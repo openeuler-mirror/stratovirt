@@ -13,6 +13,7 @@
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
+use crate::address_space::FlatView;
 use crate::errors::{ErrorKind, Result};
 use crate::{AddressRange, AddressSpace, GuestAddress, HostMemMapping, RegionOps};
 
@@ -111,11 +112,6 @@ pub struct FlatRange {
     /// The offset within Region.
     pub offset_in_region: u64,
 }
-
-/// Contain a set of `FlatRange`.
-/// Note that flat ranges is sorted by implementing `PartialOrd` and `Ord` trait.
-#[derive(Default, Clone)]
-pub struct FlatView(pub Vec<FlatRange>);
 
 /// Implement PartialEq/Eq for comparison of Region.
 impl PartialEq for Region {
