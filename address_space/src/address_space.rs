@@ -216,9 +216,17 @@ impl AddressSpace {
         let mut ioeventfds = Vec::<RegionIoEventFd>::new();
 
         for fr in flatview.0.iter() {
+            let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region).0;
             for evtfd in fr.owner.ioeventfds().iter() {
-                if fr.addr_range.find_intersection(evtfd.addr_range).is_some() {
-                    ioeventfds.push(evtfd.try_clone()?);
+                let mut evtfd_clone = evtfd.try_clone()?;
+                evtfd_clone.addr_range.base =
+                    evtfd_clone.addr_range.base.unchecked_add(region_base);
+                if fr
+                    .addr_range
+                    .find_intersection(evtfd_clone.addr_range)
+                    .is_some()
+                {
+                    ioeventfds.push(evtfd_clone);
                 }
             }
         }
@@ -603,6 +611,45 @@ mod test {
         // ioeventfd in region_c is shawdowed, delete it
         assert_eq!(
             listener.reqs.lock().unwrap().get(4).unwrap().1,
+            AddressRange::new(GuestAddress(2000), 4)
+        );
+    }
+
+    #[test]
+    fn test_subregion_ioeventfd() {
+        let ioeventfds = vec![RegionIoEventFd {
+            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            addr_range: AddressRange::from((0, 4)),
+            data_match: true,
+            data: 0_64,
+        }];
+        let default_ops = RegionOps {
+            read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
+            write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
+        };
+
+        // region layout
+        //        0      1000   2000   3000   4000   5000   6000   7000   8000
+        //        |------|------|------|------|------|------|------|------|
+        //  b:           [                                  ]
+        //  c:                  [CCCCCC]
+        // the flat_view is as follows,
+        //                      [CCCCCC]
+        let root = Region::init_container_region(8000);
+        let space = AddressSpace::new(root.clone()).unwrap();
+        let listener = TestListener::default();
+        space.register_listener(Box::new(listener.clone())).unwrap();
+
+        let region_b = Region::init_container_region(5000);
+        let region_c = Region::init_io_region(1000, default_ops);
+        region_c.set_ioeventfds(&ioeventfds);
+        region_b.add_subregion(region_c, 1000).unwrap();
+
+        root.add_subregion(region_b, 1000).unwrap();
+
+        assert!(listener.reqs.lock().unwrap().get(1).is_some());
+        assert_eq!(
+            listener.reqs.lock().unwrap().get(1).unwrap().1,
             AddressRange::new(GuestAddress(2000), 4)
         );
     }

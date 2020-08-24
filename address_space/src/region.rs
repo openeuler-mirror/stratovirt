@@ -382,15 +382,7 @@ impl Region {
 
     /// Return the IoEvent of a `Region`.
     pub fn set_ioeventfds(&self, new_fds: &[RegionIoEventFd]) {
-        let region_evtfds = new_fds
-            .iter()
-            .map(|e| {
-                let mut evt_cloned = e.try_clone().unwrap();
-                evt_cloned.addr_range.base.0 += self.offset().raw_value();
-                evt_cloned
-            })
-            .collect();
-        *self.io_evtfds.lock().unwrap() = region_evtfds;
+        *self.io_evtfds.lock().unwrap() = new_fds.iter().map(|e| e.try_clone().unwrap()).collect();
     }
 
     /// Set the ioeventfds within this Region,
@@ -400,11 +392,7 @@ impl Region {
             .lock()
             .unwrap()
             .iter()
-            .map(|e| {
-                let mut evt_cloned = e.try_clone().unwrap();
-                evt_cloned.addr_range.base.0 += self.offset().raw_value();
-                evt_cloned
-            })
+            .map(|e| e.try_clone().unwrap())
             .collect()
     }
 
