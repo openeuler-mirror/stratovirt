@@ -1,0 +1,46 @@
+[package]
+name = "StratoVirt"
+version = "0.1.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2018"
+description = "a lightweight hypervisor with low memory overhead and fast booting speed"
+license = "Mulan PSL v2"
+
+[dependencies]
+util = { path = "util" }
+machine_manager = { path = "machine_manager" }
+device_model = { path = "device_model" }
+
+log = "0.4.8"
+error-chain = "0.12.4"
+vmm-sys-util = "0.6.1"
+
+[workspace]
+members = [
+    "address_space",
+    "machine_manager",
+    "boot_loader",
+    "util",
+    "device_model",
+]
+
+[[bin]]
+name = "stratovirt"
+path = "src/main.rs"
+
+[features]
+default = ["qmp"]
+qmp = []
+
+[package.metadata.rpm.cargo]
+buildflags = ["--release"]
+
+[package.metadata.rpm.targets]
+stratovirt = { path = "/usr/bin/stratovirt" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
