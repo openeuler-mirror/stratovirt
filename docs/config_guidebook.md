@@ -10,10 +10,9 @@ StratoVirt supports json configuration file and cmdline arguments. If you set th
 
 StratoVirt supports to set the number of VCPUs(**nr_vcpus**).
 
-This allows you to set the maximum number of VCPUs that VM will support. The maximum supported
- value is 254 and the minimum value that makes sense is 1.
+This allows you to set the maximum number of VCPUs that VM will support. The maximum value is 254 and the minimum value that makes sense is 1.
 
-By default, after booted, VM will online all cpu you set.
+By default, after booted, VM will online all CPUs you set.
 
 ```shell
 # cmdline
@@ -31,11 +30,12 @@ By default, after booted, VM will online all cpu you set.
 
 ### 1.2 Memory Size
 
-StratoVirt supports to set the size of VM's memory.
+StratoVirt supports to set the size of VM's memory in cmdline.
 
 This allows you to set the size of memory that VM will support.
-If you use cmdline arguments to set it, you can give `M` or `G` as units (default units is `Kib`).
-For json configuration file, memory unit is not supported.
+You can choose `M` or `G` as unit (default unit is `Kib`).
+
+But unfortunately, in json configuration file, only `byte` are supported as unit.
 
 ```shell
 # cmdline
@@ -56,12 +56,12 @@ For json configuration file, memory unit is not supported.
 
 ### 1.3 Kernel and Kernel Parameters
 
-StratoVirt supports to launch (PE format) linux kernel 4.19 and can also set kernel
+StratoVirt supports to launch PE-format linux kernel 4.19 and can also set kernel
  parameters for VM.
 
-This allows you to give a path to linux kernel, the path can be absolute path or relative path.
+This allows you to give a path to linux kernel, the path can be either absolute path or relative path.
 
-And given kernel parameters will be actually interpreted by boot loader.
+And the given kernel parameters will be actually analyzed by boot loader.
 
 ``` shell
 # cmdline
@@ -81,20 +81,19 @@ And given kernel parameters will be actually interpreted by boot loader.
 
 ### 1.4 Initrd Configuration
 
-StratoVirt supports to launch VM by a initrd (boot loader initialized RAM disk).
+StratoVirt supports to launch VM by a initrd (boot loader initialized RAM disk) as well.
 
-This allows you to give a path to initrd image. This image will be loaded to ram by boot loader.
+If the path to initrd image is configured, it will be loaded to ram by boot loader.
 
-If you want to use initrd as rootfs, you can add `root=` and `rdinit=` in Kernel Parameters.
+If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must be added in Kernel Parameters.
 
 ```shell
 # cmdline
--initrd /Images/initrd
+-initrd /path/to/initrd
 
 # json
 {
     "boot-source": {
-        "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/ram rdinit=/bin/sh",
         "initrd_fs_path": "/path/to/initrd",
         ...
     },
@@ -104,20 +103,19 @@ If you want to use initrd as rootfs, you can add `root=` and `rdinit=` in Kernel
 
 ## 2. Device Configuration
 
-StratoVirt supports to deploy one kind of legacy device and four kinds of virtio-mmio device.
+StratoVirt supports to deploy one kind of legacy device and four kinds of virtio-mmio devices.
 
-The max number of device is 16 in x86_64 platform and 32 in aarch64 platform.
+The max number of devices is 16 on x86_64 platform and 32 on aarch64 platform.
 
 ### 2.1 Virtio-blk
 
-Virtio block device is a virtual block device, instead of placing write and read requests with the
- actual device.
+Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-Five properties are supported for virtio block device you can set.
+Five properties are supported for virtio block device.
 
-* drive_id: unique device-id presented for StratoVirt
+* drive_id: unique device-id in StratoVirt
 * path_on_host: the path of block device in host
-* serial_num: serial number for virtio block (Optional)
+* serial_num: serial number of virtio block (Optional)
 * read_only: whether virtio block device is read_only or not
 * direct: open block device with `O_DIRECT` mode or not
 
@@ -146,11 +144,11 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ### 2.2 Virtio-net
 
-Virtio-net is a virtual Ethernet card in VM. It can enable VM network capability.
+Virtio-net is a virtual Ethernet card in VM. It can enable the network capability of VM.
 
 Three properties are supported for virtio net device.
 
-* iface_id: unique device-id presented for StratoVirt
+* iface_id: unique device-id in StratoVirt
 * host_dev_name: name of tap device in host
 * mac: set mac address in VM (Optional)
 
@@ -171,7 +169,7 @@ Three properties are supported for virtio net device.
 }
 ```
 
-StratoVirt also supports vhost-net to get a higher-performance in network.
+StratoVirt also supports vhost-net to get a higher performance in network.
 
 It can be set by given `vhost` property.
 
@@ -199,7 +197,7 @@ It can be set by given `vhost` property.
 # In host
 $ brctl addbr qbr0
 $ ip tuntap add tap0 mode tap
-$ brctl addif qbr0
+$ brctl addif qbr0 tap0
 $ ifconfig qbr0 up; ifconfig tap0 up
 $ ifconfig qbr0 1.1.1.1
 
@@ -217,12 +215,12 @@ $ ping 1.1.1.1
 ### 2.3 Virtio-console
 
 Virtio console is a general-purpose serial device for data transfer between the guest and host.
- Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it. In host,
- it will be presented as a UnixSocket.
+Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it.
+In host, it will be presented as a UnixSocket.
 
 Two properties can be set for virtio console device.
 
-* console_id: unique device-id presented for StratoVirt
+* console_id: unique device-id in StratoVirt
 * socket_path: the path of virtio console socket in the host
 
 ```shell
@@ -243,7 +241,7 @@ Two properties can be set for virtio console device.
 
 ### 2.4 Virtio-vsock
 
-Virtio vsock is a host/guest communications device like virtio console, but higher performance.
+Virtio vsock is a host/guest communication device like virtio console, but it has higher performance.
 
 If you want use it, need:
 
@@ -254,7 +252,7 @@ And `modprobe vhost_vsock` in the host.
 
  Two properties can be set for virtio vsock device.
 
-* vsock_id: unique device-id presented for StratoVirt
+* vsock_id: unique device-id in StratoVirt
 * guest_cid: a unique Context-ID in host to each guest, it should satisfy `3<=guest_cid<u32:MAX`
 
 ```shell
@@ -285,13 +283,13 @@ $ nc-vsock guest_cid port_num
 
 ### 2.5 Serial
 
-Serial is a legacy device for VM, it is a communication interface for the guest to host.
+Serial is a legacy device for VM, it is a communication interface which bridges the guest and host.
 
 Commonly, we use serial as ttyS0 to output console message in StratoVirt.
 
-In StratoVirt, we can set *one* serial and can bind it with host's stdio or not.
+In StratoVirt, we can set *one* serial and decide whether to bind it with host's stdio or not.
 
-Only one argument for serial device:
+There is only one argument for serial device:
 
 * stdio: whether bind serial with stdio or not(optional)
 
@@ -319,7 +317,7 @@ StratoVirt controls VM's lifetime and external api interface with [QMP](https://
 
 When running StratoVirt, you must create api-channel in cmdline arguments as a management interface.
 
-StratoVirt supports UnixSocket type api-channel, you can set it by:
+StratoVirt supports UnixSocket-type api-channel, you can set it by:
 
 ```shell
 # cmdline
@@ -352,7 +350,7 @@ With QMP, you can control VM's lifecycle by command `stop`, `cont`, `quit` and c
 
 #### 3.3.1 Command `stop`
 
-Stop all guest VCPU execution.
+Stop all guest VCPUs execution.
 
 ```json
 <- {"execute":"stop"}
@@ -362,7 +360,7 @@ Stop all guest VCPU execution.
 
 #### 3.3.2 Command `cont`
 
-Resume all guest VCPU execution.
+Resume all guest VCPUs execution.
 
 ```json
 <- {"execute":"cont"}
@@ -400,7 +398,7 @@ Receive a file descriptor via SCM rights and assign it a name.
 
 ### 3.4 Device Hot-replace
 
-StratoVirt supports hot-replace some virtio-mmio device such as virtio-blk and virtio-net with QMP.
+StratoVirt supports hot-replacing virtio-blk and virtio-net devices with QMP.
 
 #### 3.4.1 Hot-replace Virtio-blk
 
@@ -413,10 +411,10 @@ StratoVirt supports hot-replace some virtio-mmio device such as virtio-blk and v
 
 **`node-name` in `blockdev-add` should be same as `id` in `device_add`.**
 
-For `addr`, it start at `0x0` mapping in guest with `vda` in x86_64 platform, and start at `0x1`
- mapping in guest with `vdb` in aarch64 platform.
+For `addr`, it start at `0x0` mapping in guest with `vda` on x86_64 platform, and start at `0x1`
+ mapping in guest with `vdb` on aarch64 platform.
 
-You can also remove the replaced block device by:
+You can also remove the replaceable block device by:
 
 ```json
 <- {"execute": "device_del", "arguments": {"id": "drive-0"}}
@@ -435,7 +433,7 @@ You can also remove the replaced block device by:
 
 For `addr`, it start at `0x0` mapping in guest with `eth0`.
 
-You can also remove the replaced net device by:
+You can also remove the replaceable net device by:
 
 ```json
 <- {"execute": "device_del", "arguments": {"id": "net-0"}}
@@ -446,7 +444,7 @@ You can also remove the replaced net device by:
 
 When some events happen, connected client will receive QMP events.
 
-Now StratoVirt supports `SHUTDOWN`, `STOP`, `RESUME`, `DEVICE_DELETED` four events.
+Now StratoVirt supports four events: `SHUTDOWN`, `STOP`, `RESUME`, `DEVICE_DELETED`.
 
 ## 4. Other Features
 
@@ -470,10 +468,15 @@ And you can also restore StratoVirt's **pid number** to a file by:
 
 ### 4.2 Seccomp
 
-StratoVirt use [prctl(2)](https://man7.org/linux/man-pages/man2/prctl.2.html) to limit the syscall
-in StratoVirt process by default. StratoVirt use only 32 syscalls(33 in x86_64) after running. It 
-will make a slight influence on performance to StratoVirt. If you want to disable seccomp, you can
+StratoVirt use [prctl(2)](https://man7.org/linux/man-pages/man2/prctl.2.html) to limit the syscalls
+in StratoVirt process by default. StratoVirt use only 32 syscalls in aarch64 (33 syscalls in x86_64) after running. 
+It will make a slight influence on performance to StratoVirt. If you want to disable seccomp, you can
 run StratoVirt with `-disable-seccomp`.
+
+```shell
+# cmdline
+-disable-seccomp
+```
 
 ### 4.3 Logging
 
@@ -488,12 +491,12 @@ You can enable StratoVirt's logging by:
 -D /path/to/log/file
 ```
 
-StratoVirt's log output level is dependent on env `QUANTVISOR_LOG_LEVEL`. Logging levels are `trace`
-, `debug`, `info`, `warn`, `error`. The default level is `error`.
+StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
+StratoVirt supports four log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
 
 ### 4.4 Omit_vm_memory
 
-When StratoVirt aborts unexpectedly, you may get a related core file in which the guest machine's
+When StratoVirt aborts unexpectedly, you can get a related core file in which the guest machine's
 whole memory are dumped. However, in most cases, such memory dumping is worthless and may consume
 a lot of system memory for storing.
 

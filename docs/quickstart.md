@@ -4,13 +4,13 @@
 
 * Host os
 
-    StratoVirt supports host os Linux 4.19 in both x86_64 and aarch64 platform.
+   You can run StratoVirt on both x86_64 and aarch64 platforms.
 
-    KVM mod should be supported in your host Linux kernel.
+   And on top of that, the StratoVirt is based on KVM, so please make sure you have KVM module on your platform.
 
 * Authority
 
-    You should have read/write access to `/dev/kvm`. If not, you can get your access by:
+    You should have read/write permissions to `/dev/kvm`. If not, you can get your permissions by:
 
     ```shell
     $ sudo setfacl -m u:${USER}:rw /dev/kvm
@@ -19,8 +19,8 @@
 
 ### 2.1 Check rust environment
 
-To build StratoVirt, make sure that Rust language environment and Cargo have already installed.
- The version of rustc is suggested up to 1.42.
+To build StratoVirt, make sure that Rust language environment and Cargo have already been installed.
+ The recommended version of rustc is 1.42 or later.
 
 ```shell
 $ rustc -version
@@ -33,7 +33,7 @@ If you want to deploy rust environment, the following link will help you:
 
 ### 2.2 Build with musl-libc
 
-With musl-libc, StratoVirt is linked statically and having no library dependencies. It's the
+With musl-libc, StratoVirt is linked statically and has no library dependencies. It's the
  default target to build StratoVirt.
 
 ```shell
@@ -45,11 +45,11 @@ $ rustup target add ${arch}-unknown-linux-musl
 $ cargo build --release --target ${arch}-unknown-linux-musl
 ```
 
-Now you can find StratoVirt binary in `target/${arch}-unknown-linux-musl/release/stratovirt`.
+Now you can find StratoVirt binary file in `target/${arch}-unknown-linux-musl/release/stratovirt`.
 
 ### 2.3 Build with glibc
 
-StratoVirt can also build using glibc toolchains. By this way, StratoVirt is linked dynamically.
+StratoVirt can also be built using glibc toolchains. By this way, StratoVirt is linked dynamically.
 
 ```shell
 # Add gnu rust tool-chain, if installed, skip
@@ -60,13 +60,13 @@ $ rustup target add ${arch}-unknown-linux-gnu
 $ cargo build --release --target ${arch}-unknown-linux-gnu
 ```
 
-Now you can find StratoVirt binary in `target/${arch}-unknown-linux-gnu/release/stratovirt`.
+Now you can find StratoVirt binary file in `target/${arch}-unknown-linux-gnu/release/stratovirt`.
 
-## 3. Get Kernel and rootfs Image
+## 3. Prepare Kernel and rootfs Image
 
 ### 3.1 Build kernel
 
-The current version StratoVirt supports only PE-format kernel images in both x86_64 and aarch64
+The StratoVirt in current version supports only PE-format kernel images on both x86_64 and aarch64
 platforms, which can be built with:
 
 1. Firstly, get the openEuler kernel source code:
@@ -76,14 +76,14 @@ platforms, which can be built with:
    $ cd kernel
    ```
 
-2. Check out the kernel version to kernel-4.19:
+2. Switch the kernel version to kernel-4.19:
 
    ```shell
    $ git checkout kernel-4.19
    ```
 
-3. Configure your linux kernel build. You can use [our recommended config](./kernel_config) and
-copy it to `kernel` path as `.config`. You can interactive config by:
+3. Configure your linux kernel. You can use [our recommended config](./kernel_config) and
+copy it to `kernel` path as `.config`. You can also modify config options by:
 
    ```shell
    $ make menuconfig
@@ -97,7 +97,7 @@ copy it to `kernel` path as `.config`. You can interactive config by:
 
 ### 3.2 Make rootfs
 
-Rootfs image is a file system image.  An EXT4-format image with an `init` can be mounted at
+Rootfs image is a file system image.  An EXT4-format image with `/sbin/init` can be mounted at
  boot time in StratoVirt. Below is a simple way to make a EXT4 rootfs image:
 
 1. Prepare a properly-sized file(e.g. 1G):
@@ -115,6 +115,7 @@ Rootfs image is a file system image.  An EXT4-format image with an `init` can be
 3. Mount the file image:
 
    ```shell
+   $ mkdir -p /mnt/rootfs
    $ sudo mount ./rootfs.ext4 /mnt/rootfs && cd /mnt/rootfs
    ```
 
@@ -130,7 +131,7 @@ Rootfs image is a file system image.  An EXT4-format image with an `init` can be
 5. Make a simple `/sbin/init` for EXT4 file image.
 
    ```shell
-   $ cat > sbin/init <<EOF
+   $ rm sbin/init && touch sbin/init && cat > sbin/init <<EOF
    #! /bin/sh
    mount -t devtmpfs dev /dev
    mount -t proc proc /proc
@@ -141,29 +142,29 @@ Rootfs image is a file system image.  An EXT4-format image with an `init` can be
    poweroff -f
    EOF
 
-   sudo chmod +x sbin/init
+   $ sudo chmod +x sbin/init
    ```
 
 6.  Unmount rootfs image:
 
     ```shell
-    $ umount /mnt/rootfs
+    $ cd ~ && umount /mnt/rootfs
     ```
 
-## 4. Running StratoVirt
+## 4. Run StratoVirt
 
-With kernel and rootfs image, we can boot up a guest Linux machine by StratoVirt.
+With kernel and rootfs image, we can boot a guest Linux machine by StratoVirt.
 
-### 4.1 Running with cmdline
+### 4.1 Run with cmdline
 
 The minimum configuration for StratoVirt is:
 
 * A PE format Linux kernel
-* Make rootfs image as virtio-blk device and add this device to kernel parameters
+* A rootfs image as virtio-blk device, which has to be added to kernel parameters
 * Api-channel to control StratoVirt
 * If you want to login with ttyS0, you may need a serial and add ttyS0 to kernel parameters
 
-You can deploy them with cmdline arguments:
+You can deploy StratoVirt with cmdline arguments:
 
 ```shell
 # Make sure api-channel can be created.
@@ -180,15 +181,15 @@ $ ./stratovirt \
 
 ### 4.2 Running with json
 
-StratoVirt can also boot from a json configuration file like [default.json](./default.json).
+StratoVirt can also boot from a json configuration file like provided [sample default.json](./default.json).
 
 ```shell
 # Json configuration file
 $ cat default.json
 {
   "boot-source": {
-    "kernel_image_path": "/path/to/vmlinux.bin",
-    "boot_args": "console=ttyS0 root=/dev/vda" reboot=k panic=1
+    "kernel_image_path": "/path/to/kernel",
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/vda"
   },
   "machine-config": {
     "vcpu_count": 1,
@@ -197,7 +198,7 @@ $ cat default.json
   "drive": [
     {
       "drive_id": "rootfs",
-      "path_on_host": "/path/to/rootfs,
+      "path_on_host": "/path/to/rootfs/image",
       "direct": false,
       "read_only": false
     }
@@ -213,8 +214,6 @@ $ ./stratovirt \
     -api-channel unix:/path/to/socket
 ```
 
-Now StratoVirt can boot a guest Linux machine.
-
 You can also run StratoVirt with initrdfs, read [initrd_guide](./mk_initrd.md).
 
-If you want to know more information on running StratoVirt, go to the [StratoVirt-Guidebook](./StratoVirt-Guidebook.md).
+If you want to know more information on running StratoVirt, go to the [Configuration Guidebook](./config_guidebook.md).

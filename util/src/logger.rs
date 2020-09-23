@@ -103,7 +103,7 @@ pub fn init_vm_logger(
 }
 
 pub fn init_logger_with_env(logfile: Option<Box<dyn Write + Send>>) -> Result<(), SetLoggerError> {
-    let level = match std::env::var("QUANTVISOR_LOG_LEVEL") {
+    let level = match std::env::var("STRATOVIRT_LOG_LEVEL") {
         Ok(l) => match l.to_lowercase().as_str() {
             "trace" => Level::Trace,
             "debug" => Level::Debug,

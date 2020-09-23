@@ -1,10 +1,10 @@
 {
   "boot-source": {
     "kernel_image_path": "/path/to/kernel",
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/vda quiet"
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/vda"
   },
   "machine-config": {
-    "vcpu_count": 5,
+    "vcpu_count": 1,
     "mem_size": 268435456
   },
   "drive": [

@@ -53,7 +53,7 @@ cd _install
 find . | cpio -o --format=newc > /tmp/StratoVirt-initrd
 ```
 
-## 6. Running StratoVirt with initrd
+## 6. Run StratoVirt with initrd
 
 ```shell
 $ ./stratovirt \
