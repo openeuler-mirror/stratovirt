@@ -1,34 +1,32 @@
 # StratoVirt
-
 StratoVirt is an opensource VMM(Virtual Machine Manager) which aims to perform
-next generation virtualization.StratoVirt is based on Rust programming
-language.StratoVirt is lightweight, efficient and safe.It also has features like
-Full Sence Support and Modules Flexible Splitting.
+next generation virtualization.
 
-StratoVirt is based on Rust language, which ensures the high performance in 
-safety and efficiency.
+Based on Rust programming language, StratoVirt is lightweight, efficient and safe.
+StratoVirt reduces memory resource consumption and improves VM startup speed while
+retains isolation capability and security capability of traditional virtualization.
 
-StratoVirt supports live-time remote control with qmp commands.
+StratoVirt supports communicating with external systems using OCI compatible Interface, 
+and can be applied to microservices or serverless scenarios.
 
-In the future, StratoVirt would be capable of virtualizing normal machines
-with specific hardware emulators.
+StratoVirt reserves interface and design for importing more features, even standard virtualization.
 
 ## How to start
 
 ### Preparation
 Before building StratoVirt, make sure that Rust language and Cargo have already
-been installed, if not, you can install Rust and cargo from following links:
+been installed. If not, you can find installation guidance from the following link:
 
 https://www.rust-lang.org/tools/install
 
 ### Build StratoVirt
-To build StratoVirt, go to the project's directory and make use of Cargo:
+To build StratoVirt, clone the project and build it first:
 ```sh
-$ git clone https://gitee.com/src-openeuler/stratovirt.git
+$ git clone https://gitee.com/openeuler/stratovirt.git
 $ cd stratovirt
 $ cargo build --release
 ```
-Now you can find StratoVirt binary in `target/debug/stratovirt`
+Now you can find StratoVirt binary in `target/release/stratovirt`.
 
 ### Run a VM with StratoVirt
 To run StratoVirt quickly, requires
@@ -36,6 +34,7 @@ To run StratoVirt quickly, requires
 * An EXT4-format rootfs image
 
 ```shell
+# If the socket of api-channel exists, remove if first.
 $ ./target/release/stratovirt \
     -kernel /path/to/kernel \
     -append console=ttyS0 root=/dev/vda reboot=k panic=1 \
@@ -44,19 +43,25 @@ $ ./target/release/stratovirt \
     -serial stdio
 ```
 
-Running a VM with json configuration file is also supported,
-please refer to [quickstart guide](./docs/quickstart.md) for more details.
+The detailed guidance of making rootfs, compiling kernel and building StratoVirt can be found
+in [StratoVirt QuickStart](./docs/quickstart.md).
+
+StratoVirt supports much more features, the detailed guidance can be found in [Configuration Guidebook](docs/config_guidebook.md).
+
+## Design
+
+To get more details about StratoVirt's core architecture design, refer to [StratoVirt design](./docs/design.md).
 
 ## How to contribute
-We welcome new contributors! If you want to join us, please
-take a glance at the Rust formatting guidance first:
+We welcome new contributors! And we are happy to provide guidance and help for new contributors.
+StratoVirt follows Rust formatting conventions, which can be found at:
 
 https://github.com/rust-dev-tools/fmt-rfcs/tree/master/guide
-
-Use `cargo clippy` to check and improve your code, the installation guidance
-and usage is as below:
-
 https://github.com/rust-lang/rust-clippy
+
+You can get more information about StratoVirt at:
+
+https://gitee.com/openeuler/stratovirt/wikis
 
 ## Licensing
 StratoVirt is licensed under the Mulan PSL v2.
