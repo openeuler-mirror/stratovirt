@@ -704,3 +704,68 @@ impl VirtioDevice for Net {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::*;
+    pub use super::*;
+
+    #[test]
+    fn test_net_init() {
+        // test net new method
+        let mut net = Net::new();
+        assert_eq!(net.device_features, 0);
+        assert_eq!(net.driver_features, 0);
+
+        assert_eq!(net.tap.is_none(), true);
+        assert_eq!(net.sender.is_none(), true);
+        assert_eq!(net.net_cfg.mac.is_none(), true);
+        assert_eq!(net.net_cfg.tap_fd.is_none(), true);
+        assert_eq!(net.net_cfg.vhost_type.is_none(), true);
+        assert_eq!(net.net_cfg.vhost_fd.is_none(), true);
+
+        // test net realize method
+        net.realize().unwrap();
+        assert_eq!(net.device_type(), 1);
+        assert_eq!(net.queue_num(), 2);
+        assert_eq!(net.queue_size(), 256);
+
+        // test read_config and write_config method
+        let wriet_data: Vec<u8> = vec![7; 4];
+        let mut random_data: Vec<u8> = vec![0; 4];
+        let mut origin_data: Vec<u8> = vec![0; 4];
+        net.read_config(0x00, &mut origin_data).unwrap();
+
+        net.write_config(0x00, &wriet_data).unwrap();
+        net.read_config(0x00, &mut random_data).unwrap();
+        assert_eq!(random_data, wriet_data);
+
+        net.write_config(0x00, &origin_data).unwrap();
+
+        // test boundary condition of offset and data parameters
+        let device_config = net.device_config.as_bytes();
+        let len = device_config.len() as u64;
+
+        let mut data: Vec<u8> = vec![0; 10];
+        let offset: u64 = len + 1;
+        assert_eq!(net.read_config(offset, &mut data).is_ok(), false);
+
+        let offset: u64 = len;
+        assert_eq!(net.read_config(offset, &mut data).is_ok(), false);
+
+        let offset: u64 = 0;
+        assert_eq!(net.read_config(offset, &mut data).is_ok(), true);
+
+        let offset: u64 = len;
+        let mut data: Vec<u8> = vec![0; 1];
+        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
+
+        let offset: u64 = len - 1;
+        let mut data: Vec<u8> = vec![0; 1];
+        assert_eq!(net.write_config(offset, &mut data).is_ok(), true);
+
+        let offset: u64 = 0;
+        let mut data: Vec<u8> = vec![0; len as usize];
+        assert_eq!(net.write_config(offset, &mut data).is_ok(), true);
+    }
+}
