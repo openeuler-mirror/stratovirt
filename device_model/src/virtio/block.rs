@@ -877,3 +877,103 @@ impl VirtioDevice for Block {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::*;
+    pub use super::*;
+
+    #[test]
+    fn test_block_init() {
+        // test block new method
+        let mut block = Block::new();
+        assert_eq!(block.disk_sectors, 0);
+        assert_eq!(block.device_features, 0);
+        assert_eq!(block.driver_features, 0);
+
+        assert_eq!(block.disk_image.is_none(), true);
+        assert_eq!(block.config_space.len(), 0);
+        assert_eq!(block.interrupt_cb.is_none(), true);
+        assert_eq!(block.sender.is_none(), true);
+
+        // test block realize method
+        block.realize().unwrap();
+        assert_eq!(block.device_type(), 2);
+        assert_eq!(block.queue_num(), 1);
+        assert_eq!(block.queue_size(), 256);
+
+        // test block device features
+        let device_features = (1_u64 << VIRTIO_F_VERSION_1)
+            | (1_u64 << VIRTIO_BLK_F_FLUSH)
+            | (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+            | (1_u64 << VIRTIO_BLK_F_SIZE_MAX)
+            | (1_u64 << VIRTIO_BLK_F_SEG_MAX)
+            | (1_u64 << VIRTIO_F_RING_EVENT_IDX);
+        assert_eq!(block.device_features, device_features);
+
+        // test read_config and write_config method
+        let write_data: Vec<u8> = vec![7; 4];
+        let mut random_data: Vec<u8> = vec![0; 4];
+        let mut origin_data: Vec<u8> = vec![0; 4];
+        block.read_config(0x00, &mut origin_data).unwrap();
+
+        block.write_config(0x00, &write_data).unwrap();
+        block.read_config(0x00, &mut random_data).unwrap();
+        assert_eq!(random_data, write_data);
+
+        block.write_config(0x00, &origin_data).unwrap();
+
+        // test boundary value of offset parameter
+        let mut data: Vec<u8> = vec![0; 10];
+        let offset: u64 = 17;
+        assert_eq!(block.read_config(offset, &mut data).is_ok(), false);
+
+        let offset: u64 = 16;
+        assert_eq!(block.read_config(offset, &mut data).is_ok(), false);
+
+        let offset: u64 = 15;
+        assert_eq!(block.read_config(offset, &mut data).is_ok(), true);
+
+        let offset: u64 = 0;
+        assert_eq!(block.read_config(offset, &mut data).is_ok(), true);
+
+        let mut data: Vec<u8> = vec![0; 65535];
+        assert_eq!(block.read_config(offset, &mut data).is_ok(), true);
+
+        let offset: u64 = 0;
+        let mut data: Vec<u8> = vec![0; 17];
+        assert_eq!(block.write_config(offset, &mut data).is_ok(), false);
+
+        let offset: u64 = 0;
+        let mut data: Vec<u8> = vec![0; 16];
+        assert_eq!(block.write_config(offset, &mut data).is_ok(), true);
+
+        let offset: u64 = 16;
+        let mut data: Vec<u8> = vec![0; 1];
+        assert_eq!(block.write_config(offset, &mut data).is_ok(), false);
+
+        let offset: u64 = 2;
+        let mut data: Vec<u8> = vec![0; 10];
+        assert_eq!(block.write_config(offset, &mut data).is_ok(), true);
+    }
+
+    #[test]
+    fn test_serial_num_config() {
+        // test get_serial_num_config method
+        let serial_num = "qwertyuiopasdfghjklzxcvbnm";
+        let serial_num_arr = serial_num.as_bytes();
+        let id_bytes = get_serial_num_config(&serial_num);
+        assert_eq!(id_bytes[..], serial_num_arr[..20]);
+        assert_eq!(id_bytes.len(), 20);
+
+        let serial_num = "1234567890";
+        let serial_num_arr = serial_num.as_bytes();
+        let id_bytes = get_serial_num_config(&serial_num);
+        assert_eq!(id_bytes[..10], serial_num_arr[..]);
+        assert_eq!(id_bytes.len(), 20);
+
+        let serial_num = "";
+        let id_bytes = get_serial_num_config(&serial_num);
+        assert_eq!(id_bytes.len(), 20);
+    }
+}
