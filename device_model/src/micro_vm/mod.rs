@@ -204,8 +204,11 @@ impl LightMachine {
     ///
     /// * `vm_config` - Represents the configuration for VM.
     pub fn new(vm_config: VmConfig) -> Result<Arc<LightMachine>> {
-        let kvm = Kvm::new()?;
-        let vm_fd = Arc::new(kvm.create_vm()?);
+        let kvm = Kvm::new().chain_err(|| "Failed to open /dev/kvm.")?;
+        let vm_fd = Arc::new(
+            kvm.create_vm()
+                .chain_err(|| "KVM: failed to create VM fd failed")?,
+        );
 
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))?;
         let nr_slots = kvm.get_nr_memslots();
