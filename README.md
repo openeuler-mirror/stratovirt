@@ -1,13 +1,5 @@
 # StratoVirt
-StratoVirt is an opensource VMM(Virtual Machine Manager) which aims to perform
-next generation virtualization.
-
-Based on Rust programming language, StratoVirt is lightweight, efficient and safe.
-StratoVirt reduces memory resource consumption and improves VM startup speed while
-retains isolation capability and security capability of traditional virtualization.
-
-StratoVirt supports communicating with external systems using OCI compatible Interface, 
-and can be applied to microservices or serverless scenarios.
+StratoVirt is an enterprise-level virtualization platform for cloud data centers in the computing industry. It implements a set of architecture that supports three scenarios: virtual machines, containers, and serverless. StratoVirt has key technological competitive advantages in light weight and low noise, software and hardware coordination, and Rust language-level security.
 
 StratoVirt reserves interface and design for importing more features, even standard virtualization.
 
