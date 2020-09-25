@@ -137,8 +137,11 @@ mod tests {
         use super::*;
         use kvm_ioctls::Kvm;
 
-        let kvm = Kvm::new().unwrap();
-        let vm = Arc::new(kvm.create_vm().unwrap());
+        let vm = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Arc::new(vm_fd)
+        } else {
+            return;
+        };
 
         let gic_conf = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),

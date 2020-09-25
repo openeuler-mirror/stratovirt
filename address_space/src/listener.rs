@@ -518,11 +518,6 @@ mod test {
         }
     }
 
-    fn create_vm() -> VmFd {
-        let kvm = Kvm::new().expect("create kvm failed");
-        kvm.create_vm().expect("create vm failed")
-    }
-
     fn create_ram_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
         let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(addr), size, false).unwrap());
         FlatRange {
@@ -537,7 +532,11 @@ mod test {
 
     #[test]
     fn test_alloc_slot() {
-        let kml = KvmMemoryListener::new(34, Arc::new(create_vm()));
+        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
+            Err(_) => return,
+        };
+
         let host_addr = 0u64;
         assert_eq!(kml.get_free_slot(0, 100, host_addr).unwrap(), 0);
         assert_eq!(kml.get_free_slot(200, 100, host_addr).unwrap(), 1);
@@ -553,21 +552,23 @@ mod test {
 
     #[test]
     fn test_add_del_ram_region() {
-        let vm = Arc::new(create_vm());
-        let kml = KvmMemoryListener::new(34, vm.clone());
+        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
+            Err(_) => return,
+        };
 
         let ram_size = page_size();
         let ram_fr1 = create_ram_range(0, ram_size, 0);
         kml.handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .unwrap();
-        //flat-range already added, adding again should make an error
+        // flat-range already added, adding again should make an error
         assert!(kml
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_err());
         assert!(kml
             .handle_request(Some(&ram_fr1), None, ListenerReqType::DeleteRegion)
             .is_ok());
-        //flat-range already deleted, deleting again should make an error
+        // flat-range already deleted, deleting again should make an error
         assert!(kml
             .handle_request(Some(&ram_fr1), None, ListenerReqType::DeleteRegion)
             .is_err());
@@ -575,8 +576,10 @@ mod test {
 
     #[test]
     fn test_add_region_align() {
-        let vm = Arc::new(create_vm());
-        let kml = KvmMemoryListener::new(34, vm.clone());
+        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
+            Err(_) => return,
+        };
 
         // flat-range not aligned
         let page_size = page_size();
@@ -594,8 +597,10 @@ mod test {
 
     #[test]
     fn test_add_del_ioeventfd() {
-        let vm = Arc::new(create_vm());
-        let kml = KvmMemoryListener::new(34, vm.clone());
+        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
+            Err(_) => return,
+        };
 
         let evtfd = generate_region_ioeventfd(4, None);
         assert!(kml
@@ -619,7 +624,7 @@ mod test {
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
         // deleting this ioeventfd returns an error, for the reason that
-        // function `unregister_ioevent` in kvm-ioctls package don't have an `data_match` argument
+        // function `unregister_ioevent` in kvm-ioctls package doesn't support `data_match` argument yet.
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_err());
@@ -628,8 +633,10 @@ mod test {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_kvm_io_listener() {
-        let vm = Arc::new(create_vm());
-        let iol = KvmIoListener::new(vm.clone());
+        let iol = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => KvmIoListener::new(Arc::new(vm_fd)),
+            Err(_) => return,
+        };
 
         let evtfd = generate_region_ioeventfd(4, None);
         assert!(iol
