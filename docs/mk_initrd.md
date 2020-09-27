@@ -46,7 +46,7 @@ EOF
 chmod +x etc/init.d/rcS
 ```
 
-## 5. make initrd image
+## 5. Make initrd image
 
 ```shell
 cd _install

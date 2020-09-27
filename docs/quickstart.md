@@ -62,7 +62,7 @@ $ cargo build --release --target ${arch}-unknown-linux-gnu
 
 Now you can find StratoVirt binary file in `target/${arch}-unknown-linux-gnu/release/stratovirt`.
 
-## 3. Prepare Kernel and rootfs Image
+## 3. Prepare kernel and rootfs image
 
 ### 3.1 Build kernel
 
@@ -153,13 +153,13 @@ Rootfs image is a file system image.  An EXT4-format image with `/sbin/init` can
 
 ## 4. Run StratoVirt
 
-With kernel and rootfs image, we can boot a guest Linux machine by StratoVirt.
+With kernel and rootfs image, we can boot a guest linux machine by StratoVirt.
 
 ### 4.1 Run with cmdline
 
 The minimum configuration for StratoVirt is:
 
-* A PE format Linux kernel
+* A PE format linux kernel
 * A rootfs image as virtio-blk device, which has to be added to kernel parameters
 * Api-channel to control StratoVirt
 * If you want to login with ttyS0, you may need a serial and add ttyS0 to kernel parameters
