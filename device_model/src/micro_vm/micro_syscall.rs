@@ -52,10 +52,10 @@ const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 34 syscalls
-/// * x86_64-unknown-musl: 33 syscalls
-/// * aarch64-unknown-gnu: 33 syscalls
-/// * aarch64-unknown-musl: 32 syscalls
+/// * x86_64-unknown-gnu: 35 syscalls
+/// * x86_64-unknown-musl: 34 syscalls
+/// * aarch64-unknown-gnu: 34 syscalls
+/// * aarch64-unknown-musl: 33 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 fn syscall_allow_list() -> Vec<BpfRule> {
     vec![
@@ -76,6 +76,7 @@ fn syscall_allow_list() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_recvmsg),
         BpfRule::new(libc::SYS_sendmsg),
         BpfRule::new(libc::SYS_recvfrom),
+        BpfRule::new(libc::SYS_mremap),
         BpfRule::new(libc::SYS_io_setup),
         BpfRule::new(libc::SYS_brk),
         BpfRule::new(libc::SYS_fcntl)

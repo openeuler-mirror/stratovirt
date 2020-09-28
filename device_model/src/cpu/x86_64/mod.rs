@@ -384,8 +384,8 @@ mod test {
     use super::*;
     use kvm_bindings::kvm_segment;
     use std::sync::Arc;
-    #[test]
 
+    #[test]
     fn test_x86_64_cpu() {
         let code_seg = kvm_segment {
             base: 0,
@@ -429,10 +429,15 @@ mod test {
             idt_size: 8,
             pml4_start: 0x0000_9000,
         };
-        let kvm = Kvm::new().unwrap();
-        let vm = Arc::new(kvm.create_vm().unwrap());
-        /* For `get_lapic` in realize function to work,
-        you need to create a irq_chip for VM before creating the VCPU. */
+
+        let vm = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Arc::new(vm_fd)
+        } else {
+            return;
+        };
+
+        // For `get_lapic` in realize function to work,
+        // you need to create a irq_chip for VM before creating the VCPU.
         vm.create_irq_chip().unwrap();
         let vcpu = Arc::new(vm.create_vcpu(0).unwrap());
         let mut x86_cpu = X86CPU::new(&vm, 0, 1);

@@ -45,14 +45,13 @@ error_chain! {
 
 quick_main!(run);
 
-#[allow(clippy::cast_ptr_alignment)]
 fn run() -> Result<()> {
     let cmd_args = create_args_parser().get_matches()?;
 
     if let Some(logfile_path) = cmd_args.value_of("display log") {
         if logfile_path.is_empty() {
             logger::init_logger_with_env(Some(Box::new(std::io::stdout())))
-                .expect("logger init failed!");
+                .chain_err(|| "Failed to init logger.")?;
         } else {
             let logfile = std::fs::OpenOptions::new()
                 .read(false)
@@ -60,11 +59,11 @@ fn run() -> Result<()> {
                 .append(true)
                 .create(true)
                 .mode(0o640)
-                .open(logfile_path)?;
-            logger::init_logger_with_env(Some(Box::new(logfile))).expect("logger init failed!");
+                .open(logfile_path)
+                .chain_err(|| "Failed to open log file")?;
+            logger::init_logger_with_env(Some(Box::new(logfile)))
+                .chain_err(|| "Failed to init logger.")?;
         }
-    } else {
-        logger::init_logger_with_env(None).expect("logger init failed!");
     }
 
     std::panic::set_hook(Box::new(|panic_msg| {
@@ -128,7 +127,8 @@ fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
 
     MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
         Mutex::new(api_socket),
-    )))?;
+    )))
+    .chain_err(|| "Failed to add api event to MainLoop")?;
 
     vm.realize()?;
     vm.vm_start(
@@ -141,7 +141,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
     }
 
     loop {
-        if !MainLoop::run()? {
+        if !MainLoop::run().chain_err(|| "MainLoop exits unexpectedly: error occurs")? {
             break;
         }
     }

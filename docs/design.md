@@ -13,7 +13,7 @@ StratoVirt reserves interface and design for importing more features, even stand
 - Fast cold boot: Benefit from the minimalist design, StratoVirt could boot a microVM in 50ms. 
 - Low memory overhead: StratoVirt works with a memory footprint at 3MB. 
 - IO enhancement: StratoVirt offers normal IO ability with minimalist IO device emulation. 
-- OCI compatibility: StratoVirt offers OCI-compatible interface，which connects to Kubernetes ecosystem perfectly. 
+- OCI compatibility: StratoVirt works with isula and kata container, and can be integrated in Kubernetes ecosystem perfectly.
 - Multi-platform support: Fully support for Intel and Arm platform.
 - Expansibility: StratoVirt reserves interface and design for importing more features, even expand to standard virtualization support. 
 
