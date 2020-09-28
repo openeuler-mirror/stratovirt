@@ -35,7 +35,7 @@ StratoVirt supports to set the size of VM's memory in cmdline.
 This allows you to set the size of memory that VM will support.
 You can choose `M` or `G` as unit (default unit is `Kib`).
 
-But unfortunately, in json configuration file, only `byte` are supported as unit.
+But unfortunately, in json configuration file, only `byte` is supported as unit.
 
 ```shell
 # cmdline
@@ -115,8 +115,8 @@ Five properties are supported for virtio block device.
 
 * drive_id: unique device-id in StratoVirt
 * path_on_host: the path of block device in host
-* serial_num: serial number of virtio block (Optional)
-* read_only: whether virtio block device is read_only or not
+* serial_num: serial number of virtio block (optional)
+* read_only: whether virtio block device is read-only or not
 * direct: open block device with `O_DIRECT` mode or not
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
@@ -150,7 +150,7 @@ Three properties are supported for virtio net device.
 
 * iface_id: unique device-id in StratoVirt
 * host_dev_name: name of tap device in host
-* mac: set mac address in VM (Optional)
+* mac: set mac address in VM (optional)
 
 ```shell
 # cmdline
@@ -310,7 +310,7 @@ There is only one argument for serial device:
 
 ## 3. StratoVirt Management
 
-StratoVirt controls VM's lifetime and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
+StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
  in current version.
 
 ### 3.1 Api-channel Creation
