@@ -53,7 +53,7 @@ https://github.com/rust-lang/rust-clippy
 
 https://gitee.com/openeuler/stratovirt/wikis
 
-如果您发现了一个bug或者有一些想法想要交流，欢迎发邮件到[virt邮件列表](virt@openeuler.org)或者提交一个[issue](https://gitee.com/openeuler/stratovirt/issues)。
+如果您发现了一个bug或者有一些想法想要交流，欢迎发邮件到[virt邮件列表](https://mailweb.openeuler.org/postorius/lists/virt.openeuler.org/)或者提交一个[issue](https://gitee.com/openeuler/stratovirt/issues)。
 
 ## 许可
 StratoVirt使用Mulan PSL v2开源协议许可
