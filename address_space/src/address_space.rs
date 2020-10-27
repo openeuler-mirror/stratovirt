@@ -20,7 +20,7 @@ use crate::{
     RegionType,
 };
 
-/// Contain a set of `FlatRange`.
+/// Contain an array of `FlatRange`.
 #[derive(Default, Clone)]
 pub struct FlatView(pub Vec<FlatRange>);
 
@@ -39,12 +39,12 @@ impl FlatView {
 pub struct AddressSpace {
     /// Root Region of this AddressSpace.
     root: Region,
-    /// Flat_view is the output of rendering all regions in parent address-space,
-    /// every time the topology changed (add/delete region), flat_view would be updated.
+    /// Flat_view is the output of rendering all regions in this address-space.
+    /// Every time the topology changed (add/delete region), flat_view will be updated.
     flat_view: Arc<RwLock<FlatView>>,
     /// The triggered call-backs when flat_view changed.
     listeners: Arc<Mutex<Vec<Box<dyn Listener>>>>,
-    /// The vector buffer would help in comparison stage of topology update.
+    /// The current layout of ioeventfds, which is compared with new ones in topology-update stage.
     ioeventfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
 }
 
@@ -70,7 +70,7 @@ impl AddressSpace {
         Ok(space)
     }
 
-    /// Get the copy of the root of AddressSpace.
+    /// Get the reference of root region of AddressSpace.
     pub fn root(&self) -> &Region {
         &self.root
     }
@@ -79,7 +79,7 @@ impl AddressSpace {
     ///
     /// # Arguments
     ///
-    /// * `listener` - Provided methods for Listener.
+    /// * `listener` - Provided Listener trait object.
     ///
     /// # Errors
     ///
@@ -142,7 +142,7 @@ impl AddressSpace {
     ///
     /// * `old_view` - Old flatview.
     /// * `new_view` - New flatview.
-    /// * `is_add` - Add `new_view` if `true` otherwise replace the `old_view` with `new_view`.
+    /// * `is_add` - Add new FlatRange in `new_view` if `true`.
     fn update_topology_pass(
         &self,
         old_view: &FlatView,
@@ -193,7 +193,7 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Updates ioeventfds pass according to New `RegionIoEventFd` array.
+    /// Updates ioeventfds according to New `RegionIoEventFd` array.
     ///
     /// # Arguments
     ///
@@ -223,7 +223,9 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Update IoEvents.
+    /// Update IoEventfds.
+    /// This function will compare new ioeventfds generated from `FlatView` with old ones
+    /// which is stored in AddressSpace, and then update them.
     fn update_ioeventfds(&self) -> Result<()> {
         let flatview = self.flat_view.read().unwrap();
         let mut ioeventfds = Vec::<RegionIoEventFd>::new();
@@ -249,7 +251,7 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Return the start host address of Region where the `GuestAddress` belongs to.
+    /// Return the host address according to the given `GuestAddress`.
     ///
     /// # Arguments
     ///
@@ -280,7 +282,7 @@ impl AddressSpace {
         })
     }
 
-    /// Return the biggest end address in all Ram regions in AddressSpace.
+    /// Return the end address fo memory  according to all Ram regions in AddressSpace.
     pub fn memory_end_address(&self) -> GuestAddress {
         let view = &self.flat_view.read().unwrap().0;
         view.iter()
@@ -299,7 +301,7 @@ impl AddressSpace {
     ///
     /// # Errors
     ///
-    /// Return Error if the `addr` is a invalid GuestAddress.
+    /// Return Error if the `addr` is not mapped.
     pub fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
         let view = &self.flat_view.read().unwrap();
 
@@ -316,7 +318,7 @@ impl AddressSpace {
         )
     }
 
-    /// Write data to specified memory address.
+    /// Write data to specified guest address.
     ///
     /// # Arguments
     ///
@@ -326,7 +328,7 @@ impl AddressSpace {
     ///
     /// # Errors
     ///
-    /// Return Error if the `addr` is a invalid GuestAddress.
+    /// Return Error if the `addr` is not mapped.
     pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
         let view = &self.flat_view.read().unwrap();
 
@@ -348,7 +350,7 @@ impl AddressSpace {
     /// # Arguments
     ///
     /// * `data` - The object that will be written to the memory.
-    /// * `addr` - The start address of memory where the object will be written to.
+    /// * `addr` - The start guest address where the object will be written to.
     ///
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
@@ -360,7 +362,7 @@ impl AddressSpace {
     ///
     /// # Arguments
     ///
-    /// * `addr` - The start address of memory where the data will be read from.
+    /// * `addr` - The start guest address where the data will be read from.
     ///
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
@@ -557,9 +559,9 @@ mod test {
     fn test_update_ioeventfd() {
         let ioeventfds = vec![RegionIoEventFd {
             fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            addr_range: AddressRange::from((0, 4)),
+            addr_range: AddressRange::from((0, std::mem::size_of::<u32>() as u64)),
             data_match: true,
-            data: 0_64,
+            data: 64_u64,
         }];
         let default_ops = RegionOps {
             read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),

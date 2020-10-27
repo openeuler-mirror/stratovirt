@@ -36,7 +36,7 @@ pub mod errors {
 }
 use self::errors::{ErrorKind, Result, ResultExt};
 
-/// Different operations of listener requests.
+/// Request type of listener.
 #[derive(Debug, Copy, Clone)]
 pub enum ListenerReqType {
     /// Add a region.
@@ -53,7 +53,7 @@ pub trait Listener: Send + Sync {
     /// Get priority.
     fn priority(&self) -> i32;
 
-    /// Deal with the request.
+    /// Function that handle request according to request-type.
     ///
     /// # Arguments
     ///
@@ -70,7 +70,7 @@ pub trait Listener: Send + Sync {
     }
 }
 
-/// Memory slot constructing a link between guest address and host address.
+/// Records information that manage the slot resource and current usage.
 #[derive(Default, Copy, Clone)]
 struct MemSlot {
     /// Index of a memory slot.
@@ -78,6 +78,7 @@ struct MemSlot {
     /// Guest address.
     pub guest_addr: u64,
     /// Size of memory.
+    /// size = 0 represents no-region use this slot.
     pub size: u64,
     /// Host address.
     pub host_addr: u64,
@@ -116,14 +117,14 @@ impl KvmMemoryListener {
     /// # Arguments
     ///
     /// * `guest_addr` - Guest address.
-    /// * `size` - Size of slots.
+    /// * `size` - Size of slot.
     /// * `host_addr` - Host address.
     ///
     /// # Errors
     ///
     /// Return Error if
-    /// * no valid Kvm slot.
-    /// * memory overflows.
+    /// * No available Kvm slot.
+    /// * Given memory slot overlap with existed one.
     fn get_free_slot(&self, guest_addr: u64, size: u64, host_addr: u64) -> Result<u32> {
         let mut slots = self.slots.lock().unwrap();
 
@@ -204,12 +205,11 @@ impl KvmMemoryListener {
         Ok(AddressRange::new(aligned_addr, aligned_size))
     }
 
-    /// Add a region to KvmMemoryListener,
-    /// the argument `flat_range` is used to find the region.
+    /// Callback function for adding Region, which only care about Ram-type Region yet.
     ///
     /// # Arguments
     ///
-    /// * `flat_range` - FlatRange would be used to find the region.
+    /// * `flat_range` - Corresponding FlatRange of new-added region.
     ///
     /// # Errors
     ///
@@ -253,11 +253,11 @@ impl KvmMemoryListener {
         Ok(())
     }
 
-    /// Delete a region from KvmMemoryListener.
+    /// Callback function for deleting Region, which only care about Ram-type Region yet.
     ///
     /// # Arguments
     ///
-    /// * `flat_range` - FlatRange would be used to find the region.
+    /// * `flat_range` - Corresponding FlatRange of new-deleted region.
     fn delete_region(&self, flat_range: &FlatRange) -> Result<()> {
         if flat_range.owner.region_type() != RegionType::Ram {
             return Ok(());
@@ -295,7 +295,7 @@ impl KvmMemoryListener {
     ///
     /// # Errors
     ///
-    /// Return Error if the length of ioeventfd data is unexpected.
+    /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
 
@@ -381,8 +381,7 @@ impl Listener for KvmMemoryListener {
     /// # Errors
     ///
     /// Returns Error if
-    /// * No FlatRange in argument `flat_range`.
-    /// * No IoEventFd in argument `evtfd'.
+    /// * Both `flat_range` and `evtfd' are not provided.
     fn handle_request(
         &self,
         flat_range: Option<&FlatRange>,
@@ -431,7 +430,7 @@ impl KvmIoListener {
     ///
     /// # Errors
     ///
-    /// Return Error if the length of ioeventfd data is unexpected.
+    /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
 
@@ -513,7 +512,7 @@ impl Listener for KvmIoListener {
     ///
     /// # Arguments
     ///
-    /// * `_range` - FlatRange would be used to find the region.
+    /// * `_range` - Corresponding FlatRange of new-added/deleted region.
     /// * `evtfd` - IoEvent of Region.
     /// * `req_type` - Request type.
     fn handle_request(

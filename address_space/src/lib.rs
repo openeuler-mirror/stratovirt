@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 #![allow(missing_docs)]
-//! Manages address resources that used by Vm and their devices.
+//! Manages address resources that used by Vm's memory and emulated devices.
 //!
 //! # Examples
 //!
@@ -23,11 +23,11 @@
 //! struct DummyDevice;
 //! impl DummyDevice {
 //!     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
-//!         // read operation ommited
+//!         // read operation omitted
 //!         true
 //!     }
 //!     fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool {
-//!         // write operation ommited
+//!         // write operation omitted
 //!         true
 //!     }
 //! }
