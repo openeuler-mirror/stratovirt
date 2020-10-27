@@ -543,12 +543,13 @@ mod test {
     use super::*;
     use crate::{GuestAddress, HostMemMapping, Region, RegionIoEventFd};
 
-    fn generate_region_ioeventfd(addr: u64, datamatch: Option<u64>) -> RegionIoEventFd {
+    fn generate_region_ioeventfd<T: Into<u64>>(addr: u64, datamatch: T) -> RegionIoEventFd {
+        let data = datamatch.into();
         RegionIoEventFd {
             fd: EventFd::new(EFD_NONBLOCK).unwrap(),
-            addr_range: AddressRange::from((addr, 4)),
-            data_match: datamatch.is_some(),
-            data: datamatch.unwrap_or(064),
+            addr_range: AddressRange::from((addr, std::mem::size_of::<T>() as u64)),
+            data_match: data != 0,
+            data,
         }
     }
 
@@ -637,30 +638,93 @@ mod test {
             Err(_) => return,
         };
 
-        let evtfd = generate_region_ioeventfd(4, None);
+        let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
-        // evtfd already added, adding again should make an error
+        // The evtfd already added, adding again should make an error
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_err());
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_ok());
-        // evtfd already deleted, deleting again should make an error
+        // The evtfd already deleted, deleting again should cause an error
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_err());
 
-        // register an ioeventfd with data-match
-        let evtfd = generate_region_ioeventfd(64, Some(4u64));
+        // Register an ioeventfd with data-match
+        let evtfd = generate_region_ioeventfd(64, 4_u64);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
+
+        // Register an ioeventfd which has same address with previously registered ones will cause an error
+        let same_addred_evtfd = generate_region_ioeventfd(64, 4_u64);
+        assert!(kml
+            .handle_request(
+                None,
+                Some(&same_addred_evtfd),
+                ListenerReqType::AddIoeventfd
+            )
+            .is_err());
+
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_ok());
+    }
+
+    #[test]
+    fn test_ioeventfd_with_data_match() {
+        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
+            Err(_) => return,
+        };
+        let evtfd_addr = 0x1000_u64;
+
+        let mut evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
+        evtfd.addr_range.size = 3_u64;
+        // Matched data length is not supported.
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
+            .is_err());
+
+        let evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
+            .is_ok());
+
+        // Delete ioeventfd with wrong address will cause an error.
+        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        evtfd_to_del.addr_range.base.0 = evtfd_to_del.addr_range.base.0 - 2;
+        assert!(kml
+            .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
+            .is_err());
+
+        // Delete ioeventfd with inconsistent data-match will cause error.
+        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        evtfd_to_del.data_match = false;
+        assert!(kml
+            .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
+            .is_err());
+
+        // Delete ioeventfd with inconsistent matched data will cause an error.
+        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        evtfd_to_del.data = 128_u64;
+        assert!(kml
+            .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
+            .is_err());
+
+        // Delete it successfully.
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
+            .is_ok());
+
+        // Delete a not-exist ioeventfd will cause an error.
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
+            .is_err());
     }
 
     #[test]
@@ -671,7 +735,7 @@ mod test {
             Err(_) => return,
         };
 
-        let evtfd = generate_region_ioeventfd(4, None);
+        let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
