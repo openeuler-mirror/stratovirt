@@ -289,4 +289,37 @@ mod test {
         assert!(f_back.is_ok());
         assert_eq!(f_back.as_ref().unwrap().offset, 0u64);
     }
+
+    #[test]
+    fn test_create_file_backend() {
+        let file_path = String::from("back_mem_test1");
+        let file_size = 100_u64;
+        let f_back = FileBackend::new(&file_path, file_size);
+        assert!(f_back.is_ok());
+        assert_eq!(f_back.as_ref().unwrap().offset, 0u64);
+        assert_eq!(
+            f_back.as_ref().unwrap().file.metadata().unwrap().len(),
+            100u64
+        );
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_exist_file_backend() {
+        let file_path = String::from("back_mem_test2");
+        let file = File::create(file_path.clone()).unwrap();
+        file.set_len(50_u64).unwrap();
+
+        let file_size = 100_u64;
+        let f_back = FileBackend::new(&file_path, file_size);
+        assert!(f_back.is_ok());
+        assert_eq!(f_back.as_ref().unwrap().offset, 0u64);
+        assert_eq!(
+            f_back.as_ref().unwrap().file.metadata().unwrap().len(),
+            50_u64
+        );
+
+        std::fs::remove_file(file_path).unwrap();
+    }
 }
