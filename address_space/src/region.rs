@@ -887,21 +887,20 @@ mod test {
                 .generate_flatview(GuestAddress(0), addr_range)
                 .unwrap();
 
-            for fr in view.0.iter() {
-                println!(
-                    "\nrange: addr is {:#x}, size is {:#x}",
-                    fr.addr_range.base.raw_value(),
-                    fr.addr_range.size
-                );
-                println!("offset is {:#x}", fr.offset_in_region);
-                println!("region type is {:#?}", fr.owner.region_type());
-                println!(
-                    "size is {:#x}, priority = {:#?}",
-                    fr.owner.size(),
-                    fr.owner.priority(),
-                );
-            }
             assert_eq!(view.0.len(), 5);
+            // Expected address range in flat_range, and the priority of corresponding region.
+            let expected_fw: &[(u64, u64, i32)] = &[
+                (0, 2000, 1),
+                (2000, 1000, 0),
+                (3000, 1000, 1),
+                (4000, 1000, 0),
+                (5000, 1000, 1),
+            ];
+            for (index, fr) in view.0.iter().enumerate() {
+                assert_eq!(fr.addr_range.base.raw_value(), expected_fw[index].0);
+                assert_eq!(fr.addr_range.size, expected_fw[index].1);
+                assert_eq!(fr.owner.priority(), expected_fw[index].2);
+            }
         }
 
         // memory region layout
@@ -934,21 +933,14 @@ mod test {
                 .generate_flatview(GuestAddress(0), addr_range)
                 .unwrap();
 
-            for fr in view.0.iter() {
-                println!(
-                    "\nrange: addr is {}, size is {}",
-                    fr.addr_range.base.raw_value(),
-                    fr.addr_range.size
-                );
-                println!("offset is {}", fr.offset_in_region);
-                println!("region type is {:#?}", fr.owner.region_type());
-                println!(
-                    "size is {}, priority = {}",
-                    fr.owner.size(),
-                    fr.owner.priority(),
-                );
-            }
             assert_eq!(view.0.len(), 3);
+            // Expected address range in flat_range, and the priority of corresponding region.
+            let expected_fw: &[(u64, u64, i32)] = &[(0, 1000, 0), (2000, 2000, 2), (4000, 2000, 3)];
+            for (index, fr) in view.0.iter().enumerate() {
+                assert_eq!(fr.addr_range.base.raw_value(), expected_fw[index].0);
+                assert_eq!(fr.addr_range.size, expected_fw[index].1);
+                assert_eq!(fr.owner.priority(), expected_fw[index].2);
+            }
         }
     }
 }
