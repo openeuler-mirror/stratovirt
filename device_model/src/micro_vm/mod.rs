@@ -212,9 +212,6 @@ impl LightMachine {
         #[cfg(target_arch = "x86_64")]
         sys_io.register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))?;
 
-        #[cfg(target_arch = "x86_64")]
-        Self::arch_init(&vm_fd)?;
-
         // Init guest-memory
         // Define ram-region ranges according to architectures
         let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_config.mem_size);
@@ -246,6 +243,9 @@ impl LightMachine {
         for cpu_id in 0..nrcpus {
             vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
         }
+
+        #[cfg(target_arch = "x86_64")]
+        Self::arch_init(&vm_fd)?;
 
         // Interrupt Controller Chip init
         #[cfg(target_arch = "aarch64")]
@@ -588,83 +588,6 @@ impl LightMachine {
         );
 
         MainLoop::update_event(vec![notifier])?;
-        Ok(())
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    fn generate_serial_device_node(
-        &self,
-        dev_info: &DeviceResource,
-        fdt: &mut Vec<u8>,
-    ) -> util::errors::Result<()> {
-        let node = format!("/uart@{:x}", dev_info.addr);
-        device_tree::add_sub_node(fdt, &node)?;
-        device_tree::set_property_string(fdt, &node, "compatible", "ns16550a")?;
-        device_tree::set_property_string(fdt, &node, "clock-names", "apb_pclk")?;
-        device_tree::set_property_u32(fdt, &node, "clocks", device_tree::CLK_PHANDLE)?;
-        device_tree::set_property_array_u64(fdt, &node, "reg", &[dev_info.addr, dev_info.size])?;
-        device_tree::set_property_array_u32(
-            fdt,
-            &node,
-            "interrupts",
-            &[
-                device_tree::GIC_FDT_IRQ_TYPE_SPI,
-                dev_info.irq,
-                device_tree::IRQ_TYPE_EDGE_RISING,
-            ],
-        )?;
-
-        Ok(())
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    fn generate_rtc_device_node(
-        &self,
-        dev_info: &DeviceResource,
-        fdt: &mut Vec<u8>,
-    ) -> util::errors::Result<()> {
-        let node = format!("/pl031@{:x}", dev_info.addr);
-        device_tree::add_sub_node(fdt, &node)?;
-        device_tree::set_property_string(fdt, &node, "compatible", "arm,pl031\0arm,primecell\0")?;
-        device_tree::set_property_string(fdt, &node, "clock-names", "apb_pclk")?;
-        device_tree::set_property_u32(fdt, &node, "clocks", device_tree::CLK_PHANDLE)?;
-        device_tree::set_property_array_u64(fdt, &node, "reg", &[dev_info.addr, dev_info.size])?;
-        device_tree::set_property_array_u32(
-            fdt,
-            &node,
-            "interrupts",
-            &[
-                device_tree::GIC_FDT_IRQ_TYPE_SPI,
-                dev_info.irq,
-                device_tree::IRQ_TYPE_LEVEL_HIGH,
-            ],
-        )?;
-
-        Ok(())
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    fn generate_virtio_devices_node(
-        &self,
-        dev_info: &DeviceResource,
-        fdt: &mut Vec<u8>,
-    ) -> util::errors::Result<()> {
-        let node = format!("/virtio_mmio@{:x}", dev_info.addr);
-        device_tree::add_sub_node(fdt, &node)?;
-        device_tree::set_property_string(fdt, &node, "compatible", "virtio,mmio")?;
-        device_tree::set_property_u32(fdt, &node, "interrupt-parent", device_tree::GIC_PHANDLE)?;
-        device_tree::set_property_array_u64(fdt, &node, "reg", &[dev_info.addr, dev_info.size])?;
-        device_tree::set_property_array_u32(
-            fdt,
-            &node,
-            "interrupts",
-            &[
-                device_tree::GIC_FDT_IRQ_TYPE_SPI,
-                dev_info.irq,
-                device_tree::IRQ_TYPE_EDGE_RISING,
-            ],
-        )?;
-
         Ok(())
     }
 }
@@ -1060,11 +983,108 @@ impl MainLoopManager for LightMachine {
     }
 }
 
+/// Function that helps to generate serial node in device-tree.
+///
+/// # Arguments
+///
+/// * `dev_info` - Device resource info of serial device.
+/// * `fdt` - Flatted device-tree blob where serial node will be filled into.
+#[cfg(target_arch = "aarch64")]
+fn generate_serial_device_node(
+    dev_info: &DeviceResource,
+    fdt: &mut Vec<u8>,
+) -> util::errors::Result<()> {
+    let node = format!("/uart@{:x}", dev_info.addr);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "ns16550a")?;
+    device_tree::set_property_string(fdt, &node, "clock-names", "apb_pclk")?;
+    device_tree::set_property_u32(fdt, &node, "clocks", device_tree::CLK_PHANDLE)?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[dev_info.addr, dev_info.size])?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
+            dev_info.irq,
+            device_tree::IRQ_TYPE_EDGE_RISING,
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// Function that helps to generate RTC node in device-tree.
+///
+/// # Arguments
+///
+/// * `dev_info` - Device resource info of RTC device.
+/// * `fdt` - Flatted device-tree blob where RTC node will be filled into.
+#[cfg(target_arch = "aarch64")]
+fn generate_rtc_device_node(
+    dev_info: &DeviceResource,
+    fdt: &mut Vec<u8>,
+) -> util::errors::Result<()> {
+    let node = format!("/pl031@{:x}", dev_info.addr);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "arm,pl031\0arm,primecell\0")?;
+    device_tree::set_property_string(fdt, &node, "clock-names", "apb_pclk")?;
+    device_tree::set_property_u32(fdt, &node, "clocks", device_tree::CLK_PHANDLE)?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[dev_info.addr, dev_info.size])?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
+            dev_info.irq,
+            device_tree::IRQ_TYPE_LEVEL_HIGH,
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// Function that helps to generate Virtio-Mmio device's node in device-tree.
+///
+/// # Arguments
+///
+/// * `dev_info` - Device resource info of Virtio-Mmio device.
+/// * `fdt` - Flatted device-tree blob where node will be filled into.
+#[cfg(target_arch = "aarch64")]
+fn generate_virtio_devices_node(
+    dev_info: &DeviceResource,
+    fdt: &mut Vec<u8>,
+) -> util::errors::Result<()> {
+    let node = format!("/virtio_mmio@{:x}", dev_info.addr);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "virtio,mmio")?;
+    device_tree::set_property_u32(fdt, &node, "interrupt-parent", device_tree::GIC_PHANDLE)?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[dev_info.addr, dev_info.size])?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
+            dev_info.irq,
+            device_tree::IRQ_TYPE_EDGE_RISING,
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// Trait that helps to generate all nodes in device-tree.
 #[cfg(target_arch = "aarch64")]
 trait CompileFDTHelper {
+    /// Function that helps to generate cpu nodes.
     fn generate_cpu_nodes(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
+    /// Function that helps to generate memory nodes.
     fn generate_memory_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
+    /// Function that helps to generate Virtio-mmio devices' nodes.
     fn generate_devices_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
+    /// Function that helps to generate the chosen node.
     fn generate_chosen_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
 }
 
@@ -1199,13 +1219,13 @@ impl CompileFDTHelper for LightMachine {
         for dev_info in self.bus.get_devices_info().iter().rev() {
             match dev_info.dev_type {
                 DeviceType::SERIAL => {
-                    self.generate_serial_device_node(dev_info, fdt)?;
+                    generate_serial_device_node(dev_info, fdt)?;
                 }
                 DeviceType::RTC => {
-                    self.generate_rtc_device_node(dev_info, fdt)?;
+                    generate_rtc_device_node(dev_info, fdt)?;
                 }
                 _ => {
-                    self.generate_virtio_devices_node(dev_info, fdt)?;
+                    generate_virtio_devices_node(dev_info, fdt)?;
                 }
             }
         }
