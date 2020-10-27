@@ -74,7 +74,7 @@ fn run() -> Result<()> {
 
         let panic_file = panic_msg.location().map_or("", |loc| loc.file());
         let panic_line = panic_msg.location().map_or(0, |loc| loc.line());
-        if let Some(msg) = panic_msg.payload().downcast_ref::<String>() {
+        if let Some(msg) = panic_msg.payload().downcast_ref::<&str>() {
             error!("Panic at [{}: {}]: {}.", panic_file, panic_line, msg);
         } else {
             error!("Panic at [{}: {}].", panic_file, panic_line);
