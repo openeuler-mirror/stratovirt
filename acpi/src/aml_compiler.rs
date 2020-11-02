@@ -613,6 +613,72 @@ impl AmlBuilder for AmlFieldUnit {
     }
 }
 
+/// Open a named Scope, can refer any scope within the namespace.
+pub struct AmlScope {
+    /// The name of scope.
+    name: String,
+    /// Contains objects created inside the scope, which are encodes to bytes.
+    buf: Vec<u8>,
+}
+
+impl AmlScope {
+    pub fn new(name: &str) -> AmlScope {
+        AmlScope {
+            name: name.to_string(),
+            buf: build_name_string(name),
+        }
+    }
+}
+
+impl AmlBuilder for AmlScope {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x10);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlScope {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
+/// Device object that represents a processor, a device, etc.
+pub struct AmlDevice {
+    name: String,
+    buf: Vec<u8>,
+}
+
+impl AmlDevice {
+    pub fn new(name: &str) -> AmlDevice {
+        AmlDevice {
+            name: name.to_string(),
+            buf: build_name_string(name),
+        }
+    }
+}
+
+impl AmlBuilder for AmlDevice {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x5B);
+        bytes.push(0x82);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlDevice {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -722,5 +788,38 @@ mod test {
             0x34, 0x0C,
         ];
         assert_eq!(field.aml_bytes(), target);
+    }
+
+    #[test]
+    fn test_device() {
+        // Device (PCI0)
+        // {
+        //     Name (_HID, EisaId ("PNP0A03"))
+        // }
+        let mut device = AmlDevice::new("PCI0");
+        let hid = AmlNameDecl::new("_HID", AmlEisaId::new("PNP0A03"));
+        device.append_child(hid);
+
+        let bytes = device.aml_bytes();
+        let target = vec![
+            0x5B, 0x82, 0x0F, 0x50, 0x43, 0x49, 0x30, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41,
+            0xD0, 0x0A, 0x03,
+        ];
+        assert_eq!(bytes, target);
+    }
+
+    #[test]
+    fn test_scope() {
+        // Scope (_SB) {
+        //     Name (INT1, 0xABCD)
+        // }
+        let mut scope = AmlScope::new("_SB");
+        scope.append_child(AmlNameDecl::new("INT1", AmlInteger(0xABCD)));
+
+        let target = vec![
+            0x10, 0x0D, 0x5F, 0x53, 0x42, 0x5F, 0x08, 0x49, 0x4E, 0x54, 0x31, 0x0B, 0xCD, 0xAB,
+        ];
+
+        assert_eq!(scope.aml_bytes(), target);
     }
 }
