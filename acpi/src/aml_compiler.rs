@@ -302,6 +302,138 @@ impl AmlBuilder for AmlToUuid {
     }
 }
 
+// Follow ACPI spec: 5.4 Definition Block Encoding
+// The lower two bits indicates how many bytes are used for PkgLength
+// The 3,4 bits are only used if PkgLength consists of one bytes.
+// Therefore, the max value of PkgLength is 0x3F(one-byte encoding),
+// 0xF_FF(two-byte encoding), 0xF_FF_FF(three-byte encoding), 0xF_FF_FF_FF(four-byte encoding).
+/// Calculate PkgLength according to the length, and convert it to bytes.
+fn build_pkg_length(length: usize, include_self: bool) -> Vec<u8> {
+    let pkg_1byte_shift = 6;
+    let pkg_2byte_shift = 4;
+    let pkg_3byte_shift = 12;
+    let pkg_4byte_shift = 20;
+    let mut pkg_length = length;
+    let mut bytes = Vec::new();
+
+    let bytes_count = if length + 1 < (1 << pkg_1byte_shift) {
+        1
+    } else if length + 2 < (1 << pkg_3byte_shift) {
+        2
+    } else if length + 3 < (1 << pkg_4byte_shift) {
+        3
+    } else {
+        4
+    };
+
+    if include_self {
+        pkg_length += bytes_count;
+    }
+
+    match bytes_count {
+        1 => {
+            bytes.push(pkg_length as u8);
+        }
+        2 => {
+            bytes.push((1 << pkg_1byte_shift | (pkg_length & 0xF)) as u8);
+            bytes.push((pkg_length >> pkg_2byte_shift) as u8);
+        }
+        3 => {
+            bytes.push((2 << pkg_1byte_shift | (pkg_length & 0xF)) as u8);
+            bytes.push((pkg_length >> pkg_2byte_shift) as u8);
+            bytes.push((pkg_length >> pkg_3byte_shift) as u8);
+        }
+        4 => {
+            bytes.push((3 << pkg_1byte_shift | (pkg_length & 0xF)) as u8);
+            bytes.push((pkg_length >> pkg_2byte_shift) as u8);
+            bytes.push((pkg_length >> pkg_3byte_shift) as u8);
+            bytes.push((pkg_length >> pkg_4byte_shift) as u8);
+        }
+        _ => panic!("Undefined PkgLength"),
+    }
+
+    bytes
+}
+
+/// Buffer declaration, represents an array of bytes.
+/// When a byte stream cannot by `AmlByte`, `AmlQWord`, etc, Buffer can be used.
+pub struct AmlBuffer(pub Vec<u8>);
+
+impl AmlBuilder for AmlBuffer {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x11);
+        let len_bytes = AmlInteger(self.0.len() as u64).aml_bytes();
+        bytes.extend(build_pkg_length(len_bytes.len() + self.0.len(), true));
+        bytes.extend(len_bytes);
+        bytes.extend(self.0.clone());
+
+        bytes
+    }
+}
+
+/// Package contains an array of other objects.
+pub struct AmlPackage {
+    elem_count: u8,
+    buf: Vec<u8>,
+}
+
+impl AmlPackage {
+    pub fn new(elem_count: u8) -> AmlPackage {
+        AmlPackage {
+            elem_count,
+            buf: vec![elem_count],
+        }
+    }
+}
+
+impl AmlBuilder for AmlPackage {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x12);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlPackage {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
+/// Variable-sized Package.
+pub struct AmlVarPackage {
+    elem_count: u8,
+    buf: Vec<u8>,
+}
+
+impl AmlVarPackage {
+    pub fn new(elem_count: u8) -> AmlVarPackage {
+        AmlVarPackage {
+            elem_count,
+            buf: vec![elem_count],
+        }
+    }
+}
+
+impl AmlBuilder for AmlVarPackage {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x13);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlVarPackage {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -317,5 +449,57 @@ mod test {
                 0xD7, 0x66
             ]
         );
+    }
+    #[test]
+    fn test_package() {
+        // Name (PKG1, Package(3){0x1234, "Hello world", INT1})
+        let mut pkg1 = AmlPackage::new(3);
+        pkg1.append_child(AmlInteger(0x1234));
+        pkg1.append_child(AmlString("Hello world".to_string()));
+        pkg1.append_child(AmlName("INT1".to_string()));
+        let named_pkg1 = AmlNameDecl::new("PKG1", pkg1);
+
+        let pkg1_bytes = vec![
+            0x08, 0x50, 0x4B, 0x47, 0x31, 0x12, 0x16, 0x03, 0x0B, 0x34, 0x12, 0x0D, 0x48, 0x65,
+            0x6C, 0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x00, 0x49, 0x4E, 0x54, 0x31,
+        ];
+        assert_eq!(named_pkg1.aml_bytes(), pkg1_bytes);
+
+        // Name (PKG2, Package(){INT1, "Good bye"})
+        let mut pkg2 = AmlPackage::new(2);
+        pkg2.append_child(AmlName("INT1".to_string()));
+        pkg2.append_child(AmlString("Good bye".to_string()));
+        let named_pkg2 = AmlNameDecl::new("PKG2", pkg2);
+
+        let pkg2_bytes = vec![
+            0x08, 0x50, 0x4B, 0x47, 0x32, 0x12, 0x10, 0x02, 0x49, 0x4E, 0x54, 0x31, 0x0D, 0x47,
+            0x6F, 0x6F, 0x64, 0x20, 0x62, 0x79, 0x65, 0x00,
+        ];
+        assert_eq!(named_pkg2.aml_bytes(), pkg2_bytes);
+
+        // Name (PKG3, Package(){
+        //     "ASL is fun",
+        //     Package() {0xff, 0xfe, 0xfd},
+        //     Buffer() {0x01, 0x02}
+        // })
+        let mut pkg3 = AmlPackage::new(3);
+        pkg3.append_child(AmlString("ASL is fun".to_string()));
+
+        let mut pkg32 = AmlPackage::new(3);
+        pkg32.append_child(AmlInteger(0xff));
+        pkg32.append_child(AmlInteger(0xfe));
+        pkg32.append_child(AmlInteger(0xfd));
+        pkg3.append_child(pkg32);
+
+        let buffer = AmlBuffer(vec![0x01, 0x02]);
+        pkg3.append_child(buffer);
+        let named_pkg3 = AmlNameDecl::new("PKG3", pkg3);
+
+        let pkg3_bytes = vec![
+            0x08, 0x50, 0x4B, 0x47, 0x33, 0x12, 0x1D, 0x03, 0x0D, 0x41, 0x53, 0x4C, 0x20, 0x69,
+            0x73, 0x20, 0x66, 0x75, 0x6E, 0x00, 0x12, 0x08, 0x03, 0x0A, 0xFF, 0x0A, 0xFE, 0x0A,
+            0xFD, 0x11, 0x05, 0x0A, 0x02, 0x01, 0x02,
+        ];
+        assert_eq!(named_pkg3.aml_bytes(), pkg3_bytes);
     }
 }
