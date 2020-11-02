@@ -15,13 +15,13 @@ use std::io;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
-use address_space::{GuestAddress, RegionOps};
+use address_space::GuestAddress;
 use kvm_ioctls::VmFd;
 use util::epoll_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
 use super::super::mmio::errors::{Result, ResultExt};
-use super::super::mmio::{DeviceResource, DeviceType, MmioDeviceOps};
+use super::super::mmio::{DeviceOps, DeviceResource, DeviceType, MmioDeviceOps};
 
 const UART_IER_RDI: u8 = 0x01;
 const UART_IER_THRI: u8 = 0x02;
@@ -290,7 +290,7 @@ impl Serial {
     }
 }
 
-impl RegionOps for Serial {
+impl DeviceOps for Serial {
     /// Read one byte data to `data` from a certain register selected by `offset`.
     ///
     /// # Arguments
@@ -324,7 +324,6 @@ impl RegionOps for Serial {
         self.write_internal(offset, data[0]).is_ok()
     }
 }
-
 impl MmioDeviceOps for Serial {
     /// Realize a serial for VM.
     /// * Create a new output component.

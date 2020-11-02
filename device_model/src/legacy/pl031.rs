@@ -12,13 +12,13 @@
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use address_space::{GuestAddress, RegionOps};
+use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::super::mmio::errors::{Result, ResultExt};
-use super::super::mmio::{DeviceResource, DeviceType, MmioDeviceOps};
+use super::super::mmio::{DeviceOps, DeviceResource, DeviceType, MmioDeviceOps};
 
 /// Registers for pl032 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
@@ -87,7 +87,7 @@ impl PL031 {
     }
 }
 
-impl RegionOps for PL031 {
+impl DeviceOps for PL031 {
     /// Read data from registers by guest.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if offset >= 0xFE0 && offset < 0x1000 {

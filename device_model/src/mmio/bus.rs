@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use address_space::{AddressSpace, RegionOps};
+use address_space::AddressSpace;
 use kvm_ioctls::VmFd;
 use machine_manager::config::{BootSource, ConfigCheck};
 
@@ -146,7 +146,7 @@ impl Bus {
     /// # Errors
     ///
     /// Return Error if irq number exceed the limit as Arch spec defined.
-    pub fn attach_device<T: 'static + RegionOps + MmioDeviceOps>(
+    pub fn attach_device<T: 'static + MmioDeviceOps>(
         &mut self,
         device: Arc<Mutex<T>>,
     ) -> Result<MmioDevice> {
@@ -172,15 +172,11 @@ impl Bus {
             bail!("irq {} exceed max value {}", resource.irq, IRQ_RANGE.1);
         }
 
-        let device = MmioDevice {
-            device: device.clone(),
-            dev_region: device,
-            resource: Arc::new(resource),
-        };
+        let mmio_dev = MmioDevice::new(device, resource);
 
-        self.devices.push(device.clone());
+        self.devices.push(mmio_dev.clone());
 
-        Ok(device)
+        Ok(mmio_dev)
     }
 
     /// Get the information of all devices inserted in bus.

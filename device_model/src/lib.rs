@@ -48,6 +48,27 @@ mod virtio;
 pub use error_chain::*;
 pub use micro_vm::{cmdline, main_loop::MainLoop, micro_syscall::register_seccomp, LightMachine};
 
+use address_space::GuestAddress;
+/// Basic device operations
+pub trait DeviceOps: Send {
+    /// Read function of device.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - A u8-type array.
+    /// * `base` - Base address of this device.
+    /// * `offset` - Offset from base address.
+    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool;
+    /// Write function of device.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - A u8-type array.
+    /// * `base` - Base address of this device.
+    /// * `offset` - Offset from base address.
+    fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool;
+}
+
 pub mod errors {
     error_chain! {
         links {
