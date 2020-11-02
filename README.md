@@ -55,7 +55,7 @@ You can get more information about StratoVirt at:
 
 https://gitee.com/openeuler/stratovirt/wikis
 
-If you find a bug or have some ideas, please send an email to the [virt mailing list](virt@openeuler.org) or submit an [issue](https://gitee.com/openeuler/stratovirt/issues).
+If you find a bug or have some ideas, please send an email to the [virt mailing list](https://mailweb.openeuler.org/postorius/lists/virt.openeuler.org/) or submit an [issue](https://gitee.com/openeuler/stratovirt/issues).
 
 ## Licensing
 StratoVirt is licensed under the Mulan PSL v2.
