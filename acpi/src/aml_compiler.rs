@@ -434,6 +434,185 @@ impl AmlScopeBuilder for AmlVarPackage {
     }
 }
 
+/// Operation region address space type.
+#[derive(Copy, Clone)]
+pub enum AmlAddressSpaceType {
+    /// System memory
+    SystemMemory = 0,
+    /// System IO
+    SystemIO = 1,
+    /// PCI config space
+    PCIConfig = 2,
+    /// Embedded controller space
+    EmbeddedControl = 3,
+    /// SMBus
+    SMBus = 4,
+    /// CMOS
+    SystemCMOS = 5,
+    /// PCI Bar target
+    PciBarTarget = 6,
+    /// IPMI
+    IPMI = 7,
+    /// General Purpose IO
+    GeneralPurposeIO = 8,
+    /// Generic serial bus
+    GenericSerialBus = 9,
+    /// Platform Communications Channel
+    PCC = 10,
+}
+
+/// Operation Region: defines a named objects of certain type: SystemMemory, SystemIo, etc.
+/// OperationRegion also contains the start address and size.
+pub struct AmlOpRegion {
+    /// Name of Operation region.
+    name: String,
+    /// System space type.
+    space_type: AmlAddressSpaceType,
+    /// Start address.
+    offset: u64,
+    /// Range length.
+    length: u64,
+}
+
+impl AmlOpRegion {
+    pub fn new(
+        name: &str,
+        space_type: AmlAddressSpaceType,
+        offset: u64,
+        length: u64,
+    ) -> AmlOpRegion {
+        AmlOpRegion {
+            name: name.to_string(),
+            space_type,
+            offset,
+            length,
+        }
+    }
+}
+
+impl AmlBuilder for AmlOpRegion {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x5B);
+        bytes.push(0x80);
+        bytes.extend(build_name_string(self.name.as_ref()));
+        bytes.push(self.space_type as u8);
+
+        bytes.extend(AmlInteger(self.offset).aml_bytes());
+        bytes.extend(AmlInteger(self.length).aml_bytes());
+        bytes
+    }
+}
+
+/// Access width of this field.
+#[derive(Copy, Clone)]
+pub enum AmlFieldAccessType {
+    Any = 0,
+    Byte = 1,
+    Word = 2,
+    DWord = 3,
+    QWord = 4,
+    Buffer = 5,
+}
+
+/// Flag that indicates whether the Global Lock is to be used
+/// when accessing this field
+#[derive(Copy, Clone)]
+pub enum AmlFieldLockRule {
+    NoLock = 0,
+    Lock = 1,
+}
+
+/// Flag that indicates how the unmodified bits of a field are treated
+#[derive(Copy, Clone)]
+pub enum AmlFieldUpdateRule {
+    Preserve = 0,
+    WriteAsOnes = 1,
+    WriteAsZeros = 2,
+}
+
+/// Field represents several bits in Operation Field.
+pub struct AmlField {
+    /// The name of corresponding OperationRegion.
+    name: String,
+    /// The access type of this Field.
+    access_type: AmlFieldAccessType,
+    /// Global lock is to be used or not when accessing this field.
+    lock_rule: AmlFieldLockRule,
+    /// Unmodified bits of a field are treated as Ones/Zeros/Preserve.
+    update_rule: AmlFieldUpdateRule,
+    /// Field Unit list.
+    buf: Vec<u8>,
+}
+
+impl AmlField {
+    pub fn new(
+        name: &str,
+        acc_ty: AmlFieldAccessType,
+        lock_r: AmlFieldLockRule,
+        update_r: AmlFieldUpdateRule,
+    ) -> AmlField {
+        let mut bytes = Vec::new();
+        let flag = ((update_r as u8) << 5) | ((lock_r as u8) << 1) | (acc_ty as u8 & 0x0F);
+        bytes.extend(build_name_string(name));
+        bytes.push(flag);
+
+        AmlField {
+            name: name.to_string(),
+            access_type: acc_ty,
+            lock_rule: lock_r,
+            update_rule: update_r,
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlBuilder for AmlField {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x5B);
+        bytes.push(0x81);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlField {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
+/// Field unit that defines inside Field-scope.
+pub struct AmlFieldUnit {
+    /// The name of this Field unit. `None` value indicate that this field is reserved.
+    name: Option<String>,
+    /// The Byte length of this Field unit.
+    length: u8,
+}
+
+impl AmlFieldUnit {
+    pub fn new(name: Option<&str>, length: u8) -> AmlFieldUnit {
+        AmlFieldUnit {
+            name: name.map(|s| s.to_string()),
+            length,
+        }
+    }
+}
+
+impl AmlBuilder for AmlFieldUnit {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = self
+            .name
+            .as_ref()
+            .map(|str| build_name_seg(&str))
+            .unwrap_or_else(|| vec![0x0_u8]);
+        bytes.extend(build_pkg_length(self.length as usize, false));
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -501,5 +680,47 @@ mod test {
             0xFD, 0x11, 0x05, 0x0A, 0x02, 0x01, 0x02,
         ];
         assert_eq!(named_pkg3.aml_bytes(), pkg3_bytes);
+    }
+
+    #[test]
+    fn test_op_region() {
+        // OperationRegion(OPR1, SystemMemory, 0x10000, 0x5)
+        // Field (OPR1, ByteAcc, NoLock, WriteAsZeros)
+        // {
+        //     FLD1, 8,
+        //     FLD2, 8,
+        //     Offset (3), //Start the next field unit at byte offset 3
+        //     FLD3, 4,
+        //     FLD4, 12,
+        // }
+        let op_region = AmlOpRegion::new("OPR1", AmlAddressSpaceType::SystemMemory, 0x10000, 0x5);
+        let target = vec![
+            0x5B, 0x80, 0x4F, 0x50, 0x52, 0x31, 0x00, 0x0C, 0x00, 0x00, 0x01, 0x00, 0x0A, 0x05,
+        ];
+        assert_eq!(op_region.aml_bytes(), target);
+
+        let mut field = AmlField::new(
+            "OPR1",
+            AmlFieldAccessType::Byte,
+            AmlFieldLockRule::NoLock,
+            AmlFieldUpdateRule::WriteAsZeros,
+        );
+
+        let elem1 = AmlFieldUnit::new(Some("FLD1"), 8);
+        let elem2 = AmlFieldUnit::new(Some("FLD2"), 8);
+        let elem3 = AmlFieldUnit::new(None, 8);
+        let elem4 = AmlFieldUnit::new(Some("FLD3"), 4);
+        let elem5 = AmlFieldUnit::new(Some("FLD4"), 12);
+
+        for e in vec![elem1, elem2, elem3, elem4, elem5] {
+            field.append_child(e);
+        }
+
+        let target = vec![
+            0x5B, 0x81, 0x1C, 0x4F, 0x50, 0x52, 0x31, 0x41, 0x46, 0x4C, 0x44, 0x31, 0x08, 0x46,
+            0x4C, 0x44, 0x32, 0x08, 0x00, 0x08, 0x46, 0x4C, 0x44, 0x33, 0x04, 0x46, 0x4C, 0x44,
+            0x34, 0x0C,
+        ];
+        assert_eq!(field.aml_bytes(), target);
     }
 }
