@@ -1053,6 +1053,94 @@ impl AmlScopeBuilder for AmlWhile {
     }
 }
 
+/// This struct represents a Mutex.
+pub struct AmlMutex {
+    /// Name of the mutex.
+    name: String,
+    /// The synchronization level of the mutex. Default value is zero.
+    sync_level: u8,
+}
+
+impl AmlMutex {
+    pub fn new(name: &str, sync_level: u8) -> AmlMutex {
+        if sync_level > 15 {
+            panic!(
+                "Supported sync level of mutex is 0~15, given {}",
+                sync_level
+            );
+        }
+        AmlMutex {
+            name: name.to_string(),
+            sync_level,
+        }
+    }
+}
+
+impl AmlBuilder for AmlMutex {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x5B);
+        bytes.push(0x01);
+        bytes.extend(build_name_string(self.name.as_ref()));
+        bytes.push(self.sync_level);
+        bytes
+    }
+}
+
+/// Acquire a mutex. Returns True if timeout occurs or can not acquire the mutex.
+pub struct AmlAcquire {
+    /// The mutex object is converted to byte stream.
+    mutex: Vec<u8>,
+    /// If the mutex is owned by others, current thread suspends and waits for `timeout` **milliseconds**
+    /// `timeout` being set as 0xFFFF indicates that there is no timeout and
+    /// the acquire mutex operation will keeping waiting.
+    time_out: u16,
+}
+
+impl AmlAcquire {
+    pub fn new<T: AmlBuilder>(mtx: T, time_out: u16) -> AmlAcquire {
+        AmlAcquire {
+            mutex: mtx.aml_bytes(),
+            time_out,
+        }
+    }
+}
+
+impl AmlBuilder for AmlAcquire {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x5B);
+        bytes.push(0x23);
+        bytes.extend(self.mutex.clone());
+        bytes.extend(self.time_out.as_bytes());
+        bytes
+    }
+}
+
+/// Release the ownership of the mutex.
+pub struct AmlRelease {
+    /// the mutex that has been acquired before.
+    mutex: Vec<u8>,
+}
+
+impl AmlRelease {
+    fn new<T: AmlBuilder>(mtx: T) -> AmlRelease {
+        AmlRelease {
+            mutex: mtx.aml_bytes(),
+        }
+    }
+}
+
+impl AmlBuilder for AmlRelease {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x5B);
+        bytes.push(0x27);
+        bytes.extend(self.mutex.clone());
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1448,5 +1536,56 @@ mod test {
             0x01, 0xA4, 0x00,
         ];
         assert_eq!(method.aml_bytes(), method_bytes);
+    }
+
+    #[test]
+    fn test_mutex() {
+        // Device (PCI0)
+        // {
+        //     Name (_HID, EisaId ("PNP0A03"))
+        //     Mutex (MTX1, 0)
+        //
+        //     Method(MTD1, 2) {
+        //         Local0 = 0
+        //         Local1 = Arg0
+        //         while (Local0 < Local1) {
+        //             Acquire(MTX1, 0xFFFF);
+        //             Arg1 += 1
+        //             Local0 += 1
+        //             Release(MTX1)
+        //         }
+        //     }
+        // }
+        let mut device = AmlDevice::new("PCI0");
+        let hid = AmlNameDecl::new("_HID", AmlEisaId::new("PNP0A03"));
+        device.append_child(hid);
+
+        let mutex = AmlMutex::new("MTX1", 0);
+        device.append_child(mutex);
+
+        let mut method = AmlMethod::new("MTD1", 2, false);
+
+        let store1 = AmlStore::new(AmlInteger(0x0), AmlLocal(0));
+        let store2 = AmlStore::new(AmlArg(0), AmlLocal(1));
+        method.append_child(store1);
+        method.append_child(store2);
+
+        let mut while1 = AmlWhile::new(AmlLLess::new(AmlLocal(0), AmlLocal(1)));
+        while1.append_child(AmlAcquire::new(AmlName("MTX1".to_string()), 0xFFFF));
+        while1.append_child(AmlAdd::new(AmlArg(1), AmlInteger(1), AmlArg(1)));
+        while1.append_child(AmlAdd::new(AmlLocal(0), AmlInteger(1), AmlLocal(0)));
+        while1.append_child(AmlRelease::new(AmlName("MTX1".to_string())));
+        method.append_child(while1);
+
+        device.append_child(method);
+
+        let mutex_bytes = vec![
+            0x5B, 0x82, 0x3E, 0x50, 0x43, 0x49, 0x30, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0C, 0x41,
+            0xD0, 0x0A, 0x03, 0x5B, 0x01, 0x4D, 0x54, 0x58, 0x31, 0x00, 0x14, 0x27, 0x4D, 0x54,
+            0x44, 0x31, 0x02, 0x70, 0x00, 0x60, 0x70, 0x68, 0x61, 0xA2, 0x1A, 0x95, 0x60, 0x61,
+            0x5B, 0x23, 0x4D, 0x54, 0x58, 0x31, 0xFF, 0xFF, 0x72, 0x69, 0x01, 0x69, 0x72, 0x60,
+            0x01, 0x60, 0x5B, 0x27, 0x4D, 0x54, 0x58, 0x31,
+        ];
+        assert_eq!(device.aml_bytes(), mutex_bytes);
     }
 }
