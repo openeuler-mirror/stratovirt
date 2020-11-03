@@ -1141,6 +1141,89 @@ impl AmlBuilder for AmlRelease {
     }
 }
 
+/// Create arbitrary-length field of Buffer.
+pub struct AmlCreateField {
+    /// The name of this field.
+    name: String,
+    /// The source Buffer, which has been converted to bytes.
+    src: Vec<u8>,
+    /// the start index in the Buffer, which has been converted to bytes.
+    /// `bit_index` has to be an Integer.
+    bit_index: Vec<u8>,
+    /// the length of this bit range, which has been converted to bytes.
+    /// `bit_count` has to be an Integer and must not be zero.
+    /// Note that the bit range (bit_index, bit_index + bit_count) must not exceed the bound of Buffer.
+    bit_count: Vec<u8>,
+}
+
+impl AmlCreateField {
+    pub fn new<S: AmlBuilder, T: AmlBuilder, C: AmlBuilder>(
+        src: S,
+        bit_index: T,
+        bit_count: C,
+        name: &str,
+    ) -> AmlCreateField {
+        AmlCreateField {
+            name: name.to_string(),
+            src: src.aml_bytes(),
+            bit_index: bit_index.aml_bytes(),
+            bit_count: bit_count.aml_bytes(),
+        }
+    }
+}
+
+impl AmlBuilder for AmlCreateField {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x5B);
+        bytes.push(0x13);
+        bytes.extend(self.src.clone());
+        bytes.extend(self.bit_index.clone());
+        bytes.extend(self.bit_count.clone());
+        bytes.extend(build_name_string(self.name.as_ref()));
+
+        bytes
+    }
+}
+
+/// Macro helps to define CreateWordField/CreateDWordField/CreateQWordField.
+macro_rules! create_word_field_define {
+    ($name: ident, $op: expr) => {
+        pub struct $name {
+            name: String,
+            src: Vec<u8>,
+            bit_index: Vec<u8>,
+        }
+
+        impl $name {
+            pub fn new<S: AmlBuilder, T: AmlBuilder>(src: S, bit_index: T, name: &str) -> $name {
+                $name {
+                    name: name.to_string(),
+                    src: src.aml_bytes(),
+                    bit_index: bit_index.aml_bytes(),
+                }
+            }
+        }
+
+        impl AmlBuilder for $name {
+            fn aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.push($op);
+                bytes.extend(self.src.clone());
+                bytes.extend(self.bit_index.clone());
+                bytes.extend(build_name_string(self.name.as_ref()));
+
+                bytes
+            }
+        }
+    };
+}
+
+// As for the below operations, The length of field are fixed.
+create_word_field_define!(AmlCreateWordField, 0x8B);
+create_word_field_define!(AmlCreateDWordField, 0x8A);
+create_word_field_define!(AmlCreateQWordField, 0x8F);
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1587,5 +1670,59 @@ mod test {
             0x01, 0x60, 0x5B, 0x27, 0x4D, 0x54, 0x58, 0x31,
         ];
         assert_eq!(device.aml_bytes(), mutex_bytes);
+    }
+
+    #[test]
+    fn test_create_field() {
+        // Method(MTD1,1)
+        // {
+        //     CreateDWordField (Arg0, 0, REVS)
+        //     CreateDWordField (Arg0, 4, SIZE)
+        //     CreateWordField (Arg0, 8, MINV)
+        //     CreateQWordField (Arg0, 10, MAXV)
+        //     CreateField (Arg0, 64, 8, TEMP)
+        //
+        //     TEMP = MINV | MAXV
+        //     Concatenate (REVS, SIZE, Local0)
+        //
+        //     Return(Local0)
+        // }
+        let mut method = AmlMethod::new("MTD1", 1, false);
+
+        let revs = AmlCreateDWordField::new(AmlArg(0), AmlInteger(0), "REVS");
+        let size = AmlCreateDWordField::new(AmlArg(0), AmlInteger(4), "SIZE");
+        let minv = AmlCreateWordField::new(AmlArg(0), AmlInteger(8), "MINV");
+        let maxv = AmlCreateQWordField::new(AmlArg(0), AmlInteger(10), "MAXV");
+        let temp = AmlCreateField::new(AmlArg(0), AmlInteger(64), AmlInteger(8), "TEMP");
+        method.append_child(revs);
+        method.append_child(size);
+        method.append_child(minv);
+        method.append_child(maxv);
+        method.append_child(temp);
+
+        let store = AmlOr::new(
+            AmlName("MINV".to_string()),
+            AmlName("MAXV".to_string()),
+            AmlName("TEMP".to_string()),
+        );
+        let concat = AmlConcat::new(
+            AmlName("REVS".to_string()),
+            AmlName("SIZE".to_string()),
+            AmlLocal(0),
+        );
+        method.append_child(store);
+        method.append_child(concat);
+
+        method.append_child(AmlReturn::with_value(AmlLocal(0)));
+
+        let method_bytes = vec![
+            0x14, 0x4A, 0x04, 0x4D, 0x54, 0x44, 0x31, 0x01, 0x8A, 0x68, 0x00, 0x52, 0x45, 0x56,
+            0x53, 0x8A, 0x68, 0x0A, 0x04, 0x53, 0x49, 0x5A, 0x45, 0x8B, 0x68, 0x0A, 0x08, 0x4D,
+            0x49, 0x4E, 0x56, 0x8F, 0x68, 0x0A, 0x0A, 0x4D, 0x41, 0x58, 0x56, 0x5B, 0x13, 0x68,
+            0x0A, 0x40, 0x0A, 0x08, 0x54, 0x45, 0x4D, 0x50, 0x7D, 0x4D, 0x49, 0x4E, 0x56, 0x4D,
+            0x41, 0x58, 0x56, 0x54, 0x45, 0x4D, 0x50, 0x73, 0x52, 0x45, 0x56, 0x53, 0x53, 0x49,
+            0x5A, 0x45, 0x60, 0xA4, 0x60,
+        ];
+        assert_eq!(method.aml_bytes(), method_bytes);
     }
 }
