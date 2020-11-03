@@ -961,6 +961,97 @@ ops_2arg_define!(AmlLLess, 0x95);
 ops_2arg_define!(AmlLAnd, 0x90);
 ops_2arg_define!(AmlLOr, 0x91);
 
+/// If scope
+pub struct AmlIf {
+    /// Predicate and the operations in the if-scope is converted to byte stream.
+    buf: Vec<u8>,
+}
+
+impl AmlIf {
+    pub fn new<T: AmlBuilder>(predicate: T) -> AmlIf {
+        AmlIf {
+            buf: predicate.aml_bytes(),
+        }
+    }
+}
+
+impl AmlBuilder for AmlIf {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0xA0);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlIf {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
+/// Else scope
+pub struct AmlElse {
+    /// Predicate and the operations in the else-scope is converted to byte stream.
+    buf: Vec<u8>,
+}
+
+impl AmlElse {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> AmlElse {
+        AmlElse { buf: Vec::new() }
+    }
+}
+
+impl AmlBuilder for AmlElse {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0xA1);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlElse {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
+/// While scope
+pub struct AmlWhile {
+    /// Predicate and the operations in the while-scope is converted to byte stream.
+    buf: Vec<u8>,
+}
+
+impl AmlWhile {
+    pub fn new<T: AmlBuilder>(predicate: T) -> AmlWhile {
+        AmlWhile {
+            buf: predicate.aml_bytes(),
+        }
+    }
+}
+
+impl AmlBuilder for AmlWhile {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0xA2);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlWhile {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -1104,5 +1195,111 @@ mod test {
         ];
 
         assert_eq!(scope.aml_bytes(), target);
+    }
+
+    #[test]
+    fn test_method() {
+        // Scope(\_SB.PCI4) {
+        //     OperationRegion(LED1, SystemIO, 0x10C0, 0x20)
+        //     Field(LED1, AnyAcc, NoLock, Preserve)
+        //     { // LED controls
+        //         S0LE, 1, // Slot 0 Ejection Progress LED
+        //         S0LF, 1, // Slot 0 Ejection Failure LED
+        //         S1LE, 1, // Slot 1 Ejection Progress LED
+        //         S1LF, 1, // Slot 1 Ejection Failure LED
+        //         S2LE, 1, // Slot 2 Ejection Progress LED
+        //         S2LF, 1, // Slot 2 Ejection Failure LED
+        //         S3LE, 1, // Slot 3 Ejection Progress LED
+        //         S3LF, 1 // Slot 3 Ejection Failure LED
+        //     }
+        //     Device(SLT3) { // hot plug device
+        //         Name(_ADR, 0x000C0003)
+        //         Method(_OST, 3, Serialized) {
+        //             If(LEqual(Arg0,Ones)) // Unspecified event
+        //             {
+        //                 Store(Zero, Arg1)
+        //             }
+        //             Store(Zero, Arg2) // Turn off Ejection Progress LED
+        //             Store(One, Arg0) // Turn on Ejection Failure LED
+        //         }
+        //     }
+        // }
+        let mut scope1 = AmlScope::new("\\_SB.PCI4");
+
+        let op_region = AmlOpRegion::new("LED1", AmlAddressSpaceType::SystemIO, 0x10C0, 0x20);
+        let mut field = AmlField::new(
+            "LED1",
+            AmlFieldAccessType::Any,
+            AmlFieldLockRule::NoLock,
+            AmlFieldUpdateRule::Preserve,
+        );
+        let mut elems = Vec::new();
+        elems.push(AmlFieldUnit::new(Some("S0LE"), 1));
+        elems.push(AmlFieldUnit::new(Some("S0LF"), 1));
+        elems.push(AmlFieldUnit::new(Some("S1LE"), 1));
+        elems.push(AmlFieldUnit::new(Some("S1LF"), 1));
+        elems.push(AmlFieldUnit::new(Some("S2LE"), 1));
+        elems.push(AmlFieldUnit::new(Some("S2LF"), 1));
+        elems.push(AmlFieldUnit::new(Some("S3LE"), 1));
+        elems.push(AmlFieldUnit::new(Some("S3LF"), 1));
+        for e in elems {
+            field.append_child(e);
+        }
+
+        let mut device = AmlDevice::new("SLT3");
+
+        let name1 = AmlNameDecl::new("_ADR", AmlInteger(0x000C0003));
+
+        let mut method1 = AmlMethod::new("_OST", 3, true);
+        let mut if_scope = AmlIf::new(AmlEqual::new(AmlArg(0), AmlOnes));
+        let store1 = AmlStore::new(AmlZero, AmlArg(1));
+        if_scope.append_child(store1);
+        let store2 = AmlStore::new(AmlZero, AmlArg(2));
+        let store3 = AmlStore::new(AmlOne, AmlArg(0));
+        method1.append_child(if_scope);
+        method1.append_child(store2);
+        method1.append_child(store3);
+
+        device.append_child(name1);
+        device.append_child(method1);
+        scope1.append_child(op_region);
+        scope1.append_child(field);
+        scope1.append_child(device);
+
+        let scope1_bytes = vec![
+            0x10, 0x4E, 0x06, 0x5C, 0x2E, 0x5F, 0x53, 0x42, 0x5F, 0x50, 0x43, 0x49, 0x34, 0x5B,
+            0x80, 0x4C, 0x45, 0x44, 0x31, 0x01, 0x0B, 0xC0, 0x10, 0x0A, 0x20, 0x5B, 0x81, 0x2E,
+            0x4C, 0x45, 0x44, 0x31, 0x00, 0x53, 0x30, 0x4C, 0x45, 0x01, 0x53, 0x30, 0x4C, 0x46,
+            0x01, 0x53, 0x31, 0x4C, 0x45, 0x01, 0x53, 0x31, 0x4C, 0x46, 0x01, 0x53, 0x32, 0x4C,
+            0x45, 0x01, 0x53, 0x32, 0x4C, 0x46, 0x01, 0x53, 0x33, 0x4C, 0x45, 0x01, 0x53, 0x33,
+            0x4C, 0x46, 0x01, 0x5B, 0x82, 0x24, 0x53, 0x4C, 0x54, 0x33, 0x08, 0x5F, 0x41, 0x44,
+            0x52, 0x0C, 0x03, 0x00, 0x0C, 0x00, 0x14, 0x14, 0x5F, 0x4F, 0x53, 0x54, 0x0B, 0xA0,
+            0x07, 0x93, 0x68, 0xFF, 0x70, 0x00, 0x69, 0x70, 0x00, 0x6A, 0x70, 0x01, 0x68,
+        ];
+        assert_eq!(scope1.aml_bytes(), scope1_bytes);
+
+        // Scope (\_GPE)
+        // {
+        //     Method(_E13)
+        //     {
+        //         Store(One, \_SB.PCI4.S3LE) // Turn on ejection request LED
+        //         Notify(\_SB.PCI4.SLT3, 3) // Ejection request driven from GPE13
+        //     }
+        // }
+        let mut scope2 = AmlScope::new("\\_GPE");
+        let mut method2 = AmlMethod::new("_E13", 0, false);
+        let store4 = AmlStore::new(AmlOne, AmlName("\\_SB.PCI4.S3LE".to_string()));
+        let notify = AmlNotify::new(AmlName("\\_SB.PCI4.SLT3".to_string()), AmlInteger(3));
+        method2.append_child(store4);
+        method2.append_child(notify);
+        scope2.append_child(method2);
+
+        let scope2_bytes = vec![
+            0x10, 0x30, 0x5C, 0x5F, 0x47, 0x50, 0x45, 0x14, 0x29, 0x5F, 0x45, 0x31, 0x33, 0x00,
+            0x70, 0x01, 0x5C, 0x2F, 0x03, 0x5F, 0x53, 0x42, 0x5F, 0x50, 0x43, 0x49, 0x34, 0x53,
+            0x33, 0x4C, 0x45, 0x86, 0x5C, 0x2F, 0x03, 0x5F, 0x53, 0x42, 0x5F, 0x50, 0x43, 0x49,
+            0x34, 0x53, 0x4C, 0x54, 0x33, 0x0A, 0x03,
+        ];
+        assert_eq!(scope2.aml_bytes(), scope2_bytes);
     }
 }
