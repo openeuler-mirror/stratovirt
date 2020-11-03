@@ -679,6 +679,149 @@ impl AmlScopeBuilder for AmlDevice {
     }
 }
 
+/// Method defination.
+pub struct AmlMethod {
+    /// The name of this method.
+    name: String,
+    /// Count of Arguments. default value is zero.
+    args_count: u8,
+    /// Whether this method is Serialized or not.
+    serialized: bool,
+    /// The body of this method, which has been converted to byte stream.
+    buf: Vec<u8>,
+}
+
+impl AmlMethod {
+    pub fn new(name: &str, args_count: u8, serialized: bool) -> AmlMethod {
+        if args_count > 7 {
+            panic!("Up to 7 arguments are supported, given {}", args_count);
+        }
+
+        // Method Flags:
+        //  bit 0-2: ArgCount (0-7)
+        //  bit 3: SerializeFlag
+        //      0 NotSerialized
+        //      1 Serialized
+        let mut flag = args_count;
+        if serialized {
+            flag |= 1 << 3;
+        }
+
+        let mut bytes = build_name_string(name);
+        bytes.push(flag);
+
+        AmlMethod {
+            name: name.to_string(),
+            args_count,
+            serialized,
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlBuilder for AmlMethod {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x14);
+        bytes.extend(build_pkg_length(self.buf.len(), true));
+        bytes.extend(self.buf.clone());
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlMethod {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
+/// Local variables that can be used in method, Local(0)~Local(7)
+#[derive(Copy, Clone)]
+pub struct AmlLocal(pub u8);
+
+impl AmlBuilder for AmlLocal {
+    fn aml_bytes(&self) -> Vec<u8> {
+        if self.0 > 7 {
+            panic!("Up to 8 Local are supported, given {}", self.0);
+        }
+        vec![0x60 + self.0]
+    }
+}
+
+/// Arguments passed to method, Arg(0)~Arg(6)
+#[derive(Copy, Clone)]
+pub struct AmlArg(pub u8);
+
+impl AmlBuilder for AmlArg {
+    fn aml_bytes(&self) -> Vec<u8> {
+        if self.0 > 6 {
+            panic!("Up to 7 Arguments are supported, given {}", self.0);
+        }
+        vec![0x68 + self.0]
+    }
+}
+
+/// Return from method
+pub struct AmlReturn {
+    value: Vec<u8>,
+}
+
+impl AmlReturn {
+    /// Return with nothing.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> AmlReturn {
+        AmlReturn { value: vec![0x00] }
+    }
+
+    /// Return an object or reference.
+    pub fn with_value<T: AmlBuilder>(val: T) -> AmlReturn {
+        AmlReturn {
+            value: val.aml_bytes(),
+        }
+    }
+}
+
+impl AmlBuilder for AmlReturn {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0xA4);
+        bytes.extend(self.value.clone());
+
+        bytes
+    }
+}
+
+/// Call a method.
+pub struct AmlCall {
+    /// Name of the method that will be called.
+    name: String,
+    /// The arguments that will be passed to the method. Note that
+    /// the arguments provided must match to the arguments' count of the method.
+    buf: Vec<u8>,
+}
+
+impl AmlCall {
+    pub fn new<T: AmlBuilder>(name: &str, args: Vec<T>) -> AmlCall {
+        let mut bytes = Vec::new();
+        args.iter().for_each(|arg| bytes.extend(arg.aml_bytes()));
+
+        AmlCall {
+            name: name.to_string(),
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlBuilder for AmlCall {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(build_name_string(&self.name));
+        bytes.extend(self.buf.clone());
+
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
