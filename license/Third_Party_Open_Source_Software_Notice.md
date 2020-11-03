@@ -356,3 +356,9 @@ Copyright notice:
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: The APACHE 2.0 License
 Please see above.
+
+Software: arc-swap 0.4.8
+Copyright notice:
+Copyright (c) 2017 arc-swap developers
+License: MIT or Apache License Version 2.0
+Please see above.

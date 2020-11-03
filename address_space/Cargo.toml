@@ -13,5 +13,6 @@ log = "0.4.8"
 kvm-bindings = ">=0.3.0"
 kvm-ioctls = "0.6.0"
 vmm-sys-util = ">=0.7.0"
+arc-swap = "0.4.8"
 util = {path = "../util"}
 machine_manager = {path = "../machine_manager"}
