@@ -18,7 +18,7 @@
 //! ```rust
 //! use std::sync::{Arc, Mutex};
 //! extern crate address_space;
-//! use address_space::{AddressSpace, Region, GuestAddress, HostMemMapping, RegionOps};
+//! use address_space::{AddressSpace, Region, GuestAddress, HostMemMapping, RegionOps, FileBackend};
 //!
 //! struct DummyDevice;
 //! impl DummyDevice {
@@ -37,7 +37,7 @@
 //!     let space = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
 //!
 //!     // 2. create an Ram-type Region, and set it's priority
-//!     let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000, false).unwrap());
+//!     let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000, -1, 0, false).unwrap());
 //!     let ram_region = Region::init_ram_region(mem_mapping.clone());
 //!     ram_region.set_priority(10);
 //!
@@ -87,7 +87,7 @@ mod region;
 
 pub use address::{AddressRange, GuestAddress};
 pub use address_space::AddressSpace;
-pub use host_mmap::{create_host_mmaps, HostMemMapping};
+pub use host_mmap::{create_host_mmaps, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]
 pub use listener::KvmIoListener;
 pub use listener::KvmMemoryListener;
