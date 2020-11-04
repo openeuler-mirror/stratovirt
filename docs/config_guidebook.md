@@ -56,7 +56,7 @@ But unfortunately, in json configuration file, only `byte` is supported as unit.
 
 ### 1.3 Kernel and Kernel Parameters
 
-StratoVirt supports to launch PE-format linux kernel 4.19 and can also set kernel
+StratoVirt supports to launch PE or bzImage (only x86_64) format linux kernel 4.19 and can also set kernel
  parameters for VM.
 
 This allows you to give a path to linux kernel, the path can be either absolute path or relative path.

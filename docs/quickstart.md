@@ -66,8 +66,8 @@ Now you can find StratoVirt binary file in `target/${arch}-unknown-linux-gnu/rel
 
 ### 3.1 Build kernel
 
-The StratoVirt in current version supports only PE-format kernel images on both x86_64 and aarch64
-platforms, which can be built with:
+The StratoVirt in current version supports PE or bzImage (only x86_64) format kernel images on
+both x86_64 and aarch64 platforms, which can be built with:
 
 1. Firstly, get the openEuler kernel source code:
 
@@ -93,6 +93,11 @@ copy it to `kernel` path as `.config`. You can also modify config options by:
 
    ```shell
    $ make -j vmlinux && objcopy -O binary vmlinux vmlinux.bin
+   ```
+
+5. If you want compile bzImage format kernel in x86_64.
+   ```shell
+   $ make -j bzImage
    ```
 
 ### 3.2 Make rootfs
@@ -159,7 +164,7 @@ With kernel and rootfs image, we can boot a guest linux machine by StratoVirt.
 
 The minimum configuration for StratoVirt is:
 
-* A PE format linux kernel
+* A PE or bzImage (only x86_64) format linux kernel
 * A rootfs image as virtio-blk device, which has to be added to kernel parameters
 * Api-channel to control StratoVirt
 * If you want to login with ttyS0, you may need a serial and add ttyS0 to kernel parameters

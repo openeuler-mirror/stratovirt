@@ -58,8 +58,10 @@ pub struct AArch64BootLoaderConfig {
 
 /// The start address for `kernel image`, `initrd image` and `dtb` in guest memory.
 pub struct AArch64BootLoader {
-    /// Start address for `kernel image` in guest memory.
+    /// Start address for `kernel` execute binary in guest memory.
     pub kernel_start: u64,
+    /// Start address for `vmlinux` in guest memory.
+    pub vmlinux_start: u64,
     /// Start address for `initrd image` in guest memory.
     pub initrd_start: u64,
     /// Start address for `dtb` in guest memory.
@@ -110,6 +112,7 @@ pub fn linux_bootloader(
 
     Ok(AArch64BootLoader {
         kernel_start: DRAM_MEM_START + AARCH64_KERNEL_OFFSET,
+        vmlinux_start: DRAM_MEM_START + AARCH64_KERNEL_OFFSET,
         initrd_start: initrd_addr,
         dtb_start: dtb_addr,
     })

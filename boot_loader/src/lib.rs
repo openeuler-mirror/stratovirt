@@ -17,7 +17,7 @@
 //! ## Design
 //!
 //! This crate offers support for:
-//! 1. Loading PE (vmlinux.bin) kernel images.
+//! 1. Loading PE (vmlinux.bin) kernel images and bzImage kernel images (only in x86_64).
 //! 2. Loading initrd image.
 //! 3. Initialization for architecture related information.
 //!
@@ -79,8 +79,8 @@ mod aarch64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
-use std::fs;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress};
@@ -112,44 +112,44 @@ pub mod errors {
         }
         errors {
             BootLoaderOpenKernel {
-                description("Boot loader open kernel error")
-                display("Failed to open kernel image or initrd")
+                display("Failed to open kernel image")
+            }
+            BootLoaderOpenInitrd {
+                display("Failed to open initrd image")
             }
         }
     }
 }
 
-use self::errors::{ErrorKind, Result};
+use self::errors::{ErrorKind, Result, ResultExt};
 
-/// Load PE(vmlinux.bin) linux kernel to Guest Memory.
+/// Load linux kernel or initrd image file to Guest Memory.
 ///
 /// # Arguments
-/// * `kernel_file` - host path for kernel.
-/// * `kernel_start` - kernel start address in guest memory.
+/// * `image` - image file for kernel or initrd.
+/// * `start_addr` - image start address in guest memory.
 /// * `sys_mem` - guest memory.
 ///
 /// # Errors
-/// * `BootLoaderOpenKernel`: Open PE linux kernel failed.
-/// * `AddressSpace`: Write PE linux kernel to guest memory failed.
-fn load_image(kernel_file: &PathBuf, kernel_start: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
-    debug!("Loading image {:?}", kernel_file);
-    let len = std::fs::metadata(kernel_file).unwrap().len();
-    let mut kernel_image = match fs::File::open(kernel_file) {
-        Ok(file) => file,
-        _ => return Err(ErrorKind::BootLoaderOpenKernel.into()),
-    };
+/// * `BootLoaderOpenKernel`: Open image failed.
+/// * `AddressSpace`: Write image to guest memory failed.
+fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
+    let curr_loc = image.seek(SeekFrom::Current(0)).unwrap();
+    let len = image.seek(SeekFrom::End(0)).unwrap();
+    image.seek(SeekFrom::Start(curr_loc)).unwrap();
 
-    sys_mem.write(&mut kernel_image, GuestAddress(kernel_start), len)?;
+    sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
 
     Ok(())
 }
 
-/// Load PE(vmlinux.bin) linux kernel and other boot source to Guest Memory.
+/// Load PE(vmlinux.bin) linux kernel / bzImage linux kernel (only x86_64) and
+/// other boot source to Guest Memory.
 ///
 /// # Steps
 ///
 /// 1. Prepare for linux kernel boot env, return guest memory layout.
-/// 2. According guest memory layout, load PE linux kernel to guest memory.
+/// 2. According guest memory layout, load linux kernel to guest memory.
 /// 3. According guest memory layout, load initrd image to guest memory.
 /// 4. For `x86_64` arch, inject cmdline to guest memory.
 ///
@@ -164,12 +164,24 @@ fn load_image(kernel_file: &PathBuf, kernel_start: u64, sys_mem: &Arc<AddressSpa
 /// Load kernel, initrd or kernel cmdline to guest memory failed. Boot source
 /// is broken or guest memory is unnormal.
 pub fn load_kernel(config: &BootLoaderConfig, sys_mem: &Arc<AddressSpace>) -> Result<BootLoader> {
+    let mut kernel_image =
+        File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+
+    #[cfg(target_arch = "x86_64")]
+    let boot_loader = {
+        let boot_hdr = x86_64::load_bzimage(&mut kernel_image).ok();
+        linux_bootloader(config, sys_mem, boot_hdr)?
+    };
+    #[cfg(target_arch = "aarch64")]
     let boot_loader = linux_bootloader(config, sys_mem)?;
 
-    load_image(&config.kernel, boot_loader.kernel_start, &sys_mem)?;
+    load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)?;
+
     match &config.initrd {
         Some(initrd) => {
-            load_image(&initrd, boot_loader.initrd_start, &sys_mem)?;
+            let mut initrd_image =
+                File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+            load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)?;
         }
         None => {}
     };

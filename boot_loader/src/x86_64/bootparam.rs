@@ -14,6 +14,10 @@ use util::byte_code::ByteCode;
 
 pub const E820_RAM: u32 = 1;
 pub const E820_RESERVED: u32 = 2;
+pub const BOOT_VERSION: u16 = 0x0200;
+pub const BOOT_FLAG: u16 = 0xAA55;
+pub const HDRS: u32 = 0x5372_6448;
+pub const UNDEFINED_ID: u8 = 0xFF;
 
 // Structures below sourced from:
 // https://www.kernel.org/doc/html/latest/x86/boot.html
@@ -21,7 +25,7 @@ pub const E820_RESERVED: u32 = 2;
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct RealModeKernelHeader {
-    setup_sects: u8,
+    pub setup_sects: u8,
     root_flags: u16,
     syssize: u32,
     ram_size: u16,
@@ -29,15 +33,15 @@ pub struct RealModeKernelHeader {
     root_dev: u16,
     boot_flag: u16,
     jump: u16,
-    header: u32,
-    version: u16,
+    pub header: u32,
+    pub version: u16,
     realmode_swtch: u32,
     start_sys_seg: u16,
     kernel_version: u16,
     type_of_loader: u8,
-    loadflags: u8,
+    pub loadflags: u8,
     setup_move_size: u16,
-    code32_start: u32,
+    pub code32_start: u32,
     ramdisk_image: u32,
     ramdisk_size: u32,
     bootsect_kludge: u32,
@@ -62,18 +66,34 @@ pub struct RealModeKernelHeader {
     kernel_info_offset: u32,
 }
 
+impl ByteCode for RealModeKernelHeader {}
+
 impl RealModeKernelHeader {
     pub fn new(cmdline_ptr: u32, cmdline_size: u32, ramdisk_image: u32, ramdisk_size: u32) -> Self {
         RealModeKernelHeader {
-            boot_flag: 0xaa55,
-            header: 0x5372_6448,  // "HdrS"
-            type_of_loader: 0xff, // undefined identifier and version
+            boot_flag: BOOT_FLAG,
+            header: HDRS,
+            type_of_loader: UNDEFINED_ID,
             cmdline_ptr,
             cmdline_size,
             ramdisk_image,
             ramdisk_size,
             ..Default::default()
         }
+    }
+
+    pub fn setup(
+        &mut self,
+        cmdline_ptr: u32,
+        cmdline_size: u32,
+        ramdisk_image: u32,
+        ramdisk_size: u32,
+    ) {
+        self.type_of_loader = UNDEFINED_ID;
+        self.cmdline_ptr = cmdline_ptr;
+        self.cmdline_size = cmdline_size;
+        self.ramdisk_image = ramdisk_image;
+        self.ramdisk_size = ramdisk_size;
     }
 }
 
@@ -171,7 +191,7 @@ mod test {
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,
         };
-        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space).unwrap();
+        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
         assert_eq!(initrd_addr_tmp, 0xfff_0000);
         let test_zero_page = space
             .read_object::<BootParams>(GuestAddress(0x0000_7000))
