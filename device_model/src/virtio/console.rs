@@ -396,3 +396,95 @@ impl VirtioDevice for Console {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::*;
+    pub use super::*;
+    use std::fs::remove_file;
+    use std::mem::size_of;
+
+    #[test]
+    fn test_set_driver_features() {
+        let console_cfg = ConsoleConfig {
+            console_id: "console".to_string(),
+            socket_path: "test_console.sock".to_string(),
+        };
+        let mut console = Console::new(console_cfg);
+
+        //If the device feature is 0, all driver features are not supported.
+        console.device_features = 0;
+        let driver_feature: u32 = 0xFF;
+        let page = 0_u32;
+        console.set_driver_features(page, driver_feature);
+        assert_eq!(console.driver_features, 0_u64);
+
+        let driver_feature: u32 = 0xFF;
+        let page = 1_u32;
+        console.set_driver_features(page, driver_feature);
+        assert_eq!(console.driver_features, 0_u64);
+
+        //If both the device feature bit and the front-end driver feature bit are
+        //supported at the same time,  this driver feature bit is supported.
+        console.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
+        let page = 0_u32;
+        console.set_driver_features(page, driver_feature);
+        assert_eq!(console.driver_features, (1_u64 << VIRTIO_CONSOLE_F_SIZE));
+        console.driver_features = 0;
+
+        console.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
+        let page = 0_u32;
+        console.set_driver_features(page, driver_feature);
+        assert_eq!(console.driver_features, 0);
+        console.driver_features = 0;
+
+        console.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
+        let page = 0_u32;
+        console.set_driver_features(page, driver_feature);
+        assert_eq!(console.driver_features, (1_u64 << VIRTIO_CONSOLE_F_SIZE));
+
+        let driver_feature: u32 = ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32;
+        let page = 1_u32;
+        console.set_driver_features(page, driver_feature);
+        assert_eq!(
+            console.driver_features,
+            (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE)
+        );
+
+        //Clean up the test environment
+        remove_file("test_console.sock").unwrap();
+    }
+
+    #[test]
+    fn test_read_config() {
+        let console_cfg = ConsoleConfig {
+            console_id: "console".to_string(),
+            socket_path: "test_console1.sock".to_string(),
+        };
+        let console = Console::new(console_cfg);
+
+        //The offset of configuration that needs to be read exceeds the maximum
+        let offset = size_of::<VirtioConsoleConfig>() as u64;
+        let mut read_data: Vec<u8> = vec![0; 8];
+        assert_eq!(console.read_config(offset, &mut read_data).is_ok(), false);
+
+        //Check the configuration that needs to be read
+        let offset = 0_u64;
+        let mut read_data: Vec<u8> = vec![0; 8];
+        let expect_data: Vec<u8> = vec![1, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(console.read_config(offset, &mut read_data).is_ok(), true);
+        assert_eq!(read_data, expect_data);
+
+        let offset = 0_u64;
+        let mut read_data: Vec<u8> = vec![0; 1];
+        let expect_data: Vec<u8> = vec![1];
+        assert_eq!(console.read_config(offset, &mut read_data).is_ok(), true);
+        assert_eq!(read_data, expect_data);
+
+        //Clean up the test environment
+        remove_file("test_console1.sock").unwrap();
+    }
+}
