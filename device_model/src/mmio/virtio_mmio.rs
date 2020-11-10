@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd, RegionOps};
+use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
 use machine_manager::config::ConfigCheck;
@@ -26,7 +26,7 @@ use super::super::virtio::{
 };
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use super::{DeviceResource, DeviceType, MmioDeviceOps};
+use super::{DeviceOps, DeviceResource, DeviceType, MmioDeviceOps};
 
 /// Registers of virtio-mmio device refer to Virtio Spec.
 /// Magic value - Read Only.
@@ -353,7 +353,7 @@ impl VirtioMmioDevice {
     }
 }
 
-impl RegionOps for VirtioMmioDevice {
+impl DeviceOps for VirtioMmioDevice {
     /// Read data by virtio driver from VM.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
@@ -453,30 +453,6 @@ impl RegionOps for VirtioMmioDevice {
         }
         true
     }
-
-    /// Return the ioeventfds of device,
-    /// these fds will be register to `KVM` and used for guest notifier.
-    fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
-        let mut ret = Vec::new();
-        for (index, eventfd) in self.host_notify_info.events.iter().enumerate() {
-            let addr = u64::from(NOTIFY_REG_OFFSET);
-            let eventfd_clone = match eventfd.try_clone() {
-                Err(e) => {
-                    error!("Failed to clone ioeventfd, error is {}", e);
-                    continue;
-                }
-                Ok(fd) => fd,
-            };
-            ret.push(RegionIoEventFd {
-                fd: eventfd_clone,
-                addr_range: AddressRange::from((addr, std::mem::size_of::<u32>() as u64)),
-                data_match: true,
-                data: index as u64,
-            })
-        }
-
-        ret
-    }
 }
 
 impl MmioDeviceOps for VirtioMmioDevice {
@@ -512,6 +488,28 @@ impl MmioDeviceOps for VirtioMmioDevice {
             .update_config(dev_config)
             .chain_err(|| "Failed to update configuration")?;
         Ok(())
+    }
+
+    fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
+        let mut ret = Vec::new();
+        for (index, eventfd) in self.host_notify_info.events.iter().enumerate() {
+            let addr = u64::from(NOTIFY_REG_OFFSET);
+            let eventfd_clone = match eventfd.try_clone() {
+                Err(e) => {
+                    error!("Failed to clone ioeventfd, error is {}", e);
+                    continue;
+                }
+                Ok(fd) => fd,
+            };
+            ret.push(RegionIoEventFd {
+                fd: eventfd_clone,
+                addr_range: AddressRange::from((addr, std::mem::size_of::<u32>() as u64)),
+                data_match: true,
+                data: index as u64,
+            })
+        }
+
+        ret
     }
 }
 

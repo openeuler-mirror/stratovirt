@@ -433,17 +433,6 @@ mod test {
         }
     }
 
-    struct TestDevice;
-    impl RegionOps for TestDevice {
-        fn read(&mut self, _data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
-            true
-        }
-
-        fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
-            true
-        }
-    }
-
     // the listeners in AddressSpace is settled in ascending order by priority
     #[test]
     fn test_listeners() {
@@ -501,6 +490,11 @@ mod test {
         let listener = TestListener::default();
         space.register_listener(Box::new(listener.clone())).unwrap();
 
+        let default_ops = RegionOps {
+            read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
+            write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
+        };
+
         // memory region layout
         //        0      1000   2000   3000   4000   5000   6000   7000   8000
         //        |------|------|------|------|------|------|------|------|
@@ -510,7 +504,7 @@ mod test {
         // the flat_view is as follows, region-b is container which will not appear in the flat-view
         //        [CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC]
         let region_b = Region::init_container_region(4000);
-        let region_c = Region::init_io_region(6000, Arc::new(Mutex::new(TestDevice)));
+        let region_c = Region::init_io_region(6000, default_ops.clone());
         region_b.set_priority(2);
         region_c.set_priority(1);
         root.add_subregion(region_b.clone(), 2000).unwrap();
@@ -532,7 +526,7 @@ mod test {
         //  D:                  [DDDDDD]
         // the flat_view is as follows,
         //        [CCCCCCCCCCCC][DDDDDD][CCCCCCCCCCCCCCCCCCC]
-        let region_d = Region::init_io_region(1000, Arc::new(Mutex::new(TestDevice)));
+        let region_d = Region::init_io_region(1000, default_ops);
         region_b.add_subregion(region_d.clone(), 0).unwrap();
 
         assert_eq!(space.flat_view.read().unwrap().0.len(), 3);
@@ -562,25 +556,16 @@ mod test {
 
     #[test]
     fn test_update_ioeventfd() {
-        struct TestIoEventFd;
-        impl RegionOps for TestIoEventFd {
-            fn read(&mut self, _data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
-                true
-            }
-
-            fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
-                true
-            }
-
-            fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
-                vec![RegionIoEventFd {
-                    fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-                    addr_range: AddressRange::from((0, 4)),
-                    data_match: true,
-                    data: 0_64,
-                }]
-            }
-        }
+        let ioeventfds = vec![RegionIoEventFd {
+            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            addr_range: AddressRange::from((0, 4)),
+            data_match: true,
+            data: 0_64,
+        }];
+        let default_ops = RegionOps {
+            read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
+            write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
+        };
 
         // region layout
         //        0      1000   2000   3000   4000   5000   6000   7000   8000
@@ -594,9 +579,11 @@ mod test {
         let listener = TestListener::default();
         space.register_listener(Box::new(listener.clone())).unwrap();
 
-        let region_b = Region::init_io_region(2000, Arc::new(Mutex::new(TestIoEventFd)));
+        let region_b = Region::init_io_region(2000, default_ops.clone());
         region_b.set_priority(1);
-        let region_c = Region::init_io_region(2000, Arc::new(Mutex::new(TestIoEventFd)));
+        region_b.set_ioeventfds(&ioeventfds);
+        let region_c = Region::init_io_region(2000, default_ops);
+        region_c.set_ioeventfds(&ioeventfds);
 
         root.add_subregion(region_c, 2000).unwrap();
         assert_eq!(listener.reqs.lock().unwrap().len(), 2);
@@ -624,6 +611,11 @@ mod test {
     fn test_get_ram_info() {
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root.clone()).unwrap();
+
+        let default_ops = RegionOps {
+            read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
+            write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
+        };
 
         let ram1 = Arc::new(HostMemMapping::new(GuestAddress(0), 1000, false).unwrap());
         let ram2 = Arc::new(HostMemMapping::new(GuestAddress(2000), 1000, false).unwrap());
@@ -660,7 +652,7 @@ mod test {
         //  c:            [CCCCCCCCC]
         // the flat_view is as follows,
         //        [AAAAAA][CCCCCCCCC][BB]
-        let region_c = Region::init_io_region(1500, Arc::new(Mutex::new(TestDevice)));
+        let region_c = Region::init_io_region(1500, default_ops);
         region_c.set_priority(1);
         root.add_subregion(region_c, 1000).unwrap();
 

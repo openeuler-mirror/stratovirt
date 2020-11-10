@@ -41,7 +41,9 @@ pub struct Region {
     /// If not Ram-type Region, `mem_mapping` is None. It won't be changed once initialized.
     mem_mapping: Option<Arc<HostMemMapping>>,
     /// `ops` provides read/write function.
-    ops: Option<Arc<Mutex<dyn RegionOps>>>,
+    ops: Option<RegionOps>,
+    /// ioeventfds within this Region.
+    io_evtfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
     /// Weak pointer pointing to the father address-spaces.
     space: Arc<RwLock<Weak<AddressSpace>>>,
     /// Sub-regions array, keep sorted
@@ -140,7 +142,7 @@ impl Region {
         size: u64,
         region_type: RegionType,
         mem_mapping: Option<Arc<HostMemMapping>>,
-        ops: Option<Arc<Mutex<dyn RegionOps>>>,
+        ops: Option<RegionOps>,
     ) -> Region {
         Region {
             region_type,
@@ -149,6 +151,7 @@ impl Region {
             size: Arc::new(AtomicU64::new(size)),
             mem_mapping,
             ops,
+            io_evtfds: Arc::new(Mutex::new(Vec::new())),
             space: Arc::new(RwLock::new(Weak::new())),
             subregions: Arc::new(RwLock::new(Vec::new())),
         }
@@ -169,8 +172,8 @@ impl Region {
     ///
     /// * `size` - Size of IO region.
     /// * `dev` - Operation of Region.
-    pub fn init_io_region(size: u64, dev: Arc<Mutex<dyn RegionOps>>) -> Region {
-        Region::init_region_internal(size, RegionType::IO, None, Some(dev))
+    pub fn init_io_region(size: u64, ops: RegionOps) -> Region {
+        Region::init_region_internal(size, RegionType::IO, None, Some(ops))
     }
 
     /// Initialize Container-type region.
@@ -313,14 +316,8 @@ impl Region {
                     return Err(ErrorKind::Overflow(count).into());
                 }
                 let mut slice = vec![0_u8; count as usize];
-                if !self
-                    .ops
-                    .as_ref()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .read(&mut slice, base, offset)
-                {
+                let read_ops = self.ops.as_ref().unwrap().read.as_ref();
+                if !read_ops(&mut slice, base, offset) {
                     return Err(ErrorKind::IoAccess(offset).into());
                 }
                 dst.write_all(&slice)?;
@@ -371,14 +368,8 @@ impl Region {
                 let mut slice = vec![0_u8; count as usize];
                 src.read_exact(&mut slice)?;
 
-                if !self
-                    .ops
-                    .as_ref()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .write(&slice, base, offset)
-                {
+                let write_ops = self.ops.as_ref().unwrap().write.as_ref();
+                if !write_ops(&slice, base, offset) {
                     return Err(ErrorKind::IoAccess(offset).into());
                 }
             }
@@ -390,21 +381,31 @@ impl Region {
     }
 
     /// Return the IoEvent of a `Region`.
+    pub fn set_ioeventfds(&self, new_fds: &[RegionIoEventFd]) {
+        let region_evtfds = new_fds
+            .iter()
+            .map(|e| {
+                let mut evt_cloned = e.try_clone().unwrap();
+                evt_cloned.addr_range.base.0 += self.offset().raw_value();
+                evt_cloned
+            })
+            .collect();
+        *self.io_evtfds.lock().unwrap() = region_evtfds;
+    }
+
+    /// Set the ioeventfds within this Region,
+    /// these fds will be register to `KVM` and used for guest notifier.
     pub(crate) fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
-        match self.region_type {
-            RegionType::IO => {
-                let ioeventfds = self.ops.as_ref().unwrap().lock().unwrap().ioeventfds();
-                ioeventfds
-                    .iter()
-                    .map(|e| {
-                        let mut evt_cloned = e.try_clone().unwrap();
-                        evt_cloned.addr_range.base.0 += self.offset().raw_value();
-                        evt_cloned
-                    })
-                    .collect()
-            }
-            _ => Vec::new(),
-        }
+        self.io_evtfds
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let mut evt_cloned = e.try_clone().unwrap();
+                evt_cloned.addr_range.base.0 += self.offset().raw_value();
+                evt_cloned
+            })
+            .collect()
     }
 
     /// Add sub-region to this region.
@@ -650,7 +651,7 @@ mod test {
         head: u64,
     }
 
-    impl RegionOps for TestDevice {
+    impl TestDevice {
         fn read(&mut self, data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
             if data.len() != std::mem::size_of::<u64>() {
                 return false;
@@ -742,8 +743,24 @@ mod test {
 
     #[test]
     fn test_io_region() {
-        let config_space = Arc::new(Mutex::new(TestDevice::default()));
-        let io_region = Region::init_io_region(16, config_space.clone());
+        let test_dev = Arc::new(Mutex::new(TestDevice::default()));
+        let test_dev_clone = test_dev.clone();
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = test_dev_clone.lock().unwrap();
+            device_locked.read(data, addr, offset)
+        };
+        let test_dev_clone = test_dev.clone();
+        let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = test_dev_clone.lock().unwrap();
+            device_locked.write(data, addr, offset)
+        };
+
+        let test_dev_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+
+        let io_region = Region::init_io_region(16, test_dev_ops.clone());
         let data = [0x01u8; 8];
         let mut data_res = [0x0u8; 8];
         let count = data.len() as u64;
@@ -798,11 +815,13 @@ mod test {
         assert_eq!(container.region_type(), RegionType::Container);
         assert_eq!(container.priority(), 0);
 
-        // create two io region as container's sub regions
-        let dev = Arc::new(Mutex::new(TestDevice::default()));
-        let dev2 = Arc::new(Mutex::new(TestDevice::default()));
-        let io_region = Region::init_io_region(1 << 4, dev.clone());
-        let io_region2 = Region::init_io_region(1 << 4, dev2.clone());
+        let default_ops = RegionOps {
+            read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
+            write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
+        };
+
+        let io_region = Region::init_io_region(1 << 4, default_ops.clone());
+        let io_region2 = Region::init_io_region(1 << 4, default_ops.clone());
         io_region2.set_priority(10);
 
         // add duplicate io-region or ram-region will fail
@@ -841,9 +860,10 @@ mod test {
 
     #[test]
     fn test_generate_flatview() {
-        let config_c = Arc::new(Mutex::new(TestDevice::default()));
-        let config_d = Arc::new(Mutex::new(TestDevice::default()));
-        let config_e = Arc::new(Mutex::new(TestDevice::default()));
+        let default_ops = RegionOps {
+            read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
+            write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
+        };
 
         // memory region layout
         //        0      1000   2000   3000   4000   5000   6000   7000   8000
@@ -859,9 +879,9 @@ mod test {
         {
             let region_a = Region::init_container_region(8000);
             let region_b = Region::init_container_region(4000);
-            let region_c = Region::init_io_region(6000, config_c.clone());
-            let region_d = Region::init_io_region(1000, config_d.clone());
-            let region_e = Region::init_io_region(1000, config_e.clone());
+            let region_c = Region::init_io_region(6000, default_ops.clone());
+            let region_d = Region::init_io_region(1000, default_ops.clone());
+            let region_e = Region::init_io_region(1000, default_ops.clone());
 
             region_b.set_priority(2);
             region_c.set_priority(1);
@@ -906,9 +926,9 @@ mod test {
         {
             let region_a = Region::init_container_region(8000);
             let region_b = Region::init_container_region(5000);
-            let region_c = Region::init_io_region(1000, config_c.clone());
-            let region_d = Region::init_io_region(3000, config_d.clone());
-            let region_e = Region::init_io_region(2000, config_e.clone());
+            let region_c = Region::init_io_region(1000, default_ops.clone());
+            let region_d = Region::init_io_region(3000, default_ops.clone());
+            let region_e = Region::init_io_region(2000, default_ops.clone());
 
             region_a.add_subregion(region_b.clone(), 2000).unwrap();
             region_a.add_subregion(region_c.clone(), 0).unwrap();

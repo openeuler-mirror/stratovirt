@@ -34,7 +34,7 @@ mod virtio_mmio;
 pub use self::bus::Bus;
 pub use self::virtio_mmio::VirtioMmioDevice;
 
-use address_space::{AddressSpace, Region, RegionOps};
+use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use error_chain::bail;
 use machine_manager::config::{BootSource, ConfigCheck, Param};
 
@@ -86,12 +86,38 @@ pub struct MmioDevice {
     /// MmioDeviceOps used to be invoked in function realize().
     device: Arc<Mutex<dyn MmioDeviceOps>>,
     /// RegionOps used to be registered into system address space.
-    dev_region: Arc<Mutex<dyn RegionOps>>,
+    region_ops: RegionOps,
     /// The DeviceResource required by this MMIO device.
     resource: Arc<DeviceResource>,
 }
 
 impl MmioDevice {
+    pub fn new<T: 'static + MmioDeviceOps>(
+        device: Arc<Mutex<T>>,
+        res: DeviceResource,
+    ) -> MmioDevice {
+        let device_clone = device.clone();
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = device_clone.lock().unwrap();
+            device_locked.read(data, addr, offset)
+        };
+
+        let device_clone = device.clone();
+        let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            let mut device_locked = device_clone.lock().unwrap();
+            device_locked.write(data, addr, offset)
+        };
+
+        let region_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        MmioDevice {
+            device,
+            region_ops,
+            resource: Arc::new(res),
+        }
+    }
     /// Realize this MMIO device for VM.
     ///
     /// # Arguments
@@ -108,19 +134,15 @@ impl MmioDevice {
     ) -> Result<()> {
         self.device.lock().unwrap().realize(vm_fd, *self.resource)?;
 
+        let region = Region::init_io_region(self.resource.size, self.region_ops.clone());
+        region.set_ioeventfds(&self.device.lock().unwrap().ioeventfds());
         match self.resource.dev_type {
             DeviceType::SERIAL if cfg!(target_arch = "x86_64") => {
                 #[cfg(target_arch = "x86_64")]
-                sys_io.root().add_subregion(
-                    Region::init_io_region(self.resource.size, self.dev_region.clone()),
-                    self.resource.addr,
-                )?;
+                sys_io.root().add_subregion(region, self.resource.addr)?;
             }
             _ => {
-                sys_mem.root().add_subregion(
-                    Region::init_io_region(self.resource.size, self.dev_region.clone()),
-                    self.resource.addr,
-                )?;
+                sys_mem.root().add_subregion(region, self.resource.addr)?;
             }
         }
 
@@ -165,7 +187,7 @@ impl MmioDevice {
 }
 
 /// Trait for MMIO device.
-pub trait MmioDeviceOps: Send {
+pub trait MmioDeviceOps: Send + DeviceOps {
     /// Realize this MMIO device for VM.
     fn realize(&mut self, vm_fd: &VmFd, resource: DeviceResource) -> Result<()>;
 
@@ -176,4 +198,15 @@ pub trait MmioDeviceOps: Send {
     fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         bail!("Unsupported to update configuration");
     }
+
+    /// Get IoEventFds of MMIO device.
+    fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
+        Vec::new()
+    }
+}
+
+pub trait DeviceOps: Send {
+    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool;
+
+    fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool;
 }

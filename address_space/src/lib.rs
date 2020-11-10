@@ -21,11 +21,13 @@
 //! use address_space::{AddressSpace, Region, GuestAddress, HostMemMapping, RegionOps};
 //!
 //! struct DummyDevice;
-//! impl RegionOps for DummyDevice {
+//! impl DummyDevice {
 //!     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
+//!         // read operation ommited
 //!         true
 //!     }
 //!     fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool {
+//!         // write operation ommited
 //!         true
 //!     }
 //! }
@@ -41,7 +43,22 @@
 //!
 //!     // 3. create a IO-type Region
 //!     let dev = Arc::new(Mutex::new(DummyDevice));
-//!     let io_region = Region::init_io_region(0x1000, dev);
+//!     let dev_clone = dev.clone();
+//!     let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+//!         let mut dev_locked = dev_clone.lock().unwrap();
+//!         dev_locked.read(data, addr, offset)
+//!     };
+//!     let dev_clone = dev.clone();
+//!     let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+//!         let mut dev_locked = dev_clone.lock().unwrap();
+//!         dev_locked.write(data, addr, offset)
+//!     };
+//!     let dev_ops = RegionOps {
+//!         read: Arc::new(read_ops),
+//!         write: Arc::new(write_ops),
+//!     };
+//!
+//!     let io_region = Region::init_io_region(0x1000, dev_ops);
 //!
 //!     // 4. add sub_region to address_space's root region
 //!     space.root().add_subregion(ram_region, mem_mapping.start_address().raw_value());
@@ -121,7 +138,8 @@ pub mod errors {
 }
 
 /// Provide Some operations of `Region`, mainly used by Vm's devices.
-pub trait RegionOps: Send {
+#[derive(Clone)]
+pub struct RegionOps {
     /// Read data from Region to argument `data`,
     /// return `true` if read successfully, or return `false`.
     ///
@@ -130,8 +148,7 @@ pub trait RegionOps: Send {
     /// * `data` - A u8-type array.
     /// * `base` - Base address.
     /// * `offset` - Offset from base address.
-    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool;
-
+    pub read: std::sync::Arc<dyn Fn(&mut [u8], GuestAddress, u64) -> bool + Send + Sync>,
     /// Write `data` to memory,
     /// return `true` if write successfully, or return `false`.
     ///
@@ -140,12 +157,7 @@ pub trait RegionOps: Send {
     /// * `data` - A u8-type array.
     /// * `base` - Base address.
     /// * `offset` - Offset from base address.
-    fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool;
-
-    /// Create a group of IoEvents for `region`.
-    fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
-        Vec::new()
-    }
+    pub write: std::sync::Arc<dyn Fn(&[u8], GuestAddress, u64) -> bool + Send + Sync>,
 }
 
 /// Gets the page size of system.
