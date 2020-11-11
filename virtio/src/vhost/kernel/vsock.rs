@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 use std::{os::unix::io::RawFd, usize};
 
@@ -23,7 +22,7 @@ use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
-use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_VSOCK};
+use super::super::super::{Queue, VirtioDevice, VirtioInterrupt, VIRTIO_TYPE_VSOCK};
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 
@@ -173,8 +172,7 @@ impl VirtioDevice for Vsock {
     fn activate(
         &mut self,
         _: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         queues: Vec<Arc<Mutex<Queue>>>,
         queue_evts: Vec<EventFd>,
     ) -> Result<()> {
@@ -241,8 +239,7 @@ impl VirtioDevice for Vsock {
         backend.set_running(true)?;
 
         let handler = VhostIoHandler {
-            interrupt_evt: interrupt_evt.try_clone()?,
-            interrupt_status,
+            interrupt_cb,
             host_notifies,
         };
 

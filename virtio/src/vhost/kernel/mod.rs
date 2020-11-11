@@ -19,7 +19,6 @@ pub use vsock::Vsock;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::{
@@ -32,8 +31,9 @@ use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
 
 use super::super::errors::{ErrorKind, Result, ResultExt};
-use super::super::{QueueConfig, VIRTIO_MMIO_INT_VRING};
+use super::super::{QueueConfig, VirtioInterrupt, VirtioInterruptType};
 use super::{VhostNotify, VhostOps};
+use crate::error_chain::ChainedError;
 
 /// Refer to VHOST_VIRTIO in
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
@@ -394,8 +394,7 @@ impl VhostOps for VhostBackend {
 }
 
 pub struct VhostIoHandler {
-    interrupt_evt: EventFd,
-    interrupt_status: Arc<AtomicU32>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
 }
 
@@ -408,12 +407,18 @@ impl EventNotifierHelper for VhostIoHandler {
             Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
 
-                let v = vhost.clone();
-                let v = v.lock().unwrap();
-                v.interrupt_status
-                    .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-                if let Err(e) = v.interrupt_evt.write(1) {
-                    error!("Failed to write interrupt eventfd for vhost {}", e);
+                let locked_vhost_handler = vhost.lock().unwrap();
+
+                for host_notify in locked_vhost_handler.host_notifies.iter() {
+                    if let Err(e) = (locked_vhost_handler.interrupt_cb)(
+                        &VirtioInterruptType::Vring,
+                        Some(&host_notify.queue.lock().unwrap()),
+                    ) {
+                        error!(
+                            "Failed to trigger interrupt for vhost device, error is {}",
+                            e.display_chain()
+                        );
+                    }
                 }
 
                 None as Option<Vec<EventNotifier>>

@@ -66,8 +66,8 @@ pub mod errors {
             DevConfigOverflow(offset: u64, size: u64) {
                 display("Failed to r/w dev config space: overflows, offset {}, space size {}", offset, size)
             }
-            InterruptTrigger {
-                display("Failed to trigger interrupt")
+            InterruptTrigger(dev_ty: &'static str, int_type: super::VirtioInterruptType) {
+                display("Failed to trigger interrupt for {}, int-type {:#?}", dev_ty, int_type)
             }
             VhostIoctl(ioctl: String) {
                 display("Vhost ioctl failed: {}", ioctl)
@@ -116,7 +116,6 @@ pub use rng::Rng;
 pub use vhost::kernel as VhostKern;
 pub use virtio_mmio::VirtioMmioDevice;
 
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -212,6 +211,15 @@ pub struct VirtioNetHdr {
     pub num_buffers: u16,
 }
 
+#[derive(Debug)]
+pub enum VirtioInterruptType {
+    Config,
+    Vring,
+}
+
+pub type VirtioInterrupt =
+    Box<dyn Fn(&VirtioInterruptType, Option<&Queue>) -> Result<()> + Send + Sync>;
+
 /// The trait for virtio device operations.
 pub trait VirtioDevice: Send {
     /// Realize low level device.
@@ -251,8 +259,7 @@ pub trait VirtioDevice: Send {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         queues: Vec<Arc<Mutex<Queue>>>,
         queue_evts: Vec<EventFd>,
     ) -> Result<()>;
