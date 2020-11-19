@@ -42,7 +42,6 @@ pub mod errors {
     }
 }
 
-const DRAM_MEM_START: u64 = 0x8000_0000;
 const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
 
 /// Boot loader config used for aarch64.
@@ -54,6 +53,8 @@ pub struct AArch64BootLoaderConfig {
     pub initrd: Option<PathBuf>,
     /// Initrd file size, 0 means no initrd file.
     pub initrd_size: u32,
+    /// Start address of guest memory.
+    pub mem_start: u64,
 }
 
 /// The start address for `kernel image`, `initrd image` and `dtb` in guest memory.
@@ -82,7 +83,7 @@ pub fn linux_bootloader(
                 if sys_mem.address_in_memory(GuestAddress(addr), 0) {
                     addr
                 } else {
-                    DRAM_MEM_START
+                    config.mem_start
                 }
             } else {
                 0
@@ -104,15 +105,15 @@ pub fn linux_bootloader(
         };
 
         if !sys_mem.address_in_memory(GuestAddress(initrd_addr), 0) {
-            initrd_addr = DRAM_MEM_START + u64::from(device_tree::FDT_MAX_SIZE);
+            initrd_addr = config.mem_start + u64::from(device_tree::FDT_MAX_SIZE);
         }
     } else {
         info!("No initrd image file.");
     }
 
     Ok(AArch64BootLoader {
-        kernel_start: DRAM_MEM_START + AARCH64_KERNEL_OFFSET,
-        vmlinux_start: DRAM_MEM_START + AARCH64_KERNEL_OFFSET,
+        kernel_start: config.mem_start + AARCH64_KERNEL_OFFSET,
+        vmlinux_start: config.mem_start + AARCH64_KERNEL_OFFSET,
         initrd_start: initrd_addr,
         dtb_start: dtb_addr,
     })

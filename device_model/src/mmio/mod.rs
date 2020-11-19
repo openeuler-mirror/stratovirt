@@ -159,10 +159,8 @@ impl MmioDevice {
             cmdline.push(Param {
                 param_type: "virtio_mmio.device".to_string(),
                 value: format!(
-                    "{}K@0x{:08x}:{}",
-                    self.resource.size / 1024,
-                    self.resource.addr,
-                    self.resource.irq
+                    "{}@0x{:08x}:{}",
+                    self.resource.size, self.resource.addr, self.resource.irq
                 ),
             });
         }
