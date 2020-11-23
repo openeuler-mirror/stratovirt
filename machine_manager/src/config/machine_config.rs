@@ -16,7 +16,8 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParams, ConfigCheck, ParamOperation, VmConfig};
+use crate::config::{CmdParams, ConfigCheck, Param, ParamOperation, VmConfig};
+use util::num_ops::round_down;
 
 const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_MEMSIZE: u64 = 128;
@@ -82,8 +83,11 @@ impl MachineConfig {
             machine_config.nr_cpus = value["vcpu_count"].to_string().parse::<u8>().unwrap();
         }
         if value.get("mem_size") != None {
-            machine_config.mem_config.mem_size =
-                value["mem_size"].to_string().parse::<u64>().unwrap();
+            let mut param = Param {
+                param_type: String::new(),
+                value: value["mem_size"].to_string().replace("\"", ""),
+            };
+            machine_config.mem_config.mem_size = unit_conversion(&mut param);
         }
         if value.get("mem_path") != None {
             machine_config.mem_config.mem_path =
@@ -139,25 +143,9 @@ impl VmConfig {
     pub fn update_memory(&mut self, mem_config: String) {
         let cmd_params: CmdParams = CmdParams::from_str(mem_config);
         if let Some(mut mem_size) = cmd_params.get("") {
-            if mem_size.value_replace_blank("M") || mem_size.value_replace_blank("m") {
-                self.machine_config.mem_config.mem_size =
-                    get_inner(mem_size.value_to_u64().checked_mul(M));
-            } else if mem_size.value_replace_blank("G") || mem_size.value_replace_blank("g") {
-                self.machine_config.mem_config.mem_size =
-                    get_inner(mem_size.value_to_u64().checked_mul(G));
-            } else {
-                self.machine_config.mem_config.mem_size = mem_size.value_to_u64();
-            }
+            self.machine_config.mem_config.mem_size = unit_conversion(&mut mem_size)
         } else if let Some(mut mem_size) = cmd_params.get("size") {
-            if mem_size.value_replace_blank("M") || mem_size.value_replace_blank("m") {
-                self.machine_config.mem_config.mem_size =
-                    get_inner(mem_size.value_to_u64().checked_mul(M));
-            } else if mem_size.value_replace_blank("G") || mem_size.value_replace_blank("g") {
-                self.machine_config.mem_config.mem_size =
-                    get_inner(mem_size.value_to_u64().checked_mul(G));
-            } else {
-                self.machine_config.mem_config.mem_size = mem_size.value_to_u64();
-            }
+            self.machine_config.mem_config.mem_size = unit_conversion(&mut mem_size)
         }
     }
 
@@ -173,6 +161,16 @@ impl VmConfig {
 
     pub fn update_mem_path(&mut self, mem_path: String) {
         self.machine_config.mem_config.mem_path = Some(mem_path.replace("\"", ""));
+    }
+}
+
+fn unit_conversion(origin_param: &mut Param) -> u64 {
+    if origin_param.value_replace_blank("M") || origin_param.value_replace_blank("m") {
+        get_inner(origin_param.value_to_u64().checked_mul(M))
+    } else if origin_param.value_replace_blank("G") || origin_param.value_replace_blank("g") {
+        get_inner(origin_param.value_to_u64().checked_mul(G))
+    } else {
+        get_inner(round_down(origin_param.value_to_u64(), M))
     }
 }
 
