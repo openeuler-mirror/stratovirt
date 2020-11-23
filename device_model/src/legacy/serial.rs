@@ -20,8 +20,11 @@ use kvm_ioctls::VmFd;
 use util::epoll_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
-use super::super::mmio::errors::{Result, ResultExt};
-use super::super::mmio::{DeviceOps, DeviceResource, DeviceType, MmioDeviceOps};
+use super::super::mmio::{
+    errors::{Result, ResultExt},
+    DeviceResource, DeviceType, MmioDeviceOps,
+};
+use super::super::DeviceOps;
 
 const UART_IER_RDI: u8 = 0x01;
 const UART_IER_THRI: u8 = 0x02;

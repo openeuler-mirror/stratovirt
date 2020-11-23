@@ -17,8 +17,11 @@ use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::super::mmio::errors::{Result, ResultExt};
-use super::super::mmio::{DeviceOps, DeviceResource, DeviceType, MmioDeviceOps};
+use super::super::mmio::{
+    errors::{Result, ResultExt},
+    DeviceResource, DeviceType, MmioDeviceOps,
+};
+use super::super::DeviceOps;
 
 /// Registers for pl032 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
