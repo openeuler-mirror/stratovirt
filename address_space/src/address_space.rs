@@ -313,11 +313,11 @@ impl AddressSpace {
         )
     }
 
-    /// Write memory segment to `dst`.
+    /// Write data to specified memory address.
     ///
     /// # Arguments
     ///
-    /// * `dst` - Destination the data would be written to.
+    /// * `src` - Data buffer to write.
     /// * `addr` - Start address.
     /// * `count` - Size of data.
     ///
