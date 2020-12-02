@@ -37,7 +37,7 @@
 //!     let space = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
 //!
 //!     // 2. create an Ram-type Region, and set it's priority
-//!     let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000, -1, 0, false).unwrap());
+//!     let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000, -1, 0, false, false).unwrap());
 //!     let ram_region = Region::init_ram_region(mem_mapping.clone());
 //!     ram_region.set_priority(10);
 //!
@@ -72,6 +72,7 @@
 extern crate kvm_bindings;
 extern crate kvm_ioctls;
 extern crate libc;
+extern crate machine_manager;
 extern crate util;
 extern crate vmm_sys_util;
 #[macro_use]

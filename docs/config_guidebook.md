@@ -11,18 +11,20 @@ StratoVirt supports json configuration file and cmdline arguments. If you set th
 General configuration of machine, including
 * type: The machine type of machine, StratoVirt only support MicroVm yet.
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
+* mem-share: Guest memory is sharable with other processes or not.
 
 This feature is closed by default. There are two ways to open it:
 
 ```shell
 # cmdline
--machine [type=]name[,dump-guest-core=on|off]
+-machine [type=]name[,dump-guest-core=on|off][,mem-share=on|off]
 
 # json
 {
     "machine-config": {
         "type": "MicroVm",
         "dump_guest_core": false,
+        "mem-share": false,
         ...
     },
     ...

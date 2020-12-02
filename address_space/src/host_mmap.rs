@@ -14,6 +14,8 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
 
+use machine_manager::config::MachineMemConfig;
+
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
 
@@ -81,42 +83,49 @@ impl FileBackend {
 /// # Arguments
 ///
 /// * `ranges` - The guest address range that will be mapped.
-/// * `file_path` - The path of backend-file.
-/// * `dump_guest_core` - Include guest memory in core file or not.
+/// * `mem_config` - Machine memory config.
 pub fn create_host_mmaps(
     ranges: &[(u64, u64)],
-    file_path: Option<&str>,
-    dump_guest_core: bool,
+    mem_config: &MachineMemConfig,
 ) -> Result<Vec<Arc<HostMemMapping>>> {
+    let mut f_back: Option<FileBackend> = None;
+
+    if let Some(path) = &mem_config.mem_path {
+        let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
+        f_back = Some(FileBackend::new(&path, file_len)?);
+    } else if mem_config.mem_share {
+        let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
+
+        let anon_mem_name = String::from("stratovirt_anon_mem");
+        let anon_fd =
+            unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
+        let anon_file = unsafe { File::from_raw_fd(anon_fd) };
+
+        anon_file.set_len(file_len)?;
+        f_back = Some(FileBackend {
+            file: anon_file,
+            offset: 0,
+        });
+    }
+
     let mut mappings = Vec::new();
+    for range in ranges.iter() {
+        let (fd, offset) = if let Some(fb) = f_back.as_ref() {
+            (fb.file.as_raw_fd(), fb.offset)
+        } else {
+            (-1, 0)
+        };
+        mappings.push(Arc::new(HostMemMapping::new(
+            GuestAddress(range.0),
+            range.1,
+            fd,
+            offset,
+            mem_config.dump_guest_core,
+            mem_config.mem_share,
+        )?));
 
-    match file_path {
-        Some(path) => {
-            // create file-backend
-            let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
-            let mut f_back = FileBackend::new(path, file_len)?;
-            for range in ranges.iter() {
-                mappings.push(Arc::new(HostMemMapping::new(
-                    GuestAddress(range.0),
-                    range.1,
-                    f_back.file.as_raw_fd(),
-                    f_back.offset,
-                    dump_guest_core,
-                )?));
-
-                f_back.offset += range.1;
-            }
-        }
-        None => {
-            for range in ranges.iter() {
-                mappings.push(Arc::new(HostMemMapping::new(
-                    GuestAddress(range.0),
-                    range.1,
-                    -1,
-                    0,
-                    dump_guest_core,
-                )?));
-            }
+        if let Some(mut fb) = f_back.as_mut() {
+            fb.offset += range.1
         }
     }
 
@@ -147,6 +156,7 @@ impl HostMemMapping {
     /// * `file_back` - The file's raw fd that backs memory,
     /// * `file_offset` - Offset in the file that backs memory.
     /// * `dump_guest_core` - Include guest memory in core file or not.
+    /// * `is_share` - This mapping is sharable or not.
     ///
     /// # Errors
     ///
@@ -157,10 +167,16 @@ impl HostMemMapping {
         file_back: RawFd,
         file_offset: u64,
         dump_guest_core: bool,
+        is_share: bool,
     ) -> Result<HostMemMapping> {
-        let mut flags = libc::MAP_PRIVATE | libc::MAP_NORESERVE;
+        let mut flags = libc::MAP_NORESERVE;
         if file_back == -1 {
             flags |= libc::MAP_ANONYMOUS;
+        }
+        if is_share {
+            flags |= libc::MAP_SHARED;
+        } else {
+            flags |= libc::MAP_PRIVATE;
         }
 
         let host_addr = unsafe {
@@ -240,8 +256,8 @@ mod test {
 
     #[test]
     fn test_ramblock_creation() {
-        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false).unwrap();
-        let ram2 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false).unwrap();
+        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false, false).unwrap();
+        let ram2 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false, false).unwrap();
         identify(ram1, 0, 100);
         identify(ram2, 0, 100);
     }

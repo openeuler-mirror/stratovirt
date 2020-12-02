@@ -85,7 +85,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("machine")
                 .long("machine")
-                .value_name("[type=]name[,dump_guest_core=on|off]")
+                .value_name("[type=]name[,dump_guest_core=on|off][,mem-share=on|off]")
                 .help("selects emulated machine")
                 .takes_value(true),
         )
@@ -101,6 +101,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .long("m")
                 .value_name("[size=]megs")
                 .help("configure guest RAM")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("mem-path")
+                .long("mem-path")
+                .value_name("file backend file of memory")
+                .help("configure file path that backs guest memory.")
                 .takes_value(true),
         )
         .arg(
@@ -341,6 +348,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     update_args_to_config!((args.value_of("name")), vm_cfg, update_name);
     update_args_to_config!((args.value_of("machine")), vm_cfg, update_machine);
     update_args_to_config!((args.value_of("memory")), vm_cfg, update_memory);
+    update_args_to_config!((args.value_of("mem-path")), vm_cfg, update_mem_path);
     update_args_to_config!((args.value_of("smp")), vm_cfg, update_cpu);
     update_args_to_config!((args.value_of("kernel")), vm_cfg, update_kernel);
     update_args_to_config!((args.value_of("initrd-file")), vm_cfg, update_initrd);

@@ -227,9 +227,8 @@ impl LightMachine {
 
         // Init guest-memory
         // Define ram-region ranges according to architectures
-        let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_size);
-        let mem_mappings =
-            create_host_mmaps(&ram_ranges, None, vm_config.machine_config.dump_guest_core)?;
+        let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_config.mem_size);
+        let mem_mappings = create_host_mmaps(&ram_ranges, &vm_config.machine_config.mem_config)?;
         for mmap in mem_mappings.iter() {
             sys_mem.root().add_subregion(
                 Region::init_ram_region(mmap.clone()),
