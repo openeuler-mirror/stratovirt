@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex};
 
 use vmm_sys_util::terminal::Terminal;
 
-use device_model::cmdline::{check_api_channel, create_args_parser, create_vmconfig};
 use device_model::{register_seccomp, LightMachine, MainLoop};
+use machine_manager::cmdline::{check_api_channel, create_args_parser, create_vmconfig};
 use machine_manager::config::VmConfig;
 #[cfg(feature = "qmp")]
 use machine_manager::qmp::QmpChannel;

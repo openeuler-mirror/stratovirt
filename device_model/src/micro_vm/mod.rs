@@ -32,7 +32,6 @@ extern crate boot_loader;
 extern crate machine_manager;
 extern crate util;
 
-pub mod cmdline;
 pub mod main_loop;
 pub mod micro_syscall;
 

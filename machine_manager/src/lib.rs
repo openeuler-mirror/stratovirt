@@ -27,6 +27,7 @@ extern crate log;
 extern crate error_chain;
 extern crate serde_json;
 
+pub mod cmdline;
 pub mod config;
 pub mod machine;
 #[cfg(feature = "qmp")]

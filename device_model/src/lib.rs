@@ -46,7 +46,7 @@ mod mmio;
 mod virtio;
 
 pub use error_chain::*;
-pub use micro_vm::{cmdline, main_loop::MainLoop, micro_syscall::register_seccomp, LightMachine};
+pub use micro_vm::{main_loop::MainLoop, micro_syscall::register_seccomp, LightMachine};
 
 use address_space::GuestAddress;
 
