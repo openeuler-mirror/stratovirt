@@ -138,6 +138,12 @@ pub struct HostMemMapping {
     address_range: AddressRange,
     /// The start address of mapped memory.
     host_addr: *mut u8,
+    /// The raw file descriptor that backs this mapping.
+    /// If anonymous mapping, this field is -1.
+    fd: RawFd,
+    /// Offset in file that backs this mapping.
+    /// If anonymous mapping, this field is 0.
+    file_offset: u64,
 }
 
 // Send and Sync is not auto-implemented for raw pointer type
@@ -213,6 +219,8 @@ impl HostMemMapping {
                 size,
             },
             host_addr: host_addr as *mut u8,
+            fd: file_back,
+            file_offset,
         })
     }
 
@@ -230,6 +238,17 @@ impl HostMemMapping {
     #[inline]
     pub fn host_address(&self) -> u64 {
         self.host_addr as u64
+    }
+
+    /// Get File backend information if this mapping is backed be host-memory.
+    /// return None if this mapping is an anonymous mapping.
+    ///
+    /// # Returns
+    ///
+    /// * The file descriptor of file that backs this mapping.
+    /// * The offset in file that backs this mapping.
+    pub fn file_backend(&self) -> (RawFd, u64) {
+        (self.fd, self.file_offset)
     }
 }
 

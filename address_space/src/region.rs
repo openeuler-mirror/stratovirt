@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
@@ -232,6 +233,12 @@ impl Region {
             return None;
         }
         self.mem_mapping.as_ref().map(|r| r.host_address())
+    }
+
+    /// Get the file information if this region is backed by host-memory,
+    /// Return `None` if it is not a Ram-type region.
+    pub fn get_file_backend(&self) -> Option<(RawFd, u64)> {
+        self.mem_mapping.as_ref().map(|r| r.file_backend())
     }
 
     /// Return all sub-regions of this Region, the returned vector is not empty,
