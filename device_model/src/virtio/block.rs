@@ -22,7 +22,10 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress};
-use machine_manager::config::{ConfigCheck, DriveConfig};
+use machine_manager::{
+    config::{ConfigCheck, DriveConfig},
+    main_loop::MainLoop,
+};
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
 use util::epoll_context::{
@@ -31,7 +34,6 @@ use util::epoll_context::{
 use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
-use super::super::micro_vm::main_loop::MainLoop;
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
     Element, Queue, VirtioDevice, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,

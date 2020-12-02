@@ -18,7 +18,10 @@ use std::sync::{Arc, Mutex};
 use std::{cmp, mem};
 
 use address_space::AddressSpace;
-use machine_manager::config::{ConfigCheck, NetworkInterfaceConfig};
+use machine_manager::{
+    config::{ConfigCheck, NetworkInterfaceConfig},
+    main_loop::MainLoop,
+};
 use util::byte_code::ByteCode;
 use util::epoll_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -27,7 +30,6 @@ use util::num_ops::{read_u32, write_u32};
 use util::tap::{Tap, TUN_F_VIRTIO};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
-use super::super::micro_vm::main_loop::MainLoop;
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
     Queue, VirtioDevice, VirtioNetHdr, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_VRING,
