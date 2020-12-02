@@ -24,7 +24,6 @@ const MAX_NR_CPUS: u8 = 254;
 const MIN_NR_CPUS: u8 = 1;
 const MAX_MEMSIZE: u64 = 549_755_813_888;
 const MIN_MEMSIZE: u64 = 134_217_728;
-const MAX_STRING_LENGTH: usize = 255;
 const M: u64 = 1024 * 1024;
 const G: u64 = 1024 * 1024 * 1024;
 
@@ -32,20 +31,20 @@ const G: u64 = 1024 * 1024 * 1024;
 /// Contains some basic Vm config about cpu, memory, name.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineConfig {
-    pub name: String,
+    pub mach_type: String,
     pub nr_cpus: u8,
     pub mem_size: u64,
-    pub omit_vm_memory: bool,
+    pub dump_guest_core: bool,
 }
 
 impl Default for MachineConfig {
     /// Set default config for `machine-config`.
     fn default() -> Self {
         MachineConfig {
-            name: "StratoVirt".to_string(),
+            mach_type: "MicroVm".to_string(),
             nr_cpus: DEFAULT_CPUS,
             mem_size: DEFAULT_MEMSIZE * M,
-            omit_vm_memory: false,
+            dump_guest_core: true,
         }
     }
 }
@@ -58,8 +57,8 @@ impl MachineConfig {
     /// * `Value` - structure can be gotten by `json_file`.
     pub fn from_value(value: &serde_json::Value) -> Self {
         let mut machine_config = MachineConfig::default();
-        if value.get("name") != None {
-            machine_config.name = value["name"].to_string();
+        if value.get("type") != None {
+            machine_config.mach_type = value["type"].to_string();
         }
         if value.get("vcpu_count") != None {
             machine_config.nr_cpus = value["vcpu_count"].to_string().parse::<u8>().unwrap();
@@ -67,9 +66,11 @@ impl MachineConfig {
         if value.get("mem_size") != None {
             machine_config.mem_size = value["mem_size"].to_string().parse::<u64>().unwrap();
         }
-        if value.get("omit_vm_memory") != None {
-            machine_config.omit_vm_memory =
-                value["omit_vm_memory"].to_string().parse::<bool>().unwrap();
+        if value.get("dump_guest_core") != None {
+            machine_config.dump_guest_core = value["dump_guest_core"]
+                .to_string()
+                .parse::<bool>()
+                .unwrap();
         }
         machine_config
     }
@@ -77,12 +78,6 @@ impl MachineConfig {
 
 impl ConfigCheck for MachineConfig {
     fn check(&self) -> Result<()> {
-        if self.name.len() > MAX_STRING_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("name".to_string(), MAX_STRING_LENGTH).into(),
-            );
-        }
-
         if self.nr_cpus < MIN_NR_CPUS || self.nr_cpus > MAX_NR_CPUS {
             return Err(ErrorKind::NrcpusError.into());
         }
@@ -96,6 +91,20 @@ impl ConfigCheck for MachineConfig {
 }
 
 impl VmConfig {
+    /// Update argument `name` to `VmConfig`.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name `String` updated to `VmConfig`.
+    pub fn update_machine(&mut self, mach_config: String) {
+        let cmd_params: CmdParams = CmdParams::from_str(mach_config);
+        if let Some(mach_type) = cmd_params.get("type") {
+            self.machine_config.mach_type = mach_type.value;
+        }
+        if let Some(dump_guest) = cmd_params.get("dump-guest-core") {
+            self.machine_config.dump_guest_core = dump_guest.to_bool();
+        }
+    }
     /// Update '-m' memory config to `VmConfig`.
     pub fn update_memory(&mut self, mem_config: String) {
         let cmd_params: CmdParams = CmdParams::from_str(mem_config);
@@ -126,11 +135,6 @@ impl VmConfig {
         } else if let Some(cpu_num) = cmd_params.get("cpus") {
             self.machine_config.nr_cpus = cpu_num.value_to_u8();
         }
-    }
-
-    /// Update '-omit_vm_memory' config to 'VmConfig'.
-    pub fn update_omit_vm_memory(&mut self) {
-        self.machine_config.omit_vm_memory = true;
     }
 }
 

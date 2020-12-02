@@ -83,6 +83,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("machine")
+                .long("machine")
+                .value_name("[type=]name[,dump_guest_core=on|off]")
+                .help("selects emulated machine")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("smp")
                 .long("smp")
                 .value_name("[cpus=]n")
@@ -209,13 +216,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(false)
                 .required(false),
         )
-        .arg(
-            Arg::with_name("omit_vm_memory")
-                .long("omit_vm_memory")
-                .help("not dump guest memory in core file")
-                .takes_value(false)
-                .required(false),
-        )
         // Below cmdline is adapted for Kata/Qemu, no use.
         .arg(
             Arg::with_name("uuid")
@@ -229,13 +229,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("cpu")
                 .long("cpu")
                 .help("select CPU architecture")
-                .takes_value(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("machine")
-                .long("machine")
-                .help("selects emulated machine")
                 .takes_value(true)
                 .hidden(true),
         )
@@ -346,6 +339,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
 
     // Parse cmdline args which need to set in VmConfig
     update_args_to_config!((args.value_of("name")), vm_cfg, update_name);
+    update_args_to_config!((args.value_of("machine")), vm_cfg, update_machine);
     update_args_to_config!((args.value_of("memory")), vm_cfg, update_memory);
     update_args_to_config!((args.value_of("smp")), vm_cfg, update_cpu);
     update_args_to_config!((args.value_of("kernel")), vm_cfg, update_kernel);
@@ -361,12 +355,6 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     update_args_to_config_multi!((args.values_of("device")), vm_cfg, update_vsock);
     update_args_to_config_multi!((args.values_of("netdev")), vm_cfg, update_net);
     update_args_to_config_multi!((args.values_of("chardev")), vm_cfg, update_console);
-    update_args_to_config!(
-        (args.is_present("omit_vm_memory")),
-        vm_cfg,
-        update_omit_vm_memory,
-        bool
-    );
 
     // Check the mini-set for Vm to start is ok
     vm_cfg

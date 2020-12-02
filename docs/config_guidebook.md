@@ -6,7 +6,30 @@ StratoVirt supports json configuration file and cmdline arguments. If you set th
  json configuration file and cmdline arguments, cmdline arguments will override settings in json
  configuration file.
 
-### 1.1 Cpu Number
+### 1.1 Machine Config
+
+General configuration of machine, including
+* type: The machine type of machine, StratoVirt only support MicroVm yet.
+* dump-guest-core: Including guest memory in coredump file or not, default value is true.
+
+This feature is closed by default. There are two ways to open it:
+
+```shell
+# cmdline
+-machine [type=]name[,dump-guest-core=on|off]
+
+# json
+{
+    "machine-config": {
+        "type": "MicroVm",
+        "dump_guest_core": false,
+        ...
+    },
+    ...
+}
+```
+
+### 1.2 Cpu Number
 
 StratoVirt supports to set the number of VCPUs(**nr_vcpus**).
 
@@ -28,7 +51,7 @@ By default, after booted, VM will online all CPUs you set.
 }
 ```
 
-### 1.2 Memory Size
+### 1.3 Memory Size
 
 StratoVirt supports to set the size of VM's memory in cmdline.
 
@@ -54,7 +77,7 @@ But unfortunately, in json configuration file, only `byte` is supported as unit.
 }
 ```
 
-### 1.3 Kernel and Kernel Parameters
+### 1.4 Kernel and Kernel Parameters
 
 StratoVirt supports to launch PE or bzImage (only x86_64) format linux kernel 4.19 and can also set kernel
  parameters for VM.
@@ -79,7 +102,7 @@ And the given kernel parameters will be actually analyzed by boot loader.
 }
 ```
 
-### 1.4 Initrd Configuration
+### 1.5 Initrd Configuration
 
 StratoVirt supports to launch VM by a initrd (boot loader initialized RAM disk) as well.
 
@@ -493,28 +516,3 @@ You can enable StratoVirt's logging by:
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
 StratoVirt supports four log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
-
-### 4.4 Omit_vm_memory
-
-When StratoVirt aborts unexpectedly, you can get a related core file in which the guest machine's
-whole memory are dumped. However, in most cases, such memory dumping is worthless and may consume
-a lot of system memory for storing.
-
-StratoVirt provides feature `omit_vm_memory` to avoid dumping vm's memory in the core file.
-
-This feature is closed by default. There are two ways to open it:
-
-```shell
-# cmdline
--omit_vm_memory
-
-# json
-{
-    "machine-config": {
-        ...
-        "omit_vm_memory": true,
-        ...
-    },
-    ...
-}
-```

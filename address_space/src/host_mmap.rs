@@ -82,11 +82,11 @@ impl FileBackend {
 ///
 /// * `ranges` - The guest address range that will be mapped.
 /// * `file_path` - The path of backend-file.
-/// * `omit_vm_memory` - Dump guest memory in core file or not.
+/// * `dump_guest_core` - Include guest memory in core file or not.
 pub fn create_host_mmaps(
     ranges: &[(u64, u64)],
     file_path: Option<&str>,
-    omit_vm_memory: bool,
+    dump_guest_core: bool,
 ) -> Result<Vec<Arc<HostMemMapping>>> {
     let mut mappings = Vec::new();
 
@@ -101,7 +101,7 @@ pub fn create_host_mmaps(
                     range.1,
                     f_back.file.as_raw_fd(),
                     f_back.offset,
-                    omit_vm_memory,
+                    dump_guest_core,
                 )?));
 
                 f_back.offset += range.1;
@@ -114,7 +114,7 @@ pub fn create_host_mmaps(
                     range.1,
                     -1,
                     0,
-                    omit_vm_memory,
+                    dump_guest_core,
                 )?));
             }
         }
@@ -146,7 +146,7 @@ impl HostMemMapping {
     /// * `size` - Size of memory that will be mapped.
     /// * `file_back` - The file's raw fd that backs memory,
     /// * `file_offset` - Offset in the file that backs memory.
-    /// * `omit_vm_memory` - Dump guest memory in core file or not.
+    /// * `dump_guest_core` - Include guest memory in core file or not.
     ///
     /// # Errors
     ///
@@ -156,7 +156,7 @@ impl HostMemMapping {
         size: u64,
         file_back: RawFd,
         file_offset: u64,
-        omit_vm_memory: bool,
+        dump_guest_core: bool,
     ) -> Result<HostMemMapping> {
         let mut flags = libc::MAP_PRIVATE | libc::MAP_NORESERVE;
         if file_back == -1 {
@@ -178,7 +178,7 @@ impl HostMemMapping {
             hva
         };
 
-        if omit_vm_memory {
+        if !dump_guest_core {
             unsafe {
                 let madvise_res = libc::madvise(
                     host_addr as *mut libc::c_void,
