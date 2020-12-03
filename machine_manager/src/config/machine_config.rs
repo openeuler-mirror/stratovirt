@@ -181,3 +181,178 @@ fn get_inner<T>(outer: Option<T>) -> T {
         panic!("Integer overflow occurred!");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_json_parser() {
+        let json = r#"
+        {
+            "name": "test_stratovirt",
+            "vcpu_count": 1,
+            "mem_size": 268435456,
+            "dump_guest_core": false
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let machine_config = MachineConfig::from_value(&value);
+
+        assert_eq!(machine_config.nr_cpus, 1);
+        assert_eq!(machine_config.mem_config.mem_size, 268_435_456);
+        assert_eq!(machine_config.mem_config.dump_guest_core, false);
+    }
+
+    #[test]
+    fn test_config_json_parser_unit() {
+        // Unit 'M'
+        let json = r#"
+        {
+            "mem_size": "1024M"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let machine_config = MachineConfig::from_value(&value);
+        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
+
+        // Unit 'm'
+        let json = r#"
+        {
+            "mem_size": "1024m"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let machine_config = MachineConfig::from_value(&value);
+        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
+
+        // Unit 'G'
+        let json = r#"
+        {
+            "mem_size": "1G"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let machine_config = MachineConfig::from_value(&value);
+        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
+
+        // Unit 'g'
+        let json = r#"
+        {
+            "mem_size": "1g"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let machine_config = MachineConfig::from_value(&value);
+        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
+
+        // Round down
+        let json = r#"
+        {
+            "mem_size": "1073741900"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let machine_config = MachineConfig::from_value(&value);
+        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
+    }
+
+    #[test]
+    fn test_config_cmdline_parser() {
+        let json = r#"
+        {
+            "name": "test_stratovirt",
+            "vcpu_count": 1,
+            "mem_size": 268435456,
+            "dump_guest_core": false
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let machine_config = MachineConfig::from_value(&value);
+
+        let mut vm_config = VmConfig::default();
+        vm_config.machine_config = machine_config;
+
+        vm_config.update_cpu("8".to_string());
+        assert_eq!(vm_config.machine_config.nr_cpus, 8);
+        vm_config.update_cpu("cpus=16".to_string());
+        assert_eq!(vm_config.machine_config.nr_cpus, 16);
+        vm_config.update_cpu("nrcpus=32".to_string());
+        assert_eq!(vm_config.machine_config.nr_cpus, 16);
+
+        vm_config.update_memory("256m".to_string());
+        assert_eq!(vm_config.machine_config.mem_config.mem_size, 268_435_456);
+        vm_config.update_memory("512M".to_string());
+        assert_eq!(vm_config.machine_config.mem_config.mem_size, 536_870_912);
+        vm_config.update_memory("size=1G".to_string());
+        assert_eq!(vm_config.machine_config.mem_config.mem_size, 1_073_741_824);
+
+        assert!(!vm_config.machine_config.mem_config.dump_guest_core);
+        vm_config.update_machine(String::from("dump-guest-core=on"));
+        assert!(vm_config.machine_config.mem_config.dump_guest_core);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized value to u64: 268435456N")]
+    fn test_invaild_json_01() {
+        let json = r#"
+        {
+            "name": "test_stratovirt",
+            "vcpu_count": 1,
+            "mem_size": "268435456MN",
+            "dump_guest_core": false
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        MachineConfig::from_value(&value);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized value to u64: ABCDEF")]
+    fn test_invaild_json_02() {
+        let json = r#"
+        {
+            "name": "test_stratovirt",
+            "vcpu_count": 1,
+            "mem_size": "ABCDEF",
+            "dump_guest_core": false
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        MachineConfig::from_value(&value);
+    }
+
+    #[test]
+    fn test_health_check() {
+        let memory_config = MachineMemConfig {
+            mem_size: MIN_MEMSIZE,
+            mem_path: None,
+            mem_share: false,
+            dump_guest_core: false,
+        };
+        let mut machine_config = MachineConfig {
+            mach_type: String::from("MicroVm"),
+            nr_cpus: MIN_NR_CPUS,
+            mem_config: memory_config,
+        };
+        assert!(machine_config.check().is_ok());
+
+        machine_config.nr_cpus = MAX_NR_CPUS;
+        machine_config.mem_config.mem_size = MAX_MEMSIZE;
+        assert!(machine_config.check().is_ok());
+
+        machine_config.nr_cpus = MIN_NR_CPUS - 1;
+        assert!(!machine_config.check().is_ok());
+        machine_config.nr_cpus = MAX_NR_CPUS + 1;
+        assert!(!machine_config.check().is_ok());
+        machine_config.nr_cpus = MIN_NR_CPUS;
+
+        machine_config.mem_config.mem_size = MIN_MEMSIZE - 1;
+        assert!(!machine_config.check().is_ok());
+        machine_config.mem_config.mem_size = MAX_MEMSIZE + 1;
+        assert!(!machine_config.check().is_ok());
+        machine_config.mem_config.mem_size = MIN_MEMSIZE;
+
+        assert!(machine_config.check().is_ok());
+    }
+}
