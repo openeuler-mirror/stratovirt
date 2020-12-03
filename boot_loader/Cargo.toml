@@ -11,8 +11,8 @@ license = "Mulan PSL v2"
 address_space = { path = "../address_space" }
 util = { path = "../util" }
 
-kvm-bindings = "0.2.0"
-kvm-ioctls = "0.5.0"
+kvm-bindings = "0.3.0"
+kvm-ioctls = { git = "https://github.com/rust-vmm/kvm-ioctls", branch = "master" }
 vmm-sys-util = "0.6.1"
 
 libc = "0.2.71"
