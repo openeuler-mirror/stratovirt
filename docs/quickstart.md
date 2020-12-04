@@ -72,24 +72,18 @@ platforms, which can be built with:
 1. Firstly, get the openEuler kernel source code:
 
    ```shell
-   $ git clone https://gitee.com/openeuler/kernel
+   $ git clone -b kernel-4.19 --depth=1 https://gitee.com/openeuler/kernel
    $ cd kernel
    ```
 
-2. Switch the kernel version to kernel-4.19:
-
-   ```shell
-   $ git checkout kernel-4.19
-   ```
-
-3. Configure your linux kernel. You can use [our recommended config](./kernel_config) and
+2. Configure your linux kernel. You can use [our recommended config](./kernel_config) and
 copy it to `kernel` path as `.config`. You can also modify config options by:
 
    ```shell
    $ make menuconfig
    ```
 
-4. Build and transform kernel image to PE format.
+3. Build and transform kernel image to PE format.
 
    ```shell
    $ make -j vmlinux && objcopy -O binary vmlinux vmlinux.bin
