@@ -86,19 +86,27 @@ macro_rules! event {
 }
 
 /// Macro `create_command_matches!`: Generate a match statement for qmp_command
-/// `$t` or `$tt`, which is combined with its handle func `$e`.
+/// , which is combined with its handle func.
+///
+/// # Arguments
+///
+/// `cmd_type_1` - The qmp command with no arguments.
+/// `cmd_type_2` - The qmp command with arguments.
 macro_rules! create_command_matches {
-    ( $x:expr; $(($t:tt, $e:stmt)),*; $(($tt:tt, $a:tt, $b:expr, $($tail:tt),*)),* ) => {
-        match $x {
+    ( $command:expr; $executor:expr; $ret:expr;
+      $(($cmd_type_1:tt, $func_1:tt)),*;
+      $(($cmd_type_2:tt, $func_2:tt, $($arg:tt),*)),*
+    ) => {
+        match $command {
             $(
-                $crate::qmp::qmp_schema::QmpCommand::$t{ id, .. } => {
-                    $e
+                $crate::qmp::qmp_schema::QmpCommand::$cmd_type_1{ id, ..} => {
+                    qmp_command_match!($func_1, $executor, $ret);
                     id
                 },
             )*
             $(
-                $crate::qmp::qmp_schema::QmpCommand::$tt{ arguments, id } => {
-                    qmp_command_match!($a;$b;arguments;$($tail),*);
+                $crate::qmp::qmp_schema::QmpCommand::$cmd_type_2{ arguments, id } => {
+                    qmp_command_match!($func_2, $executor, arguments, $ret, $($arg),*);
                     id
                 },
             )*
@@ -107,24 +115,15 @@ macro_rules! create_command_matches {
     };
 }
 
-/// Macro: to execute handle func $y/$a with every arguments $y/$tail.
+/// Macro: to execute handle func with every arguments.
 macro_rules! qmp_command_match {
-    ( $x:tt;$y:expr ) => {
-        {
-            $y.$x();
-        }
+    ( $func:tt, $executor:expr, $ret:expr ) => {
+        $ret = $executor.$func().into();
     };
-    ( $x:tt;$y:expr;$z:expr ) => {
-        {
-            $z = $y.$x();
-        }
-    };
-    ( $x:tt;$y:expr;$a:expr;$($tail:tt),*) => {
-        {
-            $y.$x(
-                $($a.$tail),*
-            );
-        }
+    ( $func:tt, $executor:expr, $cmd:expr, $ret:expr, $($arg:tt),* ) => {
+        $ret = $executor.$func(
+            $($cmd.$arg),*
+        ).into();
     };
 }
 
@@ -249,6 +248,20 @@ impl Response {
     }
 }
 
+impl From<bool> for Response {
+    fn from(value: bool) -> Self {
+        if value {
+            Response::create_empty_response()
+        } else {
+            Response::create_error_response(
+                schema::QmpErrorClass::GenericError(String::new()),
+                None,
+            )
+            .unwrap()
+        }
+    }
+}
+
 /// `ErrorMessage` for Qmp Response.
 #[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ErrorMessage {
@@ -369,17 +382,16 @@ fn qmp_command_exec(
 
     // Use macro create match to cover most Qmp command
     let mut id = create_command_matches!(
-        qmp_command.clone();
-        (stop, qmp_command_match!(pause; controller)),
-        (cont, qmp_command_match!(resume; controller)),
-        (query_status, qmp_command_match!(query_status; controller; qmp_response)),
-        (query_cpus, qmp_command_match!(query_cpus; controller; qmp_response)),
-        (query_hotpluggable_cpus,
-            qmp_command_match!(query_hotpluggable_cpus; controller; qmp_response));
-        (device_add, device_add, controller, id, driver, addr, lun),
-        (device_del, device_del, controller, id),
-        (blockdev_add, blockdev_add, controller, node_name, file, cache, read_only),
-        (netdev_add, netdev_add, controller, id, if_name, fds)
+        qmp_command.clone(); controller; qmp_response;
+        (stop, pause),
+        (cont, resume),
+        (query_status, query_status),
+        (query_cpus, query_cpus),
+        (query_hotpluggable_cpus, query_hotpluggable_cpus);
+        (device_add, device_add, id, driver, addr, lun),
+        (device_del, device_del, id),
+        (blockdev_add, blockdev_add, node_name, file, cache, read_only),
+        (netdev_add, netdev_add, id, if_name, fds)
     );
 
     // Handle the Qmp command which macro can't cover
@@ -678,86 +690,5 @@ mod tests {
         // After test. Environment Recover
         recover_unix_socket_environment("07");
         drop(socket);
-    }
-
-    #[derive(Clone)]
-    struct TestQmpHandler {
-        content: usize,
-    }
-
-    impl TestQmpHandler {
-        fn get_content(&self) -> usize {
-            self.content
-        }
-
-        // No response no args
-        fn handle_qmp_type_01(&mut self) {
-            self.content = 1;
-        }
-
-        // With response and no args
-        fn handle_qmp_type_02(&mut self) -> String {
-            self.content = 2;
-            "It's type 2 handler".to_string()
-        }
-
-        // No response with args
-        fn handle_qmp_type_03(&mut self, _arguments: String) {
-            self.content = 3;
-        }
-    }
-
-    fn test_handle_qmp(
-        qmp_command: QmpCommand,
-        mut handler: TestQmpHandler,
-    ) -> (Option<u32>, String, usize) {
-        let mut resp_str = String::new();
-        (
-            create_command_matches!(
-                qmp_command;
-                (stop, qmp_command_match!(handle_qmp_type_01; handler)),
-                (query_cpus, qmp_command_match!(handle_qmp_type_02; handler; resp_str));
-                (device_del, handle_qmp_type_03, handler, id)
-            ),
-            resp_str,
-            handler.get_content(),
-        )
-    }
-
-    #[test]
-    fn test_qmp_match_macro() {
-        let qmp_handler = TestQmpHandler { content: 0 };
-
-        // 1.Build a qmp command with id and no args, no response
-        let qmp_command = schema::QmpCommand::stop {
-            arguments: Default::default(),
-            id: Some(0),
-        };
-        assert_eq!(
-            test_handle_qmp(qmp_command, qmp_handler.clone()),
-            (Some(0), String::new(), 1)
-        );
-
-        // 2.Build a qmp command with id and no args, with response
-        let qmp_command = schema::QmpCommand::query_cpus {
-            arguments: Default::default(),
-            id: Some(0),
-        };
-        assert_eq!(
-            test_handle_qmp(qmp_command, qmp_handler.clone()),
-            (Some(0), "It's type 2 handler".to_string(), 2)
-        );
-
-        // 3.Build a qmp command with id and with args, no response
-        let qmp_command = schema::QmpCommand::device_del {
-            arguments: schema::device_del {
-                id: "cpu_0".to_string(),
-            },
-            id: Some(0),
-        };
-        assert_eq!(
-            test_handle_qmp(qmp_command, qmp_handler.clone()),
-            (Some(0), String::new(), 3)
-        );
     }
 }
