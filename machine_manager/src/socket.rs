@@ -381,7 +381,7 @@ impl SocketRWHandler {
             MSG_DONTWAIT, SCM_RIGHTS, SOL_SOCKET,
         };
 
-        'read: loop {
+        loop {
             let tmp_buf = [0_u8; 1];
             let mut iov = iovec {
                 iov_base: tmp_buf.as_ptr() as *mut c_void,
@@ -418,10 +418,12 @@ impl SocketRWHandler {
             if ret == -1 {
                 let sock_err = io::Error::last_os_error();
                 if sock_err.kind() == io::ErrorKind::WouldBlock {
-                    break 'read;
+                    break;
                 } else {
                     return Err(sock_err);
                 }
+            } else if ret == 0 {
+                break;
             }
 
             let cmsg_hdr: Option<&cmsghdr> = unsafe {
