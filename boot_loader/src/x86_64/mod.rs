@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-//! Boot Loader load PE linux kernel image to guest memory according
+//! Boot Loader load PE and bzImage linux kernel image to guest memory according
 //! [`x86 boot protocol`](https://www.kernel.org/doc/Documentation/x86/boot.txt).
 //!
 //! Below is x86_64 bootloader memory layout:
@@ -60,6 +60,8 @@ mod bootparam;
 mod gdt;
 mod mptable;
 
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::string::String;
 use std::sync::Arc;
@@ -68,13 +70,14 @@ use kvm_bindings::kvm_segment;
 
 use self::errors::{ErrorKind, Result, ResultExt};
 use address_space::{AddressSpace, GuestAddress};
-use bootparam::{BootParams, RealModeKernelHeader, E820_RAM, E820_RESERVED};
+use bootparam::{BootParams, RealModeKernelHeader, BOOT_VERSION, E820_RAM, E820_RESERVED, HDRS};
 use gdt::GdtEntry;
 use mptable::{
     BusEntry, ConfigTableHeader, FloatingPointer, IOApicEntry, IOInterruptEntry,
     LocalInterruptEntry, ProcessEntry, DEST_ALL_LAPIC_MASK, INTERRUPT_TYPE_EXTINT,
     INTERRUPT_TYPE_INT, INTERRUPT_TYPE_NMI, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
 };
+use util::byte_code::ByteCode;
 use util::checksum::obj_checksum;
 
 pub mod errors {
@@ -82,9 +85,15 @@ pub mod errors {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
         }
+        foreign_links {
+            Io(std::io::Error);
+        }
         errors {
             MaxCpus(cpus: u8) {
                 display("Configure cpu number({}) above supported max cpu numbers(254)", cpus)
+            }
+            InvalidBzImage {
+                display("Invalid bzImage kernel file")
             }
         }
     }
@@ -95,11 +104,13 @@ const PML4_START: u64 = 0x0000_9000;
 const PDPTE_START: u64 = 0x0000_a000;
 const PDE_START: u64 = 0x0000_b000;
 const CMDLINE_START: u64 = 0x0002_0000;
+const BOOT_HDR_START: u64 = 0x0000_01F1;
+const BZIMAGE_BOOT_OFFSET: u64 = 0x0200;
 
 const EBDA_START: u64 = 0x0009_fc00;
 const VGA_RAM_BEGIN: u64 = 0x000a_0000;
 const MB_BIOS_BEGIN: u64 = 0x000f_0000;
-const VMLINUX_RAM_START: u64 = 0x0010_0000;
+pub const VMLINUX_RAM_START: u64 = 0x0010_0000;
 const KVM_32BIT_GAP_SIZE: u64 = 0x0300 << 20; /* 768MB */
 const KVM_32BIT_MAX_MEM_SIZE: u64 = 1 << 32; /* 4GB */
 const KVM_32BIT_GAP_START: u64 = KVM_32BIT_MAX_MEM_SIZE - KVM_32BIT_GAP_SIZE;
@@ -114,6 +125,52 @@ const BOOT_GDT_OFFSET: u64 = 0x500;
 const BOOT_IDT_OFFSET: u64 = 0x520;
 
 const BOOT_GDT_MAX: usize = 4;
+
+/// Load bzImage linux kernel to Guest Memory.
+///
+/// # Notes
+/// According to `Documentation/x86/boot.txt`, bzImage includes two parts:
+/// * the setup
+/// * the compressed kernel
+/// The setup `RealModeKernelHeader` can be load at offset `0x01f1` in bzImage kernel image.
+/// The compressed kernel will be loaded into guest memory at `code32_start` in
+/// `RealModeKernelHeader`.
+/// The start address of compressed kernel is the loader address + 0x200. It will be
+/// set in `kernel_start` in `BootLoader` structure set.
+///
+/// # Arguments
+/// * `kernel_file` - host path for kernel.
+/// * `sys_mem` - guest memory.
+///
+/// # Errors
+/// * `InvalidBzImage`: BzImage header or version is invalid.
+/// * `AddressSpace`: Write bzImage linux kernel to guest memory failed.
+pub fn load_bzimage(kernel_image: &mut File) -> Result<bootparam::RealModeKernelHeader> {
+    kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
+    let mut boot_hdr_buf = [0_u8; std::mem::size_of::<bootparam::RealModeKernelHeader>()];
+    kernel_image.read_exact(&mut boot_hdr_buf)?;
+    let boot_hdr = bootparam::RealModeKernelHeader::from_bytes(&boot_hdr_buf).unwrap();
+
+    if boot_hdr.header != HDRS {
+        kernel_image.seek(SeekFrom::Start(0))?;
+        return Err(ErrorKind::InvalidBzImage.into());
+    }
+
+    if (boot_hdr.version < BOOT_VERSION) || ((boot_hdr.loadflags & 0x1) == 0x0) {
+        kernel_image.seek(SeekFrom::Start(0))?;
+        return Err(ErrorKind::InvalidBzImage.into());
+    }
+
+    let mut setup_size = boot_hdr.setup_sects as u64;
+    if setup_size == 0 {
+        setup_size = 4;
+    }
+    setup_size = (setup_size + 1) << 9;
+
+    kernel_image.seek(SeekFrom::Start(setup_size as u64))?;
+
+    Ok(*boot_hdr)
+}
 
 /// Boot loader config used for x86_64.
 pub struct X86BootLoaderConfig {
@@ -131,6 +188,7 @@ pub struct X86BootLoaderConfig {
 
 /// The start address for some boot source in guest memory for `x86_64`.
 pub struct X86BootLoader {
+    pub vmlinux_start: u64,
     pub kernel_start: u64,
     pub kernel_sp: u64,
     pub initrd_start: u64,
@@ -266,6 +324,7 @@ fn setup_isa_mptable(sys_mem: &Arc<AddressSpace>, start_addr: u64, num_cpus: u8)
 fn setup_boot_params(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
+    boot_hdr: Option<RealModeKernelHeader>,
 ) -> Result<(u64, u64)> {
     let (ramdisk_size, ramdisk_image, initrd_addr) = if config.initrd_size > 0 {
         let mut initrd_addr_max = INITRD_ADDR_MAX as u32;
@@ -280,12 +339,22 @@ fn setup_boot_params(
         (0u32, 0u32, 0u64)
     };
 
-    let mut boot_params = BootParams::new(RealModeKernelHeader::new(
-        CMDLINE_START as u32,
-        config.kernel_cmdline.len() as u32,
-        ramdisk_image,
-        ramdisk_size,
-    ));
+    let mut boot_params = if let Some(mut boot_hdr) = boot_hdr {
+        boot_hdr.setup(
+            CMDLINE_START as u32,
+            config.kernel_cmdline.len() as u32,
+            ramdisk_image,
+            ramdisk_size,
+        );
+        BootParams::new(boot_hdr)
+    } else {
+        BootParams::new(RealModeKernelHeader::new(
+            CMDLINE_START as u32,
+            config.kernel_cmdline.len() as u32,
+            ramdisk_image,
+            ramdisk_size,
+        ))
+    };
 
     boot_params.add_e820_entry(
         REAL_MODE_IVT_BEGIN,
@@ -376,17 +445,28 @@ pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
 pub fn linux_bootloader(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
+    boot_hdr: Option<RealModeKernelHeader>,
 ) -> Result<X86BootLoader> {
+    let (kernel_start, vmlinux_start) = if let Some(boot_hdr) = boot_hdr {
+        (
+            boot_hdr.code32_start as u64 + BZIMAGE_BOOT_OFFSET,
+            boot_hdr.code32_start as u64,
+        )
+    } else {
+        (VMLINUX_STARTUP, VMLINUX_STARTUP)
+    };
+
     let boot_pml4 = setup_page_table(sys_mem)?;
 
     setup_isa_mptable(sys_mem, EBDA_START, config.cpu_count)?;
 
-    let (zero_page, initrd_addr) = setup_boot_params(&config, sys_mem)?;
+    let (zero_page, initrd_addr) = setup_boot_params(&config, sys_mem, boot_hdr)?;
 
     let gdt_seg = setup_gdt(sys_mem)?;
 
     Ok(X86BootLoader {
-        kernel_start: VMLINUX_STARTUP,
+        kernel_start,
+        vmlinux_start,
         kernel_sp: BOOT_LOADER_SP,
         initrd_start: initrd_addr,
         boot_pml4_addr: boot_pml4,
@@ -450,7 +530,7 @@ mod test {
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,
         };
-        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space).unwrap();
+        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
         assert_eq!(initrd_addr_tmp, 0xfff_0000);
 
         //test setup_gdt function

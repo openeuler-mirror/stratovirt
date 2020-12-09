@@ -22,7 +22,7 @@ Now you can find StratoVirt binary in `target/release/stratovirt`.
 
 ### Run a VM with StratoVirt
 To run StratoVirt quickly, requires
-* A PE format Linux kernel
+* A PE or bzImage (only x86_64) format Linux kernel
 * An EXT4-format rootfs image
 
 ```shell

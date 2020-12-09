@@ -21,7 +21,7 @@ $ cargo build --release
 
 ### 运行软件
 为了快速上手StratoVirt，需要准备
-* PE格式的Linux内核镜像
+* PE格式或bzImage格式(仅x86_64)的Linux内核镜像
 * EXT4格式的rootfs镜像
 
 ```shell
