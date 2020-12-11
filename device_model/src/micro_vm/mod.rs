@@ -223,6 +223,9 @@ impl LightMachine {
             )?;
         }
 
+        #[cfg(target_arch = "x86_64")]
+        Self::arch_init(&vm_fd)?;
+
         // Pre init vcpu and cpu topology
         let mut mask: Vec<u8> = Vec::with_capacity(vm_config.machine_config.nr_cpus as usize);
         for _i in 0..vm_config.machine_config.nr_cpus {
@@ -243,9 +246,6 @@ impl LightMachine {
         for cpu_id in 0..nrcpus {
             vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
         }
-
-        #[cfg(target_arch = "x86_64")]
-        Self::arch_init(&vm_fd)?;
 
         // Interrupt Controller Chip init
         #[cfg(target_arch = "aarch64")]
