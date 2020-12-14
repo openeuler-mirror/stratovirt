@@ -499,7 +499,8 @@ mod test {
     fn test_x86_bootloader_and_kernel_cmdline() {
         let root = Region::init_container_region(0x2000_0000);
         let space = AddressSpace::new(root.clone()).unwrap();
-        let ram1 = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000_0000, false).unwrap());
+        let ram1 =
+            Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000_0000, -1, 0, false).unwrap());
         let region_a = Region::init_ram_region(ram1.clone());
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
