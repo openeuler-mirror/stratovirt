@@ -31,7 +31,6 @@ pub mod cmdline;
 pub mod config;
 pub mod machine;
 pub mod main_loop;
-#[cfg(feature = "qmp")]
 pub mod qmp;
 pub mod socket;
 

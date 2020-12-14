@@ -40,7 +40,6 @@ use kvm_ioctls::{VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
-#[cfg(feature = "qmp")]
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
 
 use self::errors::{ErrorKind, Result};
@@ -470,14 +469,11 @@ impl CPUInterface for CPU {
         *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
         self.vm.destroy();
 
-        #[cfg(feature = "qmp")]
-        {
-            let shutdown_msg = schema::SHUTDOWN {
-                guest: true,
-                reason: "guest-shutdown".to_string(),
-            };
-            event!(SHUTDOWN; shutdown_msg);
-        }
+        let shutdown_msg = schema::SHUTDOWN {
+            guest: true,
+            reason: "guest-shutdown".to_string(),
+        };
+        event!(SHUTDOWN; shutdown_msg);
 
         Ok(())
     }

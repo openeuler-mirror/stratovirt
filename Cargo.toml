@@ -29,8 +29,7 @@ name = "stratovirt"
 path = "src/main.rs"
 
 [features]
-default = ["qmp"]
-qmp = []
+default = []
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]

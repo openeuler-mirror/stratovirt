@@ -22,7 +22,6 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::errors::Result;
 use crate::machine::MachineExternalInterface;
-#[cfg(feature = "qmp")]
 use crate::{
     qmp::qmp_schema::QmpEvent,
     qmp::{QmpChannel, QmpGreeting, Response},
@@ -97,11 +96,8 @@ impl Socket {
             }
         }
 
-        #[cfg(feature = "qmp")]
-        {
-            QmpChannel::bind_writer(SocketRWHandler::new(self.get_stream_fd()));
-            self.send_response(true);
-        }
+        QmpChannel::bind_writer(SocketRWHandler::new(self.get_stream_fd()));
+        self.send_response(true);
     }
 
     /// Accept a new incoming connection unix stream from unix listener.
@@ -154,7 +150,6 @@ impl Socket {
     /// # Arguments
     ///
     /// * `event` - The `QmpEvent` will be sent to client.
-    #[cfg(feature = "qmp")]
     pub fn send_event(&self, event: &QmpEvent) {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
@@ -169,7 +164,6 @@ impl Socket {
     /// # Arguments
     ///
     /// * `is_greeting` - Whether sending greeting response or not.
-    #[cfg(feature = "qmp")]
     pub fn send_response(&self, is_greeting: bool) {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
@@ -198,20 +192,9 @@ impl Socket {
                     let socket_mutexed = shared_socket.lock().unwrap();
                     let stream_fd = socket_mutexed.get_stream_fd();
 
-                    #[cfg(feature = "qmp")]
-                    {
-                        let performer = &socket_mutexed.performer.as_ref().unwrap();
-
-                        if let Err(e) = crate::qmp::handle_qmp(stream_fd, performer) {
-                            error!("{}", e);
-                        }
-                    }
-
-                    #[cfg(not(feature = "qmp"))]
-                    {
-                        if let Err(e) = SocketRWHandler::new(stream_fd).read_fd() {
-                            error!("{}", e);
-                        }
+                    let performer = &socket_mutexed.performer.as_ref().unwrap();
+                    if let Err(e) = crate::qmp::handle_qmp(stream_fd, performer) {
+                        error!("{}", e);
                     }
                 }
                 if event & EventSet::HANG_UP == EventSet::HANG_UP {
@@ -219,10 +202,7 @@ impl Socket {
                     let stream_fd = socket_mutexed.get_stream_fd();
                     let listener_fd = socket_mutexed.get_listener_fd();
 
-                    #[cfg(feature = "qmp")]
-                    {
-                        QmpChannel::unbind();
-                    }
+                    QmpChannel::unbind();
 
                     Some(vec![EventNotifier::new(
                         NotifierOperation::Delete,
