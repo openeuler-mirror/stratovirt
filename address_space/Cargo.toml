@@ -11,7 +11,7 @@ machine_manager = {path = "../machine_manager"}
 
 libc = "0.2.71"
 kvm-bindings = "0.3.0"
-kvm-ioctls = { git = "https://github.com/rust-vmm/kvm-ioctls", branch = "master" }
+kvm-ioctls = "0.6.0"
 vmm-sys-util = "0.6.1"
 error-chain = "0.12.4"
 log = "0.4.8"

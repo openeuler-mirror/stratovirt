@@ -12,5 +12,5 @@ libc = "0.2.71"
 log = { version = "0.4.8", features = ["std"]}
 error-chain = "0.12.4"
 kvm-bindings = "0.3.0"
-kvm-ioctls = { git = "https://github.com/rust-vmm/kvm-ioctls", branch = "master" }
+kvm-ioctls = "0.6.0"
 vmm-sys-util = "0.6.1"

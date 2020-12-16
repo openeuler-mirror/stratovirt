@@ -342,7 +342,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Software: kvm-ioctls 0.5.0
+Software: kvm-ioctls 0.6.0
 Copyright notice:
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 Portions Copyright 2017 The Chromium OS Authors. All rights reserved.
@@ -351,7 +351,7 @@ Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: kvm-bindings 0.2.0
+Software: kvm-bindings 0.3.0
 Copyright notice:
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: The APACHE 2.0 License

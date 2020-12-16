@@ -12,7 +12,7 @@ address_space = { path = "../address_space" }
 util = { path = "../util" }
 
 kvm-bindings = "0.3.0"
-kvm-ioctls = { git = "https://github.com/rust-vmm/kvm-ioctls", branch = "master" }
+kvm-ioctls = "0.6.0"
 vmm-sys-util = "0.6.1"
 
 libc = "0.2.71"
