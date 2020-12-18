@@ -116,6 +116,10 @@ const SECCOMP_RET_TRACE: u32 = 0x7ff0_0000;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/seccomp.h#L45
 const SECCOMP_RET_MASK: u32 = 0x0000_ffff;
+/// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/seccomp.h#L16
+const SECCOMP_MODE_FILTER: u32 = 1;
+/// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/seccomp.h#L21
+const SECCOMP_FILETER_FLAG_TSYNC: u32 = 1;
 
 /// System call convention as an AUDIT_ARCH_* value
 #[cfg(target_arch = "x86_64")]
@@ -409,16 +413,17 @@ impl SyscallFilter {
         };
         let bpf_prog_ptr = &prog as *const SockFProg;
 
-        // Use prctl(2) to make bpf rules take effect.
+        // Use seccomp(2) to make bpf rules take effect.
         let ret = unsafe {
-            libc::prctl(
-                libc::PR_SET_SECCOMP,
-                libc::SECCOMP_MODE_FILTER,
+            libc::syscall(
+                libc::SYS_seccomp,
+                SECCOMP_MODE_FILTER,
+                SECCOMP_FILETER_FLAG_TSYNC,
                 bpf_prog_ptr,
             )
         };
         if ret != 0 {
-            bail!("Seccomp: prctl(2) set seccomp filter mode failed.");
+            bail!("Seccomp: seccomp(2) set seccomp filter mode failed.");
         }
 
         Ok(())

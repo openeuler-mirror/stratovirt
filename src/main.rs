@@ -131,10 +131,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
     .chain_err(|| "Failed to add api event to MainLoop")?;
 
     vm.realize()?;
-    vm.vm_start(
-        cmd_args.is_present("freeze_cpu"),
-        !cmd_args.is_present("disable-seccomp"),
-    )?;
+    vm.vm_start(cmd_args.is_present("freeze_cpu"))?;
 
     if !cmd_args.is_present("disable-seccomp") {
         register_seccomp()?;

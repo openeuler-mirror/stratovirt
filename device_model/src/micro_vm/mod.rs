@@ -463,14 +463,13 @@ impl LightMachine {
     /// # Arguments
     ///
     /// * `paused` - After started, paused all vcpu or not.
-    /// * `use_seccomp` - If use seccomp sandbox or not.
-    pub fn vm_start(&self, paused: bool, use_seccomp: bool) -> Result<()> {
+    pub fn vm_start(&self, paused: bool) -> Result<()> {
         let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
             let cpu_thread_barrier = cpus_thread_barrier.clone();
             let cpu = self.cpus.lock().unwrap()[cpu_index as usize].clone();
-            CPU::start(cpu, cpu_thread_barrier, paused, use_seccomp)?;
+            CPU::start(cpu, cpu_thread_barrier, paused)?;
         }
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
@@ -640,7 +639,7 @@ impl MachineLifecycle for LightMachine {
 
         match (old, new) {
             (Created, Running) => {
-                if let Err(e) = self.vm_start(false, false) {
+                if let Err(e) = self.vm_start(false) {
                     error!("Vm lifecycle error:{}", e);
                 };
             }
