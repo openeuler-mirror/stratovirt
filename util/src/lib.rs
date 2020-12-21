@@ -27,7 +27,6 @@ pub mod checksum;
 pub mod daemonize;
 pub mod device_tree;
 pub mod epoll_context;
-pub mod kvm_ioctls_ext;
 mod link_list;
 pub mod num_ops;
 pub mod seccomp;

@@ -334,14 +334,31 @@ impl KvmMemoryListener {
     /// * `ioevtfd` - IoEvent would be deleted.
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
-        self.fd
-            .unregister_ioevent(&ioevtfd.fd, &io_addr)
-            .chain_err(|| {
-                format!(
-                    "KVM unregister ioeventfd failed: mmio-addr {}",
-                    ioevtfd.addr_range.base.raw_value()
-                )
-            })?;
+        let ioctl_ret = if ioevtfd.data_match {
+            let length = ioevtfd.addr_range.size;
+            match length {
+                2 => self
+                    .fd
+                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
+                4 => self
+                    .fd
+                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                8 => self
+                    .fd
+                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                _ => bail!("Unexpected ioeventfd data length"),
+            }
+        } else {
+            self.fd
+                .unregister_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
+        };
+
+        ioctl_ret.chain_err(|| {
+            format!(
+                "KVM unregister ioeventfd failed: mmio-addr {}",
+                ioevtfd.addr_range.base.raw_value()
+            )
+        })?;
 
         Ok(())
     }
@@ -453,14 +470,32 @@ impl KvmIoListener {
     /// * `ioevtfd` - IoEvent of Region.
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
-        self.fd
-            .unregister_ioevent(&ioevtfd.fd, &io_addr)
-            .chain_err(|| {
-                format!(
-                    "KVM unregister ioeventfd failed: io-addr is {}",
-                    ioevtfd.addr_range.base.raw_value()
-                )
-            })?;
+
+        let ioctl_ret = if ioevtfd.data_match {
+            let length = ioevtfd.addr_range.size;
+            match length {
+                2 => self
+                    .fd
+                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
+                4 => self
+                    .fd
+                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                8 => self
+                    .fd
+                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                _ => bail!("Unexpected ioeventfd data length"),
+            }
+        } else {
+            self.fd
+                .unregister_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
+        };
+
+        ioctl_ret.chain_err(|| {
+            format!(
+                "KVM unregister ioeventfd failed: io-addr {}",
+                ioevtfd.addr_range.base.raw_value()
+            )
+        })?;
 
         Ok(())
     }
@@ -624,11 +659,9 @@ mod test {
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
-        // deleting this ioeventfd returns an error, for the reason that
-        // function `unregister_ioevent` in kvm-ioctls package doesn't support `data_match` argument yet.
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
-            .is_err());
+            .is_ok());
     }
 
     #[test]

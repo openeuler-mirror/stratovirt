@@ -8,8 +8,8 @@ license = "Mulan PSL v2"
 [dependencies]
 log = "0.4.8"
 libc = "0.2.71"
-kvm-bindings = "0.2.0"
-kvm-ioctls = "0.5.0"
+kvm-bindings = "0.3.0"
+kvm-ioctls = { git = "https://github.com/rust-vmm/kvm-ioctls", branch = "master" }
 vmm-sys-util = "0.6.1"
 byteorder = "1.3.4"
 error-chain = "0.12.4"

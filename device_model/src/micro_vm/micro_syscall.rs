@@ -14,7 +14,6 @@ extern crate libc;
 
 use crate::errors::Result;
 use crate::virtio::vhost::kernel::*;
-use util::kvm_ioctls_ext::{KVM_GET_DEVICE_ATTR, KVM_HAS_DEVICE_ATTR};
 use util::seccomp::{BpfRule, SeccompCmpOpt, SeccompOpt, SyscallFilter};
 use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
 
@@ -144,8 +143,6 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_HAS_DEVICE_ATTR() as u32)
 }
 
 /// Register seccomp rules in syscall allowlist to seccomp.

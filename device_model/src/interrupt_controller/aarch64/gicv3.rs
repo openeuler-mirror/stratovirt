@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use kvm_ioctls::{DeviceFd, VmFd};
 
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use util::kvm_ioctls_ext::{check_device_attr, get_device_attr};
 use util::{device_tree, errors};
 
 use super::GICConfig;
@@ -46,7 +45,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct KvmDevice;
 
 impl KvmDevice {
-    fn kvm_device_check(fd: &DeviceFd, group: u32, attr: u64) -> Result<bool> {
+    fn kvm_device_check(fd: &DeviceFd, group: u32, attr: u64) -> Result<()> {
         let attr = kvm_bindings::kvm_device_attr {
             group,
             attr,
@@ -54,13 +53,9 @@ impl KvmDevice {
             flags: 0,
         };
 
-        let support = check_device_attr(fd, &attr).map_err(Error::CheckDeviceAttribute)?;
-
-        if support == 0 {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        Ok(fd
+            .has_device_attr(&attr)
+            .map_err(Error::CheckDeviceAttribute)?)
     }
 
     fn kvm_device_access(
@@ -82,7 +77,8 @@ impl KvmDevice {
                 .map_err(Error::SetDeviceAttribute)?;
         } else {
             let mut attr = attr;
-            get_device_attr(fd, &mut attr).map_err(Error::GetDeviceAttribute)?;
+            fd.get_device_attr(&mut attr)
+                .map_err(Error::GetDeviceAttribute)?;
         };
 
         Ok(())
@@ -204,14 +200,13 @@ impl GICv3 {
     }
 
     fn realize(&self) -> Result<()> {
-        let multi_redist_supported = KvmDevice::kvm_device_check(
-            &self.fd,
-            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
-            kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION as u64,
-        )?;
-        if !multi_redist_supported && self.redist_regions.len() > 1 {
-            error!("Multi redistributor region not supported by KVM, max cpus count is 123");
-            return Err(Error::MultiRedistributor);
+        if self.redist_regions.len() > 1 {
+            KvmDevice::kvm_device_check(
+                &self.fd,
+                kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
+                kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION as u64,
+            )
+            .map_err(|_| Error::MultiRedistributor)?;
         }
 
         if self.redist_regions.len() == 1 {

@@ -181,6 +181,9 @@ pub trait CPUInterface {
     /// Reset registers value for `CPU`.
     fn reset(&self) -> Result<()>;
 
+    /// Make `CPU` destroy because of guest inner shutdown.
+    fn guest_shutdown(&self) -> Result<()>;
+
     /// Handle vcpu event from `kvm`.
     fn kvm_vcpu_exec(&self) -> Result<bool>;
 }
@@ -462,6 +465,23 @@ impl CPUInterface for CPU {
         }
     }
 
+    fn guest_shutdown(&self) -> Result<()> {
+        let (cpu_state, _) = &*self.state;
+        *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+        self.vm.destroy();
+
+        #[cfg(feature = "qmp")]
+        {
+            let shutdown_msg = schema::SHUTDOWN {
+                guest: true,
+                reason: "guest-shutdown".to_string(),
+            };
+            event!(SHUTDOWN; shutdown_msg);
+        }
+
+        Ok(())
+    }
+
     fn kvm_vcpu_exec(&self) -> Result<bool> {
         match self.fd.run() {
             Ok(run) => match run {
@@ -481,32 +501,43 @@ impl CPUInterface for CPU {
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Hlt => {
-                    info!("Vcpu{} Received KVM_EXIT_HLT signal", self.id());
+                    info!("Vcpu{} received KVM_EXIT_HLT signal", self.id());
                     panic!("Hlt vpu {}", self.id());
                 }
-                VcpuExit::Shutdown | VcpuExit::SystemEvent => {
-                    info!("Vcpu{} Received an KVM_EXIT_SHUTDOWN signal", self.id());
-                    let (cpu_state, _) = &*self.state;
-                    *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
-                    self.vm.destroy();
+                #[cfg(target_arch = "x86_64")]
+                VcpuExit::Shutdown => {
+                    info!("Vcpu{} received an KVM_EXIT_SHUTDOWN signal", self.id());
+                    self.guest_shutdown()?;
 
-                    #[cfg(feature = "qmp")]
+                    return Ok(false);
+                }
+                #[cfg(target_arch = "aarch64")]
+                VcpuExit::SystemEvent(event, flags) => {
+                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN
+                        || event == kvm_bindings::KVM_SYSTEM_EVENT_RESET
                     {
-                        let shutdown_msg = schema::SHUTDOWN {
-                            guest: true,
-                            reason: "guest-shutdown".to_string(),
-                        };
-                        event!(SHUTDOWN; shutdown_msg);
+                        info!(
+                            "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
+                            self.id()
+                        );
+                        self.guest_shutdown()?;
+                    } else {
+                        error!(
+                            "Vcpu{} recevied unexpected system event with type 0x{:x}, flags 0x{:x}",
+                            self.id(),
+                            event,
+                            flags
+                        );
                     }
 
                     return Ok(false);
                 }
                 VcpuExit::FailEntry => {
-                    info!("Vcpu{} Received KVM_EXIT_FAIL_ENTRY signal", self.id());
+                    info!("Vcpu{} received KVM_EXIT_FAIL_ENTRY signal", self.id());
                     return Ok(false);
                 }
                 VcpuExit::InternalError => {
-                    info!("Vcpu{} Received KVM_EXIT_INTERNAL_ERROR signal", self.id());
+                    info!("Vcpu{} received KVM_EXIT_INTERNAL_ERROR signal", self.id());
                     return Ok(false);
                 }
                 r => panic!("Unexpected exit reason: {:?}", r),
