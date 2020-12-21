@@ -14,6 +14,8 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
 
+use machine_manager::config::MachineMemConfig;
+
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
 
@@ -81,42 +83,49 @@ impl FileBackend {
 /// # Arguments
 ///
 /// * `ranges` - The guest address range that will be mapped.
-/// * `file_path` - The path of backend-file.
-/// * `omit_vm_memory` - Dump guest memory in core file or not.
+/// * `mem_config` - Machine memory config.
 pub fn create_host_mmaps(
     ranges: &[(u64, u64)],
-    file_path: Option<&str>,
-    omit_vm_memory: bool,
+    mem_config: &MachineMemConfig,
 ) -> Result<Vec<Arc<HostMemMapping>>> {
+    let mut f_back: Option<FileBackend> = None;
+
+    if let Some(path) = &mem_config.mem_path {
+        let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
+        f_back = Some(FileBackend::new(&path, file_len)?);
+    } else if mem_config.mem_share {
+        let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
+
+        let anon_mem_name = String::from("stratovirt_anon_mem");
+        let anon_fd =
+            unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
+        let anon_file = unsafe { File::from_raw_fd(anon_fd) };
+
+        anon_file.set_len(file_len)?;
+        f_back = Some(FileBackend {
+            file: anon_file,
+            offset: 0,
+        });
+    }
+
     let mut mappings = Vec::new();
+    for range in ranges.iter() {
+        let (fd, offset) = if let Some(fb) = f_back.as_ref() {
+            (fb.file.as_raw_fd(), fb.offset)
+        } else {
+            (-1, 0)
+        };
+        mappings.push(Arc::new(HostMemMapping::new(
+            GuestAddress(range.0),
+            range.1,
+            fd,
+            offset,
+            mem_config.dump_guest_core,
+            mem_config.mem_share,
+        )?));
 
-    match file_path {
-        Some(path) => {
-            // create file-backend
-            let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
-            let mut f_back = FileBackend::new(path, file_len)?;
-            for range in ranges.iter() {
-                mappings.push(Arc::new(HostMemMapping::new(
-                    GuestAddress(range.0),
-                    range.1,
-                    f_back.file.as_raw_fd(),
-                    f_back.offset,
-                    omit_vm_memory,
-                )?));
-
-                f_back.offset += range.1;
-            }
-        }
-        None => {
-            for range in ranges.iter() {
-                mappings.push(Arc::new(HostMemMapping::new(
-                    GuestAddress(range.0),
-                    range.1,
-                    -1,
-                    0,
-                    omit_vm_memory,
-                )?));
-            }
+        if let Some(mut fb) = f_back.as_mut() {
+            fb.offset += range.1
         }
     }
 
@@ -129,6 +138,12 @@ pub struct HostMemMapping {
     address_range: AddressRange,
     /// The start address of mapped memory.
     host_addr: *mut u8,
+    /// The raw file descriptor that backs this mapping.
+    /// If anonymous mapping, this field is -1.
+    fd: RawFd,
+    /// Offset in file that backs this mapping.
+    /// If anonymous mapping, this field is 0.
+    file_offset: u64,
 }
 
 // Send and Sync is not auto-implemented for raw pointer type
@@ -146,7 +161,8 @@ impl HostMemMapping {
     /// * `size` - Size of memory that will be mapped.
     /// * `file_back` - The file's raw fd that backs memory,
     /// * `file_offset` - Offset in the file that backs memory.
-    /// * `omit_vm_memory` - Dump guest memory in core file or not.
+    /// * `dump_guest_core` - Include guest memory in core file or not.
+    /// * `is_share` - This mapping is sharable or not.
     ///
     /// # Errors
     ///
@@ -156,11 +172,17 @@ impl HostMemMapping {
         size: u64,
         file_back: RawFd,
         file_offset: u64,
-        omit_vm_memory: bool,
+        dump_guest_core: bool,
+        is_share: bool,
     ) -> Result<HostMemMapping> {
-        let mut flags = libc::MAP_PRIVATE | libc::MAP_NORESERVE;
+        let mut flags = libc::MAP_NORESERVE;
         if file_back == -1 {
             flags |= libc::MAP_ANONYMOUS;
+        }
+        if is_share {
+            flags |= libc::MAP_SHARED;
+        } else {
+            flags |= libc::MAP_PRIVATE;
         }
 
         let host_addr = unsafe {
@@ -178,7 +200,7 @@ impl HostMemMapping {
             hva
         };
 
-        if omit_vm_memory {
+        if !dump_guest_core {
             unsafe {
                 let madvise_res = libc::madvise(
                     host_addr as *mut libc::c_void,
@@ -197,6 +219,8 @@ impl HostMemMapping {
                 size,
             },
             host_addr: host_addr as *mut u8,
+            fd: file_back,
+            file_offset,
         })
     }
 
@@ -214,6 +238,17 @@ impl HostMemMapping {
     #[inline]
     pub fn host_address(&self) -> u64 {
         self.host_addr as u64
+    }
+
+    /// Get File backend information if this mapping is backed be host-memory.
+    /// return None if this mapping is an anonymous mapping.
+    ///
+    /// # Returns
+    ///
+    /// * The file descriptor of file that backs this mapping.
+    /// * The offset in file that backs this mapping.
+    pub fn file_backend(&self) -> (RawFd, u64) {
+        (self.fd, self.file_offset)
     }
 }
 
@@ -240,8 +275,8 @@ mod test {
 
     #[test]
     fn test_ramblock_creation() {
-        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false).unwrap();
-        let ram2 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false).unwrap();
+        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false, false).unwrap();
+        let ram2 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false, false).unwrap();
         identify(ram1, 0, 100);
         identify(ram2, 0, 100);
     }

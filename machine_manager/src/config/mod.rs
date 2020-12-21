@@ -71,6 +71,7 @@ pub mod errors {
 
 /// `MAX_VCPUS`: the most cpu number Vm support.
 pub static MAX_VCPUS: u8 = 128_u8;
+const MAX_STRING_LENGTH: usize = 255;
 
 /// Macro: From serde_json: Value $y to get member $z, use $s's from_value
 /// function to convert.
@@ -91,6 +92,7 @@ macro_rules! config_parse {
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct VmConfig {
+    pub guest_name: String,
     pub machine_config: MachineConfig,
     pub boot_source: BootSource,
     pub drives: Option<Vec<DriveConfig>>,
@@ -125,6 +127,7 @@ impl VmConfig {
         config_parse!(serial, value, "serial", SerialConfig);
 
         Ok(VmConfig {
+            guest_name: "StratoVirt".to_string(),
             machine_config,
             boot_source,
             drives,
@@ -139,6 +142,14 @@ impl VmConfig {
     pub fn check_vmconfig(&self, is_daemonize: bool) -> Result<()> {
         self.boot_source.check()?;
         self.machine_config.check()?;
+
+        if self.guest_name.len() > MAX_STRING_LENGTH {
+            return Err(self::errors::ErrorKind::StringLengthTooLong(
+                "name".to_string(),
+                MAX_STRING_LENGTH,
+            )
+            .into());
+        }
 
         if self.drives.is_some() {
             for drive in self.drives.as_ref().unwrap() {
@@ -179,7 +190,7 @@ impl VmConfig {
     ///
     /// * `name` - The name `String` updated to `VmConfig`.
     pub fn update_name(&mut self, name: String) {
-        self.machine_config.name = name;
+        self.guest_name = name;
     }
 }
 
