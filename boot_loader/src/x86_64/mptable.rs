@@ -25,8 +25,6 @@ const APIC_FLAGS_ENABLE: u8 = 0x1;
 pub const INTERRUPT_TYPE_INT: u8 = 0;
 pub const INTERRUPT_TYPE_NMI: u8 = 1;
 pub const INTERRUPT_TYPE_EXTINT: u8 = 3;
-pub const IOAPIC_BASE_ADDR: u32 = 0xfec0_0000;
-pub const LAPIC_BASE_ADDR: u32 = 0xfee0_0000;
 pub const DEST_ALL_LAPIC_MASK: u8 = 0xff;
 
 #[repr(C)]

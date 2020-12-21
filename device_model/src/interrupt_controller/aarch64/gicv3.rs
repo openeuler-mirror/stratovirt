@@ -21,11 +21,11 @@ use util::{device_tree, errors};
 use super::GICConfig;
 use super::GICDevice;
 
+use crate::{LayoutEntryType, MEM_LAYOUT};
+
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
-const KVM_VGIC_V3_DIST_SIZE: u64 = SZ_64K;
 const KVM_VGIC_V3_REDIST_SIZE: u64 = 2 * SZ_64K;
-const KVM_VGIC_V3_ITS_SIZE: u64 = 2 * SZ_64K;
 
 #[derive(Debug)]
 pub enum Error {
@@ -37,6 +37,8 @@ pub enum Error {
     GetDeviceAttribute(kvm_ioctls::Error),
     /// Error while check device attributes for the GIC.
     CheckDeviceAttribute(kvm_ioctls::Error),
+    /// Error while multiple redistributor is acquired but KVM does not support it.
+    MultiRedistributor,
 }
 type Result<T> = std::result::Result<T, Error>;
 
@@ -55,9 +57,9 @@ impl KvmDevice {
         let support = check_device_attr(fd, &attr).map_err(Error::CheckDeviceAttribute)?;
 
         if support == 0 {
-            Ok(false)
-        } else {
             Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -112,6 +114,15 @@ trait GICv3Access {
     fn access_gic_line_level(&self, offset: u64, gicll_value: &mut u32, write: bool) -> Result<()>;
 }
 
+struct GicRedistRegion {
+    /// Base address.
+    pub base: u64,
+    /// Size of redistributor region.
+    pub size: u64,
+    /// Attribute of redistributor region.
+    pub base_attr: u64,
+}
+
 /// A wrapper around creating and managing a `GICv3`.
 pub struct GICv3 {
     /// The fd for the GICv3 device.
@@ -124,11 +135,8 @@ pub struct GICv3 {
     its_dev: Option<GICv3Its>,
     /// Maximum irq number.
     nr_irqs: u32,
-    /// Base address in the guest physical address space of the GICv3
-    /// redistributor register mappings.
-    redists_base: u64,
-    /// GICv3 redistributor region size.
-    redists_size: u64,
+    /// GICv3 redistributor info, support multiple redistributor regions.
+    redist_regions: Vec<GicRedistRegion>,
     /// Base address in the guest physical address space of the GICv3 distributor
     /// register mappings.
     dist_base: u64,
@@ -153,37 +161,78 @@ impl GICv3 {
             Err(e) => return Err(Error::CreateGIC(e)),
         };
 
+        // Calculate GIC redistributor regions' address range according to vcpu count.
+        let base = MEM_LAYOUT[LayoutEntryType::GicRedist as usize].0;
+        let size = MEM_LAYOUT[LayoutEntryType::GicRedist as usize].1;
+        let redist_capability = size / KVM_VGIC_V3_REDIST_SIZE;
+        let redist_region_count = std::cmp::min(config.vcpu_count, redist_capability);
+        let mut redist_regions = vec![GicRedistRegion {
+            base,
+            size,
+            base_attr: (redist_region_count << 52) | base,
+        }];
+
+        if config.vcpu_count > redist_capability {
+            let high_redist_base = MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].0;
+            let high_redist_region_count = config.vcpu_count - redist_capability;
+            let high_redist_attr = (high_redist_region_count << 52) | high_redist_base | 0x1;
+
+            redist_regions.push(GicRedistRegion {
+                base: high_redist_base,
+                size: high_redist_region_count * KVM_VGIC_V3_REDIST_SIZE,
+                base_attr: high_redist_attr,
+            })
+        }
+
         let mut gicv3 = GICv3 {
             fd: gic_fd,
             vcpu_count: config.vcpu_count,
             nr_irqs: config.max_irq,
             its: config.msi,
             its_dev: None,
-            redists_size: config.vcpu_count * KVM_VGIC_V3_REDIST_SIZE,
-            redists_base: config.map_region
-                - KVM_VGIC_V3_DIST_SIZE
-                - config.vcpu_count * KVM_VGIC_V3_REDIST_SIZE,
-            dist_size: KVM_VGIC_V3_DIST_SIZE,
-            dist_base: config.map_region - KVM_VGIC_V3_DIST_SIZE,
+            redist_regions,
+            dist_base: MEM_LAYOUT[LayoutEntryType::GicDist as usize].0,
+            dist_size: MEM_LAYOUT[LayoutEntryType::GicDist as usize].1,
             state: Arc::new(Mutex::new(KvmVmState::Created)),
         };
 
         if gicv3.its {
-            gicv3.its_dev =
-                Some(GICv3Its::new(&vm, gicv3.redists_base - KVM_VGIC_V3_ITS_SIZE).unwrap());
+            gicv3.its_dev = Some(GICv3Its::new(&vm).unwrap());
         }
 
         Ok(gicv3)
     }
 
     fn realize(&self) -> Result<()> {
-        KvmDevice::kvm_device_access(
+        let multi_redist_supported = KvmDevice::kvm_device_check(
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
-            u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST),
-            &self.redists_base as *const u64 as u64,
-            true,
+            kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION as u64,
         )?;
+        if !multi_redist_supported && self.redist_regions.len() > 1 {
+            error!("Multi redistributor region not supported by KVM, max cpus count is 123");
+            return Err(Error::MultiRedistributor);
+        }
+
+        if self.redist_regions.len() == 1 {
+            KvmDevice::kvm_device_access(
+                &self.fd,
+                kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
+                u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST),
+                &self.redist_regions.get(0).unwrap().base as *const u64 as u64,
+                true,
+            )?;
+        } else {
+            for redist in &self.redist_regions {
+                KvmDevice::kvm_device_access(
+                    &self.fd,
+                    kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
+                    u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION),
+                    &redist.base_attr as *const u64 as u64,
+                    true,
+                )?;
+            }
+        }
 
         KvmDevice::kvm_device_access(
             &self.fd,
@@ -348,12 +397,14 @@ impl GICDevice for GICv3 {
     }
 
     fn generate_fdt(&self, fdt: &mut Vec<u8>) -> errors::Result<()> {
-        let gic_reg = [
-            self.dist_base,
-            self.dist_size,
-            self.redists_base,
-            self.redists_size,
-        ];
+        let redist_count = self.redist_regions.len() as u32;
+        let mut gic_reg = vec![self.dist_base, self.dist_size];
+
+        for redist in &self.redist_regions {
+            gic_reg.push(redist.base);
+            gic_reg.push(redist.size);
+        }
+
         let node = "/intc";
         device_tree::add_sub_node(fdt, node)?;
         device_tree::set_property_string(fdt, node, "compatible", "arm,gic-v3")?;
@@ -362,7 +413,7 @@ impl GICDevice for GICv3 {
         device_tree::set_property_u32(fdt, node, "phandle", device_tree::GIC_PHANDLE)?;
         device_tree::set_property_u32(fdt, node, "#address-cells", 0x2)?;
         device_tree::set_property_u32(fdt, node, "#size-cells", 0x2)?;
-        device_tree::set_property_u32(fdt, node, "#redistributor-regions", 0x1)?;
+        device_tree::set_property_u32(fdt, node, "#redistributor-regions", redist_count)?;
         device_tree::set_property_array_u64(fdt, node, "reg", &gic_reg)?;
 
         let gic_intr = [
@@ -400,7 +451,7 @@ pub struct GICv3Its {
 }
 
 impl GICv3Its {
-    fn new(vm: &Arc<VmFd>, msi_base: u64) -> Result<Self> {
+    fn new(vm: &Arc<VmFd>) -> Result<Self> {
         let mut its_device = kvm_bindings::kvm_create_device {
             type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_ITS,
             fd: 0,
@@ -414,8 +465,8 @@ impl GICv3Its {
 
         Ok(GICv3Its {
             fd: its_fd,
-            msi_base,
-            msi_size: KVM_VGIC_V3_ITS_SIZE,
+            msi_base: MEM_LAYOUT[LayoutEntryType::GicIts as usize].0,
+            msi_size: MEM_LAYOUT[LayoutEntryType::GicIts as usize].1,
         })
     }
 
@@ -456,7 +507,6 @@ mod tests {
     fn test_gic_config() {
         let mut gic_conf = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
-            map_region: 0x0002_0000_0000,
             vcpu_count: 4,
             max_irq: 192,
             msi: false,

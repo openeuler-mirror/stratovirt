@@ -86,17 +86,7 @@ use crate::{
     virtio::{vhost, Console},
 };
 
-/// Layout of aarch64
-#[cfg(target_arch = "aarch64")]
-pub const DRAM_BASE: u64 = 1 << 31;
-#[cfg(target_arch = "aarch64")]
-pub const MEM_MAPPED_IO_BASE: u64 = 1 << 30;
-
-/// Layout of x86_64
-#[cfg(target_arch = "x86_64")]
-pub const MEM_MAPPED_IO_BASE: u64 = (1 << 32) - MEM_MAPPED_IO_SIZE;
-#[cfg(target_arch = "x86_64")]
-pub const MEM_MAPPED_IO_SIZE: u64 = 768 << 20;
+use crate::{LayoutEntryType, MEM_LAYOUT};
 
 /// Every type of devices depends on this configure-related trait to perform
 /// initialization.
@@ -261,7 +251,6 @@ impl LightMachine {
         #[cfg(target_arch = "aarch64")]
         let intc_conf = InterruptControllerConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
-            map_region: 1 << 30,
             vcpu_count: u64::from(vm_config.machine_config.nr_cpus),
             max_irq: 192,
             msi: true,
@@ -334,14 +323,15 @@ impl LightMachine {
         let mut ranges = Vec::<(u64, u64)>::new();
 
         #[cfg(target_arch = "aarch64")]
-        ranges.push((DRAM_BASE, mem_size));
+        ranges.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
 
         #[cfg(target_arch = "x86_64")]
         {
-            let gap_start = MEM_MAPPED_IO_BASE;
+            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
             ranges.push((0, std::cmp::min(gap_start, mem_size)));
             if mem_size > gap_start {
-                let gap_end = MEM_MAPPED_IO_BASE + MEM_MAPPED_IO_SIZE;
+                let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
                 ranges.push((gap_end, mem_size - gap_start));
             }
         }
@@ -378,6 +368,7 @@ impl LightMachine {
             kernel: boot_source.kernel_file.clone(),
             initrd,
             initrd_size: initrd_size as u32,
+            mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
 
         let layout = load_kernel(&bootloader_config, &self.sys_mem)?;
@@ -428,12 +419,19 @@ impl LightMachine {
             Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
             None => (None, 0),
         };
+
+        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
         let bootloader_config = BootLoaderConfig {
             kernel: boot_source.kernel_file.clone(),
             initrd,
             initrd_size: initrd_size as u32,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
             cpu_count: self.cpu_topo.nrcpus,
+            gap_range: (gap_start, gap_end - gap_start),
+            ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
+            lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
         };
 
         let layout = load_kernel(&bootloader_config, &self.sys_mem)?;
@@ -1158,11 +1156,13 @@ impl CompileFDTHelper for LightMachine {
     }
 
     fn generate_memory_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()> {
-        let mem_size = self.sys_mem.memory_end_address().raw_value() - 0x8000_0000;
+        let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        let mem_size = self.sys_mem.memory_end_address().raw_value()
+            - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
         let node = "/memory";
         device_tree::add_sub_node(fdt, node)?;
         device_tree::set_property_string(fdt, node, "device_type", "memory")?;
-        device_tree::set_property_array_u64(fdt, node, "reg", &[0x8000_0000, mem_size as u64])?;
+        device_tree::set_property_array_u64(fdt, node, "reg", &[mem_base, mem_size as u64])?;
 
         Ok(())
     }

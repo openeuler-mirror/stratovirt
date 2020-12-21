@@ -35,8 +35,6 @@ pub enum Error {
 pub struct GICConfig {
     /// Config GIC version
     pub version: u32,
-    /// GIC region mappings base address, aligned 64K
-    pub map_region: u64,
     /// Config number of CPUs handled by the device
     pub vcpu_count: u64,
     /// Config maximum number of irqs handled by the device
@@ -56,12 +54,6 @@ impl GICConfig {
                 "GIC only support maximum 256 vcpus".to_string(),
             ));
         }
-
-        if self.map_region < 0x1000_0000 {
-            return Err(Error::EINVAL(
-                "GIC mapping Guest Physical Address need above 0x1000_0000".to_string(),
-            ));
-        };
 
         if self.max_irq <= GIC_IRQ_INTERNAL {
             return Err(Error::EINVAL("GIC irq numbers need above 32".to_string()));
@@ -145,7 +137,6 @@ mod tests {
 
         let gic_conf = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
-            map_region: 0x0002_0000_0000,
             vcpu_count: 4,
             max_irq: 192,
             msi: false,

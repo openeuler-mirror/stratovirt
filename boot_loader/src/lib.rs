@@ -48,6 +48,9 @@
 //!         initrd_size: 0,
 //!         kernel_cmdline: String::new(),
 //!         cpu_count: 0,
+//!         gap_range: (0xC000_0000, 0x4000_0000),
+//!         ioapic_addr: 0xFEC0_0000,
+//!         lapic_addr: 0xFEE0_0000,
 //!     };
 //!
 //!     let layout = load_kernel(&bootloader_config, &guest_mem).unwrap();
@@ -62,6 +65,7 @@
 //!         kernel: kernel_file,
 //!         initrd: None,
 //!         initrd_size: 0,
+//!         mem_start: 0x4000_0000,
 //!     };
 //!
 //!     let layout = load_kernel(&bootloader_config, &guest_mem).unwrap();

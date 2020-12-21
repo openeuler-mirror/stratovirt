@@ -20,7 +20,7 @@ use super::super::virtio::{Block, Net};
 use super::{
     errors::Result, DeviceResource, DeviceType, MmioDevice, MmioDeviceOps, VirtioMmioDevice,
 };
-use crate::micro_vm::MEM_MAPPED_IO_BASE;
+use crate::{LayoutEntryType, MEM_LAYOUT};
 
 #[cfg(target_arch = "aarch64")]
 const IRQ_RANGE: (u32, u32) = (32, 191);
@@ -28,8 +28,11 @@ const IRQ_RANGE: (u32, u32) = (32, 191);
 const IRQ_RANGE: (u32, u32) = (5, 15);
 
 const MMIO_SERIAL_IRQ: u32 = 4;
+#[cfg(target_arch = "x86_64")]
 const MMIO_SERIAL_ADDR: u64 = 0x3f8;
-const MMIO_LEN: u64 = 0x1000;
+
+const MMIO_BASE: u64 = MEM_LAYOUT[LayoutEntryType::Mmio as usize].0;
+const MMIO_LEN: u64 = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
 
 /// The replaceable block device maximum count.
 pub const MMIO_REPLACEABLE_BLK_NR: usize = 6;
@@ -154,14 +157,35 @@ impl Bus {
         let index = self.devices.len();
 
         let resource = match device_type {
-            DeviceType::SERIAL if cfg!(target_arch = "x86_64") => DeviceResource {
-                addr: MMIO_SERIAL_ADDR,
-                size: 8,
-                irq: MMIO_SERIAL_IRQ,
+            #[cfg(target_arch = "aarch64")]
+            DeviceType::RTC => DeviceResource {
+                addr: MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
+                size: MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
+                irq: IRQ_RANGE.0 + index as u32,
                 dev_type: device_type,
             },
+            DeviceType::SERIAL => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    DeviceResource {
+                        addr: MMIO_SERIAL_ADDR,
+                        size: 8,
+                        irq: MMIO_SERIAL_IRQ,
+                        dev_type: device_type,
+                    }
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    DeviceResource {
+                        addr: MEM_LAYOUT[LayoutEntryType::Uart as usize].0,
+                        size: MEM_LAYOUT[LayoutEntryType::Uart as usize].1,
+                        irq: MMIO_SERIAL_IRQ,
+                        dev_type: device_type,
+                    }
+                }
+            }
             _ => DeviceResource {
-                addr: MEM_MAPPED_IO_BASE + index as u64 * MMIO_LEN,
+                addr: MMIO_BASE + index as u64 * MMIO_LEN,
                 size: MMIO_LEN,
                 irq: IRQ_RANGE.0 + index as u32,
                 dev_type: device_type,

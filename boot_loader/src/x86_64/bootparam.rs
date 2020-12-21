@@ -192,6 +192,9 @@ mod test {
             initrd_size: 0x1_0000,
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,
+            gap_range: (0xC000_0000, 0x4000_0000),
+            ioapic_addr: 0xFEC0_0000,
+            lapic_addr: 0xFEE0_0000,
         };
         let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
         assert_eq!(initrd_addr_tmp, 0xfff_0000);

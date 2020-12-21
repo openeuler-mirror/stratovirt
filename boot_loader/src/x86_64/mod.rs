@@ -75,7 +75,7 @@ use gdt::GdtEntry;
 use mptable::{
     BusEntry, ConfigTableHeader, FloatingPointer, IOApicEntry, IOInterruptEntry,
     LocalInterruptEntry, ProcessEntry, DEST_ALL_LAPIC_MASK, INTERRUPT_TYPE_EXTINT,
-    INTERRUPT_TYPE_INT, INTERRUPT_TYPE_NMI, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
+    INTERRUPT_TYPE_INT, INTERRUPT_TYPE_NMI,
 };
 use util::byte_code::ByteCode;
 use util::checksum::obj_checksum;
@@ -111,9 +111,6 @@ const EBDA_START: u64 = 0x0009_fc00;
 const VGA_RAM_BEGIN: u64 = 0x000a_0000;
 const MB_BIOS_BEGIN: u64 = 0x000f_0000;
 pub const VMLINUX_RAM_START: u64 = 0x0010_0000;
-const KVM_32BIT_GAP_SIZE: u64 = 0x0300 << 20; /* 768MB */
-const KVM_32BIT_MAX_MEM_SIZE: u64 = 1 << 32; /* 4GB */
-const KVM_32BIT_GAP_START: u64 = KVM_32BIT_MAX_MEM_SIZE - KVM_32BIT_GAP_SIZE;
 const INITRD_ADDR_MAX: u64 = 0x37ff_ffff;
 
 const VMLINUX_STARTUP: u64 = 0x0100_0000;
@@ -184,6 +181,12 @@ pub struct X86BootLoaderConfig {
     pub kernel_cmdline: String,
     /// VM's CPU count.
     pub cpu_count: u8,
+    /// (gap start, gap size)
+    pub gap_range: (u64, u64),
+    /// IO APIC base address
+    pub ioapic_addr: u32,
+    /// Local APIC base address
+    pub lapic_addr: u32,
 }
 
 /// The start address for some boot source in guest memory for `x86_64`.
@@ -248,7 +251,13 @@ macro_rules! write_entry {
     };
 }
 
-fn setup_isa_mptable(sys_mem: &Arc<AddressSpace>, start_addr: u64, num_cpus: u8) -> Result<()> {
+fn setup_isa_mptable(
+    sys_mem: &Arc<AddressSpace>,
+    start_addr: u64,
+    num_cpus: u8,
+    ioapic_addr: u32,
+    lapic_addr: u32,
+) -> Result<()> {
     const BUS_ID: u8 = 0;
     const MPTABLE_MAX_CPUS: u32 = 254; // mptable max support 255 cpus, reserve one for ioapic id
     const MPTABLE_IOAPIC_NR: u8 = 16;
@@ -280,7 +289,7 @@ fn setup_isa_mptable(sys_mem: &Arc<AddressSpace>, start_addr: u64, num_cpus: u8)
     write_entry!(BusEntry::new(BUS_ID), BusEntry, sys_mem, offset, sum);
 
     write_entry!(
-        IOApicEntry::new(ioapic_id, true, IOAPIC_BASE_ADDR),
+        IOApicEntry::new(ioapic_id, true, ioapic_addr),
         IOApicEntry,
         sys_mem,
         offset,
@@ -314,7 +323,7 @@ fn setup_isa_mptable(sys_mem: &Arc<AddressSpace>, start_addr: u64, num_cpus: u8)
     );
 
     sys_mem.write_object(
-        &ConfigTableHeader::new((offset - header) as u16, sum, LAPIC_BASE_ADDR),
+        &ConfigTableHeader::new((offset - header) as u16, sum, lapic_addr),
         GuestAddress(header),
     )?;
 
@@ -364,29 +373,18 @@ fn setup_boot_params(
     boot_params.add_e820_entry(EBDA_START, VGA_RAM_BEGIN - EBDA_START, E820_RESERVED);
     boot_params.add_e820_entry(MB_BIOS_BEGIN, 0, E820_RESERVED);
 
-    let high_memory_start = GuestAddress(VMLINUX_RAM_START);
-    let end_32bit_gap_start = GuestAddress(KVM_32BIT_GAP_START);
-    let first_addr_past_32bits = GuestAddress(KVM_32BIT_MAX_MEM_SIZE);
-    let mem_end = sys_mem.memory_end_address();
-    if mem_end < end_32bit_gap_start {
-        boot_params.add_e820_entry(
-            high_memory_start.raw_value() as u64,
-            mem_end.offset_from(high_memory_start) as u64,
-            E820_RAM,
-        );
+    let high_memory_start = VMLINUX_RAM_START;
+    let layout_32bit_gap_end = config.gap_range.0 + config.gap_range.1;
+    let mem_end = sys_mem.memory_end_address().raw_value();
+    if mem_end < layout_32bit_gap_end {
+        boot_params.add_e820_entry(high_memory_start, mem_end - high_memory_start, E820_RAM);
     } else {
+        boot_params.add_e820_entry(high_memory_start, config.gap_range.0, E820_RAM);
         boot_params.add_e820_entry(
-            high_memory_start.raw_value() as u64,
-            end_32bit_gap_start.offset_from(high_memory_start) as u64,
+            layout_32bit_gap_end,
+            mem_end - layout_32bit_gap_end,
             E820_RAM,
         );
-        if mem_end > first_addr_past_32bits {
-            boot_params.add_e820_entry(
-                first_addr_past_32bits.raw_value() as u64,
-                mem_end.offset_from(first_addr_past_32bits) as u64,
-                E820_RAM,
-            );
-        }
     }
 
     sys_mem
@@ -458,7 +456,13 @@ pub fn linux_bootloader(
 
     let boot_pml4 = setup_page_table(sys_mem)?;
 
-    setup_isa_mptable(sys_mem, EBDA_START, config.cpu_count)?;
+    setup_isa_mptable(
+        sys_mem,
+        EBDA_START,
+        config.cpu_count,
+        config.ioapic_addr,
+        config.lapic_addr,
+    )?;
 
     let (zero_page, initrd_addr) = setup_boot_params(&config, sys_mem, boot_hdr)?;
 
@@ -531,6 +535,9 @@ mod test {
             initrd_size: 0x1_0000,
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,
+            gap_range: (0xC000_0000, 0x4000_0000),
+            ioapic_addr: 0xFEC0_0000,
+            lapic_addr: 0xFEE0_0000,
         };
         let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
         assert_eq!(initrd_addr_tmp, 0xfff_0000);
