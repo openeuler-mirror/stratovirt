@@ -976,4 +976,82 @@ mod tests {
         let id_bytes = get_serial_num_config(&serial_num);
         assert_eq!(id_bytes.len(), 20);
     }
+
+    #[test]
+    fn test_set_driver_features() {
+        let mut block = Block::new();
+
+        //If the device feature is 0, all driver features are not supported.
+        block.device_features = 0;
+        let driver_feature: u32 = 0xFF;
+        let page = 0_u32;
+        block.set_driver_features(page, driver_feature);
+        assert_eq!(block.driver_features, 0_u64);
+        assert_eq!(block.get_device_features(0_u32), 0_u32);
+
+        let driver_feature: u32 = 0xFF;
+        let page = 1_u32;
+        block.set_driver_features(page, driver_feature);
+        assert_eq!(block.driver_features, 0_u64);
+        assert_eq!(block.get_device_features(1_u32), 0_u32);
+
+        //If both the device feature bit and the front-end driver feature bit are
+        //supported at the same time,  this driver feature bit is supported.
+        block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
+        let page = 0_u32;
+        block.set_driver_features(page, driver_feature);
+        assert_eq!(
+            block.driver_features,
+            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        assert_eq!(
+            block.get_device_features(page),
+            (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        block.driver_features = 0;
+
+        block.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
+        let page = 0_u32;
+        block.set_driver_features(page, driver_feature);
+        assert_eq!(block.driver_features, 0);
+        assert_eq!(block.get_device_features(page), 0_u32);
+        block.driver_features = 0;
+
+        block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
+        let page = 0_u32;
+        block.set_driver_features(page, driver_feature);
+        assert_eq!(
+            block.driver_features,
+            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        assert_eq!(
+            block.get_device_features(page),
+            (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+
+        block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
+        let page = 0_u32;
+        block.set_driver_features(page, driver_feature);
+        let driver_feature: u32 = ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32;
+        let page = 1_u32;
+        block.set_driver_features(page, driver_feature);
+        assert_eq!(
+            block.driver_features,
+            (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        let page = 0_u32;
+        assert_eq!(
+            block.get_device_features(page),
+            (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        let page = 1_u32;
+        assert_eq!(
+            block.get_device_features(page),
+            ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32
+        );
+    }
 }

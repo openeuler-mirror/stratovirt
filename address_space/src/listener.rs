@@ -36,7 +36,7 @@ pub mod errors {
 }
 use self::errors::{ErrorKind, Result, ResultExt};
 
-/// Different operations of listener requests.
+/// Request type of listener.
 #[derive(Debug, Copy, Clone)]
 pub enum ListenerReqType {
     /// Add a region.
@@ -53,7 +53,7 @@ pub trait Listener: Send + Sync {
     /// Get priority.
     fn priority(&self) -> i32;
 
-    /// Deal with the request.
+    /// Function that handle request according to request-type.
     ///
     /// # Arguments
     ///
@@ -70,7 +70,7 @@ pub trait Listener: Send + Sync {
     }
 }
 
-/// Memory slot constructing a link between guest address and host address.
+/// Records information that manage the slot resource and current usage.
 #[derive(Default, Copy, Clone)]
 struct MemSlot {
     /// Index of a memory slot.
@@ -78,6 +78,7 @@ struct MemSlot {
     /// Guest address.
     pub guest_addr: u64,
     /// Size of memory.
+    /// size = 0 represents no-region use this slot.
     pub size: u64,
     /// Host address.
     pub host_addr: u64,
@@ -116,14 +117,14 @@ impl KvmMemoryListener {
     /// # Arguments
     ///
     /// * `guest_addr` - Guest address.
-    /// * `size` - Size of slots.
+    /// * `size` - Size of slot.
     /// * `host_addr` - Host address.
     ///
     /// # Errors
     ///
     /// Return Error if
-    /// * no valid Kvm slot.
-    /// * memory overflows.
+    /// * No available Kvm slot.
+    /// * Given memory slot overlap with existed one.
     fn get_free_slot(&self, guest_addr: u64, size: u64, host_addr: u64) -> Result<u32> {
         let mut slots = self.slots.lock().unwrap();
 
@@ -204,12 +205,11 @@ impl KvmMemoryListener {
         Ok(AddressRange::new(aligned_addr, aligned_size))
     }
 
-    /// Add a region to KvmMemoryListener,
-    /// the argument `flat_range` is used to find the region.
+    /// Callback function for adding Region, which only care about Ram-type Region yet.
     ///
     /// # Arguments
     ///
-    /// * `flat_range` - FlatRange would be used to find the region.
+    /// * `flat_range` - Corresponding FlatRange of new-added region.
     ///
     /// # Errors
     ///
@@ -253,11 +253,11 @@ impl KvmMemoryListener {
         Ok(())
     }
 
-    /// Delete a region from KvmMemoryListener.
+    /// Callback function for deleting Region, which only care about Ram-type Region yet.
     ///
     /// # Arguments
     ///
-    /// * `flat_range` - FlatRange would be used to find the region.
+    /// * `flat_range` - Corresponding FlatRange of new-deleted region.
     fn delete_region(&self, flat_range: &FlatRange) -> Result<()> {
         if flat_range.owner.region_type() != RegionType::Ram {
             return Ok(());
@@ -295,7 +295,7 @@ impl KvmMemoryListener {
     ///
     /// # Errors
     ///
-    /// Return Error if the length of ioeventfd data is unexpected.
+    /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
 
@@ -381,8 +381,7 @@ impl Listener for KvmMemoryListener {
     /// # Errors
     ///
     /// Returns Error if
-    /// * No FlatRange in argument `flat_range`.
-    /// * No IoEventFd in argument `evtfd'.
+    /// * Both `flat_range` and `evtfd' are not provided.
     fn handle_request(
         &self,
         flat_range: Option<&FlatRange>,
@@ -431,7 +430,7 @@ impl KvmIoListener {
     ///
     /// # Errors
     ///
-    /// Return Error if the length of ioeventfd data is unexpected.
+    /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
 
@@ -513,7 +512,7 @@ impl Listener for KvmIoListener {
     ///
     /// # Arguments
     ///
-    /// * `_range` - FlatRange would be used to find the region.
+    /// * `_range` - Corresponding FlatRange of new-added/deleted region.
     /// * `evtfd` - IoEvent of Region.
     /// * `req_type` - Request type.
     fn handle_request(
@@ -544,12 +543,13 @@ mod test {
     use super::*;
     use crate::{GuestAddress, HostMemMapping, Region, RegionIoEventFd};
 
-    fn generate_region_ioeventfd(addr: u64, datamatch: Option<u64>) -> RegionIoEventFd {
+    fn generate_region_ioeventfd<T: Into<u64>>(addr: u64, datamatch: T) -> RegionIoEventFd {
+        let data = datamatch.into();
         RegionIoEventFd {
             fd: EventFd::new(EFD_NONBLOCK).unwrap(),
-            addr_range: AddressRange::from((addr, 4)),
-            data_match: datamatch.is_some(),
-            data: datamatch.unwrap_or(064),
+            addr_range: AddressRange::from((addr, std::mem::size_of::<T>() as u64)),
+            data_match: data != 0,
+            data,
         }
     }
 
@@ -638,30 +638,93 @@ mod test {
             Err(_) => return,
         };
 
-        let evtfd = generate_region_ioeventfd(4, None);
+        let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
-        // evtfd already added, adding again should make an error
+        // The evtfd already added, adding again should make an error
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_err());
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_ok());
-        // evtfd already deleted, deleting again should make an error
+        // The evtfd already deleted, deleting again should cause an error
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_err());
 
-        // register an ioeventfd with data-match
-        let evtfd = generate_region_ioeventfd(64, Some(4u64));
+        // Register an ioeventfd with data-match
+        let evtfd = generate_region_ioeventfd(64, 4_u64);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
+
+        // Register an ioeventfd which has same address with previously registered ones will cause an error
+        let same_addred_evtfd = generate_region_ioeventfd(64, 4_u64);
+        assert!(kml
+            .handle_request(
+                None,
+                Some(&same_addred_evtfd),
+                ListenerReqType::AddIoeventfd
+            )
+            .is_err());
+
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_ok());
+    }
+
+    #[test]
+    fn test_ioeventfd_with_data_match() {
+        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
+            Err(_) => return,
+        };
+        let evtfd_addr = 0x1000_u64;
+
+        let mut evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
+        evtfd.addr_range.size = 3_u64;
+        // Matched data length is not supported.
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
+            .is_err());
+
+        let evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
+            .is_ok());
+
+        // Delete ioeventfd with wrong address will cause an error.
+        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        evtfd_to_del.addr_range.base.0 = evtfd_to_del.addr_range.base.0 - 2;
+        assert!(kml
+            .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
+            .is_err());
+
+        // Delete ioeventfd with inconsistent data-match will cause error.
+        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        evtfd_to_del.data_match = false;
+        assert!(kml
+            .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
+            .is_err());
+
+        // Delete ioeventfd with inconsistent matched data will cause an error.
+        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        evtfd_to_del.data = 128_u64;
+        assert!(kml
+            .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
+            .is_err());
+
+        // Delete it successfully.
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
+            .is_ok());
+
+        // Delete a not-exist ioeventfd will cause an error.
+        assert!(kml
+            .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
+            .is_err());
     }
 
     #[test]
@@ -672,7 +735,7 @@ mod test {
             Err(_) => return,
         };
 
-        let evtfd = generate_region_ioeventfd(4, None);
+        let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_ok());
