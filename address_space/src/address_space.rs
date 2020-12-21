@@ -15,11 +15,24 @@ use std::sync::{Arc, Mutex, RwLock};
 use util::byte_code::ByteCode;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::region::FlatView;
 use crate::{
     AddressRange, FlatRange, GuestAddress, Listener, ListenerReqType, Region, RegionIoEventFd,
     RegionType,
 };
+
+/// Contain a set of `FlatRange`.
+#[derive(Default, Clone)]
+pub struct FlatView(pub Vec<FlatRange>);
+
+impl FlatView {
+    fn find_flatrange(&self, addr: GuestAddress) -> Option<&FlatRange> {
+        match self.0.binary_search_by_key(&addr, |x| x.addr_range.base) {
+            Ok(x) => Some(&self.0[x]),
+            Err(x) if (x > 0 && addr < self.0[x - 1].addr_range.end_addr()) => Some(&self.0[x - 1]),
+            _ => None,
+        }
+    }
+}
 
 /// Address Space of memory.
 #[derive(Clone)]
@@ -234,23 +247,15 @@ impl AddressSpace {
     ///
     /// * `addr` - Guest address.
     pub fn get_host_address(&self, addr: GuestAddress) -> Option<u64> {
-        let view = &self.flat_view.read().unwrap().0;
+        let view = &self.flat_view.read().unwrap();
 
-        match view.binary_search_by_key(&addr, |x| x.addr_range.base) {
-            Ok(x) => view[x]
+        view.find_flatrange(addr).and_then(|range| {
+            let offset = addr.offset_from(range.addr_range.base);
+            range
                 .owner
                 .get_host_address()
-                .map(|hva| hva + view[x].offset_in_region),
-            Err(x) if (x > 0 && addr < view[x - 1].addr_range.end_addr()) => {
-                let offset = addr.offset_from(view[x - 1].addr_range.base);
-                let offset_in_region = view[x - 1].offset_in_region;
-                view[x - 1]
-                    .owner
-                    .get_host_address()
-                    .map(|hva| hva + offset_in_region + offset)
-            }
-            _ => None,
-        }
+                .map(|host| host + range.offset_in_region + offset)
+        })
     }
 
     /// Check if the GuestAddress is in one of Ram region.
@@ -259,18 +264,12 @@ impl AddressSpace {
     ///
     /// * `addr` - Guest address.
     pub fn address_in_memory(&self, addr: GuestAddress, size: u64) -> bool {
-        let view = &self.flat_view.read().unwrap().0;
+        let view = &self.flat_view.read().unwrap();
 
-        match view.binary_search_by_key(&addr, |x| x.addr_range.base) {
-            Ok(x) => {
-                view[x].owner.region_type() == RegionType::Ram && size <= view[x].addr_range.size
-            }
-            Err(x) if (x > 0 && addr < view[x - 1].addr_range.end_addr()) => {
-                view[x - 1].owner.region_type() == RegionType::Ram
-                    && size <= view[x - 1].addr_range.end_addr().offset_from(addr)
-            }
-            _ => false,
-        }
+        view.find_flatrange(addr).map_or(false, |range| {
+            range.owner.region_type() == RegionType::Ram
+                && size <= range.addr_range.end_addr().offset_from(addr)
+        })
     }
 
     /// Return the biggest end address in all Ram regions in AddressSpace.
@@ -294,16 +293,12 @@ impl AddressSpace {
     ///
     /// Return Error if the `addr` is a invalid GuestAddress.
     pub fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
-        let view = &self.flat_view.read().unwrap().0;
+        let view = &self.flat_view.read().unwrap();
 
-        let (fr, offset) = match view.binary_search_by_key(&addr, |x| x.addr_range.base) {
-            Ok(x) => (&view[x], 0),
-            Err(x) if (x > 0 && addr < view[x - 1].addr_range.end_addr()) => {
-                let fr = &view[x - 1];
-                (fr, addr.offset_from(fr.addr_range.base))
-            }
-            _ => return Err(ErrorKind::AddrInvalid(addr.raw_value()).into()),
-        };
+        let (fr, offset) = view
+            .find_flatrange(addr)
+            .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
+            .chain_err(|| ErrorKind::AddrInvalid(addr.raw_value()))?;
 
         fr.owner.read(
             dst,
@@ -325,16 +320,12 @@ impl AddressSpace {
     ///
     /// Return Error if the `addr` is a invalid GuestAddress.
     pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
-        let view = &self.flat_view.read().unwrap().0;
+        let view = &self.flat_view.read().unwrap();
 
-        let (fr, offset) = match view.binary_search_by_key(&addr, |x| x.addr_range.base) {
-            Ok(x) => (&view[x], 0),
-            Err(x) if (x > 0 && addr < view[x - 1].addr_range.end_addr()) => {
-                let fr = &view[x - 1];
-                (fr, addr.offset_from(fr.addr_range.base))
-            }
-            _ => return Err(ErrorKind::AddrInvalid(addr.raw_value()).into()),
-        };
+        let (fr, offset) = view
+            .find_flatrange(addr)
+            .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
+            .chain_err(|| ErrorKind::AddrInvalid(addr.raw_value()))?;
 
         fr.owner.write(
             src,
