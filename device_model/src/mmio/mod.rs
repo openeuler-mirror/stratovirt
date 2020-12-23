@@ -63,6 +63,7 @@ pub enum DeviceType {
     NET,
     BLK,
     SERIAL,
+    BALLOON,
     #[cfg(target_arch = "aarch64")]
     RTC,
     OTHER,

@@ -56,6 +56,7 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle,
 };
 use machine_manager::{
+    config::BalloonConfig,
     config::{
         BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig, VmConfig,
         VsockConfig,
@@ -82,7 +83,7 @@ use crate::mmio::DeviceResource;
 use crate::{
     legacy::Serial,
     mmio::{Bus, DeviceType, VirtioMmioDevice},
-    virtio::{vhost, Console},
+    virtio::{balloon::Balloon, vhost, Console},
 };
 
 use crate::{LayoutEntryType, MEM_LAYOUT};
@@ -130,6 +131,17 @@ impl ConfigDevBuilder for ConsoleConfig {
         let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, console)));
         bus.attach_device(device)
             .chain_err(|| "build dev from config failed")?;
+        Ok(())
+    }
+}
+
+impl ConfigDevBuilder for BalloonConfig {
+    fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
+        let balloon = Arc::new(Mutex::new(Balloon::new(self.clone())));
+        Balloon::object_init(balloon.clone());
+        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, balloon)));
+        bus.attach_device(device)
+            .chain_err(|| "Failed to build balloon device from config")?;
         Ok(())
     }
 }
@@ -563,6 +575,10 @@ impl LightMachine {
             for console in consoles {
                 self.register_device(&console)?;
             }
+        }
+
+        if let Some(balloon) = vm_config.balloon {
+            self.register_device(&balloon)?;
         }
 
         Ok(())
