@@ -723,3 +723,72 @@ pub fn qmp_query_balloon() -> Option<u64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::*;
+    pub use super::*;
+
+    #[test]
+    fn test_balloon_init() {
+        let bln_cfg = BalloonConfig {
+            deflate_on_oom: true,
+        };
+
+        let mut bln = Balloon::new(bln_cfg);
+        assert_eq!(bln.driver_features, 0);
+        assert_eq!(bln.actual, 0);
+        assert_eq!(bln.num_pages, 0);
+        assert!(bln.interrupt_cb.is_none());
+        let feature = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM);
+        assert_eq!(bln.device_features, feature);
+
+        // test realize function.
+        bln.realize().unwrap();
+        assert_eq!(bln.device_type(), 5);
+        assert_eq!(bln.queue_num(), 2);
+        assert_eq!(bln.queue_size(), 256);
+    }
+
+    #[test]
+    fn test_object_init() {
+        let bln_cfg = BalloonConfig {
+            deflate_on_oom: true,
+        };
+
+        let balloon = Arc::new(Mutex::new(Balloon::new(bln_cfg)));
+        Balloon::object_init(balloon);
+        let balloon_get = unsafe { &BALLOON_DEV };
+        assert!(balloon_get.is_some());
+    }
+
+    #[test]
+    fn test_read_config() {
+        let bln_cfg = BalloonConfig {
+            deflate_on_oom: true,
+        };
+
+        let mut balloon = Balloon::new(bln_cfg);
+        let wriet_data = [0, 0, 0, 0, 1, 0, 0, 0];
+        let mut random_data: Vec<u8> = vec![0; 8];
+        let addr = 0x00;
+        assert_eq!(balloon.get_memory_size(), 0);
+        balloon.actual = 1;
+        balloon.read_config(addr, &mut random_data).unwrap();
+        assert_eq!(random_data, wriet_data);
+    }
+
+    #[test]
+    fn test_write_config() {
+        let bln_cfg = BalloonConfig {
+            deflate_on_oom: true,
+        };
+
+        let mut balloon = Balloon::new(bln_cfg);
+        let wriet_data = [1, 0, 0, 0];
+        let addr = 0x00;
+        assert_eq!(balloon.get_memory_size(), 0);
+        balloon.write_config(addr, &wriet_data).unwrap();
+        assert_eq!(balloon.actual, 1);
+    }
+}
