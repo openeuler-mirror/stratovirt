@@ -13,6 +13,7 @@
 extern crate serde;
 extern crate serde_json;
 
+mod balloon;
 mod boot_source;
 mod chardev;
 mod fs;
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use util::device_tree;
 
 pub use self::errors::Result;
+pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
 pub use fs::*;
@@ -100,6 +102,7 @@ pub struct VmConfig {
     pub consoles: Option<Vec<ConsoleConfig>>,
     pub vsock: Option<VsockConfig>,
     pub serial: Option<SerialConfig>,
+    pub balloon: Option<BalloonConfig>,
 }
 
 impl VmConfig {
@@ -116,6 +119,7 @@ impl VmConfig {
         let mut consoles = None;
         let mut vsock = None;
         let mut serial = None;
+        let mut balloon = None;
 
         // Use macro to use from_value function for every member
         config_parse!(machine_config, value, "machine-config", MachineConfig);
@@ -125,6 +129,7 @@ impl VmConfig {
         config_parse!(consoles, value, "console", ConsoleConfig);
         config_parse!(vsock, value, "vsock", VsockConfig);
         config_parse!(serial, value, "serial", SerialConfig);
+        config_parse!(balloon, value, "balloon", BalloonConfig);
 
         Ok(VmConfig {
             guest_name: "StratoVirt".to_string(),
@@ -135,6 +140,7 @@ impl VmConfig {
             consoles,
             vsock,
             serial,
+            balloon,
         })
     }
 

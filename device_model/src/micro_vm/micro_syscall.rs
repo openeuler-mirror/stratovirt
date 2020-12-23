@@ -109,12 +109,16 @@ fn syscall_allow_list() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_fstat),
         BpfRule::new(libc::SYS_pread64),
         BpfRule::new(libc::SYS_pwrite64),
+        BpfRule::new(libc::SYS_mprotect),
+        BpfRule::new(libc::SYS_clone),
+        BpfRule::new(libc::SYS_set_robust_list),
+        BpfRule::new(libc::SYS_sched_getaffinity),
+        BpfRule::new(libc::SYS_nanosleep),
+        BpfRule::new(libc::SYS_timerfd_settime),
         #[cfg(target_env = "gnu")]
-        BpfRule::new(libc::SYS_madvise).add_constraint(
-            SeccompCmpOpt::Eq,
-            2,
-            libc::MADV_DONTNEED as u32,
-        ),
+        BpfRule::new(libc::SYS_madvise)
+            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32),
     ]
 }
 
