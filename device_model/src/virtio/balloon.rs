@@ -12,7 +12,9 @@
 
 use super::{errors::*, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG};
 
-use address_space::GuestAddress;
+use address_space::{
+    FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+};
 use machine_manager::config::BalloonConfig;
 use std::{
     cmp,
@@ -62,6 +64,76 @@ impl BlnMemInfo {
             }
         }
         None
+    }
+
+    fn add_mem_range(&self, fr: &FlatRange) {
+        let guest_phys_addr = fr.addr_range.base.raw_value();
+        let memory_size = fr.addr_range.size;
+        if let Some(host_addr) = fr.owner.get_host_address() {
+            let userspace_addr = host_addr + fr.offset_in_region;
+            self.regions.lock().unwrap().push(BlnMemoryRegion {
+                guest_phys_addr,
+                memory_size,
+                userspace_addr,
+                flags_padding: 0_u64,
+            });
+        } else {
+            error!("Failed to get host address!");
+        }
+    }
+
+    fn delete_mem_range(&self, fr: &FlatRange) {
+        let mut mem_regions = self.regions.lock().unwrap();
+        if let Some(host_addr) = fr.owner.get_host_address() {
+            let target = BlnMemoryRegion {
+                guest_phys_addr: fr.addr_range.base.raw_value(),
+                memory_size: fr.addr_range.size,
+                userspace_addr: host_addr + fr.offset_in_region,
+                flags_padding: 0_u64,
+            };
+            for (index, mr) in mem_regions.iter().enumerate() {
+                if mr.guest_phys_addr == target.guest_phys_addr
+                    && mr.memory_size == target.memory_size
+                    && mr.userspace_addr == target.userspace_addr
+                    && mr.flags_padding == target.flags_padding
+                {
+                    mem_regions.remove(index);
+                    return;
+                }
+            }
+        } else {
+            error!("Failed to get host address!");
+        }
+        debug!("Balloon: deleting mem region failed: not matched");
+    }
+}
+
+impl Listener for BlnMemInfo {
+    fn priority(&self) -> i32 {
+        0
+    }
+    fn handle_request(
+        &self,
+        range: Option<&FlatRange>,
+        _evtfd: Option<&RegionIoEventFd>,
+        req_type: ListenerReqType,
+    ) -> std::result::Result<(), address_space::errors::Error> {
+        match req_type {
+            ListenerReqType::AddRegion => {
+                let fr = range.unwrap();
+                if fr.owner.region_type() == RegionType::Ram {
+                    self.add_mem_range(&fr);
+                }
+            }
+            ListenerReqType::DeleteRegion => {
+                let fr = range.unwrap();
+                if fr.owner.region_type() == RegionType::Ram {
+                    self.delete_mem_range(&fr);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
