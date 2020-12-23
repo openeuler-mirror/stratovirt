@@ -24,7 +24,6 @@
 //!
 //! - `x86_64`
 //! - `aarch64`
-#![allow(dead_code)]
 pub mod balloon;
 pub mod block;
 pub mod console;

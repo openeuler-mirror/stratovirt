@@ -72,7 +72,6 @@ use util::epoll_context::{
     EventNotifier, EventNotifierHelper, MainLoopManager, NotifierCallback, NotifierOperation,
 };
 
-use crate::cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use crate::errors::{Result, ResultExt};
 #[cfg(target_arch = "aarch64")]
 use crate::interrupt_controller::{InterruptController, InterruptControllerConfig};
@@ -80,6 +79,10 @@ use crate::interrupt_controller::{InterruptController, InterruptControllerConfig
 use crate::legacy::PL031;
 #[cfg(target_arch = "aarch64")]
 use crate::mmio::DeviceResource;
+use crate::{
+    cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU},
+    virtio::balloon::{qmp_balloon, qmp_query_balloon},
+};
 use crate::{
     legacy::Serial,
     mmio::{Bus, DeviceType, VirtioMmioDevice},
@@ -839,6 +842,33 @@ impl DeviceInterface for LightMachine {
             }
         }
         Response::create_response(hotplug_vec.into(), None)
+    }
+
+    fn balloon(&self, value: u64) -> Response {
+        if qmp_balloon(value) {
+            return Response::create_empty_response();
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::DeviceNotActive(
+                "No balloon device has been activated".to_string(),
+            ),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn query_balloon(&self) -> Response {
+        if let Some(actual) = qmp_query_balloon() {
+            let ret = qmp_schema::BalloonInfo { actual };
+            return Response::create_response(serde_json::to_value(&ret).unwrap(), None);
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::DeviceNotActive(
+                "No balloon device has been activated".to_string(),
+            ),
+            None,
+        )
+        .unwrap()
     }
 
     fn device_add(

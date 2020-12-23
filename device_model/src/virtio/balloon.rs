@@ -705,3 +705,21 @@ impl VirtioDevice for Balloon {
         bail!("Unsupported to update configuration")
     }
 }
+
+pub fn qmp_balloon(target: u64) -> bool {
+    if let Some(dev) = unsafe { &BALLOON_DEV } {
+        if let Ok(()) = dev.lock().unwrap().set_memory_size(target) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn qmp_query_balloon() -> Option<u64> {
+    if let Some(dev) = unsafe { &BALLOON_DEV } {
+        let ram_size = dev.lock().unwrap().get_ram_size();
+        let balloon_size = dev.lock().unwrap().get_memory_size();
+        return Some(ram_size - balloon_size);
+    }
+    None
+}

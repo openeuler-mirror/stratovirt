@@ -387,11 +387,13 @@ fn qmp_command_exec(
         (cont, resume),
         (query_status, query_status),
         (query_cpus, query_cpus),
+        (query_balloon, query_balloon),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (device_add, device_add, id, driver, addr, lun),
         (device_del, device_del, id),
         (blockdev_add, blockdev_add, node_name, file, cache, read_only),
-        (netdev_add, netdev_add, id, if_name, fds)
+        (netdev_add, netdev_add, id, if_name, fds),
+        (balloon, balloon, value)
     );
 
     // Handle the Qmp command which macro can't cover

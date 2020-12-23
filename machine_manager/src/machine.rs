@@ -158,6 +158,12 @@ pub trait DeviceInterface {
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;
+
+    /// Query balloon's size.
+    fn query_balloon(&self) -> Response;
+
+    /// Set balloon's size.
+    fn balloon(&self, size: u64) -> Response;
 }
 
 /// Machine interface which is exposed to inner hypervisor.

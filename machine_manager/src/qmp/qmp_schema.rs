@@ -130,6 +130,20 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<u32>,
     },
+    #[serde(rename = "balloon")]
+    balloon {
+        #[serde(default)]
+        arguments: balloon,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
+    },
+    #[serde(rename = "query-balloon")]
+    query_balloon {
+        #[serde(default)]
+        arguments: query_balloon,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
+    },
 }
 
 /// qmp_capabilities
@@ -816,4 +830,66 @@ pub enum QmpEvent {
         data: DEVICE_DELETED,
         timestamp: TimeStamp,
     },
+}
+
+/// query-balloon:
+///
+/// Query the actual size of memory of VM.
+///
+/// # Returns
+///
+/// `BalloonInfo` includs the actual size of memory
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-balloon" }
+/// <- {"return":{"actual":8589934592}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_balloon {}
+impl Command for query_balloon {
+    const NAME: &'static str = "query-balloon";
+    type Res = BalloonInfo;
+    fn back(self) -> BalloonInfo {
+        Default::default()
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct BalloonInfo {
+    pub actual: u64,
+}
+
+/// balloon:
+///
+/// Advice VM to change memory size with the argument `value`.
+///
+/// # Arguments
+///
+/// * `value` - Memoey size.
+///
+/// # Notes
+///
+/// This is only an advice instead of command to VM,
+/// therefore, the VM changes its memory according to `value` and its condation.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "balloon", "arguments": { "value": 589934492 } }
+/// <- {"return":{}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct balloon {
+    #[serde(rename = "value")]
+    pub value: u64,
+}
+
+impl Command for balloon {
+    const NAME: &'static str = "balloon";
+    type Res = Empty;
+    fn back(self) -> Empty {
+        Default::default()
+    }
 }
