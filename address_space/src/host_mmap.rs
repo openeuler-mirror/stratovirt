@@ -20,10 +20,11 @@ use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
 
 /// FileBackend represents backend-file of `HostMemMapping`.
+#[derive(Clone)]
 pub struct FileBackend {
     /// File we used to map memory.
-    pub file: File,
-    /// Offset from where the file begins.
+    pub file: Arc<File>,
+    /// Represents HostMmapping's offset in this file.
     pub offset: u64,
 }
 
@@ -72,7 +73,7 @@ impl FileBackend {
         }
 
         Ok(FileBackend {
-            file,
+            file: Arc::new(file),
             offset: 0_u64,
         })
     }
@@ -103,23 +104,17 @@ pub fn create_host_mmaps(
 
         anon_file.set_len(file_len)?;
         f_back = Some(FileBackend {
-            file: anon_file,
+            file: Arc::new(anon_file),
             offset: 0,
         });
     }
 
     let mut mappings = Vec::new();
     for range in ranges.iter() {
-        let (fd, offset) = if let Some(fb) = f_back.as_ref() {
-            (fb.file.as_raw_fd(), fb.offset)
-        } else {
-            (-1, 0)
-        };
         mappings.push(Arc::new(HostMemMapping::new(
             GuestAddress(range.0),
             range.1,
-            fd,
-            offset,
+            f_back.clone(),
             mem_config.dump_guest_core,
             mem_config.mem_share,
         )?));
@@ -138,12 +133,8 @@ pub struct HostMemMapping {
     address_range: AddressRange,
     /// The start address of mapped memory.
     host_addr: *mut u8,
-    /// The raw file descriptor that backs this mapping.
-    /// If anonymous mapping, this field is -1.
-    fd: RawFd,
-    /// Offset in file that backs this mapping.
-    /// If anonymous mapping, this field is 0.
-    file_offset: u64,
+    /// Represents file and offset-in-file that backs this mapping.
+    file_back: Option<FileBackend>,
 }
 
 // Send and Sync is not auto-implemented for raw pointer type
@@ -159,8 +150,7 @@ impl HostMemMapping {
     ///
     /// * `guest_addr` - The start address im memory.
     /// * `size` - Size of memory that will be mapped.
-    /// * `file_back` - The file's raw fd that backs memory,
-    /// * `file_offset` - Offset in the file that backs memory.
+    /// * `file_back` - Information of file and offset-in-file that backs memory.
     /// * `dump_guest_core` - Include guest memory in core file or not.
     /// * `is_share` - This mapping is sharable or not.
     ///
@@ -170,13 +160,12 @@ impl HostMemMapping {
     pub fn new(
         guest_addr: GuestAddress,
         size: u64,
-        file_back: RawFd,
-        file_offset: u64,
+        file_back: Option<FileBackend>,
         dump_guest_core: bool,
         is_share: bool,
     ) -> Result<HostMemMapping> {
         let mut flags = libc::MAP_NORESERVE;
-        if file_back == -1 {
+        if file_back.is_none() {
             flags |= libc::MAP_ANONYMOUS;
         }
         if is_share {
@@ -191,8 +180,11 @@ impl HostMemMapping {
                 size as libc::size_t,
                 libc::PROT_READ | libc::PROT_WRITE,
                 flags,
-                file_back,
-                file_offset as i64,
+                file_back
+                    .clone()
+                    .map(|fb| fb.file.as_raw_fd())
+                    .unwrap_or(-1),
+                file_back.clone().map(|fb| fb.offset).unwrap_or(0) as i64,
             );
             if hva == libc::MAP_FAILED {
                 return Err(ErrorKind::Mmap.into());
@@ -219,8 +211,7 @@ impl HostMemMapping {
                 size,
             },
             host_addr: host_addr as *mut u8,
-            fd: file_back,
-            file_offset,
+            file_back,
         })
     }
 
@@ -242,13 +233,8 @@ impl HostMemMapping {
 
     /// Get File backend information if this mapping is backed be host-memory.
     /// return None if this mapping is an anonymous mapping.
-    ///
-    /// # Returns
-    ///
-    /// * The file descriptor of file that backs this mapping.
-    /// * The offset in file that backs this mapping.
-    pub fn file_backend(&self) -> (RawFd, u64) {
-        (self.fd, self.file_offset)
+    pub fn file_backend(&self) -> Option<FileBackend> {
+        self.file_back.clone()
     }
 }
 
@@ -275,8 +261,8 @@ mod test {
 
     #[test]
     fn test_ramblock_creation() {
-        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false, false).unwrap();
-        let ram2 = HostMemMapping::new(GuestAddress(0), 100u64, -1, 0, false, false).unwrap();
+        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false).unwrap();
+        let ram2 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false).unwrap();
         identify(ram1, 0, 100);
         identify(ram2, 0, 100);
     }
