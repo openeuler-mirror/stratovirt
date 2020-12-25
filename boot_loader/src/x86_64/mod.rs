@@ -89,8 +89,6 @@ pub struct X86BootLoaderConfig {
     pub kernel: std::path::PathBuf,
     /// Path of the initrd image.
     pub initrd: Option<std::path::PathBuf>,
-    /// Initrd image size.
-    pub initrd_size: u32,
     /// Kernel cmdline parameters.
     pub kernel_cmdline: String,
     /// VM's CPU count.
@@ -109,7 +107,6 @@ pub struct X86BootLoader {
     pub vmlinux_start: u64,
     pub kernel_start: u64,
     pub kernel_sp: u64,
-    pub initrd_start: u64,
     pub boot_pml4_addr: u64,
     pub zero_page_addr: u64,
     pub segments: BootGdtSegment,

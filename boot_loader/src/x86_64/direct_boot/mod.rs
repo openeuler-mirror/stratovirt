@@ -133,9 +133,8 @@ fn load_initrd(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     header: &mut RealModeKernelHeader,
-    boot_layout: &mut X86BootLoader,
 ) -> Result<()> {
-    if config.initrd_size == 0 {
+    if config.initrd.is_none() {
         info!("No initrd image file.");
         return Ok(());
     };
@@ -145,14 +144,14 @@ fn load_initrd(
         initrd_addr_max = sys_mem.memory_end_address().raw_value();
     };
 
-    let initrd_addr = (initrd_addr_max - config.initrd_size as u64) & !0xfff_u64;
-
     let mut initrd_image = File::open(config.initrd.as_ref().unwrap())
         .chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+    let initrd_size = initrd_image.metadata().unwrap().len() as u64;
+    let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
+
     load_image(&mut initrd_image, initrd_addr, &sys_mem).chain_err(|| "Failed to load image")?;
 
-    header.set_ramdisk(initrd_addr as u32, config.initrd_size);
-    boot_layout.initrd_start = initrd_addr;
+    header.set_ramdisk(initrd_addr as u32, initrd_size as u32);
 
     Ok(())
 }
@@ -249,7 +248,7 @@ pub fn load_kernel(
     };
     let mut boot_header = load_kernel_image(config, sys_mem, &mut boot_loader_layout)?;
 
-    load_initrd(config, sys_mem, &mut boot_header, &mut boot_loader_layout)
+    load_initrd(config, sys_mem, &mut boot_header)
         .chain_err(|| "Failed to load initrd to vm memory")?;
 
     setup_kernel_cmdline(&config, sys_mem, &mut boot_header)
@@ -315,7 +314,6 @@ mod test {
         let config = X86BootLoaderConfig {
             kernel: PathBuf::new(),
             initrd: Some(PathBuf::new()),
-            initrd_size: 0x1_0000,
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,
             gap_range: (0xC000_0000, 0x4000_0000),

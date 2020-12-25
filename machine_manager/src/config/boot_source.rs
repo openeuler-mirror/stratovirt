@@ -15,7 +15,6 @@ extern crate serde_json;
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -89,25 +88,20 @@ impl ConfigCheck for BootSource {
     }
 }
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct InitrdConfig {
     /// Path of the initrd image
     pub initrd_file: PathBuf,
-    /// Size of initrd image
+    pub initrd_addr: u64,
     pub initrd_size: u64,
-    pub initrd_addr: Mutex<u64>,
 }
 
 impl InitrdConfig {
     pub fn new(initrd: &str) -> Self {
-        let initrd_size = match std::fs::metadata(initrd) {
-            Ok(meta) => meta.len() as u64,
-            _ => panic!("initrd file init failed {:?}!", initrd),
-        };
         InitrdConfig {
             initrd_file: PathBuf::from(initrd),
-            initrd_size,
-            initrd_addr: Mutex::new(0),
+            initrd_addr: 0,
+            initrd_size: 0,
         }
     }
 }
@@ -127,16 +121,6 @@ impl ConfigCheck for InitrdConfig {
         }
 
         Ok(())
-    }
-}
-
-impl Clone for InitrdConfig {
-    fn clone(&self) -> Self {
-        InitrdConfig {
-            initrd_file: self.initrd_file.to_path_buf(),
-            initrd_size: self.initrd_size,
-            initrd_addr: Mutex::new(0),
-        }
     }
 }
 
@@ -359,8 +343,8 @@ mod tests {
         assert!(boot_source.check().is_ok());
         let initrd_config = boot_source.initrd.unwrap();
         assert_eq!(initrd_config.initrd_file, PathBuf::from(&initrd_path));
-        assert_eq!(initrd_config.initrd_size, 100);
-        assert_eq!(*initrd_config.initrd_addr.lock().unwrap(), 0);
+        assert_eq!(initrd_config.initrd_size, 0);
+        assert_eq!(initrd_config.initrd_addr, 0);
         std::fs::remove_file(&kernel_path).unwrap();
         std::fs::remove_file(&initrd_path).unwrap();
     }

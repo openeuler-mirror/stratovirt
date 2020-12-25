@@ -261,10 +261,7 @@ impl MachineOps for StdMachine {
         use crate::errors::ResultExt;
 
         let boot_source = self.boot_source.lock().unwrap();
-        let (initrd, initrd_size) = match &boot_source.initrd {
-            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
-            None => (None, 0),
-        };
+        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
@@ -272,7 +269,6 @@ impl MachineOps for StdMachine {
         let bootloader_config = BootLoaderConfig {
             kernel: boot_source.kernel_file.clone(),
             initrd,
-            initrd_size: initrd_size as u32,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
             cpu_count: self.cpu_topo.nrcpus,
             gap_range: (gap_start, gap_end - gap_start),

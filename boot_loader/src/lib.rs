@@ -45,7 +45,6 @@
 //!     let bootloader_config = BootLoaderConfig {
 //!         kernel: kernel_file,
 //!         initrd: None,
-//!         initrd_size: 0,
 //!         kernel_cmdline: String::new(),
 //!         cpu_count: 0,
 //!         gap_range: (0xC000_0000, 0x4000_0000),
@@ -64,7 +63,6 @@
 //!     let bootloader_config = BootLoaderConfig {
 //!         kernel: kernel_file,
 //!         initrd: None,
-//!         initrd_size: 0,
 //!         mem_start: 0x4000_0000,
 //!     };
 //!
@@ -113,7 +111,7 @@ pub mod errors {
                     util::device_tree::FDT_MAX_SIZE
                 )
             }
-            InitrdOverflow(addr: u64, size: u32) {
+            InitrdOverflow(addr: u64, size: u64) {
                 display(
                     "Failed to load initrd image {} to memory {}.",
                      size,
