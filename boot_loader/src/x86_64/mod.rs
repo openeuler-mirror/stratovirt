@@ -104,6 +104,7 @@ pub struct X86BootLoaderConfig {
 }
 
 /// The start address for some boot source in guest memory for `x86_64`.
+#[derive(Debug, Default, Copy, Clone)]
 pub struct X86BootLoader {
     pub vmlinux_start: u64,
     pub kernel_start: u64,

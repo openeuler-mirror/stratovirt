@@ -77,31 +77,23 @@ pub struct RealModeKernelHeader {
 impl ByteCode for RealModeKernelHeader {}
 
 impl RealModeKernelHeader {
-    pub fn new(cmdline_ptr: u32, cmdline_size: u32, ramdisk_image: u32, ramdisk_size: u32) -> Self {
+    pub fn new() -> Self {
         RealModeKernelHeader {
             boot_flag: BOOT_FLAG,
             header: HDRS,
             type_of_loader: UNDEFINED_ID,
-            cmdline_ptr,
-            cmdline_size,
-            ramdisk_image,
-            ramdisk_size,
             ..Default::default()
         }
     }
 
-    pub fn setup(
-        &mut self,
-        cmdline_ptr: u32,
-        cmdline_size: u32,
-        ramdisk_image: u32,
-        ramdisk_size: u32,
-    ) {
-        self.type_of_loader = UNDEFINED_ID;
-        self.cmdline_ptr = cmdline_ptr;
+    pub fn set_cmdline(&mut self, cmdline_addr: u32, cmdline_size: u32) {
+        self.cmdline_ptr = cmdline_addr;
         self.cmdline_size = cmdline_size;
-        self.ramdisk_image = ramdisk_image;
-        self.ramdisk_size = ramdisk_size;
+    }
+
+    pub fn set_ramdisk(&mut self, addr: u32, size: u32) {
+        self.ramdisk_image = addr;
+        self.ramdisk_size = size;
     }
 }
 
