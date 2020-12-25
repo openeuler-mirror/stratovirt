@@ -55,7 +55,13 @@
 mod bootparam;
 mod direct_boot;
 
-pub use direct_boot::load_kernel;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use address_space::AddressSpace;
+use kvm_bindings::kvm_segment;
+
+use crate::errors::Result;
 
 const ZERO_PAGE_START: u64 = 0x0000_7000;
 const PML4_START: u64 = 0x0000_9000;
@@ -88,7 +94,7 @@ pub struct X86BootLoaderConfig {
     /// Path of the kernel image.
     pub kernel: std::path::PathBuf,
     /// Path of the initrd image.
-    pub initrd: Option<std::path::PathBuf>,
+    pub initrd: Option<PathBuf>,
     /// Kernel cmdline parameters.
     pub kernel_cmdline: String,
     /// VM's CPU count.
@@ -99,14 +105,16 @@ pub struct X86BootLoaderConfig {
     pub ioapic_addr: u32,
     /// Local APIC base address
     pub lapic_addr: u32,
+    /// Boot from 64-bit protection mode or not.
+    pub prot64_mode: bool,
 }
 
 /// The start address for some boot source in guest memory for `x86_64`.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct X86BootLoader {
-    pub vmlinux_start: u64,
-    pub kernel_start: u64,
-    pub kernel_sp: u64,
+    pub boot_ip: u64,
+    pub boot_sp: u64,
+    pub boot_selector: u16,
     pub boot_pml4_addr: u64,
     pub zero_page_addr: u64,
     pub segments: BootGdtSegment,
@@ -114,10 +122,21 @@ pub struct X86BootLoader {
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct BootGdtSegment {
-    pub code_segment: kvm_bindings::kvm_segment,
-    pub data_segment: kvm_bindings::kvm_segment,
+    pub code_segment: kvm_segment,
+    pub data_segment: kvm_segment,
     pub gdt_base: u64,
     pub gdt_limit: u16,
     pub idt_base: u64,
     pub idt_limit: u16,
+}
+
+pub fn load_linux(
+    config: &X86BootLoaderConfig,
+    sys_mem: &Arc<AddressSpace>,
+) -> Result<X86BootLoader> {
+    if !config.prot64_mode {
+        bail!("Only support boot from 64-bit protection mode.");
+    }
+
+    direct_boot::load_linux(config, sys_mem)
 }

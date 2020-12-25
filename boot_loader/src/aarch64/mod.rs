@@ -63,7 +63,7 @@ pub struct AArch64BootLoader {
 ///
 /// Load kernel, initrd to guest memory failed. Boot source is broken or
 /// guest memory is abnormal.
-pub fn load_kernel(
+pub fn load_linux(
     config: &AArch64BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
 ) -> Result<AArch64BootLoader> {

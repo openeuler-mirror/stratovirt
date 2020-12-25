@@ -36,7 +36,7 @@
 //! # extern crate boot_loader;
 //!
 //! use address_space::{AddressSpace, Region};
-//! use boot_loader::{BootLoaderConfig, load_kernel};
+//! use boot_loader::{BootLoaderConfig, load_linux};
 //!
 //! #[cfg(target_arch="x86_64")]
 //! fn main() {
@@ -50,9 +50,10 @@
 //!         gap_range: (0xC000_0000, 0x4000_0000),
 //!         ioapic_addr: 0xFEC0_0000,
 //!         lapic_addr: 0xFEE0_0000,
+//!         prot64_mode: true,
 //!     };
 //!
-//!     let layout = load_kernel(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
 //!     // Now PE linux kernel and kernel cmdline are loaded to guest memory...
 //! }
 //!
@@ -66,7 +67,7 @@
 //!         mem_start: 0x4000_0000,
 //!     };
 //!
-//!     let layout = load_kernel(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
 //!     // Now PE linux kernel is loaded to guest memory...
 //! }
 //! ```
@@ -82,14 +83,14 @@ mod aarch64;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::load_kernel;
+pub use aarch64::load_linux;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoader as BootLoader;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoaderConfig as BootLoaderConfig;
 
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::load_kernel;
+pub use x86_64::load_linux;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86BootLoader as BootLoader;
 #[cfg(target_arch = "x86_64")]

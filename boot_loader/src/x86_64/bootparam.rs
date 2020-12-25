@@ -225,6 +225,7 @@ mod test {
             gap_range: (0xC000_0000, 0x4000_0000),
             ioapic_addr: 0xFEC0_0000,
             lapic_addr: 0xFEE0_0000,
+            prot64_mode: false,
         };
 
         let boot_hdr = RealModeKernelHeader::default();

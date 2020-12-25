@@ -123,8 +123,7 @@ fn load_kernel_image(
 
     load_image(&mut kernel_image, vmlinux_start, &sys_mem).chain_err(|| "Failed to load image")?;
 
-    boot_layout.kernel_start = kernel_start;
-    boot_layout.vmlinux_start = vmlinux_start;
+    boot_layout.boot_ip = kernel_start;
 
     Ok(boot_hdr)
 }
@@ -237,12 +236,12 @@ pub fn setup_kernel_cmdline(
 ///
 /// Load kernel, initrd or kernel cmdline to guest memory failed. Boot source
 /// is broken or guest memory is abnormal.
-pub fn load_kernel(
+pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
 ) -> Result<X86BootLoader> {
     let mut boot_loader_layout = X86BootLoader {
-        kernel_sp: BOOT_LOADER_SP,
+        boot_sp: BOOT_LOADER_SP,
         zero_page_addr: ZERO_PAGE_START,
         ..Default::default()
     };
@@ -319,6 +318,7 @@ mod test {
             gap_range: (0xC000_0000, 0x4000_0000),
             ioapic_addr: 0xFEC0_0000,
             lapic_addr: 0xFEE0_0000,
+            prot64_mode: false,
         };
         let mut boot_hdr = RealModeKernelHeader::new();
         assert!(setup_boot_params(&config, &space, &boot_hdr).is_ok());
