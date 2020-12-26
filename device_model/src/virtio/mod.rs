@@ -170,6 +170,9 @@ pub mod errors {
             VhostIoctl(ioctl: String) {
                 display("Vhost ioctl failed: {}", ioctl)
             }
+            ElementEmpty {
+                display("Failed to get iovec from element!")
+            }
         }
     }
 }

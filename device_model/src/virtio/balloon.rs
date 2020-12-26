@@ -10,22 +10,208 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::{errors::*, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG};
+use super::{errors::*, Element, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG};
 
 use address_space::{
-    FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use machine_manager::config::BalloonConfig;
 use std::{
     cmp,
     sync::{Arc, Mutex},
 };
+use util::byte_code::ByteCode;
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
+const BALLOON_PAGE_SIZE: u64 = 1 << VIRTIO_BALLOON_PFN_SHIFT;
+const BALLOON_INFLATE_EVENT: bool = true;
+const BALLOON_DEFLATE_EVENT: bool = false;
 
 static mut BALLOON_DEV: Option<Arc<Mutex<Balloon>>> = None;
 type VirtioBalloonInterrupt = Box<dyn Fn(u32) -> Result<()> + Send + Sync>;
+
+/// IO vector, used to find memory segments.
+#[derive(Clone, Copy, Default)]
+pub struct Iovec {
+    /// Base address of memory.
+    pub iov_base: GuestAddress,
+    /// Length of memory segments.
+    pub iov_len: u64,
+}
+
+impl ByteCode for Iovec {}
+
+/// Read data segment starting at `iov.iov_base` + `offset` to buffer <T>.
+/// Return bufer <T>.
+///
+/// # Arguments
+///
+/// * `address_space` - Address space of VM.
+/// * `iov` - IOvec includes base address and length.
+/// * `offset` - Offset.
+fn iov_to_buf<T: ByteCode>(
+    address_space: &Arc<AddressSpace>,
+    &iov: &Iovec,
+    offset: u64,
+) -> Option<T> {
+    let obj_len = std::mem::size_of::<T>() as u64;
+    let mut data: Vec<u8> = vec![0; obj_len as usize];
+    if offset >= iov.iov_len || offset + obj_len > iov.iov_len {
+        return None;
+    }
+
+    if address_space
+        .read(&mut data, iov.iov_base, iov.iov_len)
+        .is_err()
+    {
+        error!("Read virtioqueue failed!");
+        return None;
+    }
+    unsafe {
+        Some(std::ptr::read_volatile(
+            &data[(offset as usize)..] as *const _ as *const T,
+        ))
+    }
+}
+
+struct Request {
+    /// The index of descriptor for the request.
+    pub desc_index: u16,
+    /// Count of elements.
+    pub elem_cnt: u32,
+    /// The data which is both readable and writable.
+    pub iovec: Vec<Iovec>,
+}
+
+impl Request {
+    /// Parse the request from virtio queue.
+    /// Return the request from qirtio queue.
+    ///
+    /// # Arguments
+    ///
+    /// * `elem` - Available ring.
+    pub fn parse(elem: &Element) -> Result<Request> {
+        let mut request = Request {
+            desc_index: elem.index,
+            elem_cnt: 0u32,
+            iovec: Vec::new(),
+        };
+        if elem.out_iovec.is_empty() {
+            return Err(ErrorKind::ElementEmpty.into());
+        } else {
+            let elem_iov = elem.out_iovec.get(0).unwrap();
+            request.iovec.push(Iovec {
+                iov_base: elem_iov.addr,
+                iov_len: elem_iov.len as u64,
+            });
+            request.elem_cnt += elem_iov.len;
+        }
+        Ok(request)
+    }
+
+    /// Mark balloon page with `MADV_DONTNEED` or `MADV_WILLNEED`.
+    ///
+    /// # Arguments
+    ///
+    /// * `req_type` - A label used to mark balloon pages.
+    /// * `mem` - Collection of all Ram regions.
+    pub fn mark_balloon_page(
+        &self,
+        req_type: bool,
+        address_space: &Arc<AddressSpace>,
+        mem: &BlnMemInfo,
+    ) {
+        let advice = if req_type {
+            libc::MADV_DONTNEED
+        } else {
+            libc::MADV_WILLNEED
+        };
+        let mut last_addr: u64 = 0;
+        let mut count_iov: u64 = 4;
+        let mut free_len: u64 = 0;
+        let mut start_addr: u64 = 0;
+
+        for iov in self.iovec.iter() {
+            let mut offset = 0;
+            if req_type == BALLOON_INFLATE_EVENT {
+                while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
+                    offset += std::mem::size_of::<u32>() as u64;
+                    let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
+                    let hva = match mem.get_host_address(gpa) {
+                        Some(addr) => addr,
+                        None => {
+                            error!("failed to mark balloon page");
+                            continue;
+                        }
+                    };
+                    if (last_addr == 0) || (hva + BALLOON_PAGE_SIZE == last_addr) {
+                        free_len += 1;
+                    } else {
+                        unsafe {
+                            libc::madvise(
+                                last_addr as *const libc::c_void as *mut _,
+                                (free_len * BALLOON_PAGE_SIZE) as usize,
+                                advice,
+                            );
+                        }
+                        free_len = 1;
+                    }
+                    if count_iov == iov.iov_len {
+                        unsafe {
+                            libc::madvise(
+                                hva as *const libc::c_void as *mut _,
+                                (free_len * BALLOON_PAGE_SIZE) as usize,
+                                advice,
+                            );
+                        }
+                    }
+                    count_iov += std::mem::size_of::<u32>() as u64;
+                    last_addr = hva;
+                }
+            } else {
+                while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
+                    offset += std::mem::size_of::<u32>() as u64;
+                    let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
+                    let hva = match mem.get_host_address(gpa) {
+                        Some(addr) => addr,
+                        None => {
+                            error!("failed to mark balloon page");
+                            continue;
+                        }
+                    };
+                    if last_addr == 0 {
+                        free_len += 1;
+                        start_addr = hva;
+                    } else if hva == last_addr + BALLOON_PAGE_SIZE {
+                        free_len += 1;
+                    } else {
+                        unsafe {
+                            libc::madvise(
+                                start_addr as *const libc::c_void as *mut _,
+                                (free_len * BALLOON_PAGE_SIZE) as usize,
+                                advice,
+                            );
+                        }
+                        free_len = 1;
+                        start_addr = hva;
+                    }
+                    if count_iov == iov.iov_len {
+                        unsafe {
+                            libc::madvise(
+                                start_addr as *const libc::c_void as *mut _,
+                                (free_len * BALLOON_PAGE_SIZE) as usize,
+                                advice,
+                            );
+                        }
+                    }
+                    count_iov += std::mem::size_of::<u32>() as u64;
+                    last_addr = hva;
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, Default)]
 struct BlnMemoryRegion {
