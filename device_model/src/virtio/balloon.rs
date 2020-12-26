@@ -10,17 +10,26 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::{errors::*, Element, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG};
+use super::{
+    errors::*, Element, Queue, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
+};
 
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use machine_manager::config::BalloonConfig;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::{
     cmp,
     sync::{Arc, Mutex},
 };
-use util::byte_code::ByteCode;
+use util::{
+    byte_code::ByteCode,
+    epoll_context::{
+        read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    },
+};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
@@ -320,6 +329,131 @@ impl Listener for BlnMemInfo {
             _ => {}
         }
         Ok(())
+    }
+}
+
+/// Deal with balloon request.
+struct BalloonIoHandler {
+    /// The features of driver.
+    driver_features: u64,
+    /// Address space.
+    mem_space: Arc<AddressSpace>,
+    /// Inflate queue.
+    inf_queue: Arc<Mutex<Queue>>,
+    /// Inflate EventFd.
+    inf_evt: EventFd,
+    /// Deflate queue.
+    def_queue: Arc<Mutex<Queue>>,
+    /// Deflate EventFd.
+    def_evt: EventFd,
+    /// The interrupt call back function.
+    interrupt_cb: Arc<VirtioBalloonInterrupt>,
+    /// Balloon Memory information.
+    mem_info: BlnMemInfo,
+}
+
+impl BalloonIoHandler {
+    /// Process balloon queue.
+    ///
+    /// # Arguments
+    ///
+    /// * `req_type` - Type of request.
+    ///
+    /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the balloon.
+    fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
+        {
+            let queue = if req_type {
+                &mut self.inf_queue
+            } else {
+                &mut self.def_queue
+            };
+            let mut unlocked_queue = queue.lock().unwrap();
+            while let Ok(elem) = unlocked_queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+            {
+                match Request::parse(&elem) {
+                    Ok(req) => {
+                        req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
+                        unlocked_queue.vring.add_used(
+                            &self.mem_space,
+                            req.desc_index,
+                            req.elem_cnt as u32,
+                        )?;
+                    }
+                    Err(e) => {
+                        error!("fail to parse available descriptor chain: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
+        self.signal_used_queue()?;
+        Ok(())
+    }
+
+    /// Trigger interrupt to notify vm.
+    fn signal_used_queue(&self) -> Result<()> {
+        (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING)
+    }
+}
+
+/// Create a new EventNotifier.
+///
+/// # Arguments
+///
+/// * `fd` - Raw file descriptor.
+/// * `handler` - Handle function.
+fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
+    let mut handlers = Vec::new();
+    handlers.push(Arc::new(Mutex::new(handler)));
+    EventNotifier::new(
+        NotifierOperation::AddShared,
+        fd,
+        None,
+        EventSet::IN,
+        handlers,
+    )
+}
+
+impl EventNotifierHelper for BalloonIoHandler {
+    /// Register event notifiers for different queue event.
+    fn internal_notifiers(balloon_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+        {
+            let cloned_balloon_io = balloon_io.clone();
+            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+                read_fd(fd);
+                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+                locked_balloon_io
+                    .process_balloon_queue(BALLOON_INFLATE_EVENT)
+                    .unwrap_or_else(|_| error!("Failed to inflate balloon."));
+                None
+            });
+            let locked_balloon_io = balloon_io.lock().unwrap();
+            notifiers.push(build_event_notifier(
+                locked_balloon_io.inf_evt.as_raw_fd(),
+                handler,
+            ));
+        }
+
+        {
+            let cloned_balloon_io = balloon_io.clone();
+            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+                read_fd(fd);
+                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+                locked_balloon_io
+                    .process_balloon_queue(BALLOON_DEFLATE_EVENT)
+                    .unwrap_or_else(|_| error!("Failed to deflate balloon."));
+                None
+            });
+            let locked_balloon_io = balloon_io.lock().unwrap();
+            notifiers.push(build_event_notifier(
+                locked_balloon_io.def_evt.as_raw_fd(),
+                handler,
+            ));
+        }
+        notifiers
     }
 }
 
