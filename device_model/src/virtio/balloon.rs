@@ -11,28 +11,37 @@
 // See the Mulan PSL v2 for more details.
 
 use super::{
-    errors::*, Element, Queue, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
+    errors::*, Element, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG,
+    VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BALLOON,
 };
 
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use machine_manager::config::BalloonConfig;
-use std::os::unix::io::{AsRawFd, RawFd};
+use machine_manager::{config::BalloonConfig, main_loop::MainLoop};
+use std::sync::atomic::Ordering;
 use std::{
     cmp,
     sync::{Arc, Mutex},
+};
+use std::{
+    io::Write,
+    os::unix::io::{AsRawFd, RawFd},
+    sync::atomic::AtomicU32,
 };
 use util::{
     byte_code::ByteCode,
     epoll_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
+    num_ops::{read_u32, write_u32},
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
+const QUEUE_SIZE_BALLOON: u16 = 256;
+const QUEUE_NUM_BALLOON: usize = 2;
 const BALLOON_PAGE_SIZE: u64 = 1 << VIRTIO_BALLOON_PFN_SHIFT;
 const BALLOON_INFLATE_EVENT: bool = true;
 const BALLOON_DEFLATE_EVENT: bool = false;
@@ -49,7 +58,17 @@ pub struct Iovec {
     pub iov_len: u64,
 }
 
+/// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
+#[derive(Copy, Clone, Default)]
+struct VirtioBalloonConfig {
+    /// Number of pages host wants Guest to give up.
+    pub num_pages: u32,
+    /// Number of pages we've actually got in balloon.
+    pub actual: u32,
+}
+
 impl ByteCode for Iovec {}
+impl ByteCode for VirtioBalloonConfig {}
 
 /// Read data segment starting at `iov.iov_base` + `offset` to buffer <T>.
 /// Return bufer <T>.
@@ -541,5 +560,148 @@ impl Balloon {
     /// Get the memory size of guest.
     pub fn get_memory_size(&self) -> u64 {
         (self.actual as u64) << VIRTIO_BALLOON_PFN_SHIFT
+    }
+}
+
+impl VirtioDevice for Balloon {
+    /// Realize a balloon device.
+    fn realize(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Get the type of balloon.
+    fn device_type(&self) -> u32 {
+        VIRTIO_TYPE_BALLOON as u32
+    }
+
+    /// Get the number of balloon-device queues.
+    fn queue_num(&self) -> usize {
+        QUEUE_NUM_BALLOON
+    }
+
+    /// Get the zise of balloon queue.
+    fn queue_size(&self) -> u16 {
+        QUEUE_SIZE_BALLOON
+    }
+
+    /// Get the feature of `balloon` device.
+    fn get_device_features(&self, features_select: u32) -> u32 {
+        read_u32(self.device_features, features_select)
+    }
+
+    /// Set feature for device.
+    ///
+    /// # Arguments
+    ///
+    /// * `page` - Selector of feature.
+    /// * `value` - Value to be set.
+    fn set_driver_features(&mut self, page: u32, value: u32) {
+        let mut v = write_u32(value, page);
+        let unrequested_features = v & !self.device_features;
+        if unrequested_features != 0 {
+            warn!("Received acknowledge request for unknown feature: {:x}", v);
+            v &= !unrequested_features;
+        }
+        self.driver_features |= v;
+    }
+
+    /// Read configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - Offset from base address.
+    /// * `data` - Read data to `data`.
+    fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
+        let new_config = VirtioBalloonConfig {
+            num_pages: self.num_pages,
+            actual: self.actual,
+        };
+        if offset != 0 {
+            return Err(ErrorKind::IncorrectOffset(0, offset).into());
+        }
+        data.write_all(&new_config.as_bytes()[offset as usize..data.len()])?;
+        Ok(())
+    }
+
+    /// Write configuration.
+    ///
+    /// # Argument
+    ///
+    /// * `_offset` - Offset from base address.
+    fn write_config(&mut self, _offset: u64, data: &[u8]) -> Result<()> {
+        // Guest update actual balloon size
+        let new_actual = match unsafe { data.align_to::<u32>() } {
+            (_, [new_config], _) => *new_config,
+            _ => {
+                error!("Failed to write balloon config");
+                return Ok(());
+            }
+        };
+        self.actual = new_actual;
+        Ok(())
+    }
+
+    /// Active balloon device.
+    ///
+    /// # Arguments
+    ///
+    /// * `mem_space` - Address space.
+    /// * `interrupt_evt` - Interrupt EventFd.
+    /// * `interrupt_stats` - Statistics interrupt.
+    /// * `queues` - Different virtio queues.
+    /// * `queue_evts` Different EventFd.
+    fn activate(
+        &mut self,
+        mem_space: Arc<AddressSpace>,
+        interrupt_evt: EventFd,
+        interrupt_stats: Arc<AtomicU32>,
+        mut queues: Vec<Arc<Mutex<Queue>>>,
+        mut queue_evts: Vec<EventFd>,
+    ) -> Result<()> {
+        if queues.len() != QUEUE_NUM_BALLOON {
+            return Err(ErrorKind::IncorrectQueueNum(QUEUE_NUM_BALLOON, queues.len()).into());
+        }
+
+        let inf_queue = queues.remove(0);
+        let inf_queue_evt = queue_evts.remove(0);
+        let def_queue = queues.remove(0);
+        let def_queue_evt = queue_evts.remove(0);
+        let interrupt_evt = interrupt_evt.try_clone()?;
+        let interrupt_stats = interrupt_stats;
+        let cb = Arc::new(Box::new(move |status: u32| {
+            interrupt_stats.fetch_or(status, Ordering::SeqCst);
+            interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+        }) as VirtioBalloonInterrupt);
+
+        self.interrupt_cb = Some(cb.clone());
+        let bln_mem_info = BlnMemInfo::new();
+        self.mem_info = bln_mem_info.clone();
+        let handler = BalloonIoHandler {
+            driver_features: self.driver_features,
+            mem_space: mem_space.clone(),
+            inf_queue,
+            inf_evt: inf_queue_evt,
+            def_queue,
+            def_evt: def_queue_evt,
+            interrupt_cb: cb.clone(),
+            mem_info: bln_mem_info.clone(),
+        };
+
+        mem_space.register_listener(Box::new(bln_mem_info))?;
+        MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
+            Mutex::new(handler),
+        )))?;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Option<()> {
+        None
+    }
+
+    fn update_config(
+        &mut self,
+        _dev_config: Option<Arc<dyn machine_manager::config::ConfigCheck>>,
+    ) -> Result<()> {
+        bail!("Unsupported to update configuration")
     }
 }
