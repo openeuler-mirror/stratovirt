@@ -9,26 +9,16 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-
-use super::{
-    errors::*, Element, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG,
-    VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BALLOON,
-};
+use std::cmp;
+use std::io::Write;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use machine_manager::{config::BalloonConfig, main_loop::MainLoop};
-use std::sync::atomic::Ordering;
-use std::{
-    cmp,
-    sync::{Arc, Mutex},
-};
-use std::{
-    io::Write,
-    os::unix::io::{AsRawFd, RawFd},
-    sync::atomic::AtomicU32,
-};
 use util::{
     byte_code::ByteCode,
     epoll_context::{
@@ -37,6 +27,11 @@ use util::{
     num_ops::{read_u32, write_u32},
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
+use super::{
+    errors::*, Element, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG,
+    VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BALLOON,
+};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
