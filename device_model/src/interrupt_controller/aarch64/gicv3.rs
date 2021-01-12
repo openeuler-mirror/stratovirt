@@ -380,15 +380,17 @@ impl GICDevice for GICv3 {
         vm: &Arc<VmFd>,
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
-        let gic = GICv3::new(vm, gic_conf)?;
+        Ok(Arc::new(GICv3::new(vm, gic_conf)?))
+    }
 
-        gic.realize()?;
+    fn realize(&self) -> Result<()> {
+        self.realize()?;
 
-        if let Some(its) = &gic.its_dev {
+        if let Some(its) = &self.its_dev {
             its.realize()?;
         }
 
-        Ok(Arc::new(gic))
+        Ok(())
     }
 
     fn generate_fdt(&self, fdt: &mut Vec<u8>) -> errors::Result<()> {

@@ -19,7 +19,6 @@ use kvm_ioctls::VmFd;
 pub use gicv3::Error as GICError;
 pub use gicv3::GICv3;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-#[cfg(target_arch = "aarch64")]
 use util::{device_tree, errors};
 
 // First 32 are private to each CPU (SGIs and PPIs).
@@ -78,6 +77,9 @@ pub trait GICDevice: MachineLifecycle {
     where
         Self: Sized;
 
+    /// Realize function for kvm_based `GIC` device.
+    fn realize(&self) -> Result<(), GICError>;
+
     /// Constructs `fdt` node for `GIC`.
     ///
     /// # Arguments
@@ -88,7 +90,6 @@ pub trait GICDevice: MachineLifecycle {
 
 /// A wrapper around creating and using a kvm-based interrupt controller.
 pub struct InterruptController {
-    #[cfg(target_arch = "aarch64")]
     gic: Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>,
 }
 
