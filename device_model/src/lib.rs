@@ -79,6 +79,8 @@ pub mod errors {
             Manager(machine_manager::errors::Error, machine_manager::errors::ErrorKind);
             Cpu(crate::cpu::errors::Error, crate::cpu::errors::ErrorKind);
             Mmio(crate::mmio::errors::Error, crate::mmio::errors::ErrorKind);
+            InterruptController(crate::interrupt_controller::errors::Error,
+                crate::interrupt_controller::errors::ErrorKind) #[cfg(target_arch = "aarch64")];
         }
         foreign_links {
             Io(std::io::Error);

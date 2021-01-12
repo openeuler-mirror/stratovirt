@@ -16,19 +16,42 @@ use std::sync::Arc;
 
 use kvm_ioctls::VmFd;
 
-pub use gicv3::Error as GICError;
 pub use gicv3::GICv3;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use util::{device_tree, errors};
+use util::{device_tree, errors::Result as UtilResult};
 
 // First 32 are private to each CPU (SGIs and PPIs).
 const GIC_IRQ_INTERNAL: u32 = 32;
 
-#[derive(Debug)]
-pub enum Error {
-    /// Invalid argument
-    EINVAL(std::string::String),
+pub mod errors {
+    error_chain! {
+        foreign_links {
+            Kvm(kvm_ioctls::Error);
+        }
+        errors {
+            InvalidConfig(err_info: String) {
+                display("Invalid config: {}.", err_info)
+            }
+            CreateGIC(err: kvm_ioctls::Error) {
+                display("Failed to create GIC device: {:#?}.", err)
+            }
+            SetDeviceAttribute(err: kvm_ioctls::Error) {
+                display("Failed to set device attributes for GIC: {:#?}.", err)
+            }
+            GetDeviceAttribute(err: kvm_ioctls::Error) {
+                display("Failed to get device attributes for GIC: {:#?}.", err)
+            }
+            CheckDeviceAttribute(err: kvm_ioctls::Error) {
+                display("Failed to check device attributes for GIC: {:#?}.", err)
+            }
+            MultiRedistributor {
+                display("multiple redistributor is acquired but KVM does not support it.")
+            }
+        }
+    }
 }
+
+use self::errors::{ErrorKind, Result};
 
 /// Configure a Interrupt controller.
 pub struct GICConfig {
@@ -43,19 +66,21 @@ pub struct GICConfig {
 }
 
 impl GICConfig {
-    fn check_sanity(&self) -> Result<(), Error> {
+    fn check_sanity(&self) -> Result<()> {
         if self.version != kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3 {
-            return Err(Error::EINVAL("GIC only support GICv3".to_string()));
+            return Err(ErrorKind::InvalidConfig("GIC only support GICv3".to_string()).into());
         };
 
         if self.vcpu_count > 256 || self.vcpu_count == 0 {
-            return Err(Error::EINVAL(
-                "GIC only support maximum 256 vcpus".to_string(),
-            ));
+            return Err(
+                ErrorKind::InvalidConfig("GIC only support maximum 256 vcpus".to_string()).into(),
+            );
         }
 
         if self.max_irq <= GIC_IRQ_INTERNAL {
-            return Err(Error::EINVAL("GIC irq numbers need above 32".to_string()));
+            return Err(
+                ErrorKind::InvalidConfig("GIC irq numbers need above 32".to_string()).into(),
+            );
         }
 
         Ok(())
@@ -73,19 +98,19 @@ pub trait GICDevice: MachineLifecycle {
     fn create_device(
         vm: &Arc<VmFd>,
         gic_conf: &GICConfig,
-    ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>, GICError>
+    ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>>
     where
         Self: Sized;
 
     /// Realize function for kvm_based `GIC` device.
-    fn realize(&self) -> Result<(), GICError>;
+    fn realize(&self) -> Result<()>;
 
     /// Constructs `fdt` node for `GIC`.
     ///
     /// # Arguments
     ///
     /// * `fdt` - Device tree presented by bytes.
-    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> errors::Result<()>;
+    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> UtilResult<()>;
 }
 
 /// A wrapper around creating and using a kvm-based interrupt controller.
@@ -100,10 +125,15 @@ impl InterruptController {
     ///
     /// * `vm` - File descriptor for vmfd.
     /// * `gic_conf` - Configuration for `GIC`.
-    pub fn new(vm: Arc<VmFd>, gic_conf: &GICConfig) -> Result<InterruptController, std::io::Error> {
+    pub fn new(vm: Arc<VmFd>, gic_conf: &GICConfig) -> Result<InterruptController> {
         Ok(InterruptController {
-            gic: GICv3::create_device(&vm, gic_conf).unwrap(),
+            gic: GICv3::create_device(&vm, gic_conf)?,
         })
+    }
+
+    pub fn realize(&self) -> Result<()> {
+        self.gic.realize()?;
+        Ok(())
     }
 
     /// Change `InterruptController` lifecycle state to `Stopped`.
@@ -114,9 +144,8 @@ impl InterruptController {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
 impl device_tree::CompileFDT for InterruptController {
-    fn generate_fdt_node(&self, fdt: &mut Vec<u8>) -> errors::Result<()> {
+    fn generate_fdt_node(&self, fdt: &mut Vec<u8>) -> UtilResult<()> {
         self.gic.generate_fdt(fdt)?;
         debug!("Interrupt Controller device tree generated!");
         Ok(())
