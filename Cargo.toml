@@ -28,6 +28,7 @@ members = [
     "pci",
     "sysbus",
     "util",
+    "acpi",
     "virtio",
 ]
 
