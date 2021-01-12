@@ -207,3 +207,115 @@ impl AmlBuilder for AmlName {
         build_name_string(self.0.as_ref())
     }
 }
+
+/// EISA ID String
+pub struct AmlEisaId {
+    name: String,
+}
+
+impl AmlEisaId {
+    pub fn new(name: &str) -> AmlEisaId {
+        if name.len() != 7 {
+            panic!("Eisa: String length is not 7.");
+        }
+        AmlEisaId {
+            name: name.to_string(),
+        }
+    }
+}
+
+impl AmlBuilder for AmlEisaId {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let chars = self.name.chars().collect::<Vec<_>>();
+        let dword: u32 = (chars[0] as u32 - 0x40) << 26
+            | (chars[1] as u32 - 0x40) << 21
+            | (chars[2] as u32 - 0x40) << 16
+            | chars[3].to_digit(16).unwrap() << 12
+            | chars[4].to_digit(16).unwrap() << 8
+            | chars[5].to_digit(16).unwrap() << 4
+            | chars[6].to_digit(16).unwrap();
+
+        let mut bytes = dword.as_bytes().to_vec();
+        bytes.reverse();
+        bytes.insert(0, 0x0C);
+        bytes
+    }
+}
+
+/// Convert an ASCII string to a 128-bit buffer.
+/// format: aabbccdd-eeff-gghh-iijj-kkllmmnnoopp
+pub struct AmlToUuid {
+    name: String,
+}
+
+impl AmlToUuid {
+    pub fn new(str: &str) -> AmlToUuid {
+        let name = str.to_string();
+        if !Self::check_valid_uuid(&name) {
+            panic!("Invalid UUID");
+        }
+
+        AmlToUuid { name }
+    }
+
+    /// Check if the uuid is valid.
+    fn check_valid_uuid(uuid: &str) -> bool {
+        if uuid.len() != 36 {
+            return false;
+        }
+
+        // Char located at 8, 13, 18, 23 should be `-`
+        let indexs = &[8, 13, 18, 23];
+        for i in indexs {
+            if uuid.chars().nth(*i).unwrap() != '-' {
+                return false;
+            }
+        }
+
+        for ch in uuid.chars() {
+            if ch != '-' && (!ch.is_ascii_hexdigit()) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+impl AmlBuilder for AmlToUuid {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // If the UUID is "aabbccdd-eeff-gghh-iijj-kkllmmnnoopp", then the encoded order is:
+        // dd cc bb aa ff ee hh gg ii jj kk ll mm nn oo pp
+        let index = &[6, 4, 2, 0, 11, 9, 16, 14, 19, 21, 24, 26, 28, 30, 32, 34];
+
+        for i in index {
+            let mut chars = self.name.chars();
+            bytes.push(
+                (chars.nth(*i).unwrap().to_digit(16).unwrap() as u8) << 4
+                    | chars.next().unwrap().to_digit(16).unwrap() as u8,
+            );
+        }
+
+        bytes
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_uuid() {
+        let uuid = AmlToUuid::new("33DB4D5B-1FF7-401C-9657-7441C03DD766");
+
+        assert_eq!(
+            uuid.aml_bytes(),
+            &[
+                0x5B, 0x4D, 0xDB, 0x33, 0xF7, 0x1F, 0x1C, 0x40, 0x96, 0x57, 0x74, 0x41, 0xC0, 0x3D,
+                0xD7, 0x66
+            ]
+        );
+    }
+}
