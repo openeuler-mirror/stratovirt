@@ -12,6 +12,8 @@
 
 use util::byte_code::ByteCode;
 
+const ACPI_NAME_SEG_MAX: u8 = 4;
+
 /// This trait is used for converting AML Data structure to byte stream.
 pub trait AmlBuilder {
     /// Transfer this struct to byte stream.
@@ -104,5 +106,104 @@ impl AmlBuilder for AmlString {
         bytes.extend(self.0.as_bytes().to_vec());
         bytes.push(0x0);
         bytes
+    }
+}
+
+/// Parse and check a name-segment, and convert it to byte stream.
+fn build_name_seg(name: &str) -> Vec<u8> {
+    if name.len() > usize::from(ACPI_NAME_SEG_MAX) {
+        panic!("the length of NameSeg is larger than 4.");
+    }
+
+    let mut bytes = name.as_bytes().to_vec();
+    bytes.extend(vec![b'_'; ACPI_NAME_SEG_MAX as usize - name.len()]);
+    bytes
+}
+
+/// Parse a name-string and convert it to byte stream
+fn build_name_string(name: &str) -> Vec<u8> {
+    let strs = name.split('.').collect::<Vec<&str>>();
+    if strs.is_empty() || strs.len() > 255 {
+        panic!("Invalid ACPI name string, length: {}", strs.len());
+    }
+
+    let mut bytes = Vec::new();
+
+    // parse the first segment.
+    let mut first_str = strs[0].to_string();
+    let mut index = 0;
+
+    for (i, ch) in first_str.chars().enumerate() {
+        if ch == '\\' || ch == '^' {
+            bytes.push(ch as u8);
+        } else {
+            index = i;
+            break;
+        }
+    }
+
+    let remain_first = first_str.drain(index..).collect::<String>();
+
+    match strs.len() {
+        1 => {
+            if remain_first.is_empty() {
+                bytes.push(0x00);
+            } else {
+                bytes.append(&mut build_name_seg(&remain_first));
+            }
+        }
+        2 => {
+            bytes.push(0x2E);
+            bytes.append(&mut build_name_seg(&remain_first));
+            bytes.append(&mut build_name_seg(&strs[1].to_string()));
+        }
+        _ => {
+            bytes.push(0x2F);
+            bytes.push(strs.len() as u8);
+            bytes.append(&mut build_name_seg(&remain_first));
+
+            strs.iter().skip(1).for_each(|s| {
+                bytes.extend(build_name_seg(&s.to_string()));
+            })
+        }
+    }
+
+    bytes
+}
+
+/// This struct represents declaration of a named object
+pub struct AmlNameDecl {
+    /// Name of the object.
+    name: String,
+    /// The corresponding object that be named.
+    obj: Vec<u8>,
+}
+
+impl AmlNameDecl {
+    pub fn new<T: AmlBuilder>(name: &str, obj: T) -> AmlNameDecl {
+        AmlNameDecl {
+            name: name.to_string(),
+            obj: obj.aml_bytes(),
+        }
+    }
+}
+
+impl AmlBuilder for AmlNameDecl {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x08);
+        bytes.extend(build_name_string(self.name.as_ref()));
+        bytes.extend(self.obj.clone());
+        bytes
+    }
+}
+
+/// AmlName represents a Named object that has been declared before.
+#[derive(Clone)]
+pub struct AmlName(pub String);
+
+impl AmlBuilder for AmlName {
+    fn aml_bytes(&self) -> Vec<u8> {
+        build_name_string(self.0.as_ref())
     }
 }
