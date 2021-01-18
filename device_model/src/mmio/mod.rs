@@ -33,6 +33,7 @@ mod virtio_mmio;
 
 pub use self::bus::Bus;
 pub use self::virtio_mmio::VirtioMmioDevice;
+use super::DeviceOps;
 
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use error_chain::bail;
@@ -201,10 +202,4 @@ pub trait MmioDeviceOps: Send + DeviceOps {
     fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         Vec::new()
     }
-}
-
-pub trait DeviceOps: Send {
-    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool;
-
-    fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool;
 }

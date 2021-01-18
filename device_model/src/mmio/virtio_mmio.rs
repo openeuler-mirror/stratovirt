@@ -25,8 +25,11 @@ use super::super::virtio::{
     VIRTIO_TYPE_NET,
 };
 
-use super::errors::{ErrorKind, Result, ResultExt};
-use super::{DeviceOps, DeviceResource, DeviceType, MmioDeviceOps};
+use super::super::DeviceOps;
+use super::{
+    errors::{ErrorKind, Result, ResultExt},
+    DeviceResource, DeviceType, MmioDeviceOps,
+};
 
 /// Registers of virtio-mmio device refer to Virtio Spec.
 /// Magic value - Read Only.
