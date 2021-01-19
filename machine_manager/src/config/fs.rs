@@ -16,7 +16,7 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParams, ConfigCheck, ParamOperation, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAX_PATH_LENGTH: usize = 4096;
@@ -101,23 +101,34 @@ impl VmConfig {
     }
 
     /// Update '-drive ...' drive config to `VmConfig`.
-    pub fn update_drive(&mut self, drive_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(drive_config);
+    pub fn update_drive(&mut self, drive_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser
+            .push("file")
+            .push("id")
+            .push("readonly")
+            .push("direct")
+            .push("serial");
+
+        cmd_parser.parse(drive_config)?;
+
         let mut drive = DriveConfig::default();
-        if let Some(drive_path) = cmd_params.get("file") {
-            drive.path_on_host = drive_path.value;
+        if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
+            drive.path_on_host = drive_path;
         }
-        if let Some(drive_id) = cmd_params.get("id") {
-            drive.drive_id = drive_id.value;
+        if let Some(drive_id) = cmd_parser.get_value::<String>("id")? {
+            drive.drive_id = drive_id;
         }
-        if let Some(read_only) = cmd_params.get("readonly") {
-            drive.read_only = read_only.to_bool();
+        if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
+            drive.read_only = read_only.into();
         }
-        if let Some(direct) = cmd_params.get("direct") {
-            drive.direct = direct.to_bool();
+        if let Some(direct) = cmd_parser.get_value::<ExBool>("direct")? {
+            drive.direct = direct.into();
         }
-        drive.serial_num = cmd_params.get_value_str("serial");
+        drive.serial_num = cmd_parser.get_value::<String>("serial")?;
 
         self.add_drive(drive);
+
+        Ok(())
     }
 }

@@ -10,10 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-use crate::config::{CmdParams, ParamOperation, VmConfig};
 use serde::{Deserialize, Serialize};
+
+use super::errors::Result;
+use crate::config::{CmdParser, ExBool, VmConfig};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BalloonConfig {
@@ -27,12 +27,18 @@ impl BalloonConfig {
 }
 
 impl VmConfig {
-    pub fn update_balloon(&mut self, balloon_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(balloon_config);
+    pub fn update_balloon(&mut self, balloon_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser.push("deflate-on-oom");
+
+        cmd_parser.parse(balloon_config)?;
+
         let mut balloon: BalloonConfig = Default::default();
-        if let Some(default) = cmd_params.get("deflate-on-oom") {
-            balloon.deflate_on_oom = default.to_bool();
+        if let Some(default) = cmd_parser.get_value::<ExBool>("deflate-on-oom")? {
+            balloon.deflate_on_oom = default.into();
         }
         self.balloon = Some(balloon);
+
+        Ok(())
     }
 }

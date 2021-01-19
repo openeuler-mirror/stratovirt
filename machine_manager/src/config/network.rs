@@ -16,7 +16,7 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParams, ConfigCheck, ParamOperation, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAC_ADDRESS_LENGTH: usize = 17;
@@ -104,32 +104,37 @@ impl VmConfig {
 
     /// Update '-netdev ...' network config to `VmConfig`
     /// Some attr in `NetworkInterfaceConfig` would be found in `DeviceConfig`
-    pub fn update_net(&mut self, net_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(net_config);
-        let mut net = NetworkInterfaceConfig::default();
+    pub fn update_net(&mut self, net_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser
+            .push("id")
+            .push("netdev")
+            .push("mac")
+            .push("fds")
+            .push("vhost")
+            .push("vhostfds");
 
-        if let Some(net_id) = cmd_params.get("id") {
-            net.iface_id = net_id.value;
+        cmd_parser.parse(net_config)?;
+
+        let mut net = NetworkInterfaceConfig::default();
+        if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
+            net.iface_id = net_id;
         }
-        if let Some(net_hostname) = cmd_params.get("netdev") {
-            net.host_dev_name = net_hostname.value;
+        if let Some(net_hostname) = cmd_parser.get_value::<String>("netdev")? {
+            net.host_dev_name = net_hostname;
         }
-        if let Some(net_mac) = cmd_params.get("mac") {
-            net.mac = Some(net_mac.value);
-        }
-        if let Some(tap_fd) = cmd_params.get("fds") {
-            net.tap_fd = Some(tap_fd.value_to_u32() as i32);
-        }
-        if let Some(vhost) = cmd_params.get("vhost") {
-            if vhost.to_bool() {
-                net.vhost_type = Some("vhost-kernel".to_string());
+        if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
+            if vhost.into() {
+                net.vhost_type = Some(String::from("vhost-kernel"));
             }
         }
-        if let Some(vhostfd) = cmd_params.get("vhostfds") {
-            net.vhost_fd = Some(vhostfd.value_to_u32() as i32);
-        }
+        net.mac = cmd_parser.get_value::<String>("mac")?;
+        net.tap_fd = cmd_parser.get_value::<i32>("fds")?;
+        net.vhost_fd = cmd_parser.get_value::<i32>("vhostfds")?;
 
         self.add_netdev(net);
+
+        Ok(())
     }
 }
 

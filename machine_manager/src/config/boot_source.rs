@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{ConfigCheck, Param, ParamOperation, VmConfig};
+use crate::config::{ConfigCheck, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAX_PATH_LENGTH: usize = 4096;
@@ -149,28 +149,6 @@ pub struct KernelParams {
     pub length: usize,
 }
 
-impl ParamOperation for KernelParams {
-    /// Allocates an empty `KernelParams`
-    fn new() -> Self {
-        let params: Vec<Param> = Vec::new();
-        let length: usize = 0;
-        KernelParams { params, length }
-    }
-
-    /// Created `Kernel` from `String`.
-    fn from_str(kernel_cmdline: String) -> Self {
-        let split = kernel_cmdline.split(' ');
-        let vec = split.collect::<Vec<&str>>();
-        let mut params: Vec<Param> = Vec::new();
-        let mut length: usize = 0;
-        for item in vec {
-            params.push(Param::from_str(item));
-            length += 1;
-        }
-        KernelParams { params, length }
-    }
-}
-
 impl ConfigCheck for KernelParams {
     fn check(&self) -> Result<()> {
         for param in self.params.clone() {
@@ -188,6 +166,19 @@ impl ConfigCheck for KernelParams {
 }
 
 impl KernelParams {
+    /// Created `Kernel` from `String`.
+    fn from_str(kernel_cmdline: String) -> Self {
+        let split = kernel_cmdline.split(' ');
+        let vec = split.collect::<Vec<&str>>();
+        let mut params: Vec<Param> = Vec::new();
+        let mut length: usize = 0;
+        for item in vec {
+            params.push(Param::from_str(item));
+            length += 1;
+        }
+        KernelParams { params, length }
+    }
+
     /// Push new `Param` to `KernelParams`.
     pub fn push(&mut self, item: Param) {
         self.params.push(item);
@@ -227,10 +218,61 @@ impl fmt::Display for KernelParams {
     }
 }
 
+/// The basic structure to parse arguments to config.
+///
+/// # Notes
+///
+/// The attr format such as `param_type=value` can be treated as a `Param`
+/// Single attr such as `quiet` can also be treated as Param
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct Param {
+    /// The item on the left of `=`, if no `=`, param_type is ""
+    pub param_type: String,
+    /// The item on the right of `=`, if no `=`, the whole is value
+    pub value: String,
+}
+
+impl Param {
+    /// Converts from `&str`.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The `str` transformed to `Param`.
+    fn from_str(item: &str) -> Self {
+        let split = item.split('=');
+        let vec = split.collect::<Vec<&str>>();
+        if vec.len() == 1 {
+            Param {
+                param_type: String::new(),
+                value: String::from(vec[0]),
+            }
+        } else {
+            Param {
+                param_type: String::from(vec[0]),
+                value: String::from(vec[1]),
+            }
+        }
+    }
+}
+
+impl fmt::Display for Param {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut str1 = String::from(&self.param_type);
+        let param_str = if str1.is_empty() {
+            String::from(&self.value)
+        } else {
+            str1 += "=";
+            str1 + &self.value
+        };
+        write!(f, "{}", param_str)
+    }
+}
+
 impl VmConfig {
     /// Update `-kernel kernel_file` config to `VmConfig`
-    pub fn update_kernel(&mut self, kernel_image: String) {
+    pub fn update_kernel(&mut self, kernel_image: &str) -> Result<()> {
         self.boot_source.kernel_file = PathBuf::from(kernel_image);
+        Ok(())
     }
 
     /// Update  `-append kernel_cmdline` config to `VmConfig`
@@ -240,15 +282,15 @@ impl VmConfig {
     }
 
     /// Update `-initrd initrd_path` config to `VmConfig`
-    pub fn update_initrd(&mut self, initrd: String) {
-        self.boot_source.initrd = Some(InitrdConfig::new(&initrd));
+    pub fn update_initrd(&mut self, initrd: &str) -> Result<()> {
+        self.boot_source.initrd = Some(InitrdConfig::new(initrd));
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Param, ParamOperation};
-    use super::KernelParams;
+    use super::*;
 
     #[test]
     fn test_kernel_params() {

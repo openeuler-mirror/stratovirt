@@ -21,14 +21,15 @@ mod machine_config;
 mod network;
 
 use std::any::Any;
-use std::fmt;
+use std::collections::HashMap;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "aarch64")]
 use util::device_tree;
 
-pub use self::errors::Result;
+pub use self::errors::{ErrorKind, Result};
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
@@ -39,6 +40,14 @@ pub use network::*;
 pub mod errors {
     error_chain! {
         errors {
+            InvalidParam(param: String) {
+                description("No defined for this cmdline param.")
+                display("Invalid parameter \'{}\'", param)
+            }
+            ConvertValueFailed(param: String, value: String) {
+                description("Failed to convert value for param.")
+                display("Unable to parse \'{}\' for \'{}\'", value, param)
+            }
             StringLengthTooLong(t: String, len: usize) {
                 description("Limit the length of String.")
                 display("Input {} string's length must be no more than {}.", t, len)
@@ -195,8 +204,9 @@ impl VmConfig {
     /// # Arguments
     ///
     /// * `name` - The name `String` updated to `VmConfig`.
-    pub fn update_name(&mut self, name: String) {
-        self.guest_name = name;
+    pub fn update_name(&mut self, name: &str) -> Result<()> {
+        self.guest_name = name.to_string();
+        Ok(())
     }
 }
 
@@ -233,243 +243,104 @@ pub trait ConfigCheck: AsAny + Send + Sync {
     fn check(&self) -> Result<()>;
 }
 
-/// The basic structure to parse arguments to config.
-///
-/// # Notes
-///
-/// The attr format such as `param_type=value` can be treated as a `Param`
-/// Single attr such as `quiet` can also be treated as Param
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub struct Param {
-    /// The item on the left of `=`, if no `=`, param_type is ""
-    pub param_type: String,
-    /// The item on the right of `=`, if no `=`, the whole is value
-    pub value: String,
+/// Struct `CmdParser` used to parse and check cmdline parameters to vm config.
+pub struct CmdParser {
+    params: HashMap<String, Option<String>>,
 }
 
-impl Param {
-    /// Converts from `&str`.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` - The `str` transformed to `Param`.
-    fn from_str(item: &str) -> Self {
-        let split = item.split('=');
-        let vec = split.collect::<Vec<&str>>();
-        if vec.len() == 1 {
-            Param {
-                param_type: String::new(),
-                value: String::from(vec[0]),
-            }
-        } else {
-            Param {
-                param_type: String::from(vec[0]),
-                value: String::from(vec[1]),
-            }
-        }
-    }
-
-    /// Converts `value` in `Param` to `u64`.
-    pub fn value_to_u64(&self) -> u64 {
-        self.value
-            .parse::<u64>()
-            .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", &self.value))
-    }
-
-    /// Converts `value` in `Param` to `u32`.
-    pub fn value_to_u32(&self) -> u32 {
-        self.value
-            .parse::<u32>()
-            .unwrap_or_else(|_| panic!("Unrecognized value to u32: {}", &self.value))
-    }
-
-    /// Converts `value` in `Param` to `u8`.
-    pub fn value_to_u8(&self) -> u8 {
-        self.value
-            .parse::<u8>()
-            .unwrap_or_else(|_| panic!("Unrecognized value to u8: {}", &self.value))
-    }
-
-    /// Replace `value`'s `str` in `Param` by blank.
-    ///
-    /// # Arguments
-    ///
-    /// * `s` - The `str` in `Param` will be replaced.
-    pub fn value_replace_blank(&mut self, s: &str) -> bool {
-        if self.value.contains(s) {
-            self.value = self.value.replace(s, "");
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Converts `yes`,`on`,`true`,`no`,`off`,`false` in `value` to `bool`.
-    pub fn to_bool(&self) -> bool {
-        match self.value.as_ref() {
-            "yes" | "on" | "true" => true,
-            "no" | "off" | "false" => false,
-            _ => panic!("Can only give `yes`,`on`,`true`,`no`,`off`,`false` for boolean."),
-        }
-    }
-}
-
-impl fmt::Display for Param {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut str1 = String::from(&self.param_type);
-        let param_str = if str1.is_empty() {
-            String::from(&self.value)
-        } else {
-            str1 += "=";
-            str1 + &self.value
-        };
-        write!(f, "{}", param_str)
-    }
-}
-
-/// `Operation` for `Param`.
-///
-/// The trait `ParamOperation` define two function: `new()` and `from_str()`.
-pub trait ParamOperation {
-    fn new() -> Self;
-    fn from_str(s: String) -> Self;
-}
-
-/// Struct `CmdParams` used to parse arguments to config.
-/// Contains a `Vec<Param>` and its `len()`.
-#[derive(Default, Debug, Serialize, Deserialize)]
-pub struct CmdParams {
-    /// A `Vec` to restore `Param`s, each item in `Vec` is a basic Param,
-    /// such as `isrootfs=on`.
-    pub params: Vec<Param>,
-    /// The length of the whole cmdline, a basic param is simple one.
-    pub length: usize,
-}
-
-impl ParamOperation for CmdParams {
-    /// Allocates an empty `CmdParams`.
+impl CmdParser {
+    /// Allocates an empty `CmdParser`.
     fn new() -> Self {
-        let params: Vec<Param> = Vec::new();
-        let length: usize = 0;
-        CmdParams { params, length }
-    }
-
-    /// Created `CmdParams` from `String`.
-    ///
-    /// # Arguments
-    ///
-    /// * `cmdline_args`: The args `String` to be transformed.
-    fn from_str(cmdline_args: String) -> Self {
-        let split = cmdline_args.split(',');
-        let vec = split.collect::<Vec<&str>>();
-        let mut params: Vec<Param> = Vec::new();
-        let mut length: usize = 0;
-
-        for item in vec {
-            params.push(Param::from_str(item));
-            length += 1;
+        CmdParser {
+            params: HashMap::<String, Option<String>>::new(),
         }
-        CmdParams { params, length }
     }
-}
 
-impl CmdParams {
-    /// Input the `Param`'s `param_type`, get its `value`.
+    /// Push a new param field into `params`.
     ///
     /// # Arguments
     ///
-    /// * `item` - The item name `str` to get `Param`.
-    pub fn get(&self, item: &str) -> Option<Param> {
-        for i in 0..self.length {
-            if self.params[i].param_type == item {
-                return Some(self.params[i].clone());
+    /// * `param_field`: The cmdline parameter field name.
+    fn push(&mut self, param_field: &str) -> &mut Self {
+        self.params.insert(param_field.to_string(), None);
+
+        self
+    }
+
+    /// Parse cmdline parameters string into `params`.
+    ///
+    /// # Arguments
+    ///
+    /// * `cmd_param`: The whole cmdline parameter string.
+    fn parse(&mut self, cmd_param: &str) -> Result<()> {
+        if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
+            return Err(ErrorKind::InvalidParam(cmd_param.to_string()).into());
+        }
+        let param_items = cmd_param.split(',').collect::<Vec<&str>>();
+        for param_item in param_items {
+            if param_item.starts_with('=') || cmd_param.ends_with('=') {
+                return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+            }
+            let param = param_item.split('=').collect::<Vec<&str>>();
+            let (param_key, param_value) = match param.len() {
+                1 => ("", param[0]),
+                2 => (param[0], param[1]),
+                _ => {
+                    return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+                }
+            };
+
+            if self.params.contains_key(param_key) {
+                *self.params.get_mut(param_key).unwrap() = Some(String::from(param_value));
+            } else {
+                return Err(ErrorKind::InvalidParam(param[0].to_string()).into());
             }
         }
-        None
+
+        Ok(())
     }
 
-    /// Input the `Param`'s `param_type`, get its value.
+    /// Get cmdline parameters value from param field name.
     ///
     /// # Arguments
     ///
-    /// * `item` - The item name `str` to get `Param`'s value `String`.
-    pub fn get_value_str(&self, item: &str) -> Option<String> {
-        if let Some(param) = self.get(item) {
-            Some(param.value)
-        } else {
-            None
-        }
-    }
-
-    /// Input the `Param`'s `param_type`, get its value to u32.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` - The item name `str` to get `Param`'s value `i32`.
-    pub fn get_value_i32(&self, item: &str) -> Option<i32> {
-        if let Some(param) = self.get(item) {
-            Some(param.value_to_u32() as i32)
-        } else {
-            None
-        }
-    }
-
-    /// Input the `Param`'s `param_type`, get its value to u32.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` - The item name `str` to get `Param`'s value `u32`.
-    pub fn get_value_u64(&self, item: &str) -> Option<u64> {
-        if let Some(param) = self.get(item) {
-            Some(param.value_to_u64())
-        } else {
-            None
+    /// * `param_field`: The cmdline parameter field name.
+    fn get_value<T: FromStr>(&self, param_field: &str) -> Result<Option<T>> {
+        match self.params.get(param_field) {
+            Some(value) => {
+                if let Some(raw_value) = value {
+                    Ok(Some(raw_value.parse().map_err(|_| {
+                        ErrorKind::ConvertValueFailed(param_field.to_string(), raw_value.clone())
+                    })?))
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// This struct is a wrapper for `bool`.
+/// More switch string can be transferred to this structure.
+pub struct ExBool {
+    inner: bool,
+}
 
-    #[test]
-    fn test_basic_param() {
-        let test_param_str = "isrootfs=on";
-        let mut test_param: Param = Param::from_str(&test_param_str);
+impl FromStr for ExBool {
+    type Err = ();
 
-        assert_eq!(test_param.to_string(), "isrootfs=on".to_string());
-        assert_eq!(test_param.to_bool(), true);
-
-        test_param.value = "off".to_string();
-        assert_eq!(test_param.to_bool(), false);
-
-        let test_param_str = "quiet";
-        let mut test_param: Param = Param::from_str(&test_param_str);
-
-        assert_eq!(test_param.to_string(), "quiet".to_string());
-        test_param.value_replace_blank("et");
-        assert_eq!(test_param.to_string(), "qui".to_string());
-
-        let test_param_str = "max_vcpu=8";
-        let test_param: Param = Param::from_str(&test_param_str);
-
-        assert_eq!(test_param.value_to_u8(), 8u8);
-        assert_eq!(test_param.value_to_u32(), 8u32);
-        assert_eq!(test_param.value_to_u64(), 8u64);
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "true" | "on" | "yes" => Ok(ExBool { inner: true }),
+            "false" | "off" | "no" => Ok(ExBool { inner: false }),
+            _ => Err(()),
+        }
     }
+}
 
-    #[test]
-    fn test_cmd_param() {
-        let test_cmdline = "socket,id=charconsole0,path=/tmp/console.sock";
-        let test_cmdline_param = CmdParams::from_str(test_cmdline.to_string());
-
-        assert_eq!(
-            test_cmdline_param.get("id").unwrap().to_string(),
-            "id=charconsole0".to_string()
-        );
-        assert_eq!(
-            test_cmdline_param.get("").unwrap().to_string(),
-            "socket".to_string()
-        );
+impl Into<bool> for ExBool {
+    fn into(self) -> bool {
+        self.inner
     }
 }

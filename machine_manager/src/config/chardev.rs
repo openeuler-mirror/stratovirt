@@ -16,7 +16,7 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParams, ConfigCheck, ParamOperation, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAX_PATH_LENGTH: usize = 4096;
@@ -75,16 +75,23 @@ impl VmConfig {
     }
 
     /// Update '-console ...' network config to `VmConfig`.
-    pub fn update_console(&mut self, console_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(console_config);
+    pub fn update_console(&mut self, console_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser.push("id").push("path");
+
+        cmd_parser.parse(console_config)?;
+
         let mut console = ConsoleConfig::default();
-        if let Some(console_id) = cmd_params.get("id") {
-            console.console_id = console_id.value;
+        if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
+            console.console_id = console_id;
         }
-        if let Some(console_path) = cmd_params.get("path") {
-            console.socket_path = console_path.value;
+        if let Some(console_path) = cmd_parser.get_value::<String>("path")? {
+            console.socket_path = console_path;
         }
+
         self.add_console(console);
+
+        Ok(())
     }
 
     /// Get virtio-console's config from `device` and `chardev` config.
@@ -116,16 +123,21 @@ impl SerialConfig {
 }
 
 impl VmConfig {
-    pub fn update_serial(&mut self, serial_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(serial_config);
+    pub fn update_serial(&mut self, serial_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser.push("");
 
-        if let Some(serial_type) = cmd_params.get("") {
-            if serial_type.to_string() == "stdio" {
+        cmd_parser.parse(serial_config)?;
+
+        if let Some(serial_type) = cmd_parser.get_value::<String>("")? {
+            if serial_type == "stdio" {
                 self.serial = Some(SerialConfig { stdio: true });
             } else {
                 self.serial = Some(SerialConfig { stdio: false });
             }
         }
+
+        Ok(())
     }
 }
 
@@ -162,18 +174,27 @@ impl ConfigCheck for VsockConfig {
 }
 
 impl VmConfig {
-    pub fn update_vsock(&mut self, vsock_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(vsock_config);
+    pub fn update_vsock(&mut self, vsock_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser
+            .push("")
+            .push("id")
+            .push("guest-cid")
+            .push("vhostfd");
 
-        if let Some(device_type) = cmd_params.get("") {
-            if device_type.value.contains("vsock") {
-                let vhost_fd = cmd_params.get_value_i32("vhostfd");
+        cmd_parser.parse(vsock_config)?;
+
+        if let Some(device_type) = cmd_parser.get_value::<String>("")? {
+            if device_type.contains("vsock") {
+                let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
                 self.vsock = Some(VsockConfig {
-                    vsock_id: cmd_params.get_value_str("id").unwrap(),
-                    guest_cid: cmd_params.get_value_u64("guest-cid").unwrap(),
+                    vsock_id: cmd_parser.get_value::<String>("id")?.unwrap(),
+                    guest_cid: cmd_parser.get_value::<u64>("guest-cid")?.unwrap(),
                     vhost_fd,
                 });
             }
         }
+
+        Ok(())
     }
 }

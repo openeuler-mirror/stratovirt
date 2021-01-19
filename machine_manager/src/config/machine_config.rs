@@ -16,7 +16,7 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParams, ConfigCheck, Param, ParamOperation, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 use util::num_ops::round_down;
 
 const DEFAULT_CPUS: u8 = 1;
@@ -83,11 +83,8 @@ impl MachineConfig {
             machine_config.nr_cpus = value["vcpu_count"].to_string().parse::<u8>().unwrap();
         }
         if value.get("mem_size") != None {
-            let mut param = Param {
-                param_type: String::new(),
-                value: value["mem_size"].to_string().replace("\"", ""),
-            };
-            machine_config.mem_config.mem_size = unit_conversion(&mut param);
+            machine_config.mem_config.mem_size =
+                memory_unit_conversion(&value["mem_size"].to_string().replace("\"", ""));
         }
         if value.get("mem_path") != None {
             machine_config.mem_config.mem_path =
@@ -127,50 +124,92 @@ impl VmConfig {
     /// # Arguments
     ///
     /// * `name` - The name `String` updated to `VmConfig`.
-    pub fn update_machine(&mut self, mach_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(mach_config);
-        if let Some(mach_type) = cmd_params.get("type") {
-            self.machine_config.mach_type = mach_type.value;
+    pub fn update_machine(&mut self, mach_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser
+            .push("type")
+            .push("dump-guest-core")
+            .push("mem-share");
+
+        cmd_parser.parse(mach_config)?;
+
+        if let Some(mach_type) = cmd_parser.get_value::<String>("type")? {
+            self.machine_config.mach_type = mach_type;
         }
-        if let Some(dump_guest) = cmd_params.get("dump-guest-core") {
-            self.machine_config.mem_config.dump_guest_core = dump_guest.to_bool();
+        if let Some(dump_guest) = cmd_parser.get_value::<ExBool>("dump-guest-core")? {
+            self.machine_config.mem_config.dump_guest_core = dump_guest.into();
         }
-        if let Some(mem_share) = cmd_params.get("mem-share") {
-            self.machine_config.mem_config.mem_share = mem_share.to_bool();
+        if let Some(mem_share) = cmd_parser.get_value::<ExBool>("mem-share")? {
+            self.machine_config.mem_config.mem_share = mem_share.into();
         }
+
+        Ok(())
     }
+
     /// Update '-m' memory config to `VmConfig`.
-    pub fn update_memory(&mut self, mem_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(mem_config);
-        if let Some(mut mem_size) = cmd_params.get("") {
-            self.machine_config.mem_config.mem_size = unit_conversion(&mut mem_size)
-        } else if let Some(mut mem_size) = cmd_params.get("size") {
-            self.machine_config.mem_config.mem_size = unit_conversion(&mut mem_size)
+    pub fn update_memory(&mut self, mem_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser.push("").push("size");
+
+        cmd_parser.parse(mem_config)?;
+
+        if let Some(mem_size) = cmd_parser.get_value::<String>("")? {
+            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size);
+        } else if let Some(mem_size) = cmd_parser.get_value::<String>("size")? {
+            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size);
         }
+
+        Ok(())
     }
 
     /// Update '-smp' cpu config to `VmConfig`.
-    pub fn update_cpu(&mut self, cpu_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(cpu_config);
-        if let Some(cpu_num) = cmd_params.get("") {
-            self.machine_config.nr_cpus = cpu_num.value_to_u8();
-        } else if let Some(cpu_num) = cmd_params.get("cpus") {
-            self.machine_config.nr_cpus = cpu_num.value_to_u8();
+    pub fn update_cpu(&mut self, cpu_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser.push("").push("cpus");
+
+        cmd_parser.parse(cpu_config)?;
+
+        if let Some(cpu_num) = cmd_parser.get_value::<u8>("")? {
+            self.machine_config.nr_cpus = cpu_num;
+        } else if let Some(cpu_num) = cmd_parser.get_value::<u8>("cpus")? {
+            self.machine_config.nr_cpus = cpu_num;
         }
+
+        Ok(())
     }
 
-    pub fn update_mem_path(&mut self, mem_path: String) {
+    pub fn update_mem_path(&mut self, mem_path: &str) -> Result<()> {
         self.machine_config.mem_config.mem_path = Some(mem_path.replace("\"", ""));
+        Ok(())
     }
 }
 
-fn unit_conversion(origin_param: &mut Param) -> u64 {
-    if origin_param.value_replace_blank("M") || origin_param.value_replace_blank("m") {
-        get_inner(origin_param.value_to_u64().checked_mul(M))
-    } else if origin_param.value_replace_blank("G") || origin_param.value_replace_blank("g") {
-        get_inner(origin_param.value_to_u64().checked_mul(G))
+fn memory_unit_conversion(origin_value: &str) -> u64 {
+    if origin_value.contains('M') || origin_value.contains('m') {
+        let value = origin_value.replace("M", "");
+        let value = value.replace("m", "");
+        get_inner(
+            value
+                .parse::<u64>()
+                .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", &value))
+                .checked_mul(M),
+        )
+    } else if origin_value.contains('G') || origin_value.contains('g') {
+        let value = origin_value.replace("G", "");
+        let value = value.replace("g", "");
+        get_inner(
+            value
+                .parse::<u64>()
+                .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", &value))
+                .checked_mul(G),
+        )
     } else {
-        get_inner(round_down(origin_param.value_to_u64(), M))
+        get_inner(round_down(
+            origin_value
+                .parse::<u64>()
+                .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", &origin_value)),
+            M,
+        ))
     }
 }
 
@@ -273,22 +312,22 @@ mod tests {
         let mut vm_config = VmConfig::default();
         vm_config.machine_config = machine_config;
 
-        vm_config.update_cpu("8".to_string());
+        assert!(vm_config.update_cpu("8").is_ok());
         assert_eq!(vm_config.machine_config.nr_cpus, 8);
-        vm_config.update_cpu("cpus=16".to_string());
+        assert!(vm_config.update_cpu("cpus=16").is_ok());
         assert_eq!(vm_config.machine_config.nr_cpus, 16);
-        vm_config.update_cpu("nrcpus=32".to_string());
+        assert!(vm_config.update_cpu("nr_cpus=32").is_err());
         assert_eq!(vm_config.machine_config.nr_cpus, 16);
 
-        vm_config.update_memory("256m".to_string());
+        assert!(vm_config.update_memory("256m").is_ok());
         assert_eq!(vm_config.machine_config.mem_config.mem_size, 268_435_456);
-        vm_config.update_memory("512M".to_string());
+        assert!(vm_config.update_memory("512M").is_ok());
         assert_eq!(vm_config.machine_config.mem_config.mem_size, 536_870_912);
-        vm_config.update_memory("size=1G".to_string());
+        assert!(vm_config.update_memory("size=1G").is_ok());
         assert_eq!(vm_config.machine_config.mem_config.mem_size, 1_073_741_824);
 
         assert!(!vm_config.machine_config.mem_config.dump_guest_core);
-        vm_config.update_machine(String::from("dump-guest-core=on"));
+        assert!(vm_config.update_machine("dump-guest-core=true").is_ok());
         assert!(vm_config.machine_config.mem_config.dump_guest_core);
     }
 
