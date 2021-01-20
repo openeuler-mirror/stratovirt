@@ -83,7 +83,10 @@ fn run() -> Result<()> {
         }
     }));
 
-    match real_main(&cmd_args) {
+    let vm_config: VmConfig = create_vmconfig(&cmd_args)?;
+    info!("VmConfig is {:?}", vm_config);
+
+    match real_main(&cmd_args, vm_config) {
         Ok(()) => info!("MainLoop over, Vm exit"),
         Err(ref e) => {
             std::io::stdin()
@@ -97,10 +100,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
-    let vm_config: VmConfig = create_vmconfig(cmd_args)?;
-    info!("VmConfig is {:?}", vm_config);
-
+fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<()> {
     if cmd_args.is_present("daemonize") {
         match daemonize(cmd_args.value_of("pidfile")) {
             Ok(()) => info!("Daemonize mode start!"),
