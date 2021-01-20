@@ -132,3 +132,63 @@ impl VmConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_drive_config_json_parser() {
+        let json = r#"
+        [{
+            "drive_id": "rootfs",
+            "path_on_host": "/path/to/block",
+            "serial_num": "1111111",
+            "direct": false,
+            "read_only": false
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let configs = DriveConfig::from_value(&value);
+        assert!(configs.is_some());
+        let drive_configs = configs.unwrap();
+        assert_eq!(drive_configs[0].drive_id, "rootfs");
+        assert_eq!(drive_configs[0].path_on_host, "/path/to/block");
+        assert_eq!(drive_configs[0].serial_num, Some(String::from("1111111")));
+        assert_eq!(drive_configs[0].direct, false);
+        assert_eq!(drive_configs[0].read_only, false);
+        let json = r#"
+        [{
+            "drive_id": "rootfs",
+            "path_on_host": "/path/to/block",
+            "direct": false,
+            "read_only": false
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let configs = DriveConfig::from_value(&value);
+        assert!(configs.is_some());
+        let drive_configs = configs.unwrap();
+        assert_eq!(drive_configs[0].serial_num, None);
+    }
+
+    #[test]
+    fn test_drive_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .is_ok());
+        let configs = vm_config.drives.clone();
+        assert!(configs.is_some());
+        let mut drive_configs = configs.unwrap();
+        assert_eq!(drive_configs[0].drive_id, "rootfs");
+        assert_eq!(drive_configs[0].path_on_host, "/path/to/rootfs");
+        assert_eq!(drive_configs[0].direct, true);
+        assert_eq!(drive_configs[0].read_only, false);
+        assert_eq!(drive_configs[0].serial_num, Some(String::from("111111")));
+        assert!(drive_configs[0].check().is_ok());
+        drive_configs[0].serial_num = Some(String::from("22222222222222222222"));
+        assert!(drive_configs[0].check().is_ok());
+        drive_configs[0].serial_num = Some(String::from("222222222222222222222"));
+        assert!(drive_configs[0].check().is_err());
+    }
+}
