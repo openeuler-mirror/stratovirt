@@ -291,6 +291,7 @@ impl VmConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
 
     #[test]
     fn test_kernel_params() {
@@ -307,5 +308,61 @@ mod tests {
             test_kernel_param.to_string(),
             "reboot=k panic=1 pci=off nomodules 8250.nr_uarts=0 maxcpus=8"
         );
+    }
+
+    #[test]
+    fn test_bootsource_json_parser() {
+        let json = r#"
+        {
+            "kernel_image_path": "/path/to/vmlinux",
+            "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let boot_source = BootSource::from_value(&value);
+        assert_eq!(boot_source.kernel_file, PathBuf::from("/path/to/vmlinux"));
+        assert_eq!(
+            boot_source.kernel_cmdline.to_string(),
+            "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
+        );
+        assert!(boot_source.initrd.is_none());
+    }
+
+    #[test]
+    fn test_bootsource_cmdline_parser() {
+        let kernel_path = String::from("vmlinux.bin");
+        let initrd_path = String::from("initrd.img");
+        let kernel_file = File::create(&kernel_path).unwrap();
+        kernel_file.set_len(100_u64).unwrap();
+        let initrd_file = File::create(&initrd_path).unwrap();
+        initrd_file.set_len(100_u64).unwrap();
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.update_kernel(&kernel_path).is_ok());
+        vm_config.update_kernel_cmdline(&vec![
+            String::from("console=ttyS0"),
+            String::from("reboot=k"),
+            String::from("panic=1"),
+            String::from("pci=off"),
+            String::from("tsc=reliable"),
+            String::from("ipv6.disable=1"),
+        ]);
+        let boot_source = vm_config.clone().boot_source;
+        assert_eq!(boot_source.kernel_file, PathBuf::from(&kernel_path));
+        assert_eq!(
+            boot_source.kernel_cmdline.to_string(),
+            "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
+        );
+        assert!(boot_source.initrd.is_none());
+        assert!(boot_source.check().is_ok());
+        assert!(vm_config.update_initrd(&initrd_path).is_ok());
+        let boot_source = vm_config.clone().boot_source;
+        assert!(boot_source.initrd.is_some());
+        assert!(boot_source.check().is_ok());
+        let initrd_config = boot_source.initrd.unwrap();
+        assert_eq!(initrd_config.initrd_file, PathBuf::from(&initrd_path));
+        assert_eq!(initrd_config.initrd_size, 100);
+        assert_eq!(*initrd_config.initrd_addr.lock().unwrap(), 0);
+        std::fs::remove_file(&kernel_path).unwrap();
+        std::fs::remove_file(&initrd_path).unwrap();
     }
 }
