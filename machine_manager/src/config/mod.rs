@@ -344,3 +344,134 @@ impl Into<bool> for ExBool {
         self.inner
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cmd_parser() {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser
+            .push("")
+            .push("id")
+            .push("path")
+            .push("num")
+            .push("killed");
+        assert!(cmd_parser
+            .parse("socket,id=charconsole0,path=/tmp/console.sock,num=1,killed=true")
+            .is_ok());
+        assert_eq!(
+            cmd_parser.get_value::<String>("").unwrap().unwrap(),
+            "socket".to_string()
+        );
+        assert_eq!(
+            cmd_parser.get_value::<String>("id").unwrap().unwrap(),
+            "charconsole0".to_string()
+        );
+        assert_eq!(
+            cmd_parser.get_value::<String>("path").unwrap().unwrap(),
+            "/tmp/console.sock".to_string()
+        );
+        assert_eq!(cmd_parser.get_value::<u64>("num").unwrap().unwrap(), 1_u64);
+        assert_eq!(cmd_parser.get_value::<u32>("num").unwrap().unwrap(), 1_u32);
+        assert_eq!(cmd_parser.get_value::<u16>("num").unwrap().unwrap(), 1_u16);
+        assert_eq!(cmd_parser.get_value::<u8>("num").unwrap().unwrap(), 1_u8);
+        assert_eq!(cmd_parser.get_value::<i64>("num").unwrap().unwrap(), 1_i64);
+        assert_eq!(cmd_parser.get_value::<i32>("num").unwrap().unwrap(), 1_i32);
+        assert_eq!(cmd_parser.get_value::<i16>("num").unwrap().unwrap(), 1_i16);
+        assert_eq!(cmd_parser.get_value::<i8>("num").unwrap().unwrap(), 1_i8);
+        assert!(cmd_parser.get_value::<bool>("killed").unwrap().unwrap());
+        assert!(
+            cmd_parser
+                .get_value::<ExBool>("killed")
+                .unwrap()
+                .unwrap()
+                .inner
+        );
+        assert!(cmd_parser.parse("killed=on").is_ok());
+        assert!(
+            cmd_parser
+                .get_value::<ExBool>("killed")
+                .unwrap()
+                .unwrap()
+                .inner
+        );
+        assert!(cmd_parser.parse("killed=yes").is_ok());
+        assert!(
+            cmd_parser
+                .get_value::<ExBool>("killed")
+                .unwrap()
+                .unwrap()
+                .inner
+        );
+        assert!(cmd_parser.parse("killed=false").is_ok());
+        assert!(!cmd_parser.get_value::<bool>("killed").unwrap().unwrap());
+        assert!(
+            !cmd_parser
+                .get_value::<ExBool>("killed")
+                .unwrap()
+                .unwrap()
+                .inner
+        );
+        assert!(cmd_parser.parse("killed=off").is_ok());
+        assert!(
+            !cmd_parser
+                .get_value::<ExBool>("killed")
+                .unwrap()
+                .unwrap()
+                .inner
+        );
+        assert!(cmd_parser.parse("killed=no").is_ok());
+        assert!(
+            !cmd_parser
+                .get_value::<ExBool>("killed")
+                .unwrap()
+                .unwrap()
+                .inner
+        );
+        assert!(cmd_parser.parse("killed=random").is_ok());
+        assert!(cmd_parser.get_value::<bool>("killed").is_err());
+        assert!(cmd_parser.get_value::<ExBool>("killed").is_err());
+        assert!(cmd_parser.get_value::<String>("random").unwrap().is_none());
+        assert!(cmd_parser.parse("random=false").is_err());
+    }
+
+    #[test]
+    fn test_vmcfg_json_parser() {
+        let kernel_path = String::from("test_vmlinux.bin");
+        let kernel_file = std::fs::File::create(&kernel_path).unwrap();
+        kernel_file.set_len(100_u64).unwrap();
+        let basic_json = r#"
+        {
+            "boot-source": {
+              "kernel_image_path": "test_vmlinux.bin",
+              "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/vda"
+            },
+            "machine-config": {
+              "vcpu_count": 1,
+              "mem_size": 268435456
+            },
+            "drive": [
+              {
+                "drive_id": "rootfs",
+                "path_on_host": "/path/to/rootfs/image",
+                "direct": false,
+                "read_only": false
+              }
+            ],
+            "serial": {
+              "stdio": true
+            }
+        }
+        "#;
+        let value = serde_json::from_str(basic_json).unwrap();
+        let vm_config_rst = VmConfig::create_from_value(value);
+        assert!(vm_config_rst.is_ok());
+        let vm_config = vm_config_rst.unwrap();
+        assert_eq!(vm_config.guest_name, "StratoVirt");
+        assert!(vm_config.check_vmconfig(false).is_ok());
+        assert!(vm_config.check_vmconfig(true).is_err());
+        std::fs::remove_file(&kernel_path).unwrap();
+    }
+}
