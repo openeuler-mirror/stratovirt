@@ -402,10 +402,12 @@ impl Bus {
     /// * `id` - Device id.
     pub fn del_replaceable_device(&self, id: &str) -> Result<String> {
         // find the index of configuration by name and remove it
+        let mut is_exist = false;
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         for (index, config) in configs_lock.iter().enumerate() {
             if config.id == id {
                 configs_lock.remove(index);
+                is_exist = true;
                 break;
             }
         }
@@ -420,6 +422,9 @@ impl Bus {
             }
         }
 
+        if !is_exist {
+            bail!("Device {} not found", id);
+        }
         Ok(id.to_string())
     }
 

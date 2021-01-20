@@ -37,6 +37,7 @@ pub mod micro_syscall;
 use std::marker::{Send, Sync};
 use std::ops::Deref;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::vec::Vec;
 
@@ -82,6 +83,7 @@ use crate::mmio::DeviceResource;
 use crate::{
     cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU},
     virtio::balloon::{qmp_balloon, qmp_query_balloon},
+    virtio::net::create_tap,
 };
 use crate::{
     legacy::Serial,
@@ -864,7 +866,6 @@ impl DeviceInterface for LightMachine {
             ),
             None,
         )
-        .unwrap()
     }
 
     fn query_balloon(&self) -> Response {
@@ -878,7 +879,6 @@ impl DeviceInterface for LightMachine {
             ),
             None,
         )
-        .unwrap()
     }
 
     fn device_add(
@@ -887,7 +887,7 @@ impl DeviceInterface for LightMachine {
         driver: String,
         addr: Option<String>,
         lun: Option<usize>,
-    ) -> bool {
+    ) -> Response {
         // get slot of bus by addr or lun
         let mut slot = 0;
         if let Some(addr) = addr {
@@ -900,18 +900,22 @@ impl DeviceInterface for LightMachine {
             slot = lun + 1;
         }
 
-        if let Err(ref e) = self.bus.add_replaceable_device(&id, &driver, slot) {
-            error!(
-                "Failed to add device, {}",
-                error_chain::ChainedError::display_chain(e)
-            );
-            return false;
+        match self.bus.add_replaceable_device(&id, &driver, slot) {
+            Ok(()) => Response::create_empty_response(),
+            Err(ref e) => {
+                error!(
+                    "Failed to add device: {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
         }
-
-        true
     }
 
-    fn device_del(&self, device_id: String) -> bool {
+    fn device_del(&self, device_id: String) -> Response {
         match self.bus.del_replaceable_device(&device_id) {
             Ok(path) => {
                 let block_del_event = qmp_schema::DEVICE_DELETED {
@@ -920,14 +924,17 @@ impl DeviceInterface for LightMachine {
                 };
                 event!(DEVICE_DELETED; block_del_event);
 
-                true
+                Response::create_empty_response()
             }
             Err(ref e) => {
                 error!(
-                    "Failed to delete device, {}",
+                    "Failed to delete device: {}",
                     error_chain::ChainedError::display_chain(e)
                 );
-                false
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
             }
         }
     }
@@ -938,7 +945,8 @@ impl DeviceInterface for LightMachine {
         file: qmp_schema::FileOptions,
         cache: Option<qmp_schema::CacheOptions>,
         read_only: Option<bool>,
-    ) -> bool {
+    ) -> Response {
+        const MAX_STRING_LENGTH: usize = 255;
         let read_only = if let Some(ro) = read_only { ro } else { false };
 
         let direct = if let Some(cache) = cache {
@@ -950,6 +958,32 @@ impl DeviceInterface for LightMachine {
             true
         };
 
+        let blk = Path::new(&file.filename);
+        if !blk.exists() || !blk.is_file() {
+            let blk_file = format!("{:?}", blk);
+            error!("File {} does not exist or is not a file", blk_file);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("Invalid block path".to_string()),
+                None,
+            );
+        }
+        if let Some(file_name) = blk.file_name() {
+            if file_name.len() > MAX_STRING_LENGTH {
+                error!("File name {:?} is illegal", file_name);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError("Illegal block name".to_string()),
+                    None,
+                );
+            }
+        } else {
+            let blk_file = format!("{:?}", blk);
+            error!("Path：{} is not valid", blk_file);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("Invalid block path".to_string()),
+                None,
+            );
+        }
+
         let config = DriveConfig {
             drive_id: node_name.clone(),
             path_on_host: file.filename,
@@ -959,18 +993,22 @@ impl DeviceInterface for LightMachine {
             iothread: None,
         };
 
-        if let Err(ref e) = self.bus.add_replaceable_config(node_name, Arc::new(config)) {
-            error!(
-                "Failed to add block device, {}",
-                error_chain::ChainedError::display_chain(e)
-            );
-            return false;
+        match self.bus.add_replaceable_config(node_name, Arc::new(config)) {
+            Ok(()) => Response::create_empty_response(),
+            Err(ref e) => {
+                error!(
+                    "Failed to add block device: {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
         }
-
-        true
     }
 
-    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> bool {
+    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response {
         let mut config = NetworkInterfaceConfig {
             iface_id: id.clone(),
             host_dev_name: "".to_string(),
@@ -1000,24 +1038,41 @@ impl DeviceInterface for LightMachine {
                             "Add netdev error: failed to convert {} to RawFd.",
                             netdev_fd
                         );
-                        return false;
+                        return Response::create_error_response(
+                            qmp_schema::QmpErrorClass::GenericError(
+                                "Add netdev error: failed to convert {} to RawFd.".to_string(),
+                            ),
+                            None,
+                        );
                     }
                 };
                 config.tap_fd = Some(fd_num);
             }
         } else if let Some(if_name) = if_name {
-            config.host_dev_name = if_name;
+            config.host_dev_name = if_name.clone();
+            if create_tap(None, Some(&if_name)).is_err() {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "Tap device already in use".to_string(),
+                    ),
+                    None,
+                );
+            }
         }
 
-        if let Err(ref e) = self.bus.add_replaceable_config(id, Arc::new(config)) {
-            error!(
-                "Failed to add net device, {}",
-                error_chain::ChainedError::display_chain(e)
-            );
-            return false;
+        match self.bus.add_replaceable_config(id, Arc::new(config)) {
+            Ok(()) => Response::create_empty_response(),
+            Err(ref e) => {
+                error!(
+                    "Failed to add net device: {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
         }
-
-        true
     }
 
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
@@ -1027,7 +1082,7 @@ impl DeviceInterface for LightMachine {
         } else {
             let err_resp =
                 qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
-            Response::create_error_response(err_resp, None).unwrap()
+            Response::create_error_response(err_resp, None)
         }
     }
 }

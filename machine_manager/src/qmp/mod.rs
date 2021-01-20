@@ -232,15 +232,12 @@ impl Response {
     /// * `err_class` - The `QmpErrorClass` of qmp `error` field.
     /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
     ///          `id`.
-    pub fn create_error_response(
-        err_class: schema::QmpErrorClass,
-        id: Option<u32>,
-    ) -> Result<Self> {
-        Ok(Response {
+    pub fn create_error_response(err_class: schema::QmpErrorClass, id: Option<u32>) -> Self {
+        Response {
             return_: None,
-            error: Some(ErrorMessage::new(&err_class)?),
+            error: Some(ErrorMessage::new(&err_class)),
             id,
-        })
+        }
     }
 
     fn change_id(&mut self, id: Option<u32>) {
@@ -257,7 +254,6 @@ impl From<bool> for Response {
                 schema::QmpErrorClass::GenericError(String::new()),
                 None,
             )
-            .unwrap()
         }
     }
 }
@@ -271,16 +267,16 @@ pub struct ErrorMessage {
 }
 
 impl ErrorMessage {
-    fn new(e: &schema::QmpErrorClass) -> Result<Self> {
+    fn new(e: &schema::QmpErrorClass) -> Self {
         let content = e.to_content();
-        let serde_str = serde_json::to_string(&e)?;
+        let serde_str = serde_json::to_string(&e).unwrap();
         let serde_vec: Vec<&str> = serde_str.split(':').collect();
         let class_name = serde_vec[0];
         let len: usize = class_name.len();
-        Ok(ErrorMessage {
+        ErrorMessage {
             errorkind: class_name[2..len - 1].to_string(),
             desc: content,
-        })
+        }
     }
 }
 
@@ -364,7 +360,7 @@ pub fn handle_qmp(stream_fd: RawFd, controller: &Arc<dyn MachineExternalInterfac
             warn!("Qmp json parser made an error:{}", e);
             qmp_service.send_str(&serde_json::to_string(&Response::create_error_response(
                 err_resp, None,
-            )?)?)?;
+            ))?)?;
             Ok(())
         }
     }
@@ -569,7 +565,7 @@ mod tests {
         // 3.Error response
         let qmp_err =
             schema::QmpErrorClass::GenericError("Invalid Qmp command arguments!".to_string());
-        let resp = Response::create_error_response(qmp_err, None).unwrap();
+        let resp = Response::create_error_response(qmp_err, None);
 
         let json_msg =
             r#"{"error":{"class":"GenericError","desc":"Invalid Qmp command arguments!"}}"#;

@@ -48,6 +48,7 @@ impl QmpErrorClass {
 /// A enum to store all command struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "execute")]
+#[serde(deny_unknown_fields)]
 pub enum QmpCommand {
     #[serde(rename = "qmp_capabilities")]
     qmp_capabilities {
@@ -157,6 +158,7 @@ pub enum QmpCommand {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct qmp_capabilities {}
 
 impl Command for qmp_capabilities {
@@ -182,6 +184,7 @@ impl Command for qmp_capabilities {
 /// <- { "return": {}}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct quit {}
 
 impl Command for quit {
@@ -204,6 +207,7 @@ impl Command for quit {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct stop {}
 
 impl Command for stop {
@@ -226,6 +230,7 @@ impl Command for stop {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct cont {}
 
 impl Command for cont {
@@ -255,6 +260,7 @@ impl Command for cont {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct device_add {
     #[serde(rename = "id")]
     pub id: String,
@@ -276,12 +282,14 @@ impl Command for device_add {
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileOptions {
     pub driver: String,
     pub filename: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CacheOptions {
     #[serde(rename = "no-flush")]
     pub no_flush: Option<bool>,
@@ -309,6 +317,7 @@ pub struct CacheOptions {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct blockdev_add {
     #[serde(rename = "node-name")]
     pub node_name: String,
@@ -345,6 +354,7 @@ impl Command for blockdev_add {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct netdev_add {
     pub id: String,
     #[serde(rename = "ifname")]
@@ -390,6 +400,7 @@ impl Command for netdev_add {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct device_del {
     pub id: String,
 }
@@ -404,6 +415,7 @@ impl Command for device_del {
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct blockdev_del {
     #[serde(rename = "node-name")]
     pub node_name: String,
@@ -437,6 +449,7 @@ impl Command for blockdev_del {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct netdev_del {
     pub id: String,
 }
@@ -463,17 +476,18 @@ impl Command for netdev_del {
 /// -> { "execute": "query-hotpluggable-cpus" }
 /// <- {"return": [
 ///      {
-///         "type": "qemu64-x86_64-cpu", "vcpus-count": 1,
+///         "type": host-x-cpu", "vcpus-count": 1,
 ///         "props": {"core-id": 0, "socket-id": 1, "thread-id": 0}
 ///      },
 ///      {
 ///         "qom-path": "/machine/unattached/device[0]",
-///         "type": "qemu64-x86_64-cpu", "vcpus-count": 1,
+///         "type": "host-x-cpu", "vcpus-count": 1,
 ///         "props": {"core-id": 0, "socket-id": 0, "thread-id": 0}
 ///      }
 ///    ]}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct query_hotpluggable_cpus {}
 
 impl Command for query_hotpluggable_cpus {
@@ -546,6 +560,7 @@ pub struct CpuInstanceProperties {
 ///    }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct query_cpus {}
 
 impl Command for query_cpus {
@@ -621,6 +636,7 @@ pub struct CpuInfoArm {}
 ///                  "status": "running" } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct query_status {}
 
 impl Command for query_status {
@@ -701,6 +717,7 @@ impl Default for RunState {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct getfd {
     #[serde(rename = "fdname")]
     pub fd_name: String,
@@ -726,6 +743,7 @@ impl Command for getfd {
 /// If the command-line option "-no-shutdown" has been specified, StratoVirt
 /// will not exit, and a STOP event will eventually follow the SHUTDOWN event
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SHUTDOWN {
     /// If true, the shutdown was triggered by a guest request (such as
     /// a guest-initiated ACPI shutdown request or other hardware-specific
@@ -743,6 +761,7 @@ impl Event for SHUTDOWN {
 ///
 /// Emitted when the virtual machine is reset
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RESET {
     /// If true, the reset was triggered by a guest request (such as
     /// a guest-initiated ACPI reboot request or other hardware-specific action
@@ -759,6 +778,7 @@ impl Event for RESET {
 ///
 /// Emitted when the virtual machine is stopped
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct STOP {}
 
 impl Event for STOP {
@@ -769,6 +789,7 @@ impl Event for STOP {
 ///
 /// Emitted when the virtual machine resumes execution
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RESUME {}
 
 impl Event for RESUME {
@@ -790,6 +811,7 @@ impl Event for RESUME {
 ///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DEVICE_DELETED {
     /// Device name.
     #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
