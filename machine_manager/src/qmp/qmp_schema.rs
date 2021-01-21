@@ -1086,4 +1086,198 @@ mod tests {
         let ret_msg = r#"invalid type: string "isdf", expected struct query_status"#;
         assert!(err_msg == ret_msg);
     }
+
+    #[test]
+    fn test_wrong_qmp_arguments() {
+        // right arguments for device_add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add" , 
+            "arguments": {
+                "id":"net-0", 
+                "driver":"virtio-net-mmio", 
+                "addr":"0x0"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // unknow arguments for device_add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add" , 
+            "arguments": {
+                "id":"net-0", 
+                "driver":"virtio-net-mmio", 
+                "addr":"0x0",
+                "UnknowArg": "should go to error"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"unknown field `UnknowArg`"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // wrong spelling arguments for device_add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add" , 
+            "arguments": {
+                "id":"net-0", 
+                "drive":"virtio-net-mmio", 
+                "addr":"0x0"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"unknown field `drive`"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // right arguments for device_del.
+        let json_msg = r#"
+        { 
+            "execute": "device_del" , 
+            "arguments": {
+                "id": "net-1"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // wrong arguments for device_del.
+        let json_msg = r#"
+        { 
+            "execute": "device_del" , 
+            "arguments": {
+                "value": "h8i"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let unknow_msg = r#"unknown field `value`"#;
+        let expect_msg = r#"expected `id`"#;
+        assert!(err_msg.contains(unknow_msg));
+        assert!(err_msg.contains(expect_msg));
+
+        // missing arguments for getfd.
+        let json_msg = r#"
+        { 
+            "execute": "getfd"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"missing field `arguments`"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for getfd.
+        let json_msg = r#"
+        { 
+            "execute": "getfd" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct getfd"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for getfd.
+        let json_msg = r#"
+        { 
+            "execute": "getfd",
+            "arguments": { 
+                "fdname": "fd1" 
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for blockdev-add.
+        let json_msg = r#"
+        { 
+            "execute": "blockdev-add",
+            "arguments": {
+                "node-name": "drive-0", 
+                "file": {
+                    "driver": "file", 
+                    "filename": "/path/to/block"
+                }, 
+                "cache": {
+                    "direct": true
+                }, 
+                "read-only": false
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for device-add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add",
+            "arguments": {
+                "id": "drive-0", 
+                "driver": "virtio-blk-mmio", 
+                "addr": "0x1"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for netdev-add.
+        let json_msg = r#"
+        { 
+            "execute": "netdev_add",
+            "arguments": {
+                "id": "net-0", 
+                "ifname":"tap0"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+    }
 }
