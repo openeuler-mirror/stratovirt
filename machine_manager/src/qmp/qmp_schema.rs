@@ -1280,4 +1280,36 @@ mod tests {
         let ret_msg = r#"ok"#;
         assert!(err_msg == ret_msg);
     }
+
+    #[test]
+    fn test_unsupported_commands() {
+        // unsupported qmp command.
+        let json_msg = r#"
+        { 
+            "execute": "hello-world" , 
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"unknown variant `hello-world`"#;
+        assert!(err_msg.contains(part_msg));
+
+        // unsupported qmp command, and unknow field.
+        let json_msg = r#"
+        { 
+            "execute": "hello-world" , 
+            "arguments": {
+                "msg": "hello",
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"unknown variant `hello-world`"#;
+        assert!(err_msg.contains(part_msg));
+    }
 }
