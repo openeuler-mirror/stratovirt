@@ -915,3 +915,175 @@ impl Command for balloon {
         Default::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate serde;
+    extern crate serde_json;
+    use super::*;
+
+    #[test]
+    fn test_qmp_unexpected_arguments() {
+        // qmp: quit.
+        let json_msg = r#"
+        { 
+            "execute": "quit"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for quit.
+        let json_msg = r#"
+        { 
+            "execute": "quit" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct quit"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: stop.
+        let json_msg = r#"
+        { 
+            "execute": "stop"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for stop.
+        let json_msg = r#"
+        { 
+            "execute": "stop" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct stop"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: cont.
+        let json_msg = r#"
+        { 
+            "execute": "cont"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for count.
+        let json_msg = r#"
+        { 
+            "execute": "cont" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct cont"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: query-hotpluggable-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-hotpluggable-cpus"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-hotpluggable-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-hotpluggable-cpus" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_hotpluggable_cpus"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: query-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-cpus"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-cpus" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_cpus"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: query-ststus.
+        let json_msg = r#"
+        { 
+            "execute": "query-status"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-status.
+        let json_msg = r#"
+        { 
+            "execute": "query-status" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_status"#;
+        assert!(err_msg == ret_msg);
+    }
+}
