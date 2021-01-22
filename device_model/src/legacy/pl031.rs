@@ -173,14 +173,14 @@ impl MmioDeviceOps for PL031 {
     fn realize(&mut self, vm_fd: &VmFd, resource: DeviceResource) -> Result<()> {
         match EventFd::new(libc::EFD_NONBLOCK) {
             Ok(evt) => {
-                vm_fd
-                    .register_irqfd(&evt, resource.irq)
-                    .chain_err(|| "Failed to register irqfd")?;
+                vm_fd.register_irqfd(&evt, resource.irq).chain_err(|| {
+                    format!("Failed to register irqfd for rtc, irq {}", resource.irq,)
+                })?;
                 self.interrupt_evt = Some(evt);
 
                 Ok(())
             }
-            Err(_) => Err("Failed to create new EventFd".into()),
+            Err(_) => Err("Failed to create new EventFd for rtc".into()),
         }
     }
 

@@ -104,8 +104,8 @@ impl Serial {
     /// * fail to get an interrupt event fd.
     fn interrupt(&self) -> Result<()> {
         match &self.interrupt_evt {
-            Some(evt) => evt.write(1).chain_err(|| "Failed to write fd")?,
-            None => bail!("Failed to get an interrupt event fd"),
+            Some(evt) => evt.write(1).chain_err(|| "Failed to write fd for serial")?,
+            None => bail!("Failed to get an interrupt event fd for serial"),
         };
 
         Ok(())
@@ -253,7 +253,7 @@ impl Serial {
                     } else {
                         let output = match &mut self.output {
                             Some(output_) => output_,
-                            None => bail!("Failed to get output fd."),
+                            None => bail!("Failed to get output fd for serial."),
                         };
 
                         output
@@ -348,14 +348,14 @@ impl MmioDeviceOps for Serial {
 
         match EventFd::new(libc::EFD_NONBLOCK) {
             Ok(evt) => {
-                vm_fd
-                    .register_irqfd(&evt, resource.irq)
-                    .chain_err(|| "Failed to register irqfd")?;
+                vm_fd.register_irqfd(&evt, resource.irq).chain_err(|| {
+                    format!("Failed to register irqfd for serial, irq {}", resource.irq)
+                })?;
                 self.interrupt_evt = Some(evt);
 
                 Ok(())
             }
-            Err(_) => Err("Failed to create new EventFd".into()),
+            Err(_) => Err("Failed to create new EventFd for serial".into()),
         }
     }
 
