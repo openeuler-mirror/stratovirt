@@ -106,7 +106,10 @@ impl RequestOutHeader {
         match self.request_type {
             VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_FLUSH | VIRTIO_BLK_T_GET_ID => true,
             _ => {
-                error!("request type {} is not supported \n", self.request_type);
+                error!(
+                    "request type {} is not supported for block",
+                    self.request_type
+                );
                 false
             }
         }
@@ -191,29 +194,41 @@ impl Request {
     fn new(mem_space: &Arc<AddressSpace>, elem: &Element) -> Result<Self> {
         if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() || elem.desc_num < 2 {
             bail!(
-                "Missed header: out {} in {}",
+                "Missed header for block request: out {} in {} desc num {}",
                 elem.out_iovec.len(),
-                elem.in_iovec.len()
+                elem.in_iovec.len(),
+                elem.desc_num
             );
         }
 
         let out_iov_elem = elem.out_iovec.get(0).unwrap();
         if out_iov_elem.len < size_of::<RequestOutHeader>() as u32 {
-            bail!("Invalid out header: length {}", out_iov_elem.len);
+            bail!(
+                "Invalid out header for block request: length {}",
+                out_iov_elem.len
+            );
         }
 
         let out_header = mem_space
             .read_object::<RequestOutHeader>(out_iov_elem.addr)
-            .chain_err(|| format!("Failed to read from memory, addr {}", out_iov_elem.addr.0))?;
+            .chain_err(|| {
+                format!(
+                    "Failed to read header from memory for block request, addr {}",
+                    out_iov_elem.addr.0,
+                )
+            })?;
 
         if !out_header.is_valid() {
-            bail!("Unsupported request type");
+            bail!("Unsupported block request type");
         }
 
         let pos = elem.in_iovec.len() - 1;
         let in_iov_elem = elem.in_iovec.get(pos).unwrap();
         if in_iov_elem.len < 1 {
-            bail!("Invalid out header: length {}", in_iov_elem.len);
+            bail!(
+                "Invalid out header for block request: length {}",
+                in_iov_elem.len
+            );
         }
 
         let mut request = Request {
@@ -309,22 +324,33 @@ impl Request {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::PREADV;
                 if direct {
-                    (*aio).as_mut().rw_aio(aiocb)?;
+                    (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
+                        "Failed to process block request for reading asynchronously"
+                    })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb)?;
+                    (*aio).as_mut().rw_sync(aiocb).chain_err(|| {
+                        "Failed to process block request for reading synchronously"
+                    })?;
                 }
             }
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::PWRITEV;
                 if direct {
-                    (*aio).as_mut().rw_aio(aiocb)?;
+                    (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
+                        "Failed to process block request for writing asynchronously"
+                    })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb)?;
+                    (*aio).as_mut().rw_sync(aiocb).chain_err(|| {
+                        "Failed to process block request for writing synchronously"
+                    })?;
                 }
             }
             VIRTIO_BLK_T_FLUSH => {
                 aiocb.opcode = IoCmd::FDSYNC;
-                (*aio).as_mut().rw_sync(aiocb)?;
+                (*aio)
+                    .as_mut()
+                    .rw_sync(aiocb)
+                    .chain_err(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
                 if let Some(serial) = serial_num {
@@ -345,7 +371,10 @@ impl Request {
 
                 return Ok(1);
             }
-            _ => bail!("The type of request is not supported"),
+            _ => bail!(
+                "The type {} of block request is not supported",
+                self.out_header.request_type
+            ),
         };
         Ok(0)
     }
@@ -406,8 +435,11 @@ impl BlockIoHandler {
                     req_queue.push(req);
                     req_index += 1;
                 }
-                Err(e) => {
-                    error!("failed to create request, err {:#?}", e);
+                Err(ref e) => {
+                    error!(
+                        "failed to create block request, {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
                     break;
                 }
             };
@@ -446,12 +478,13 @@ impl BlockIoHandler {
                             if v == 1 {
                                 // get device id
                                 self.mem_space
-                                    .write_object(&VIRTIO_BLK_S_OK, req.in_header)?;
+                                    .write_object(&VIRTIO_BLK_S_OK, req.in_header)
+                                    .chain_err(|| "Failed to write result for the request for block with device id")?;
                                 self.queue.lock().unwrap().vring.add_used(
                                     &self.mem_space,
                                     req.desc_index,
                                     1,
-                                )?;
+                                ).chain_err(|| "Failed to add the request for block with device id to used ring")?;
 
                                 if self
                                     .queue
@@ -464,8 +497,11 @@ impl BlockIoHandler {
                                 }
                             }
                         }
-                        Err(e) => {
-                            error!("Failed to parse available descriptor chain: {:?}", e);
+                        Err(ref e) => {
+                            error!(
+                                "Failed to execute block request, {}",
+                                error_chain::ChainedError::display_chain(e)
+                            );
                         }
                     }
                     req_index += 1;
@@ -477,13 +513,17 @@ impl BlockIoHandler {
                     .lock()
                     .unwrap()
                     .vring
-                    .add_used(&self.mem_space, req.desc_index, 1)?;
+                    .add_used(&self.mem_space, req.desc_index, 1)
+                    .chain_err(|| {
+                        "Failed to add used ring, when block request queue isn't empty"
+                    })?;
             }
             need_interrupt = true
         }
 
         if !req_queue.is_empty() || need_interrupt {
-            (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING)?;
+            (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING)
+                .chain_err(|| "Failed to send an interrupt for block")?;
         }
 
         Ok(())
@@ -497,30 +537,30 @@ impl BlockIoHandler {
             } else {
                 i64::from(VIRTIO_BLK_S_OK)
             };
-            let complete_cb = &aiocb.iocompletecb;
 
-            if complete_cb
+            let complete_cb = &aiocb.iocompletecb;
+            if let Err(ref e) = complete_cb
                 .mem_space
                 .write_object(&status, complete_cb.req_status_addr)
-                .is_err()
             {
-                error!("Failed to write object(aio completion)");
+                error!(
+                    "Failed to write the status (aio completion) {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
                 return;
             }
 
             let mut queue_lock = complete_cb.queue.lock().unwrap();
-            if queue_lock
-                .vring
-                .add_used(
-                    &complete_cb.mem_space,
+            if let Err(ref e) = queue_lock.vring.add_used(
+                &complete_cb.mem_space,
+                complete_cb.desc_index,
+                complete_cb.rw_len,
+            ) {
+                error!(
+                    "Failed to add used ring(aio completion), index {}, len {} {}",
                     complete_cb.desc_index,
                     complete_cb.rw_len,
-                )
-                .is_err()
-            {
-                error!(
-                    "Failed to add used ring(aio completion), index {}, len {}",
-                    complete_cb.desc_index, complete_cb.rw_len
+                    error_chain::ChainedError::display_chain(e),
                 );
                 return;
             }
@@ -563,8 +603,12 @@ impl BlockIoHandler {
             }
         };
 
-        self.process_queue()
-            .unwrap_or_else(|_| error!("Failed to handle block IO."));
+        if let Err(ref e) = self.process_queue() {
+            error!(
+                "Failed to handle block IO for updating handler {}",
+                error_chain::ChainedError::display_chain(e)
+            );
+        }
     }
 }
 
@@ -600,9 +644,12 @@ impl EventNotifierHelper for BlockIoHandler {
             read_fd(fd);
 
             let mut locked_block_io = cloned_block_io.lock().unwrap();
-            locked_block_io
-                .process_queue()
-                .unwrap_or_else(|_| error!("Failed to handle block IO."));
+            if let Err(ref e) = locked_block_io.process_queue() {
+                error!(
+                    "Failed to handle block IO {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
+            }
             None
         });
         notifiers.push(build_event_notifier(
@@ -617,9 +664,12 @@ impl EventNotifierHelper for BlockIoHandler {
                 read_fd(fd);
 
                 if let Some(aio) = &mut cloned_block_io.lock().unwrap().aio {
-                    aio.handle()
-                        .map_err(|e| error!("Failed to handle aio, {}", e))
-                        .ok();
+                    if let Err(ref e) = aio.handle() {
+                        error!(
+                            "Failed to handle aio, {}",
+                            error_chain::ChainedError::display_chain(e)
+                        );
+                    }
                 }
                 None
             });
@@ -706,7 +756,7 @@ impl VirtioDevice for Block {
         self.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
 
         self.build_device_config_space()
-            .chain_err(|| "Failed to build config space")?;
+            .chain_err(|| "Failed to build config space for block")?;
 
         let mut disk_size = DUMMY_IMG_SIZE;
 
@@ -720,7 +770,10 @@ impl VirtioDevice for Block {
                     .custom_flags(libc::O_DIRECT)
                     .open(&self.blk_cfg.path_on_host)
                     .chain_err(|| {
-                        format!("failed to open the file {}", self.blk_cfg.path_on_host)
+                        format!(
+                            "failed to open the file by O_DIRECT for block {}",
+                            self.blk_cfg.path_on_host
+                        )
                     })?
             } else {
                 OpenOptions::new()
@@ -728,13 +781,16 @@ impl VirtioDevice for Block {
                     .write(!self.blk_cfg.read_only)
                     .open(&self.blk_cfg.path_on_host)
                     .chain_err(|| {
-                        format!("failed to open the file {}", self.blk_cfg.path_on_host)
+                        format!(
+                            "failed to open the file for block {}",
+                            self.blk_cfg.path_on_host
+                        )
                     })?
             };
 
             disk_size = file
                 .seek(SeekFrom::End(0))
-                .chain_err(|| "Failed to seek the end")? as u64;
+                .chain_err(|| "Failed to seek the end for block")? as u64;
 
             self.disk_image = Some(file);
         } else {
