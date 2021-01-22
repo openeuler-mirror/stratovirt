@@ -230,7 +230,7 @@ impl VhostBackend {
                 .write(true)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
                 .open(path)
-                .chain_err(|| format!("Failed to open {}.", path))?,
+                .chain_err(|| format!("Failed to open {} for vhost backend.", path))?,
         };
         let mem_info = VhostMemInfo::new();
         mem_space.register_listener(Box::new(mem_info.clone()))?;
@@ -412,8 +412,8 @@ impl EventNotifierHelper for VhostIoHandler {
                 let v = v.lock().unwrap();
                 v.interrupt_status
                     .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-                if v.interrupt_evt.write(1).is_err() {
-                    error!("Failed to write interrupt eventfd for vhost");
+                if let Err(e) = v.interrupt_evt.write(1) {
+                    error!("Failed to write interrupt eventfd for vhost {}", e);
                 }
 
                 None as Option<Vec<EventNotifier>>
