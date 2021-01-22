@@ -18,7 +18,8 @@ use machine_manager::config::{BootSource, ConfigCheck};
 
 use super::super::virtio::{Block, Net};
 use super::{
-    errors::Result, DeviceResource, DeviceType, MmioDevice, MmioDeviceOps, VirtioMmioDevice,
+    errors::{Result, ResultExt},
+    DeviceResource, DeviceType, MmioDevice, MmioDeviceOps, VirtioMmioDevice,
 };
 use crate::{LayoutEntryType, MEM_LAYOUT};
 
@@ -193,7 +194,13 @@ impl Bus {
         };
 
         if resource.irq > IRQ_RANGE.1 {
-            bail!("irq {} exceed max value {}", resource.irq, IRQ_RANGE.1);
+            bail!(
+                "irq {} exceed max value {}, index: {} type: {:?}",
+                resource.irq,
+                IRQ_RANGE.1,
+                index,
+                device_type
+            );
         }
 
         let mmio_dev = MmioDevice::new(device, resource);
@@ -236,7 +243,11 @@ impl Bus {
             DeviceType::BLK => {
                 let index = self.replaceable_info.block_count;
                 if index >= MMIO_REPLACEABLE_BLK_NR {
-                    return Err("Index is out of bounds".into());
+                    bail!(
+                        "Index {} is out of bounds {} for block to fill replaceable device",
+                        index,
+                        MMIO_REPLACEABLE_BLK_NR,
+                    );
                 }
                 self.replaceable_info.block_count += 1;
                 index
@@ -244,13 +255,18 @@ impl Bus {
             DeviceType::NET => {
                 let index = self.replaceable_info.net_count + MMIO_REPLACEABLE_BLK_NR;
                 if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
-                    return Err("Index is out of bounds".into());
+                    bail!(
+                        "Index {} is out of bounds {} for net to fill replaceable device",
+                        index,
+                        MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR,
+                    );
                 }
                 self.replaceable_info.net_count += 1;
                 index
             }
             _ => {
-                return Err("Device Type is unsupported".into());
+                bail!("Unsupported replaceable device type to fill replaceable device, id: {} type: {:?}",
+                    id, dev_type);
             }
         };
 
@@ -283,7 +299,12 @@ impl Bus {
     ) -> Result<()> {
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         if configs_lock.len() >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
-            bail!("Replaceable configs size extend the max size.");
+            bail!(
+                "The size {} of replaceable configs extend the max size {}, id {}.",
+                configs_lock.len(),
+                MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR,
+                id,
+            );
         }
 
         for config in configs_lock.iter() {
@@ -313,16 +334,28 @@ impl Bus {
     pub fn add_replaceable_device(&self, id: &str, driver: &str, slot: usize) -> Result<()> {
         let index = if driver.contains("net") {
             if slot >= MMIO_REPLACEABLE_NET_NR {
-                bail!("Index is out of bounds");
+                bail!(
+                    "Index {} is out of bounds {} for net to add replaceable device",
+                    slot,
+                    MMIO_REPLACEABLE_NET_NR
+                );
             }
             slot + MMIO_REPLACEABLE_BLK_NR
         } else if driver.contains("blk") {
             if slot >= MMIO_REPLACEABLE_BLK_NR {
-                bail!("Index is out of bounds");
+                bail!(
+                    "Index {} is out of bounds {} for block to add replaceable device",
+                    slot,
+                    MMIO_REPLACEABLE_BLK_NR
+                );
             }
             slot
         } else {
-            bail!("Unsupported replaceable device type, type: {}", driver);
+            bail!(
+                "Unsupported replaceable device type to add replaceable device, id: {} driver: {}",
+                id,
+                driver,
+            );
         };
 
         let configs_lock = self.replaceable_info.configs.lock().unwrap();
@@ -335,14 +368,22 @@ impl Bus {
         }
 
         if dev_config.is_none() {
-            bail!("Failed to find the configuration {} ", id);
+            bail!(
+                "Failed to find the configuration to add replaceable device, id: {} driver: {}",
+                id,
+                driver
+            );
         }
 
         // find the replaceable device and replace it
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
         if let Some(device_info) = replaceable_devices.get_mut(index) {
             if device_info.used {
-                bail!("The slot{} is used, {}", slot, id);
+                bail!(
+                    "The slot {} is already used for adding replaceable device, {}",
+                    slot,
+                    id
+                );
             } else {
                 device_info.id = id.to_string();
                 device_info.used = true;
@@ -397,13 +438,15 @@ impl Bus {
         #[cfg(target_arch = "x86_64")] sys_io: Arc<AddressSpace>,
     ) -> Result<()> {
         for device in &self.devices {
-            device.realize(
-                vm_fd,
-                &bs,
-                &sys_mem,
-                #[cfg(target_arch = "x86_64")]
-                sys_io.clone(),
-            )?;
+            device
+                .realize(
+                    vm_fd,
+                    &bs,
+                    &sys_mem,
+                    #[cfg(target_arch = "x86_64")]
+                    sys_io.clone(),
+                )
+                .chain_err(|| "Failed to realize mmio device")?;
         }
 
         Ok(())

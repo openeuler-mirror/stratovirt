@@ -55,10 +55,10 @@ pub mod errors {
         }
     }
 }
-use self::errors::Result;
+use self::errors::{Result, ResultExt};
 
 /// The different type of MMIO Device.
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Debug, Clone, Eq, PartialEq)]
 pub enum DeviceType {
     NET,
     BLK,
@@ -134,17 +134,38 @@ impl MmioDevice {
         sys_mem: &Arc<AddressSpace>,
         #[cfg(target_arch = "x86_64")] sys_io: Arc<AddressSpace>,
     ) -> Result<()> {
-        self.device.lock().unwrap().realize(vm_fd, *self.resource)?;
+        let dev_type = self.resource.dev_type;
+        self.device
+            .lock()
+            .unwrap()
+            .realize(vm_fd, *self.resource)
+            .chain_err(|| format!("Failed to realize device {:?}", dev_type))?;
 
         let region = Region::init_io_region(self.resource.size, self.region_ops.clone());
         region.set_ioeventfds(&self.device.lock().unwrap().ioeventfds());
-        match self.resource.dev_type {
+        match dev_type {
             DeviceType::SERIAL if cfg!(target_arch = "x86_64") => {
                 #[cfg(target_arch = "x86_64")]
-                sys_io.root().add_subregion(region, self.resource.addr)?;
+                sys_io
+                    .root()
+                    .add_subregion(region, self.resource.addr)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to add subregion for io space, type {:?}, addr: 0x{:X}",
+                            dev_type, self.resource.addr,
+                        )
+                    })?;
             }
             _ => {
-                sys_mem.root().add_subregion(region, self.resource.addr)?;
+                sys_mem
+                    .root()
+                    .add_subregion(region, self.resource.addr)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to add subregion for mem space, type {:?}, addr: 0x{:X}",
+                            dev_type, self.resource.addr,
+                        )
+                    })?;
             }
         }
 

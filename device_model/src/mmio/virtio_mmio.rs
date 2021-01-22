@@ -150,15 +150,27 @@ impl VirtioMmioCommonConfig {
         self.device_status & (set | clr) == set
     }
 
+    /// Get the status of virtio device
+    fn get_device_status(&self) -> u32 {
+        self.device_status
+    }
+
     /// Get mutable QueueConfig structure of virtio device.
     fn get_mut_queue_config(&mut self) -> Result<&mut QueueConfig> {
         if self.check_device_status(
             CONFIG_STATUS_FEATURES_OK,
             CONFIG_STATUS_DRIVER_OK | CONFIG_STATUS_FAILED,
         ) {
+            let queue_select = self.queue_select;
             self.queues_config
-                .get_mut(self.queue_select as usize)
-                .ok_or_else(|| "Mmio-reg queue_select overflows".into())
+                .get_mut(queue_select as usize)
+                .ok_or_else(|| {
+                    format!(
+                        "Mmio-reg queue_select {} overflows for mutable queue config",
+                        queue_select,
+                    )
+                    .into()
+                })
         } else {
             Err(ErrorKind::DeviceStatus(self.device_status).into())
         }
@@ -166,9 +178,16 @@ impl VirtioMmioCommonConfig {
 
     /// Get immutable QueueConfig structure of virtio device.
     fn get_queue_config(&self) -> Result<&QueueConfig> {
+        let queue_select = self.queue_select;
         self.queues_config
-            .get(self.queue_select as usize)
-            .ok_or_else(|| "Mmio-reg queue_select overflows".into())
+            .get(queue_select as usize)
+            .ok_or_else(|| {
+                format!(
+                    "Mmio-reg queue_select overflows {} for immutable queue config",
+                    queue_select,
+                )
+                .into()
+            })
     }
 
     /// Read data from the common config of virtio device.
@@ -361,31 +380,41 @@ impl DeviceOps for VirtioMmioDevice {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
             0x00..=0xff if data.len() == 4 => {
-                let value =
-                    if let Ok(v) = self.common_config.read_common_config(&self.device, offset) {
-                        v
-                    } else {
-                        error!("Failed to read mmio register");
+                let value = match self.common_config.read_common_config(&self.device, offset) {
+                    Ok(v) => v,
+                    Err(ref e) => {
+                        error!(
+                            "Failed to read mmio register {}, type: {}, {}",
+                            offset,
+                            self.device.lock().unwrap().device_type(),
+                            error_chain::ChainedError::display_chain(e),
+                        );
                         return false;
-                    };
+                    }
+                };
                 LittleEndian::write_u32(data, value);
             }
             0x100..=0xfff => {
-                if self
+                if let Err(ref e) = self
                     .device
                     .lock()
                     .unwrap()
                     .read_config(offset as u64 - 0x100, data)
-                    .is_err()
                 {
-                    error!("Failed to read virtio-dev config space");
+                    error!(
+                        "Failed to read virtio-dev config space {} type: {} {}",
+                        offset as u64 - 0x100,
+                        self.device.lock().unwrap().device_type(),
+                        error_chain::ChainedError::display_chain(e),
+                    );
                     return false;
                 }
             }
             _ => {
                 warn!(
-                    "Failed to read mmio register: overflows, offset is 0x{:x}",
+                    "Failed to read mmio register: overflows, offset is 0x{:x}, type: {}",
                     offset,
+                    self.device.lock().unwrap().device_type(),
                 );
             }
         };
@@ -397,16 +426,18 @@ impl DeviceOps for VirtioMmioDevice {
         match offset {
             0x00..=0xff if data.len() == 4 => {
                 let value = LittleEndian::read_u32(data);
-                match self
-                    .common_config
-                    .write_common_config(&self.device, offset, value)
+                if let Err(ref e) =
+                    self.common_config
+                        .write_common_config(&self.device, offset, value)
                 {
-                    Ok(_) => {}
-                    Err(err) => {
-                        error!("Failed to write mmio register, err: {}", err);
-                        return false;
-                    }
-                };
+                    error!(
+                        "Failed to write mmio register {}, type: {}, {}",
+                        offset,
+                        self.device.lock().unwrap().device_type(),
+                        error_chain::ChainedError::display_chain(e),
+                    );
+                    return false;
+                }
 
                 if self.common_config.check_device_status(
                     CONFIG_STATUS_ACKNOWLEDGE
@@ -417,11 +448,11 @@ impl DeviceOps for VirtioMmioDevice {
                 ) && !self.device_activated
                 {
                     let res = self.activate().map(|_| self.device_activated = true);
-                    if let Err(e) = res {
+                    if let Err(ref e) = res {
                         error!(
-                            "Failed to activate dev, type: {:#?}, err: {:#?}",
+                            "Failed to activate dev, type: {}, {}",
                             self.device.lock().unwrap().device_type(),
-                            e
+                            error_chain::ChainedError::display_chain(e),
                         );
                     }
                 }
@@ -431,25 +462,33 @@ impl DeviceOps for VirtioMmioDevice {
                     .common_config
                     .check_device_status(CONFIG_STATUS_DRIVER, CONFIG_STATUS_FAILED)
                 {
-                    if self
+                    if let Err(ref e) = self
                         .device
                         .lock()
                         .unwrap()
                         .write_config(offset as u64 - 0x100, data)
-                        .is_err()
                     {
-                        error!("Failed to write virtio-dev config space");
+                        error!(
+                            "Failed to write virtio-dev config space {}, type: {}, {}",
+                            offset as u64 - 0x100,
+                            self.device.lock().unwrap().device_type(),
+                            error_chain::ChainedError::display_chain(e),
+                        );
                         return false;
                     }
                 } else {
-                    error!("Failed to write virtio-dev config space: driver is not ready");
+                    error!("Failed to write virtio-dev config space: driver is not ready 0x{:X}, type: {}",
+                        self.common_config.get_device_status(),
+                        self.device.lock().unwrap().device_type(),
+                    );
                     return false;
                 }
             }
             _ => {
                 warn!(
-                    "Failed to write mmio register: overflows, offset is 0x{:x}",
+                    "Failed to write mmio register: overflows, offset is 0x{:x} type: {}",
                     offset,
+                    self.device.lock().unwrap().device_type(),
                 );
                 return false;
             }
@@ -461,15 +500,22 @@ impl DeviceOps for VirtioMmioDevice {
 impl MmioDeviceOps for VirtioMmioDevice {
     /// Realize this MMIO device for VM.
     fn realize(&mut self, vm_fd: &VmFd, resource: DeviceResource) -> Result<()> {
+        let device_type = self.device.lock().unwrap().device_type();
         vm_fd
             .register_irqfd(&self.interrupt_evt, resource.irq)
-            .chain_err(|| "Failed to register irqfd")?;
+            .chain_err(|| {
+                format!(
+                    "Failed to register irqfd for virtio mmio device, irq: {}, type: {}",
+                    resource.irq, device_type,
+                )
+            })?;
 
-        self.device
-            .lock()
-            .unwrap()
-            .realize()
-            .chain_err(|| "Failed to realize device for virtio mmio device")?;
+        self.device.lock().unwrap().realize().chain_err(|| {
+            format!(
+                "Failed to realize device for virtio mmio device, type: {}",
+                device_type,
+            )
+        })?;
 
         Ok(())
     }
@@ -486,11 +532,17 @@ impl MmioDeviceOps for VirtioMmioDevice {
 
     /// Update the low level config of MMIO device.
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
+        let device_type = self.device.lock().unwrap().device_type();
         self.device
             .lock()
             .unwrap()
             .update_config(dev_config)
-            .chain_err(|| "Failed to update configuration")?;
+            .chain_err(|| {
+                format!(
+                    "Failed to update configuration, device type: {}",
+                    device_type
+                )
+            })?;
         Ok(())
     }
 
