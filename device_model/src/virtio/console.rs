@@ -111,22 +111,30 @@ impl ConsoleHandler {
                     Ok(_) => {
                         write_count = allow_write_count;
                     }
-                    Err(e) => {
-                        error!("Failed to write slice: {:?}", e);
+                    Err(ref e) => {
+                        error!(
+                            "Failed to write slice for input console: addr {:X} len {} {}",
+                            elem_iov.addr.0,
+                            source_slice.len(),
+                            error_chain::ChainedError::display_chain(e)
+                        );
                         break;
                     }
                 }
             }
 
-            match queue_lock
-                .vring
-                .add_used(&self.mem_space, elem.index, write_count as u32)
+            if let Err(ref e) =
+                queue_lock
+                    .vring
+                    .add_used(&self.mem_space, elem.index, write_count as u32)
             {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Failed to add used ring {}: {:?}", elem.index, e);
-                    break;
-                }
+                error!(
+                    "Failed to add used ring for input console, index: {} len: {} {}",
+                    elem.index,
+                    write_count,
+                    error_chain::ChainedError::display_chain(e)
+                );
+                break;
             }
 
             if write_count >= count {
@@ -165,8 +173,13 @@ impl ConsoleHandler {
                     Ok(_) => {
                         read_count = allow_read_count;
                     }
-                    Err(e) => {
-                        error!("Failed to read buffer: {:?}", e);
+                    Err(ref e) => {
+                        error!(
+                            "Failed to read buffer for output console: addr: {:X}, len: {} {}",
+                            elem_iov.addr.0,
+                            allow_read_count - read_count,
+                            error_chain::ChainedError::display_chain(e)
+                        );
                         break;
                     }
                 };
@@ -178,8 +191,13 @@ impl ConsoleHandler {
                 };
             }
 
-            if let Err(e) = queue_lock.vring.add_used(&self.mem_space, elem.index, 0) {
-                error!("Failed to add used ring {}: {:?}", elem.index, e);
+            if let Err(ref e) = queue_lock.vring.add_used(&self.mem_space, elem.index, 0) {
+                error!(
+                    "Failed to add used ring for output console, index: {} len: {} {}",
+                    elem.index,
+                    0,
+                    error_chain::ChainedError::display_chain(e)
+                );
                 break;
             }
         }
@@ -290,10 +308,10 @@ impl Console {
     pub fn new(console_cfg: ConsoleConfig) -> Self {
         let path = console_cfg.socket_path;
         let listener = UnixListener::bind(path.as_str())
-            .unwrap_or_else(|_| panic!("Failed to bind socket {}", path));
+            .unwrap_or_else(|_| panic!("Failed to bind socket for console {}", path));
 
         limit_permission(path.as_str())
-            .unwrap_or_else(|_| panic!("Failed to change file permission for {}", path));
+            .unwrap_or_else(|_| panic!("Failed to change file permission for console {}", path));
 
         Console {
             config: Arc::new(Mutex::new(VirtioConsoleConfig::new())),
@@ -337,7 +355,7 @@ impl VirtioDevice for Console {
         let mut v = write_u32(value, page);
         let unrequested_features = v & !self.device_features;
         if unrequested_features != 0 {
-            warn!("Received acknowledge request with unknown feature.");
+            warn!("Received acknowledge request with unknown feature for console.");
             v &= !unrequested_features;
         }
         self.driver_features |= v;
@@ -361,7 +379,7 @@ impl VirtioDevice for Console {
 
     /// Write data to config from guest.
     fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
-        bail!("No device config space")
+        bail!("Device config space for console is not supported")
     }
 
     /// Activate the virtio device, this function is called by vcpu thread when frontend
