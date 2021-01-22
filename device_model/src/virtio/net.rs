@@ -162,7 +162,7 @@ impl NetIoHandler {
             .unwrap()
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
-            .chain_err(|| "Failed to pop avail ring")?;
+            .chain_err(|| "Failed to pop avail ring for net rx")?;
 
         let mut write_count = 0;
         for elem_iov in elem.in_iovec.iter() {
@@ -178,8 +178,11 @@ impl NetIoHandler {
                 Ok(_) => {
                     write_count = allow_write_count;
                 }
-                Err(e) => {
-                    error!("Failed to write slice: err {:?}", e);
+                Err(ref e) => {
+                    error!(
+                        "Failed to write slice for net rx: {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
                     break;
                 }
             }
@@ -195,12 +198,17 @@ impl NetIoHandler {
             .unwrap()
             .vring
             .add_used(&self.mem_space, elem.index, write_count as u32)
-            .chain_err(|| format!("Failed to add used ring {}", elem.index))?;
+            .chain_err(|| {
+                format!(
+                    "Failed to add used ring for net rx, index: {}, len: {}",
+                    elem.index, write_count
+                )
+            })?;
         self.rx.need_irqs = true;
 
         if write_count < self.rx.bytes_read {
             bail!(
-                "The length {} which is written is less than the length {} of buffer which is read",
+                "The length {} which is written is less than the length {} of buffer which is read for net rx",
                 write_count,
                 self.rx.bytes_read
             );
@@ -238,8 +246,11 @@ impl NetIoHandler {
                 Err(e) => {
                     match e.raw_os_error() {
                         Some(err) if err == libc::EAGAIN => (),
+                        Some(err) => {
+                            bail!("Net rx: Failed to read tap, os error: {}", err);
+                        }
                         _ => {
-                            bail!("Failed to read tap");
+                            bail!("Net rx: Failed to read tap and can't get os error code");
                         }
                     };
                     break;
@@ -275,7 +286,7 @@ impl NetIoHandler {
                         elem_iov.addr,
                         (alloc_read_count - read_count) as u64,
                     )
-                    .chain_err(|| "Failed to read buffer for transmit")?;
+                    .chain_err(|| "Net tx：Failed to read buffer for transmit")?;
 
                 read_count = alloc_read_count;
             }
@@ -379,10 +390,12 @@ impl EventNotifierHelper for NetIoHandler {
             let mut locked_net_io = cloned_net_io.lock().unwrap();
             read_fd(fd);
             if locked_net_io.rx.unfinished_frame {
-                locked_net_io
-                    .handle_last_frame_rx()
-                    .map_err(|e| error!("Failed to handle last frame(rx), {}", e))
-                    .ok();
+                if let Err(ref e) = locked_net_io.handle_last_frame_rx() {
+                    error!(
+                        "Failed to handle last frame(rx event) for net, {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
+                }
             }
             None
         });
@@ -398,12 +411,12 @@ impl EventNotifierHelper for NetIoHandler {
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            cloned_net_io
-                .lock()
-                .unwrap()
-                .handle_tx()
-                .map_err(|e| error!("Failed to handle tx, {}", e))
-                .ok();
+            if let Err(ref e) = cloned_net_io.lock().unwrap().handle_tx() {
+                error!(
+                    "Failed to handle tx(tx event) for net, {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
+            }
             None
         });
         let tx_fd = locked_net_io.tx.queue_evt.as_raw_fd();
@@ -420,16 +433,19 @@ impl EventNotifierHelper for NetIoHandler {
             let handler: Box<NotifierCallback> = Box::new(move |_, _| {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
                 if locked_net_io.rx.unfinished_frame {
-                    locked_net_io
-                        .handle_last_frame_rx()
-                        .map_err(|e| error!("Failed to handle last frame(rx), {}", e))
-                        .ok();
-                } else {
-                    locked_net_io
-                        .handle_rx()
-                        .map_err(|e| error!("Failed to handle rx, {}", e))
-                        .ok();
+                    if let Err(ref e) = locked_net_io.handle_last_frame_rx() {
+                        error!(
+                            "Failed to handle last frame(tap event), {}",
+                            error_chain::ChainedError::display_chain(e)
+                        );
+                    }
+                } else if let Err(ref e) = locked_net_io.handle_rx() {
+                    error!(
+                        "Failed to handle rx(tap event), {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
                 }
+
                 None
             });
             let tap_fd = tap.as_raw_fd();
