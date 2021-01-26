@@ -25,6 +25,7 @@ pub mod arg_parser;
 pub mod byte_code;
 pub mod checksum;
 pub mod daemonize;
+#[cfg(target_arch = "aarch64")]
 pub mod device_tree;
 pub mod epoll_context;
 mod link_list;
