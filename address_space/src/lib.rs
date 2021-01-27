@@ -69,12 +69,6 @@
 //! }
 //! ```
 
-extern crate kvm_bindings;
-extern crate kvm_ioctls;
-extern crate libc;
-extern crate machine_manager;
-extern crate util;
-extern crate vmm_sys_util;
 #[macro_use]
 extern crate error_chain;
 #[macro_use]
@@ -86,8 +80,8 @@ mod host_mmap;
 mod listener;
 mod region;
 
+pub use crate::address_space::AddressSpace;
 pub use address::{AddressRange, GuestAddress};
-pub use address_space::AddressSpace;
 pub use host_mmap::{create_host_mmaps, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]
 pub use listener::KvmIoListener;
