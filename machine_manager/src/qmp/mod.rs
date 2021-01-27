@@ -689,4 +689,41 @@ mod tests {
         recover_unix_socket_environment("07");
         drop(socket);
     }
+
+    #[test]
+    fn test_create_error_response() {
+        let strange_msg = "!?/.,、。’】=  -~1！@#￥%……&*（）——+".to_string();
+
+        let err_cls = schema::QmpErrorClass::GenericError(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "GenericError".to_string());
+        let qmp_err = schema::QmpErrorClass::GenericError(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
+
+        let err_cls = schema::QmpErrorClass::CommandNotFound(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "CommandNotFound".to_string());
+        let qmp_err = schema::QmpErrorClass::CommandNotFound(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
+
+        let err_cls = schema::QmpErrorClass::DeviceNotFound(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "DeviceNotFound".to_string());
+        let qmp_err = schema::QmpErrorClass::DeviceNotFound(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
+
+        let err_cls = schema::QmpErrorClass::KVMMissingCap(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "KVMMissingCap".to_string());
+        let qmp_err = schema::QmpErrorClass::KVMMissingCap(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
+    }
 }
