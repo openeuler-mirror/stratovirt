@@ -13,9 +13,11 @@
 extern crate serde;
 extern crate serde_json;
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::errors::{ErrorKind, Result, ResultExt};
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 use util::num_ops::round_down;
 
@@ -27,6 +29,22 @@ const MAX_MEMSIZE: u64 = 549_755_813_888;
 const MIN_MEMSIZE: u64 = 134_217_728;
 const M: u64 = 1024 * 1024;
 const G: u64 = 1024 * 1024 * 1024;
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+pub enum MachineType {
+    MicroVm,
+}
+
+impl FromStr for MachineType {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "microvm" => Ok(MachineType::MicroVm),
+            _ => Err(()),
+        }
+    }
+}
 
 /// Config that contains machine's memory information config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,7 +70,7 @@ impl Default for MachineMemConfig {
 /// Contains some basic Vm config about cpu, memory, name.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineConfig {
-    pub mach_type: String,
+    pub mach_type: MachineType,
     pub nr_cpus: u8,
     pub mem_config: MachineMemConfig,
 }
@@ -61,7 +79,7 @@ impl Default for MachineConfig {
     /// Set default config for `machine-config`.
     fn default() -> Self {
         MachineConfig {
-            mach_type: "MicroVm".to_string(),
+            mach_type: MachineType::MicroVm,
             nr_cpus: DEFAULT_CPUS,
             mem_config: MachineMemConfig::default(),
         }
@@ -77,7 +95,10 @@ impl MachineConfig {
     pub fn from_value(value: &serde_json::Value) -> Self {
         let mut machine_config = MachineConfig::default();
         if value.get("type") != None {
-            machine_config.mach_type = value["type"].to_string();
+            machine_config.mach_type = value["type"]
+                .to_string()
+                .parse::<MachineType>()
+                .expect("Unrecognized machine type");
         }
         if value.get("vcpu_count") != None {
             machine_config.nr_cpus = value["vcpu_count"].to_string().parse::<u8>().unwrap();
@@ -127,13 +148,23 @@ impl VmConfig {
     pub fn update_machine(&mut self, mach_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new();
         cmd_parser
+            .push("")
             .push("type")
             .push("dump-guest-core")
             .push("mem-share");
 
         cmd_parser.parse(mach_config)?;
 
-        if let Some(mach_type) = cmd_parser.get_value::<String>("type")? {
+        if let Some(mach_type) = cmd_parser
+            .get_value::<MachineType>("")
+            .chain_err(|| "Unrecognized machine type")?
+        {
+            self.machine_config.mach_type = mach_type;
+        }
+        if let Some(mach_type) = cmd_parser
+            .get_value::<MachineType>("type")
+            .chain_err(|| "Unrecognized machine type")?
+        {
             self.machine_config.mach_type = mach_type;
         }
         if let Some(dump_guest) = cmd_parser.get_value::<ExBool>("dump-guest-core")? {
@@ -370,7 +401,7 @@ mod tests {
             dump_guest_core: false,
         };
         let mut machine_config = MachineConfig {
-            mach_type: String::from("MicroVm"),
+            mach_type: MachineType::MicroVm,
             nr_cpus: MIN_NR_CPUS,
             mem_config: memory_config,
         };

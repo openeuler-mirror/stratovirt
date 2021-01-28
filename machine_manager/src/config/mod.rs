@@ -281,7 +281,7 @@ impl CmdParser {
             if param_item.starts_with('=') || cmd_param.ends_with('=') {
                 return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
             }
-            let param = param_item.split('=').collect::<Vec<&str>>();
+            let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
             let (param_key, param_value) = match param.len() {
                 1 => ("", param[0]),
                 2 => (param[0], param[1]),
