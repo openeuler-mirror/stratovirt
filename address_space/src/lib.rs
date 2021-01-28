@@ -116,8 +116,8 @@ pub mod errors {
             Mmap {
                 display("Failed to mmap")
             }
-            IoAccess(offset: u64) {
-                display("Access io region failed, offset is 0x{:X}", offset)
+            IoAccess(base: u64, offset: u64, count: u64) {
+                display("Failed to access IO-type region, region base 0x{:X}, offset 0x{:X}, size 0x{:X}", base, offset, count)
             }
             RegionType(t: crate::RegionType) {
                 display("Wrong region type, {:#?}", t)
