@@ -315,7 +315,7 @@ impl LightMachine {
                 vcpu_id,
                 Arc::new(Mutex::new(arch_cpu)),
                 cpu_vm.clone(),
-            )?;
+            );
 
             let mut vcpus = vm.cpus.lock().unwrap();
             let newcpu = Arc::new(cpu);
