@@ -94,12 +94,15 @@ pub mod errors {
         foreign_links {
             Io(std::io::Error);
         }
-        links {
-            KvmListener(crate::listener::errors::Error, crate::listener::errors::ErrorKind);
-        }
         errors {
+            ListenerRequest(req_type: crate::listener::ListenerReqType) {
+                display("Failed to call listener, request type is {:#?}", req_type)
+            }
             IoEventFd {
                 display("Failed to clone EventFd")
+            }
+            AddrAlignUp(addr: u64, align: u64) {
+                display("Failed to align-up address, overflows: addr 0x{:X}, align 0x{:X}", addr, align)
             }
             RegionNotFound(addr: u64) {
                 display("Failed to find matched region, addr 0x{:X}", addr)
@@ -115,6 +118,15 @@ pub mod errors {
             }
             RegionType(t: crate::RegionType) {
                 display("Wrong region type, {:#?}", t)
+            }
+            NoAvailKvmSlot(cnt: usize) {
+                display("No available kvm_mem_slot, total count is {}", cnt)
+            }
+            NoMatchedKvmSlot(addr: u64, sz: u64) {
+                display("Failed to find matched kvm_mem_slot, addr 0x{:X}, size 0x{:X}", addr, sz)
+            }
+            KvmSlotOverlap(add: (u64, u64), exist: (u64, u64)) {
+                display("Added KVM mem range (0x{:X}, 0x{:X}) overlaps with exist one (0x{:X}, 0x{:X})", add.0, add.1, exist.0, exist.1)
             }
         }
     }
