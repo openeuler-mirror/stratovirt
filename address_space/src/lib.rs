@@ -98,32 +98,20 @@ pub mod errors {
             KvmListener(crate::listener::errors::Error, crate::listener::errors::ErrorKind);
         }
         errors {
-            RegionOverlap(addr: u64) {
-                display("Region overlap with others, addr {}", addr)
-            }
             IoEventFd {
                 display("Failed to clone EventFd")
             }
-            AddrResource {
-                display("No available address resource in space")
-            }
-            AddrNotAligned(addr: u64) {
-                display("Specified address is not aligned, {}", addr)
-            }
-            AddrInvalid(addr: u64) {
-                display("Failed to find matched region, addr {}", addr)
+            RegionNotFound(addr: u64) {
+                display("Failed to find matched region, addr 0x{:X}", addr)
             }
             Overflow(addr: u64) {
-                display("Address overflows, addr is {}", addr)
-            }
-            FileBackend {
-                display("Exceed file-backend length")
+                display("Address overflows, addr is 0x{:X}", addr)
             }
             Mmap {
                 display("Failed to mmap")
             }
             IoAccess(offset: u64) {
-                display("Access io region failed, offset is {}", offset)
+                display("Access io region failed, offset is 0x{:X}", offset)
             }
             RegionType(t: crate::RegionType) {
                 display("Wrong region type, {:#?}", t)

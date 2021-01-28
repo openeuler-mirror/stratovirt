@@ -308,7 +308,7 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .chain_err(|| ErrorKind::AddrInvalid(addr.raw_value()))?;
+            .chain_err(|| ErrorKind::RegionNotFound(addr.raw_value()))?;
 
         fr.owner.read(
             dst,
@@ -335,7 +335,7 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .chain_err(|| ErrorKind::AddrInvalid(addr.raw_value()))?;
+            .chain_err(|| ErrorKind::RegionNotFound(addr.raw_value()))?;
 
         fr.owner.write(
             src,
