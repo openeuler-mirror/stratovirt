@@ -98,6 +98,9 @@ pub mod errors {
             ListenerRequest(req_type: crate::listener::ListenerReqType) {
                 display("Failed to call listener, request type is {:#?}", req_type)
             }
+            UpdateTopology(base: u64, size: u64, reg_ty: crate::RegionType) {
+                display("Failed to update topology, base 0x{:X}, size 0x{:X}, region type is {:#?}", base, size, reg_ty)
+            }
             IoEventFd {
                 display("Failed to clone EventFd")
             }
