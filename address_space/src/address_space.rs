@@ -22,7 +22,7 @@ use crate::{
 
 /// Contain an array of `FlatRange`.
 #[derive(Default, Clone)]
-pub struct FlatView(pub Vec<FlatRange>);
+pub(crate) struct FlatView(pub Vec<FlatRange>);
 
 impl FlatView {
     fn find_flatrange(&self, addr: GuestAddress) -> Option<&FlatRange> {
