@@ -49,31 +49,31 @@ pub mod errors {
             // arg_parser submodule error
             MissingArgument(t: String) {
                 description("The required argument was not provided.")
-                display("Argument '{}' required, but not found.", t)
+                display("Argument '{}' required, but not found. Use \'-h\' or \'-help\' to get usage.", t)
             }
             MissingValue(t: String) {
                 description("A value for args was not provided.")
-                display("The argument '{}' requires a value, but none was supplied.", t)
+                display("The argument '{}' requires a value, but none was supplied. Use \'-h\' or \'-help\' to get usage.", t)
             }
             IllegelValue(t1: String, t2: String) {
                 description("A value is illegel for args.")
-                display("The value '{}' is illegel for argument '{}'.", t1, t2)
+                display("The value '{}' is illegel for argument '{}'. Use \'-h\' or \'-help\' to get usage.", t1, t2)
             }
             ValueOutOfPossible(t1: String, t2: String) {
                 description("A value for args is out of possile values.")
-                display("The value of argument '{}' must be in '{}'.", t1, t2)
+                display("The value of argument '{}' must be in '{}'. Use \'-h\' or \'-help\' to get usage.", t1, t2)
             }
             UnexpectedArguments(t: String) {
                 description("The provided argument was not expected.")
-                display("Found argument '{}' which wasn't expected, or isn't valid in the context.", t)
+                display("Found argument '{}' which wasn't expected, or isn't valid in the context. Use \'-h\' or \'-help\' to get usage.", t)
             }
             DuplicateArgument(t: String) {
                 description("The argument was provided more than once.")
-                display("The argument '{}' was provided more than once.", t)
+                display("The argument '{}' was provided more than once. Use \'-h\' or \'-help\' to get usage.", t)
             }
             DuplicateValue(t: String) {
                 description("The argument value was provided more than once.")
-                display("The argument '{}' only need one value.", t)
+                display("The argument '{}' only need one value. Use \'-h\' or \'-help\' to get usage.", t)
             }
             // daemonize submodule error
             DaemonFork {
