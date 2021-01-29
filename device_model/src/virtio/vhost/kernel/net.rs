@@ -312,3 +312,112 @@ impl VirtioDevice for Net {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::*;
+    pub use super::*;
+    pub use address_space::*;
+    pub use std::fs::File;
+
+    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
+
+    fn vhost_address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36);
+        let sys_space = AddressSpace::new(root).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
+
+    #[test]
+    fn test_vhost_net_realize() {
+        let json = r#"
+        [{
+            "iface_id": "eth1",
+            "host_dev_name": "tap1",
+            "mac": "1F:2C:3E:4A:5B:6D",
+            "vhost_type": "vhost-kernel",
+            "tap_fd": 4,
+            "vhost_fd": 5
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let confs = NetworkInterfaceConfig::from_value(&value);
+        let vhost_net_confs = confs.unwrap();
+        let vhost_net_conf = vhost_net_confs[0].clone();
+        let vhost_net_space = vhost_address_space_init();
+        let mut vhost_net = Net::new(vhost_net_conf, vhost_net_space.clone());
+        // the tap_fd and vhost_fd attribute of vhost-net can't be assigned.
+        assert_eq!(vhost_net.realize().is_ok(), false);
+
+        let json = r#"
+        [{
+            "iface_id": "eth0",
+            "host_dev_name": "tap0",
+            "mac": "1A:2B:3C:4D:5E:6F",
+            "vhost_type": "vhost-kernel"
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let confs = NetworkInterfaceConfig::from_value(&value);
+        let vhost_net_confs = confs.unwrap();
+        let vhost_net_conf = vhost_net_confs[0].clone();
+        let mut vhost_net = Net::new(vhost_net_conf, vhost_net_space.clone());
+
+        // if fail to open vhost-net device, no need to continue.
+        if let Err(_e) = File::open("/dev/vhost-net") {
+            return;
+        }
+        // without assigned value of tap_fd and vhost_fd,
+        // vhost-net device can be realized successfully.
+        assert_eq!(vhost_net.realize().is_ok(), true);
+
+        // test for get/set_driver_features
+        vhost_net.device_features = 0;
+        let page: u32 = 0x0;
+        let value: u32 = 0xff;
+        vhost_net.set_driver_features(page, value);
+        let new_page = vhost_net.get_device_features(page);
+        assert_eq!(new_page, page);
+
+        vhost_net.device_features = 0xffff_ffff_ffff_ffff;
+        let page: u32 = 0x0;
+        let value: u32 = 0xff;
+        vhost_net.set_driver_features(page, value);
+        let new_page = vhost_net.get_device_features(page);
+        assert_ne!(new_page, page);
+
+        // test for read/write_config
+        let device_config = vhost_net.device_config.as_bytes();
+        let len = device_config.len() as u64;
+
+        let offset: u64 = 0;
+        let data: Vec<u8> = vec![1; len as usize];
+        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), true);
+
+        let mut read_data: Vec<u8> = vec![0; len as usize];
+        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), true);
+        assert_eq!(read_data, data);
+
+        let offset: u64 = 1;
+        let data: Vec<u8> = vec![1; len as usize];
+        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), false);
+
+        let offset: u64 = len + 1;
+        let mut read_data: Vec<u8> = vec![0; len as usize];
+        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), false);
+
+        let offset: u64 = len - 1;
+        let mut read_data: Vec<u8> = vec![0; len as usize];
+        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), true);
+    }
+}
