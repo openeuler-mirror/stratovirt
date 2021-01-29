@@ -14,11 +14,13 @@ use std::fs::File;
 use std::io::Read;
 
 use error_chain::bail;
-use machine_manager::config::VmConfig;
-use machine_manager::socket::SocketType;
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
-use crate::errors::{Result, ResultExt};
+use crate::{
+    config::VmConfig,
+    errors::{Result, ResultExt},
+    socket::SocketType,
+};
 
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");

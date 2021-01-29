@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::config::NetworkInterfaceConfig;
+use machine_manager::{config::NetworkInterfaceConfig, main_loop::MainLoop};
 use util::byte_code::ByteCode;
 use util::epoll_context::EventNotifierHelper;
 use util::num_ops::{read_u32, write_u32};
@@ -26,7 +26,6 @@ use util::tap::Tap;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
-use super::super::super::super::micro_vm::main_loop::MainLoop;
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::super::{
     net::{build_device_config_space, create_tap, VirtioNetConfig},

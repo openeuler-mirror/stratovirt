@@ -32,8 +32,6 @@ extern crate boot_loader;
 extern crate machine_manager;
 extern crate util;
 
-pub mod cmdline;
-pub mod main_loop;
 pub mod micro_syscall;
 
 use std::marker::{Send, Sync};
@@ -53,13 +51,16 @@ use vmm_sys_util::terminal::Terminal;
 use address_space::KvmIoListener;
 use address_space::{create_host_mmaps, AddressSpace, GuestAddress, KvmMemoryListener, Region};
 use boot_loader::{load_kernel, BootLoaderConfig};
-use machine_manager::config::{
-    BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig, VmConfig,
-    VsockConfig,
-};
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle,
+};
+use machine_manager::{
+    config::{
+        BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig, VmConfig,
+        VsockConfig,
+    },
+    main_loop::MainLoop,
 };
 #[cfg(feature = "qmp")]
 use machine_manager::{qmp, qmp::qmp_schema as schema, qmp::QmpChannel};
@@ -79,7 +80,6 @@ use crate::interrupt_controller::{InterruptController, InterruptControllerConfig
 use crate::legacy::PL031;
 #[cfg(target_arch = "aarch64")]
 use crate::mmio::DeviceResource;
-use crate::MainLoop;
 use crate::{
     legacy::Serial,
     mmio::{Bus, DeviceType, VirtioMmioDevice},

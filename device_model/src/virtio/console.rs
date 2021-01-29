@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::config::ConsoleConfig;
+use machine_manager::{config::ConsoleConfig, main_loop::MainLoop};
 use util::byte_code::ByteCode;
 use util::epoll_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::num_ops::{read_u32, write_u32};
@@ -26,7 +26,6 @@ use util::unix::limit_permission;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::super::micro_vm::main_loop::MainLoop;
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
     Queue, VirtioDevice, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_VRING,

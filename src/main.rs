@@ -22,12 +22,15 @@ use std::sync::{Arc, Mutex};
 
 use vmm_sys_util::terminal::Terminal;
 
-use device_model::cmdline::{check_api_channel, create_args_parser, create_vmconfig};
-use device_model::{register_seccomp, LightMachine, MainLoop};
+use device_model::{register_seccomp, LightMachine};
 use machine_manager::config::VmConfig;
 #[cfg(feature = "qmp")]
 use machine_manager::qmp::QmpChannel;
 use machine_manager::socket::Socket;
+use machine_manager::{
+    cmdline::{check_api_channel, create_args_parser, create_vmconfig},
+    main_loop::MainLoop,
+};
 use util::epoll_context::EventNotifierHelper;
 use util::unix::limit_permission;
 use util::{arg_parser, daemonize::daemonize, logger};
