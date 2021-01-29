@@ -137,7 +137,7 @@ impl KvmMemoryListener {
             }
         }
 
-        Err(ErrorKind::NoAvailKvmSlot(self.slots.lock().unwrap().len()).into())
+        Err(ErrorKind::NoAvailKvmSlot(slots.len()).into())
     }
 
     /// Delete a slot after finding it according to the given arguments.
