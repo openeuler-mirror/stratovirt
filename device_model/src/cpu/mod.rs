@@ -986,4 +986,45 @@ mod tests {
             vec![(196608, vec![4, 3, 0, 0])]
         );
     }
+
+    #[test]
+    fn test_cpu_get_topu() {
+        let test_nr_cpus: u8 = 16;
+        let mask = Vec::with_capacity(test_nr_cpus as usize);
+
+        let microvm_cpu_topo = CpuTopology {
+            sockets: test_nr_cpus,
+            cores: 1,
+            threads: 1,
+            nrcpus: test_nr_cpus,
+            max_cpus: test_nr_cpus,
+            online_mask: Arc::new(Mutex::new(mask)),
+        };
+
+        assert_eq!(microvm_cpu_topo.get_topo(0), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo(4), (4, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo(8), (8, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo(15), (15, 0, 0));
+
+        let test_nr_cpus: u8 = 32;
+        let mask = Vec::with_capacity(test_nr_cpus as usize);
+        let test_cpu_topo = CpuTopology {
+            sockets: 2,
+            cores: 4,
+            threads: 2,
+            nrcpus: test_nr_cpus,
+            max_cpus: test_nr_cpus,
+            online_mask: Arc::new(Mutex::new(mask)),
+        };
+
+        assert_eq!(test_cpu_topo.get_topo(0), (0, 0, 0));
+        assert_eq!(test_cpu_topo.get_topo(4), (0, 2, 0));
+        assert_eq!(test_cpu_topo.get_topo(7), (0, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo(11), (1, 1, 1));
+        assert_eq!(test_cpu_topo.get_topo(15), (1, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo(17), (2, 0, 1));
+        assert_eq!(test_cpu_topo.get_topo(23), (2, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo(29), (3, 2, 1));
+        assert_eq!(test_cpu_topo.get_topo(31), (3, 3, 1));
+    }
 }
