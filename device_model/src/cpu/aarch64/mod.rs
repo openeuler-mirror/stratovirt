@@ -20,7 +20,7 @@ use kvm_bindings::{
 };
 use kvm_ioctls::{VcpuFd, VmFd};
 
-use self::errors::{ErrorKind, Result};
+use self::errors::{ErrorKind, Result, ResultExt};
 
 pub mod errors {
     error_chain! {
@@ -233,26 +233,36 @@ impl CPUAArch64 {
     pub fn reset_vcpu(&self, vcpu: &Arc<VcpuFd>) -> Result<()> {
         // Configure PSTATE(Processor State), mask all interrupts.
         let data: u64 = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
-        set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_PSTATE, data)
-            .expect("Failed to set core reg pstate register");
+        set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_PSTATE, data).chain_err(|| {
+            format!(
+                "Failed to set core reg pstate register for CPU {}/KVM",
+                self.vcpu_id
+            )
+        })?;
 
         // Reset x1, x2, x3 register to zero.
         set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_REGS(1), 0)
-            .expect("Failed to init x1 to zero");
+            .chain_err(|| format!("Failed to init x1 to zero for CPU {}/KVM", self.vcpu_id))?;
 
         set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_REGS(2), 0)
-            .expect("Failed to init x2 to zero");
+            .chain_err(|| format!("Failed to init x2 to zero for CPU {}/KVM", self.vcpu_id))?;
 
         set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_REGS(3), 0)
-            .expect("Failed to init x3 to zero");
+            .chain_err(|| format!("Failed to init x3 to zero for CPU {}/KVM", self.vcpu_id))?;
 
         // Configure boot ip and device tree address, prepare for kernel setup
         if self.vcpu_id == 0 {
-            set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_REGS(0), self.fdt_addr)
-                .expect("Failed to set device tree address");
+            set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_REGS(0), self.fdt_addr).chain_err(
+                || {
+                    format!(
+                        "Failed to set device tree address for CPU {}/KVM",
+                        self.vcpu_id
+                    )
+                },
+            )?;
 
             set_one_core_reg(&vcpu, Arm64CoreRegs::USER_PT_REG_PC, self.boot_ip)
-                .expect("Failed to set boot ip");
+                .chain_err(|| format!("Failed to set boot ip for CPU {}/KVM", self.vcpu_id))?;
         }
 
         Ok(())
