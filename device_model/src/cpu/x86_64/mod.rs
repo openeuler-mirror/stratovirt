@@ -51,6 +51,7 @@ const MSR_LIST: &[u32] = &[
 const MSR_IA32_MISC_ENABLE: u32 = 0x01a0;
 const MSR_IA32_MISC_ENABLE_FAST_STRING: u64 = 0x1;
 
+#[derive(Default)]
 /// X86 CPU booting configure information
 pub struct X86CPUBootConfig {
     /// Register %rip value

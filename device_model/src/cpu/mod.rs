@@ -253,10 +253,7 @@ impl CPU {
 
     /// Get this `CPU`'s thread id.
     pub fn tid(&self) -> u64 {
-        match *self.tid.lock().unwrap() {
-            Some(tid) => tid,
-            None => 0,
-        }
+        (*self.tid.lock().unwrap()).unwrap_or(0)
     }
 
     /// Set thread id for `CPU`.
@@ -673,5 +670,225 @@ impl CpuTopology {
         let coreid: u8 = (vcpu_id as u8 % cpu_per_socket) / cpu_per_core;
         let threadid: u8 = (vcpu_id as u8 % cpu_per_socket) % cpu_per_core;
         (socketid, coreid, threadid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use kvm_ioctls::{Kvm, VmFd};
+    use machine_manager::machine::{
+        KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
+    };
+
+    struct TestVm {
+        #[cfg(target_arch = "x86_64")]
+        pio_in: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        #[cfg(target_arch = "x86_64")]
+        pio_out: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        mmio_read: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        mmio_write: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    }
+
+    impl TestVm {
+        fn new() -> Self {
+            TestVm {
+                #[cfg(target_arch = "x86_64")]
+                pio_in: Arc::new(Mutex::new(Vec::new())),
+                #[cfg(target_arch = "x86_64")]
+                pio_out: Arc::new(Mutex::new(Vec::new())),
+                mmio_read: Arc::new(Mutex::new(Vec::new())),
+                mmio_write: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl MachineLifecycle for TestVm {
+        fn notify_lifecycle(&self, _old: KvmVmState, _new: KvmVmState) -> bool {
+            true
+        }
+    }
+
+    impl MachineAddressInterface for TestVm {
+        #[cfg(target_arch = "x86_64")]
+        fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
+            self.pio_in.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        fn pio_out(&self, addr: u64, data: &[u8]) -> bool {
+            self.pio_out.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+            self.mmio_read.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+            self.mmio_write.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+    }
+
+    impl MachineInterface for TestVm {}
+
+    fn test_memory_init(vm_fd: &VmFd, size: usize, guest_addr: u64) -> (*mut u8, u64) {
+        let load_addr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut() as *mut libc::c_void,
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANONYMOUS | libc::MAP_SHARED | libc::MAP_NORESERVE,
+                -1,
+                0,
+            )
+        };
+        if load_addr == libc::MAP_FAILED {
+            panic!("mmap failed.");
+        }
+        let slot: u32 = 0;
+        let mem_region = kvm_bindings::kvm_userspace_memory_region {
+            slot,
+            guest_phys_addr: guest_addr,
+            memory_size: size as u64,
+            userspace_addr: load_addr as u64,
+            flags: 0,
+        };
+        unsafe {
+            vm_fd.set_user_memory_region(mem_region).unwrap();
+        }
+        (load_addr as *mut u8, guest_addr)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn test_base_code() -> [u8; 24] {
+        [
+            0xba, 0xf8, 0x03, /* mov $0x3f8, %dx */
+            0x00, 0xd8, /* add %bl, %al */
+            0x04, b'0', /* add $'0', %al */
+            0xee, /* out %al, %dx */
+            0xec, /* in %dx, %al */
+            0xc6, 0x06, 0x00, 0x80, 0x00, /* movl $0, (0x8000); This generates a MMIO Write.*/
+            0x8a, 0x16, 0x00, 0x80, /* movl (0x8000), %dl; This generates a MMIO Read.*/
+            0xc6, 0x06, 0x00, 0x20,
+            0x00, /* movl $0, (0x2000); Dirty one page in guest mem. */
+            0xf4, /* hlt */
+        ]
+    }
+
+    #[test]
+    fn test_cpu_lifecycle() {
+        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => Arc::new(vm_fd),
+            Err(_) => return,
+        };
+
+        let vm = Arc::new(TestVm::new());
+        let vm_arc: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>> =
+            Arc::new(Box::new(vm.clone()));
+
+        let cpu = CPU::new(
+            Arc::new(vm_fd.create_vcpu(0).unwrap()),
+            0,
+            Arc::new(Mutex::new(ArchCPU::default())),
+            vm_arc.clone(),
+        );
+
+        let (cpu_state, _) = &*cpu.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);
+        drop(cpu_state);
+
+        let cpus_thread_barrier = Arc::new(Barrier::new(2));
+        let cpu_thread_barrier = cpus_thread_barrier.clone();
+
+        // Test cpu life cycle as:
+        // Created -> Paused -> Running -> Paused -> Running -> Destroy
+        let cpu_arc = Arc::new(cpu);
+        CPU::start(cpu_arc.clone(), cpu_thread_barrier, true).unwrap();
+        cpus_thread_barrier.wait();
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
+        drop(cpu_state);
+
+        assert!(cpu_arc.resume().is_ok());
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
+        drop(cpu_state);
+
+        assert!(cpu_arc.pause().is_ok());
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
+        drop(cpu_state);
+
+        assert!(cpu_arc.resume().is_ok());
+        let _ = cpu_arc.destroy();
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Nothing);
+        drop(cpu_state);
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn test_cpu_command_emulate() {
+        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => Arc::new(vm_fd),
+            Err(_) => return,
+        };
+
+        let vm = Arc::new(TestVm::new());
+        let vm_arc: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>> =
+            Arc::new(Box::new(vm.clone()));
+
+        let cpu = CPU::new(
+            Arc::new(vm_fd.create_vcpu(0).unwrap()),
+            0,
+            Arc::new(Mutex::new(ArchCPU::default())),
+            vm_arc.clone(),
+        );
+
+        let mem_size = 0x4000;
+        let (hva, gpa) = test_memory_init(&vm_fd, mem_size, 0x1000);
+
+        let code = test_base_code();
+        unsafe {
+            let mut slice = std::slice::from_raw_parts_mut(hva, mem_size);
+            slice.write_all(&code).unwrap();
+        }
+
+        let mut vcpu_sregs = cpu.fd.get_sregs().unwrap();
+        assert_ne!(vcpu_sregs.cs.base, 0);
+        assert_ne!(vcpu_sregs.cs.selector, 0);
+        vcpu_sregs.cs.base = 0;
+        vcpu_sregs.cs.selector = 0;
+        cpu.fd.set_sregs(&vcpu_sregs).unwrap();
+
+        let mut vcpu_regs = cpu.fd.get_regs().unwrap();
+        vcpu_regs.rip = gpa;
+        vcpu_regs.rax = 2;
+        vcpu_regs.rbx = 3;
+        vcpu_regs.rflags = 2;
+        cpu.fd.set_regs(&vcpu_regs).unwrap();
+
+        loop {
+            match cpu.kvm_vcpu_exec() {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(e) => {
+                    assert_eq!(e.to_string(), "CPU 0/KVM halted!");
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(*vm.pio_in.lock().unwrap(), vec![(1016, vec![0])]);
+        assert_eq!(*vm.pio_out.lock().unwrap(), vec![(1016, vec![53])]);
+        assert_eq!(*vm.mmio_read.lock().unwrap(), vec![(32768, vec![0])]);
+        assert_eq!(*vm.mmio_write.lock().unwrap(), vec![(32768, vec![0])]);
     }
 }
