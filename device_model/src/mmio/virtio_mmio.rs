@@ -567,6 +567,11 @@ impl MmioDeviceOps for VirtioMmioDevice {
 
         ret
     }
+
+    fn unrealize(&mut self) -> Result<()> {
+        self.device.lock().unwrap().unrealize()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

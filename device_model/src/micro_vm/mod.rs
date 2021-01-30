@@ -701,6 +701,17 @@ impl MachineLifecycle for LightMachine {
 
         true
     }
+
+    fn release(&self) -> bool {
+        if let Err(ref e) = self.bus.unrealize() {
+            error!(
+                "Failed to release resource, {}",
+                error_chain::ChainedError::display_chain(e)
+            );
+            return false;
+        }
+        true
+    }
 }
 
 impl MachineAddressInterface for LightMachine {

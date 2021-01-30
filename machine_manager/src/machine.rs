@@ -89,6 +89,11 @@ pub trait MachineLifecycle {
     /// * `old` - The current `KvmVmState`.
     /// * `new` - The new `KvmVmState` expected to transform.
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool;
+
+    /// Release resource
+    fn release(&self) -> bool {
+        false
+    }
 }
 
 /// `AddressSpace` access interface of `Machine`.
