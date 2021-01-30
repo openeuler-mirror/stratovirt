@@ -11,6 +11,7 @@ util = { path = "util" }
 machine_manager = { path = "machine_manager" }
 device_model = { path = "device_model" }
 
+libc = "0.2.71"
 log = "0.4.8"
 error-chain = "0.12.4"
 vmm-sys-util = "0.6.1"

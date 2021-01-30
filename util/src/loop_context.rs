@@ -254,7 +254,6 @@ impl EventLoopContext {
     pub fn run(&mut self) -> Result<bool> {
         if let Some(manager) = &self.manager {
             if manager.loop_should_exit() {
-                manager.loop_cleanup()?;
                 return Ok(false);
             }
         }
@@ -292,6 +291,22 @@ impl EventLoopContext {
         self.clear_gc();
 
         Ok(true)
+    }
+
+    /// VM exit and release resource.
+    pub fn exit(&self) -> bool {
+        if let Some(vm) = &self.manager {
+            if let Err(ref e) = vm.loop_cleanup() {
+                error!(
+                    "Failed to exit vm, {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
+                return false;
+            } else {
+                return true;
+            }
+        }
+        false
     }
 }
 

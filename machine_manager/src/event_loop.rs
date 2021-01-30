@@ -138,4 +138,20 @@ impl EventLoop {
             }
         }
     }
+
+    /// Exit vm and clean environment.
+    ///
+    /// # Notes
+    ///
+    /// Set CURRENT_MAINLOOP to None to release MainLoopContext,
+    /// otherwise, it will not be released automatically.
+    pub fn clean() -> bool {
+        let ret = Self::get_ctx(None).exit();
+        unsafe {
+            if GLOBAL_EVENT_LOOP.is_some() {
+                GLOBAL_EVENT_LOOP = None;
+            }
+        }
+        ret
+    }
 }

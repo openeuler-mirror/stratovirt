@@ -67,6 +67,7 @@ pub enum DeviceType {
     #[cfg(target_arch = "aarch64")]
     RTC,
     OTHER,
+    CONSOLE,
 }
 
 /// The requirement of address space and irq number by MMIO device.
@@ -206,7 +207,7 @@ impl MmioDevice {
         self.device.lock().unwrap().update_config(dev_config)
     }
 
-    ///Unrealize resource
+    /// Unrealize resource
     pub fn unrealize(&self) -> Result<()> {
         self.device.lock().unwrap().unrealize()?;
         Ok(())

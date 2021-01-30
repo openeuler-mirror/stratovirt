@@ -125,6 +125,9 @@ pub mod errors {
                 description("Chmod command failed.")
                 display("Chmod command failed, os error {}", e)
             }
+            FailedToCleanEnv {
+                display("Failed to clean environment, for more details please look them up in error log")
+            }
         }
     }
 }

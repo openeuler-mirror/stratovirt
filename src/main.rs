@@ -14,6 +14,7 @@
 extern crate error_chain;
 #[macro_use]
 extern crate log;
+extern crate libc;
 extern crate vmm_sys_util;
 
 use std::os::unix::fs::OpenOptionsExt;
@@ -23,13 +24,13 @@ use std::sync::{Arc, Mutex};
 use vmm_sys_util::terminal::Terminal;
 
 use device_model::{register_seccomp, LightMachine};
-use machine_manager::config::VmConfig;
 use machine_manager::qmp::QmpChannel;
 use machine_manager::socket::Socket;
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     event_loop::EventLoop,
 };
+use machine_manager::{config::VmConfig, signal_handler::register_kill_signal};
 use util::loop_context::EventNotifierHelper;
 use util::unix::limit_permission;
 use util::{arg_parser, daemonize::daemonize, logger};
@@ -81,6 +82,9 @@ fn run() -> Result<()> {
         } else {
             error!("Panic at [{}: {}].", panic_file, panic_line);
         }
+        if !EventLoop::clean() {
+            error!("Clean environment failed!");
+        }
     }));
 
     let vm_config: VmConfig = create_vmconfig(&cmd_args)?;
@@ -95,6 +99,10 @@ fn run() -> Result<()> {
                 .expect("Failed to set terminal to canon mode.");
             error!("{}", error_chain::ChainedError::display_chain(e));
         }
+    }
+
+    if !EventLoop::clean() {
+        error!("Clean environment failed!");
     }
 
     Ok(())
@@ -115,6 +123,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
 
     QmpChannel::object_init();
     EventLoop::object_init(&vm_config.iothreads)?;
+    register_kill_signal();
 
     let vm = LightMachine::new(vm_config)?;
     EventLoop::set_manager(vm.clone(), None);
@@ -125,7 +134,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
         limit_permission(&api_path)
             .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
-        Socket::from_unix_listener(listener, Some(vm.clone()))
+        Socket::from_unix_listener(listener, Some(vm.clone()), api_path)
     };
 
     EventLoop::update_event(

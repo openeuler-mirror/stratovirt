@@ -616,7 +616,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("06");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None);
+        let socket = Socket::from_unix_listener(listener, None, "test_06.sock".to_string());
         socket.bind_unix_stream(server);
         QmpChannel::bind_writer(SocketRWHandler::new(socket.get_stream_fd()));
 
@@ -666,7 +666,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("07");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None);
+        let socket = Socket::from_unix_listener(listener, None, "test_07.sock".to_string());
         socket.bind_unix_stream(server);
 
         // 1.send greeting response

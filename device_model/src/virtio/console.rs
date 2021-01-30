@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp;
 use std::io::{Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::{cmp, fs};
 
 use address_space::AddressSpace;
 use machine_manager::{config::ConsoleConfig, event_loop::EventLoop};
@@ -297,6 +297,8 @@ pub struct Console {
     driver_features: u64,
     /// UnixListener for virtio-console to communicate in host.
     listener: UnixListener,
+    /// Path to console socket file.
+    path: String,
 }
 
 impl Console {
@@ -312,12 +314,12 @@ impl Console {
 
         limit_permission(path.as_str())
             .unwrap_or_else(|_| panic!("Failed to change file permission for console {}", path));
-
         Console {
             config: Arc::new(Mutex::new(VirtioConsoleConfig::new())),
             device_features: 0_u64,
             driver_features: 0_u64,
             listener,
+            path,
         }
     }
 }
@@ -411,6 +413,13 @@ impl VirtioDevice for Console {
             None,
         )?;
 
+        Ok(())
+    }
+
+    fn unrealize(&self) -> Result<()> {
+        fs::remove_file(self.path.clone())
+            .chain_err(|| format!("Failed to delete console socket file: {}", &self.path))?;
+        info!("Delete console socket file: {} successfully", &self.path);
         Ok(())
     }
 }
