@@ -102,7 +102,7 @@ impl VmConfig {
 
     /// Update '-drive ...' drive config to `VmConfig`.
     pub fn update_drive(&mut self, drive_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("drive");
         cmd_parser
             .push("file")
             .push("id")

@@ -28,7 +28,7 @@ impl BalloonConfig {
 
 impl VmConfig {
     pub fn update_balloon(&mut self, balloon_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("balloon");
         cmd_parser.push("deflate-on-oom");
 
         cmd_parser.parse(balloon_config)?;

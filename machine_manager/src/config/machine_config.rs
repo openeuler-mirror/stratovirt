@@ -105,7 +105,8 @@ impl MachineConfig {
         }
         if value.get("mem_size") != None {
             machine_config.mem_config.mem_size =
-                memory_unit_conversion(&value["mem_size"].to_string().replace("\"", ""));
+                memory_unit_conversion(&value["mem_size"].to_string().replace("\"", ""))
+                    .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", value["mem_size"]));
         }
         if value.get("mem_path") != None {
             machine_config.mem_config.mem_path =
@@ -146,7 +147,7 @@ impl VmConfig {
     ///
     /// * `name` - The name `String` updated to `VmConfig`.
     pub fn update_machine(&mut self, mach_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("machine");
         cmd_parser
             .push("")
             .push("type")
@@ -179,15 +180,15 @@ impl VmConfig {
 
     /// Update '-m' memory config to `VmConfig`.
     pub fn update_memory(&mut self, mem_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("m");
         cmd_parser.push("").push("size");
 
         cmd_parser.parse(mem_config)?;
 
         if let Some(mem_size) = cmd_parser.get_value::<String>("")? {
-            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size);
+            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size)?;
         } else if let Some(mem_size) = cmd_parser.get_value::<String>("size")? {
-            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size);
+            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size)?;
         }
 
         Ok(())
@@ -195,7 +196,7 @@ impl VmConfig {
 
     /// Update '-smp' cpu config to `VmConfig`.
     pub fn update_cpu(&mut self, cpu_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("smp");
         cmd_parser.push("").push("cpus");
 
         cmd_parser.parse(cpu_config)?;
@@ -215,40 +216,44 @@ impl VmConfig {
     }
 }
 
-fn memory_unit_conversion(origin_value: &str) -> u64 {
-    if origin_value.contains('M') || origin_value.contains('m') {
-        let value = origin_value.replace("M", "");
-        let value = value.replace("m", "");
+fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
+    if origin_value.contains('M') ^ origin_value.contains('m') {
+        let value = origin_value.replacen("M", "", 1);
+        let value = value.replacen("m", "", 1);
         get_inner(
             value
                 .parse::<u64>()
-                .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", &value))
+                .map_err(|_| {
+                    ErrorKind::ConvertValueFailed(String::from("u64"), origin_value.to_string())
+                })?
                 .checked_mul(M),
         )
-    } else if origin_value.contains('G') || origin_value.contains('g') {
-        let value = origin_value.replace("G", "");
-        let value = value.replace("g", "");
+    } else if origin_value.contains('G') ^ origin_value.contains('g') {
+        let value = origin_value.replacen("G", "", 1);
+        let value = value.replacen("g", "", 1);
         get_inner(
             value
                 .parse::<u64>()
-                .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", &value))
+                .map_err(|_| {
+                    ErrorKind::ConvertValueFailed(String::from("u64"), origin_value.to_string())
+                })?
                 .checked_mul(G),
         )
     } else {
         get_inner(round_down(
-            origin_value
-                .parse::<u64>()
-                .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", &origin_value)),
+            origin_value.parse::<u64>().map_err(|_| {
+                ErrorKind::ConvertValueFailed(String::from("u64"), origin_value.to_string())
+            })?,
             M,
         ))
     }
 }
 
-fn get_inner<T>(outer: Option<T>) -> T {
+fn get_inner<T>(outer: Option<T>) -> Result<T> {
     if let Some(x) = outer {
-        x
+        Ok(x)
     } else {
-        panic!("Integer overflow occurred!");
+        Err(ErrorKind::IntegerOverflow("-m").into())
     }
 }
 
@@ -360,36 +365,6 @@ mod tests {
         assert!(!vm_config.machine_config.mem_config.dump_guest_core);
         assert!(vm_config.update_machine("dump-guest-core=true").is_ok());
         assert!(vm_config.machine_config.mem_config.dump_guest_core);
-    }
-
-    #[test]
-    #[should_panic(expected = "Unrecognized value to u64: 268435456N")]
-    fn test_invaild_json_01() {
-        let json = r#"
-        {
-            "name": "test_stratovirt",
-            "vcpu_count": 1,
-            "mem_size": "268435456MN",
-            "dump_guest_core": false
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        MachineConfig::from_value(&value);
-    }
-
-    #[test]
-    #[should_panic(expected = "Unrecognized value to u64: ABCDEF")]
-    fn test_invaild_json_02() {
-        let json = r#"
-        {
-            "name": "test_stratovirt",
-            "vcpu_count": 1,
-            "mem_size": "ABCDEF",
-            "dump_guest_core": false
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        MachineConfig::from_value(&value);
     }
 
     #[test]

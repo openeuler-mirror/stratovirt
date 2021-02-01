@@ -220,7 +220,7 @@ You can also run StratoVirt with initrdfs, read [initrd_guide](./mk_initrd.md).
 
 ### 4.3 Close the VM
 
-ACPI(Advanced Configuration and Power Interface) has not been implemented yet in StratoVirt. Power manament, such as `shutdown` 
+ACPI(Advanced Configuration and Power Interface) has not been implemented yet in StratoVirt. Power management, such as `shutdown` 
 or `reboot` behavior, is not allowed. So it is not feasible to use `shutdown` or `poweroff` command to close the VM.
 Instead, use `reboot` command in the guest or `quit` command with QMP to close the VM.
 

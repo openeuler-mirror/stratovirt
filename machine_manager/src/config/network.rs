@@ -105,7 +105,7 @@ impl VmConfig {
     /// Update '-netdev ...' network config to `VmConfig`
     /// Some attr in `NetworkInterfaceConfig` would be found in `DeviceConfig`
     pub fn update_net(&mut self, net_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("netdev");
         cmd_parser
             .push("id")
             .push("netdev")
