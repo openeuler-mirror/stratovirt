@@ -179,7 +179,7 @@ impl HostMemMapping {
         dump_guest_core: bool,
         is_share: bool,
     ) -> Result<HostMemMapping> {
-        let mut flags = libc::MAP_NORESERVE;
+        let mut flags = 0_i32;
         if file_back.is_none() {
             flags |= libc::MAP_ANONYMOUS;
         }
