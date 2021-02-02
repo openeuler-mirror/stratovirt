@@ -17,7 +17,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex, RwLock};
 
-use util::epoll_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 
 use super::errors::Result;

@@ -18,9 +18,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::{config::ConsoleConfig, main_loop::MainLoop};
+use machine_manager::{config::ConsoleConfig, event_loop::EventLoop};
 use util::byte_code::ByteCode;
-use util::epoll_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::num_ops::{read_u32, write_u32};
 use util::unix::limit_permission;
 use vmm_sys_util::epoll::EventSet;
@@ -406,9 +406,10 @@ impl VirtioDevice for Console {
             client: None,
         };
 
-        MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
-            Mutex::new(handler),
-        )))?;
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+            None,
+        )?;
 
         Ok(())
     }

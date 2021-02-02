@@ -28,9 +28,9 @@ use machine_manager::qmp::QmpChannel;
 use machine_manager::socket::Socket;
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
-    main_loop::MainLoop,
+    event_loop::EventLoop,
 };
-use util::epoll_context::EventNotifierHelper;
+use util::loop_context::EventNotifierHelper;
 use util::unix::limit_permission;
 use util::{arg_parser, daemonize::daemonize, logger};
 
@@ -114,10 +114,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     }
 
     QmpChannel::object_init();
-    MainLoop::object_init();
+    EventLoop::object_init(&vm_config.iothreads)?;
 
     let vm = LightMachine::new(vm_config)?;
-    MainLoop::set_manager(vm.clone());
+    EventLoop::set_manager(vm.clone(), None);
 
     let api_socket = {
         let (api_path, _) = check_api_channel(&cmd_args)?;
@@ -128,9 +128,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
         Socket::from_unix_listener(listener, Some(vm.clone()))
     };
 
-    MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
-        Mutex::new(api_socket),
-    )))
+    EventLoop::update_event(
+        EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(api_socket))),
+        None,
+    )
     .chain_err(|| "Failed to add api event to MainLoop")?;
 
     vm.realize()?;
@@ -140,11 +141,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
         register_seccomp()?;
     }
 
-    loop {
-        if !MainLoop::run().chain_err(|| "MainLoop exits unexpectedly: error occurs")? {
-            break;
-        }
-    }
+    EventLoop::loop_run().chain_err(|| "MainLoop exits unexpectedly: error occurs")?;
 
     Ok(())
 }

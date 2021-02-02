@@ -27,8 +27,8 @@ pub mod checksum;
 pub mod daemonize;
 #[cfg(target_arch = "aarch64")]
 pub mod device_tree;
-pub mod epoll_context;
 mod link_list;
+pub mod loop_context;
 pub mod num_ops;
 pub mod seccomp;
 pub mod tap;

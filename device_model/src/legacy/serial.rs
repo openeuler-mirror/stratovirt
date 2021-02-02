@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use address_space::GuestAddress;
 use kvm_ioctls::VmFd;
-use util::epoll_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
 use super::super::mmio::{

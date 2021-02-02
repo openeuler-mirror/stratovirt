@@ -20,10 +20,10 @@ use std::{cmp, mem};
 use address_space::AddressSpace;
 use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
-    main_loop::MainLoop,
+    event_loop::EventLoop,
 };
 use util::byte_code::ByteCode;
-use util::epoll_context::{
+use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::num_ops::{read_u32, write_u32};
@@ -689,9 +689,11 @@ impl VirtioDevice for Net {
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
         };
-        MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
-            Mutex::new(handler),
-        )))?;
+
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+            self.net_cfg.iothread.as_ref(),
+        )?;
 
         Ok(())
     }

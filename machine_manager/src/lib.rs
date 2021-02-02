@@ -29,8 +29,8 @@ extern crate serde_json;
 
 pub mod cmdline;
 pub mod config;
+pub mod event_loop;
 pub mod machine;
-pub mod main_loop;
 pub mod qmp;
 pub mod socket;
 
