@@ -14,9 +14,8 @@
 extern crate error_chain;
 #[macro_use]
 extern crate log;
-extern crate libc;
-extern crate vmm_sys_util;
 
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
@@ -96,8 +95,17 @@ fn run() -> Result<()> {
             std::io::stdin()
                 .lock()
                 .set_canon_mode()
-                .expect("Failed to set terminal to canon mode.");
-            error!("{}", error_chain::ChainedError::display_chain(e));
+                .chain_err(|| "Failed to set terminal to canon mode.")?;
+            if cmd_args.is_present("display log") {
+                error!("{}", error_chain::ChainedError::display_chain(e));
+            } else {
+                write!(
+                    &mut std::io::stderr(),
+                    "{}",
+                    error_chain::ChainedError::display_chain(e)
+                )
+                .expect("Failed to write to stderr");
+            }
         }
     }
 
