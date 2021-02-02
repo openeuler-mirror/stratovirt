@@ -990,7 +990,7 @@ impl DeviceInterface for LightMachine {
             }
         } else {
             let blk_file = format!("{:?}", blk);
-            error!("Path：{} is not valid", blk_file);
+            error!("Path: {} is not valid", blk_file);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError("Invalid block path".to_string()),
                 None,

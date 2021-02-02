@@ -286,7 +286,7 @@ impl NetIoHandler {
                         elem_iov.addr,
                         (alloc_read_count - read_count) as u64,
                     )
-                    .chain_err(|| "Net tx：Failed to read buffer for transmit")?;
+                    .chain_err(|| "Net tx: Failed to read buffer for transmit")?;
 
                 read_count = alloc_read_count;
             }
@@ -298,7 +298,7 @@ impl NetIoHandler {
             queue
                 .vring
                 .add_used(&self.mem_space, elem.index, 0)
-                .chain_err(|| format!("Net tx：Failed to add used ring {}", elem.index))?;
+                .chain_err(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
         }
 
         Ok(())
