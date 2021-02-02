@@ -43,22 +43,21 @@ impl BootSource {
     /// # Arguments
     ///
     /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Self {
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
         let mut boot_source = BootSource::default();
-        if value.get("kernel_image_path") != None {
-            boot_source.kernel_file =
-                PathBuf::from(&(value["kernel_image_path"].to_string().replace("\"", "")));
+        if let serde_json::Value::Object(items) = value {
+            for (name, item) in items {
+                let item_str = item.to_string().replace("\"", "");
+                match name.as_str() {
+                    "kernel_image_path" => boot_source.kernel_file = PathBuf::from(&item_str),
+                    "boot_args" => boot_source.kernel_cmdline = KernelParams::from_str(item_str),
+                    "initrd_fs_path" => boot_source.initrd = Some(InitrdConfig::new(&item_str)),
+                    _ => return Err(ErrorKind::InvalidJsonField(name.to_string()).into()),
+                }
+            }
         }
-        if value.get("boot_args") != None {
-            boot_source.kernel_cmdline =
-                KernelParams::from_str((value["boot_args"]).to_string().replace("\"", ""))
-        }
-        if value.get("initrd_fs_path") != None {
-            boot_source.initrd = Some(InitrdConfig::new(
-                &(value["initrd_fs_path"].to_string().replace("\"", "")),
-            ))
-        }
-        boot_source
+
+        Ok(boot_source)
     }
 
     /// Move all the elements of `other` into `Self.kernel_cmdline`.
@@ -319,7 +318,7 @@ mod tests {
         }
         "#;
         let value = serde_json::from_str(json).unwrap();
-        let boot_source = BootSource::from_value(&value);
+        let boot_source = BootSource::from_value(&value).unwrap();
         assert_eq!(boot_source.kernel_file, PathBuf::from("/path/to/vmlinux"));
         assert_eq!(
             boot_source.kernel_cmdline.to_string(),

@@ -36,8 +36,9 @@ impl ConsoleConfig {
     /// # Arguments
     ///
     /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Vec<Self>> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -117,8 +118,9 @@ impl SerialConfig {
     /// # Arguments
     ///
     /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -152,8 +154,9 @@ pub struct VsockConfig {
 impl VsockConfig {
     /// Create `VsockConfig` from `Value` structure.
     /// `Value` structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -212,7 +215,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = ConsoleConfig::from_value(&value);
-        assert!(configs.is_some());
+        assert!(configs.is_ok());
         let console_configs = configs.unwrap();
         assert_eq!(console_configs.len(), 1);
         assert_eq!(console_configs[0].console_id, "test_console");
@@ -225,7 +228,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = ConsoleConfig::from_value(&value);
-        assert!(configs.is_none());
+        assert!(configs.is_err());
     }
 
     #[test]
@@ -250,9 +253,9 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = SerialConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         assert!(!config.as_ref().unwrap().stdio);
-        vm_config.serial = config;
+        vm_config.serial = config.ok();
         assert!(vm_config.update_serial("stdio").is_ok());
         assert!(vm_config.serial.as_ref().unwrap().stdio);
     }
@@ -267,7 +270,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = VsockConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         let vsock_config = config.unwrap();
         assert_eq!(vsock_config.vsock_id, "test_vsock");
         assert_eq!(vsock_config.guest_cid, 3);
@@ -280,7 +283,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = VsockConfig::from_value(&value);
-        assert!(config.is_none());
+        assert!(config.is_err());
     }
     #[test]
     fn test_vsock_config_cmdline_parser() {

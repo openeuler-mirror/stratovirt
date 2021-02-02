@@ -21,8 +21,9 @@ pub struct BalloonConfig {
 }
 
 impl BalloonConfig {
-    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -56,7 +57,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = BalloonConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         assert_eq!(config.unwrap().deflate_on_oom, true);
 
         let json = r#"
@@ -66,7 +67,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = BalloonConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         assert_eq!(config.unwrap().deflate_on_oom, false);
     }
 

@@ -41,8 +41,9 @@ impl DriveConfig {
     /// # Arguments
     ///
     /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Vec<Self>> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -161,7 +162,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = DriveConfig::from_value(&value);
-        assert!(configs.is_some());
+        assert!(configs.is_ok());
         let drive_configs = configs.unwrap();
         assert_eq!(drive_configs[0].drive_id, "rootfs");
         assert_eq!(drive_configs[0].path_on_host, "/path/to/block");
@@ -178,7 +179,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = DriveConfig::from_value(&value);
-        assert!(configs.is_some());
+        assert!(configs.is_ok());
         let drive_configs = configs.unwrap();
         assert_eq!(drive_configs[0].serial_num, None);
     }

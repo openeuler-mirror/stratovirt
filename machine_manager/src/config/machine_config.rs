@@ -92,37 +92,48 @@ impl MachineConfig {
     /// # Arguments
     ///
     /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Self {
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
         let mut machine_config = MachineConfig::default();
-        if value.get("type") != None {
-            machine_config.mach_type = value["type"]
-                .to_string()
-                .parse::<MachineType>()
-                .expect("Unrecognized machine type");
+        if let serde_json::Value::Object(items) = value {
+            for (name, item) in items {
+                let item_str = item.to_string().replace("\"", "");
+                match name.as_str() {
+                    "type" => {
+                        machine_config.mach_type =
+                            item_str.parse::<MachineType>().map_err(|_| {
+                                ErrorKind::ConvertValueFailed(item_str, "MachineType".to_string())
+                            })?
+                    }
+                    "vcpu_count" => {
+                        machine_config.nr_cpus = item_str.parse::<u8>().map_err(|_| {
+                            ErrorKind::ConvertValueFailed(item_str, "u8".to_string())
+                        })?
+                    }
+                    "mem_size" => {
+                        machine_config.mem_config.mem_size = memory_unit_conversion(&item_str)
+                            .map_err(|_| {
+                                ErrorKind::ConvertValueFailed(item_str, "u64".to_string())
+                            })?
+                    }
+                    "mem_path" => machine_config.mem_config.mem_path = Some(item_str),
+                    "mem_share" => {
+                        machine_config.mem_config.mem_share =
+                            item_str.parse::<bool>().map_err(|_| {
+                                ErrorKind::ConvertValueFailed(item_str, "bool".to_string())
+                            })?
+                    }
+                    "dump_guest_core" => {
+                        machine_config.mem_config.dump_guest_core =
+                            item_str.parse::<bool>().map_err(|_| {
+                                ErrorKind::ConvertValueFailed(item_str, "bool".to_string())
+                            })?
+                    }
+                    _ => return Err(ErrorKind::InvalidJsonField(name.to_string()).into()),
+                }
+            }
         }
-        if value.get("vcpu_count") != None {
-            machine_config.nr_cpus = value["vcpu_count"].to_string().parse::<u8>().unwrap();
-        }
-        if value.get("mem_size") != None {
-            machine_config.mem_config.mem_size =
-                memory_unit_conversion(&value["mem_size"].to_string().replace("\"", ""))
-                    .unwrap_or_else(|_| panic!("Unrecognized value to u64: {}", value["mem_size"]));
-        }
-        if value.get("mem_path") != None {
-            machine_config.mem_config.mem_path =
-                Some(value["mem_path"].to_string().replace("\"", ""));
-        }
-        if value.get("mem_share") != None {
-            machine_config.mem_config.mem_share =
-                value["mem_share"].to_string().parse::<bool>().unwrap();
-        }
-        if value.get("dump_guest_core") != None {
-            machine_config.mem_config.dump_guest_core = value["dump_guest_core"]
-                .to_string()
-                .parse::<bool>()
-                .unwrap();
-        }
-        machine_config
+
+        Ok(machine_config)
     }
 }
 
@@ -265,7 +276,6 @@ mod tests {
     fn test_config_json_parser() {
         let json = r#"
         {
-            "name": "test_stratovirt",
             "vcpu_count": 1,
             "mem_size": 268435456,
             "dump_guest_core": false
@@ -273,6 +283,8 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let machine_config = MachineConfig::from_value(&value);
+        assert!(machine_config.is_ok());
+        let machine_config = machine_config.unwrap();
 
         assert_eq!(machine_config.nr_cpus, 1);
         assert_eq!(machine_config.mem_config.mem_size, 268_435_456);
@@ -288,7 +300,7 @@ mod tests {
         }
         "#;
         let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value);
+        let machine_config = MachineConfig::from_value(&value).unwrap();
         assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
 
         // Unit 'm'
@@ -298,7 +310,7 @@ mod tests {
         }
         "#;
         let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value);
+        let machine_config = MachineConfig::from_value(&value).unwrap();
         assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
 
         // Unit 'G'
@@ -308,7 +320,7 @@ mod tests {
         }
         "#;
         let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value);
+        let machine_config = MachineConfig::from_value(&value).unwrap();
         assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
 
         // Unit 'g'
@@ -318,7 +330,7 @@ mod tests {
         }
         "#;
         let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value);
+        let machine_config = MachineConfig::from_value(&value).unwrap();
         assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
 
         // Round down
@@ -328,7 +340,7 @@ mod tests {
         }
         "#;
         let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value);
+        let machine_config = MachineConfig::from_value(&value).unwrap();
         assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
     }
 
@@ -336,7 +348,6 @@ mod tests {
     fn test_config_cmdline_parser() {
         let json = r#"
         {
-            "name": "test_stratovirt",
             "vcpu_count": 1,
             "mem_size": 268435456,
             "dump_guest_core": false
@@ -346,7 +357,7 @@ mod tests {
         let machine_config = MachineConfig::from_value(&value);
 
         let mut vm_config = VmConfig::default();
-        vm_config.machine_config = machine_config;
+        vm_config.machine_config = machine_config.unwrap();
 
         assert!(vm_config.update_cpu("8").is_ok());
         assert_eq!(vm_config.machine_config.nr_cpus, 8);

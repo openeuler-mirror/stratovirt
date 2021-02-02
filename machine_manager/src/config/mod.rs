@@ -41,7 +41,13 @@ pub use network::*;
 
 pub mod errors {
     error_chain! {
+        foreign_links {
+            JsonSerde(serde_json::Error);
+        }
         errors {
+            InvalidJsonField(field: String) {
+                display("Invalid json field \'{}\'", field)
+            }
             InvalidParam(param: String) {
                 display("Invalid parameter \'{}\'", param)
             }
@@ -79,25 +85,7 @@ pub mod errors {
     }
 }
 
-/// `MAX_VCPUS`: the most cpu number Vm support.
-pub static MAX_VCPUS: u8 = 128_u8;
 const MAX_STRING_LENGTH: usize = 255;
-
-/// Macro: From serde_json: Value $y to get member $z, use $s's from_value
-/// function to convert.
-///
-/// # Example
-///
-/// ```text
-/// config_parse!(machine_config, value, "machine-config", MachineConfig);
-/// ```
-macro_rules! config_parse {
-    ( $x:expr, $y:expr, $z:expr, $s:tt ) => {
-        if let Some(tmp_value) = $y.get($z) {
-            $x = $s::from_value(tmp_value);
-        }
-    };
-}
 
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -131,16 +119,22 @@ impl VmConfig {
         let mut iothreads = None;
         let mut balloon = None;
 
-        // Use macro to use from_value function for every member
-        config_parse!(machine_config, value, "machine-config", MachineConfig);
-        config_parse!(boot_source, value, "boot-source", BootSource);
-        config_parse!(drives, value, "drive", DriveConfig);
-        config_parse!(nets, value, "net", NetworkInterfaceConfig);
-        config_parse!(consoles, value, "console", ConsoleConfig);
-        config_parse!(vsock, value, "vsock", VsockConfig);
-        config_parse!(serial, value, "serial", SerialConfig);
-        config_parse!(iothreads, value, "iothread", IothreadConfig);
-        config_parse!(balloon, value, "balloon", BalloonConfig);
+        if let serde_json::Value::Object(items) = value {
+            for (name, item) in items {
+                match name.as_str() {
+                    "machine-config" => machine_config = MachineConfig::from_value(&item)?,
+                    "boot-source" => boot_source = BootSource::from_value(&item)?,
+                    "drive" => drives = Some(DriveConfig::from_value(&item)?),
+                    "net" => nets = Some(NetworkInterfaceConfig::from_value(&item)?),
+                    "console" => consoles = Some(ConsoleConfig::from_value(&item)?),
+                    "vsock" => vsock = Some(VsockConfig::from_value(&item)?),
+                    "serial" => serial = Some(SerialConfig::from_value(&item)?),
+                    "iothread" => iothreads = Some(IothreadConfig::from_value(&item)?),
+                    "balloon" => balloon = Some(BalloonConfig::from_value(&item)?),
+                    _ => return Err(ErrorKind::InvalidJsonField(name).into()),
+                }
+            }
+        }
 
         Ok(VmConfig {
             guest_name: "StratoVirt".to_string(),
