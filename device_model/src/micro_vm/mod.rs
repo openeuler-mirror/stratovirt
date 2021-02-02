@@ -956,6 +956,7 @@ impl DeviceInterface for LightMachine {
             read_only,
             direct,
             serial_num: None,
+            iothread: None,
         };
 
         if let Err(ref e) = self.bus.add_replaceable_config(node_name, Arc::new(config)) {
@@ -977,6 +978,7 @@ impl DeviceInterface for LightMachine {
             tap_fd: None,
             vhost_type: None,
             vhost_fd: None,
+            iothread: None,
         };
 
         if let Some(fds) = fds {

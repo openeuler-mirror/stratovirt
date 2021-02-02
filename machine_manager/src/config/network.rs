@@ -32,6 +32,7 @@ pub struct NetworkInterfaceConfig {
     pub tap_fd: Option<i32>,
     pub vhost_type: Option<String>,
     pub vhost_fd: Option<i32>,
+    pub iothread: Option<String>,
 }
 
 impl NetworkInterfaceConfig {
@@ -55,6 +56,7 @@ impl Default for NetworkInterfaceConfig {
             tap_fd: None,
             vhost_type: None,
             vhost_fd: None,
+            iothread: None,
         }
     }
 }
@@ -85,6 +87,14 @@ impl ConfigCheck for NetworkInterfaceConfig {
             }
         }
 
+        if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "iothread name".to_string(),
+                MAX_STRING_LENGTH,
+            )
+            .into());
+        }
+
         Ok(())
     }
 }
@@ -112,7 +122,8 @@ impl VmConfig {
             .push("mac")
             .push("fds")
             .push("vhost")
-            .push("vhostfds");
+            .push("vhostfds")
+            .push("iothread");
 
         cmd_parser.parse(net_config)?;
 
@@ -131,6 +142,7 @@ impl VmConfig {
         net.mac = cmd_parser.get_value::<String>("mac")?;
         net.tap_fd = cmd_parser.get_value::<i32>("fds")?;
         net.vhost_fd = cmd_parser.get_value::<i32>("vhostfds")?;
+        net.iothread = cmd_parser.get_value::<String>("iothread")?;
 
         self.add_netdev(net);
 

@@ -32,6 +32,7 @@ pub struct DriveConfig {
     pub read_only: bool,
     pub direct: bool,
     pub serial_num: Option<String>,
+    pub iothread: Option<String>,
 }
 
 impl DriveConfig {
@@ -53,6 +54,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             serial_num: None,
+            iothread: None,
         }
     }
 }
@@ -83,6 +85,14 @@ impl ConfigCheck for DriveConfig {
             .into());
         }
 
+        if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "iothread name".to_string(),
+                MAX_STRING_LENGTH,
+            )
+            .into());
+        }
+
         Ok(())
     }
 }
@@ -108,7 +118,8 @@ impl VmConfig {
             .push("id")
             .push("readonly")
             .push("direct")
-            .push("serial");
+            .push("serial")
+            .push("iothread");
 
         cmd_parser.parse(drive_config)?;
 
@@ -126,6 +137,7 @@ impl VmConfig {
             drive.direct = direct.into();
         }
         drive.serial_num = cmd_parser.get_value::<String>("serial")?;
+        drive.iothread = cmd_parser.get_value::<String>("iothread")?;
 
         self.add_drive(drive);
 

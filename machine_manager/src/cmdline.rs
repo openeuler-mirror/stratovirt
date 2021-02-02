@@ -226,6 +226,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .required(false),
         )
         .arg(
+            Arg::with_name("iothread")
+                .multiple(true)
+                .long("iothread")
+                .value_name("id=str")
+                .help("configure a iothread ID 'str'")
+                .takes_values(true),
+        )
+        .arg(
             Arg::with_name("balloon")
                 .long("balloon")
                 .value_name("[deflate_on_oom=]")
@@ -292,6 +300,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     update_args_to_config_multi!((args.values_of("device")), vm_cfg, update_vsock);
     update_args_to_config_multi!((args.values_of("netdev")), vm_cfg, update_net);
     update_args_to_config_multi!((args.values_of("chardev")), vm_cfg, update_console);
+    update_args_to_config_multi!((args.values_of("iothread")), vm_cfg, update_iothread);
 
     // Check the mini-set for Vm to start is ok
     vm_cfg
