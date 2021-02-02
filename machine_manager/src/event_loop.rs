@@ -128,7 +128,10 @@ impl EventLoop {
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 loop {
-                    event_loop.main_loop.run()?;
+                    if !event_loop.main_loop.run()? {
+                        info!("MainLoop exits due to guest internal operation.");
+                        return Ok(());
+                    }
                 }
             } else {
                 bail!("Global Event Loop have not been initialized.")
