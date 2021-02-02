@@ -44,9 +44,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use vmm_sys_util::terminal::Terminal;
 
-use crate::errors::Result;
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
+use crate::{errors::Result, event_loop::EventLoop};
 use qmp_schema as schema;
 use schema::QmpCommand;
 
@@ -345,12 +345,15 @@ pub fn handle_qmp(stream_fd: RawFd, controller: &Arc<dyn MachineExternalInterfac
                     reason: "host-qmp-quit".to_string(),
                 };
                 event!(SHUTDOWN; shutdown_msg);
+                if !EventLoop::clean() {
+                    error!("Clean environment failed!");
+                }
 
                 std::io::stdin()
                     .lock()
                     .set_canon_mode()
                     .expect("Failed to set terminal to canon mode.");
-                std::process::exit(1);
+                std::process::exit(0);
             }
 
             Ok(())
