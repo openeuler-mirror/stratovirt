@@ -379,7 +379,11 @@ fn setup_boot_params(
     if mem_end < layout_32bit_gap_end {
         boot_params.add_e820_entry(high_memory_start, mem_end - high_memory_start, E820_RAM);
     } else {
-        boot_params.add_e820_entry(high_memory_start, config.gap_range.0, E820_RAM);
+        boot_params.add_e820_entry(
+            high_memory_start,
+            config.gap_range.0 - high_memory_start,
+            E820_RAM,
+        );
         boot_params.add_e820_entry(
             layout_32bit_gap_end,
             mem_end - layout_32bit_gap_end,
