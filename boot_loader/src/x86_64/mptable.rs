@@ -87,7 +87,7 @@ impl ConfigTableHeader {
             length,
             spec: SPEC_VERSION,
             checksum: 0,
-            oem_id: [b'q', b'v', 0x0, 0x0, 0x0, 0x0, 0x0, 0x0],
+            oem_id: [b'S', b'T', b'R', b'A', b'T', b'O', 0x0, 0x0],
             product_id: [
                 b'1', b'.', b'0', 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
             ],
