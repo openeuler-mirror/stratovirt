@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::Result;
+use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ExBool, VmConfig};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ impl BalloonConfig {
 impl VmConfig {
     pub fn update_balloon(&mut self, balloon_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("balloon");
-        cmd_parser.push("deflate-on-oom");
+        cmd_parser.push("").push("deflate-on-oom");
 
         cmd_parser.parse(balloon_config)?;
 
@@ -38,6 +38,12 @@ impl VmConfig {
         if let Some(default) = cmd_parser.get_value::<ExBool>("deflate-on-oom")? {
             balloon.deflate_on_oom = default.into();
         }
+        if let Some(should_empty) = cmd_parser.get_value::<String>("")? {
+            if should_empty != "" {
+                return Err(ErrorKind::InvalidParam(should_empty).into());
+            }
+        }
+
         self.balloon = Some(balloon);
 
         Ok(())

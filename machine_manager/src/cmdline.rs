@@ -238,6 +238,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .long("balloon")
                 .value_name("[deflate_on_oom=]")
                 .help("add balloon device")
+                .can_no_value(true)
                 .takes_value(true),
         )
 }
