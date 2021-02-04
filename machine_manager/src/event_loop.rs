@@ -146,6 +146,11 @@ impl EventLoop {
     /// Set CURRENT_MAINLOOP to None to release MainLoopContext,
     /// otherwise, it will not be released automatically.
     pub fn clean() -> bool {
+        unsafe {
+            if GLOBAL_EVENT_LOOP.is_none() {
+                return true;
+            }
+        }
         let ret = Self::get_ctx(None).exit();
         unsafe {
             if GLOBAL_EVENT_LOOP.is_some() {
