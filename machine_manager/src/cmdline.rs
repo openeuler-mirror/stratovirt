@@ -88,7 +88,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("machine")
                 .long("machine")
                 .value_name("[type=]name[,dump_guest_core=on|off][,mem-share=on|off]")
-                .help("selects emulated machine")
+                .help("selects emulated machine and set properties")
                 .takes_value(true),
         )
         .arg(
@@ -101,14 +101,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("memory")
                 .long("m")
-                .value_name("[size=]megs")
+                .value_name("[size=]megs[m|M|g|G]")
                 .help("configure guest RAM")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("mem-path")
                 .long("mem-path")
-                .value_name("file backend file of memory")
+                .value_name("filebackend file path")
                 .help("configure file path that backs guest memory.")
                 .takes_value(true),
         )
@@ -130,7 +130,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("kernel-cmdline")
                 .multiple(true)
                 .long("append")
-                .value_name("command-line parameters")
+                .value_name("kernel cmdline parameters")
                 .help("use 'cmdline' as kernel command line")
                 .takes_values(true),
         )
@@ -144,7 +144,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("api-channel")
                 .long("api-channel")
-                .value_name("unix:PATH")
+                .value_name("unix:socket_path")
                 .help("set api-channel's unixsocket path")
                 .takes_value(true)
                 .required(true),
@@ -153,7 +153,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("drive")
                 .multiple(true)
                 .long("drive")
-                .value_name("[file=path][,id=str][,readonly=][,direct=]")
+                .value_name("file=path,id=str[,readonly=][,direct=][,serial=][,iothread=]")
                 .help("use 'file' as a drive image")
                 .takes_values(true),
         )
@@ -161,7 +161,9 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("netdev")
                 .multiple(true)
                 .long("netdev")
-                .value_name("tap[,id=str][,netdev=hostname][,mac=addr]")
+                .value_name(
+                    "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfds=][,iothread=]",
+                )
                 .help("configure a host TAP network with ID 'str'")
                 .takes_values(true),
         )
@@ -169,16 +171,16 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("chardev")
                 .multiple(true)
                 .long("chardev")
-                .value_name("chartype[,id=str][,path=socket_path]")
-                .help("set char device for vm")
+                .value_name("id=str,path=socket_path")
+                .help("set char device virtio console for vm")
                 .takes_values(true),
         )
         .arg(
             Arg::with_name("device")
                 .multiple(true)
                 .long("device")
-                .value_name("device_type[,prop1=value1,...]")
-                .help("add device (based on driver) and sets driver properties")
+                .value_name("vsock,id=str,guest-cid=u32[,vhostfd=]")
+                .help("add virtio vsock device and sets properties")
                 .takes_values(true),
         )
         .arg(
@@ -192,7 +194,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("display log")
                 .long("D")
-                .value_name("log_path")
+                .value_name("log path")
                 .help("output log to logfile (default stderr)")
                 .takes_value(true)
                 .can_no_value(true),
@@ -200,6 +202,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("pidfile")
                 .long("pidfile")
+                .value_name("pidfile path")
                 .help("write PID to 'file'")
                 .takes_value(true),
         )
@@ -236,7 +239,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("balloon")
                 .long("balloon")
-                .value_name("[deflate_on_oom=]")
+                .value_name("[deflate_on_oom=bool]")
                 .help("add balloon device")
                 .can_no_value(true)
                 .takes_value(true),
