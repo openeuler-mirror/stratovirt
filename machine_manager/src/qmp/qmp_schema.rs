@@ -325,6 +325,7 @@ pub struct blockdev_add {
     pub cache: Option<CacheOptions>,
     #[serde(rename = "read-only")]
     pub read_only: Option<bool>,
+    pub driver: Option<String>,
 }
 
 impl Command for blockdev_add {
