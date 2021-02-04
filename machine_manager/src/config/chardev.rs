@@ -85,10 +85,14 @@ impl VmConfig {
         let mut console = ConsoleConfig::default();
         if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
             console.console_id = console_id;
-        }
+        } else {
+            return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
+        };
         if let Some(console_path) = cmd_parser.get_value::<String>("path")? {
             console.socket_path = console_path;
-        }
+        } else {
+            return Err(ErrorKind::FieldIsMissing("path", "chardev").into());
+        };
 
         self.add_console(console);
 
@@ -135,8 +139,10 @@ impl VmConfig {
             if serial_type == "stdio" {
                 self.serial = Some(SerialConfig { stdio: true });
             } else {
-                self.serial = Some(SerialConfig { stdio: false });
+                return Err(ErrorKind::InvalidParam(serial_type).into());
             }
+        } else {
+            self.serial = Some(SerialConfig { stdio: false });
         }
 
         Ok(())
@@ -196,12 +202,12 @@ impl VmConfig {
                 let vsock_id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
                     vsock_id
                 } else {
-                    bail!("\"id\" is missing for vsock device.");
+                    return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
                 };
                 let guest_cid = if let Some(guest_cid) = cmd_parser.get_value::<u64>("guest-cid")? {
                     guest_cid
                 } else {
-                    bail!("\"guest-cid\" is missing for vsock device.")
+                    return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
                 };
                 let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
                 self.vsock = Some(VsockConfig {

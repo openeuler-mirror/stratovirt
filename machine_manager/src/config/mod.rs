@@ -66,6 +66,9 @@ pub mod errors {
             UnknownDeviceType(item: String) {
                 display("Unknown device type: {}!", item)
             }
+            FieldIsMissing(field: &'static str, device: &'static str) {
+                display("\'{}\' is missing for \'{}\' device.", field, device)
+            }
             NrcpusError {
                 display("Number of vcpu should be more than 0 and less than 255.")
             }

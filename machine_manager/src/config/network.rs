@@ -131,9 +131,13 @@ impl VmConfig {
         let mut net = NetworkInterfaceConfig::default();
         if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
             net.iface_id = net_id;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("id", "netdev").into());
         }
         if let Some(net_hostname) = cmd_parser.get_value::<String>("netdev")? {
             net.host_dev_name = net_hostname;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("netdev", "netdev").into());
         }
         if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
             if vhost.into() {

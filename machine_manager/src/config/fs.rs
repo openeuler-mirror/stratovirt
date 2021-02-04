@@ -127,9 +127,13 @@ impl VmConfig {
         let mut drive = DriveConfig::default();
         if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
             drive.path_on_host = drive_path;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("file", "drive").into());
         }
         if let Some(drive_id) = cmd_parser.get_value::<String>("id")? {
             drive.drive_id = drive_id;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("id", "drive").into());
         }
         if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
             drive.read_only = read_only.into();
