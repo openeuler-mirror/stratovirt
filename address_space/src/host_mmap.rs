@@ -58,13 +58,20 @@ impl FileBackend {
             unsafe { libc::unlink(fs_cstr) };
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
+            let is_created = !path.exists();
             // Open the file, if not exist, create it.
-            std::fs::OpenOptions::new()
+            let file_ret = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .open(path)
-                .chain_err(|| format!("Failed to Open file: {}", file_path))?
+                .chain_err(|| format!("Failed to Open file: {}", file_path))?;
+
+            if is_created {
+                unsafe { libc::unlink(std::ffi::CString::new(file_path).unwrap().into_raw()) };
+            }
+
+            file_ret
         };
 
         let old_file_len = file.metadata().unwrap().len();
@@ -305,8 +312,6 @@ mod test {
             f_back.as_ref().unwrap().file.metadata().unwrap().len(),
             100u64
         );
-
-        std::fs::remove_file(file_path).unwrap();
     }
 
     #[test]
