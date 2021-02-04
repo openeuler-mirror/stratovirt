@@ -612,4 +612,4 @@ You can enable StratoVirt's logging by:
 ```
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
-StratoVirt supports four log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
+StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
