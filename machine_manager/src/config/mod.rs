@@ -63,6 +63,9 @@ pub mod errors {
             IntegerOverflow(item: &'static str) {
                 display("Integer overflow occurred during parse {}!", item)
             }
+            UnknownDeviceType(item: String) {
+                display("Unknown device type: {}!", item)
+            }
             NrcpusError {
                 display("Number of vcpu should be more than 0 and less than 255.")
             }
@@ -70,7 +73,7 @@ pub mod errors {
                 display("Size of memory should be less than 512G and more than 128M.")
             }
             GuestCidError {
-                display("Vsock guest-cid should be more than 3 and less than 4294967296.")
+                display("Vsock guest-cid should >= 3 and < 4294967296.")
             }
             MacFormatError {
                 display("Mac address is illegal.")

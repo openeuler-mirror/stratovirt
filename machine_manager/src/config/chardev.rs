@@ -188,13 +188,29 @@ impl VmConfig {
         cmd_parser.parse(vsock_config)?;
 
         if let Some(device_type) = cmd_parser.get_value::<String>("")? {
-            if device_type.contains("vsock") {
+            if device_type == "vsock" {
+                if self.vsock.is_some() {
+                    bail!("Device vsock can only be set one for one StratoVirt VM.");
+                }
+
+                let vsock_id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
+                    vsock_id
+                } else {
+                    bail!("\"id\" is missing for vsock device.");
+                };
+                let guest_cid = if let Some(guest_cid) = cmd_parser.get_value::<u64>("guest-cid")? {
+                    guest_cid
+                } else {
+                    bail!("\"guest-cid\" is missing for vsock device.")
+                };
                 let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
                 self.vsock = Some(VsockConfig {
-                    vsock_id: cmd_parser.get_value::<String>("id")?.unwrap(),
-                    guest_cid: cmd_parser.get_value::<u64>("guest-cid")?.unwrap(),
+                    vsock_id,
+                    guest_cid,
                     vhost_fd,
                 });
+            } else {
+                return Err(ErrorKind::UnknownDeviceType(device_type).into());
             }
         }
 
