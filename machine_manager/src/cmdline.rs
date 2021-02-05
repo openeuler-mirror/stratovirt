@@ -187,8 +187,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("serial")
                 .long("serial")
                 .value_name("[stdio]")
-                .help("add serial and set stdio or not")
-                .can_no_value(true)
+                .help("add serial and set chardev [stdio] for it")
                 .takes_value(true),
         )
         .arg(

@@ -135,15 +135,14 @@ impl VmConfig {
 
         cmd_parser.parse(serial_config)?;
 
+        let mut stdio = false;
         if let Some(serial_type) = cmd_parser.get_value::<String>("")? {
-            if serial_type == "stdio" {
-                self.serial = Some(SerialConfig { stdio: true });
-            } else {
-                return Err(ErrorKind::InvalidParam(serial_type).into());
+            match serial_type.as_str() {
+                "stdio" => stdio = true,
+                _ => return Err(ErrorKind::InvalidParam(serial_type).into()),
             }
-        } else {
-            self.serial = Some(SerialConfig { stdio: false });
-        }
+        };
+        self.serial = Some(SerialConfig { stdio });
 
         Ok(())
     }
