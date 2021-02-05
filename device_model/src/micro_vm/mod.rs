@@ -71,7 +71,6 @@ use machine_manager::{
 use util::device_tree;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::CompileFDT;
-use util::errors::ErrorKind;
 use util::loop_context::{
     EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -622,18 +621,6 @@ impl LightMachine {
         EventLoop::update_event(vec![notifier], None)?;
         Ok(())
     }
-
-    /// Release resource after exiting the VM.
-    fn unrealize(&self) -> bool {
-        if let Err(ref e) = self.bus.unrealize() {
-            error!(
-                "Failed to release resource, {}",
-                error_chain::ChainedError::display_chain(e)
-            );
-            return false;
-        }
-        true
-    }
 }
 
 impl MachineLifecycle for LightMachine {
@@ -1126,9 +1113,6 @@ impl EventLoopManager for LightMachine {
     }
 
     fn loop_cleanup(&self) -> util::errors::Result<()> {
-        if !self.unrealize() {
-            return Err(ErrorKind::FailedToCleanEnv.into());
-        }
         if let Err(e) = std::io::stdin().lock().set_canon_mode() {
             error!(
                 "destroy virtual machine: reset stdin to canonical mode failed, {}",

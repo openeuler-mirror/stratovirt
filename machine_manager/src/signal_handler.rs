@@ -9,16 +9,19 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
+extern crate vmm_sys_util;
+use crate::event_loop::EventLoop;
+use std::io::Write;
 
-use libc::{c_int, c_void, sighandler_t, signal};
+use libc::{c_int, c_void, siginfo_t};
+use vmm_sys_util::signal::register_signal_handler;
 use vmm_sys_util::terminal::Terminal;
 
-use crate::event_loop::EventLoop;
-
 const VM_EXIT_GENE_ERR: i32 = -1;
+const SYSTEMCALL_OFFSET: isize = 6;
 
-extern "C" fn signal_handler(_sig: c_int) {
-    info!("Received kill signal, removing env and exiting...");
+fn basic_clean() {
+    info!("Removing environment and exiting...");
     if !EventLoop::clean() {
         error!("Clean environment failed!");
     }
@@ -26,17 +29,33 @@ extern "C" fn signal_handler(_sig: c_int) {
         .lock()
         .set_canon_mode()
         .expect("Failed to set terminal to canon mode.");
+}
+
+fn exit_with_code(code: i32) {
+    // Safe, because the basic_clean function has been executed before exit.
     unsafe {
-        libc::_exit(VM_EXIT_GENE_ERR);
+        libc::_exit(code);
     }
 }
 
-fn get_handler() -> sighandler_t {
-    signal_handler as extern "C" fn(c_int) as *mut c_void as sighandler_t
+extern "C" fn handle_signal_term(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
+    info!("Received kill signal, signal num: {}", num);
+    basic_clean();
+    exit_with_code(VM_EXIT_GENE_ERR);
 }
 
+extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) {
+    let badcall = unsafe { *(info as *const i32).offset(SYSTEMCALL_OFFSET) as usize };
+    error!("Received a bad system call, number: {}", badcall);
+    basic_clean();
+    write!(&mut std::io::stderr(), "Bad system call").expect("Failed to write to stderr");
+    exit_with_code(VM_EXIT_GENE_ERR);
+}
+
+/// Register kill signal handler. Signals suported now are SIGTERM and SIGSYS.
 pub fn register_kill_signal() {
-    unsafe {
-        signal(libc::SIGTERM, get_handler());
-    }
+    register_signal_handler(libc::SIGTERM, handle_signal_term)
+        .expect("Register signal handler for SIGTERM failed!");
+    register_signal_handler(libc::SIGSYS, handle_signal_sys)
+        .expect("Register signal handler for SIGSYS failed!");
 }

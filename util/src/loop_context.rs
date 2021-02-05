@@ -12,9 +12,9 @@
 
 extern crate vmm_sys_util;
 
-use std::collections::BTreeMap;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
+use std::{collections::BTreeMap, fs};
 
 use libc::{c_void, read};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
@@ -114,6 +114,8 @@ pub struct EventLoopContext {
     gc: Arc<RwLock<Vec<Box<EventNotifier>>>>,
     /// Temp events vector, store wait returned events.
     ready_events: Vec<EpollEvent>,
+    /// Path of files that should be removed after exiting the vm.
+    files: Vec<String>,
 }
 
 unsafe impl Sync for EventLoopContext {}
@@ -128,6 +130,7 @@ impl EventLoopContext {
             events: Arc::new(RwLock::new(BTreeMap::new())),
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
+            files: Vec::new(),
         }
     }
 
@@ -254,6 +257,7 @@ impl EventLoopContext {
     pub fn run(&mut self) -> Result<bool> {
         if let Some(manager) = &self.manager {
             if manager.loop_should_exit() {
+                manager.loop_cleanup()?;
                 return Ok(false);
             }
         }
@@ -293,17 +297,19 @@ impl EventLoopContext {
         Ok(true)
     }
 
-    /// VM exit and release resource.
-    pub fn exit(&self) -> bool {
-        if let Some(vm) = &self.manager {
-            if let Err(ref e) = vm.loop_cleanup() {
-                error!(
-                    "Failed to exit vm, {}",
-                    error_chain::ChainedError::display_chain(e)
-                );
+    /// Add path of files.
+    pub fn add_files(&mut self, path: String) {
+        self.files.push(path);
+    }
+
+    /// Remove unused files.
+    pub fn remove_files(&mut self) -> bool {
+        while let Some(file) = self.files.pop() {
+            if let Err(ref e) = fs::remove_file(&file) {
+                error!("Failed to delete console socket file:{} :{}", &file, e);
                 return false;
             } else {
-                return true;
+                info!("Delete file: {} successfully.", &file);
             }
         }
         true

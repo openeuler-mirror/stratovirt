@@ -456,11 +456,4 @@ impl Bus {
 
         Ok(())
     }
-
-    pub fn unrealize(&self) -> Result<()> {
-        for dev in &self.devices {
-            dev.unrealize()?;
-        }
-        Ok(())
-    }
 }
