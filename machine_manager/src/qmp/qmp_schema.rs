@@ -74,7 +74,7 @@ pub enum QmpCommand {
         id: Option<u32>,
     },
     device_add {
-        arguments: device_add,
+        arguments: Box<device_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<u32>,
     },
@@ -270,6 +270,16 @@ pub struct device_add {
     pub addr: Option<String>,
     #[serde(rename = "lun")]
     pub lun: Option<usize>,
+    #[serde(rename = "drive")]
+    pub drive: Option<String>,
+    #[serde(rename = "romfile")]
+    pub romfile: Option<String>,
+    #[serde(rename = "share-rw")]
+    pub share: Option<String>,
+    #[serde(rename = "bus")]
+    pub bus: Option<String>,
+    #[serde(rename = "mac")]
+    pub mac: Option<String>,
 }
 
 impl Command for device_add {
@@ -325,7 +335,11 @@ pub struct blockdev_add {
     pub cache: Option<CacheOptions>,
     #[serde(rename = "read-only")]
     pub read_only: Option<bool>,
+    #[serde(rename = "read-zeros")]
+    pub read_zeros: Option<bool>,
     pub driver: Option<String>,
+    pub backing: Option<String>,
+    pub discard: Option<String>,
 }
 
 impl Command for blockdev_add {
@@ -361,6 +375,9 @@ pub struct netdev_add {
     #[serde(rename = "ifname")]
     pub if_name: Option<String>,
     pub fds: Option<String>,
+    pub dnssearch: Option<String>,
+    #[serde(rename = "type")]
+    pub net_type: Option<String>,
 }
 
 impl Command for netdev_add {
@@ -1133,7 +1150,7 @@ mod tests {
             "execute": "device_add" , 
             "arguments": {
                 "id":"net-0", 
-                "drive":"virtio-net-mmio", 
+                "driv":"virtio-net-mmio", 
                 "addr":"0x0"
             }
         }
@@ -1142,7 +1159,7 @@ mod tests {
             Ok(_) => "ok".to_string(),
             Err(e) => e.to_string(),
         };
-        let ret_msg = r#"unknown field `drive`"#;
+        let ret_msg = r#"unknown field `driv`"#;
         assert!(err_msg.contains(ret_msg));
 
         // right arguments for device_del.
