@@ -373,8 +373,8 @@ impl CPUInterface for CPU {
             },
             None => {}
         }
-        let mut cpu_state = cpu_state.lock().unwrap();
         cvar.notify_all();
+        let mut cpu_state = cpu_state.lock().unwrap();
 
         cpu_state = cvar
             .wait_timeout(cpu_state, Duration::from_millis(16))
@@ -607,12 +607,18 @@ impl CPUThreadWorker {
 
         info!("vcpu{} start running", self.thread_cpu.id);
         while let Ok(true) = self.ready_for_running() {
+            #[cfg(not(test))]
             if !self
                 .thread_cpu
                 .kvm_vcpu_exec()
                 .chain_err(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
             {
                 break;
+            }
+
+            #[cfg(test)]
+            {
+                thread::sleep(Duration::from_millis(10));
             }
         }
 
@@ -857,23 +863,35 @@ mod tests {
         // Created -> Paused -> Running -> Paused -> Running -> Destroy
         let cpu_arc = Arc::new(cpu);
         CPU::start(cpu_arc.clone(), cpu_thread_barrier, true).unwrap();
+
+        // Wait for CPU thread init signal hook
+        std::thread::sleep(Duration::from_millis(50));
         cpus_thread_barrier.wait();
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
         drop(cpu_state);
 
         assert!(cpu_arc.resume().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
         drop(cpu_state);
 
         assert!(cpu_arc.pause().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
         drop(cpu_state);
 
         assert!(cpu_arc.resume().is_ok());
-        let _ = cpu_arc.destroy();
+        assert!(cpu_arc.destroy().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Nothing);
         drop(cpu_state);
@@ -952,7 +970,6 @@ mod tests {
 
         let core_reg_base: u64 = 0x6030_0000_0010_0000;
         let mmio_addr: u64 = guest_addr + mem_size as u64;
-        println!("mmio addr is {}", mmio_addr);
 
         cpu.fd
             .set_one_reg(core_reg_base + 2 * 32, guest_addr)
