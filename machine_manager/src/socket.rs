@@ -11,11 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 use serde::Deserialize;
-use std::io::{Read, Write};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex, RwLock};
-use std::{fs, io};
 
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
@@ -42,7 +41,7 @@ const MAX_SOCKET_MSG_LENGTH: usize = 8192;
 ///
 /// fn main() -> std::io::Result<()> {
 ///     let listener = UnixListener::bind("/path/to/my/socket")?;
-///     let socket = Socket::from_unix_listener(listener, None, "/path/to/my/socket".to_string());
+///     let socket = Socket::from_unix_listener(listener, None);
 ///     assert!(!socket.is_connected());
 ///
 ///     let client_stream = UnixStream::connect("/path/to/my/socket")?;
@@ -61,21 +60,6 @@ pub struct Socket {
     stream: RwLock<Option<SocketStream>>,
     /// Perform socket command
     performer: Option<Arc<dyn MachineExternalInterface>>,
-    /// path of socket file
-    path: String,
-}
-
-impl Drop for Socket {
-    fn drop(&mut self) {
-        if let Err(ref e) = fs::remove_file(self.path.clone()) {
-            error!(
-                "Failed to remove api socket file: {} , {} , please remove it manually",
-                &self.path, e
-            );
-        } else {
-            info!("Delete api Socket file: {} successfully", &self.path);
-        }
-    }
 }
 
 impl Socket {
@@ -88,14 +72,12 @@ impl Socket {
     pub fn from_unix_listener(
         listener: UnixListener,
         performer: Option<Arc<dyn MachineExternalInterface>>,
-        path: String,
     ) -> Self {
         Socket {
             sock_type: SocketType::Unix,
             listener,
             stream: RwLock::new(None),
             performer,
-            path,
         }
     }
 
@@ -413,8 +395,8 @@ impl SocketRWHandler {
             let ret = unsafe { recvmsg(self.socket_fd, &mut mhdr, MSG_DONTWAIT) };
 
             if ret == -1 {
-                let sock_err = io::Error::last_os_error();
-                if sock_err.kind() == io::ErrorKind::WouldBlock {
+                let sock_err = Error::last_os_error();
+                if sock_err.kind() == ErrorKind::WouldBlock {
                     break;
                 } else {
                     return Err(sock_err);
@@ -456,7 +438,7 @@ impl SocketRWHandler {
             if let Some(pos) = self.pos.checked_add(1) {
                 self.pos = pos;
             } else {
-                return Err(io::ErrorKind::InvalidInput.into());
+                return Err(ErrorKind::InvalidInput.into());
             }
         }
         Ok(())
@@ -496,8 +478,8 @@ impl SocketRWHandler {
         mhdr.msg_flags = 0;
 
         if unsafe { sendmsg(self.socket_fd, &mhdr, 0) } == -1 {
-            Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
+            Err(Error::new(
+                ErrorKind::BrokenPipe,
                 "The socket pipe is broken!",
             ))
         } else {
@@ -529,7 +511,7 @@ impl Write for SocketRWHandler {
         if let Some(pos) = self.pos.checked_add(buf.len()) {
             self.pos = pos;
         } else {
-            return Err(io::ErrorKind::InvalidInput.into());
+            return Err(ErrorKind::InvalidInput.into());
         }
 
         self.write_fd(buf.len())?;
@@ -628,8 +610,8 @@ impl SocketHandler {
                 let _ = self.stream.write(&[b'\n'])?;
                 Ok(())
             }
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
+            Err(_) => Err(Error::new(
+                ErrorKind::BrokenPipe,
                 "The socket pipe is broken!",
             )),
         }
@@ -822,7 +804,7 @@ mod tests {
     fn test_socket_lifecycle() {
         // Pre test. Environment Preparation
         let (listener, _, server) = prepare_unix_socket_environment("04");
-        let socket = Socket::from_unix_listener(listener, None, "test_04.sock".to_string());
+        let socket = Socket::from_unix_listener(listener, None);
 
         // life cycle test
         // 1.Unconnected

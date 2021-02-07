@@ -46,7 +46,7 @@ use vmm_sys_util::terminal::Terminal;
 
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
-use crate::{errors::Result, event_loop::EventLoop};
+use crate::{errors::Result, temp_cleaner::TempCleaner};
 use qmp_schema as schema;
 use schema::QmpCommand;
 
@@ -345,9 +345,7 @@ pub fn handle_qmp(stream_fd: RawFd, controller: &Arc<dyn MachineExternalInterfac
                     reason: "host-qmp-quit".to_string(),
                 };
                 event!(SHUTDOWN; shutdown_msg);
-                if !EventLoop::clean() {
-                    error!("Clean environment failed!");
-                }
+                TempCleaner::clean();
 
                 std::io::stdin()
                     .lock()
@@ -619,7 +617,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("06");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None, "test_06.sock".to_string());
+        let socket = Socket::from_unix_listener(listener, None);
         socket.bind_unix_stream(server);
         QmpChannel::bind_writer(SocketRWHandler::new(socket.get_stream_fd()));
 
@@ -669,7 +667,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("07");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None, "test_07.sock".to_string());
+        let socket = Socket::from_unix_listener(listener, None);
         socket.bind_unix_stream(server);
 
         // 1.send greeting response

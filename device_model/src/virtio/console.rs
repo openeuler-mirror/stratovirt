@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::{config::ConsoleConfig, event_loop::EventLoop};
+use machine_manager::{config::ConsoleConfig, event_loop::EventLoop, temp_cleaner::TempCleaner};
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::num_ops::{read_u32, write_u32};
@@ -297,8 +297,6 @@ pub struct Console {
     driver_features: u64,
     /// UnixListener for virtio-console to communicate in host.
     listener: UnixListener,
-    /// Path to console socket file.
-    path: String,
 }
 
 impl Console {
@@ -312,6 +310,9 @@ impl Console {
         let listener = UnixListener::bind(path.as_str())
             .unwrap_or_else(|_| panic!("Failed to bind socket for console {}", path));
 
+        // add file to temporary pool, so it could be clean when vm exit.
+        TempCleaner::add_path(path.clone());
+
         limit_permission(path.as_str())
             .unwrap_or_else(|_| panic!("Failed to change file permission for console {}", path));
         Console {
@@ -319,7 +320,6 @@ impl Console {
             device_features: 0_u64,
             driver_features: 0_u64,
             listener,
-            path,
         }
     }
 }
@@ -329,7 +329,6 @@ impl VirtioDevice for Console {
     fn realize(&mut self) -> Result<()> {
         self.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
 
-        EventLoop::add_files(self.path.clone());
         Ok(())
     }
 

@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 extern crate vmm_sys_util;
-use crate::event_loop::EventLoop;
+use crate::temp_cleaner::TempCleaner;
 use std::io::Write;
 
 use libc::{c_int, c_void, siginfo_t};
@@ -22,9 +22,10 @@ const SYSTEMCALL_OFFSET: isize = 6;
 
 fn basic_clean() {
     info!("Removing environment and exiting...");
-    if !EventLoop::clean() {
-        error!("Clean environment failed!");
-    }
+
+    // clean temporary file
+    TempCleaner::clean();
+
     std::io::stdin()
         .lock()
         .set_canon_mode()
