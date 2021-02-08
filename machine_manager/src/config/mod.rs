@@ -289,7 +289,7 @@ impl CmdParser {
         }
         let param_items = cmd_param.split(',').collect::<Vec<&str>>();
         for param_item in param_items {
-            if param_item.starts_with('=') || cmd_param.ends_with('=') {
+            if param_item.starts_with('=') || param_item.ends_with('=') {
                 return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
             }
             let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
