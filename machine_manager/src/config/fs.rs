@@ -100,8 +100,16 @@ impl ConfigCheck for DriveConfig {
 
 impl VmConfig {
     /// Add new block device to `VmConfig`.
-    fn add_drive(&mut self, drive: DriveConfig) {
+    fn add_drive(&mut self, drive: DriveConfig) -> Result<()> {
         if let Some(mut drives) = self.drives.clone() {
+            for d in &drives {
+                if d.drive_id == drive.drive_id {
+                    return Err(
+                        ErrorKind::IdRepeat("drive".to_string(), d.drive_id.to_string()).into(),
+                    );
+                }
+            }
+
             drives.push(drive);
             self.drives = Some(drives);
         } else {
@@ -109,6 +117,8 @@ impl VmConfig {
             drives.push(drive);
             self.drives = Some(drives);
         }
+
+        Ok(())
     }
 
     /// Update '-drive ...' drive config to `VmConfig`.
@@ -144,9 +154,7 @@ impl VmConfig {
         drive.serial_num = cmd_parser.get_value::<String>("serial")?;
         drive.iothread = cmd_parser.get_value::<String>("iothread")?;
 
-        self.add_drive(drive);
-
-        Ok(())
+        self.add_drive(drive)
     }
 }
 

@@ -57,10 +57,13 @@ pub mod errors {
             StringLengthTooLong(t: String, len: usize) {
                 display("Input {} string's length must be no more than {}.", t, len)
             }
-            FieldRepeat(field: String, name: String) {
-                display("\'{}\' in {} is offerred more than once.", field, name)
+            FieldRepeat(param: String, field: String) {
+                display("Input field \'{}\' in {} is offered more than once.", field, param)
             }
-            IntegerOverflow(item: &'static str) {
+            IdRepeat(param: String, id: String) {
+                display("Input id \'{}\' for {} repeat.", id, param)
+            }
+            IntegerOverflow(item: String) {
                 display("Integer overflow occurred during parse {}!", item)
             }
             UnknownDeviceType(item: String) {
@@ -69,14 +72,15 @@ pub mod errors {
             FieldIsMissing(field: &'static str, device: &'static str) {
                 display("\'{}\' is missing for \'{}\' device.", field, device)
             }
-            NrcpusError {
-                display("Number of vcpu should be more than 0 and less than 255.")
-            }
-            MemsizeError {
-                display("Size of memory should be less than 512G and more than 128M.")
-            }
-            GuestCidError {
-                display("Vsock guest-cid should >= 3 and < 4294967296.")
+            IllegalValue(name: String, min: u64, min_include: bool, max: u64, max_include: bool) {
+                display(
+                    "{} must >{} {} and <{} {}.",
+                    name,
+                    if *min_include {"="} else {""},
+                    min,
+                    if *max_include {"="} else {""},
+                    max
+                )
             }
             MacFormatError {
                 display("Mac address is illegal.")
@@ -87,11 +91,14 @@ pub mod errors {
             UnRegularFile(t: String) {
                 display("{} is not a regular File.", t)
             }
+            Unaligned(param: String, value: u64, align: u64) {
+                display("Input value {} is unaligned with {} for {}.", value, align, param)
+            }
         }
     }
 }
 
-const MAX_STRING_LENGTH: usize = 255;
+pub const MAX_STRING_LENGTH: usize = 255;
 
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -307,7 +314,7 @@ impl CmdParser {
                     *field_value = Some(String::from(param_value));
                 } else {
                     return Err(
-                        ErrorKind::FieldRepeat(param_key.to_string(), self.name.clone()).into(),
+                        ErrorKind::FieldRepeat(self.name.clone(), param_key.to_string()).into(),
                     );
                 }
             } else {

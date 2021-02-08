@@ -16,9 +16,9 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParser, ConfigCheck, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
 
-const MAX_STRING_LENGTH: usize = 255;
+const MAX_IOTHREAD_NUM: usize = 8;
 
 /// Config structure for iothread.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -51,8 +51,27 @@ impl ConfigCheck for IothreadConfig {
 
 impl VmConfig {
     /// Add new iothread device to `VmConfig`.
-    fn add_iothread(&mut self, iothread: IothreadConfig) {
+    fn add_iothread(&mut self, iothread: IothreadConfig) -> Result<()> {
         if let Some(mut iothreads) = self.iothreads.clone() {
+            if iothreads.len() >= MAX_IOTHREAD_NUM {
+                return Err(ErrorKind::IllegalValue(
+                    "Iothread number".to_string(),
+                    0,
+                    true,
+                    MAX_IOTHREAD_NUM as u64,
+                    true,
+                )
+                .into());
+            }
+
+            for t in &iothreads {
+                if t.id == iothread.id {
+                    return Err(
+                        ErrorKind::IdRepeat("iothread".to_string(), t.id.to_string()).into(),
+                    );
+                }
+            }
+
             iothreads.push(iothread);
             self.iothreads = Some(iothreads);
         } else {
@@ -60,6 +79,8 @@ impl VmConfig {
             iothreads.push(iothread);
             self.iothreads = Some(iothreads);
         }
+
+        Ok(())
     }
 
     pub fn update_iothread(&mut self, iothread_config: &str) -> Result<()> {
@@ -73,8 +94,6 @@ impl VmConfig {
             iothread.id = id;
         }
 
-        self.add_iothread(iothread);
-
-        Ok(())
+        self.add_iothread(iothread)
     }
 }

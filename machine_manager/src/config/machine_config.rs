@@ -23,8 +23,8 @@ use util::num_ops::round_down;
 
 const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_MEMSIZE: u64 = 128;
-const MAX_NR_CPUS: u8 = 254;
-const MIN_NR_CPUS: u8 = 1;
+const MAX_NR_CPUS: u64 = 254;
+const MIN_NR_CPUS: u64 = 1;
 const MAX_MEMSIZE: u64 = 549_755_813_888;
 const MIN_MEMSIZE: u64 = 134_217_728;
 const M: u64 = 1024 * 1024;
@@ -101,31 +101,47 @@ impl MachineConfig {
                     "type" => {
                         machine_config.mach_type =
                             item_str.parse::<MachineType>().map_err(|_| {
-                                ErrorKind::ConvertValueFailed(item_str, "MachineType".to_string())
+                                ErrorKind::ConvertValueFailed("MachineType".to_string(), item_str)
                             })?
                     }
                     "vcpu_count" => {
-                        machine_config.nr_cpus = item_str.parse::<u8>().map_err(|_| {
-                            ErrorKind::ConvertValueFailed(item_str, "u8".to_string())
-                        })?
+                        let cpu = item_str.parse::<u64>().map_err(|_| {
+                            ErrorKind::ConvertValueFailed("vcpu_count".to_string(), item_str)
+                        })?;
+                        // limit cpu count
+                        if cpu < MIN_NR_CPUS || cpu > MAX_NR_CPUS {
+                            return Err(ErrorKind::IllegalValue(
+                                "CPU number".to_string(),
+                                MIN_NR_CPUS,
+                                true,
+                                MAX_NR_CPUS,
+                                true,
+                            )
+                            .into());
+                        }
+
+                        machine_config.nr_cpus = cpu as u8;
                     }
                     "mem_size" => {
                         machine_config.mem_config.mem_size = memory_unit_conversion(&item_str)
                             .map_err(|_| {
-                                ErrorKind::ConvertValueFailed(item_str, "u64".to_string())
+                                ErrorKind::ConvertValueFailed("mem_size".to_string(), item_str)
                             })?
                     }
                     "mem_path" => machine_config.mem_config.mem_path = Some(item_str),
                     "mem_share" => {
                         machine_config.mem_config.mem_share =
                             item_str.parse::<bool>().map_err(|_| {
-                                ErrorKind::ConvertValueFailed(item_str, "bool".to_string())
+                                ErrorKind::ConvertValueFailed("mem_share".to_string(), item_str)
                             })?
                     }
                     "dump_guest_core" => {
                         machine_config.mem_config.dump_guest_core =
                             item_str.parse::<bool>().map_err(|_| {
-                                ErrorKind::ConvertValueFailed(item_str, "bool".to_string())
+                                ErrorKind::ConvertValueFailed(
+                                    "dump_guest_core".to_string(),
+                                    item_str,
+                                )
                             })?
                     }
                     _ => return Err(ErrorKind::InvalidJsonField(name.to_string()).into()),
@@ -139,12 +155,15 @@ impl MachineConfig {
 
 impl ConfigCheck for MachineConfig {
     fn check(&self) -> Result<()> {
-        if self.nr_cpus < MIN_NR_CPUS || self.nr_cpus > MAX_NR_CPUS {
-            return Err(ErrorKind::NrcpusError.into());
-        }
-
         if self.mem_config.mem_size < MIN_MEMSIZE || self.mem_config.mem_size > MAX_MEMSIZE {
-            return Err(ErrorKind::MemsizeError.into());
+            return Err(ErrorKind::IllegalValue(
+                "Memory size".to_string(),
+                MIN_MEMSIZE,
+                true,
+                MAX_MEMSIZE,
+                true,
+            )
+            .into());
         }
 
         Ok(())
@@ -196,11 +215,15 @@ impl VmConfig {
 
         cmd_parser.parse(mem_config)?;
 
-        if let Some(mem_size) = cmd_parser.get_value::<String>("")? {
-            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size)?;
+        let mem = if let Some(mem_size) = cmd_parser.get_value::<String>("")? {
+            memory_unit_conversion(&mem_size)?
         } else if let Some(mem_size) = cmd_parser.get_value::<String>("size")? {
-            self.machine_config.mem_config.mem_size = memory_unit_conversion(&mem_size)?;
-        }
+            memory_unit_conversion(&mem_size)?
+        } else {
+            return Err(ErrorKind::FieldIsMissing("size", "memory").into());
+        };
+
+        self.machine_config.mem_config.mem_size = mem;
 
         Ok(())
     }
@@ -212,11 +235,28 @@ impl VmConfig {
 
         cmd_parser.parse(cpu_config)?;
 
-        if let Some(cpu_num) = cmd_parser.get_value::<u8>("")? {
-            self.machine_config.nr_cpus = cpu_num;
-        } else if let Some(cpu_num) = cmd_parser.get_value::<u8>("cpus")? {
-            self.machine_config.nr_cpus = cpu_num;
+        let cpu = if let Some(cpu) = cmd_parser.get_value::<u64>("")? {
+            cpu
+        } else if let Some(cpu) = cmd_parser.get_value::<u64>("cpus")? {
+            cpu
+        } else {
+            return Err(ErrorKind::FieldIsMissing("cpus", "smp").into());
+        };
+
+        // limit cpu count
+        if cpu < MIN_NR_CPUS || cpu > MAX_NR_CPUS {
+            return Err(ErrorKind::IllegalValue(
+                "CPU number".to_string(),
+                MIN_NR_CPUS,
+                true,
+                MAX_NR_CPUS,
+                true,
+            )
+            .into());
         }
+
+        // it is safe, as value limited before
+        self.machine_config.nr_cpus = cpu as u8;
 
         Ok(())
     }
@@ -235,7 +275,7 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
             value
                 .parse::<u64>()
                 .map_err(|_| {
-                    ErrorKind::ConvertValueFailed(String::from("u64"), origin_value.to_string())
+                    ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
                 })?
                 .checked_mul(M),
         )
@@ -246,17 +286,22 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
             value
                 .parse::<u64>()
                 .map_err(|_| {
-                    ErrorKind::ConvertValueFailed(String::from("u64"), origin_value.to_string())
+                    ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
                 })?
                 .checked_mul(G),
         )
     } else {
-        get_inner(round_down(
-            origin_value.parse::<u64>().map_err(|_| {
-                ErrorKind::ConvertValueFailed(String::from("u64"), origin_value.to_string())
-            })?,
-            M,
-        ))
+        let size = origin_value.parse::<u64>().map_err(|_| {
+            ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
+        })?;
+
+        if let Some(round) = round_down(size, M) {
+            if size != round {
+                return Err(ErrorKind::Unaligned("memory".to_string(), size, M).into());
+            }
+        }
+
+        get_inner(Some(size))
     }
 }
 
@@ -264,7 +309,7 @@ fn get_inner<T>(outer: Option<T>) -> Result<T> {
     if let Some(x) = outer {
         Ok(x)
     } else {
-        Err(ErrorKind::IntegerOverflow("-m").into())
+        Err(ErrorKind::IntegerOverflow("-m".to_string()).into())
     }
 }
 
@@ -340,8 +385,7 @@ mod tests {
         }
         "#;
         let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value).unwrap();
-        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
+        assert!(MachineConfig::from_value(&value).is_err());
     }
 
     #[test]
@@ -388,21 +432,16 @@ mod tests {
         };
         let mut machine_config = MachineConfig {
             mach_type: MachineType::MicroVm,
-            nr_cpus: MIN_NR_CPUS,
+            nr_cpus: MIN_NR_CPUS as u8,
             mem_config: memory_config,
         };
         assert!(machine_config.check().is_ok());
 
-        machine_config.nr_cpus = MAX_NR_CPUS;
+        machine_config.nr_cpus = MAX_NR_CPUS as u8;
         machine_config.mem_config.mem_size = MAX_MEMSIZE;
         assert!(machine_config.check().is_ok());
 
-        machine_config.nr_cpus = MIN_NR_CPUS - 1;
-        assert!(!machine_config.check().is_ok());
-        machine_config.nr_cpus = MAX_NR_CPUS + 1;
-        assert!(!machine_config.check().is_ok());
-        machine_config.nr_cpus = MIN_NR_CPUS;
-
+        machine_config.nr_cpus = MIN_NR_CPUS as u8;
         machine_config.mem_config.mem_size = MIN_MEMSIZE - 1;
         assert!(!machine_config.check().is_ok());
         machine_config.mem_config.mem_size = MAX_MEMSIZE + 1;
