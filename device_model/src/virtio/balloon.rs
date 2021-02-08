@@ -9,22 +9,24 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-use std::cmp;
+use std::cmp::{self, Reverse};
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::{
-    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+    host_page_size, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType,
+    RegionIoEventFd, RegionType,
 };
 use machine_manager::{config::BalloonConfig, event_loop::EventLoop};
 use util::{
+    bitmap::Bitmap,
     byte_code::ByteCode,
     loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
-    num_ops::{read_u32, write_u32},
+    num_ops::{read_u32, round_down, write_u32},
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -40,6 +42,7 @@ const QUEUE_NUM_BALLOON: usize = 2;
 const BALLOON_PAGE_SIZE: u64 = 1 << VIRTIO_BALLOON_PFN_SHIFT;
 const BALLOON_INFLATE_EVENT: bool = true;
 const BALLOON_DEFLATE_EVENT: bool = false;
+const BITS_OF_TYPE_U64: u64 = 64;
 
 static mut BALLOON_DEV: Option<Arc<Mutex<Balloon>>> = None;
 type VirtioBalloonInterrupt = Box<dyn Fn(u32) -> Result<()> + Send + Sync>;
@@ -65,6 +68,38 @@ struct VirtioBalloonConfig {
 impl ByteCode for Iovec {}
 impl ByteCode for VirtioBalloonConfig {}
 
+/// Bitmap for balloon. It is used if the host page size is bigger than 4k.
+struct BalloonedPageBitmap {
+    /// The start hva address of bitmap.
+    base_address: u64,
+    /// Bitmap.
+    bitmap: Bitmap<u64>,
+}
+
+impl BalloonedPageBitmap {
+    fn new(len: u64) -> Self {
+        BalloonedPageBitmap {
+            base_address: 0,
+            bitmap: Bitmap::<u64>::new((len / BITS_OF_TYPE_U64) as usize + 1),
+        }
+    }
+
+    fn set_bit(&mut self, location: u64) -> Result<()> {
+        self.bitmap.set(location as usize)?;
+        Ok(())
+    }
+
+    fn is_full(&self, bits: u64) -> bool {
+        match self.bitmap.count_front_bits(bits as usize) {
+            Ok(nr) => nr == bits as usize,
+            Err(ref e) => {
+                error!("Failed to count bits: {}", e);
+                false
+            }
+        }
+    }
+}
+
 /// Read data segment starting at `iov.iov_base` + `offset` to buffer <T>.
 /// Return bufer <T>.
 ///
@@ -79,24 +114,19 @@ fn iov_to_buf<T: ByteCode>(
     offset: u64,
 ) -> Option<T> {
     let obj_len = std::mem::size_of::<T>() as u64;
-    let mut data: Vec<u8> = vec![0; obj_len as usize];
-    if offset >= iov.iov_len || offset + obj_len > iov.iov_len {
+    if offset + obj_len > iov.iov_len {
         return None;
     }
 
-    if let Err(ref e) = address_space.read(&mut data, iov.iov_base, iov.iov_len) {
-        error!(
-            "Read virtioqueue failed: {}",
-            error_chain::ChainedError::display_chain(e)
-        );
-        return None;
-    }
-
-    // Safe, because the offset is checked.
-    unsafe {
-        Some(std::ptr::read_volatile(
-            &data[(offset as usize)..] as *const _ as *const T,
-        ))
+    match address_space.read_object::<T>(GuestAddress(iov.iov_base.raw_value() + offset)) {
+        Ok(dat) => Some(dat),
+        Err(ref e) => {
+            error!(
+                "Read virtioqueue failed: {}",
+                error_chain::ChainedError::display_chain(e)
+            );
+            None
+        }
     }
 }
 
@@ -171,49 +201,23 @@ impl Request {
 
         for iov in self.iovec.iter() {
             let mut offset = 0;
-            if req_type == BALLOON_INFLATE_EVENT {
-                while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
-                    offset += std::mem::size_of::<u32>() as u64;
-                    let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
-                    let hva = match mem.get_host_address(gpa) {
-                        Some(addr) => addr,
-                        None => {
-                            error!("Failed to mark balloon page: can not get host address");
-                            continue;
-                        }
-                    };
-                    if (last_addr == 0) || (hva + BALLOON_PAGE_SIZE == last_addr) {
-                        free_len += 1;
-                    } else {
-                        memory_advise(
-                            last_addr as *const libc::c_void as *mut _,
-                            (free_len * BALLOON_PAGE_SIZE) as usize,
-                            advice,
-                        );
-                        free_len = 1;
+            let mut hvaset = Vec::new();
+            while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
+                offset += std::mem::size_of::<u32>() as u64;
+                let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
+                let hva = match mem.get_host_address(gpa) {
+                    Some(addr) => addr,
+                    None => {
+                        error!("Can not get host address, gpa: {}", gpa.raw_value());
+                        continue;
                     }
-
-                    if count_iov == iov.iov_len {
-                        memory_advise(
-                            hva as *const libc::c_void as *mut _,
-                            (free_len * BALLOON_PAGE_SIZE) as usize,
-                            advice,
-                        );
-                    }
-                    count_iov += std::mem::size_of::<u32>() as u64;
-                    last_addr = hva;
-                }
-            } else {
-                while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
-                    offset += std::mem::size_of::<u32>() as u64;
-                    let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
-                    let hva = match mem.get_host_address(gpa) {
-                        Some(addr) => addr,
-                        None => {
-                            error!("Failed to mark balloon page: can not get host address");
-                            continue;
-                        }
-                    };
+                };
+                hvaset.push(hva);
+            }
+            hvaset.sort_by_key(|&b| Reverse(b));
+            let host_page_size = host_page_size();
+            if host_page_size == BALLOON_PAGE_SIZE {
+                while let Some(hva) = hvaset.pop() {
                     if last_addr == 0 {
                         free_len += 1;
                         start_addr = hva;
@@ -238,6 +242,44 @@ impl Request {
                     }
                     count_iov += std::mem::size_of::<u32>() as u64;
                     last_addr = hva;
+                }
+            } else {
+                let mut host_page_bitmap =
+                    BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
+                while let Some(hva) = hvaset.pop() {
+                    if host_page_bitmap.base_address == 0 {
+                        if let Some(base_addr) = round_down(hva, host_page_size) {
+                            host_page_bitmap.base_address = base_addr;
+                        } else {
+                            error!(
+                                "Failed to round_down, hva: {}, align: {}",
+                                hva, host_page_size
+                            );
+                        }
+                    } else if host_page_bitmap.base_address + host_page_size < hva {
+                        host_page_bitmap =
+                            BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
+                        continue;
+                    }
+
+                    if let Err(ref e) =
+                        host_page_bitmap.set_bit((hva % host_page_size) / BALLOON_PAGE_SIZE)
+                    {
+                        error!(
+                            "Failed to set bit with index: {} :{}",
+                            (hva % host_page_size) / BALLOON_PAGE_SIZE,
+                            e
+                        );
+                    }
+                    if host_page_bitmap.is_full(host_page_size / BALLOON_PAGE_SIZE) {
+                        memory_advise(
+                            host_page_bitmap.base_address as *const libc::c_void as *mut _,
+                            host_page_size as usize,
+                            advice,
+                        );
+                        host_page_bitmap =
+                            BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
+                    }
                 }
             }
         }
@@ -321,6 +363,16 @@ impl BlnMemInfo {
         } else {
             error!("Failed to get host address!");
         }
+    }
+
+    /// Get Ram size of AddressSpace.
+    fn get_ram_size(&self) -> u64 {
+        let mut size = 0_u64;
+        let unlockedrgs = self.regions.lock().unwrap();
+        for rg in unlockedrgs.iter() {
+            size += rg.memory_size;
+        }
+        size
     }
 }
 
@@ -531,16 +583,6 @@ impl Balloon {
         }
     }
 
-    /// Get Ram size of AddressSpace.
-    pub fn get_ram_size(&self) -> u64 {
-        let mut size = 0_u64;
-        let unlockedrgs = self.mem_info.regions.lock().unwrap();
-        for rg in unlockedrgs.iter() {
-            size += rg.memory_size;
-        }
-        size
-    }
-
     /// Notify configuration changes to VM.
     fn signal_config_change(&self) -> Result<()> {
         if self.interrupt_cb.is_none() {
@@ -556,9 +598,13 @@ impl Balloon {
     /// # Argument
     ///
     /// * `size` - Target momery size.
-    pub fn set_memory_size(&mut self, size: u64) -> Result<()> {
+    pub fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
+        let host_page_size = host_page_size();
+        if host_page_size > BALLOON_PAGE_SIZE {
+            warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
+        }
         let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let current_ram_size = (self.get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
+        let current_ram_size = (self.mem_info.get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
         let vm_target = cmp::min(target, current_ram_size);
         self.num_pages = current_ram_size - vm_target;
         self.signal_config_change().chain_err(|| {
@@ -567,9 +613,14 @@ impl Balloon {
         Ok(())
     }
 
-    /// Get the memory size of guest.
-    pub fn get_memory_size(&self) -> u64 {
+    /// Get the size of memory that reclaimed by balloon.
+    pub fn get_balloon_memory_size(&self) -> u64 {
         (self.actual as u64) << VIRTIO_BALLOON_PFN_SHIFT
+    }
+
+    /// Get the actual memory size of guest.
+    pub fn get_guest_memory_size(&self) -> u64 {
+        self.mem_info.get_ram_size() - self.get_balloon_memory_size()
     }
 }
 
@@ -728,7 +779,7 @@ pub fn qmp_balloon(target: u64) -> bool {
     // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
     // this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
-        match dev.lock().unwrap().set_memory_size(target) {
+        match dev.lock().unwrap().set_guest_memory_size(target) {
             Ok(()) => {
                 return true;
             }
@@ -745,9 +796,8 @@ pub fn qmp_query_balloon() -> Option<u64> {
     // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
     // this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
-        let ram_size = dev.lock().unwrap().get_ram_size();
-        let balloon_size = dev.lock().unwrap().get_memory_size();
-        return Some(ram_size - balloon_size);
+        let unlocked_dev = dev.lock().unwrap();
+        return Some(unlocked_dev.get_guest_memory_size());
     }
     None
 }
@@ -800,7 +850,7 @@ mod tests {
         let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut random_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
-        assert_eq!(balloon.get_memory_size(), 0);
+        assert_eq!(balloon.get_balloon_memory_size(), 0);
         balloon.actual = 1;
         balloon.read_config(addr, &mut random_data).unwrap();
         assert_eq!(random_data, write_data);
@@ -815,7 +865,7 @@ mod tests {
         let mut balloon = Balloon::new(bln_cfg);
         let write_data = [1, 0, 0, 0];
         let addr = 0x00;
-        assert_eq!(balloon.get_memory_size(), 0);
+        assert_eq!(balloon.get_balloon_memory_size(), 0);
         balloon.write_config(addr, &write_data).unwrap();
         assert_eq!(balloon.actual, 1);
     }
