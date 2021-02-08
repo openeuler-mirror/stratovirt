@@ -22,6 +22,7 @@ extern crate kvm_ioctls;
 
 pub mod aio;
 pub mod arg_parser;
+pub mod bitmap;
 pub mod byte_code;
 pub mod checksum;
 pub mod daemonize;
@@ -125,6 +126,10 @@ pub mod errors {
             ChmodFailed(e: i32) {
                 description("Chmod command failed.")
                 display("Chmod command failed, os error {}", e)
+            }
+            OutOfBound(index: u64, bound: u64) {
+                description("Index out of bound of array")
+                display("Index :{} out of bound :{}", index, bound)
             }
         }
     }
