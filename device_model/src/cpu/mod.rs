@@ -32,7 +32,7 @@ mod aarch64;
 mod x86_64;
 
 use std::cell::RefCell;
-use std::sync::{Arc, Barrier, Condvar, Mutex};
+use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -89,6 +89,9 @@ pub mod errors {
             }
             UnhandledKvmExit(cpu_id: u8) {
                 display("CPU {}/KVM received an unhandled kvm exit event!", cpu_id)
+            }
+            NoMachineInterface {
+                display("No Machine Interface saved in CPU")
             }
         }
     }
@@ -197,7 +200,7 @@ pub struct CPU {
     /// The thread tid of this VCPU.
     tid: Arc<Mutex<Option<u64>>>,
     /// The VM combined by this VCPU.
-    vm: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>>,
+    vm: Weak<dyn MachineInterface + Send + Sync>,
 }
 
 impl CPU {
@@ -213,7 +216,7 @@ impl CPU {
         vcpu_fd: Arc<VcpuFd>,
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        vm: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>>,
+        vm: Arc<dyn MachineInterface + Send + Sync>,
     ) -> Self {
         CPU {
             id,
@@ -223,7 +226,7 @@ impl CPU {
             work_queue: Arc::new((Mutex::new(0), Condvar::new())),
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
-            vm,
+            vm: Arc::downgrade(&vm),
         }
     }
 
@@ -392,7 +395,12 @@ impl CPUInterface for CPU {
     fn guest_shutdown(&self) -> Result<()> {
         let (cpu_state, _) = &*self.state;
         *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
-        self.vm.destroy();
+
+        if let Some(vm) = self.vm.upgrade() {
+            vm.destroy();
+        } else {
+            return Err(ErrorKind::NoMachineInterface.into());
+        }
 
         if QmpChannel::is_connected() {
             let shutdown_msg = schema::SHUTDOWN {
@@ -406,21 +414,27 @@ impl CPUInterface for CPU {
     }
 
     fn kvm_vcpu_exec(&self) -> Result<bool> {
+        let vm = if let Some(vm) = self.vm.upgrade() {
+            vm
+        } else {
+            return Err(ErrorKind::NoMachineInterface.into());
+        };
+
         match self.fd.run() {
             Ok(run) => match run {
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoIn(addr, data) => {
-                    self.vm.pio_in(u64::from(addr), data);
+                    vm.pio_in(u64::from(addr), data);
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoOut(addr, data) => {
-                    self.vm.pio_out(u64::from(addr), data);
+                    vm.pio_out(u64::from(addr), data);
                 }
                 VcpuExit::MmioRead(addr, data) => {
-                    self.vm.mmio_read(addr, data);
+                    vm.mmio_read(addr, data);
                 }
                 VcpuExit::MmioWrite(addr, data) => {
-                    self.vm.mmio_write(addr, data);
+                    vm.mmio_write(addr, data);
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Hlt => {
@@ -788,14 +802,12 @@ mod tests {
         };
 
         let vm = Arc::new(TestVm::new());
-        let vm_arc: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>> =
-            Arc::new(Box::new(vm.clone()));
 
         let cpu = CPU::new(
             Arc::new(vm_fd.create_vcpu(0).unwrap()),
             0,
             Arc::new(Mutex::new(ArchCPU::default())),
-            vm_arc.clone(),
+            vm.clone(),
         );
 
         Ok((vm_fd, vm, cpu))

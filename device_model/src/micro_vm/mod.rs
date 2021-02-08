@@ -35,7 +35,6 @@ extern crate util;
 pub mod micro_syscall;
 
 use std::fs::metadata;
-use std::marker::{Send, Sync};
 use std::ops::Deref;
 use std::os::linux::fs::MetadataExt;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -302,8 +301,6 @@ impl LightMachine {
         let vm = Arc::new(vm);
 
         // Add vcpu object to vm
-        let cpu_vm: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>> =
-            Arc::new(Box::new(vm.clone()));
         for vcpu_id in 0..nrcpus {
             #[cfg(target_arch = "aarch64")]
             let arch_cpu = ArchCPU::new(&vm_fd, u32::from(vcpu_id));
@@ -315,7 +312,7 @@ impl LightMachine {
                 vcpu_fds[vcpu_id as usize].clone(),
                 vcpu_id,
                 Arc::new(Mutex::new(arch_cpu)),
-                cpu_vm.clone(),
+                vm.clone(),
             );
 
             let mut vcpus = vm.cpus.lock().unwrap();
