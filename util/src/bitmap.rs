@@ -192,3 +192,17 @@ bitops!(u8);
 bitops!(u16);
 bitops!(u32);
 bitops!(u64);
+
+#[cfg(test)]
+mod tests {
+    use super::Bitmap;
+
+    #[test]
+    fn test_bitmap_basic() {
+        let mut bitmap = Bitmap::<u16>::new(1);
+        assert!(bitmap.set(15).is_ok());
+        assert!(bitmap.set(16).is_err());
+        assert_eq!(bitmap.count_front_bits(16).unwrap(), 1);
+        assert_eq!(bitmap.count_front_bits(15).unwrap(), 0);
+    }
+}
