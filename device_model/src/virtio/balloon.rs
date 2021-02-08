@@ -49,11 +49,11 @@ type VirtioBalloonInterrupt = Box<dyn Fn(u32) -> Result<()> + Send + Sync>;
 
 /// IO vector, used to find memory segments.
 #[derive(Clone, Copy, Default)]
-pub struct Iovec {
+struct Iovec {
     /// Base address of memory.
-    pub iov_base: GuestAddress,
+    iov_base: GuestAddress,
     /// Length of memory segments.
-    pub iov_len: u64,
+    iov_len: u64,
 }
 
 /// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
@@ -139,16 +139,19 @@ fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int
             "DONTNEED".to_string()
         };
         let e = std::io::Error::last_os_error();
-        error!("Mark memory to {} failed: {}", evt_type, e);
+        error!(
+            "Mark memory address: {} to {} failed: {}",
+            addr as u64, evt_type, e
+        );
     }
 }
 struct Request {
     /// The index of descriptor for the request.
-    pub desc_index: u16,
+    desc_index: u16,
     /// Count of elements.
-    pub elem_cnt: u32,
+    elem_cnt: u32,
     /// The data which is both readable and writable.
-    pub iovec: Vec<Iovec>,
+    iovec: Vec<Iovec>,
 }
 
 impl Request {
@@ -158,7 +161,7 @@ impl Request {
     /// # Arguments
     ///
     /// * `elem` - Available ring.
-    pub fn parse(elem: &Element) -> Result<Request> {
+    fn parse(elem: &Element) -> Result<Request> {
         let mut request = Request {
             desc_index: elem.index,
             elem_cnt: 0u32,
@@ -183,7 +186,7 @@ impl Request {
     ///
     /// * `req_type` - A label used to mark balloon pages.
     /// * `mem` - Collection of all Ram regions.
-    pub fn mark_balloon_page(
+    fn mark_balloon_page(
         &self,
         req_type: bool,
         address_space: &Arc<AddressSpace>,
@@ -289,28 +292,28 @@ impl Request {
 #[derive(Debug, Copy, Clone, Default)]
 struct BlnMemoryRegion {
     /// GPA.
-    pub guest_phys_addr: u64,
+    guest_phys_addr: u64,
     /// Size of the memory region.
-    pub memory_size: u64,
+    memory_size: u64,
     /// HVA.
-    pub userspace_addr: u64,
+    userspace_addr: u64,
     /// No flags specified for now.
-    pub flags_padding: u64,
+    flags_padding: u64,
 }
 
 #[derive(Clone)]
 struct BlnMemInfo {
-    pub regions: Arc<Mutex<Vec<BlnMemoryRegion>>>,
+    regions: Arc<Mutex<Vec<BlnMemoryRegion>>>,
 }
 
 impl BlnMemInfo {
-    pub fn new() -> BlnMemInfo {
+    fn new() -> BlnMemInfo {
         BlnMemInfo {
             regions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    pub fn get_host_address(&self, addr: GuestAddress) -> Option<u64> {
+    fn get_host_address(&self, addr: GuestAddress) -> Option<u64> {
         let all_regions = self.regions.lock().unwrap();
         for i in 0..all_regions.len() {
             if addr.raw_value() < all_regions[i].guest_phys_addr + all_regions[i].memory_size
