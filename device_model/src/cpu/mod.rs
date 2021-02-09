@@ -36,7 +36,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-use kvm_ioctls::{VcpuExit, VcpuFd};
+use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
@@ -152,7 +152,7 @@ thread_local! {
 /// Trait to handle `CPU` lifetime.
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
-    fn realize(&self, boot: &CPUBootConfig) -> Result<()>;
+    fn realize(&self, vm_fd: &Arc<VmFd>, boot: &CPUBootConfig) -> Result<()>;
 
     ///
     /// # Arguments
@@ -266,7 +266,7 @@ impl CPU {
 }
 
 impl CPUInterface for CPU {
-    fn realize(&self, boot: &CPUBootConfig) -> Result<()> {
+    fn realize(&self, vm_fd: &Arc<VmFd>, boot: &CPUBootConfig) -> Result<()> {
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
             return Err(
@@ -277,7 +277,7 @@ impl CPUInterface for CPU {
         self.arch_cpu
             .lock()
             .unwrap()
-            .realize(&self.fd, boot)
+            .realize(vm_fd, &self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
 
         Ok(())

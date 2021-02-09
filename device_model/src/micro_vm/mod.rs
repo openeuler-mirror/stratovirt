@@ -289,7 +289,7 @@ impl LightMachine {
             sys_io,
             bus: Bus::new(sys_mem),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
-            vm_fd: vm_fd.clone(),
+            vm_fd,
             vm_state,
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| "Create EventFd for power-button failed.")?,
@@ -303,10 +303,10 @@ impl LightMachine {
         // Add vcpu object to vm
         for vcpu_id in 0..nrcpus {
             #[cfg(target_arch = "aarch64")]
-            let arch_cpu = ArchCPU::new(&vm_fd, u32::from(vcpu_id));
+            let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
 
             #[cfg(target_arch = "x86_64")]
-            let arch_cpu = ArchCPU::new(&vm_fd, u32::from(vcpu_id), u32::from(nrcpus));
+            let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(nrcpus));
 
             let cpu = CPU::new(
                 vcpu_fds[vcpu_id as usize].clone(),
@@ -403,7 +403,7 @@ impl LightMachine {
         };
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].realize(&boot_config)?;
+            self.cpus.lock().unwrap()[cpu_index as usize].realize(&self.vm_fd, &boot_config)?;
         }
 
         let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
@@ -467,7 +467,7 @@ impl LightMachine {
         };
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].realize(&boot_config)?;
+            self.cpus.lock().unwrap()[cpu_index as usize].realize(&self.vm_fd, &boot_config)?;
         }
 
         self.register_power_event()?;

@@ -110,6 +110,9 @@ pub mod errors {
     use super::x86_64 as arch;
 
     error_chain! {
+        foreign_links {
+            Io(std::io::Error);
+        }
         links {
             ArchErrors(arch::errors::Error, arch::errors::ErrorKind);
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
@@ -138,9 +141,9 @@ use self::errors::{ErrorKind, Result, ResultExt};
 /// * `BootLoaderOpenKernel`: Open image failed.
 /// * `AddressSpace`: Write image to guest memory failed.
 fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
-    let curr_loc = image.seek(SeekFrom::Current(0)).unwrap();
-    let len = image.seek(SeekFrom::End(0)).unwrap();
-    image.seek(SeekFrom::Start(curr_loc)).unwrap();
+    let curr_loc = image.seek(SeekFrom::Current(0))?;
+    let len = image.seek(SeekFrom::End(0))?;
+    image.seek(SeekFrom::Start(curr_loc))?;
 
     sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
 
@@ -174,24 +177,29 @@ pub fn load_kernel(config: &BootLoaderConfig, sys_mem: &Arc<AddressSpace>) -> Re
     #[cfg(target_arch = "x86_64")]
     let boot_loader = {
         let boot_hdr = x86_64::load_bzimage(&mut kernel_image).ok();
-        linux_bootloader(config, sys_mem, boot_hdr)?
+        linux_bootloader(config, sys_mem, boot_hdr)
+            .chain_err(|| "Failed to init x86_64 boot_loader")?
     };
     #[cfg(target_arch = "aarch64")]
-    let boot_loader = linux_bootloader(config, sys_mem)?;
+    let boot_loader =
+        linux_bootloader(config, sys_mem).chain_err(|| "Failed to init aarch64 boot_loader")?;
 
-    load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)?;
+    load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)
+        .chain_err(|| "Failed to load kernel image to vm memory")?;
 
     match &config.initrd {
         Some(initrd) => {
             let mut initrd_image =
                 File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
-            load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)?;
+            load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)
+                .chain_err(|| "Failed to load initrd image to vm memory")?;
         }
         None => {}
     };
 
     #[cfg(target_arch = "x86_64")]
-    x86_64::setup_kernel_cmdline(&config, sys_mem)?;
+    x86_64::setup_kernel_cmdline(&config, sys_mem)
+        .chain_err(|| "Failed to setup kernel cmdline")?;
 
     Ok(boot_loader)
 }
