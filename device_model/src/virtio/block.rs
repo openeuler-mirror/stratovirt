@@ -937,8 +937,91 @@ impl VirtioDevice for Block {
 mod tests {
     pub use super::super::*;
     pub use super::*;
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use std::fs;
     use std::process::Command;
+    use std::{thread, time::Duration};
+
+    const VIRTQ_DESC_F_NEXT: u16 = 0x01;
+    const VIRTQ_DESC_F_WRITE: u16 = 0x02;
+    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
+
+    fn address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36);
+        let sys_space = AddressSpace::new(root).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
+
+    // Activate block device and add to unnamed thread to execute epoll.
+    fn run_block_device(mem_space: Arc<AddressSpace>) -> (QueueConfig, EventFd, EventFd) {
+        EventLoop::object_init(&None).unwrap();
+
+        let mut block = Block::new();
+        block.realize().unwrap();
+
+        let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
+        queue_config.desc_table = GuestAddress(0);
+        queue_config.avail_ring = GuestAddress(4096);
+        queue_config.used_ring = GuestAddress(8192);
+        queue_config.ready = true;
+        queue_config.size = QUEUE_SIZE_BLK;
+
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let queue_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let queue_evts: Vec<EventFd> = vec![queue_evt.try_clone().unwrap()];
+        let queues: Vec<Arc<Mutex<Queue>>> =
+            vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
+
+        block
+            .activate(
+                mem_space.clone(),
+                interrupt_evt.try_clone().unwrap(),
+                interrupt_status,
+                queues,
+                queue_evts,
+            )
+            .unwrap();
+
+        thread::spawn(move || loop {
+            EventLoop::loop_run().unwrap();
+        });
+
+        return (queue_config, queue_evt, interrupt_evt);
+    }
+
+    // Set avail_ring and send notification to the block device.
+    fn signal_process_queue(
+        mem_space: Arc<AddressSpace>,
+        queue_config: QueueConfig,
+        queue_evt: EventFd,
+    ) -> Result<()> {
+        // Setting avail_ring idx
+        mem_space
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .unwrap();
+        // Setting avail_ring id
+        mem_space
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .unwrap();
+
+        // Imitating guest OS to send notification.
+        queue_evt.write(1).unwrap();
+        // Waiting for main loop epoll to handle Notification.
+        thread::sleep(Duration::from_millis(200));
+
+        Ok(())
+    }
 
     // Use different input parameters to verify block `new()` and `realize()` functionality.
     // The Parameters include read_only, direct and disk image path.
@@ -1077,5 +1160,237 @@ mod tests {
         let id_bytes_temp = get_serial_num_config(&serial_num);
         assert_eq!(id_bytes_temp[..], [0; 20]);
         assert_eq!(id_bytes_temp.len(), 20);
+    }
+
+    // Imitate guest OS to create a virtio_queue request and notify the block. Then block device
+    // will process queue and inject interrupt into guest OS.
+    #[test]
+    fn test_valid_request() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+
+        // Setting the first desc. Note: a request requires at least two desc tables.
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x100),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        let req_head = RequestOutHeader {
+            request_type: VIRTIO_BLK_T_OUT,
+            io_prio: 0,
+            sector: 0,
+        };
+        mem_space
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .unwrap();
+
+        // Setting the second desc
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x200),
+            len: 16,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 2,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16 as u64),
+            )
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+
+        // Block device will return an interrupt, check it here.
+        assert_eq!(interrupt_evt.read().unwrap(), 1);
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        let id = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 4 as u64))
+            .unwrap();
+        let len = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 8 as u64))
+            .unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(id, 0);
+        assert_eq!(len, 1);
+    }
+
+    // Test update config function.
+    #[test]
+    fn test_update_config() {
+        EventLoop::object_init(&None).unwrap();
+
+        let mut block = Block::new();
+        block.realize().unwrap();
+
+        let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
+        queue_config.desc_table = GuestAddress(0);
+        queue_config.avail_ring = GuestAddress(4096);
+        queue_config.used_ring = GuestAddress(8192);
+        queue_config.ready = true;
+        queue_config.size = QUEUE_SIZE_BLK;
+
+        let mem_space = address_space_init();
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let queue_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let queue_evts: Vec<EventFd> = vec![queue_evt.try_clone().unwrap()];
+        let queues: Vec<Arc<Mutex<Queue>>> =
+            vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
+
+        block
+            .activate(
+                mem_space.clone(),
+                interrupt_evt.try_clone().unwrap(),
+                interrupt_status,
+                queues,
+                queue_evts,
+            )
+            .unwrap();
+
+        thread::spawn(move || loop {
+            EventLoop::loop_run().unwrap();
+        });
+
+        block
+            .update_config(Some(Arc::new(block.blk_cfg.clone())))
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(interrupt_evt.read().unwrap(), 1);
+    }
+
+    // A complete request must send tow desc table. It will not work with only one.
+    #[test]
+    fn test_missing_queue_num() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+
+        // Just Set one desc table, it will not create requests or trigger an interrupt.
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x100),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+        // Block process queue failed, so no interrupt is injected.
+        assert!(interrupt_evt.read().is_err());
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 0);
+    }
+
+    // Set RequestOutHeader invalid type, block can not process request.
+    #[test]
+    fn test_invalid_request_type() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+
+        // Test RequestOutHeader invalid type
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x100),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        let req_head = RequestOutHeader {
+            // invalid type
+            request_type: 16,
+            io_prio: 0,
+            sector: 0,
+        };
+        mem_space
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .unwrap();
+
+        // Setting the second desc
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x200),
+            len: 16,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 2,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16 as u64),
+            )
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+        // Block process queue failed, so no interrupt is injected.
+        assert!(interrupt_evt.read().is_err());
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 0);
+    }
+
+    // It will not work if the address set is out of bounds.
+    #[test]
+    fn test_address_out_of_bounds() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+
+        // Test GuestAddress plus len is out of bounds (addr + len > SYSTEM_SPACE_SIZE).
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x000f_fff4),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        let req_head = RequestOutHeader {
+            request_type: VIRTIO_BLK_T_OUT,
+            io_prio: 0,
+            sector: 0,
+        };
+        mem_space
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .unwrap();
+
+        // Setting the second desc
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x200),
+            len: 16,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 2,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16 as u64),
+            )
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+        // Block process queue failed, so no interrupt is injected.
+        assert!(interrupt_evt.read().is_err());
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 0);
     }
 }
