@@ -10,9 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::unix::io::RawFd;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
+use std::{os::unix::io::RawFd, usize};
 
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
@@ -31,6 +31,8 @@ use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK
 const QUEUE_NUM_VSOCK: usize = 3;
 /// Size of each virtqueue.
 const QUEUE_SIZE_VSOCK: u16 = 256;
+/// Size of virtio config space
+const VSOCK_CONFIG_SIZE: usize = 8;
 /// Backend vhost-vsock device path.
 const VHOST_PATH: &str = "/dev/vhost-vsock";
 
@@ -78,12 +80,13 @@ pub struct Vsock {
 
 impl Vsock {
     pub fn new(vsock_cfg: VsockConfig, mem_space: Arc<AddressSpace>) -> Self {
+        let config: Vec<u8> = [0; VSOCK_CONFIG_SIZE].to_vec();
         Vsock {
             vsock_cfg,
             backend: None,
             device_features: 0_u64,
             driver_features: 0_u64,
-            config_space: Vec::new(),
+            config_space: config,
             mem_space,
         }
     }
