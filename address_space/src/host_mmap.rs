@@ -26,6 +26,8 @@ pub struct FileBackend {
     pub file: Arc<File>,
     /// Represents HostMmapping's offset in this file.
     pub offset: u64,
+    /// Page size of this file.
+    pub page_size: u64,
 }
 
 impl FileBackend {
@@ -107,6 +109,7 @@ impl FileBackend {
         Ok(FileBackend {
             file: Arc::new(file),
             offset: 0_u64,
+            page_size: fstat.f_bsize as u64,
         })
     }
 }
@@ -147,6 +150,7 @@ pub fn create_host_mmaps(
         f_back = Some(FileBackend {
             file: Arc::new(anon_file),
             offset: 0,
+            page_size: crate::host_page_size(),
         });
     }
 

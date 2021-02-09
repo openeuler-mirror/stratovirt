@@ -18,7 +18,7 @@ use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
 use util::num_ops::round_down;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::{page_size, AddressRange, FlatRange, RegionIoEventFd, RegionType};
+use crate::{host_page_size, AddressRange, FlatRange, RegionIoEventFd, RegionType};
 
 /// Request type of listener.
 #[derive(Debug, Copy, Clone)]
@@ -204,9 +204,10 @@ impl KvmMemoryListener {
             return Ok(());
         }
 
-        let (aligned_addr, aligned_size) = Self::align_mem_slot(flat_range.addr_range, page_size())
-            .map(|r| (r.base, r.size))
-            .chain_err(|| "Failed to align mem slot")?;
+        let (aligned_addr, aligned_size) =
+            Self::align_mem_slot(flat_range.addr_range, host_page_size())
+                .map(|r| (r.base, r.size))
+                .chain_err(|| "Failed to align mem slot")?;
         let align_adjust = aligned_addr.raw_value() - flat_range.addr_range.base.raw_value();
 
         // `unwrap()` won't fail because Ram-type Region definitely has hva
@@ -251,9 +252,10 @@ impl KvmMemoryListener {
             return Ok(());
         }
 
-        let (aligned_addr, aligned_size) = Self::align_mem_slot(flat_range.addr_range, page_size())
-            .map(|r| (r.base, r.size))
-            .chain_err(|| "Failed to align mem slot")?;
+        let (aligned_addr, aligned_size) =
+            Self::align_mem_slot(flat_range.addr_range, host_page_size())
+                .map(|r| (r.base, r.size))
+                .chain_err(|| "Failed to align mem slot")?;
 
         let mem_slot = self
             .delete_slot(aligned_addr.raw_value(), aligned_size)
@@ -610,7 +612,7 @@ mod test {
             Err(_) => return,
         };
 
-        let ram_size = page_size();
+        let ram_size = host_page_size();
         let ram_fr1 = create_ram_range(0, ram_size, 0);
         kml.handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .unwrap();
@@ -635,7 +637,7 @@ mod test {
         };
 
         // flat-range not aligned
-        let page_size = page_size();
+        let page_size = host_page_size();
         let ram_fr2 = create_ram_range(page_size, 2 * page_size, 1000);
         assert!(kml
             .handle_request(Some(&ram_fr2), None, ListenerReqType::AddRegion)
