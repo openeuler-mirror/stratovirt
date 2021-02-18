@@ -84,7 +84,7 @@ pub enum QmpCommand {
         id: Option<u32>,
     },
     netdev_add {
-        arguments: netdev_add,
+        arguments: Box<netdev_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<u32>,
     },
@@ -280,6 +280,14 @@ pub struct device_add {
     pub bus: Option<String>,
     #[serde(rename = "mac")]
     pub mac: Option<String>,
+    #[serde(rename = "netdev")]
+    pub netdev: Option<String>,
+    #[serde(rename = "disable-modern")]
+    pub disable_modern: Option<String>,
+    #[serde(rename = "mq")]
+    pub mq: Option<String>,
+    #[serde(rename = "vectors")]
+    pub vectors: Option<String>,
 }
 
 impl Command for device_add {
@@ -340,6 +348,8 @@ pub struct blockdev_add {
     pub driver: Option<String>,
     pub backing: Option<String>,
     pub discard: Option<String>,
+    pub id: Option<String>,
+    pub options: Option<String>,
 }
 
 impl Command for blockdev_add {
@@ -378,6 +388,12 @@ pub struct netdev_add {
     pub dnssearch: Option<String>,
     #[serde(rename = "type")]
     pub net_type: Option<String>,
+    pub vhost: Option<String>,
+    pub vhostfds: Option<String>,
+    pub ifname: Option<String>,
+    pub downscript: Option<String>,
+    pub script: Option<String>,
+    pub queues: Option<String>,
 }
 
 impl Command for netdev_add {
