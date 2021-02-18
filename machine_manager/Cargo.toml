@@ -17,6 +17,5 @@ error-chain = "0.12.4"
 vmm-sys-util = "0.6.1"
 
 [features]
-default = ["qmp"]
-qmp = []
+default = []
 

@@ -61,9 +61,8 @@ use machine_manager::{
         VsockConfig,
     },
     main_loop::MainLoop,
+    qmp::{qmp_schema, QmpChannel, Response},
 };
-#[cfg(feature = "qmp")]
-use machine_manager::{qmp, qmp::qmp_schema as schema, qmp::QmpChannel};
 #[cfg(target_arch = "aarch64")]
 use util::device_tree;
 #[cfg(target_arch = "aarch64")]
@@ -594,7 +593,6 @@ impl LightMachine {
 impl MachineLifecycle for LightMachine {
     fn pause(&self) -> bool {
         if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
-            #[cfg(feature = "qmp")]
             event!(STOP);
 
             true
@@ -608,7 +606,6 @@ impl MachineLifecycle for LightMachine {
             return false;
         }
 
-        #[cfg(feature = "qmp")]
         event!(RESUME);
 
         true
@@ -715,34 +712,32 @@ impl MachineAddressInterface for LightMachine {
 }
 
 impl DeviceInterface for LightMachine {
-    #[cfg(feature = "qmp")]
-    fn query_status(&self) -> qmp::Response {
+    fn query_status(&self) -> Response {
         let vmstate = self.vm_state.deref().0.lock().unwrap();
         let qmp_state = match *vmstate {
-            KvmVmState::Running => schema::StatusInfo {
+            KvmVmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
                 running: true,
-                status: schema::RunState::running,
+                status: qmp_schema::RunState::running,
             },
-            KvmVmState::Paused => schema::StatusInfo {
+            KvmVmState::Paused => qmp_schema::StatusInfo {
                 singlestep: false,
                 running: true,
-                status: schema::RunState::paused,
+                status: qmp_schema::RunState::paused,
             },
             _ => Default::default(),
         };
 
-        qmp::Response::create_response(serde_json::to_value(&qmp_state).unwrap(), None)
+        Response::create_response(serde_json::to_value(&qmp_state).unwrap(), None)
     }
 
-    #[cfg(feature = "qmp")]
-    fn query_cpus(&self) -> qmp::Response {
+    fn query_cpus(&self) -> Response {
         let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
         for cpu_index in 0..self.cpu_topo.max_cpus {
             if self.cpu_topo.get_mask(cpu_index as usize) == 1 {
                 let thread_id = self.cpus.lock().unwrap()[cpu_index as usize].tid();
                 let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = schema::CpuInstanceProperties {
+                let cpu_instance = qmp_schema::CpuInstanceProperties {
                     node_id: None,
                     socket_id: Some(socketid as isize),
                     core_id: Some(coreid as isize),
@@ -750,7 +745,7 @@ impl DeviceInterface for LightMachine {
                 };
                 #[cfg(target_arch = "x86_64")]
                 {
-                    let cpu_info = schema::CpuInfo::x86 {
+                    let cpu_info = qmp_schema::CpuInfo::x86 {
                         current: true,
                         qom_path: String::from("/machine/unattached/device[")
                             + &cpu_index.to_string()
@@ -759,13 +754,13 @@ impl DeviceInterface for LightMachine {
                         props: Some(cpu_instance),
                         CPU: cpu_index as isize,
                         thread_id: thread_id as isize,
-                        x86: schema::CpuInfoX86 {},
+                        x86: qmp_schema::CpuInfoX86 {},
                     };
                     cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
                 }
                 #[cfg(target_arch = "aarch64")]
                 {
-                    let cpu_info = schema::CpuInfo::Arm {
+                    let cpu_info = qmp_schema::CpuInfo::Arm {
                         current: true,
                         qom_path: String::from("/machine/unattached/device[")
                             + &cpu_index.to_string()
@@ -774,17 +769,16 @@ impl DeviceInterface for LightMachine {
                         props: Some(cpu_instance),
                         CPU: cpu_index as isize,
                         thread_id: thread_id as isize,
-                        arm: schema::CpuInfoArm {},
+                        arm: qmp_schema::CpuInfoArm {},
                     };
                     cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
                 }
             }
         }
-        qmp::Response::create_response(cpu_vec.into(), None)
+        Response::create_response(cpu_vec.into(), None)
     }
 
-    #[cfg(feature = "qmp")]
-    fn query_hotpluggable_cpus(&self) -> qmp::Response {
+    fn query_hotpluggable_cpus(&self) -> Response {
         let mut hotplug_vec: Vec<serde_json::Value> = Vec::new();
         #[cfg(target_arch = "x86_64")]
         let cpu_type = String::from("host-x86-cpu");
@@ -794,13 +788,13 @@ impl DeviceInterface for LightMachine {
         for cpu_index in 0..self.cpu_topo.max_cpus {
             if self.cpu_topo.get_mask(cpu_index as usize) == 0 {
                 let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = schema::CpuInstanceProperties {
+                let cpu_instance = qmp_schema::CpuInstanceProperties {
                     node_id: None,
                     socket_id: Some(socketid as isize),
                     core_id: Some(coreid as isize),
                     thread_id: Some(threadid as isize),
                 };
-                let hotpluggable_cpu = schema::HotpluggableCPU {
+                let hotpluggable_cpu = qmp_schema::HotpluggableCPU {
                     type_: cpu_type.clone(),
                     vcpus_count: 1,
                     props: cpu_instance,
@@ -809,13 +803,13 @@ impl DeviceInterface for LightMachine {
                 hotplug_vec.push(serde_json::to_value(hotpluggable_cpu).unwrap());
             } else {
                 let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = schema::CpuInstanceProperties {
+                let cpu_instance = qmp_schema::CpuInstanceProperties {
                     node_id: None,
                     socket_id: Some(socketid as isize),
                     core_id: Some(coreid as isize),
                     thread_id: Some(threadid as isize),
                 };
-                let hotpluggable_cpu = schema::HotpluggableCPU {
+                let hotpluggable_cpu = qmp_schema::HotpluggableCPU {
                     type_: cpu_type.clone(),
                     vcpus_count: 1,
                     props: cpu_instance,
@@ -828,7 +822,7 @@ impl DeviceInterface for LightMachine {
                 hotplug_vec.push(serde_json::to_value(hotpluggable_cpu).unwrap());
             }
         }
-        qmp::Response::create_response(hotplug_vec.into(), None)
+        Response::create_response(hotplug_vec.into(), None)
     }
 
     fn device_add(
@@ -856,14 +850,11 @@ impl DeviceInterface for LightMachine {
     fn device_del(&self, device_id: String) -> bool {
         match self.bus.del_replaceable_device(&device_id) {
             Ok(path) => {
-                #[cfg(feature = "qmp")]
-                {
-                    let block_del_event = schema::DEVICE_DELETED {
-                        device: Some(device_id),
-                        path,
-                    };
-                    event!(DEVICE_DELETED; block_del_event);
-                }
+                let block_del_event = qmp_schema::DEVICE_DELETED {
+                    device: Some(device_id),
+                    path,
+                };
+                event!(DEVICE_DELETED; block_del_event);
 
                 true
             }
@@ -874,8 +865,8 @@ impl DeviceInterface for LightMachine {
     fn blockdev_add(
         &self,
         node_name: String,
-        file: schema::FileOptions,
-        cache: Option<schema::CacheOptions>,
+        file: qmp_schema::FileOptions,
+        cache: Option<qmp_schema::CacheOptions>,
         read_only: Option<bool>,
     ) -> bool {
         let read_only = if let Some(ro) = read_only { ro } else { false };
@@ -920,25 +911,21 @@ impl DeviceInterface for LightMachine {
                 String::from(&fds)
             };
 
-            #[cfg(feature = "qmp")]
-            {
-                if let Some(fd_num) = QmpChannel::get_fd(&netdev_fd) {
-                    config.tap_fd = Some(fd_num);
-                } else {
-                    // try to convert string to RawFd
-                    let fd_num = match netdev_fd.parse::<i32>() {
-                        Ok(fd) => fd,
-                        _ => {
-                            error!(
-                                "Add netdev error: failed to convert {} to RawFd.",
-                                netdev_fd
-                            );
-                            return false;
-                        }
-                    };
-
-                    config.tap_fd = Some(fd_num);
-                }
+            if let Some(fd_num) = QmpChannel::get_fd(&netdev_fd) {
+                config.tap_fd = Some(fd_num);
+            } else {
+                // try to convert string to RawFd
+                let fd_num = match netdev_fd.parse::<i32>() {
+                    Ok(fd) => fd,
+                    _ => {
+                        error!(
+                            "Add netdev error: failed to convert {} to RawFd.",
+                            netdev_fd
+                        );
+                        return false;
+                    }
+                };
+                config.tap_fd = Some(fd_num);
             }
         } else if let Some(if_name) = if_name {
             config.host_dev_name = if_name;
@@ -949,14 +936,14 @@ impl DeviceInterface for LightMachine {
             .is_ok()
     }
 
-    #[cfg(feature = "qmp")]
-    fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> qmp::Response {
+    fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
         if let Some(fd) = if_fd {
             QmpChannel::set_fd(fd_name, fd);
-            qmp::Response::create_empty_response()
+            Response::create_empty_response()
         } else {
-            let err_resp = schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
-            qmp::Response::create_error_response(err_resp, None).unwrap()
+            let err_resp =
+                qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
+            Response::create_error_response(err_resp, None).unwrap()
         }
     }
 }

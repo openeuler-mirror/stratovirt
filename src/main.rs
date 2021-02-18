@@ -24,7 +24,6 @@ use vmm_sys_util::terminal::Terminal;
 
 use device_model::{register_seccomp, LightMachine};
 use machine_manager::config::VmConfig;
-#[cfg(feature = "qmp")]
 use machine_manager::qmp::QmpChannel;
 use machine_manager::socket::Socket;
 use machine_manager::{
@@ -114,7 +113,6 @@ fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
             .chain_err(|| "Failed to set terminal to raw mode.")?;
     }
 
-    #[cfg(feature = "qmp")]
     QmpChannel::object_init();
     MainLoop::object_init();
 

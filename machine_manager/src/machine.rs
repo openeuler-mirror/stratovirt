@@ -14,11 +14,8 @@ extern crate util;
 
 use std::os::unix::io::RawFd;
 
-#[cfg(feature = "qmp")]
-use crate::qmp::Response;
-
-#[cfg(feature = "qmp")]
 use crate::qmp::qmp_schema::{CacheOptions, FileOptions};
+use crate::qmp::Response;
 
 /// State for KVM VM.
 #[derive(PartialEq, Copy, Clone)]
@@ -127,15 +124,12 @@ pub trait MachineAddressInterface {
 /// Including some query, setting and operation.
 pub trait DeviceInterface {
     /// Query vm running state.
-    #[cfg(feature = "qmp")]
     fn query_status(&self) -> Response;
 
     /// Query each cpu's the topology info.
-    #[cfg(feature = "qmp")]
     fn query_cpus(&self) -> Response;
 
     /// Query each `hotpluggable_cpus`'s topology info and hotplug message.
-    #[cfg(feature = "qmp")]
     fn query_hotpluggable_cpus(&self) -> Response;
 
     /// Add a device with configuration.
@@ -163,7 +157,6 @@ pub trait DeviceInterface {
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> bool;
 
     /// Receive a file descriptor via SCM rights and assign it a name.
-    #[cfg(feature = "qmp")]
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;
 }
 

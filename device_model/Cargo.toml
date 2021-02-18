@@ -21,6 +21,5 @@ machine_manager = { path = "../machine_manager" }
 boot_loader = { path = "../boot_loader" }
 
 [features]
-default = ["qmp"]
+default = []
 mmio = []
-qmp = []
