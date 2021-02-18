@@ -95,7 +95,12 @@ impl DeviceOps for PL031 {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if offset >= 0xFE0 && offset < 0x1000 {
             let value = u32::from(RTC_PERIPHERAL_ID[((offset - 0xFE0) >> 2) as usize]);
-            LittleEndian::write_u32(data, value);
+            match data.len() {
+                1 => data[0] = value as u8,
+                2 => LittleEndian::write_u16(data, value as u16),
+                4 => LittleEndian::write_u32(data, value as u32),
+                _ => {}
+            }
             return true;
         }
 
@@ -125,7 +130,12 @@ impl DeviceOps for PL031 {
             _ => {}
         }
 
-        LittleEndian::write_u32(data, value);
+        match data.len() {
+            1 => data[0] = value as u8,
+            2 => LittleEndian::write_u16(data, value as u16),
+            4 => LittleEndian::write_u32(data, value as u32),
+            _ => {}
+        }
 
         true
     }
