@@ -39,7 +39,7 @@ $ ./target/release/stratovirt \
 StratoVirt所支持更多特性，详细指导请参考[Configuration Guidebook](docs/config_guidebook.md)。
 
 ## 设计
-想获取更多的StratoVirt核心架构设计信息，请参考[StratoVirt design](./docs/design.md)。
+想获取更多的StratoVirt核心架构设计信息，请参考[StratoVirt design](./docs/design.ch.md)。
 
 ## 如何贡献
 我们非常欢迎新贡献者的加入，并且非常乐意为新的贡献者提供指导和帮助。
