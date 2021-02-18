@@ -303,6 +303,8 @@ struct BlnMemoryRegion {
     userspace_addr: u64,
     /// No flags specified for now.
     flags_padding: u64,
+    /// Region Page size
+    reg_page_size: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -332,16 +334,30 @@ impl BlnMemInfo {
         None
     }
 
+    fn has_huge_page(&self) -> bool {
+        let all_regions = self.regions.lock().unwrap();
+        for reg in all_regions.iter() {
+            if let Some(size) = reg.reg_page_size {
+                if size > host_page_size() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn add_mem_range(&self, fr: &FlatRange) {
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
         if let Some(host_addr) = fr.owner.get_host_address() {
             let userspace_addr = host_addr + fr.offset_in_region;
+            let reg_page_size = fr.owner.get_region_page_size();
             self.regions.lock().unwrap().push(BlnMemoryRegion {
                 guest_phys_addr,
                 memory_size,
                 userspace_addr,
                 flags_padding: 0_u64,
+                reg_page_size,
             });
         } else {
             error!("Failed to get host address!");
@@ -351,17 +367,20 @@ impl BlnMemInfo {
     fn delete_mem_range(&self, fr: &FlatRange) {
         let mut mem_regions = self.regions.lock().unwrap();
         if let Some(host_addr) = fr.owner.get_host_address() {
+            let reg_page_size = fr.owner.get_region_page_size();
             let target = BlnMemoryRegion {
                 guest_phys_addr: fr.addr_range.base.raw_value(),
                 memory_size: fr.addr_range.size,
                 userspace_addr: host_addr + fr.offset_in_region,
                 flags_padding: 0_u64,
+                reg_page_size,
             };
             for (index, mr) in mem_regions.iter().enumerate() {
                 if mr.guest_phys_addr == target.guest_phys_addr
                     && mr.memory_size == target.memory_size
                     && mr.userspace_addr == target.userspace_addr
                     && mr.flags_padding == target.flags_padding
+                    && mr.reg_page_size == target.reg_page_size
                 {
                     mem_regions.remove(index);
                     return;
@@ -459,7 +478,9 @@ impl BalloonIoHandler {
             {
                 match Request::parse(&elem) {
                     Ok(req) => {
-                        req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
+                        if !self.mem_info.has_huge_page() {
+                            req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
+                        }
                         unlocked_queue
                             .vring
                             .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
@@ -485,15 +506,15 @@ impl BalloonIoHandler {
     /// Send balloon changed event.
     fn send_balloon_changed_event(&self) {
         let ram_size = self.mem_info.get_ram_size();
-        let balloon_size = self.get_memory_size();
+        let balloon_size = self.get_balloon_memory_size();
         let msg = BalloonInfo {
             actual: ram_size - balloon_size,
         };
         event!(BALLOON_CHANGED; msg);
     }
 
-    /// Get the memory size of guest.
-    pub fn get_memory_size(&self) -> u64 {
+    /// Get the memory size of balloon.
+    fn get_balloon_memory_size(&self) -> u64 {
         (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
     }
 }
@@ -653,7 +674,7 @@ impl Balloon {
         };
         event!(BALLOON_CHANGED; msg);
         let host_page_size = host_page_size();
-        if host_page_size > BALLOON_PAGE_SIZE {
+        if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.has_huge_page() {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
         }
         let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
