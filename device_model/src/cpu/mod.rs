@@ -159,13 +159,7 @@ pub trait CPUInterface {
     /// * `cpu` - The cpu instance shared in thread.
     /// * `thread_barrier` - The cpu thread barrier.
     /// * `paused` - After started, paused vcpu or not.
-    /// * `use seccomp` - Use seccomp in vcpu thread.
-    fn start(
-        cpu: Arc<Self>,
-        thread_barrier: Arc<Barrier>,
-        paused: bool,
-        use_seccomp: bool,
-    ) -> Result<()>
+    fn start(cpu: Arc<Self>, thread_barrier: Arc<Barrier>, paused: bool) -> Result<()>
     where
         Self: std::marker::Sized;
 
@@ -336,12 +330,7 @@ impl CPUInterface for CPU {
         Ok(())
     }
 
-    fn start(
-        cpu: Arc<CPU>,
-        thread_barrier: Arc<Barrier>,
-        paused: bool,
-        use_seccomp: bool,
-    ) -> Result<()> {
+    fn start(cpu: Arc<CPU>, thread_barrier: Arc<Barrier>, paused: bool) -> Result<()> {
         let (cpu_state, _) = &*cpu.state;
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
             return Err(ErrorKind::StartVcpu("Cpu is already running".to_string()).into());
@@ -372,12 +361,6 @@ impl CPUInterface for CPU {
                 thread_barrier.wait();
 
                 info!("vcpu{} start running", cpu.id);
-                if use_seccomp {
-                    if let Err(e) = crate::micro_vm::micro_syscall::register_seccomp() {
-                        error!("Failed to register seccomp in cpu{} thread:{}", cpu.id, e);
-                    }
-                }
-
                 loop {
                     if !cpu.ready_for_running() {
                         break;
