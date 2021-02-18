@@ -114,7 +114,9 @@ fn syscall_allow_list() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_set_robust_list),
         BpfRule::new(libc::SYS_sched_getaffinity),
         BpfRule::new(libc::SYS_nanosleep),
+        BpfRule::new(libc::SYS_timerfd_create),
         BpfRule::new(libc::SYS_timerfd_settime),
+        BpfRule::new(libc::SYS_timerfd_gettime),
         BpfRule::new(libc::SYS_statx),
         #[cfg(target_arch = "x86_64")]
         BpfRule::new(libc::SYS_unlink),

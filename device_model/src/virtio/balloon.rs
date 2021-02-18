@@ -9,17 +9,26 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-use std::cmp::{self, Reverse};
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::{
+    cmp::{self, Reverse},
+    time::Duration,
+};
 
+use super::{
+    errors::*, Element, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG,
+    VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BALLOON,
+};
 use address_space::{
     host_page_size, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType,
     RegionIoEventFd, RegionType,
 };
-use machine_manager::{config::BalloonConfig, event_loop::EventLoop};
+use machine_manager::{
+    config::BalloonConfig, event_loop::EventLoop, qmp::qmp_schema::BalloonInfo, qmp::QmpChannel,
+};
 use util::{
     bitmap::Bitmap,
     byte_code::ByteCode,
@@ -28,12 +37,7 @@ use util::{
     },
     num_ops::{read_u32, round_down, write_u32},
 };
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-
-use super::{
-    errors::*, Element, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG,
-    VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BALLOON,
-};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
@@ -427,6 +431,10 @@ struct BalloonIoHandler {
     interrupt_cb: Arc<VirtioBalloonInterrupt>,
     /// Balloon Memory information.
     mem_info: BlnMemInfo,
+    /// Event timer for BALLOON_CHANGED event.
+    event_timer: Arc<Mutex<TimerFd>>,
+    /// Actual balloon size
+    balloon_actual: Arc<AtomicU32>,
 }
 
 impl BalloonIoHandler {
@@ -472,6 +480,21 @@ impl BalloonIoHandler {
     /// Trigger interrupt to notify vm.
     fn signal_used_queue(&self) -> Result<()> {
         (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING).chain_err(|| "Failed to write interrupt eventfd")
+    }
+
+    /// Send balloon changed event.
+    fn send_balloon_changed_event(&self) {
+        let ram_size = self.mem_info.get_ram_size();
+        let balloon_size = self.get_memory_size();
+        let msg = BalloonInfo {
+            actual: ram_size - balloon_size,
+        };
+        event!(BALLOON_CHANGED; msg);
+    }
+
+    /// Get the memory size of guest.
+    pub fn get_memory_size(&self) -> u64 {
+        (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
     }
 }
 
@@ -534,6 +557,25 @@ impl EventNotifierHelper for BalloonIoHandler {
                 handler,
             ));
         }
+        {
+            let cloned_balloon_io = balloon_io.clone();
+            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+                read_fd(fd);
+                let locked_balloon_io = cloned_balloon_io.lock().unwrap();
+                locked_balloon_io.send_balloon_changed_event();
+                None
+            });
+            let locked_balloon_io = balloon_io.lock().unwrap();
+            notifiers.push(build_event_notifier(
+                locked_balloon_io
+                    .event_timer
+                    .clone()
+                    .lock()
+                    .unwrap()
+                    .as_raw_fd(),
+                handler,
+            ));
+        }
         notifiers
     }
 }
@@ -545,13 +587,15 @@ pub struct Balloon {
     /// Driver features.
     driver_features: u64,
     /// Actual memory pages.
-    actual: u32,
+    actual: Arc<AtomicU32>,
     /// Target memory pages.
     num_pages: u32,
     /// Interrupt callback function.
     interrupt_cb: Option<Arc<VirtioBalloonInterrupt>>,
     /// Balloon memory information.
     mem_info: BlnMemInfo,
+    /// Event timer for BALLOON_CHANGED event.
+    event_timer: Arc<Mutex<TimerFd>>,
 }
 
 impl Balloon {
@@ -565,13 +609,15 @@ impl Balloon {
         if bln_cfg.deflate_on_oom {
             device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
         }
+
         Balloon {
             device_features,
             driver_features: 0u64,
-            actual: 0u32,
+            actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
             mem_info: BlnMemInfo::new(),
+            event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
         }
     }
 
@@ -602,6 +648,10 @@ impl Balloon {
     ///
     /// * `size` - Target momery size.
     pub fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
+        let msg = BalloonInfo {
+            actual: self.get_guest_memory_size(),
+        };
+        event!(BALLOON_CHANGED; msg);
         let host_page_size = host_page_size();
         if host_page_size > BALLOON_PAGE_SIZE {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
@@ -617,8 +667,8 @@ impl Balloon {
     }
 
     /// Get the size of memory that reclaimed by balloon.
-    pub fn get_balloon_memory_size(&self) -> u64 {
-        (self.actual as u64) << VIRTIO_BALLOON_PFN_SHIFT
+    fn get_balloon_memory_size(&self) -> u64 {
+        (self.actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
     }
 
     /// Get the actual memory size of guest.
@@ -678,7 +728,7 @@ impl VirtioDevice for Balloon {
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let new_config = VirtioBalloonConfig {
             num_pages: self.num_pages,
-            actual: self.actual,
+            actual: self.actual.load(Ordering::Acquire),
         };
         if offset != 0 {
             return Err(ErrorKind::IncorrectOffset(0, offset).into());
@@ -696,13 +746,25 @@ impl VirtioDevice for Balloon {
     fn write_config(&mut self, _offset: u64, data: &[u8]) -> Result<()> {
         // Guest update actual balloon size
         // Safe, because the results will be checked.
+        let old_actual = self.actual.load(Ordering::Acquire);
         let new_actual = match unsafe { data.align_to::<u32>() } {
             (_, [new_config], _) => *new_config,
             _ => {
                 return Err(ErrorKind::FailedToWriteConfig.into());
             }
         };
-        self.actual = new_actual;
+        if old_actual != new_actual {
+            let mut timer = self.event_timer.lock().unwrap();
+            if let Ok(ret) = timer.is_armed() {
+                if !ret {
+                    timer
+                        .reset(Duration::new(1, 0), None)
+                        .chain_err(|| "Failed to reset timer for qmp event during ballooning")?;
+                }
+            }
+        }
+        self.actual.store(new_actual, Ordering::Release);
+
         Ok(())
     }
 
@@ -752,6 +814,8 @@ impl VirtioDevice for Balloon {
             def_evt: def_queue_evt,
             interrupt_cb: cb.clone(),
             mem_info: bln_mem_info.clone(),
+            event_timer: self.event_timer.clone(),
+            balloon_actual: self.actual.clone(),
         };
 
         mem_space
@@ -818,7 +882,7 @@ mod tests {
 
         let mut bln = Balloon::new(bln_cfg);
         assert_eq!(bln.driver_features, 0);
-        assert_eq!(bln.actual, 0);
+        assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
         assert!(bln.interrupt_cb.is_none());
         let feature = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM);
@@ -849,12 +913,12 @@ mod tests {
             deflate_on_oom: true,
         };
 
-        let mut balloon = Balloon::new(bln_cfg);
+        let balloon = Balloon::new(bln_cfg);
         let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut random_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
-        balloon.actual = 1;
+        balloon.actual.store(1, Ordering::Release);
         balloon.read_config(addr, &mut random_data).unwrap();
         assert_eq!(random_data, write_data);
     }
@@ -870,6 +934,6 @@ mod tests {
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
         balloon.write_config(addr, &write_data).unwrap();
-        assert_eq!(balloon.actual, 1);
+        assert_eq!(balloon.actual.load(Ordering::Acquire), 1);
     }
 }
