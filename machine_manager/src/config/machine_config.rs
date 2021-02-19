@@ -109,7 +109,7 @@ impl MachineConfig {
                             ErrorKind::ConvertValueFailed("vcpu_count".to_string(), item_str)
                         })?;
                         // limit cpu count
-                        if cpu < MIN_NR_CPUS || cpu > MAX_NR_CPUS {
+                        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
                             return Err(ErrorKind::IllegalValue(
                                 "CPU number".to_string(),
                                 MIN_NR_CPUS,
@@ -244,7 +244,7 @@ impl VmConfig {
         };
 
         // limit cpu count
-        if cpu < MIN_NR_CPUS || cpu > MAX_NR_CPUS {
+        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
             return Err(ErrorKind::IllegalValue(
                 "CPU number".to_string(),
                 MIN_NR_CPUS,

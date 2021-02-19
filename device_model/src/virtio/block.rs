@@ -52,7 +52,7 @@ const CONFIG_SPACE_SIZE: usize = 16;
 /// Used to compute the number of sectors.
 const SECTOR_SHIFT: u8 = 9;
 /// Size of a sector of the block device.
-const SECTOR_SIZE: u64 = (0x01 as u64) << SECTOR_SHIFT;
+const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
 
@@ -604,14 +604,12 @@ impl BlockIoHandler {
 }
 
 fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
-    let mut handlers = Vec::new();
-    handlers.push(Arc::new(Mutex::new(handler)));
     EventNotifier::new(
         NotifierOperation::AddShared,
         fd,
         None,
         EventSet::IN,
-        handlers,
+        vec![Arc::new(Mutex::new(handler))],
     )
 }
 
@@ -684,7 +682,7 @@ pub struct Block {
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
     /// Config space of the block device.
-    config_space: Vec<u8>,
+    config_space: [u8; CONFIG_SPACE_SIZE],
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
     /// The sending half of Rust's channel to send the image file.
@@ -706,31 +704,24 @@ impl Block {
             disk_sectors: 0,
             device_features: 0,
             driver_features: 0,
-            config_space: Vec::with_capacity(CONFIG_SPACE_SIZE),
+            config_space: [0u8; CONFIG_SPACE_SIZE],
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
-    fn build_device_config_space(&mut self) -> Result<()> {
+    fn build_device_config_space(&mut self) {
         // capacity: 64bits
         let num_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
         for i in 0..8 {
-            self.config_space.push((num_sectors >> (8 * i)) as u8);
-        }
-
-        // size_max=0: 32bits
-        for _ in 0..4 {
-            self.config_space.push(0_u8);
+            self.config_space[i] = (num_sectors >> (8 * i)) as u8;
         }
 
         // seg_max=128-2: 32bits
         for i in 0..4 {
-            self.config_space.push((126 >> (8 * i)) as u8);
+            self.config_space[12 + i] = (126 >> (8 * i)) as u8;
         }
-
-        Ok(())
     }
 }
 
@@ -746,12 +737,11 @@ impl VirtioDevice for Block {
         self.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
         self.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
 
-        self.build_device_config_space()
-            .chain_err(|| "Failed to build config space for block")?;
+        self.build_device_config_space();
 
         let mut disk_size = DUMMY_IMG_SIZE;
 
-        if self.blk_cfg.path_on_host != "" {
+        if !self.blk_cfg.path_on_host.is_empty() {
             self.disk_image = None;
 
             let mut file = if self.blk_cfg.direct {
@@ -1050,7 +1040,7 @@ mod tests {
         assert_eq!(block.disk_sectors, 0);
         assert_eq!(block.device_features, 0);
         assert_eq!(block.driver_features, 0);
-        assert_eq!(block.config_space.len(), 0);
+        assert_eq!(block.config_space.len(), 16);
         assert!(block.disk_image.is_none());
         assert!(block.interrupt_cb.is_none());
         assert!(block.sender.is_none());

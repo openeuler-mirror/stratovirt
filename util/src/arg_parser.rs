@@ -276,9 +276,10 @@ impl<'a> ArgParser<'a> {
 impl<'a> Arg<'a> {
     /// Create a new arg with arg's name.
     pub fn with_name(name: &'a str) -> Self {
-        let mut arg = Arg::default();
-        arg.name = name;
-        arg
+        Arg {
+            name,
+            ..Default::default()
+        }
     }
 
     /// Set long argument for arg.
@@ -524,9 +525,7 @@ impl<'a> Arg<'a> {
 
 impl<'a> ArgMatches<'a> {
     fn new(args: BTreeMap<&'a str, Arg<'a>>) -> Self {
-        let mut arg_matches = ArgMatches::default();
-        arg_matches.args = args;
-        arg_matches
+        ArgMatches { args }
     }
 
     /// Get the single value for `arg`.

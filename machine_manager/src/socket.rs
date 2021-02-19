@@ -177,10 +177,7 @@ impl Socket {
     }
 
     /// Create socket's accepted stream to `event_notifier`.
-    fn create_event_notifier(
-        &mut self,
-        shared_socket: Arc<Mutex<Self>>,
-    ) -> Option<Vec<EventNotifier>> {
+    fn create_event_notifier(&mut self, shared_socket: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
         self.accept();
 
@@ -225,7 +222,7 @@ impl Socket {
         );
 
         notifiers.push(notifier);
-        Some(notifiers)
+        notifiers
     }
 }
 
@@ -236,7 +233,9 @@ impl EventNotifierHelper for Socket {
         let socket = shared_socket.clone();
         let mut handlers = Vec::new();
         let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, _| socket.lock().unwrap().create_event_notifier(socket.clone()));
+            Box::new(move |_, _| {
+                Some(socket.lock().unwrap().create_event_notifier(socket.clone()))
+            });
 
         handlers.push(Arc::new(Mutex::new(handler)));
 

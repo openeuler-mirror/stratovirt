@@ -304,7 +304,7 @@ impl NetIoHandler {
         Ok(())
     }
 
-    fn update_evt_handler(net_io: &Arc<Mutex<Self>>) -> Option<Vec<EventNotifier>> {
+    fn update_evt_handler(net_io: &Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut locked_net_io = net_io.lock().unwrap();
         locked_net_io.tap = match locked_net_io.receiver.recv() {
             Ok(tap) => tap,
@@ -319,25 +319,26 @@ impl NetIoHandler {
             locked_net_io.tap_fd = tap.as_raw_fd();
         }
 
-        let mut notifiers = Vec::new();
-        notifiers.push(build_event_notifier(
-            locked_net_io.update_evt,
-            None,
-            NotifierOperation::Delete,
-            EventSet::IN,
-        ));
-        notifiers.push(build_event_notifier(
-            locked_net_io.rx.queue_evt.as_raw_fd(),
-            None,
-            NotifierOperation::Delete,
-            EventSet::IN,
-        ));
-        notifiers.push(build_event_notifier(
-            locked_net_io.tx.queue_evt.as_raw_fd(),
-            None,
-            NotifierOperation::Delete,
-            EventSet::IN,
-        ));
+        let mut notifiers = vec![
+            build_event_notifier(
+                locked_net_io.update_evt,
+                None,
+                NotifierOperation::Delete,
+                EventSet::IN,
+            ),
+            build_event_notifier(
+                locked_net_io.rx.queue_evt.as_raw_fd(),
+                None,
+                NotifierOperation::Delete,
+                EventSet::IN,
+            ),
+            build_event_notifier(
+                locked_net_io.tx.queue_evt.as_raw_fd(),
+                None,
+                NotifierOperation::Delete,
+                EventSet::IN,
+            ),
+        ];
         if old_tap_fd != -1 {
             notifiers.push(build_event_notifier(
                 old_tap_fd,
@@ -349,7 +350,7 @@ impl NetIoHandler {
         drop(locked_net_io);
 
         notifiers.append(&mut EventNotifierHelper::internal_notifiers(net_io.clone()));
-        Some(notifiers)
+        notifiers
     }
 }
 
@@ -373,7 +374,7 @@ impl EventNotifierHelper for NetIoHandler {
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            NetIoHandler::update_evt_handler(&cloned_net_io)
+            Some(NetIoHandler::update_evt_handler(&cloned_net_io))
         });
         let mut notifiers = Vec::new();
         let update_fd = locked_net_io.update_evt;
@@ -569,7 +570,7 @@ impl VirtioDevice for Net {
             self.device_features |= build_device_config_space(&mut self.device_config, mac);
         }
 
-        if self.net_cfg.host_dev_name != "" {
+        if !self.net_cfg.host_dev_name.is_empty() {
             self.tap = None;
             self.tap = create_tap(None, Some(&self.net_cfg.host_dev_name))
                 .chain_err(|| "Failed to open tap with file path")?;

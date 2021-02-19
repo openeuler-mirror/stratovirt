@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::convert::Into;
-
 // /*
 //  * Constructor for a conventional segment GDT (or LDT) entry.
 //  * This is a macro so it can be used in initializers.
@@ -53,11 +51,11 @@ impl GdtEntry {
 //   Bits(22): D/B, Default Operation Size
 //   Bits(23): G, Granularity
 //   Bits(24 - 31): Base Address 24, 31
-impl Into<kvm_bindings::kvm_segment> for GdtEntry {
-    fn into(self) -> kvm_bindings::kvm_segment {
-        let base = (self.0 >> 16 & 0x00ff_ffff) | (self.0 >> (56 - 24) & 0xff00_0000);
-        let limit = (self.0 >> (48 - 16) & 0x000f_0000) | (self.0 & 0x0000_ffff);
-        let flags = (self.0 >> 40) & 0x0000_f0ff;
+impl From<GdtEntry> for kvm_bindings::kvm_segment {
+    fn from(item: GdtEntry) -> Self {
+        let base = (item.0 >> 16 & 0x00ff_ffff) | (item.0 >> (56 - 24) & 0xff00_0000);
+        let limit = (item.0 >> (48 - 16) & 0x000f_0000) | (item.0 & 0x0000_ffff);
+        let flags = (item.0 >> 40) & 0x0000_f0ff;
 
         kvm_bindings::kvm_segment {
             base,
@@ -75,9 +73,9 @@ impl Into<kvm_bindings::kvm_segment> for GdtEntry {
     }
 }
 
-impl Into<u64> for GdtEntry {
-    fn into(self) -> u64 {
-        self.0
+impl From<GdtEntry> for u64 {
+    fn from(item: GdtEntry) -> Self {
+        item.0
     }
 }
 

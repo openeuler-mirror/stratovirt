@@ -427,14 +427,12 @@ impl BalloonIoHandler {
 /// * `fd` - Raw file descriptor.
 /// * `handler` - Handle function.
 fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
-    let mut handlers = Vec::new();
-    handlers.push(Arc::new(Mutex::new(handler)));
     EventNotifier::new(
         NotifierOperation::AddShared,
         fd,
         None,
         EventSet::IN,
-        handlers,
+        vec![Arc::new(Mutex::new(handler))],
     )
 }
 

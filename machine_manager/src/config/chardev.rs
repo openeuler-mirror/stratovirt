@@ -65,23 +65,19 @@ impl ConfigCheck for ConsoleConfig {
 impl VmConfig {
     /// Add new virtio-console device to `VmConfig`.
     fn add_console(&mut self, console: ConsoleConfig) -> Result<()> {
-        if let Some(mut consoles) = self.consoles.clone() {
-            for c in &consoles {
+        if self.consoles.is_some() {
+            for c in self.consoles.as_ref().unwrap() {
                 if c.console_id == console.console_id {
                     return Err(ErrorKind::IdRepeat(
-                        c.console_id.to_string(),
                         "virtio-console".to_string(),
+                        c.console_id.to_string(),
                     )
                     .into());
                 }
             }
-
-            consoles.push(console);
-            self.consoles = Some(consoles);
+            self.consoles.as_mut().unwrap().push(console);
         } else {
-            let mut consoles: Vec<ConsoleConfig> = Vec::new();
-            consoles.push(console);
-            self.consoles = Some(consoles);
+            self.consoles = Some(vec![console]);
         }
 
         Ok(())

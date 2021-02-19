@@ -172,9 +172,9 @@ pub enum SeccompOpt {
     Allow,
 }
 
-impl Into<u32> for SeccompOpt {
-    fn into(self) -> u32 {
-        match self {
+impl From<SeccompOpt> for u32 {
+    fn from(seccomp_opt: SeccompOpt) -> Self {
+        match seccomp_opt {
             SeccompOpt::Kill => SECCOMP_RET_KILL,
             SeccompOpt::Trap => SECCOMP_RET_TRAP,
             SeccompOpt::Errno(x) => SECCOMP_RET_ERRNO | (x & SECCOMP_RET_MASK),

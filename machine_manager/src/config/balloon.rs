@@ -39,7 +39,7 @@ impl VmConfig {
             balloon.deflate_on_oom = default.into();
         }
         if let Some(should_empty) = cmd_parser.get_value::<String>("")? {
-            if should_empty != "" {
+            if !should_empty.is_empty() {
                 return Err(ErrorKind::InvalidParam(should_empty).into());
             }
         }

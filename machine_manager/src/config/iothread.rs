@@ -52,8 +52,8 @@ impl ConfigCheck for IothreadConfig {
 impl VmConfig {
     /// Add new iothread device to `VmConfig`.
     fn add_iothread(&mut self, iothread: IothreadConfig) -> Result<()> {
-        if let Some(mut iothreads) = self.iothreads.clone() {
-            if iothreads.len() >= MAX_IOTHREAD_NUM {
+        if self.iothreads.is_some() {
+            if self.iothreads.as_ref().unwrap().len() >= MAX_IOTHREAD_NUM {
                 return Err(ErrorKind::IllegalValue(
                     "Iothread number".to_string(),
                     0,
@@ -64,7 +64,7 @@ impl VmConfig {
                 .into());
             }
 
-            for t in &iothreads {
+            for t in self.iothreads.as_ref().unwrap() {
                 if t.id == iothread.id {
                     return Err(
                         ErrorKind::IdRepeat("iothread".to_string(), t.id.to_string()).into(),
@@ -72,12 +72,9 @@ impl VmConfig {
                 }
             }
 
-            iothreads.push(iothread);
-            self.iothreads = Some(iothreads);
+            self.iothreads.as_mut().unwrap().push(iothread);
         } else {
-            let mut iothreads: Vec<IothreadConfig> = Vec::new();
-            iothreads.push(iothread);
-            self.iothreads = Some(iothreads);
+            self.iothreads = Some(vec![iothread]);
         }
 
         Ok(())
