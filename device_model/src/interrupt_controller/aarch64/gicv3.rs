@@ -15,31 +15,16 @@ use std::sync::{Arc, Mutex};
 use kvm_ioctls::{DeviceFd, VmFd};
 
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use util::{device_tree, errors};
+use util::device_tree;
 
-use super::GICConfig;
-use super::GICDevice;
+use super::errors::{ErrorKind, Result};
+use super::{GICConfig, GICDevice, UtilResult};
 
 use crate::{LayoutEntryType, MEM_LAYOUT};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
 const KVM_VGIC_V3_REDIST_SIZE: u64 = 2 * SZ_64K;
-
-#[derive(Debug)]
-pub enum Error {
-    /// Error while calling KVM ioctl for setting up the global interrupt controller.
-    CreateGIC(kvm_ioctls::Error),
-    /// Error while setting device attributes for the GIC.
-    SetDeviceAttribute(kvm_ioctls::Error),
-    /// Error while getting device attributes for the GIC.
-    GetDeviceAttribute(kvm_ioctls::Error),
-    /// Error while check device attributes for the GIC.
-    CheckDeviceAttribute(kvm_ioctls::Error),
-    /// Error while multiple redistributor is acquired but KVM does not support it.
-    MultiRedistributor,
-}
-type Result<T> = std::result::Result<T, Error>;
 
 /// A wrapper for kvm_based device check and access.
 pub struct KvmDevice;
@@ -55,7 +40,7 @@ impl KvmDevice {
 
         Ok(fd
             .has_device_attr(&attr)
-            .map_err(Error::CheckDeviceAttribute)?)
+            .map_err(ErrorKind::CheckDeviceAttribute)?)
     }
 
     fn kvm_device_access(
@@ -74,11 +59,11 @@ impl KvmDevice {
 
         if write {
             fd.set_device_attr(&attr)
-                .map_err(Error::SetDeviceAttribute)?;
+                .map_err(ErrorKind::SetDeviceAttribute)?;
         } else {
             let mut attr = attr;
             fd.get_device_attr(&mut attr)
-                .map_err(Error::GetDeviceAttribute)?;
+                .map_err(ErrorKind::GetDeviceAttribute)?;
         };
 
         Ok(())
@@ -144,7 +129,7 @@ pub struct GICv3 {
 
 impl GICv3 {
     pub fn new(vm: &Arc<VmFd>, config: &GICConfig) -> Result<Self> {
-        config.check_sanity().unwrap();
+        config.check_sanity()?;
 
         let mut gic_device = kvm_bindings::kvm_create_device {
             type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
@@ -154,7 +139,7 @@ impl GICv3 {
 
         let gic_fd = match vm.create_device(&mut gic_device) {
             Ok(fd) => fd,
-            Err(e) => return Err(Error::CreateGIC(e)),
+            Err(e) => return Err(ErrorKind::CreateGIC(e).into()),
         };
 
         // Calculate GIC redistributor regions' address range according to vcpu count.
@@ -193,7 +178,7 @@ impl GICv3 {
         };
 
         if gicv3.its {
-            gicv3.its_dev = Some(GICv3Its::new(&vm).unwrap());
+            gicv3.its_dev = Some(GICv3Its::new(&vm)?);
         }
 
         Ok(gicv3)
@@ -206,7 +191,7 @@ impl GICv3 {
                 kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
                 kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION as u64,
             )
-            .map_err(|_| Error::MultiRedistributor)?;
+            .map_err(|_| ErrorKind::MultiRedistributor)?;
         }
 
         if self.redist_regions.len() == 1 {
@@ -380,18 +365,20 @@ impl GICDevice for GICv3 {
         vm: &Arc<VmFd>,
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
-        let gic = GICv3::new(vm, gic_conf)?;
+        Ok(Arc::new(GICv3::new(vm, gic_conf)?))
+    }
 
-        gic.realize()?;
+    fn realize(&self) -> Result<()> {
+        self.realize()?;
 
-        if let Some(its) = &gic.its_dev {
+        if let Some(its) = &self.its_dev {
             its.realize()?;
         }
 
-        Ok(Arc::new(gic))
+        Ok(())
     }
 
-    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> errors::Result<()> {
+    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> UtilResult<()> {
         let redist_count = self.redist_regions.len() as u32;
         let mut gic_reg = vec![self.dist_base, self.dist_size];
 
@@ -455,7 +442,7 @@ impl GICv3Its {
 
         let its_fd = match vm.create_device(&mut its_device) {
             Ok(fd) => fd,
-            Err(e) => return Err(Error::CreateGIC(e)),
+            Err(e) => return Err(ErrorKind::CreateGIC(e).into()),
         };
 
         Ok(GICv3Its {

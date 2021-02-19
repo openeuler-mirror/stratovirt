@@ -368,6 +368,7 @@ impl LightMachine {
     /// Realize `LightMachine` means let all members of `LightMachine` enabled.
     #[cfg(target_arch = "aarch64")]
     pub fn realize(&self) -> Result<()> {
+        self.irq_chip.realize()?;
         self.bus
             .realize_devices(&self.vm_fd, &self.boot_source, &self.sys_mem)?;
 

@@ -27,7 +27,7 @@
 mod aarch64;
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::InterruptController;
+pub use aarch64::{errors, InterruptController};
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::GICConfig as InterruptControllerConfig;
