@@ -58,7 +58,7 @@ By default, after booted, VM will online all CPUs you set.
 StratoVirt supports to set the size of VM's memory in cmdline.
 
 This allows you to set the size of memory that VM will support.
-You can choose `M` or `G` as unit (default unit is `Kib`).
+You can choose `M` or `G` as unit (default unit is `Byte`).
 
 But unfortunately, in json configuration file, only `byte` is supported as unit.
 

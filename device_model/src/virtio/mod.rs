@@ -178,6 +178,12 @@ pub mod errors {
             IncorrectOffset(expect: u64, actual: u64) {
                 display("Incorrect offset, expected {}, got {}", expect, actual)
             }
+            DeviceNotActivated(devname: String) {
+                display("Device {} not activated", devname)
+            }
+            FailedToWriteConfig {
+                display("Failed to Write config")
+            }
         }
     }
 }

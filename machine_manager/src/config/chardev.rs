@@ -76,7 +76,7 @@ impl VmConfig {
 
     /// Update '-console ...' network config to `VmConfig`.
     pub fn update_console(&mut self, console_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("chardev");
         cmd_parser.push("id").push("path");
 
         cmd_parser.parse(console_config)?;
@@ -124,7 +124,7 @@ impl SerialConfig {
 
 impl VmConfig {
     pub fn update_serial(&mut self, serial_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("serial");
         cmd_parser.push("");
 
         cmd_parser.parse(serial_config)?;
@@ -175,7 +175,7 @@ impl ConfigCheck for VsockConfig {
 
 impl VmConfig {
     pub fn update_vsock(&mut self, vsock_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("device");
         cmd_parser
             .push("")
             .push("id")

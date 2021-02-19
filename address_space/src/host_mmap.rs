@@ -323,4 +323,38 @@ mod test {
 
         std::fs::remove_file(file_path).unwrap();
     }
+
+    #[test]
+    fn test_create_host_mmaps() {
+        let addr_ranges = [(0x0, 0x10_0000), (0x100000, 0x10_0000)];
+        let mem_config = MachineMemConfig {
+            mem_size: 0x20_0000,
+            mem_path: Some(String::from("/tmp")),
+            dump_guest_core: false,
+            mem_share: false,
+        };
+
+        let host_mmaps = create_host_mmaps(&addr_ranges, &mem_config).unwrap();
+        assert_eq!(host_mmaps.len(), 2);
+
+        // check the start address and size of HostMemMapping
+        for (index, mmap) in host_mmaps.iter().enumerate() {
+            assert_eq!(mmap.start_address().raw_value(), addr_ranges[index].0);
+            assert_eq!(mmap.size(), addr_ranges[index].1);
+            assert!(mmap.file_backend().is_some());
+        }
+
+        // check the file backends' total size, should equal to mem_size in config.
+        let total_file_size = host_mmaps[0]
+            .file_backend()
+            .unwrap()
+            .file
+            .metadata()
+            .unwrap()
+            .len();
+        let total_mem_size = addr_ranges.iter().fold(0_u64, |acc, x| acc + x.1);
+        let total_mmaps_size = host_mmaps.iter().fold(0_u64, |acc, x| acc + x.size());
+        assert_eq!(total_mem_size, total_file_size);
+        assert_eq!(total_mem_size, total_mmaps_size);
+    }
 }

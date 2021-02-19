@@ -205,7 +205,7 @@ mod test {
     }
 
     #[test]
-    fn test_offset() {
+    fn test_addr_offset() {
         let addr1 = GuestAddress(0xAE);
         let addr2 = GuestAddress(0xA0);
         let addr3 = GuestAddress(0xE);
@@ -294,5 +294,28 @@ mod test {
         };
 
         assert_eq!(range.end_addr(), GuestAddress(65_u64));
+    }
+
+    #[test]
+    fn test_address_range_compare() {
+        let range1 = AddressRange {
+            base: GuestAddress(0x1000),
+            size: 0x1000,
+        };
+        let mut range2 = AddressRange {
+            base: GuestAddress(0x500),
+            size: 0x500,
+        };
+
+        assert!(range2 != range1);
+        assert!(range2 < range1);
+
+        range2.base = GuestAddress(0x1000);
+        assert!(range2 != range1);
+        assert!(range2 < range1);
+
+        range2.size = 0x1200;
+        assert!(range2 != range1);
+        assert!(range2 > range1);
     }
 }

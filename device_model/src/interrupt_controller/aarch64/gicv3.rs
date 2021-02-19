@@ -17,7 +17,7 @@ use kvm_ioctls::{DeviceFd, VmFd};
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::device_tree;
 
-use super::errors::{ErrorKind, Result};
+use super::errors::{ErrorKind, Result, ResultExt};
 use super::{GICConfig, GICDevice, UtilResult};
 
 use crate::{LayoutEntryType, MEM_LAYOUT};
@@ -97,11 +97,11 @@ trait GICv3Access {
 
 struct GicRedistRegion {
     /// Base address.
-    pub base: u64,
+    base: u64,
     /// Size of redistributor region.
-    pub size: u64,
+    size: u64,
     /// Attribute of redistributor region.
-    pub base_attr: u64,
+    base_attr: u64,
 }
 
 /// A wrapper around creating and managing a `GICv3`.
@@ -128,7 +128,7 @@ pub struct GICv3 {
 }
 
 impl GICv3 {
-    pub fn new(vm: &Arc<VmFd>, config: &GICConfig) -> Result<Self> {
+    fn new(vm: &Arc<VmFd>, config: &GICConfig) -> Result<Self> {
         config.check_sanity()?;
 
         let mut gic_device = kvm_bindings::kvm_create_device {
@@ -139,7 +139,7 @@ impl GICv3 {
 
         let gic_fd = match vm.create_device(&mut gic_device) {
             Ok(fd) => fd,
-            Err(e) => return Err(ErrorKind::CreateGIC(e).into()),
+            Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
         };
 
         // Calculate GIC redistributor regions' address range according to vcpu count.
@@ -178,7 +178,7 @@ impl GICv3 {
         };
 
         if gicv3.its {
-            gicv3.its_dev = Some(GICv3Its::new(&vm)?);
+            gicv3.its_dev = Some(GICv3Its::new(&vm).chain_err(|| "Failed to create ITS")?);
         }
 
         Ok(gicv3)
@@ -201,7 +201,8 @@ impl GICv3 {
                 u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST),
                 &self.redist_regions.get(0).unwrap().base as *const u64 as u64,
                 true,
-            )?;
+            )
+            .chain_err(|| "Failed to set GICv3 attribute: redistributor address")?;
         } else {
             for redist in &self.redist_regions {
                 KvmDevice::kvm_device_access(
@@ -210,7 +211,8 @@ impl GICv3 {
                     u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION),
                     &redist.base_attr as *const u64 as u64,
                     true,
-                )?;
+                )
+                .chain_err(|| "Failed to set GICv3 attribute: redistributor region address")?;
             }
         }
 
@@ -220,7 +222,8 @@ impl GICv3 {
             u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_DIST),
             &self.dist_base as *const u64 as u64,
             true,
-        )?;
+        )
+        .chain_err(|| "Failed to set GICv3 attribute: distributor address")?;
 
         KvmDevice::kvm_device_check(&self.fd, kvm_bindings::KVM_DEV_ARM_VGIC_GRP_NR_IRQS, 0)?;
 
@@ -231,7 +234,8 @@ impl GICv3 {
             0,
             &self.nr_irqs as *const u32 as u64,
             true,
-        )?;
+        )
+        .chain_err(|| "Failed to set GICv3 attribute: irqs")?;
 
         // Finalize the GIC.
         KvmDevice::kvm_device_access(
@@ -240,7 +244,8 @@ impl GICv3 {
             u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_CTRL_INIT),
             0,
             true,
-        )?;
+        )
+        .chain_err(|| "KVM failed to initialize GICv3")?;
 
         let mut state = self.state.lock().unwrap();
         *state = KvmVmState::Running;
@@ -369,10 +374,10 @@ impl GICDevice for GICv3 {
     }
 
     fn realize(&self) -> Result<()> {
-        self.realize()?;
+        self.realize().chain_err(|| "Failed to realize GICv3")?;
 
         if let Some(its) = &self.its_dev {
-            its.realize()?;
+            its.realize().chain_err(|| "Failed to realize ITS")?;
         }
 
         Ok(())
@@ -420,7 +425,7 @@ impl GICDevice for GICv3 {
     }
 }
 
-pub struct GICv3Its {
+struct GICv3Its {
     /// The fd for the GICv3Its device
     fd: DeviceFd,
 
@@ -442,7 +447,7 @@ impl GICv3Its {
 
         let its_fd = match vm.create_device(&mut its_device) {
             Ok(fd) => fd,
-            Err(e) => return Err(ErrorKind::CreateGIC(e).into()),
+            Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
         };
 
         Ok(GICv3Its {
@@ -457,7 +462,8 @@ impl GICv3Its {
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
             u64::from(kvm_bindings::KVM_VGIC_ITS_ADDR_TYPE),
-        )?;
+        )
+        .chain_err(|| "ITS address attribute is not supported for KVM")?;
 
         KvmDevice::kvm_device_access(
             &self.fd,
@@ -465,7 +471,8 @@ impl GICv3Its {
             u64::from(kvm_bindings::KVM_VGIC_ITS_ADDR_TYPE),
             &self.msi_base as *const u64 as u64,
             true,
-        )?;
+        )
+        .chain_err(|| "Failed to set ITS attribute: ITS address")?;
 
         // Finalize the GIC Its.
         KvmDevice::kvm_device_access(
@@ -474,7 +481,8 @@ impl GICv3Its {
             u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_CTRL_INIT),
             &self.msi_base as *const u64 as u64,
             true,
-        )?;
+        )
+        .chain_err(|| "KVM failed to initialize ITS")?;
 
         Ok(())
     }
@@ -482,35 +490,68 @@ impl GICv3Its {
 
 #[cfg(test)]
 mod tests {
-
+    use super::super::GICConfig;
     use super::*;
+    use kvm_ioctls::Kvm;
 
     #[test]
-    fn test_gic_config() {
-        let mut gic_conf = GICConfig {
+    fn test_create_gicv3() {
+        let vm = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Arc::new(vm_fd)
+        } else {
+            return;
+        };
+
+        let gic_conf = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
             vcpu_count: 4,
             max_irq: 192,
             msi: false,
         };
 
-        assert!(gic_conf.check_sanity().is_ok());
-        gic_conf.version = 3;
-        assert!(gic_conf.check_sanity().is_err());
-        gic_conf.version = kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into();
-        assert!(gic_conf.check_sanity().is_ok());
+        assert!(GICv3::new(&vm, &gic_conf).is_ok());
+    }
 
-        gic_conf.vcpu_count = 257;
-        assert!(gic_conf.check_sanity().is_err());
-        gic_conf.vcpu_count = 0;
-        assert!(gic_conf.check_sanity().is_err());
-        gic_conf.vcpu_count = 24;
-        assert!(gic_conf.check_sanity().is_ok());
+    #[test]
+    fn test_create_gic_device() {
+        let vm_fd = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Arc::new(vm_fd)
+        } else {
+            return;
+        };
 
-        gic_conf.max_irq = 32;
-        assert!(gic_conf.check_sanity().is_err());
+        let gic_config = GICConfig {
+            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+            vcpu_count: 4_u64,
+            max_irq: 192_u32,
+            msi: false,
+        };
 
-        gic_conf.max_irq = 32;
-        assert!(gic_conf.check_sanity().is_err());
+        let gic = GICv3::new(&vm_fd, &gic_config).unwrap();
+        assert!(gic.its_dev.is_none());
+        assert_eq!(gic.its, false);
+
+        assert!(GICv3::new(&vm_fd, &gic_config).is_err());
+    }
+
+    #[test]
+    fn test_gic_redist_regions() {
+        let vm_fd = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Arc::new(vm_fd)
+        } else {
+            return;
+        };
+
+        let gic_config = GICConfig {
+            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+            vcpu_count: 210_u64,
+            max_irq: 192_u32,
+            msi: true,
+        };
+
+        let gic = GICv3::new(&vm_fd, &gic_config).unwrap();
+        assert!(gic.its_dev.is_some());
+        assert_eq!(gic.its, true);
+        assert_eq!(gic.redist_regions.len(), 2);
     }
 }

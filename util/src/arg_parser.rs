@@ -491,7 +491,11 @@ impl<'a> Arg<'a> {
                 self.help.unwrap_or("")
             );
             let font_offset = font_str.len();
-            help_str.replace_range(..font_offset, &font_str);
+            if font_offset > TWENTY_FOUT_BLANK.len() * 3 - FOUR_BLANK.len() {
+                help_str = format!("{}\n{}", font_str, help_str);
+            } else {
+                help_str.replace_range(..font_offset, &font_str);
+            }
             (help_str, HelpType::OPTION)
         }
     }

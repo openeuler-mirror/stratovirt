@@ -137,7 +137,7 @@ impl KvmMemoryListener {
             }
         }
 
-        Err(ErrorKind::NoAvailKvmSlot(self.slots.lock().unwrap().len()).into())
+        Err(ErrorKind::NoAvailKvmSlot(slots.len()).into())
     }
 
     /// Delete a slot after finding it according to the given arguments.
@@ -583,7 +583,7 @@ mod test {
     #[test]
     fn test_alloc_slot() {
         let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
+            Ok(vm_fd) => KvmMemoryListener::new(4, Arc::new(vm_fd)),
             Err(_) => return,
         };
 
@@ -593,6 +593,9 @@ mod test {
         assert_eq!(kml.get_free_slot(300, 100, host_addr).unwrap(), 2);
         assert_eq!(kml.get_free_slot(500, 100, host_addr).unwrap(), 3);
         assert!(kml.get_free_slot(200, 100, host_addr).is_err());
+
+        // no available KVM mem slot
+        assert!(kml.get_free_slot(600, 100, host_addr).is_err());
 
         kml.delete_slot(200, 100).unwrap();
         assert!(kml.delete_slot(150, 100).is_err());
@@ -699,7 +702,7 @@ mod test {
 
         let mut evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
         evtfd.addr_range.size = 3_u64;
-        // Matched data length is not supported.
+        // Matched data's length must be 2, 4 or 8.
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
             .is_err());
@@ -764,5 +767,16 @@ mod test {
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::DeleteIoeventfd)
             .is_err());
+
+        // Matched data's length must be 2, 4 or 8.
+        let mut evtfd_match = generate_region_ioeventfd(4, 64_u32);
+        evtfd_match.addr_range.size = 3;
+        assert!(iol
+            .handle_request(None, Some(&evtfd_match), ListenerReqType::AddIoeventfd)
+            .is_err());
+        evtfd_match.addr_range.size = 4;
+        assert!(iol
+            .handle_request(None, Some(&evtfd_match), ListenerReqType::AddIoeventfd)
+            .is_ok());
     }
 }

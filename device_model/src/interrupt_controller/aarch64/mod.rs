@@ -30,10 +30,10 @@ pub mod errors {
         }
         errors {
             InvalidConfig(err_info: String) {
-                display("Invalid config: {}.", err_info)
+                display("Invalid GIC config: {}.", err_info)
             }
-            CreateGIC(err: kvm_ioctls::Error) {
-                display("Failed to create GIC device: {:#?}.", err)
+            CreateKvmDevice(err: kvm_ioctls::Error) {
+                display("Failed to create KVM device: {:#?}.", err)
             }
             SetDeviceAttribute(err: kvm_ioctls::Error) {
                 display("Failed to set device attributes for GIC: {:#?}.", err)
@@ -51,7 +51,7 @@ pub mod errors {
     }
 }
 
-use self::errors::{ErrorKind, Result};
+use self::errors::{ErrorKind, Result, ResultExt};
 
 /// Configure a Interrupt controller.
 pub struct GICConfig {
@@ -127,12 +127,12 @@ impl InterruptController {
     /// * `gic_conf` - Configuration for `GIC`.
     pub fn new(vm: Arc<VmFd>, gic_conf: &GICConfig) -> Result<InterruptController> {
         Ok(InterruptController {
-            gic: GICv3::create_device(&vm, gic_conf)?,
+            gic: GICv3::create_device(&vm, gic_conf).chain_err(|| "Failed to realize GIC")?,
         })
     }
 
     pub fn realize(&self) -> Result<()> {
-        self.gic.realize()?;
+        self.gic.realize().chain_err(|| "Failed to realize GIC")?;
         Ok(())
     }
 
@@ -140,38 +140,45 @@ impl InterruptController {
     pub fn stop(&self) {
         self.gic
             .notify_lifecycle(KvmVmState::Running, KvmVmState::Paused);
-        debug!("Device gic stopped!");
     }
 }
 
 impl device_tree::CompileFDT for InterruptController {
     fn generate_fdt_node(&self, fdt: &mut Vec<u8>) -> UtilResult<()> {
         self.gic.generate_fdt(fdt)?;
-        debug!("Interrupt Controller device tree generated!");
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_create_gicv3() {
-        use super::*;
-        use kvm_ioctls::Kvm;
-
-        let vm = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
-            return;
-        };
-
-        let gic_conf = GICConfig {
+    fn test_gic_config() {
+        let mut gic_conf = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
             vcpu_count: 4,
             max_irq: 192,
             msi: false,
         };
 
-        assert!(gicv3::GICv3::new(&vm, &gic_conf).is_ok());
+        assert!(gic_conf.check_sanity().is_ok());
+        gic_conf.version = 3;
+        assert!(gic_conf.check_sanity().is_err());
+        gic_conf.version = kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into();
+        assert!(gic_conf.check_sanity().is_ok());
+
+        gic_conf.vcpu_count = 257;
+        assert!(gic_conf.check_sanity().is_err());
+        gic_conf.vcpu_count = 0;
+        assert!(gic_conf.check_sanity().is_err());
+        gic_conf.vcpu_count = 24;
+        assert!(gic_conf.check_sanity().is_ok());
+
+        assert!(gic_conf.check_sanity().is_ok());
+
+        gic_conf.max_irq = 32;
+        assert!(gic_conf.check_sanity().is_err());
     }
 }

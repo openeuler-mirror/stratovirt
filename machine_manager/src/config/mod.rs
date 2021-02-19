@@ -41,39 +41,36 @@ pub mod errors {
     error_chain! {
         errors {
             InvalidParam(param: String) {
-                description("No defined for this cmdline param.")
                 display("Invalid parameter \'{}\'", param)
             }
             ConvertValueFailed(param: String, value: String) {
-                description("Failed to convert value for param.")
                 display("Unable to parse \'{}\' for \'{}\'", value, param)
             }
             StringLengthTooLong(t: String, len: usize) {
-                description("Limit the length of String.")
                 display("Input {} string's length must be no more than {}.", t, len)
             }
+            FieldRepeat(field: String, name: String) {
+                display("\'{}\' in {} is offerred more than once.", field, name)
+            }
+            IntegerOverflow(item: &'static str) {
+                display("Integer overflow occurred during parse {}!", item)
+            }
             NrcpusError {
-                description("Limit the number of vcpu in StratoVirt.")
                 display("Number of vcpu should be more than 0 and less than 255.")
             }
             MemsizeError {
-                description("Limit the size of memory in StratoVirt.")
                 display("Size of memory should be less than 512G and more than 128M.")
             }
             GuestCidError {
-                description("Check legality of vsock guest-cid.")
                 display("Vsock guest-cid should be more than 3 and less than 4294967296.")
             }
             MacFormatError {
-                description("Check legality of vsock mac address.")
                 display("Mac address is illegal.")
             }
             UnknownVhostType {
-                description("Unknown vhost type.")
                 display("Unknown vhost type.")
             }
             UnRegularFile(t: String) {
-                description("Check legality of file.")
                 display("{} is not a regular File.", t)
             }
         }
@@ -245,13 +242,15 @@ pub trait ConfigCheck: AsAny + Send + Sync {
 
 /// Struct `CmdParser` used to parse and check cmdline parameters to vm config.
 pub struct CmdParser {
+    name: String,
     params: HashMap<String, Option<String>>,
 }
 
 impl CmdParser {
     /// Allocates an empty `CmdParser`.
-    fn new() -> Self {
+    fn new(name: &str) -> Self {
         CmdParser {
+            name: name.to_string(),
             params: HashMap::<String, Option<String>>::new(),
         }
     }
@@ -281,7 +280,7 @@ impl CmdParser {
             if param_item.starts_with('=') || cmd_param.ends_with('=') {
                 return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
             }
-            let param = param_item.split('=').collect::<Vec<&str>>();
+            let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
             let (param_key, param_value) = match param.len() {
                 1 => ("", param[0]),
                 2 => (param[0], param[1]),
@@ -291,7 +290,14 @@ impl CmdParser {
             };
 
             if self.params.contains_key(param_key) {
-                *self.params.get_mut(param_key).unwrap() = Some(String::from(param_value));
+                let field_value = self.params.get_mut(param_key).unwrap();
+                if field_value.is_none() {
+                    *field_value = Some(String::from(param_value));
+                } else {
+                    return Err(
+                        ErrorKind::FieldRepeat(param_key.to_string(), self.name.clone()).into(),
+                    );
+                }
             } else {
                 return Err(ErrorKind::InvalidParam(param[0].to_string()).into());
             }
@@ -308,9 +314,15 @@ impl CmdParser {
     fn get_value<T: FromStr>(&self, param_field: &str) -> Result<Option<T>> {
         match self.params.get(param_field) {
             Some(value) => {
+                let field_msg = if param_field == "" {
+                    &self.name
+                } else {
+                    param_field
+                };
+
                 if let Some(raw_value) = value {
                     Ok(Some(raw_value.parse().map_err(|_| {
-                        ErrorKind::ConvertValueFailed(param_field.to_string(), raw_value.clone())
+                        ErrorKind::ConvertValueFailed(field_msg.to_string(), raw_value.clone())
                     })?))
                 } else {
                     Ok(None)
@@ -351,15 +363,21 @@ mod tests {
 
     #[test]
     fn test_cmd_parser() {
-        let mut cmd_parser = CmdParser::new();
+        let mut cmd_parser = CmdParser::new("test");
         cmd_parser
             .push("")
             .push("id")
             .push("path")
             .push("num")
-            .push("killed");
+            .push("test1")
+            .push("test2")
+            .push("test3")
+            .push("test4")
+            .push("test5")
+            .push("test6")
+            .push("test7");
         assert!(cmd_parser
-            .parse("socket,id=charconsole0,path=/tmp/console.sock,num=1,killed=true")
+            .parse("socket,id=charconsole0,path=/tmp/console.sock,num=1,test1=true,test2=on,test3=yes,test4=false,test5=off,test6=no,test7=random")
             .is_ok());
         assert_eq!(
             cmd_parser.get_value::<String>("").unwrap().unwrap(),
@@ -381,58 +399,52 @@ mod tests {
         assert_eq!(cmd_parser.get_value::<i32>("num").unwrap().unwrap(), 1_i32);
         assert_eq!(cmd_parser.get_value::<i16>("num").unwrap().unwrap(), 1_i16);
         assert_eq!(cmd_parser.get_value::<i8>("num").unwrap().unwrap(), 1_i8);
-        assert!(cmd_parser.get_value::<bool>("killed").unwrap().unwrap());
+        assert!(cmd_parser.get_value::<bool>("test1").unwrap().unwrap());
         assert!(
             cmd_parser
-                .get_value::<ExBool>("killed")
+                .get_value::<ExBool>("test1")
                 .unwrap()
                 .unwrap()
                 .inner
         );
-        assert!(cmd_parser.parse("killed=on").is_ok());
         assert!(
             cmd_parser
-                .get_value::<ExBool>("killed")
+                .get_value::<ExBool>("test2")
                 .unwrap()
                 .unwrap()
                 .inner
         );
-        assert!(cmd_parser.parse("killed=yes").is_ok());
         assert!(
             cmd_parser
-                .get_value::<ExBool>("killed")
+                .get_value::<ExBool>("test3")
                 .unwrap()
                 .unwrap()
                 .inner
         );
-        assert!(cmd_parser.parse("killed=false").is_ok());
-        assert!(!cmd_parser.get_value::<bool>("killed").unwrap().unwrap());
+        assert!(!cmd_parser.get_value::<bool>("test4").unwrap().unwrap());
         assert!(
             !cmd_parser
-                .get_value::<ExBool>("killed")
+                .get_value::<ExBool>("test4")
                 .unwrap()
                 .unwrap()
                 .inner
         );
-        assert!(cmd_parser.parse("killed=off").is_ok());
         assert!(
             !cmd_parser
-                .get_value::<ExBool>("killed")
+                .get_value::<ExBool>("test5")
                 .unwrap()
                 .unwrap()
                 .inner
         );
-        assert!(cmd_parser.parse("killed=no").is_ok());
         assert!(
             !cmd_parser
-                .get_value::<ExBool>("killed")
+                .get_value::<ExBool>("test6")
                 .unwrap()
                 .unwrap()
                 .inner
         );
-        assert!(cmd_parser.parse("killed=random").is_ok());
-        assert!(cmd_parser.get_value::<bool>("killed").is_err());
-        assert!(cmd_parser.get_value::<ExBool>("killed").is_err());
+        assert!(cmd_parser.get_value::<bool>("test7").is_err());
+        assert!(cmd_parser.get_value::<ExBool>("test7").is_err());
         assert!(cmd_parser.get_value::<String>("random").unwrap().is_none());
         assert!(cmd_parser.parse("random=false").is_err());
     }

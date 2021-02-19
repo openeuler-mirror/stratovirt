@@ -67,3 +67,60 @@ impl ByteCode for i8 {}
 impl ByteCode for i16 {}
 impl ByteCode for i32 {}
 impl ByteCode for i64 {}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[allow(dead_code)]
+    #[derive(Copy, Clone, Default)]
+    struct TestData {
+        type_id: [u8; 8],
+        time_sec: u64,
+    }
+
+    impl ByteCode for TestData {}
+
+    #[test]
+    fn test_bytecode_plain_data() {
+        let num1: u32 = 0x1234_5678;
+        assert_eq!(num1.as_bytes().to_vec(), vec![0x78, 0x56, 0x34, 0x12]);
+
+        let bytes = [0x34_u8, 0x56, 0x12, 0x05];
+        assert_eq!(*u32::from_bytes(&bytes).unwrap(), 0x0512_5634);
+
+        // Convert failed because byte stream's length is not equal to u32's size
+        let mis_bytes = [0x0_u8, 0x0, 0x12];
+        assert!(u32::from_bytes(&mis_bytes).is_none());
+    }
+
+    #[test]
+    fn test_bytecode_struct() {
+        let data = TestData {
+            type_id: *b"bytecode",
+            time_sec: 0x12345679,
+        };
+
+        let mut target = Vec::new();
+        target.extend_from_slice(&[0x79, 0x56, 0x34, 0x12]);
+        target.extend_from_slice(&[0_u8; 4]);
+        target.extend_from_slice(b"bytecode");
+        assert_eq!(data.as_bytes().to_vec(), target);
+
+        // Convert failed because byte stream's length is not equal to size of struct.
+        target.remove(target.len() - 1);
+        assert!(TestData::from_bytes(&target).is_none());
+    }
+
+    #[test]
+    fn test_byte_code_mut() {
+        let mut num1 = 0x1234_5678_u32;
+
+        let res_bytes = num1.as_mut_bytes();
+        assert_eq!(res_bytes.to_vec(), vec![0x78, 0x56, 0x34, 0x12]);
+        res_bytes[3] = 0x99;
+
+        let res_num = u32::from_mut_bytes(res_bytes).unwrap();
+        assert_eq!(*res_num, 0x9934_5678);
+    }
+}

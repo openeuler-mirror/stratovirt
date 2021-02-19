@@ -84,13 +84,15 @@ fn iov_to_buf<T: ByteCode>(
         return None;
     }
 
-    if address_space
-        .read(&mut data, iov.iov_base, iov.iov_len)
-        .is_err()
-    {
-        error!("Read virtioqueue failed!");
+    if let Err(ref e) = address_space.read(&mut data, iov.iov_base, iov.iov_len) {
+        error!(
+            "Read virtioqueue failed: {}",
+            error_chain::ChainedError::display_chain(e)
+        );
         return None;
     }
+
+    // Safe, because the offset is checked.
     unsafe {
         Some(std::ptr::read_volatile(
             &data[(offset as usize)..] as *const _ as *const T,
@@ -98,6 +100,18 @@ fn iov_to_buf<T: ByteCode>(
     }
 }
 
+fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int) {
+    // Safe, because the memory to be freed is allocated by guest.
+    if unsafe { libc::madvise(addr, len, advice) } != 0 {
+        let evt_type = if advice == libc::MADV_WILLNEED {
+            "WILLNEED".to_string()
+        } else {
+            "DONTNEED".to_string()
+        };
+        let e = std::io::Error::last_os_error();
+        error!("Mark memory to {} failed: {}", evt_type, e);
+    }
+}
 struct Request {
     /// The index of descriptor for the request.
     pub desc_index: u16,
@@ -164,30 +178,27 @@ impl Request {
                     let hva = match mem.get_host_address(gpa) {
                         Some(addr) => addr,
                         None => {
-                            error!("failed to mark balloon page");
+                            error!("Failed to mark balloon page: can not get host address");
                             continue;
                         }
                     };
                     if (last_addr == 0) || (hva + BALLOON_PAGE_SIZE == last_addr) {
                         free_len += 1;
                     } else {
-                        unsafe {
-                            libc::madvise(
-                                last_addr as *const libc::c_void as *mut _,
-                                (free_len * BALLOON_PAGE_SIZE) as usize,
-                                advice,
-                            );
-                        }
+                        memory_advise(
+                            last_addr as *const libc::c_void as *mut _,
+                            (free_len * BALLOON_PAGE_SIZE) as usize,
+                            advice,
+                        );
                         free_len = 1;
                     }
+
                     if count_iov == iov.iov_len {
-                        unsafe {
-                            libc::madvise(
-                                hva as *const libc::c_void as *mut _,
-                                (free_len * BALLOON_PAGE_SIZE) as usize,
-                                advice,
-                            );
-                        }
+                        memory_advise(
+                            hva as *const libc::c_void as *mut _,
+                            (free_len * BALLOON_PAGE_SIZE) as usize,
+                            advice,
+                        );
                     }
                     count_iov += std::mem::size_of::<u32>() as u64;
                     last_addr = hva;
@@ -199,7 +210,7 @@ impl Request {
                     let hva = match mem.get_host_address(gpa) {
                         Some(addr) => addr,
                         None => {
-                            error!("failed to mark balloon page");
+                            error!("Failed to mark balloon page: can not get host address");
                             continue;
                         }
                     };
@@ -209,24 +220,21 @@ impl Request {
                     } else if hva == last_addr + BALLOON_PAGE_SIZE {
                         free_len += 1;
                     } else {
-                        unsafe {
-                            libc::madvise(
-                                start_addr as *const libc::c_void as *mut _,
-                                (free_len * BALLOON_PAGE_SIZE) as usize,
-                                advice,
-                            );
-                        }
+                        memory_advise(
+                            start_addr as *const libc::c_void as *mut _,
+                            (free_len * BALLOON_PAGE_SIZE) as usize,
+                            advice,
+                        );
                         free_len = 1;
                         start_addr = hva;
                     }
+
                     if count_iov == iov.iov_len {
-                        unsafe {
-                            libc::madvise(
-                                start_addr as *const libc::c_void as *mut _,
-                                (free_len * BALLOON_PAGE_SIZE) as usize,
-                                advice,
-                            );
-                        }
+                        memory_advise(
+                            start_addr as *const libc::c_void as *mut _,
+                            (free_len * BALLOON_PAGE_SIZE) as usize,
+                            advice,
+                        );
                     }
                     count_iov += std::mem::size_of::<u32>() as u64;
                     last_addr = hva;
@@ -313,7 +321,6 @@ impl BlnMemInfo {
         } else {
             error!("Failed to get host address!");
         }
-        debug!("Balloon: deleting mem region failed: not matched");
     }
 }
 
@@ -321,6 +328,7 @@ impl Listener for BlnMemInfo {
     fn priority(&self) -> i32 {
         0
     }
+
     fn handle_request(
         &self,
         range: Option<&FlatRange>,
@@ -389,26 +397,26 @@ impl BalloonIoHandler {
                 match Request::parse(&elem) {
                     Ok(req) => {
                         req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
-                        unlocked_queue.vring.add_used(
-                            &self.mem_space,
-                            req.desc_index,
-                            req.elem_cnt as u32,
-                        )?;
+                        unlocked_queue
+                            .vring
+                            .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
+                            .chain_err(|| "Failed to add balloon response into used queue")?;
                     }
                     Err(e) => {
-                        error!("fail to parse available descriptor chain: {:?}", e);
+                        error!("Fail to parse available descriptor chain: {:?}", e);
                         break;
                     }
                 }
             }
         }
-        self.signal_used_queue()?;
+        self.signal_used_queue()
+            .chain_err(|| "Failed to notify used queue after processing balloon events")?;
         Ok(())
     }
 
     /// Trigger interrupt to notify vm.
     fn signal_used_queue(&self) -> Result<()> {
-        (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING)
+        (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING).chain_err(|| "Failed to write interrupt eventfd")
     }
 }
 
@@ -439,9 +447,12 @@ impl EventNotifierHelper for BalloonIoHandler {
             let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                locked_balloon_io
-                    .process_balloon_queue(BALLOON_INFLATE_EVENT)
-                    .unwrap_or_else(|_| error!("Failed to inflate balloon."));
+                if let Err(ref e) = locked_balloon_io.process_balloon_queue(BALLOON_INFLATE_EVENT) {
+                    error!(
+                        "Failed to inflate balloon: {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
+                };
                 None
             });
             let locked_balloon_io = balloon_io.lock().unwrap();
@@ -456,9 +467,12 @@ impl EventNotifierHelper for BalloonIoHandler {
             let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                locked_balloon_io
-                    .process_balloon_queue(BALLOON_DEFLATE_EVENT)
-                    .unwrap_or_else(|_| error!("Failed to deflate balloon."));
+                if let Err(ref e) = locked_balloon_io.process_balloon_queue(BALLOON_DEFLATE_EVENT) {
+                    error!(
+                        "Failed to deflate balloon: {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
+                };
                 None
             });
             let locked_balloon_io = balloon_io.lock().unwrap();
@@ -510,6 +524,8 @@ impl Balloon {
 
     /// Init balloon object for global use.
     pub fn object_init(dev: Arc<Mutex<Balloon>>) {
+        // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
+        // this function will not be called simultaneously.
         unsafe {
             if BALLOON_DEV.is_none() {
                 BALLOON_DEV = Some(dev)
@@ -530,8 +546,7 @@ impl Balloon {
     /// Notify configuration changes to VM.
     fn signal_config_change(&self) -> Result<()> {
         if self.interrupt_cb.is_none() {
-            debug!("balloon device not activated");
-            return Ok(());
+            return Err(ErrorKind::DeviceNotActivated("balloon".to_string()).into());
         }
         let interrupt = self.interrupt_cb.as_ref().unwrap();
         (*interrupt)(VIRTIO_MMIO_INT_CONFIG)
@@ -548,7 +563,9 @@ impl Balloon {
         let current_ram_size = (self.get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
         let vm_target = cmp::min(target, current_ram_size);
         self.num_pages = current_ram_size - vm_target;
-        self.signal_config_change()?;
+        self.signal_config_change().chain_err(|| {
+            "Failed to notify about configuration change after setting balloon memory"
+        })?;
         Ok(())
     }
 
@@ -614,7 +631,8 @@ impl VirtioDevice for Balloon {
         if offset != 0 {
             return Err(ErrorKind::IncorrectOffset(0, offset).into());
         }
-        data.write_all(&new_config.as_bytes()[offset as usize..data.len()])?;
+        data.write_all(&new_config.as_bytes()[offset as usize..data.len()])
+            .chain_err(|| "Failed to write data to 'data' while reading balloon config")?;
         Ok(())
     }
 
@@ -625,11 +643,11 @@ impl VirtioDevice for Balloon {
     /// * `_offset` - Offset from base address.
     fn write_config(&mut self, _offset: u64, data: &[u8]) -> Result<()> {
         // Guest update actual balloon size
+        // Safe, because the results will be checked.
         let new_actual = match unsafe { data.align_to::<u32>() } {
             (_, [new_config], _) => *new_config,
             _ => {
-                error!("Failed to write balloon config");
-                return Ok(());
+                return Err(ErrorKind::FailedToWriteConfig.into());
             }
         };
         self.actual = new_actual;
@@ -661,7 +679,9 @@ impl VirtioDevice for Balloon {
         let inf_queue_evt = queue_evts.remove(0);
         let def_queue = queues.remove(0);
         let def_queue_evt = queue_evts.remove(0);
-        let interrupt_evt = interrupt_evt.try_clone()?;
+        let interrupt_evt = interrupt_evt
+            .try_clone()
+            .chain_err(|| "Failed to clone event fd for balloon device")?;
         let interrupt_stats = interrupt_stats;
         let cb = Arc::new(Box::new(move |status: u32| {
             interrupt_stats.fetch_or(status, Ordering::SeqCst);
@@ -682,10 +702,13 @@ impl VirtioDevice for Balloon {
             mem_info: bln_mem_info.clone(),
         };
 
-        mem_space.register_listener(Box::new(bln_mem_info))?;
+        mem_space
+            .register_listener(Box::new(bln_mem_info))
+            .chain_err(|| "Failed to register memory listener defined by balloon device.")?;
         MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
             Mutex::new(handler),
-        )))?;
+        )))
+        .chain_err(|| "Failed to register balloon event notifier to MainLoop")?;
         Ok(())
     }
 
@@ -702,15 +725,25 @@ impl VirtioDevice for Balloon {
 }
 
 pub fn qmp_balloon(target: u64) -> bool {
+    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
+    // this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
-        if let Ok(()) = dev.lock().unwrap().set_memory_size(target) {
-            return true;
+        match dev.lock().unwrap().set_memory_size(target) {
+            Ok(()) => {
+                return true;
+            }
+            Err(ref e) => {
+                error!("Failed to set balloon memory size: {}, {}", target, e);
+                return false;
+            }
         }
     }
     false
 }
 
 pub fn qmp_query_balloon() -> Option<u64> {
+    // Safe, because there is no confliction when writing global variable BALLOON_DEV, in other words,
+    // this function will not be called simultaneously.
     if let Some(dev) = unsafe { &BALLOON_DEV } {
         let ram_size = dev.lock().unwrap().get_ram_size();
         let balloon_size = dev.lock().unwrap().get_memory_size();

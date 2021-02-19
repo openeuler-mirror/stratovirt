@@ -15,7 +15,7 @@ StratoVirt的核心架构如下图所示，从上到下分为三层：
 - BootLoader: StratoVirt使用简单的BootLoader加载内核镜像，而不像传统的繁琐的BIOS和Grub引导方式，实现快速启动；
 - 轻量化：为了提高性能和减少攻击面，StratoVirt最小化了用户态设备的模拟；使用KVM仿真设备和半虚拟化设备，如GIC、串行、RTC和virtio设备；
 
- ![image](images/StratoVirt-arch;png)
+ ![image](images/StratoVirt-arch.png)
 
 ## 特性
 
