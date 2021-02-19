@@ -333,6 +333,25 @@ There is only one argument for serial device:
 }
 ```
 
+### 2.6 Virtio_Balloon
+Balloon is a virtio device, it offers a flex memory mechanism for VM.
+
+Only one property is supported for virtio-balloon.
+* deflate_on_oom: whether to deflate balloon when there is no enough memory in guest.
+This feature can prevent OOM occur in guest.
+
+```shell
+# cmdline
+-balloon deflate-on-oom=true
+# json
+{
+    "balloon": {
+    "deflate_on_oom": true
+    },
+}
+```
+
+
 ## 3. StratoVirt Management
 
 StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
@@ -465,7 +484,23 @@ You can also remove the replaceable net device by:
 -> {"return": {}}
 ```
 
-### 3.5 Event Notification
+### 3.5 Balloon
+
+With QMP command you can set target memory size of guest and get memory size of guest.
+#### 3.5.1 command 'balloon'
+Set target memory size of guest.
+```json
+<- { "execute": "balloon", "arguments": { "value": 2147483648 } }
+-> {"return":{}}
+```
+#### 3.5.2 command 'query-balloon'
+Get memory size of guest.
+```json
+<- { "execute": "query-balloon" }
+-> {"return":{"actual":2147483648}}
+```
+
+### 3.6 Event Notification
 
 When some events happen, connected client will receive QMP events.
 

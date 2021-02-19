@@ -56,6 +56,7 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle,
 };
 use machine_manager::{
+    config::BalloonConfig,
     config::{
         BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig, VmConfig,
         VsockConfig,
@@ -71,7 +72,6 @@ use util::epoll_context::{
     EventNotifier, EventNotifierHelper, MainLoopManager, NotifierCallback, NotifierOperation,
 };
 
-use crate::cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use crate::errors::{Result, ResultExt};
 #[cfg(target_arch = "aarch64")]
 use crate::interrupt_controller::{InterruptController, InterruptControllerConfig};
@@ -80,9 +80,13 @@ use crate::legacy::PL031;
 #[cfg(target_arch = "aarch64")]
 use crate::mmio::DeviceResource;
 use crate::{
+    cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU},
+    virtio::balloon::{qmp_balloon, qmp_query_balloon},
+};
+use crate::{
     legacy::Serial,
     mmio::{Bus, DeviceType, VirtioMmioDevice},
-    virtio::{vhost, Console},
+    virtio::{balloon::Balloon, vhost, Console},
 };
 
 use crate::{LayoutEntryType, MEM_LAYOUT};
@@ -130,6 +134,17 @@ impl ConfigDevBuilder for ConsoleConfig {
         let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, console)));
         bus.attach_device(device)
             .chain_err(|| "build dev from config failed")?;
+        Ok(())
+    }
+}
+
+impl ConfigDevBuilder for BalloonConfig {
+    fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
+        let balloon = Arc::new(Mutex::new(Balloon::new(self.clone())));
+        Balloon::object_init(balloon.clone());
+        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, balloon)));
+        bus.attach_device(device)
+            .chain_err(|| "Failed to build balloon device from config")?;
         Ok(())
     }
 }
@@ -565,6 +580,10 @@ impl LightMachine {
             }
         }
 
+        if let Some(balloon) = vm_config.balloon {
+            self.register_device(&balloon)?;
+        }
+
         Ok(())
     }
 
@@ -823,6 +842,33 @@ impl DeviceInterface for LightMachine {
             }
         }
         Response::create_response(hotplug_vec.into(), None)
+    }
+
+    fn balloon(&self, value: u64) -> Response {
+        if qmp_balloon(value) {
+            return Response::create_empty_response();
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::DeviceNotActive(
+                "No balloon device has been activated".to_string(),
+            ),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn query_balloon(&self) -> Response {
+        if let Some(actual) = qmp_query_balloon() {
+            let ret = qmp_schema::BalloonInfo { actual };
+            return Response::create_response(serde_json::to_value(&ret).unwrap(), None);
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::DeviceNotActive(
+                "No balloon device has been activated".to_string(),
+            ),
+            None,
+        )
+        .unwrap()
     }
 
     fn device_add(

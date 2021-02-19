@@ -202,6 +202,9 @@ $ cat default.json
       "read_only": false
     }
   ],
+  "balloon": {
+    "deflate_on_oom": true
+  },
   "serial": {
     "stdio": true
   }

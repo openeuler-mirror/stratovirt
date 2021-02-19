@@ -24,6 +24,7 @@
 //!
 //! - `x86_64`
 //! - `aarch64`
+pub mod balloon;
 pub mod block;
 pub mod console;
 pub mod net;
@@ -52,7 +53,7 @@ pub const VIRTIO_TYPE_NET: u32 = 1;
 pub const VIRTIO_TYPE_BLOCK: u32 = 2;
 pub const VIRTIO_TYPE_CONSOLE: u32 = 3;
 pub const _VIRTIO_TYPE_RNG: u32 = 4;
-pub const _VIRTIO_TYPE_BALLOON: u32 = 5;
+pub const VIRTIO_TYPE_BALLOON: u32 = 5;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const _VIRTIO_TYPE_FS: u32 = 26;
 
@@ -167,6 +168,15 @@ pub mod errors {
             }
             VhostIoctl(ioctl: String) {
                 display("Vhost ioctl failed: {}", ioctl)
+            }
+            ElementEmpty {
+                display("Failed to get iovec from element!")
+            }
+            IncorrectQueueNum(expect: usize, actual: usize) {
+                display("Cannot perform activate. Expected {} queue(s), got {}", expect, actual)
+            }
+            IncorrectOffset(expect: u64, actual: u64) {
+                display("Incorrect offset, expected {}, got {}", expect, actual)
             }
         }
     }

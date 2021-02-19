@@ -305,6 +305,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .required(false)
                 .hidden(true),
         )
+        .arg(
+            Arg::with_name("balloon")
+                .long("balloon")
+                .value_name("[deflate_on_oom=]")
+                .help("add balloon device")
+                .takes_value(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -355,6 +362,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     update_args_to_config!((args.value_of("kernel")), vm_cfg, update_kernel);
     update_args_to_config!((args.value_of("initrd-file")), vm_cfg, update_initrd);
     update_args_to_config!((args.value_of("serial")), vm_cfg, update_serial);
+    update_args_to_config!((args.value_of("balloon")), vm_cfg, update_balloon);
     update_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,
