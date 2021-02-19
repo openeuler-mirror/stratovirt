@@ -225,86 +225,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(false)
                 .required(false),
         )
-        // Below cmdline is adapted for Kata/Qemu, no use.
-        .arg(
-            Arg::with_name("uuid")
-                .long("uuid")
-                .value_name("uuid")
-                .help("specify machine UUID")
-                .takes_value(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("cpu")
-                .long("cpu")
-                .help("select CPU architecture")
-                .takes_value(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("global_property")
-                .long("global")
-                .multiple(true)
-                .help("set a global default for a item property")
-                .takes_values(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("object")
-                .multiple(true)
-                .long("object")
-                .value_name(" TYPENAME[,PROP1=VALUE1,...]")
-                .help("create a new object of type TYPENAME settingproperties")
-                .takes_values(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("fsdriver")
-                .multiple(true)
-                .long("fsdev")
-                .help("set fs device for vm")
-                .takes_values(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("vga [std|cirrus|vmware|qxl|xenfb|tcx|cg3|virtio|none]")
-                .long("vga")
-                .help("select video card type")
-                .takes_value(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("numa node")
-                .long("numa")
-                .value_name("[,memdev=id][,cpus=cpu[-cpu]][,nodeid=node]")
-                .help("set numa config")
-                .takes_value(true)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("no-user-config")
-                .long("no-user-config")
-                .help("do not load user-provided config files at startup")
-                .takes_value(false)
-                .required(false)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("nodefaults")
-                .long("nodefaults")
-                .help("don't create default devices")
-                .takes_value(false)
-                .required(false)
-                .hidden(true),
-        )
-        .arg(
-            Arg::with_name("nographic")
-                .long("nographic")
-                .help("disable graphical output and redirect serial I/Os to console")
-                .takes_value(false)
-                .required(false)
-                .hidden(true),
-        )
         .arg(
             Arg::with_name("balloon")
                 .long("balloon")
@@ -327,7 +247,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
 ///
 /// Input arguments is illegal for `VmConfig` or `VmConfig`'s health check
 /// failed -- with this unhealthy `VmConfig`, VM will not boot successfully.
-#[allow(unused_parens)]
 pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     // Parse config-file json.
     // VmConfig can be transformed by json file which described VmConfig

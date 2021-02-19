@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use crate::address_space::FlatView;
-use crate::errors::{ErrorKind, Result};
+use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, AddressSpace, FileBackend, GuestAddress, HostMemMapping, RegionOps};
 
 /// Types of Region.
@@ -73,7 +73,7 @@ impl RegionIoEventFd {
     /// # Arguments
     ///
     /// * `other` - Other `RegionIoEventFd`.
-    pub fn before(&self, other: &RegionIoEventFd) -> bool {
+    pub(crate) fn before(&self, other: &RegionIoEventFd) -> bool {
         if self.addr_range.base != other.addr_range.base {
             return self.addr_range.base < other.addr_range.base;
         }
@@ -91,7 +91,7 @@ impl RegionIoEventFd {
 
     /// Return the cloned IoEvent,
     /// return error if failed to clone EventFd.
-    pub fn try_clone(&self) -> Result<RegionIoEventFd> {
+    pub(crate) fn try_clone(&self) -> Result<RegionIoEventFd> {
         let fd = self.fd.try_clone().or(Err(ErrorKind::IoEventFd))?;
         Ok(RegionIoEventFd {
             fd,
@@ -303,7 +303,14 @@ impl Region {
         offset: u64,
         count: u64,
     ) -> Result<()> {
-        self.check_valid_offset(offset, count)?;
+        self.check_valid_offset(offset, count).chain_err(|| {
+            format!(
+                "Invalid offset: offset 0x{:X}, data length 0x{:X}, region size 0x{:X}",
+                offset,
+                count,
+                self.size()
+            )
+        })?;
 
         match self.region_type {
             RegionType::Ram => {
@@ -311,7 +318,8 @@ impl Region {
                 let slice = unsafe {
                     std::slice::from_raw_parts((host_addr + offset) as *const u8, count as usize)
                 };
-                dst.write_all(slice)?;
+                dst.write_all(slice)
+                    .chain_err(|| "Failed to write content of Ram to mutable buffer")?;
             }
             RegionType::IO => {
                 if count >= std::usize::MAX as u64 {
@@ -320,9 +328,10 @@ impl Region {
                 let mut slice = vec![0_u8; count as usize];
                 let read_ops = self.ops.as_ref().unwrap().read.as_ref();
                 if !read_ops(&mut slice, base, offset) {
-                    return Err(ErrorKind::IoAccess(offset).into());
+                    return Err(ErrorKind::IoAccess(base.raw_value(), offset, count).into());
                 }
-                dst.write_all(&slice)?;
+                dst.write_all(&slice)
+                    .chain_err(|| "Failed to write slice provided by device to mutable buffer")?;
             }
             _ => {
                 return Err(ErrorKind::RegionType(self.region_type()).into());
@@ -353,7 +362,14 @@ impl Region {
         offset: u64,
         count: u64,
     ) -> Result<()> {
-        self.check_valid_offset(offset, count)?;
+        self.check_valid_offset(offset, count).chain_err(|| {
+            format!(
+                "Invalid offset: offset 0x{:X}, data length 0x{:X}, region size 0x{:X}",
+                offset,
+                count,
+                self.size()
+            )
+        })?;
 
         match self.region_type {
             RegionType::Ram => {
@@ -361,18 +377,21 @@ impl Region {
                 let slice = unsafe {
                     std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, count as usize)
                 };
-                src.read_exact(slice)?;
+                src.read_exact(slice)
+                    .chain_err(|| "Failed to write buffer to Ram")?;
             }
             RegionType::IO => {
                 if count >= std::usize::MAX as u64 {
                     return Err(ErrorKind::Overflow(count).into());
                 }
                 let mut slice = vec![0_u8; count as usize];
-                src.read_exact(&mut slice)?;
+                src.read_exact(&mut slice).chain_err(|| {
+                    "Failed to write buffer to slice, which will be provided for device"
+                })?;
 
                 let write_ops = self.ops.as_ref().unwrap().write.as_ref();
                 if !write_ops(&slice, base, offset) {
-                    return Err(ErrorKind::IoAccess(offset).into());
+                    return Err(ErrorKind::IoAccess(base.raw_value(), offset, count).into());
                 }
             }
             _ => {
@@ -389,7 +408,7 @@ impl Region {
 
     /// Set the ioeventfds within this Region,
     /// these fds will be register to `KVM` and used for guest notifier.
-    pub(crate) fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
+    pub fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         self.io_evtfds
             .lock()
             .unwrap()
@@ -417,7 +436,15 @@ impl Region {
         if self.region_type() != RegionType::Container {
             return Err(ErrorKind::RegionType(self.region_type()).into());
         }
-        self.check_valid_offset(offset, child.size())?;
+        self.check_valid_offset(offset, child.size())
+            .chain_err(|| {
+                format!(
+                    "Invalid offset: offset 0x{:X}, child length 0x{:X}, region size 0x{:X}",
+                    offset,
+                    child.size(),
+                    self.size()
+                )
+            })?;
 
         // set child region's offset and father address-space
         child.set_offset(GuestAddress(offset));
@@ -438,7 +465,9 @@ impl Region {
         drop(sub_regions);
 
         if let Some(space) = self.space.read().unwrap().upgrade() {
-            space.update_topology()?;
+            space
+                .update_topology()
+                .chain_err(|| "Failed to update topology for address_space")?;
         } else {
             debug!("add subregion to container region, which has no belonged address-space");
         }
@@ -470,12 +499,15 @@ impl Region {
         drop(sub_regions);
 
         if !removed {
-            bail!("Delete subregion failed: no matched region");
+            warn!("Failed to delete subregion from parent region: not found");
+            return Err(ErrorKind::RegionNotFound(child.offset().raw_value()).into());
         }
 
         // get father address-space and update topology
         if let Some(space) = self.space.read().unwrap().upgrade() {
-            space.update_topology()?;
+            space
+                .update_topology()
+                .chain_err(|| "Failed to update topology for address_space")?;
         } else {
             debug!("add subregion to container region, which has no belonged address-space");
         }
@@ -508,17 +540,34 @@ impl Region {
                 let intersect = match region_range.find_intersection(addr_range) {
                     Some(r) => r,
                     None => bail!(
-                        "Generate flat view failed: region_addr {} exceeds",
-                        region_base.raw_value()
+                        "Generate flat view failed: region_addr 0x{:X} exceeds parent region range (0x{:X}, 0x{:X})",
+                        region_base.raw_value(),
+                        addr_range.base.raw_value(),
+                        addr_range.size
                     ),
                 };
 
                 for sub_r in self.subregions.read().unwrap().iter() {
-                    sub_r.render_region_pass(region_base, intersect, flat_view)?;
+                    sub_r
+                        .render_region_pass(region_base, intersect, flat_view)
+                        .chain_err(|| {
+                            format!(
+                                "Failed to render subregion, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
+                                base.raw_value(),
+                                addr_range.base.raw_value(),
+                                addr_range.size
+                            )
+                        })?;
                 }
             }
             RegionType::Ram | RegionType::IO => {
-                self.render_terminate_region(base, addr_range, flat_view)?;
+                self.render_terminate_region(base, addr_range, flat_view)
+                    .chain_err(||
+                        format!(
+                            "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
+                            base.raw_value(), addr_range.base.raw_value(),
+                            addr_range.size
+                        ))?;
             }
         }
         Ok(())
@@ -546,8 +595,10 @@ impl Region {
         let intersect = match region_range.find_intersection(addr_range) {
             Some(r) => r,
             None => bail!(
-                "Gen flatview failed: region_addr {} exceeds",
-                region_range.base.raw_value()
+                "Generate flat view failed: region_addr 0x{:X} exceeds parent region range (0x{:X}, 0x{:X})",
+                region_range.base.raw_value(),
+                addr_range.base.raw_value(),
+                addr_range.size
             ),
         };
 
@@ -611,17 +662,33 @@ impl Region {
     ///
     /// * `base` - Base address.
     /// * `addr_range` - Address range.
-    pub fn generate_flatview(
+    pub(crate) fn generate_flatview(
         &self,
         base: GuestAddress,
         addr_range: AddressRange,
     ) -> Result<FlatView> {
         let mut flat_view = FlatView::default();
         match self.region_type {
-            RegionType::Container => self.render_region_pass(base, addr_range, &mut flat_view)?,
-            RegionType::Ram | RegionType::IO => {
-                self.render_terminate_region(base, addr_range, &mut flat_view)?
-            }
+            RegionType::Container => self
+                .render_region_pass(base, addr_range, &mut flat_view)
+                .chain_err(|| {
+                    format!(
+                        "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
+                        base.raw_value(),
+                        addr_range.base.raw_value(),
+                        addr_range.size
+                    )
+                })?,
+            RegionType::Ram | RegionType::IO => self
+                .render_terminate_region(base, addr_range, &mut flat_view)
+                .chain_err(|| {
+                    format!(
+                        "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
+                        base.raw_value(),
+                        addr_range.base.raw_value(),
+                        addr_range.size
+                    )
+                })?,
         }
         Ok(flat_view)
     }

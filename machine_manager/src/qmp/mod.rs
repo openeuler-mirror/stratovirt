@@ -441,7 +441,7 @@ impl QmpChannel {
         }
     }
 
-    /// Bind a `SocketRWHanler` to `QMP_CHANNEL`.
+    /// Bind a `SocketRWHandler` to `QMP_CHANNEL`.
     ///
     /// # Arguments
     ///

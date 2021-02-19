@@ -2,6 +2,7 @@
 name = "address_space"
 version = "0.1.0"
 authors = ["Huawei StratoVirt Team"]
+edition = "2018"
 license = "Mulan PSL v2"
 description = "provide memory management for VM"
 

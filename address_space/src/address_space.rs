@@ -22,7 +22,7 @@ use crate::{
 
 /// Contain an array of `FlatRange`.
 #[derive(Default, Clone)]
-pub struct FlatView(pub Vec<FlatRange>);
+pub(crate) struct FlatView(pub Vec<FlatRange>);
 
 impl FlatView {
     fn find_flatrange(&self, addr: GuestAddress) -> Option<&FlatRange> {
@@ -64,7 +64,9 @@ impl AddressSpace {
 
         root.set_belonged_address_space(&space);
         if !space.root.subregions().is_empty() {
-            space.update_topology()?;
+            space
+                .update_topology()
+                .chain_err(|| "Failed to update topology for address_space")?;
         }
 
         Ok(space)
@@ -86,9 +88,7 @@ impl AddressSpace {
     /// Return Error if fail to call `listener`.
     pub fn register_listener(&self, listener: Box<dyn Listener>) -> Result<()> {
         for fr in self.flat_view.read().unwrap().0.iter() {
-            listener
-                .handle_request(Some(&fr), None, ListenerReqType::AddRegion)
-                .chain_err(|| "Failed to call listener")?;
+            listener.handle_request(Some(&fr), None, ListenerReqType::AddRegion)?;
         }
 
         let mut idx = 0;
@@ -123,16 +123,13 @@ impl AddressSpace {
     ) -> Result<()> {
         let listeners = self.listeners.lock().unwrap();
         match req_type {
-            ListenerReqType::DeleteRegion | ListenerReqType::AddIoeventfd => {
-                listeners.iter().rev().try_for_each(|ml| {
-                    ml.handle_request(flat_range, evtfd, req_type)
-                        .chain_err(|| "Failed to call listener")
-                })
-            }
-            _ => listeners.iter().try_for_each(|ml| {
-                ml.handle_request(flat_range, evtfd, req_type)
-                    .chain_err(|| "Failed to call listener")
-            }),
+            ListenerReqType::DeleteRegion | ListenerReqType::AddIoeventfd => listeners
+                .iter()
+                .rev()
+                .try_for_each(|ml| ml.handle_request(flat_range, evtfd, req_type)),
+            _ => listeners
+                .iter()
+                .try_for_each(|ml| ml.handle_request(flat_range, evtfd, req_type)),
         }
     }
 
@@ -169,14 +166,28 @@ impl AddressSpace {
                             && old_r.addr_range.size != new_r.addr_range.size)
                     {
                         if !is_add {
-                            self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)?;
+                            self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)
+                                .chain_err(|| {
+                                    ErrorKind::UpdateTopology(
+                                        old_r.addr_range.base.raw_value(),
+                                        old_r.addr_range.size,
+                                        old_r.owner.region_type(),
+                                    )
+                                })?;
                         }
                         old_idx += 1;
                         continue;
                     }
                 } else {
                     if !is_add {
-                        self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)?;
+                        self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)
+                            .chain_err(|| {
+                                ErrorKind::UpdateTopology(
+                                    old_r.addr_range.base.raw_value(),
+                                    old_r.addr_range.size,
+                                    old_r.owner.region_type(),
+                                )
+                            })?;
                     }
                     old_idx += 1;
                     continue;
@@ -185,7 +196,14 @@ impl AddressSpace {
 
             // current old_range is None, or current new_range is before old_range
             if is_add && new_range.is_some() {
-                self.call_listeners(new_range, None, ListenerReqType::AddRegion)?;
+                self.call_listeners(new_range, None, ListenerReqType::AddRegion)
+                    .chain_err(|| {
+                        ErrorKind::UpdateTopology(
+                            new_range.unwrap().addr_range.base.raw_value(),
+                            new_range.unwrap().addr_range.size,
+                            new_range.unwrap().owner.region_type(),
+                        )
+                    })?;
             }
             new_idx += 1;
         }
@@ -207,12 +225,26 @@ impl AddressSpace {
             let old_fd = old_evtfds.get(old_idx);
             let new_fd = new_evtfds.get(new_idx);
             if old_fd.is_some() && (new_fd.is_none() || old_fd.unwrap().before(new_fd.unwrap())) {
-                self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)?;
+                self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)
+                    .chain_err(|| {
+                        ErrorKind::UpdateTopology(
+                            old_fd.unwrap().addr_range.base.raw_value(),
+                            old_fd.unwrap().addr_range.size,
+                            RegionType::IO,
+                        )
+                    })?;
                 old_idx += 1;
             } else if new_fd.is_some()
                 && (old_fd.is_none() || new_fd.unwrap().before(old_fd.unwrap()))
             {
-                self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)?;
+                self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)
+                    .chain_err(|| {
+                        ErrorKind::UpdateTopology(
+                            new_fd.unwrap().addr_range.base.raw_value(),
+                            new_fd.unwrap().addr_range.size,
+                            RegionType::IO,
+                        )
+                    })?;
                 new_idx += 1;
             } else {
                 old_idx += 1;
@@ -246,7 +278,8 @@ impl AddressSpace {
             }
         }
 
-        self.update_ioeventfds_pass(&ioeventfds)?;
+        self.update_ioeventfds_pass(&ioeventfds)
+            .chain_err(|| "Failed to update ioeventfds")?;
         *self.ioeventfds.lock().unwrap() = ioeventfds;
         Ok(())
     }
@@ -308,14 +341,20 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .chain_err(|| ErrorKind::AddrInvalid(addr.raw_value()))?;
+            .chain_err(|| ErrorKind::RegionNotFound(addr.raw_value()))?;
 
-        fr.owner.read(
-            dst,
-            fr.addr_range.base.unchecked_sub(fr.offset_in_region),
-            fr.offset_in_region + offset,
-            count,
-        )
+        let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
+        let offset_in_region = fr.offset_in_region + offset;
+        fr.owner
+            .read(dst, region_base, offset_in_region, count)
+            .chain_err(|| {
+                format!(
+                "Failed to read region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
+                region_base.raw_value(),
+                offset_in_region,
+                count
+            )
+            })
     }
 
     /// Write data to specified guest address.
@@ -335,14 +374,19 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .chain_err(|| ErrorKind::AddrInvalid(addr.raw_value()))?;
+            .chain_err(|| ErrorKind::RegionNotFound(addr.raw_value()))?;
 
-        fr.owner.write(
-            src,
-            fr.addr_range.base.unchecked_sub(fr.offset_in_region),
-            fr.offset_in_region + offset,
-            count,
-        )
+        let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
+        let offset_in_region = fr.offset_in_region + offset;
+        fr.owner
+            .write(src, region_base, offset_in_region, count)
+            .chain_err(||
+                format!(
+                    "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
+                    region_base.raw_value(),
+                    offset_in_region,
+                    count
+                ))
     }
 
     /// Write an object to memory.
@@ -356,6 +400,7 @@ impl AddressSpace {
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn write_object<T: ByteCode>(&self, data: &T, addr: GuestAddress) -> Result<()> {
         self.write(&mut data.as_bytes(), addr, std::mem::size_of::<T>() as u64)
+            .chain_err(|| "Failed to write object")
     }
 
     /// Read some data from memory to form an object.
@@ -372,7 +417,8 @@ impl AddressSpace {
             &mut obj.as_mut_bytes(),
             addr,
             std::mem::size_of::<T>() as u64,
-        )?;
+        )
+        .chain_err(|| "Failed to read object")?;
         Ok(obj)
     }
 
@@ -381,14 +427,20 @@ impl AddressSpace {
         let old_fv = self.flat_view.read().unwrap();
 
         let addr_range = AddressRange::new(GuestAddress(0), self.root.size());
-        let new_fv = self.root.generate_flatview(GuestAddress(0), addr_range)?;
+        let new_fv = self
+            .root
+            .generate_flatview(GuestAddress(0), addr_range)
+            .chain_err(|| "Failed to generate new topology")?;
 
-        self.update_topology_pass(&old_fv, &new_fv, false)?;
-        self.update_topology_pass(&old_fv, &new_fv, true)?;
+        self.update_topology_pass(&old_fv, &new_fv, false)
+            .chain_err(|| "Failed to update topology (first pass)")?;
+        self.update_topology_pass(&old_fv, &new_fv, true)
+            .chain_err(|| "Failed to update topology (second pass)")?;
 
         drop(old_fv);
         *self.flat_view.write().unwrap() = new_fv;
-        self.update_ioeventfds()?;
+        self.update_ioeventfds()
+            .chain_err(|| "Failed to generate and update ioeventfds")?;
         Ok(())
     }
 }

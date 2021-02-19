@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::PartialEq;
 use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
@@ -30,6 +31,7 @@ const TWENTY_FOUT_BLANK: &str = "                        ";
 type ArgsMap = BTreeMap<String, Vec<String>>;
 
 /// Format help type.
+#[derive(PartialEq, Debug)]
 pub enum HelpType {
     /// Argument as a Flag.
     FLAGS,
@@ -176,10 +178,11 @@ impl<'a> ArgParser<'a> {
     /// Starts the parsing process.This method gets all user provided arguments
     /// from [`env::args_os`] in order to allow for invalid UTF-8 code points.
     pub fn get_matches(mut self) -> Result<ArgMatches<'a>> {
-        let (arg_hash, multi_vec) = parse_cmdline(&self.allow_list)?;
+        let cmd_args: Vec<String> = env::args().collect();
+        let (arg_hash, multi_vec) = parse_cmdline(&cmd_args, &self.allow_list)?;
 
         if arg_hash.contains_key(HELP_SHORT) || arg_hash.contains_key(HELP_LONG) {
-            self.output_help();
+            self.output_help(&mut std::io::stdout());
             process::exit(0);
         }
 
@@ -195,7 +198,7 @@ impl<'a> ArgParser<'a> {
         Ok(ArgMatches::new(self.args))
     }
 
-    fn output_help(&self) {
+    fn output_help(&self, handle: &mut dyn Write) {
         let mut output_base: Vec<String> = Vec::new();
         let mut output_flags: Vec<String> = Vec::new();
         let mut output_options: Vec<String> = Vec::new();
@@ -228,10 +231,6 @@ impl<'a> ArgParser<'a> {
                 HelpType::HIDDEN => {}
             }
         }
-
-        // start output using stdout now
-        let stdout = std::io::stdout();
-        let mut handle = std::io::BufWriter::new(stdout);
 
         // base output
         for line in output_base {
@@ -573,8 +572,7 @@ impl<'a> ArgMatches<'a> {
 }
 
 #[allow(clippy::map_entry)]
-fn parse_cmdline(allow_list: &[String]) -> Result<(ArgsMap, Vec<String>)> {
-    let cmd_args: Vec<String> = env::args().collect();
+fn parse_cmdline(cmd_args: &[String], allow_list: &[String]) -> Result<(ArgsMap, Vec<String>)> {
     let mut arg_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut multi_vec: Vec<String> = Vec::new();
 
@@ -628,4 +626,171 @@ fn get_name() -> String {
 fn split_arg(arg: &str, prefix_chars: &str) -> String {
     let i = prefix_chars.len();
     String::from(&arg[i..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Read, Seek, SeekFrom};
+
+    #[derive(Default)]
+    struct TestBuffer {
+        inner: Cursor<Vec<u8>>,
+    }
+
+    impl TestBuffer {
+        fn get_msg_vec(&mut self) -> String {
+            self.inner.seek(SeekFrom::Start(0)).unwrap();
+            let mut msgs = Vec::new();
+            self.inner.read_to_end(&mut msgs).unwrap();
+            String::from_utf8(msgs).unwrap()
+        }
+    }
+
+    fn create_test_arg<'a>() -> ArgParser<'a> {
+        ArgParser::new("StratoVirt")
+            .version("1.0.0")
+            .author("Huawei Technologies Co., Ltd")
+            .about("A light kvm-based hypervisor.")
+            .arg(
+                Arg::with_name("name")
+                    .long("name")
+                    .value_name("vm_name")
+                    .help("set the name of the guest.")
+                    .takes_value(true),
+            )
+            .arg(
+                Arg::with_name("api-channel")
+                    .long("api-channel")
+                    .value_name("unix:PATH")
+                    .help("set api-channel's unixsocket path")
+                    .takes_value(true)
+                    .required(true),
+            )
+            .arg(
+                Arg::with_name("drive")
+                    .multiple(true)
+                    .long("drive")
+                    .value_name("[file=path][,id=str][,readonly=][,direct=]")
+                    .help("use 'file' as a drive image")
+                    .takes_values(true),
+            )
+            .arg(
+                Arg::with_name("display log")
+                    .long("D")
+                    .value_name("log_path")
+                    .help("output log to logfile (default stderr)")
+                    .takes_value(true)
+                    .can_no_value(true),
+            )
+            .arg(
+                Arg::with_name("freeze_cpu")
+                    .short("S")
+                    .long("freeze")
+                    .help("Freeze CPU at startup")
+                    .takes_value(false)
+                    .required(false),
+            )
+    }
+
+    fn create_test_arg_matches(cmdline_str: &str) -> ArgMatches {
+        let mut arg_parser = create_test_arg();
+        let input_vec = cmdline_str
+            .split(' ')
+            .collect::<Vec<&str>>()
+            .iter_mut()
+            .map(|item| item.to_string())
+            .collect::<Vec<String>>();
+        let (arg_hash, multi_vec) = parse_cmdline(&input_vec, &arg_parser.allow_list).unwrap();
+        for arg in arg_parser.args.values_mut() {
+            assert!((*arg).parse_from_hash(&arg_hash, &multi_vec).is_ok());
+        }
+        ArgMatches::new(arg_parser.args)
+    }
+
+    #[test]
+    fn test_arg_base_msg() {
+        let arg_parser = create_test_arg();
+        assert_eq!(arg_parser.name, "StratoVirt");
+        assert_eq!(arg_parser.version.unwrap(), "1.0.0");
+        assert_eq!(arg_parser.author.unwrap(), "Huawei Technologies Co., Ltd");
+        assert_eq!(arg_parser.about.unwrap(), "A light kvm-based hypervisor.");
+    }
+
+    #[test]
+    fn test_arg_base_help_msg() {
+        let arg_parser = create_test_arg();
+        let mut buffer = TestBuffer::default();
+        arg_parser.output_help(&mut buffer.inner);
+
+        let help_str = buffer.get_msg_vec();
+        let help_msg = help_str.split("\n").collect::<Vec<&str>>();
+        assert_eq!(help_msg[0], "StratoVirt 1.0.0");
+        assert_eq!(help_msg[1], "Huawei Technologies Co., Ltd");
+        assert_eq!(help_msg[2], "A light kvm-based hypervisor.");
+        assert_eq!(help_msg[3], "USAGE:");
+        assert_eq!(help_msg[5], "FLAGS:");
+        assert_eq!(help_msg[9], "OPTIONS:");
+    }
+
+    #[test]
+    fn test_single_arg_check() {
+        let arg = Arg::with_name("name")
+            .long("name")
+            .short("N")
+            .value_name("vm_name")
+            .help("set the name of the guest.")
+            .takes_value(true)
+            .possible_values(vec!["vm1", "vm2", "vm3"])
+            .required(false)
+            .hidden(false)
+            .multiple(false)
+            .can_no_value(false)
+            .default_value("vm1");
+        assert_eq!(arg.name, "name");
+        assert_eq!(arg.long.unwrap(), "name");
+        assert_eq!(arg.short.unwrap(), "N");
+        assert_eq!(arg.value_name.unwrap(), "vm_name");
+        assert_eq!(arg.help.unwrap(), "set the name of the guest.");
+        assert_eq!(
+            arg.possible_values.as_ref().unwrap(),
+            &vec!["vm1", "vm2", "vm3"]
+        );
+        assert_eq!(arg.required, false);
+        assert_eq!(arg.presented, true);
+        assert_eq!(arg.hiddable, false);
+        assert_eq!(arg.can_no_value, false);
+        assert_eq!(arg.value.as_ref().unwrap(), "vm1");
+
+        let (help_msg, help_type) = arg.help_message();
+        assert_eq!(help_type, HelpType::FLAGS);
+        assert_eq!(
+            help_msg,
+            format!(
+                "{}-N, -name{}   set the name of the guest.",
+                FOUR_BLANK, EIGHT_BLANK
+            )
+        );
+    }
+
+    #[test]
+    fn test_arg_matches() {
+        let arg_matches = create_test_arg_matches("stratovirt -name vm1 -api-channel unix:sv.sock -drive file=/path/to/rootfs,id=rootfs -D -S");
+
+        assert!(arg_matches.is_present("name"));
+        assert!(arg_matches.is_present("api-channel"));
+        assert!(arg_matches.is_present("drive"));
+        assert!(arg_matches.is_present("display log"));
+        assert!(arg_matches.is_present("freeze_cpu"));
+
+        assert_eq!(arg_matches.value_of("name").as_ref().unwrap(), "vm1");
+        assert_eq!(
+            arg_matches.value_of("api-channel").as_ref().unwrap(),
+            "unix:sv.sock"
+        );
+        assert_eq!(
+            arg_matches.values_of("drive").as_ref().unwrap(),
+            &vec!["file=/path/to/rootfs,id=rootfs"]
+        );
+    }
 }

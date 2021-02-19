@@ -52,7 +52,7 @@ impl FileBackend {
             let raw_fd = unsafe { libc::mkstemp(fs_cstr) };
             if raw_fd < 0 {
                 return Err(std::io::Error::last_os_error())
-                    .chain_err(|| "Create file-backend failed");
+                    .chain_err(|| format!("Failed to create file in directory: {} ", file_path));
             }
 
             unsafe { libc::unlink(fs_cstr) };
@@ -64,12 +64,12 @@ impl FileBackend {
                 .write(true)
                 .create(true)
                 .open(path)
-                .chain_err(|| "Open file-backend failed")?
+                .chain_err(|| format!("Failed to Open file: {}", file_path))?
         };
 
         if file.metadata().unwrap().len() == 0 {
             file.set_len(file_len)
-                .chain_err(|| "Set file length failed.")?;
+                .chain_err(|| format!("Failed to set length of file: {}", file_path))?;
         }
 
         Ok(FileBackend {
@@ -93,16 +93,25 @@ pub fn create_host_mmaps(
 
     if let Some(path) = &mem_config.mem_path {
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
-        f_back = Some(FileBackend::new(&path, file_len)?);
+        f_back = Some(
+            FileBackend::new(&path, file_len)
+                .chain_err(|| "Failed to create file that backs memory")?,
+        );
     } else if mem_config.mem_share {
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
-
         let anon_mem_name = String::from("stratovirt_anon_mem");
+
         let anon_fd =
             unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
-        let anon_file = unsafe { File::from_raw_fd(anon_fd) };
+        if anon_fd < 0 {
+            return Err(std::io::Error::last_os_error()).chain_err(|| "Failed to create memfd");
+        }
 
-        anon_file.set_len(file_len)?;
+        let anon_file = unsafe { File::from_raw_fd(anon_fd) };
+        anon_file
+            .set_len(file_len)
+            .chain_err(|| "Failed to set the length of anonymous file that backs memory")?;
+
         f_back = Some(FileBackend {
             file: Arc::new(anon_file),
             offset: 0,
@@ -111,13 +120,16 @@ pub fn create_host_mmaps(
 
     let mut mappings = Vec::new();
     for range in ranges.iter() {
-        mappings.push(Arc::new(HostMemMapping::new(
-            GuestAddress(range.0),
-            range.1,
-            f_back.clone(),
-            mem_config.dump_guest_core,
-            mem_config.mem_share,
-        )?));
+        mappings.push(Arc::new(
+            HostMemMapping::new(
+                GuestAddress(range.0),
+                range.1,
+                f_back.clone(),
+                mem_config.dump_guest_core,
+                mem_config.mem_share,
+            )
+            .chain_err(|| "Failed to create HostMemMapping")?,
+        ));
 
         if let Some(mut fb) = f_back.as_mut() {
             fb.offset += range.1
@@ -187,7 +199,7 @@ impl HostMemMapping {
                 file_back.clone().map(|fb| fb.offset).unwrap_or(0) as i64,
             );
             if hva == libc::MAP_FAILED {
-                return Err(ErrorKind::Mmap.into());
+                return Err(std::io::Error::last_os_error()).chain_err(|| ErrorKind::Mmap);
             }
             hva
         };
@@ -200,7 +212,10 @@ impl HostMemMapping {
                     libc::MADV_DONTDUMP,
                 );
                 if madvise_res < 0 {
-                    error!("madvise with MADV_DONTDUMP failed");
+                    error!(
+                        "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {}",
+                        std::io::Error::last_os_error()
+                    );
                 }
             }
         }

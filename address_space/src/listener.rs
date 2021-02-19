@@ -17,24 +17,8 @@ use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
 use util::num_ops::round_down;
 
+use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{page_size, AddressRange, FlatRange, RegionIoEventFd, RegionType};
-
-pub mod errors {
-    error_chain! {
-        errors {
-            NoAvailKvmSlot {
-                display("No available kvm_mem_slot, used up")
-            }
-            NoMatchedKvmSlot(addr: u64, sz: u64) {
-                display("Failed to find matched kvm_mem_slot, addr {}, size {}", addr, sz)
-            }
-            Overlap {
-                display("Address range overlaps with others")
-            }
-        }
-    }
-}
-use self::errors::{ErrorKind, Result, ResultExt};
 
 /// Request type of listener.
 #[derive(Debug, Copy, Clone)]
@@ -65,25 +49,26 @@ pub trait Listener: Send + Sync {
         _range: Option<&FlatRange>,
         _evtfd: Option<&RegionIoEventFd>,
         _type: ListenerReqType,
-    ) -> std::result::Result<(), crate::errors::Error> {
+    ) -> Result<()> {
         Ok(())
     }
 }
 
 /// Records information that manage the slot resource and current usage.
+#[allow(dead_code)]
 #[derive(Default, Copy, Clone)]
 struct MemSlot {
     /// Index of a memory slot.
-    pub index: u32,
+    index: u32,
     /// Guest address.
-    pub guest_addr: u64,
+    guest_addr: u64,
     /// Size of memory.
     /// size = 0 represents no-region use this slot.
-    pub size: u64,
+    size: u64,
     /// Host address.
-    pub host_addr: u64,
+    host_addr: u64,
     /// Flag.
-    pub flag: u32,
+    flag: u32,
 }
 
 /// Kvm memory listener.
@@ -135,7 +120,9 @@ impl KvmMemoryListener {
                 .find_intersection(range)
                 .is_some()
             {
-                return Err(ErrorKind::Overlap.into());
+                return Err(
+                    ErrorKind::KvmSlotOverlap((guest_addr, size), (s.guest_addr, s.size)).into(),
+                );
             }
             Ok(())
         })?;
@@ -150,7 +137,7 @@ impl KvmMemoryListener {
             }
         }
 
-        Err(ErrorKind::NoAvailKvmSlot.into())
+        Err(ErrorKind::NoAvailKvmSlot(self.slots.lock().unwrap().len()).into())
     }
 
     /// Delete a slot after finding it according to the given arguments.
@@ -188,19 +175,17 @@ impl KvmMemoryListener {
     ///
     /// Return Error if Memslot size is zero after aligned.
     fn align_mem_slot(range: AddressRange, alignment: u64) -> Result<AddressRange> {
-        let aligned_addr = range.base.align_up(alignment).chain_err(|| {
-            format!(
-                "Address Overflows after aligned, addr: {}",
-                range.base.raw_value()
-            )
-        })?;
+        let aligned_addr = range
+            .base
+            .align_up(alignment)
+            .chain_err(|| ErrorKind::AddrAlignUp(range.base.raw_value(), alignment))?;
 
         let aligned_size = range
             .size
             .checked_sub(aligned_addr.offset_from(range.base))
             .and_then(|sz| round_down(sz, alignment))
             .filter(|&sz| sz > 0_u64)
-            .ok_or_else(|| ErrorKind::Msg("Mem slot size is zero after aligned".to_string()))?;
+            .chain_err(|| format!("Mem slot size is zero after aligned, addr 0x{:X}, size 0x{:X}, alignment 0x{:X}", range.base.raw_value(), range.size, alignment))?;
 
         Ok(AddressRange::new(aligned_addr, aligned_size))
     }
@@ -219,8 +204,9 @@ impl KvmMemoryListener {
             return Ok(());
         }
 
-        let (aligned_addr, aligned_size) =
-            Self::align_mem_slot(flat_range.addr_range, page_size()).map(|r| (r.base, r.size))?;
+        let (aligned_addr, aligned_size) = Self::align_mem_slot(flat_range.addr_range, page_size())
+            .map(|r| (r.base, r.size))
+            .chain_err(|| "Failed to align mem slot")?;
         let align_adjust = aligned_addr.raw_value() - flat_range.addr_range.base.raw_value();
 
         // `unwrap()` won't fail because Ram-type Region definitely has hva
@@ -228,7 +214,9 @@ impl KvmMemoryListener {
             + flat_range.offset_in_region
             + align_adjust;
 
-        let slot_idx = self.get_free_slot(aligned_addr.raw_value(), aligned_size, aligned_hva)?;
+        let slot_idx = self
+            .get_free_slot(aligned_addr.raw_value(), aligned_size, aligned_hva)
+            .chain_err(|| "Failed to get available KVM mem slot")?;
 
         let kvm_region = kvm_userspace_memory_region {
             slot: slot_idx | (self.as_id.load(Ordering::SeqCst) << 16),
@@ -240,10 +228,10 @@ impl KvmMemoryListener {
         unsafe {
             self.fd.set_user_memory_region(kvm_region).or_else(|e| {
                 self.delete_slot(aligned_addr.raw_value(), aligned_size)
-                    .chain_err(|| "Failed to delete kvm_mem_slot")?;
+                    .chain_err(|| "Failed to delete Kvm mem slot")?;
                 Err(e).chain_err(|| {
                     format!(
-                        "KVM register memory region failed: addr {}, size {}",
+                        "KVM register memory region failed: addr 0x{:X}, size 0x{:X}",
                         aligned_addr.raw_value(),
                         aligned_size
                     )
@@ -263,10 +251,13 @@ impl KvmMemoryListener {
             return Ok(());
         }
 
-        let (aligned_addr, aligned_size) =
-            Self::align_mem_slot(flat_range.addr_range, page_size()).map(|r| (r.base, r.size))?;
+        let (aligned_addr, aligned_size) = Self::align_mem_slot(flat_range.addr_range, page_size())
+            .map(|r| (r.base, r.size))
+            .chain_err(|| "Failed to align mem slot")?;
 
-        let mem_slot = self.delete_slot(aligned_addr.raw_value(), aligned_size)?;
+        let mem_slot = self
+            .delete_slot(aligned_addr.raw_value(), aligned_size)
+            .chain_err(|| "Failed to delete KVM mem slot")?;
 
         let kvm_region = kvm_userspace_memory_region {
             slot: mem_slot.index | (self.as_id.load(Ordering::SeqCst) << 16),
@@ -278,7 +269,7 @@ impl KvmMemoryListener {
         unsafe {
             self.fd.set_user_memory_region(kvm_region).chain_err(|| {
                 format!(
-                    "KVM unregister memory region failed: addr {}",
+                    "KVM unregister memory region failed: addr 0x{:X}",
                     aligned_addr.raw_value(),
                 )
             })?;
@@ -311,7 +302,7 @@ impl KvmMemoryListener {
                 8 => self
                     .fd
                     .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
-                _ => bail!("Unexpected ioeventfd data length"),
+                _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
             self.fd.register_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
@@ -319,8 +310,14 @@ impl KvmMemoryListener {
 
         ioctl_ret.chain_err(|| {
             format!(
-                "KVM register ioeventfd failed: mmio-addr {}",
-                ioevtfd.addr_range.base.raw_value()
+                "KVM register ioeventfd failed, mmio addr 0x{:X}, size 0x{:X}, data_match {}",
+                ioevtfd.addr_range.base.raw_value(),
+                ioevtfd.addr_range.size,
+                if ioevtfd.data_match {
+                    ioevtfd.data
+                } else {
+                    u64::MAX
+                }
             )
         })?;
 
@@ -346,7 +343,7 @@ impl KvmMemoryListener {
                 8 => self
                     .fd
                     .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
-                _ => bail!("Unexpected ioeventfd data length"),
+                _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
             self.fd
@@ -355,8 +352,14 @@ impl KvmMemoryListener {
 
         ioctl_ret.chain_err(|| {
             format!(
-                "KVM unregister ioeventfd failed: mmio-addr {}",
-                ioevtfd.addr_range.base.raw_value()
+                "KVM unregister ioeventfd failed: mmio addr 0x{:X}, size 0x{:X}, data_match {}",
+                ioevtfd.addr_range.base.raw_value(),
+                ioevtfd.addr_range.size,
+                if ioevtfd.data_match {
+                    ioevtfd.data
+                } else {
+                    u64::MAX
+                }
             )
         })?;
 
@@ -387,22 +390,21 @@ impl Listener for KvmMemoryListener {
         flat_range: Option<&FlatRange>,
         evtfd: Option<&RegionIoEventFd>,
         req_type: ListenerReqType,
-    ) -> std::result::Result<(), crate::errors::Error> {
-        match req_type {
+    ) -> Result<()> {
+        let req_ret = match req_type {
             ListenerReqType::AddRegion => {
-                self.add_region(flat_range.chain_err(|| "No FlatRange")?)?
+                self.add_region(flat_range.chain_err(|| "No FlatRange for AddRegion request")?)
             }
-            ListenerReqType::DeleteRegion => {
-                self.delete_region(flat_range.chain_err(|| "No FlatRange")?)?
-            }
+            ListenerReqType::DeleteRegion => self
+                .delete_region(flat_range.chain_err(|| "No FlatRange for DeleteRegion request")?),
             ListenerReqType::AddIoeventfd => {
-                self.add_ioeventfd(evtfd.chain_err(|| "No IoEventFd")?)?
+                self.add_ioeventfd(evtfd.chain_err(|| "No IoEventFd for AddIoeventfd request")?)
             }
-            ListenerReqType::DeleteIoeventfd => {
-                self.delete_ioeventfd(evtfd.chain_err(|| "No IoEventFd")?)?
-            }
-        }
-        Ok(())
+            ListenerReqType::DeleteIoeventfd => self
+                .delete_ioeventfd(evtfd.chain_err(|| "No IoEventFd for DeleteIoeventfd request")?),
+        };
+
+        req_ret.chain_err(|| ErrorKind::ListenerRequest(req_type))
     }
 }
 
@@ -446,7 +448,7 @@ impl KvmIoListener {
                 8 => self
                     .fd
                     .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
-                _ => bail!("unexpected ioeventfd data length"),
+                _ => bail!("unexpected ioeventfd data length {}", length),
             }
         } else {
             self.fd.register_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
@@ -454,8 +456,14 @@ impl KvmIoListener {
 
         ioctl_ret.chain_err(|| {
             format!(
-                "KVM register ioeventfd failed: mmio-addr {}",
-                ioevtfd.addr_range.base.raw_value()
+                "KVM register ioeventfd failed: io addr 0x{:X}, size 0x{:X}, data_match {}",
+                ioevtfd.addr_range.base.raw_value(),
+                ioevtfd.addr_range.size,
+                if ioevtfd.data_match {
+                    ioevtfd.data
+                } else {
+                    u64::MAX
+                }
             )
         })?;
 
@@ -482,7 +490,7 @@ impl KvmIoListener {
                 8 => self
                     .fd
                     .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
-                _ => bail!("Unexpected ioeventfd data length"),
+                _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
             self.fd
@@ -491,8 +499,14 @@ impl KvmIoListener {
 
         ioctl_ret.chain_err(|| {
             format!(
-                "KVM unregister ioeventfd failed: io-addr {}",
-                ioevtfd.addr_range.base.raw_value()
+                "KVM unregister ioeventfd failed: io addr 0x{:X}, size 0x{:X}, data_match {}",
+                ioevtfd.addr_range.base.raw_value(),
+                ioevtfd.addr_range.size,
+                if ioevtfd.data_match {
+                    ioevtfd.data
+                } else {
+                    u64::MAX
+                }
             )
         })?;
 
@@ -520,17 +534,17 @@ impl Listener for KvmIoListener {
         _range: Option<&FlatRange>,
         evtfd: Option<&RegionIoEventFd>,
         req_type: ListenerReqType,
-    ) -> std::result::Result<(), crate::errors::Error> {
-        match req_type {
+    ) -> Result<()> {
+        let handle_ret = match req_type {
             ListenerReqType::AddIoeventfd => {
-                self.add_ioeventfd(evtfd.chain_err(|| "No IoEventFd")?)?
+                self.add_ioeventfd(evtfd.chain_err(|| "No IoEventFd for AddIoeventfd request")?)
             }
-            ListenerReqType::DeleteIoeventfd => {
-                self.delete_ioeventfd(evtfd.chain_err(|| "No IoEventFd")?)?
-            }
-            _ => {}
-        }
-        Ok(())
+            ListenerReqType::DeleteIoeventfd => self
+                .delete_ioeventfd(evtfd.chain_err(|| "No IoEventFd for DeleteIoeventfd request")?),
+            _ => return Ok(()),
+        };
+
+        handle_ret.chain_err(|| ErrorKind::ListenerRequest(req_type))
     }
 }
 

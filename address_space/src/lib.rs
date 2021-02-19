@@ -69,12 +69,6 @@
 //! }
 //! ```
 
-extern crate kvm_bindings;
-extern crate kvm_ioctls;
-extern crate libc;
-extern crate machine_manager;
-extern crate util;
-extern crate vmm_sys_util;
 #[macro_use]
 extern crate error_chain;
 #[macro_use]
@@ -86,8 +80,8 @@ mod host_mmap;
 mod listener;
 mod region;
 
+pub use crate::address_space::AddressSpace;
 pub use address::{AddressRange, GuestAddress};
-pub use address_space::AddressSpace;
 pub use host_mmap::{create_host_mmaps, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]
 pub use listener::KvmIoListener;
@@ -100,39 +94,42 @@ pub mod errors {
         foreign_links {
             Io(std::io::Error);
         }
-        links {
-            KvmListener(crate::listener::errors::Error, crate::listener::errors::ErrorKind);
-        }
         errors {
-            RegionOverlap(addr: u64) {
-                display("Region overlap with others, addr {}", addr)
+            ListenerRequest(req_type: crate::listener::ListenerReqType) {
+                display("Failed to call listener, request type is {:#?}", req_type)
+            }
+            UpdateTopology(base: u64, size: u64, reg_ty: crate::RegionType) {
+                display("Failed to update topology, base 0x{:X}, size 0x{:X}, region type is {:#?}", base, size, reg_ty)
             }
             IoEventFd {
                 display("Failed to clone EventFd")
             }
-            AddrResource {
-                display("No available address resource in space")
+            AddrAlignUp(addr: u64, align: u64) {
+                display("Failed to align-up address, overflows: addr 0x{:X}, align 0x{:X}", addr, align)
             }
-            AddrNotAligned(addr: u64) {
-                display("Specified address is not aligned, {}", addr)
-            }
-            AddrInvalid(addr: u64) {
-                display("Failed to find matched region, addr {}", addr)
+            RegionNotFound(addr: u64) {
+                display("Failed to find matched region, addr 0x{:X}", addr)
             }
             Overflow(addr: u64) {
-                display("Address overflows, addr is {}", addr)
-            }
-            FileBackend {
-                display("Exceed file-backend length")
+                display("Address overflows, addr is 0x{:X}", addr)
             }
             Mmap {
                 display("Failed to mmap")
             }
-            IoAccess(offset: u64) {
-                display("Access io region failed, offset is {}", offset)
+            IoAccess(base: u64, offset: u64, count: u64) {
+                display("Failed to access IO-type region, region base 0x{:X}, offset 0x{:X}, size 0x{:X}", base, offset, count)
             }
             RegionType(t: crate::RegionType) {
                 display("Wrong region type, {:#?}", t)
+            }
+            NoAvailKvmSlot(cnt: usize) {
+                display("No available kvm_mem_slot, total count is {}", cnt)
+            }
+            NoMatchedKvmSlot(addr: u64, sz: u64) {
+                display("Failed to find matched kvm_mem_slot, addr 0x{:X}, size 0x{:X}", addr, sz)
+            }
+            KvmSlotOverlap(add: (u64, u64), exist: (u64, u64)) {
+                display("Added KVM mem range (0x{:X}, 0x{:X}) overlaps with exist one (0x{:X}, 0x{:X})", add.0, add.1, exist.0, exist.1)
             }
         }
     }
