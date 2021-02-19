@@ -16,7 +16,7 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParams, ConfigCheck, ParamOperation, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAX_PATH_LENGTH: usize = 4096;
@@ -75,16 +75,23 @@ impl VmConfig {
     }
 
     /// Update '-console ...' network config to `VmConfig`.
-    pub fn update_console(&mut self, console_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(console_config);
+    pub fn update_console(&mut self, console_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser.push("id").push("path");
+
+        cmd_parser.parse(console_config)?;
+
         let mut console = ConsoleConfig::default();
-        if let Some(console_id) = cmd_params.get("id") {
-            console.console_id = console_id.value;
+        if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
+            console.console_id = console_id;
         }
-        if let Some(console_path) = cmd_params.get("path") {
-            console.socket_path = console_path.value;
+        if let Some(console_path) = cmd_parser.get_value::<String>("path")? {
+            console.socket_path = console_path;
         }
+
         self.add_console(console);
+
+        Ok(())
     }
 
     /// Get virtio-console's config from `device` and `chardev` config.
@@ -116,16 +123,21 @@ impl SerialConfig {
 }
 
 impl VmConfig {
-    pub fn update_serial(&mut self, serial_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(serial_config);
+    pub fn update_serial(&mut self, serial_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser.push("");
 
-        if let Some(serial_type) = cmd_params.get("") {
-            if serial_type.to_string() == "stdio" {
+        cmd_parser.parse(serial_config)?;
+
+        if let Some(serial_type) = cmd_parser.get_value::<String>("")? {
+            if serial_type == "stdio" {
                 self.serial = Some(SerialConfig { stdio: true });
             } else {
                 self.serial = Some(SerialConfig { stdio: false });
             }
         }
+
+        Ok(())
     }
 }
 
@@ -162,18 +174,151 @@ impl ConfigCheck for VsockConfig {
 }
 
 impl VmConfig {
-    pub fn update_vsock(&mut self, vsock_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(vsock_config);
+    pub fn update_vsock(&mut self, vsock_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser
+            .push("")
+            .push("id")
+            .push("guest-cid")
+            .push("vhostfd");
 
-        if let Some(device_type) = cmd_params.get("") {
-            if device_type.value.contains("vsock") {
-                let vhost_fd = cmd_params.get_value_i32("vhostfd");
+        cmd_parser.parse(vsock_config)?;
+
+        if let Some(device_type) = cmd_parser.get_value::<String>("")? {
+            if device_type.contains("vsock") {
+                let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
                 self.vsock = Some(VsockConfig {
-                    vsock_id: cmd_params.get_value_str("id").unwrap(),
-                    guest_cid: cmd_params.get_value_u64("guest-cid").unwrap(),
+                    vsock_id: cmd_parser.get_value::<String>("id")?.unwrap(),
+                    guest_cid: cmd_parser.get_value::<u64>("guest-cid")?.unwrap(),
                     vhost_fd,
                 });
             }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_console_config_json_parser() {
+        let json = r#"
+        [{
+            "console_id": "test_console",
+            "socket_path": "/path/to/socket"
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let configs = ConsoleConfig::from_value(&value);
+        assert!(configs.is_some());
+        let console_configs = configs.unwrap();
+        assert_eq!(console_configs.len(), 1);
+        assert_eq!(console_configs[0].console_id, "test_console");
+        assert_eq!(console_configs[0].socket_path, "/path/to/socket");
+        let json = r#"
+        [{
+            "console_id": "test_console",
+            "console_type": "unix_socket"
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let configs = ConsoleConfig::from_value(&value);
+        assert!(configs.is_none());
+    }
+
+    #[test]
+    fn test_console_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_console("id=test_console,path=/path/to/socket")
+            .is_ok());
+        let console_configs = vm_config.get_virtio_console();
+        assert_eq!(console_configs.len(), 1);
+        assert_eq!(console_configs[0].console_id, "test_console");
+        assert_eq!(console_configs[0].socket_path, "/path/to/socket");
+        assert!(console_configs[0].check().is_ok());
+    }
+    #[test]
+    fn test_serial_config_parser() {
+        let mut vm_config = VmConfig::default();
+        let json = r#"
+        {
+            "stdio": false
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let config = SerialConfig::from_value(&value);
+        assert!(config.is_some());
+        assert!(!config.as_ref().unwrap().stdio);
+        vm_config.serial = config;
+        assert!(vm_config.update_serial("stdio").is_ok());
+        assert!(vm_config.serial.as_ref().unwrap().stdio);
+    }
+    #[test]
+    fn test_vsock_config_json_parser() {
+        let json = r#"
+        {
+            "vsock_id": "test_vsock",
+            "guest_cid": 3,
+            "vhost_fd": 4
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let config = VsockConfig::from_value(&value);
+        assert!(config.is_some());
+        let vsock_config = config.unwrap();
+        assert_eq!(vsock_config.vsock_id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, Some(4));
+        let json = r#"
+        {
+            "vsock_id": "test_vsock",
+            "guest_cid": "3"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let config = VsockConfig::from_value(&value);
+        assert!(config.is_none());
+    }
+    #[test]
+    fn test_vsock_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_vsock("vsock,id=test_vsock,guest-cid=3")
+            .is_ok());
+        if let Some(vsock_config) = vm_config.vsock {
+            assert_eq!(vsock_config.vsock_id, "test_vsock");
+            assert_eq!(vsock_config.guest_cid, 3);
+            assert_eq!(vsock_config.vhost_fd, None);
+            assert!(vsock_config.check().is_ok())
+        } else {
+            assert!(false)
+        }
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_vsock("vsock,id=test_vsock,guest-cid=3,vhostfd=4")
+            .is_ok());
+        if let Some(vsock_config) = vm_config.vsock {
+            assert_eq!(vsock_config.vsock_id, "test_vsock");
+            assert_eq!(vsock_config.guest_cid, 3);
+            assert_eq!(vsock_config.vhost_fd, Some(4));
+            assert!(vsock_config.check().is_ok())
+        } else {
+            assert!(false)
+        }
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_vsock("vsock,id=test_vsock,guest-cid=1")
+            .is_ok());
+        if let Some(vsock_config) = vm_config.vsock {
+            assert_eq!(vsock_config.vsock_id, "test_vsock");
+            assert_eq!(vsock_config.guest_cid, 1);
+            assert_eq!(vsock_config.vhost_fd, None);
+            assert!(vsock_config.check().is_err())
+        } else {
+            assert!(false)
         }
     }
 }

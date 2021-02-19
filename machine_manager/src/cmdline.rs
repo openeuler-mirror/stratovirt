@@ -38,12 +38,12 @@ const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 macro_rules! update_args_to_config {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temp) = &$x {
-            $z.$s(temp.to_string())
+            $z.$s(temp)?;
         }
     };
     ( $x:tt, $z:expr, $s:tt, vec ) => {
         if let Some(temp) = &$x {
-            $z.$s(&temp.to_vec())
+            $z.$s(&temp)
         }
     };
     ( $x:tt, $z:expr, $s:tt, bool ) => {
@@ -65,7 +65,7 @@ macro_rules! update_args_to_config_multi {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temps) = &$x {
             for temp in temps {
-                $z.$s(temp.to_string())
+                $z.$s(temp)?;
             }
         }
     };

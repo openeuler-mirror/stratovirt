@@ -16,7 +16,7 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParams, ConfigCheck, ParamOperation, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAC_ADDRESS_LENGTH: usize = 17;
@@ -104,32 +104,37 @@ impl VmConfig {
 
     /// Update '-netdev ...' network config to `VmConfig`
     /// Some attr in `NetworkInterfaceConfig` would be found in `DeviceConfig`
-    pub fn update_net(&mut self, net_config: String) {
-        let cmd_params: CmdParams = CmdParams::from_str(net_config);
-        let mut net = NetworkInterfaceConfig::default();
+    pub fn update_net(&mut self, net_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new();
+        cmd_parser
+            .push("id")
+            .push("netdev")
+            .push("mac")
+            .push("fds")
+            .push("vhost")
+            .push("vhostfds");
 
-        if let Some(net_id) = cmd_params.get("id") {
-            net.iface_id = net_id.value;
+        cmd_parser.parse(net_config)?;
+
+        let mut net = NetworkInterfaceConfig::default();
+        if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
+            net.iface_id = net_id;
         }
-        if let Some(net_hostname) = cmd_params.get("netdev") {
-            net.host_dev_name = net_hostname.value;
+        if let Some(net_hostname) = cmd_parser.get_value::<String>("netdev")? {
+            net.host_dev_name = net_hostname;
         }
-        if let Some(net_mac) = cmd_params.get("mac") {
-            net.mac = Some(net_mac.value);
-        }
-        if let Some(tap_fd) = cmd_params.get("fds") {
-            net.tap_fd = Some(tap_fd.value_to_u32() as i32);
-        }
-        if let Some(vhost) = cmd_params.get("vhost") {
-            if vhost.to_bool() {
-                net.vhost_type = Some("vhost-kernel".to_string());
+        if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
+            if vhost.into() {
+                net.vhost_type = Some(String::from("vhost-kernel"));
             }
         }
-        if let Some(vhostfd) = cmd_params.get("vhostfds") {
-            net.vhost_fd = Some(vhostfd.value_to_u32() as i32);
-        }
+        net.mac = cmd_parser.get_value::<String>("mac")?;
+        net.tap_fd = cmd_parser.get_value::<i32>("fds")?;
+        net.vhost_fd = cmd_parser.get_value::<i32>("vhostfds")?;
 
         self.add_netdev(net);
+
+        Ok(())
     }
 }
 
@@ -160,4 +165,107 @@ fn check_mac_address(mac: &str) -> bool {
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_network_config_json_parser() {
+        let json = r#"
+        [{
+            "iface_id": "eth0",
+            "host_dev_name": "tap0",
+            "mac": "1A:2B:3C:4D:5E:6F",
+            "tap_fd": 4,
+            "vhost_type": "vhost-kernel",
+            "vhost_fd": 5
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let configs = NetworkInterfaceConfig::from_value(&value);
+        assert!(configs.is_some());
+        let network_configs = configs.unwrap();
+        assert_eq!(network_configs[0].iface_id, "eth0");
+        assert_eq!(network_configs[0].host_dev_name, "tap0");
+        assert_eq!(
+            network_configs[0].mac,
+            Some(String::from("1A:2B:3C:4D:5E:6F"))
+        );
+        assert_eq!(network_configs[0].tap_fd, Some(4));
+        assert_eq!(
+            network_configs[0].vhost_type,
+            Some(String::from("vhost-kernel"))
+        );
+        assert_eq!(network_configs[0].vhost_fd, Some(5));
+        let json = r#"
+        [{
+            "iface_id": "eth0",
+            "host_dev_name": "tap0"
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let configs = NetworkInterfaceConfig::from_value(&value);
+        assert!(configs.is_some());
+        let network_configs = configs.unwrap();
+        assert_eq!(network_configs[0].iface_id, "eth0");
+        assert_eq!(network_configs[0].host_dev_name, "tap0");
+        assert!(network_configs[0].mac.is_none());
+        assert!(network_configs[0].tap_fd.is_none());
+        assert!(network_configs[0].vhost_type.is_none());
+        assert!(network_configs[0].vhost_fd.is_none());
+    }
+    #[test]
+    fn test_network_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.update_net("id=eth0,netdev=tap0").is_ok());
+        let configs = vm_config.nets.clone();
+        assert!(configs.is_some());
+        let network_configs = configs.unwrap();
+        assert_eq!(network_configs[0].iface_id, "eth0");
+        assert_eq!(network_configs[0].host_dev_name, "tap0");
+        assert!(network_configs[0].mac.is_none());
+        assert!(network_configs[0].tap_fd.is_none());
+        assert!(network_configs[0].vhost_type.is_none());
+        assert!(network_configs[0].vhost_fd.is_none());
+        assert!(vm_config
+            .update_net("id=eth1,netdev=tap1,mac=12:34:56:78:9A:BC,vhost=on,vhostfds=4")
+            .is_ok());
+        let configs = vm_config.nets.clone();
+        assert!(configs.is_some());
+        let network_configs = configs.unwrap();
+        assert_eq!(network_configs[1].iface_id, "eth1");
+        assert_eq!(network_configs[1].host_dev_name, "tap1");
+        assert_eq!(
+            network_configs[1].mac,
+            Some(String::from("12:34:56:78:9A:BC"))
+        );
+        assert!(network_configs[1].tap_fd.is_none());
+        assert_eq!(
+            network_configs[1].vhost_type,
+            Some(String::from("vhost-kernel"))
+        );
+        assert_eq!(network_configs[1].vhost_fd, Some(4));
+    }
+    #[test]
+    fn test_network_config_check() {
+        let json = r#"
+        [{
+            "iface_id": "eth0",
+            "host_dev_name": "tap0"
+        }]
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let configs = NetworkInterfaceConfig::from_value(&value);
+        let mut network_configs = configs.unwrap();
+        assert!(network_configs[0].check().is_ok());
+        network_configs[0].set_mac(String::from("12:34:56:78:9A:BC"));
+        assert!(network_configs[0].check().is_ok());
+        network_configs[0].set_mac(String::from("A:B:C:D:E:F"));
+        assert!(network_configs[0].check().is_err());
+        network_configs[0].set_mac(String::from("00:1A:2B:3C:4D:5E:6F"));
+        assert!(network_configs[0].check().is_err());
+        network_configs[0].set_mac(String::from("AB:CD:EF:GH:IJ:KL"));
+        assert!(network_configs[0].check().is_err());
+    }
 }
