@@ -51,12 +51,12 @@ const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 35 syscalls
-/// * x86_64-unknown-musl: 34 syscalls
-/// * aarch64-unknown-gnu: 34 syscalls
-/// * aarch64-unknown-musl: 33 syscalls
+/// * x86_64-unknown-gnu: 36 syscalls
+/// * x86_64-unknown-musl: 36 syscalls
+/// * aarch64-unknown-gnu: 38 syscalls
+/// * aarch64-unknown-musl: 38 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
-fn syscall_allow_list() -> Vec<BpfRule> {
+pub fn syscall_allow_list() -> Vec<BpfRule> {
     vec![
         BpfRule::new(libc::SYS_read),
         BpfRule::new(libc::SYS_write),
@@ -85,6 +85,7 @@ fn syscall_allow_list() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_rt_sigprocmask),
         #[cfg(target_arch = "x86_64")]
         BpfRule::new(libc::SYS_open),
+        #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_openat),
         BpfRule::new(libc::SYS_sigaltstack),
         BpfRule::new(libc::SYS_mmap),
@@ -107,22 +108,15 @@ fn syscall_allow_list() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_gettid),
         BpfRule::new(libc::SYS_getpid),
         BpfRule::new(libc::SYS_fstat),
+        #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_pread64),
+        #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_pwrite64),
-        BpfRule::new(libc::SYS_mprotect),
-        BpfRule::new(libc::SYS_clone),
-        BpfRule::new(libc::SYS_set_robust_list),
-        BpfRule::new(libc::SYS_sched_getaffinity),
-        BpfRule::new(libc::SYS_nanosleep),
-        BpfRule::new(libc::SYS_timerfd_create),
-        BpfRule::new(libc::SYS_timerfd_settime),
-        BpfRule::new(libc::SYS_timerfd_gettime),
         BpfRule::new(libc::SYS_statx),
         #[cfg(target_arch = "x86_64")]
         BpfRule::new(libc::SYS_unlink),
         #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_unlinkat),
-        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_madvise)
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32),
@@ -157,12 +151,11 @@ fn ioctl_allow_list() -> BpfRule {
 }
 
 /// Register seccomp rules in syscall allowlist to seccomp.
-pub fn register_seccomp() -> Result<()> {
+pub fn register_seccomp(bpf_rules: Vec<BpfRule>) -> Result<()> {
     let mut seccomp_filter = SyscallFilter::new(SeccompOpt::Trap);
 
-    let mut bpf_rules = syscall_allow_list();
-    for bpf_rule in &mut bpf_rules {
-        seccomp_filter.push(bpf_rule);
+    for mut bpf_rule in bpf_rules {
+        seccomp_filter.push(&mut bpf_rule);
     }
 
     seccomp_filter.realize()?;

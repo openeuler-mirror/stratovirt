@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use vmm_sys_util::terminal::Terminal;
 
-use device_model::{register_seccomp, LightMachine};
+use device_model::{balloon_allow_list, register_seccomp, syscall_allow_list, LightMachine};
 use machine_manager::qmp::QmpChannel;
 use machine_manager::socket::Socket;
 use machine_manager::{
@@ -160,7 +160,11 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     vm.vm_start(cmd_args.is_present("freeze_cpu"))?;
 
     if !cmd_args.is_present("disable-seccomp") {
-        register_seccomp()?;
+        let mut allow_list = syscall_allow_list();
+        if cmd_args.is_present("balloon") {
+            balloon_allow_list(&mut allow_list);
+        }
+        register_seccomp(allow_list)?;
     }
 
     EventLoop::loop_run().chain_err(|| "MainLoop exits unexpectedly: error occurs")?;

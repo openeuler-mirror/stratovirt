@@ -36,6 +36,7 @@ use util::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
     num_ops::{read_u32, round_down, write_u32},
+    seccomp::BpfRule,
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
@@ -888,6 +889,20 @@ pub fn qmp_query_balloon() -> Option<u64> {
         return Some(unlocked_dev.get_guest_memory_size());
     }
     None
+}
+
+/// Create a syscall bpf rule for device `Balloon`.
+pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
+    syscall_allow_list.extend(vec![
+        BpfRule::new(libc::SYS_mprotect),
+        BpfRule::new(libc::SYS_clone),
+        BpfRule::new(libc::SYS_set_robust_list),
+        BpfRule::new(libc::SYS_sched_getaffinity),
+        BpfRule::new(libc::SYS_nanosleep),
+        BpfRule::new(libc::SYS_timerfd_create),
+        BpfRule::new(libc::SYS_timerfd_settime),
+        BpfRule::new(libc::SYS_timerfd_gettime),
+    ])
 }
 
 #[cfg(test)]
