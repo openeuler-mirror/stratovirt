@@ -121,8 +121,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
 
     let api_socket = {
         let (api_path, _) = check_api_channel(&cmd_args)?;
-        let listener = UnixListener::bind(&api_path)?;
-        limit_permission(&api_path)?;
+        let listener = UnixListener::bind(&api_path)
+            .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
+        limit_permission(&api_path)
+            .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
         Socket::from_unix_listener(listener, Some(vm.clone()))
     };
 

@@ -93,9 +93,12 @@ impl VirtioDevice for Vsock {
     /// Realize vhost virtio vsock device.
     fn realize(&mut self) -> Result<()> {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
-        let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)?;
+        let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
+            .chain_err(|| "Failed to create backend for vsock")?;
 
-        self.device_features = backend.get_features()?;
+        self.device_features = backend
+            .get_features()
+            .chain_err(|| "Failed to get features for vsock")?;
         self.backend = Some(backend);
 
         Ok(())
@@ -143,7 +146,7 @@ impl VirtioDevice for Vsock {
                 data,
                 ((self.vsock_cfg.guest_cid >> 32) & 0xffff_ffff) as u32,
             ),
-            _ => bail!("Failed to read config: offset {} exceeds", offset),
+            _ => bail!("Failed to read config: offset {} exceeds for vsock", offset),
         }
         Ok(())
     }
@@ -183,19 +186,39 @@ impl VirtioDevice for Vsock {
             None => return Err("Failed to get backend for vsock".into()),
             Some(backend_) => backend_,
         };
-        backend.set_owner()?;
-        backend.set_features(self.driver_features)?;
-        backend.set_mem_table()?;
+        backend
+            .set_owner()
+            .chain_err(|| "Failed to set owner for vsock")?;
+        backend
+            .set_features(self.driver_features)
+            .chain_err(|| "Failed to set features for vsock")?;
+        backend
+            .set_mem_table()
+            .chain_err(|| "Failed to set mem table for vsock")?;
 
         for (queue_index, queue_mutex) in vhost_queues.iter().enumerate() {
             let queue = queue_mutex.lock().unwrap();
             let actual_size = queue.vring.actual_size();
             let queue_config = queue.vring.get_queue_config();
 
-            backend.set_vring_num(queue_index, actual_size)?;
-            backend.set_vring_addr(&queue_config, queue_index, 0)?;
-            backend.set_vring_base(queue_index, 0)?;
-            backend.set_vring_kick(queue_index, &queue_evts[queue_index])?;
+            backend
+                .set_vring_num(queue_index, actual_size)
+                .chain_err(|| {
+                    format!("Failed to set vring num for vsock, index: {}", queue_index)
+                })?;
+            backend
+                .set_vring_addr(&queue_config, queue_index, 0)
+                .chain_err(|| {
+                    format!("Failed to set vring addr for vsock, index: {}", queue_index)
+                })?;
+            backend.set_vring_base(queue_index, 0).chain_err(|| {
+                format!("Failed to set vring base for vsock, index: {}", queue_index)
+            })?;
+            backend
+                .set_vring_kick(queue_index, &queue_evts[queue_index])
+                .chain_err(|| {
+                    format!("Failed to set vring kick for vsock, index: {}", queue_index)
+                })?;
             drop(queue);
 
             let host_notify = VhostNotify {
@@ -203,7 +226,11 @@ impl VirtioDevice for Vsock {
                     .chain_err(|| ErrorKind::EventFdCreate)?,
                 queue: queue_mutex.clone(),
             };
-            backend.set_vring_call(queue_index, &host_notify.notify_evt)?;
+            backend
+                .set_vring_call(queue_index, &host_notify.notify_evt)
+                .chain_err(|| {
+                    format!("Failed to set vring call for vsock, index: {}", queue_index)
+                })?;
             host_notifies.push(host_notify);
         }
 

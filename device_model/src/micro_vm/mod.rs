@@ -368,7 +368,9 @@ impl LightMachine {
     /// Realize `LightMachine` means let all members of `LightMachine` enabled.
     #[cfg(target_arch = "aarch64")]
     pub fn realize(&self) -> Result<()> {
-        self.irq_chip.realize()?;
+        self.irq_chip
+            .realize()
+            .chain_err(|| "Failed to realize interrupt controller")?;
         self.bus
             .realize_devices(&self.vm_fd, &self.boot_source, &self.sys_mem)?;
 
@@ -556,33 +558,40 @@ impl LightMachine {
         }
 
         if let Some(serial) = vm_config.serial {
-            self.register_device(&serial)?;
+            self.register_device(&serial)
+                .chain_err(|| "Failed to register serial device")?;
         }
 
         if let Some(vsock) = vm_config.vsock {
-            self.register_device(&vsock)?;
+            self.register_device(&vsock)
+                .chain_err(|| "Failed to register vsock device")?;
         }
 
         if let Some(drives) = vm_config.drives {
             for drive in drives {
-                self.register_device(&drive)?;
+                self.register_device(&drive)
+                    .chain_err(|| format!("Failed to register drive device {}", drive.drive_id))?;
             }
         }
 
         if let Some(nets) = vm_config.nets {
             for net in nets {
-                self.register_device(&net)?;
+                self.register_device(&net)
+                    .chain_err(|| format!("Failed to register net device {}", net.iface_id))?;
             }
         }
 
         if let Some(consoles) = vm_config.consoles {
             for console in consoles {
-                self.register_device(&console)?;
+                self.register_device(&console).chain_err(|| {
+                    format!("Failed to register console device {}", console.console_id)
+                })?;
             }
         }
 
         if let Some(balloon) = vm_config.balloon {
-            self.register_device(&balloon)?;
+            self.register_device(&balloon)
+                .chain_err(|| "Failed to register balloon device")?;
         }
 
         Ok(())
@@ -891,7 +900,15 @@ impl DeviceInterface for LightMachine {
             slot = lun + 1;
         }
 
-        self.bus.add_replaceable_device(&id, &driver, slot).is_ok()
+        if let Err(ref e) = self.bus.add_replaceable_device(&id, &driver, slot) {
+            error!(
+                "Failed to add device, {}",
+                error_chain::ChainedError::display_chain(e)
+            );
+            return false;
+        }
+
+        true
     }
 
     fn device_del(&self, device_id: String) -> bool {
@@ -905,7 +922,13 @@ impl DeviceInterface for LightMachine {
 
                 true
             }
-            _ => false,
+            Err(ref e) => {
+                error!(
+                    "Failed to delete device, {}",
+                    error_chain::ChainedError::display_chain(e)
+                );
+                false
+            }
         }
     }
 
@@ -935,9 +958,15 @@ impl DeviceInterface for LightMachine {
             serial_num: None,
         };
 
-        self.bus
-            .add_replaceable_config(node_name, Arc::new(config))
-            .is_ok()
+        if let Err(ref e) = self.bus.add_replaceable_config(node_name, Arc::new(config)) {
+            error!(
+                "Failed to add block device, {}",
+                error_chain::ChainedError::display_chain(e)
+            );
+            return false;
+        }
+
+        true
     }
 
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> bool {
@@ -978,9 +1007,15 @@ impl DeviceInterface for LightMachine {
             config.host_dev_name = if_name;
         }
 
-        self.bus
-            .add_replaceable_config(id, Arc::new(config))
-            .is_ok()
+        if let Err(ref e) = self.bus.add_replaceable_config(id, Arc::new(config)) {
+            error!(
+                "Failed to add net device, {}",
+                error_chain::ChainedError::display_chain(e)
+            );
+            return false;
+        }
+
+        true
     }
 
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {

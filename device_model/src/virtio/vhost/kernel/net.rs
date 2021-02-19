@@ -109,10 +109,15 @@ impl Net {
 impl VirtioDevice for Net {
     /// Realize vhost virtio network device.
     fn realize(&mut self) -> Result<()> {
-        let backend = VhostBackend::new(&self.mem_space, "/dev/vhost-net", self.net_cfg.vhost_fd)?;
-        backend.set_owner()?;
+        let backend = VhostBackend::new(&self.mem_space, "/dev/vhost-net", self.net_cfg.vhost_fd)
+            .chain_err(|| "Failed to create backend for vhost net")?;
+        backend
+            .set_owner()
+            .chain_err(|| "Failed to set owner for vhost net")?;
 
-        let mut vhost_features = backend.get_features()?;
+        let mut vhost_features = backend
+            .get_features()
+            .chain_err(|| "Failed to get features for vhost net")?;
         vhost_features &= !(1_u64 << VHOST_NET_F_VIRTIO_NET_HDR);
         vhost_features &= !(1_u64 << VIRTIO_F_ACCESS_PLATFORM);
 
@@ -134,8 +139,8 @@ impl VirtioDevice for Net {
             _ => Some(self.net_cfg.host_dev_name.as_str()),
         };
 
-        self.tap =
-            create_tap(self.net_cfg.tap_fd, host_dev_name).chain_err(|| "Failed to create tap")?;
+        self.tap = create_tap(self.net_cfg.tap_fd, host_dev_name)
+            .chain_err(|| "Failed to create tap for vhost net")?;
         self.backend = Some(backend);
         self.device_features = device_features;
         self.vhost_features = vhost_features;
@@ -169,7 +174,7 @@ impl VirtioDevice for Net {
         let unsupported_features = features & !self.device_features;
         if unsupported_features != 0 {
             warn!(
-                "Received acknowledge request with unsupported feature: {:x}",
+                "Received acknowledge request with unsupported feature for vhost net: 0x{:x}",
                 features
             );
             features &= !unsupported_features;
@@ -217,22 +222,52 @@ impl VirtioDevice for Net {
     ) -> Result<()> {
         let mut host_notifies = Vec::new();
         let backend = match &self.backend {
-            None => return Err("Failed to get backend".into()),
+            None => return Err("Failed to get backend for vhost net".into()),
             Some(backend_) => backend_,
         };
 
-        backend.set_features(self.vhost_features)?;
-        backend.set_mem_table()?;
+        backend
+            .set_features(self.vhost_features)
+            .chain_err(|| "Failed to set features for vhost net")?;
+        backend
+            .set_mem_table()
+            .chain_err(|| "Failed to set mem table for vhost net")?;
 
         for (queue_index, queue_mutex) in queues.iter().enumerate() {
             let queue = queue_mutex.lock().unwrap();
             let actual_size = queue.vring.actual_size();
             let queue_config = queue.vring.get_queue_config();
 
-            backend.set_vring_num(queue_index, actual_size)?;
-            backend.set_vring_addr(&queue_config, queue_index, 0)?;
-            backend.set_vring_base(queue_index, 0)?;
-            backend.set_vring_kick(queue_index, &queue_evts[queue_index])?;
+            backend
+                .set_vring_num(queue_index, actual_size)
+                .chain_err(|| {
+                    format!(
+                        "Failed to set vring num for vhost net, index: {} size: {}",
+                        queue_index, actual_size,
+                    )
+                })?;
+            backend
+                .set_vring_addr(&queue_config, queue_index, 0)
+                .chain_err(|| {
+                    format!(
+                        "Failed to set vring addr for vhost net, index: {}",
+                        queue_index,
+                    )
+                })?;
+            backend.set_vring_base(queue_index, 0).chain_err(|| {
+                format!(
+                    "Failed to set vring base for vhost net, index: {}",
+                    queue_index,
+                )
+            })?;
+            backend
+                .set_vring_kick(queue_index, &queue_evts[queue_index])
+                .chain_err(|| {
+                    format!(
+                        "Failed to set vring kick for vhost net, index: {}",
+                        queue_index,
+                    )
+                })?;
 
             drop(queue);
 
@@ -241,14 +276,26 @@ impl VirtioDevice for Net {
                     .chain_err(|| ErrorKind::EventFdCreate)?,
                 queue: queue_mutex.clone(),
             };
-            backend.set_vring_call(queue_index, &host_notify.notify_evt)?;
+            backend
+                .set_vring_call(queue_index, &host_notify.notify_evt)
+                .chain_err(|| {
+                    format!(
+                        "Failed to set vring call for vhost net, index: {}",
+                        queue_index,
+                    )
+                })?;
             host_notifies.push(host_notify);
 
             let tap = match &self.tap {
-                None => bail!("Failed to get tap"),
+                None => bail!("Failed to get tap for vhost net"),
                 Some(tap_) => tap_,
             };
-            backend.set_backend(queue_index, &tap.file)?;
+            backend.set_backend(queue_index, &tap.file).chain_err(|| {
+                format!(
+                    "Failed to set tap device for vhost net, index: {}",
+                    queue_index,
+                )
+            })?;
         }
 
         let handler = VhostIoHandler {
