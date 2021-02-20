@@ -46,7 +46,9 @@ enum EventStatus {
     /// Event is removed.
     Removed = 2,
 }
+
 pub type NotifierCallback = dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>;
+
 /// Epoll Event Notifier Entry.
 pub struct EventNotifier {
     /// Raw file descriptor
@@ -86,38 +88,41 @@ impl EventNotifier {
 /// `EventNotifier` Factory
 ///
 /// When an object have some `EventNotifier` wants
-/// to add to main loop, the object need to implement
-/// `InternalNotifiers` trait, so `MainLoop` would be
+/// to add to event loop, the object need to implement
+/// `InternalNotifiers` trait, so `EventLoop` would be
 /// easy to get notifiers, and add to epoll context.
 pub trait EventNotifierHelper {
     fn internal_notifiers(_: Arc<Mutex<Self>>) -> Vec<EventNotifier>;
 }
 
-/// MainLoop manager, advise continue running or stop running
-pub trait MainLoopManager {
-    fn main_loop_should_exit(&self) -> bool;
-    fn main_loop_cleanup(&self) -> Result<()>;
+/// EventLoop manager, advise continue running or stop running
+pub trait EventLoopManager: Send + Sync {
+    fn loop_should_exit(&self) -> bool;
+    fn loop_cleanup(&self) -> Result<()>;
 }
 
-/// Main Epoll Loop Context
+/// Epoll Loop Context
 #[allow(clippy::vec_box)]
-pub struct MainLoopContext {
+pub struct EventLoopContext {
     /// Epoll file descriptor.
     epoll: Epoll,
     /// Control epoll loop running.
-    manager: Option<Arc<dyn MainLoopManager>>,
-    /// Fds registered to the `MainLoop`.
-    events: Arc<RwLock<BTreeMap<i32, Box<EventNotifier>>>>,
+    manager: Option<Arc<dyn EventLoopManager>>,
+    /// Fds registered to the `EventLoop`.
+    events: Arc<RwLock<BTreeMap<RawFd, Box<EventNotifier>>>>,
     /// Events abandoned are stored in garbage collector.
     gc: Arc<RwLock<Vec<Box<EventNotifier>>>>,
     /// Temp events vector, store wait returned events.
     ready_events: Vec<EpollEvent>,
 }
 
-impl MainLoopContext {
-    /// Constructs a new `MainLoopContext`.
+unsafe impl Sync for EventLoopContext {}
+unsafe impl Send for EventLoopContext {}
+
+impl EventLoopContext {
+    /// Constructs a new `EventLoopContext`.
     pub fn new() -> Self {
-        MainLoopContext {
+        EventLoopContext {
             epoll: Epoll::new().unwrap(),
             manager: None,
             events: Arc::new(RwLock::new(BTreeMap::new())),
@@ -126,7 +131,7 @@ impl MainLoopContext {
         }
     }
 
-    pub fn set_manager(&mut self, manager: Arc<dyn MainLoopManager>) {
+    pub fn set_manager(&mut self, manager: Arc<dyn EventLoopManager>) {
         self.manager = Some(manager);
     }
 
@@ -214,7 +219,7 @@ impl MainLoopContext {
                 let event = events_map.remove(&event.raw_fd).unwrap();
                 self.gc.write().unwrap().push(event);
             }
-            None => {
+            _ => {
                 return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
             }
         }
@@ -222,11 +227,11 @@ impl MainLoopContext {
         Ok(())
     }
 
-    /// update fds registered to `MainLoop` according to the operation type.
+    /// update fds registered to `EventLoop` according to the operation type.
     ///
     /// # Arguments
     ///
-    /// * `notifiers` - event notifiers wanted to add to or remove from `MainLoop`.
+    /// * `notifiers` - event notifiers wanted to add to or remove from `EventLoop`.
     pub fn update_events(&mut self, notifiers: Vec<EventNotifier>) -> Result<()> {
         for en in notifiers {
             match en.op {
@@ -247,14 +252,11 @@ impl MainLoopContext {
 
     /// Executes `epoll.wait()` to wait for events, and call the responding callbacks.
     pub fn run(&mut self) -> Result<bool> {
-        match &self.manager {
-            Some(manager) => {
-                if manager.main_loop_should_exit() {
-                    manager.main_loop_cleanup()?;
-                    return Ok(false);
-                }
+        if let Some(manager) = &self.manager {
+            if manager.loop_should_exit() {
+                manager.loop_cleanup()?;
+                return Ok(false);
             }
-            None => {}
         }
 
         let ev_count = match self
@@ -293,7 +295,7 @@ impl MainLoopContext {
     }
 }
 
-impl Default for MainLoopContext {
+impl Default for EventLoopContext {
     fn default() -> Self {
         Self::new()
     }
@@ -324,7 +326,7 @@ mod test {
     use std::os::unix::io::{AsRawFd, RawFd};
     use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
-    impl MainLoopContext {
+    impl EventLoopContext {
         fn check_existence(&self, fd: RawFd) -> Option<bool> {
             let events_map = self.events.read().unwrap();
             match events_map.get(&fd) {
@@ -373,7 +375,7 @@ mod test {
 
     #[test]
     fn basic_test() {
-        let mut mainloop = MainLoopContext::new();
+        let mut mainloop = EventLoopContext::new();
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd1_related = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -401,7 +403,7 @@ mod test {
 
     #[test]
     fn parked_event_test() {
-        let mut mainloop = MainLoopContext::new();
+        let mut mainloop = EventLoopContext::new();
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd2 = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -448,7 +450,7 @@ mod test {
 
     #[test]
     fn event_handler_test() {
-        let mut mainloop = MainLoopContext::new();
+        let mut mainloop = EventLoopContext::new();
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd1_related = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -487,7 +489,7 @@ mod test {
 
     #[test]
     fn error_operation_test() {
-        let mut mainloop = MainLoopContext::new();
+        let mut mainloop = EventLoopContext::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let leisure_fd = EventFd::new(EFD_NONBLOCK).unwrap();
 
@@ -524,7 +526,7 @@ mod test {
 
     #[test]
     fn error_parked_operation_test() {
-        let mut mainloop = MainLoopContext::new();
+        let mut mainloop = EventLoopContext::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd2 = EventFd::new(EFD_NONBLOCK).unwrap();
 
@@ -559,7 +561,7 @@ mod test {
 
     #[test]
     fn fd_released_test() {
-        let mut mainloop = MainLoopContext::new();
+        let mut mainloop = EventLoopContext::new();
         let fd = mainloop.create_event();
 
         // In this case, fd is already closed. But program was wrote to ignore the error.

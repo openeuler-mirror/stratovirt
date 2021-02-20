@@ -61,15 +61,15 @@ use machine_manager::{
         BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig, VmConfig,
         VsockConfig,
     },
-    main_loop::MainLoop,
+    event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
 };
 #[cfg(target_arch = "aarch64")]
 use util::device_tree;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::CompileFDT;
-use util::epoll_context::{
-    EventNotifier, EventNotifierHelper, MainLoopManager, NotifierCallback, NotifierOperation,
+use util::loop_context::{
+    EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 
 use crate::errors::{Result, ResultExt};
@@ -169,7 +169,7 @@ impl ConfigDevBuilder for SerialConfig {
             .chain_err(|| "build dev from config failed")?;
 
         if self.stdio {
-            MainLoop::update_event(EventNotifierHelper::internal_notifiers(serial))?;
+            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
         }
         Ok(())
     }
@@ -614,7 +614,7 @@ impl LightMachine {
             vec![power_button_handler],
         );
 
-        MainLoop::update_event(vec![notifier])?;
+        EventLoop::update_event(vec![notifier], None)?;
         Ok(())
     }
 }
@@ -956,6 +956,7 @@ impl DeviceInterface for LightMachine {
             read_only,
             direct,
             serial_num: None,
+            iothread: None,
         };
 
         if let Err(ref e) = self.bus.add_replaceable_config(node_name, Arc::new(config)) {
@@ -977,6 +978,7 @@ impl DeviceInterface for LightMachine {
             tap_fd: None,
             vhost_type: None,
             vhost_fd: None,
+            iothread: None,
         };
 
         if let Some(fds) = fds {
@@ -1033,13 +1035,13 @@ impl DeviceInterface for LightMachine {
 impl MachineInterface for LightMachine {}
 impl MachineExternalInterface for LightMachine {}
 
-impl MainLoopManager for LightMachine {
-    fn main_loop_should_exit(&self) -> bool {
+impl EventLoopManager for LightMachine {
+    fn loop_should_exit(&self) -> bool {
         let vmstate = self.vm_state.deref().0.lock().unwrap();
         *vmstate == KvmVmState::Shutdown
     }
 
-    fn main_loop_cleanup(&self) -> util::errors::Result<()> {
+    fn loop_cleanup(&self) -> util::errors::Result<()> {
         if let Err(e) = std::io::stdin().lock().set_canon_mode() {
             error!(
                 "destroy virtual machine: reset stdin to canonical mode failed, {}",

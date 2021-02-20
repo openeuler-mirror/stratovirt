@@ -18,9 +18,9 @@ use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::{config::NetworkInterfaceConfig, main_loop::MainLoop};
+use machine_manager::{config::NetworkInterfaceConfig, event_loop::EventLoop};
 use util::byte_code::ByteCode;
-use util::epoll_context::EventNotifierHelper;
+use util::loop_context::EventNotifierHelper;
 use util::num_ops::{read_u32, write_u32};
 use util::tap::Tap;
 use vmm_sys_util::eventfd::EventFd;
@@ -304,9 +304,10 @@ impl VirtioDevice for Net {
             host_notifies,
         };
 
-        MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
-            Mutex::new(handler),
-        )))?;
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+            None,
+        )?;
 
         Ok(())
     }

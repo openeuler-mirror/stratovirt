@@ -24,11 +24,11 @@ use std::sync::{Arc, Mutex};
 use address_space::{AddressSpace, GuestAddress};
 use machine_manager::{
     config::{ConfigCheck, DriveConfig},
-    main_loop::MainLoop,
+    event_loop::EventLoop,
 };
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
-use util::epoll_context::{
+use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::num_ops::{read_u32, write_u32};
@@ -578,15 +578,6 @@ impl BlockIoHandler {
         Ok(Box::new(Aio::new(complete_func)?))
     }
 
-    fn add_event_notifiers(mut self) -> Result<()> {
-        self.aio = Some(self.build_aio()?);
-        MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
-            Mutex::new(self),
-        )))?;
-
-        Ok(())
-    }
-
     fn update_evt_handler(&mut self) {
         match self.receiver.recv() {
             Ok((image, disk_sectors, serial_num, direct)) => {
@@ -885,7 +876,7 @@ impl VirtioDevice for Block {
         let (sender, receiver) = channel();
         self.sender = Some(sender);
 
-        let handler = BlockIoHandler {
+        let mut handler = BlockIoHandler {
             queue: queues.remove(0),
             queue_evt: queue_evts.remove(0),
             mem_space,
@@ -899,7 +890,13 @@ impl VirtioDevice for Block {
             update_evt: self.update_evt.as_raw_fd(),
             interrupt_cb: cb,
         };
-        handler.add_event_notifiers()?;
+
+        handler.aio = Some(handler.build_aio()?);
+
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+            self.blk_cfg.iothread.as_ref(),
+        )?;
 
         Ok(())
     }

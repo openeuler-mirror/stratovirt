@@ -132,24 +132,39 @@ StratoVirt supports to deploy one kind of legacy device and four kinds of virtio
 
 The max number of devices is 16 on x86_64 platform and 32 on aarch64 platform.
 
-### 2.1 Virtio-blk
+### 2.1 iothread
+
+Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads du to `iothread` configuration, 
+and these threads can be used by devices exclusively improving performance.
+
+There is only one argument for iothread:
+
+* id: identify io thread, can used in device configuration.
+
+```shell
+# cmdline
+-iothread id=iothread1 -iothread id=iothread2
+```
+
+### 2.2 Virtio-blk
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-Five properties are supported for virtio block device.
+Six properties are supported for virtio block device.
 
 * drive_id: unique device-id in StratoVirt
 * path_on_host: the path of block device in host
 * serial_num: serial number of virtio block (optional)
 * read_only: whether virtio block device is read-only or not
 * direct: open block device with `O_DIRECT` mode or not
+* iothread: indicate which iothread will be used, if not specified the main thread will be used
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
 
 ```shell
 # cmdline
--drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
+-drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off[,iothread=iothread1]
 
 # json
 {
@@ -160,26 +175,29 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
             "path_on_host": "/path/to/block",
             "serial_num": "11111111",
             "direct": false,
-            "read_only": false
+            "read_only": false,
+            "iothread": "iothread1"
         }
     ],
     ...
 }
 ```
 
-### 2.2 Virtio-net
+### 2.3 Virtio-net
 
 Virtio-net is a virtual Ethernet card in VM. It can enable the network capability of VM.
 
-Three properties are supported for virtio net device.
+Four properties are supported for virtio net device.
 
 * iface_id: unique device-id in StratoVirt
 * host_dev_name: name of tap device in host
 * mac: set mac address in VM (optional)
+* iothread: indicate which iothread will be used, if not specified the main thread will be used. 
+It only affects on virito-net, not vhost-net.
 
 ```shell
 # cmdline
--netdev id=iface_id,netdev=host_dev_name[,mac=12:34:56:78:9A:BC]
+-netdev id=iface_id,netdev=host_dev_name[,mac=12:34:56:78:9A:BC][,iothread=iothread1]
 
 # json
 {
@@ -188,7 +206,8 @@ Three properties are supported for virtio net device.
        {
            "iface_id": "tap0",
            "host_dev_name": "tap0",
-           "mac": "12:34:56:78:9A:BC"
+           "mac": "12:34:56:78:9A:BC",
+           "iothread": "iothread1"
        }
    ]
 }
@@ -237,7 +256,7 @@ $ ip addr add 1.1.1.2/24 dev eth0
 $ ping 1.1.1.1
 ```
 
-### 2.3 Virtio-console
+### 2.4 Virtio-console
 
 Virtio console is a general-purpose serial device for data transfer between the guest and host.
 Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it.
@@ -264,7 +283,7 @@ Two properties can be set for virtio console device.
 }
 ```
 
-### 2.4 Virtio-vsock
+### 2.5 Virtio-vsock
 
 Virtio vsock is a host/guest communication device like virtio console, but it has higher performance.
 
@@ -306,7 +325,7 @@ $ nc-vsock -l port_num
 $ nc-vsock guest_cid port_num
 ```
 
-### 2.5 Serial
+### 2.6 Serial
 
 Serial is a legacy device for VM, it is a communication interface which bridges the guest and host.
 
@@ -333,7 +352,7 @@ There is only one argument for serial device:
 }
 ```
 
-### 2.6 Virtio_Balloon
+### 2.7 Virtio_Balloon
 Balloon is a virtio device, it offers a flex memory mechanism for VM.
 
 Only one property is supported for virtio-balloon.

@@ -18,10 +18,10 @@ use std::sync::{Arc, Mutex};
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use machine_manager::{config::BalloonConfig, main_loop::MainLoop};
+use machine_manager::{config::BalloonConfig, event_loop::EventLoop};
 use util::{
     byte_code::ByteCode,
-    epoll_context::{
+    loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
     num_ops::{read_u32, write_u32},
@@ -705,10 +705,12 @@ impl VirtioDevice for Balloon {
         mem_space
             .register_listener(Box::new(bln_mem_info))
             .chain_err(|| "Failed to register memory listener defined by balloon device.")?;
-        MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
-            Mutex::new(handler),
-        )))
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+            None,
+        )
         .chain_err(|| "Failed to register balloon event notifier to MainLoop")?;
+
         Ok(())
     }
 

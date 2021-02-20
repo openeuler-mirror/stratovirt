@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
-use machine_manager::{config::VsockConfig, main_loop::MainLoop};
-use util::epoll_context::EventNotifierHelper;
+use machine_manager::{config::VsockConfig, event_loop::EventLoop};
+use util::loop_context::EventNotifierHelper;
 use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
@@ -243,9 +243,10 @@ impl VirtioDevice for Vsock {
             host_notifies,
         };
 
-        MainLoop::update_event(EventNotifierHelper::internal_notifiers(Arc::new(
-            Mutex::new(handler),
-        )))?;
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+            None,
+        )?;
 
         Ok(())
     }

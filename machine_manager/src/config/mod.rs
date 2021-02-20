@@ -17,6 +17,7 @@ mod balloon;
 mod boot_source;
 mod chardev;
 mod fs;
+mod iothread;
 mod machine_config;
 mod network;
 
@@ -34,6 +35,7 @@ pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
 pub use fs::*;
+pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
 
@@ -108,6 +110,7 @@ pub struct VmConfig {
     pub consoles: Option<Vec<ConsoleConfig>>,
     pub vsock: Option<VsockConfig>,
     pub serial: Option<SerialConfig>,
+    pub iothreads: Option<Vec<IothreadConfig>>,
     pub balloon: Option<BalloonConfig>,
 }
 
@@ -125,6 +128,7 @@ impl VmConfig {
         let mut consoles = None;
         let mut vsock = None;
         let mut serial = None;
+        let mut iothreads = None;
         let mut balloon = None;
 
         // Use macro to use from_value function for every member
@@ -135,6 +139,7 @@ impl VmConfig {
         config_parse!(consoles, value, "console", ConsoleConfig);
         config_parse!(vsock, value, "vsock", VsockConfig);
         config_parse!(serial, value, "serial", SerialConfig);
+        config_parse!(iothreads, value, "iothread", IothreadConfig);
         config_parse!(balloon, value, "balloon", BalloonConfig);
 
         Ok(VmConfig {
@@ -146,6 +151,7 @@ impl VmConfig {
             consoles,
             vsock,
             serial,
+            iothreads,
             balloon,
         })
     }
@@ -191,6 +197,12 @@ impl VmConfig {
 
         if self.serial.is_some() && self.serial.as_ref().unwrap().stdio && is_daemonize {
             bail!("Serial with stdio and daemonize can't be set together");
+        }
+
+        if self.iothreads.is_some() {
+            for iothread in self.iothreads.as_ref().unwrap() {
+                iothread.check()?;
+            }
         }
 
         Ok(())

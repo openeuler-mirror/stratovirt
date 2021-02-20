@@ -26,7 +26,7 @@ use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use util::byte_code::ByteCode;
-use util::epoll_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
