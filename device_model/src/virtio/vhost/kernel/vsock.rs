@@ -282,16 +282,13 @@ mod tests {
     }
 
     #[test]
-    fn test_vsock() {
+    fn test_vsock_init() {
         // test vsock new method
         let mut vsock = vsock_create_instance();
+
         assert_eq!(vsock.device_features, 0);
         assert_eq!(vsock.driver_features, 0);
         assert!(vsock.backend.is_none());
-
-        // test vsock realize method
-        assert!(vsock.realize().is_ok());
-        assert!(vsock.backend.is_some());
 
         assert_eq!(vsock.device_type(), VIRTIO_TYPE_VSOCK);
         assert_eq!(vsock.queue_num(), QUEUE_NUM_VSOCK);
@@ -343,6 +340,21 @@ mod tests {
         let mut buf: [u8; 4] = [0; 4];
         assert_eq!(vsock.read_config(5, &mut buf).is_err(), true);
         assert_eq!(vsock.read_config(3, &mut buf).is_err(), true);
+    }
+
+    #[test]
+    fn test_vsock_realize() {
+        // test vsock new method
+        let mut vsock = vsock_create_instance();
+
+        // return directly if /dev/vhost-vsock does not exist
+        if !std::path::Path::new(VHOST_PATH).exists() {
+            return;
+        }
+
+        // test vsock realize method
+        assert!(vsock.realize().is_ok());
+        assert!(vsock.backend.is_some());
 
         // test vsock set_guest_cid
         let backend = vsock.backend.unwrap();
