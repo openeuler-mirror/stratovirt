@@ -941,6 +941,7 @@ mod tests {
     use machine_manager::config::IothreadConfig;
     use std::sync::Once;
     use std::{thread, time::Duration};
+    use vmm_sys_util::tempfile::TempFile;
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
@@ -1054,16 +1055,13 @@ mod tests {
         assert!(block.interrupt_cb.is_none());
         assert!(block.sender.is_none());
 
-        // Realize block device
+        // Realize block device: create TempFile as backing file.
         block.blk_cfg.read_only = true;
         block.blk_cfg.direct = false;
-        block.blk_cfg.path_on_host = "/tmp/".to_string();
-        // Realize will failed, because path_on_host is not a disk image path.
-        assert!(block.realize().is_err());
+        let f = TempFile::new().unwrap();
+        block.blk_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
+        assert!(block.realize().is_ok());
 
-        block.blk_cfg.direct = true;
-        block.blk_cfg.path_on_host = "".to_string();
-        assert_eq!(block.realize().is_ok(), true);
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
         assert_eq!(block.queue_num(), QUEUE_NUM_BLK);
         assert_eq!(block.queue_size(), QUEUE_SIZE_BLK);
