@@ -151,12 +151,17 @@ impl EventLoop {
                 return true;
             }
         }
-        let ret = Self::get_ctx(None).exit();
+        let ret = Self::get_ctx(None).remove_files();
         unsafe {
             if GLOBAL_EVENT_LOOP.is_some() {
                 GLOBAL_EVENT_LOOP = None;
             }
         }
         ret
+    }
+
+    /// Add to be removed files to Eventloop.
+    pub fn add_files(path: String) {
+        Self::get_ctx(None).add_files(path);
     }
 }

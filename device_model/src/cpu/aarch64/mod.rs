@@ -15,8 +15,8 @@ use std::mem;
 use std::sync::Arc;
 
 use kvm_bindings::{
-    kvm_regs, kvm_vcpu_init, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64,
-    KVM_REG_ARM_CORE, KVM_REG_SIZE_U128, KVM_REG_SIZE_U32, KVM_REG_SIZE_U64,
+    kvm_regs, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64, KVM_REG_ARM_CORE,
+    KVM_REG_SIZE_U128, KVM_REG_SIZE_U32, KVM_REG_SIZE_U64,
 };
 use kvm_ioctls::{VcpuFd, VmFd};
 
@@ -177,43 +177,43 @@ pub struct CPUAArch64 {
     boot_ip: u64,
     /// The guest physical address of device tree blob (dtb).
     fdt_addr: u64,
-    /// Used to pass vcpu target and supported features to kvm.
-    kvi: kvm_vcpu_init,
 }
 
 impl CPUAArch64 {
-    pub fn new(vm_fd: &Arc<VmFd>, vcpu_id: u32) -> Self {
-        let mut kvi = kvm_bindings::kvm_vcpu_init::default();
-        vm_fd.get_preferred_target(&mut kvi).unwrap();
-
+    pub fn new(vcpu_id: u32) -> Self {
         CPUAArch64 {
             vcpu_id,
             mpidr: UNINIT_MPIDR,
             boot_ip: 0,
             fdt_addr: 0,
-            kvi,
         }
     }
 
     pub fn realize(
         &mut self,
+        vm_fd: &Arc<VmFd>,
         vcpu_fd: &Arc<VcpuFd>,
         boot_config: &AArch64CPUBootConfig,
     ) -> Result<()> {
         self.boot_ip = boot_config.kernel_addr;
         self.fdt_addr = boot_config.fdt_addr;
 
+        let mut kvi = kvm_bindings::kvm_vcpu_init::default();
+        vm_fd
+            .get_preferred_target(&mut kvi)
+            .chain_err(|| "Failed to get kvm vcpu preferred target")?;
+
         // support PSCI 0.2
         // We already checked that the capability is supported.
-        self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
-
+        kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
         // Non-boot cpus are powered off initially.
         if self.vcpu_id != 0 {
-            self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
+            kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
         }
 
-        vcpu_fd.vcpu_init(&self.kvi).unwrap();
-
+        vcpu_fd
+            .vcpu_init(&kvi)
+            .chain_err(|| "Failed to init kvm vcpu")?;
         self.get_mpidr(vcpu_fd);
 
         Ok(())

@@ -102,8 +102,16 @@ impl ConfigCheck for NetworkInterfaceConfig {
 
 impl VmConfig {
     /// Add new network device to `VmConfig`
-    fn add_netdev(&mut self, net: NetworkInterfaceConfig) {
+    fn add_netdev(&mut self, net: NetworkInterfaceConfig) -> Result<()> {
         if let Some(mut nets) = self.nets.clone() {
+            for n in &nets {
+                if n.iface_id == net.iface_id {
+                    return Err(
+                        ErrorKind::IdRepeat("netdev".to_string(), n.iface_id.to_string()).into(),
+                    );
+                }
+            }
+
             nets.push(net);
             self.nets = Some(nets);
         } else {
@@ -111,6 +119,8 @@ impl VmConfig {
             nets.push(net);
             self.nets = Some(nets);
         }
+
+        Ok(())
     }
 
     /// Update '-netdev ...' network config to `VmConfig`
@@ -149,9 +159,7 @@ impl VmConfig {
         net.vhost_fd = cmd_parser.get_value::<i32>("vhostfds")?;
         net.iothread = cmd_parser.get_value::<String>("iothread")?;
 
-        self.add_netdev(net);
-
-        Ok(())
+        self.add_netdev(net)
     }
 }
 

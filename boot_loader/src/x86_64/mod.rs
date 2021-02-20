@@ -145,7 +145,9 @@ const BOOT_GDT_MAX: usize = 4;
 pub fn load_bzimage(kernel_image: &mut File) -> Result<bootparam::RealModeKernelHeader> {
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
     let mut boot_hdr_buf = [0_u8; std::mem::size_of::<bootparam::RealModeKernelHeader>()];
-    kernel_image.read_exact(&mut boot_hdr_buf)?;
+    kernel_image
+        .read_exact(&mut boot_hdr_buf)
+        .chain_err(|| "Failed to read boot_hdr from bzImage kernel")?;
     let boot_hdr = bootparam::RealModeKernelHeader::from_bytes(&boot_hdr_buf).unwrap();
 
     if boot_hdr.header != HDRS {
@@ -458,7 +460,7 @@ pub fn linux_bootloader(
         (VMLINUX_STARTUP, VMLINUX_STARTUP)
     };
 
-    let boot_pml4 = setup_page_table(sys_mem)?;
+    let boot_pml4 = setup_page_table(sys_mem).chain_err(|| "Failed to setup page table")?;
 
     setup_isa_mptable(
         sys_mem,
@@ -466,9 +468,11 @@ pub fn linux_bootloader(
         config.cpu_count,
         config.ioapic_addr,
         config.lapic_addr,
-    )?;
+    )
+    .chain_err(|| "Failed to setup isa mptable")?;
 
-    let (zero_page, initrd_addr) = setup_boot_params(&config, sys_mem, boot_hdr)?;
+    let (zero_page, initrd_addr) = setup_boot_params(&config, sys_mem, boot_hdr)
+        .chain_err(|| "Failed to setup boot params")?;
 
     let gdt_seg = setup_gdt(sys_mem)?;
 

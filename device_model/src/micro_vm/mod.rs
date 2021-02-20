@@ -35,7 +35,6 @@ extern crate util;
 pub mod micro_syscall;
 
 use std::fs::metadata;
-use std::marker::{Send, Sync};
 use std::ops::Deref;
 use std::os::linux::fs::MetadataExt;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -71,7 +70,6 @@ use machine_manager::{
 use util::device_tree;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::CompileFDT;
-use util::errors::ErrorKind;
 use util::loop_context::{
     EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -291,7 +289,7 @@ impl LightMachine {
             sys_io,
             bus: Bus::new(sys_mem),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
-            vm_fd: vm_fd.clone(),
+            vm_fd,
             vm_state,
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| "Create EventFd for power-button failed.")?,
@@ -303,20 +301,18 @@ impl LightMachine {
         let vm = Arc::new(vm);
 
         // Add vcpu object to vm
-        let cpu_vm: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>> =
-            Arc::new(Box::new(vm.clone()));
         for vcpu_id in 0..nrcpus {
             #[cfg(target_arch = "aarch64")]
-            let arch_cpu = ArchCPU::new(&vm_fd, u32::from(vcpu_id));
+            let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
 
             #[cfg(target_arch = "x86_64")]
-            let arch_cpu = ArchCPU::new(&vm_fd, u32::from(vcpu_id), u32::from(nrcpus));
+            let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(nrcpus));
 
             let cpu = CPU::new(
                 vcpu_fds[vcpu_id as usize].clone(),
                 vcpu_id,
                 Arc::new(Mutex::new(arch_cpu)),
-                cpu_vm.clone(),
+                vm.clone(),
             );
 
             let mut vcpus = vm.cpus.lock().unwrap();
@@ -407,7 +403,7 @@ impl LightMachine {
         };
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].realize(&boot_config)?;
+            self.cpus.lock().unwrap()[cpu_index as usize].realize(&self.vm_fd, &boot_config)?;
         }
 
         let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
@@ -471,7 +467,7 @@ impl LightMachine {
         };
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].realize(&boot_config)?;
+            self.cpus.lock().unwrap()[cpu_index as usize].realize(&self.vm_fd, &boot_config)?;
         }
 
         self.register_power_event()?;
@@ -621,18 +617,6 @@ impl LightMachine {
 
         EventLoop::update_event(vec![notifier], None)?;
         Ok(())
-    }
-
-    /// Release resource after exiting the VM.
-    fn unrealize(&self) -> bool {
-        if let Err(ref e) = self.bus.unrealize() {
-            error!(
-                "Failed to release resource, {}",
-                error_chain::ChainedError::display_chain(e)
-            );
-            return false;
-        }
-        true
     }
 }
 
@@ -1126,9 +1110,6 @@ impl EventLoopManager for LightMachine {
     }
 
     fn loop_cleanup(&self) -> util::errors::Result<()> {
-        if !self.unrealize() {
-            return Err(ErrorKind::FailedToCleanEnv.into());
-        }
         if let Err(e) = std::io::stdin().lock().set_canon_mode() {
             error!(
                 "destroy virtual machine: reset stdin to canonical mode failed, {}",

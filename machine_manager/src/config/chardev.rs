@@ -64,8 +64,18 @@ impl ConfigCheck for ConsoleConfig {
 
 impl VmConfig {
     /// Add new virtio-console device to `VmConfig`.
-    fn add_console(&mut self, console: ConsoleConfig) {
+    fn add_console(&mut self, console: ConsoleConfig) -> Result<()> {
         if let Some(mut consoles) = self.consoles.clone() {
+            for c in &consoles {
+                if c.console_id == console.console_id {
+                    return Err(ErrorKind::IdRepeat(
+                        c.console_id.to_string(),
+                        "virtio-console".to_string(),
+                    )
+                    .into());
+                }
+            }
+
             consoles.push(console);
             self.consoles = Some(consoles);
         } else {
@@ -73,6 +83,8 @@ impl VmConfig {
             consoles.push(console);
             self.consoles = Some(consoles);
         }
+
+        Ok(())
     }
 
     /// Update '-console ...' network config to `VmConfig`.
@@ -94,9 +106,7 @@ impl VmConfig {
             return Err(ErrorKind::FieldIsMissing("path", "chardev").into());
         };
 
-        self.add_console(console);
-
-        Ok(())
+        self.add_console(console)
     }
 
     /// Get virtio-console's config from `device` and `chardev` config.
@@ -135,15 +145,14 @@ impl VmConfig {
 
         cmd_parser.parse(serial_config)?;
 
+        let mut stdio = false;
         if let Some(serial_type) = cmd_parser.get_value::<String>("")? {
-            if serial_type == "stdio" {
-                self.serial = Some(SerialConfig { stdio: true });
-            } else {
-                return Err(ErrorKind::InvalidParam(serial_type).into());
+            match serial_type.as_str() {
+                "stdio" => stdio = true,
+                _ => return Err(ErrorKind::InvalidParam(serial_type).into()),
             }
-        } else {
-            self.serial = Some(SerialConfig { stdio: false });
-        }
+        };
+        self.serial = Some(SerialConfig { stdio });
 
         Ok(())
     }
@@ -175,7 +184,14 @@ impl ConfigCheck for VsockConfig {
         }
 
         if self.guest_cid < MIN_GUEST_CID || self.guest_cid >= MAX_GUEST_CID {
-            return Err(ErrorKind::GuestCidError.into());
+            return Err(ErrorKind::IllegalValue(
+                "Vsock guest-cid".to_string(),
+                MIN_GUEST_CID,
+                true,
+                MAX_GUEST_CID,
+                false,
+            )
+            .into());
         }
 
         Ok(())
@@ -204,11 +220,13 @@ impl VmConfig {
                 } else {
                     return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
                 };
-                let guest_cid = if let Some(guest_cid) = cmd_parser.get_value::<u64>("guest-cid")? {
-                    guest_cid
+
+                let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
+                    cid
                 } else {
                     return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
                 };
+
                 let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
                 self.vsock = Some(VsockConfig {
                     vsock_id,

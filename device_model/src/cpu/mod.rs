@@ -32,11 +32,11 @@ mod aarch64;
 mod x86_64;
 
 use std::cell::RefCell;
-use std::sync::{Arc, Barrier, Condvar, Mutex};
+use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-use kvm_ioctls::{VcpuExit, VcpuFd};
+use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
@@ -89,6 +89,9 @@ pub mod errors {
             }
             UnhandledKvmExit(cpu_id: u8) {
                 display("CPU {}/KVM received an unhandled kvm exit event!", cpu_id)
+            }
+            NoMachineInterface {
+                display("No Machine Interface saved in CPU")
             }
         }
     }
@@ -149,7 +152,7 @@ thread_local! {
 /// Trait to handle `CPU` lifetime.
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
-    fn realize(&self, boot: &CPUBootConfig) -> Result<()>;
+    fn realize(&self, vm_fd: &Arc<VmFd>, boot: &CPUBootConfig) -> Result<()>;
 
     ///
     /// # Arguments
@@ -197,7 +200,7 @@ pub struct CPU {
     /// The thread tid of this VCPU.
     tid: Arc<Mutex<Option<u64>>>,
     /// The VM combined by this VCPU.
-    vm: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>>,
+    vm: Weak<dyn MachineInterface + Send + Sync>,
 }
 
 impl CPU {
@@ -213,7 +216,7 @@ impl CPU {
         vcpu_fd: Arc<VcpuFd>,
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        vm: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>>,
+        vm: Arc<dyn MachineInterface + Send + Sync>,
     ) -> Self {
         CPU {
             id,
@@ -223,7 +226,7 @@ impl CPU {
             work_queue: Arc::new((Mutex::new(0), Condvar::new())),
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
-            vm,
+            vm: Arc::downgrade(&vm),
         }
     }
 
@@ -263,7 +266,7 @@ impl CPU {
 }
 
 impl CPUInterface for CPU {
-    fn realize(&self, boot: &CPUBootConfig) -> Result<()> {
+    fn realize(&self, vm_fd: &Arc<VmFd>, boot: &CPUBootConfig) -> Result<()> {
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
             return Err(
@@ -274,7 +277,7 @@ impl CPUInterface for CPU {
         self.arch_cpu
             .lock()
             .unwrap()
-            .realize(&self.fd, boot)
+            .realize(vm_fd, &self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
 
         Ok(())
@@ -373,8 +376,8 @@ impl CPUInterface for CPU {
             },
             None => {}
         }
-        let mut cpu_state = cpu_state.lock().unwrap();
         cvar.notify_all();
+        let mut cpu_state = cpu_state.lock().unwrap();
 
         cpu_state = cvar
             .wait_timeout(cpu_state, Duration::from_millis(16))
@@ -392,7 +395,12 @@ impl CPUInterface for CPU {
     fn guest_shutdown(&self) -> Result<()> {
         let (cpu_state, _) = &*self.state;
         *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
-        self.vm.destroy();
+
+        if let Some(vm) = self.vm.upgrade() {
+            vm.destroy();
+        } else {
+            return Err(ErrorKind::NoMachineInterface.into());
+        }
 
         if QmpChannel::is_connected() {
             let shutdown_msg = schema::SHUTDOWN {
@@ -406,21 +414,27 @@ impl CPUInterface for CPU {
     }
 
     fn kvm_vcpu_exec(&self) -> Result<bool> {
+        let vm = if let Some(vm) = self.vm.upgrade() {
+            vm
+        } else {
+            return Err(ErrorKind::NoMachineInterface.into());
+        };
+
         match self.fd.run() {
             Ok(run) => match run {
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoIn(addr, data) => {
-                    self.vm.pio_in(u64::from(addr), data);
+                    vm.pio_in(u64::from(addr), data);
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoOut(addr, data) => {
-                    self.vm.pio_out(u64::from(addr), data);
+                    vm.pio_out(u64::from(addr), data);
                 }
                 VcpuExit::MmioRead(addr, data) => {
-                    self.vm.mmio_read(addr, data);
+                    vm.mmio_read(addr, data);
                 }
                 VcpuExit::MmioWrite(addr, data) => {
-                    self.vm.mmio_write(addr, data);
+                    vm.mmio_write(addr, data);
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Hlt => {
@@ -607,12 +621,18 @@ impl CPUThreadWorker {
 
         info!("vcpu{} start running", self.thread_cpu.id);
         while let Ok(true) = self.ready_for_running() {
+            #[cfg(not(test))]
             if !self
                 .thread_cpu
                 .kvm_vcpu_exec()
                 .chain_err(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
             {
                 break;
+            }
+
+            #[cfg(test)]
+            {
+                thread::sleep(Duration::from_millis(10));
             }
         }
 
@@ -782,14 +802,12 @@ mod tests {
         };
 
         let vm = Arc::new(TestVm::new());
-        let vm_arc: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>> =
-            Arc::new(Box::new(vm.clone()));
 
         let cpu = CPU::new(
             Arc::new(vm_fd.create_vcpu(0).unwrap()),
             0,
             Arc::new(Mutex::new(ArchCPU::default())),
-            vm_arc.clone(),
+            vm.clone(),
         );
 
         Ok((vm_fd, vm, cpu))
@@ -857,23 +875,35 @@ mod tests {
         // Created -> Paused -> Running -> Paused -> Running -> Destroy
         let cpu_arc = Arc::new(cpu);
         CPU::start(cpu_arc.clone(), cpu_thread_barrier, true).unwrap();
+
+        // Wait for CPU thread init signal hook
+        std::thread::sleep(Duration::from_millis(50));
         cpus_thread_barrier.wait();
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
         drop(cpu_state);
 
         assert!(cpu_arc.resume().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
         drop(cpu_state);
 
         assert!(cpu_arc.pause().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
         drop(cpu_state);
 
         assert!(cpu_arc.resume().is_ok());
-        let _ = cpu_arc.destroy();
+        assert!(cpu_arc.destroy().is_ok());
+
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Nothing);
         drop(cpu_state);
@@ -952,7 +982,6 @@ mod tests {
 
         let core_reg_base: u64 = 0x6030_0000_0010_0000;
         let mmio_addr: u64 = guest_addr + mem_size as u64;
-        println!("mmio addr is {}", mmio_addr);
 
         cpu.fd
             .set_one_reg(core_reg_base + 2 * 32, guest_addr)

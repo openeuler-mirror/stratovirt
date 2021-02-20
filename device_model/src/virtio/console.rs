@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp;
 use std::io::{Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{cmp, fs};
 
 use address_space::AddressSpace;
 use machine_manager::{config::ConsoleConfig, event_loop::EventLoop};
@@ -329,6 +329,7 @@ impl VirtioDevice for Console {
     fn realize(&mut self) -> Result<()> {
         self.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
 
+        EventLoop::add_files(self.path.clone());
         Ok(())
     }
 
@@ -413,13 +414,6 @@ impl VirtioDevice for Console {
             None,
         )?;
 
-        Ok(())
-    }
-
-    fn unrealize(&self) -> Result<()> {
-        fs::remove_file(self.path.clone())
-            .chain_err(|| format!("Failed to delete console socket file: {}", &self.path))?;
-        info!("Delete console socket file: {} successfully", &self.path);
         Ok(())
     }
 }

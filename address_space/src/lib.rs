@@ -160,6 +160,6 @@ pub struct RegionOps {
 
 /// Gets the page size of system.
 #[inline]
-pub fn page_size() -> u64 {
+pub fn host_page_size() -> u64 {
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
 }

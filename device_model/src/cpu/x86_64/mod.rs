@@ -87,7 +87,7 @@ pub struct X86CPU {
 }
 
 impl X86CPU {
-    pub fn new(_vm_fd: &Arc<VmFd>, vcpuid: u32, nr_vcpus: u32) -> Self {
+    pub fn new(vcpuid: u32, nr_vcpus: u32) -> Self {
         X86CPU {
             id: vcpuid,
             nr_vcpus,
@@ -95,7 +95,12 @@ impl X86CPU {
         }
     }
 
-    pub fn realize(&mut self, vcpu_fd: &Arc<VcpuFd>, boot_config: &X86CPUBootConfig) -> Result<()> {
+    pub fn realize(
+        &mut self,
+        _vm_fd: &Arc<VmFd>,
+        vcpu_fd: &Arc<VcpuFd>,
+        boot_config: &X86CPUBootConfig,
+    ) -> Result<()> {
         self.boot_ip = boot_config.boot_ip;
         self.boot_sp = boot_config.boot_sp;
         self.zero_page = boot_config.zero_page;
@@ -118,7 +123,7 @@ impl X86CPU {
     fn setup_cpuid(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         let sys_fd = match Kvm::new() {
             Ok(fd) => fd,
-            _ => panic!("setup_cpuid:Open /dev/kvm failed"),
+            _ => bail!("setup_cpuid:Open /dev/kvm failed"),
         };
         let mut cpuid = sys_fd
             .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
@@ -455,9 +460,9 @@ mod test {
         // you need to create a irq_chip for VM before creating the VCPU.
         vm.create_irq_chip().unwrap();
         let vcpu = Arc::new(vm.create_vcpu(0).unwrap());
-        let mut x86_cpu = X86CPU::new(&vm, 0, 1);
+        let mut x86_cpu = X86CPU::new(0, 1);
         //test realize function
-        assert!(x86_cpu.realize(&vcpu, &cpu_config).is_ok());
+        assert!(x86_cpu.realize(&vm, &vcpu, &cpu_config).is_ok());
 
         //test setup special registers
         assert!(x86_cpu.setup_sregs(&vcpu).is_ok());

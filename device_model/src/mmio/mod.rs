@@ -206,12 +206,6 @@ impl MmioDevice {
     pub fn update_config(&self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         self.device.lock().unwrap().update_config(dev_config)
     }
-
-    /// Unrealize resource
-    pub fn unrealize(&self) -> Result<()> {
-        self.device.lock().unwrap().unrealize()?;
-        Ok(())
-    }
 }
 
 /// Trait for MMIO device.
@@ -230,10 +224,5 @@ pub trait MmioDeviceOps: Send + DeviceOps {
     /// Get IoEventFds of MMIO device.
     fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         Vec::new()
-    }
-
-    /// Unrealize mmio devices.
-    fn unrealize(&mut self) -> Result<()> {
-        Ok(())
     }
 }

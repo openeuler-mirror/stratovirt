@@ -26,6 +26,8 @@ pub struct FileBackend {
     pub file: Arc<File>,
     /// Represents HostMmapping's offset in this file.
     pub offset: u64,
+    /// Page size of this file.
+    pub page_size: u64,
 }
 
 impl FileBackend {
@@ -47,7 +49,7 @@ impl FileBackend {
         let path = std::path::Path::new(&file_path);
         let file = if path.is_dir() {
             let fs_path = format!("{}{}", file_path, "/stratovirt_backmem_XXXXXX");
-            let fs_cstr = std::ffi::CString::new(fs_path).unwrap().into_raw();
+            let fs_cstr = std::ffi::CString::new(fs_path.clone()).unwrap().into_raw();
 
             let raw_fd = unsafe { libc::mkstemp(fs_cstr) };
             if raw_fd < 0 {
@@ -55,17 +57,46 @@ impl FileBackend {
                     .chain_err(|| format!("Failed to create file in directory: {} ", file_path));
             }
 
-            unsafe { libc::unlink(fs_cstr) };
+            if unsafe { libc::unlink(fs_cstr) } != 0 {
+                error!(
+                    "Failed to unlink file \"{}\", error: {}",
+                    fs_path,
+                    std::io::Error::last_os_error()
+                );
+            }
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
+            let is_created = !path.exists();
             // Open the file, if not exist, create it.
-            std::fs::OpenOptions::new()
+            let file_ret = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .open(path)
-                .chain_err(|| format!("Failed to Open file: {}", file_path))?
+                .chain_err(|| format!("Failed to Open file: {}", file_path))?;
+
+            if is_created
+                && unsafe { libc::unlink(std::ffi::CString::new(file_path).unwrap().into_raw()) }
+                    != 0
+            {
+                error!(
+                    "Failed to unlink file \"{}\", error: {}",
+                    file_path,
+                    std::io::Error::last_os_error()
+                );
+            }
+
+            file_ret
         };
+
+        // Safe because struct `statfs` only contains plain-data-type field,
+        // and set to all-zero will not cause any undefined behavior.
+        let mut fstat: libc::statfs = unsafe { std::mem::zeroed() };
+        unsafe { libc::fstatfs(file.as_raw_fd(), &mut fstat) };
+        info!(
+            "Using memory backing file, the page size is {}",
+            fstat.f_bsize
+        );
 
         let old_file_len = file.metadata().unwrap().len();
         if old_file_len == 0 {
@@ -78,6 +109,7 @@ impl FileBackend {
         Ok(FileBackend {
             file: Arc::new(file),
             offset: 0_u64,
+            page_size: fstat.f_bsize as u64,
         })
     }
 }
@@ -118,6 +150,7 @@ pub fn create_host_mmaps(
         f_back = Some(FileBackend {
             file: Arc::new(anon_file),
             offset: 0,
+            page_size: crate::host_page_size(),
         });
     }
 
@@ -305,8 +338,6 @@ mod test {
             f_back.as_ref().unwrap().file.metadata().unwrap().len(),
             100u64
         );
-
-        std::fs::remove_file(file_path).unwrap();
     }
 
     #[test]

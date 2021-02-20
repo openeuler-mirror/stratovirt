@@ -236,6 +236,13 @@ impl Region {
         self.mem_mapping.as_ref().and_then(|r| r.file_backend())
     }
 
+    pub fn get_region_page_size(&self) -> Option<u64> {
+        self.mem_mapping
+            .as_ref()
+            .and_then(|r| r.file_backend())
+            .map(|fb| fb.page_size)
+    }
+
     /// Return all sub-regions of this Region, the returned vector is not empty,
     /// iff this region is a container.
     pub(crate) fn subregions(&self) -> Vec<Region> {

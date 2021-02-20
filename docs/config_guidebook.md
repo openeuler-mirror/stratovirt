@@ -372,17 +372,15 @@ Serial is a legacy device for VM, it is a communication interface which bridges 
 
 Commonly, we use serial as ttyS0 to output console message in StratoVirt.
 
-In StratoVirt, we can set *one* serial and decide whether to bind it with host's stdio or not.
+In StratoVirt, we can set *one* serial and bind it with host's stdio.
 
 There is only one argument for serial device:
 
-* stdio: whether bind serial with stdio or not(optional)
+* stdio: bind serial with stdio
 
 ```shell
 # cmdline
 -serial stdio
-# or
--serial
 
 # json
 {
