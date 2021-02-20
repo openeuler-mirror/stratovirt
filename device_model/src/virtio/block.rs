@@ -935,16 +935,17 @@ impl VirtioDevice for Block {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
-    pub use super::*;
+    use super::super::*;
+    use super::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use std::fs;
-    use std::process::Command;
+    use machine_manager::config::IothreadConfig;
+    use std::sync::Once;
     use std::{thread, time::Duration};
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
+    static INIT: Once = Once::new();
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36);
@@ -963,10 +964,31 @@ mod tests {
     }
 
     // Activate block device and add to unnamed thread to execute epoll.
-    fn run_block_device(mem_space: Arc<AddressSpace>) -> (QueueConfig, EventFd, EventFd) {
-        EventLoop::object_init(&None).unwrap();
+    fn run_block_device(
+        mem_space: Arc<AddressSpace>,
+        thread_name: &str,
+    ) -> (QueueConfig, EventFd, EventFd) {
+        // Create iothreads for each test case. iothreads will init only once.
+        INIT.call_once(|| {
+            let iothreads: Vec<IothreadConfig> = vec![
+                IothreadConfig {
+                    id: "test_valid_request".to_string(),
+                },
+                IothreadConfig {
+                    id: "test_invalid_request_type".to_string(),
+                },
+                IothreadConfig {
+                    id: "test_missing_queue_num".to_string(),
+                },
+                IothreadConfig {
+                    id: "test_address_out_of_bounds".to_string(),
+                },
+            ];
+            EventLoop::object_init(&Some(iothreads)).unwrap();
+        });
 
         let mut block = Block::new();
+        block.blk_cfg.iothread = Some(thread_name.to_string());
         block.realize().unwrap();
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
@@ -992,10 +1014,6 @@ mod tests {
                 queue_evts,
             )
             .unwrap();
-
-        thread::spawn(move || loop {
-            EventLoop::loop_run().unwrap();
-        });
 
         return (queue_config, queue_evt, interrupt_evt);
     }
@@ -1024,8 +1042,6 @@ mod tests {
     }
 
     // Use different input parameters to verify block `new()` and `realize()` functionality.
-    // The Parameters include read_only, direct and disk image path.
-    // Note: if ramdisk does not exist, it will create one first.
     #[test]
     fn test_block_init() {
         // New block device
@@ -1045,26 +1061,12 @@ mod tests {
         // Realize will failed, because path_on_host is not a disk image path.
         assert!(block.realize().is_err());
 
-        // Create a real disk image `/dev/ram0`.
-        let cmd_str = "/usr/bin/mknod -m 660 /dev/ram0 b 1 1".to_string();
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(cmd_str)
-            .output()
-            .expect("create ramdisk failed");
-
         block.blk_cfg.direct = true;
-        block.blk_cfg.path_on_host = "/dev/ram0".to_string();
+        block.blk_cfg.path_on_host = "".to_string();
         assert_eq!(block.realize().is_ok(), true);
-        assert!(block.disk_image.is_some());
-        assert_ne!(block.disk_sectors, 0);
-        assert_ne!(block.config_space.len(), 0);
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
         assert_eq!(block.queue_num(), QUEUE_NUM_BLK);
         assert_eq!(block.queue_size(), QUEUE_SIZE_BLK);
-
-        // Delete created ram disk.
-        fs::remove_file("/dev/ram0").unwrap();
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and
@@ -1167,7 +1169,8 @@ mod tests {
     #[test]
     fn test_valid_request() {
         let mem_space = address_space_init();
-        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_valid_request");
 
         // Setting the first desc. Note: a request requires at least two desc tables.
         let desc = SplitVringDesc {
@@ -1222,55 +1225,12 @@ mod tests {
         assert_eq!(len, 1);
     }
 
-    // Test update config function.
-    #[test]
-    fn test_update_config() {
-        EventLoop::object_init(&None).unwrap();
-
-        let mut block = Block::new();
-        block.realize().unwrap();
-
-        let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
-        queue_config.desc_table = GuestAddress(0);
-        queue_config.avail_ring = GuestAddress(4096);
-        queue_config.used_ring = GuestAddress(8192);
-        queue_config.ready = true;
-        queue_config.size = QUEUE_SIZE_BLK;
-
-        let mem_space = address_space_init();
-        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let interrupt_status = Arc::new(AtomicU32::new(0));
-        let queue_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let queue_evts: Vec<EventFd> = vec![queue_evt.try_clone().unwrap()];
-        let queues: Vec<Arc<Mutex<Queue>>> =
-            vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
-
-        block
-            .activate(
-                mem_space.clone(),
-                interrupt_evt.try_clone().unwrap(),
-                interrupt_status,
-                queues,
-                queue_evts,
-            )
-            .unwrap();
-
-        thread::spawn(move || loop {
-            EventLoop::loop_run().unwrap();
-        });
-
-        block
-            .update_config(Some(Arc::new(block.blk_cfg.clone())))
-            .unwrap();
-        thread::sleep(Duration::from_millis(200));
-        assert_eq!(interrupt_evt.read().unwrap(), 1);
-    }
-
     // A complete request must send tow desc table. It will not work with only one.
     #[test]
     fn test_missing_queue_num() {
         let mem_space = address_space_init();
-        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_missing_queue_num");
 
         // Just Set one desc table, it will not create requests or trigger an interrupt.
         let desc = SplitVringDesc {
@@ -1297,7 +1257,8 @@ mod tests {
     #[test]
     fn test_invalid_request_type() {
         let mem_space = address_space_init();
-        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_invalid_request_type");
 
         // Test RequestOutHeader invalid type
         let desc = SplitVringDesc {
@@ -1348,7 +1309,8 @@ mod tests {
     #[test]
     fn test_address_out_of_bounds() {
         let mem_space = address_space_init();
-        let (queue_config, queue_evt, interrupt_evt) = run_block_device(mem_space.clone());
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_address_out_of_bounds");
 
         // Test GuestAddress plus len is out of bounds (addr + len > SYSTEM_SPACE_SIZE).
         let desc = SplitVringDesc {
