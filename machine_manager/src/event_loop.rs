@@ -54,20 +54,20 @@ impl EventLoop {
                     main_loop: EventLoopContext::new(),
                     io_threads,
                 });
-            }
 
-            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
-                for (id, ctx) in &mut event_loop.io_threads {
-                    thread::Builder::new().name(id.to_string()).spawn(move || {
-                        while let Ok(ret) = ctx.run() {
-                            if !ret {
-                                break;
+                if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
+                    for (id, ctx) in &mut event_loop.io_threads {
+                        thread::Builder::new().name(id.to_string()).spawn(move || {
+                            while let Ok(ret) = ctx.run() {
+                                if !ret {
+                                    break;
+                                }
                             }
-                        }
-                    })?;
+                        })?;
+                    }
+                } else {
+                    bail!("Global Event Loop have not been initialized.")
                 }
-            } else {
-                bail!("Global Event Loop have not been initialized.")
             }
         }
 
@@ -79,16 +79,14 @@ impl EventLoop {
     /// # Arguments
     ///
     /// * `name` - if None, return main loop, OR return io-thread-loop which is related to `name`.
-    pub fn get_ctx(name: Option<&String>) -> &mut EventLoopContext {
+    pub fn get_ctx(name: Option<&String>) -> Option<&mut EventLoopContext> {
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 if let Some(name) = name {
-                    if let Some(ctx) = event_loop.io_threads.get_mut(name) {
-                        return ctx;
-                    }
+                    return event_loop.io_threads.get_mut(name);
                 }
 
-                return &mut event_loop.main_loop;
+                return Some(&mut event_loop.main_loop);
             }
         }
 
@@ -102,7 +100,9 @@ impl EventLoop {
     /// * `manager` - The main part to manager the event loop specified by name.
     /// * `name` - specify which event loop to manage
     pub fn set_manager(manager: Arc<dyn EventLoopManager>, name: Option<&String>) {
-        Self::get_ctx(name).set_manager(manager)
+        if let Some(ctx) = Self::get_ctx(name) {
+            ctx.set_manager(manager)
+        }
     }
 
     /// Update event notifiers to  event loop
@@ -115,7 +115,11 @@ impl EventLoop {
         notifiers: Vec<EventNotifier>,
         name: Option<&String>,
     ) -> util::errors::Result<()> {
-        Self::get_ctx(name).update_events(notifiers)
+        if let Some(ctx) = Self::get_ctx(name) {
+            ctx.update_events(notifiers)
+        } else {
+            bail!("Loop Context not found in EventLoop.")
+        }
     }
 
     /// Start to run main loop

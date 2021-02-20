@@ -15,6 +15,7 @@ extern crate vmm_sys_util;
 use std::collections::BTreeMap;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use libc::{c_void, read};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
@@ -101,6 +102,29 @@ pub trait EventLoopManager: Send + Sync {
     fn loop_cleanup(&self) -> Result<()>;
 }
 
+/// Timer structure is used for delay function execution.
+struct Timer {
+    /// Given the function that will be called.
+    func: Box<dyn Fn()>,
+    /// Given the real time when the `func` will be called.
+    expire_time: Instant,
+}
+
+impl Timer {
+    /// Construct function
+    ///
+    /// # Arguments
+    ///
+    /// * `func` - the function will be called later.
+    /// * `nsec` - delay time in nanosecond.
+    pub fn new(func: Box<dyn Fn()>, nsec: u64) -> Self {
+        Timer {
+            func,
+            expire_time: Instant::now() + Duration::new(0, nsec as u32),
+        }
+    }
+}
+
 /// Epoll Loop Context
 #[allow(clippy::vec_box)]
 pub struct EventLoopContext {
@@ -114,6 +138,8 @@ pub struct EventLoopContext {
     gc: Arc<RwLock<Vec<Box<EventNotifier>>>>,
     /// Temp events vector, store wait returned events.
     ready_events: Vec<EpollEvent>,
+    /// Timer list
+    timers: Vec<Timer>,
 }
 
 unsafe impl Sync for EventLoopContext {}
@@ -128,6 +154,7 @@ impl EventLoopContext {
             events: Arc::new(RwLock::new(BTreeMap::new())),
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
+            timers: Vec::new(),
         }
     }
 
@@ -259,10 +286,11 @@ impl EventLoopContext {
             }
         }
 
-        let ev_count = match self
-            .epoll
-            .wait(READY_EVENT_MAX, -1, &mut self.ready_events[..])
-        {
+        let ev_count = match self.epoll.wait(
+            READY_EVENT_MAX,
+            self.timers_min_timeout(),
+            &mut self.ready_events[..],
+        ) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(ErrorKind::EpollWait(e).into()),
@@ -289,9 +317,67 @@ impl EventLoopContext {
             }
         }
 
+        self.run_timers();
+
         self.clear_gc();
 
         Ok(true)
+    }
+
+    /// Call the function given by `func` after `nsec` nanoseconds.
+    ///
+    /// # Arguments
+    ///
+    /// * `func` - the function will be called later.
+    /// * `nsec` - delay time in nanoseconds.
+    pub fn delay_call(&mut self, func: Box<dyn Fn()>, nsec: u64) {
+        let timer = Timer::new(func, nsec);
+
+        // insert in order of expire_time
+        let mut index = self.timers.len();
+        for (i, t) in self.timers.iter().enumerate() {
+            if timer.expire_time < t.expire_time {
+                index = i;
+                break;
+            }
+        }
+        self.timers.insert(index, timer);
+    }
+
+    /// Get the expire_time of the soonest Timer, and then translate it to timeout.
+    fn timers_min_timeout(&self) -> i32 {
+        if self.timers.is_empty() {
+            return -1;
+        }
+
+        let now = Instant::now();
+        if self.timers[0].expire_time <= now {
+            return 0;
+        }
+
+        let timeout = (self.timers[0].expire_time - now).as_millis();
+        if timeout >= i32::MAX as u128 {
+            i32::MAX - 1
+        } else {
+            timeout as i32
+        }
+    }
+
+    /// Call function of the timers which have already expired.
+    fn run_timers(&mut self) {
+        let now = Instant::now();
+        let mut expired_nr = 0;
+
+        for timer in &self.timers {
+            if timer.expire_time > now {
+                break;
+            }
+
+            expired_nr += 1;
+            (timer.func)();
+        }
+
+        self.timers.drain(0..expired_nr);
     }
 }
 
