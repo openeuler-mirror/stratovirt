@@ -48,6 +48,7 @@ impl QmpErrorClass {
 /// A enum to store all command struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "execute")]
+#[serde(deny_unknown_fields)]
 pub enum QmpCommand {
     #[serde(rename = "qmp_capabilities")]
     qmp_capabilities {
@@ -157,6 +158,7 @@ pub enum QmpCommand {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct qmp_capabilities {}
 
 impl Command for qmp_capabilities {
@@ -182,6 +184,7 @@ impl Command for qmp_capabilities {
 /// <- { "return": {}}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct quit {}
 
 impl Command for quit {
@@ -204,6 +207,7 @@ impl Command for quit {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct stop {}
 
 impl Command for stop {
@@ -226,6 +230,7 @@ impl Command for stop {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct cont {}
 
 impl Command for cont {
@@ -255,6 +260,7 @@ impl Command for cont {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct device_add {
     #[serde(rename = "id")]
     pub id: String,
@@ -276,12 +282,14 @@ impl Command for device_add {
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileOptions {
     pub driver: String,
     pub filename: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CacheOptions {
     #[serde(rename = "no-flush")]
     pub no_flush: Option<bool>,
@@ -309,6 +317,7 @@ pub struct CacheOptions {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct blockdev_add {
     #[serde(rename = "node-name")]
     pub node_name: String,
@@ -345,6 +354,7 @@ impl Command for blockdev_add {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct netdev_add {
     pub id: String,
     #[serde(rename = "ifname")]
@@ -390,6 +400,7 @@ impl Command for netdev_add {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct device_del {
     pub id: String,
 }
@@ -404,6 +415,7 @@ impl Command for device_del {
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct blockdev_del {
     #[serde(rename = "node-name")]
     pub node_name: String,
@@ -437,6 +449,7 @@ impl Command for blockdev_del {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct netdev_del {
     pub id: String,
 }
@@ -463,17 +476,18 @@ impl Command for netdev_del {
 /// -> { "execute": "query-hotpluggable-cpus" }
 /// <- {"return": [
 ///      {
-///         "type": "qemu64-x86_64-cpu", "vcpus-count": 1,
+///         "type": host-x-cpu", "vcpus-count": 1,
 ///         "props": {"core-id": 0, "socket-id": 1, "thread-id": 0}
 ///      },
 ///      {
 ///         "qom-path": "/machine/unattached/device[0]",
-///         "type": "qemu64-x86_64-cpu", "vcpus-count": 1,
+///         "type": "host-x-cpu", "vcpus-count": 1,
 ///         "props": {"core-id": 0, "socket-id": 0, "thread-id": 0}
 ///      }
 ///    ]}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct query_hotpluggable_cpus {}
 
 impl Command for query_hotpluggable_cpus {
@@ -546,6 +560,7 @@ pub struct CpuInstanceProperties {
 ///    }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct query_cpus {}
 
 impl Command for query_cpus {
@@ -621,6 +636,7 @@ pub struct CpuInfoArm {}
 ///                  "status": "running" } }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct query_status {}
 
 impl Command for query_status {
@@ -701,6 +717,7 @@ impl Default for RunState {
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct getfd {
     #[serde(rename = "fdname")]
     pub fd_name: String,
@@ -726,6 +743,7 @@ impl Command for getfd {
 /// If the command-line option "-no-shutdown" has been specified, StratoVirt
 /// will not exit, and a STOP event will eventually follow the SHUTDOWN event
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SHUTDOWN {
     /// If true, the shutdown was triggered by a guest request (such as
     /// a guest-initiated ACPI shutdown request or other hardware-specific
@@ -743,6 +761,7 @@ impl Event for SHUTDOWN {
 ///
 /// Emitted when the virtual machine is reset
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RESET {
     /// If true, the reset was triggered by a guest request (such as
     /// a guest-initiated ACPI reboot request or other hardware-specific action
@@ -759,6 +778,7 @@ impl Event for RESET {
 ///
 /// Emitted when the virtual machine is stopped
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct STOP {}
 
 impl Event for STOP {
@@ -769,6 +789,7 @@ impl Event for STOP {
 ///
 /// Emitted when the virtual machine resumes execution
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RESUME {}
 
 impl Event for RESUME {
@@ -790,6 +811,7 @@ impl Event for RESUME {
 ///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DEVICE_DELETED {
     /// Device name.
     #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
@@ -891,5 +913,403 @@ impl Command for balloon {
     type Res = Empty;
     fn back(self) -> Empty {
         Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate serde;
+    extern crate serde_json;
+    use super::*;
+
+    #[test]
+    fn test_qmp_unexpected_arguments() {
+        // qmp: quit.
+        let json_msg = r#"
+        { 
+            "execute": "quit"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for quit.
+        let json_msg = r#"
+        { 
+            "execute": "quit" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct quit"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: stop.
+        let json_msg = r#"
+        { 
+            "execute": "stop"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for stop.
+        let json_msg = r#"
+        { 
+            "execute": "stop" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct stop"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: cont.
+        let json_msg = r#"
+        { 
+            "execute": "cont"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for count.
+        let json_msg = r#"
+        { 
+            "execute": "cont" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct cont"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: query-hotpluggable-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-hotpluggable-cpus"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-hotpluggable-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-hotpluggable-cpus" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_hotpluggable_cpus"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: query-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-cpus"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-cpus.
+        let json_msg = r#"
+        { 
+            "execute": "query-cpus" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_cpus"#;
+        assert!(err_msg == ret_msg);
+
+        // qmp: query-ststus.
+        let json_msg = r#"
+        { 
+            "execute": "query-status"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-status.
+        let json_msg = r#"
+        { 
+            "execute": "query-status" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_status"#;
+        assert!(err_msg == ret_msg);
+    }
+
+    #[test]
+    fn test_wrong_qmp_arguments() {
+        // right arguments for device_add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add" , 
+            "arguments": {
+                "id":"net-0", 
+                "driver":"virtio-net-mmio", 
+                "addr":"0x0"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // unknow arguments for device_add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add" , 
+            "arguments": {
+                "id":"net-0", 
+                "driver":"virtio-net-mmio", 
+                "addr":"0x0",
+                "UnknowArg": "should go to error"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"unknown field `UnknowArg`"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // wrong spelling arguments for device_add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add" , 
+            "arguments": {
+                "id":"net-0", 
+                "drive":"virtio-net-mmio", 
+                "addr":"0x0"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"unknown field `drive`"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // right arguments for device_del.
+        let json_msg = r#"
+        { 
+            "execute": "device_del" , 
+            "arguments": {
+                "id": "net-1"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg.contains(ret_msg));
+
+        // wrong arguments for device_del.
+        let json_msg = r#"
+        { 
+            "execute": "device_del" , 
+            "arguments": {
+                "value": "h8i"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let unknow_msg = r#"unknown field `value`"#;
+        let expect_msg = r#"expected `id`"#;
+        assert!(err_msg.contains(unknow_msg));
+        assert!(err_msg.contains(expect_msg));
+
+        // missing arguments for getfd.
+        let json_msg = r#"
+        { 
+            "execute": "getfd"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"missing field `arguments`"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for getfd.
+        let json_msg = r#"
+        { 
+            "execute": "getfd" , 
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct getfd"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for getfd.
+        let json_msg = r#"
+        { 
+            "execute": "getfd",
+            "arguments": { 
+                "fdname": "fd1" 
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for blockdev-add.
+        let json_msg = r#"
+        { 
+            "execute": "blockdev-add",
+            "arguments": {
+                "node-name": "drive-0", 
+                "file": {
+                    "driver": "file", 
+                    "filename": "/path/to/block"
+                }, 
+                "cache": {
+                    "direct": true
+                }, 
+                "read-only": false
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for device-add.
+        let json_msg = r#"
+        { 
+            "execute": "device_add",
+            "arguments": {
+                "id": "drive-0", 
+                "driver": "virtio-blk-mmio", 
+                "addr": "0x1"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // right arguments for netdev-add.
+        let json_msg = r#"
+        { 
+            "execute": "netdev_add",
+            "arguments": {
+                "id": "net-0", 
+                "ifname":"tap0"
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+    }
+
+    #[test]
+    fn test_unsupported_commands() {
+        // unsupported qmp command.
+        let json_msg = r#"
+        { 
+            "execute": "hello-world" , 
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"unknown variant `hello-world`"#;
+        assert!(err_msg.contains(part_msg));
+
+        // unsupported qmp command, and unknow field.
+        let json_msg = r#"
+        { 
+            "execute": "hello-world" , 
+            "arguments": {
+                "msg": "hello",
+            }
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"unknown variant `hello-world`"#;
+        assert!(err_msg.contains(part_msg));
     }
 }

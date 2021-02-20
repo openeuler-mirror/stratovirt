@@ -248,4 +248,9 @@ pub trait VirtioDevice: Send {
     fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         bail!("Unsupported to update configuration")
     }
+
+    /// Unrealize virtio devices.
+    fn unrealize(&self) -> Result<()> {
+        Ok(())
+    }
 }

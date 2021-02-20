@@ -22,7 +22,7 @@ use vmm_sys_util::eventfd::EventFd;
 use super::super::virtio::{
     virtio_has_feature, Queue, QueueConfig, VirtioDevice, NOTIFY_REG_OFFSET,
     QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BALLOON,
-    VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET,
+    VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_CONSOLE, VIRTIO_TYPE_NET,
 };
 
 use super::super::DeviceOps;
@@ -526,6 +526,7 @@ impl MmioDeviceOps for VirtioMmioDevice {
             VIRTIO_TYPE_NET => DeviceType::NET,
             VIRTIO_TYPE_BLOCK => DeviceType::BLK,
             VIRTIO_TYPE_BALLOON => DeviceType::BALLOON,
+            VIRTIO_TYPE_CONSOLE => DeviceType::CONSOLE,
             _ => DeviceType::OTHER,
         }
     }
@@ -566,6 +567,11 @@ impl MmioDeviceOps for VirtioMmioDevice {
         }
 
         ret
+    }
+
+    fn unrealize(&mut self) -> Result<()> {
+        self.device.lock().unwrap().unrealize()?;
+        Ok(())
     }
 }
 

@@ -139,10 +139,10 @@ pub trait DeviceInterface {
         driver: String,
         addr: Option<String>,
         lun: Option<usize>,
-    ) -> bool;
+    ) -> Response;
 
     /// Delete a device with device id.
-    fn device_del(&self, device_id: String) -> bool;
+    fn device_del(&self, device_id: String) -> Response;
 
     /// Creates a new block device.
     fn blockdev_add(
@@ -151,10 +151,10 @@ pub trait DeviceInterface {
         file: FileOptions,
         cache: Option<CacheOptions>,
         read_only: Option<bool>,
-    ) -> bool;
+    ) -> Response;
 
     /// Create a new network device.
-    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> bool;
+    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response;
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;

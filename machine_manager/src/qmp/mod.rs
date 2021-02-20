@@ -44,9 +44,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use vmm_sys_util::terminal::Terminal;
 
-use crate::errors::Result;
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
+use crate::{errors::Result, event_loop::EventLoop};
 use qmp_schema as schema;
 use schema::QmpCommand;
 
@@ -232,15 +232,12 @@ impl Response {
     /// * `err_class` - The `QmpErrorClass` of qmp `error` field.
     /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
     ///          `id`.
-    pub fn create_error_response(
-        err_class: schema::QmpErrorClass,
-        id: Option<u32>,
-    ) -> Result<Self> {
-        Ok(Response {
+    pub fn create_error_response(err_class: schema::QmpErrorClass, id: Option<u32>) -> Self {
+        Response {
             return_: None,
-            error: Some(ErrorMessage::new(&err_class)?),
+            error: Some(ErrorMessage::new(&err_class)),
             id,
-        })
+        }
     }
 
     fn change_id(&mut self, id: Option<u32>) {
@@ -257,7 +254,6 @@ impl From<bool> for Response {
                 schema::QmpErrorClass::GenericError(String::new()),
                 None,
             )
-            .unwrap()
         }
     }
 }
@@ -271,16 +267,16 @@ pub struct ErrorMessage {
 }
 
 impl ErrorMessage {
-    fn new(e: &schema::QmpErrorClass) -> Result<Self> {
+    fn new(e: &schema::QmpErrorClass) -> Self {
         let content = e.to_content();
-        let serde_str = serde_json::to_string(&e)?;
+        let serde_str = serde_json::to_string(&e).unwrap();
         let serde_vec: Vec<&str> = serde_str.split(':').collect();
         let class_name = serde_vec[0];
         let len: usize = class_name.len();
-        Ok(ErrorMessage {
+        ErrorMessage {
             errorkind: class_name[2..len - 1].to_string(),
             desc: content,
-        })
+        }
     }
 }
 
@@ -349,12 +345,15 @@ pub fn handle_qmp(stream_fd: RawFd, controller: &Arc<dyn MachineExternalInterfac
                     reason: "host-qmp-quit".to_string(),
                 };
                 event!(SHUTDOWN; shutdown_msg);
+                if !EventLoop::clean() {
+                    error!("Clean environment failed!");
+                }
 
                 std::io::stdin()
                     .lock()
                     .set_canon_mode()
                     .expect("Failed to set terminal to canon mode.");
-                std::process::exit(1);
+                std::process::exit(0);
             }
 
             Ok(())
@@ -364,7 +363,7 @@ pub fn handle_qmp(stream_fd: RawFd, controller: &Arc<dyn MachineExternalInterfac
             warn!("Qmp json parser made an error:{}", e);
             qmp_service.send_str(&serde_json::to_string(&Response::create_error_response(
                 err_resp, None,
-            )?)?)?;
+            ))?)?;
             Ok(())
         }
     }
@@ -569,7 +568,7 @@ mod tests {
         // 3.Error response
         let qmp_err =
             schema::QmpErrorClass::GenericError("Invalid Qmp command arguments!".to_string());
-        let resp = Response::create_error_response(qmp_err, None).unwrap();
+        let resp = Response::create_error_response(qmp_err, None);
 
         let json_msg =
             r#"{"error":{"class":"GenericError","desc":"Invalid Qmp command arguments!"}}"#;
@@ -620,7 +619,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("06");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None);
+        let socket = Socket::from_unix_listener(listener, None, "test_06.sock".to_string());
         socket.bind_unix_stream(server);
         QmpChannel::bind_writer(SocketRWHandler::new(socket.get_stream_fd()));
 
@@ -670,7 +669,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("07");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_unix_listener(listener, None);
+        let socket = Socket::from_unix_listener(listener, None, "test_07.sock".to_string());
         socket.bind_unix_stream(server);
 
         // 1.send greeting response
@@ -692,5 +691,42 @@ mod tests {
         // After test. Environment Recover
         recover_unix_socket_environment("07");
         drop(socket);
+    }
+
+    #[test]
+    fn test_create_error_response() {
+        let strange_msg = "!?/.,、。’】=  -~1！@#￥%……&*（）——+".to_string();
+
+        let err_cls = schema::QmpErrorClass::GenericError(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "GenericError".to_string());
+        let qmp_err = schema::QmpErrorClass::GenericError(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
+
+        let err_cls = schema::QmpErrorClass::CommandNotFound(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "CommandNotFound".to_string());
+        let qmp_err = schema::QmpErrorClass::CommandNotFound(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
+
+        let err_cls = schema::QmpErrorClass::DeviceNotFound(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "DeviceNotFound".to_string());
+        let qmp_err = schema::QmpErrorClass::DeviceNotFound(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
+
+        let err_cls = schema::QmpErrorClass::KVMMissingCap(strange_msg.clone());
+        let msg = ErrorMessage::new(&err_cls);
+        assert_eq!(msg.desc, strange_msg);
+        assert_eq!(msg.errorkind, "KVMMissingCap".to_string());
+        let qmp_err = schema::QmpErrorClass::KVMMissingCap(strange_msg.clone());
+        let resp = Response::create_error_response(qmp_err, None);
+        assert_eq!(resp.error, Some(msg));
     }
 }
