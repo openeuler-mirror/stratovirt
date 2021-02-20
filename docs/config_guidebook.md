@@ -79,7 +79,48 @@ But unfortunately, in json configuration file, only `byte` is supported as unit.
 }
 ```
 
-### 1.4 Kernel and Kernel Parameters
+### 1.4 Backend file of memory
+
+StratoVirt supports to set the backend file of VM's memory.
+
+This allows you to give a path to backend-file, which can be either a directory or a file.
+The path has to be absolute path.
+
+```shell
+# cmdline
+-mem-path /path/to/file
+-mem-path /path/to/dir
+
+# json
+{
+    "machine-config": {
+        "mem_path": "/path/to/file",
+        ...
+    },
+    ...
+}
+```
+
+### 1.4.1 hugepages
+
+Memory backend file can be used to let guest use hugetlbfs on host.
+The following steps show how to use hugepages:
+
+```shell
+# mount hugetlbfs on a directory on host
+$ mount -t hugetlbfs hugetlbfs /path/to/hugepages
+
+# set the count of hugepages
+$ sysctl vm.nr_hugepages=1024
+
+# check hugepage size and count on host
+$ cat /proc/meminfo
+
+# run StratoVirt with backend-file
+... -mem-path /path/to/hugepages ...
+```
+
+### 1.5 Kernel and Kernel Parameters
 
 StratoVirt supports to launch PE or bzImage (only x86_64) format linux kernel 4.19 and can also set kernel
  parameters for VM.
@@ -104,7 +145,7 @@ And the given kernel parameters will be actually analyzed by boot loader.
 }
 ```
 
-### 1.5 Initrd Configuration
+### 1.6 Initrd Configuration
 
 StratoVirt supports to launch VM by a initrd (boot loader initialized RAM disk) as well.
 
@@ -571,4 +612,4 @@ You can enable StratoVirt's logging by:
 ```
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
-StratoVirt supports four log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
+StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.

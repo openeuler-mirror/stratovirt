@@ -34,8 +34,10 @@ extern crate util;
 
 pub mod micro_syscall;
 
+use std::fs::metadata;
 use std::marker::{Send, Sync};
 use std::ops::Deref;
+use std::os::linux::fs::MetadataExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex};
@@ -315,7 +317,7 @@ impl LightMachine {
                 vcpu_id,
                 Arc::new(Mutex::new(arch_cpu)),
                 cpu_vm.clone(),
-            )?;
+            );
 
             let mut vcpus = vm.cpus.lock().unwrap();
             let newcpu = Arc::new(cpu);
@@ -972,14 +974,29 @@ impl DeviceInterface for LightMachine {
         };
 
         let blk = Path::new(&file.filename);
-        if !blk.exists() || !blk.is_file() {
-            let blk_file = format!("{:?}", blk);
-            error!("File {} does not exist or is not a file", blk_file);
-            return Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError("Invalid block path".to_string()),
-                None,
-            );
+        match metadata(blk) {
+            Ok(meta) => {
+                if (meta.st_mode() & libc::S_IFREG != libc::S_IFREG)
+                    && (meta.st_mode() & libc::S_IFBLK != libc::S_IFBLK)
+                {
+                    error!("File {:?} is not a regular file or block device", blk);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "File is not a regular file or block device".to_string(),
+                        ),
+                        None,
+                    );
+                }
+            }
+            Err(ref e) => {
+                error!("Blockdev_add failed: {}", e);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
         }
+
         if let Some(file_name) = blk.file_name() {
             if file_name.len() > MAX_STRING_LENGTH {
                 error!("File name {:?} is illegal", file_name);
@@ -989,8 +1006,7 @@ impl DeviceInterface for LightMachine {
                 );
             }
         } else {
-            let blk_file = format!("{:?}", blk);
-            error!("Path: {} is not valid", blk_file);
+            error!("Path: {:?} is not valid", blk);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError("Invalid block path".to_string()),
                 None,

@@ -19,7 +19,7 @@ use kvm_bindings::{
 };
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 
-use self::errors::Result;
+use self::errors::{Result, ResultExt};
 use cpuid::host_cpuid;
 
 pub mod errors {
@@ -51,6 +51,7 @@ const MSR_LIST: &[u32] = &[
 const MSR_IA32_MISC_ENABLE: u32 = 0x01a0;
 const MSR_IA32_MISC_ENABLE_FAST_STRING: u64 = 0x1;
 
+#[derive(Default)]
 /// X86 CPU booting configure information
 pub struct X86CPUBootConfig {
     /// Register %rip value
@@ -108,7 +109,8 @@ impl X86CPU {
 
         // Only setting vcpu lapic state, other registers should
         // reset when the vcpu start running.
-        self.setup_lapic(vcpu_fd)?;
+        self.setup_lapic(vcpu_fd)
+            .chain_err(|| format!("Failed to set lapic for CPU {}/KVM", self.id))?;
 
         Ok(())
     }
@@ -118,7 +120,9 @@ impl X86CPU {
             Ok(fd) => fd,
             _ => panic!("setup_cpuid:Open /dev/kvm failed"),
         };
-        let mut cpuid = sys_fd.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)?;
+        let mut cpuid = sys_fd
+            .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
+            .chain_err(|| format!("Failed to get supported cpuid for CPU {}/KVM", self.id))?;
         let entries = cpuid.as_mut_slice();
 
         for entry in entries.iter_mut() {
@@ -222,7 +226,9 @@ impl X86CPU {
         const X86_CR0_PG: u64 = 0x8000_0000;
         const X86_CR4_PAE: u64 = 0x20;
 
-        let mut sregs: kvm_sregs = vcpu_fd.get_sregs()?;
+        let mut sregs: kvm_sregs = vcpu_fd
+            .get_sregs()
+            .chain_err(|| format!("Failed to get sregs for CPU {}/KVM", self.id))?;
 
         // Init gdt table, gdt table has loaded to Guest Memory Space
         sregs.cs = self.code_segment;
@@ -294,7 +300,9 @@ impl X86CPU {
         const APIC_MODE_NMI: u32 = 0x4;
         const APIC_MODE_EXTINT: u32 = 0x7;
 
-        let mut lapic = vcpu_fd.get_lapic()?;
+        let mut lapic = vcpu_fd
+            .get_lapic()
+            .chain_err(|| format!("Failed to get lapic for CPU {}/KVM", self.id))?;
 
         // The member regs in struct kvm_lapic_state is a u8 array with 1024 entries,
         // so it's saft to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
@@ -308,7 +316,9 @@ impl X86CPU {
             *apic_lvt_lint1 |= APIC_MODE_NMI << 8;
         }
 
-        vcpu_fd.set_lapic(&lapic)?;
+        vcpu_fd
+            .set_lapic(&lapic)
+            .chain_err(|| format!("Failed to set lapic for CPU {}/KVM", self.id))?;
 
         Ok(())
     }
@@ -369,11 +379,16 @@ impl X86CPU {
     }
 
     pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
-        self.setup_cpuid(vcpu_fd)?;
-        self.setup_sregs(vcpu_fd)?;
-        self.setup_regs(vcpu_fd)?;
-        self.setup_fpu(vcpu_fd)?;
-        self.setup_msrs(vcpu_fd)?;
+        self.setup_cpuid(vcpu_fd)
+            .chain_err(|| format!("Failed to set cpuid for CPU {}", self.id))?;
+        self.setup_sregs(vcpu_fd)
+            .chain_err(|| format!("Failed to set sregs for CPU {}/KVM", self.id))?;
+        self.setup_regs(vcpu_fd)
+            .chain_err(|| format!("Failed to set regs for CPU {}/KVM", self.id))?;
+        self.setup_fpu(vcpu_fd)
+            .chain_err(|| format!("Failed to set fpu for CPU {}/KVM", self.id))?;
+        self.setup_msrs(vcpu_fd)
+            .chain_err(|| format!("Failed to set Msrs for CPU {}/KVM", self.id))?;
 
         Ok(())
     }

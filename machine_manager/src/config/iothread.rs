@@ -29,8 +29,9 @@ pub struct IothreadConfig {
 impl IothreadConfig {
     /// Create `IothreadConfig` from `Value` structure.
     /// `Value` structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Vec<Self>> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 

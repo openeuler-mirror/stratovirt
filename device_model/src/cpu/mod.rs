@@ -42,7 +42,7 @@ use vmm_sys_util::signal::{register_signal_handler, Killable};
 
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
 
-use self::errors::{ErrorKind, Result};
+use self::errors::{ErrorKind, Result, ResultExt};
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::errors as ArchCPUError;
 #[cfg(target_arch = "aarch64")]
@@ -67,29 +67,36 @@ pub mod errors {
         }
         errors {
             CreateVcpu(err_info: String) {
-                description("Create kvm vcpu error!")
                 display("Failed to create kvm vcpu: {}!", err_info)
             }
             RealizeVcpu(err_info: String) {
-                description("Configure vcpu error!")
                 display("Failed to configure kvm vcpu: {}!", err_info)
             }
             StartVcpu(err_info: String) {
-                description("Start vcpu error!")
                 display("Failed to starting kvm vcpu: {}!", err_info)
             }
             StopVcpu(err_info: String) {
-                description("Stop vcpu error!")
                 display("Failed to stopping kvm vcpu: {}!", err_info)
             }
             DestroyVcpu(err_info: String) {
-                description("Destroy vcpu error!")
                 display("Failed to destroy kvm vcpu: {}!", err_info)
+            }
+            VcpuHltEvent(cpu_id: u8) {
+                display("CPU {}/KVM halted!", cpu_id)
+            }
+            VcpuExitReason(cpu_id: u8, err_info: String) {
+                display("CPU {}/KVM received an unexpected exit reason: {}!", cpu_id, err_info)
+            }
+            UnhandledKvmExit(cpu_id: u8) {
+                display("CPU {}/KVM received an unhandled kvm exit event!", cpu_id)
             }
         }
     }
 }
 
+// Used to sync cpu state.
+const SYNC_READ_CPU_STATE: u64 = 1;
+const SYNC_WRITE_CPU_STATE: u64 = 2;
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
 #[cfg(not(target_env = "musl"))]
@@ -139,14 +146,6 @@ thread_local! {
     )
 }
 
-fn init_local_thread_vcpu(vcpu_id: u8) {
-    LOCAL_THREAD_VCPU.with(|thread_vcpu| {
-        let mut vcpu_signal = thread_vcpu.borrow_mut();
-        vcpu_signal.vcpu_id = u32::from(vcpu_id);
-        vcpu_signal.dirty_stamps = 0;
-    })
-}
-
 /// Trait to handle `CPU` lifetime.
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
@@ -179,18 +178,6 @@ pub trait CPUInterface {
 
     /// Handle vcpu event from `kvm`.
     fn kvm_vcpu_exec(&self) -> Result<bool>;
-}
-
-/// Trait to handle `CPU` running statement.
-pub trait CPUWorker {
-    const SYNC_READ_CPU_STATE: u64 = 1;
-    const SYNC_WRITE_CPU_STATE: u64 = 2;
-
-    /// Handle `notify` change in vcpu thread.
-    fn handle_workqueue(&self);
-
-    /// Check vcpu thread is `paused` or `running`.
-    fn ready_for_running(&self) -> bool;
 }
 
 /// `CPU` is a wrapper around creating and using a kvm-based VCPU.
@@ -227,8 +214,8 @@ impl CPU {
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
         vm: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>>,
-    ) -> Result<Self> {
-        Ok(CPU {
+    ) -> Self {
+        CPU {
             id,
             fd: vcpu_fd,
             arch_cpu,
@@ -237,7 +224,7 @@ impl CPU {
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm,
-        })
+        }
     }
 
     /// Get this `CPU`'s ID.
@@ -258,7 +245,7 @@ impl CPU {
     }
 
     /// Set task the `CPU` to handle.
-    pub fn set_task(&self, task: Option<thread::JoinHandle<()>>) {
+    fn set_task(&self, task: Option<thread::JoinHandle<()>>) {
         let mut data = self.task.lock().unwrap();
         (*data).take().map(thread::JoinHandle::join);
         *data = task;
@@ -266,38 +253,12 @@ impl CPU {
 
     /// Get this `CPU`'s thread id.
     pub fn tid(&self) -> u64 {
-        match *self.tid.lock().unwrap() {
-            Some(tid) => tid,
-            None => 0,
-        }
+        (*self.tid.lock().unwrap()).unwrap_or(0)
     }
 
     /// Set thread id for `CPU`.
-    pub fn set_tid(&self) {
+    fn set_tid(&self) {
         *self.tid.lock().unwrap() = Some(util::unix::gettid());
-    }
-
-    /// Init signal for `CPU` event.
-    fn init_signals() -> Result<()> {
-        extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
-            match signum {
-                VCPU_EXIT_SIGNAL => LOCAL_THREAD_VCPU.with(|thread_vcpu| {
-                    let mut vcpu_signal = thread_vcpu.borrow_mut();
-                    vcpu_signal.dirty_stamps = VCPU_EXIT_SIGNAL as u64;
-                }),
-                VCPU_PAUSE_SIGNAL => LOCAL_THREAD_VCPU.with(|thread_vcpu| {
-                    let mut vcpu_signal = thread_vcpu.borrow_mut();
-                    vcpu_signal.dirty_stamps = VCPU_PAUSE_SIGNAL as u64;
-                }),
-                _ => {}
-            }
-        }
-
-        register_signal_handler(VCPU_EXIT_SIGNAL, handle_signal)?;
-        register_signal_handler(VCPU_PAUSE_SIGNAL, handle_signal)?;
-        register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)?;
-
-        Ok(())
     }
 }
 
@@ -310,7 +271,11 @@ impl CPUInterface for CPU {
             );
         }
 
-        self.arch_cpu.lock().unwrap().realize(&self.fd, boot)?;
+        self.arch_cpu
+            .lock()
+            .unwrap()
+            .realize(&self.fd, boot)
+            .chain_err(|| "Failed to realize arch cpu")?;
 
         Ok(())
     }
@@ -341,42 +306,19 @@ impl CPUInterface for CPU {
         }
 
         let local_cpu = cpu.clone();
+        let cpu_thread_worker = CPUThreadWorker::new(cpu);
         let handle = thread::Builder::new()
-            .name(format!("CPU {}/KVM", cpu.id))
+            .name(format!("CPU {}/KVM", local_cpu.id))
             .spawn(move || {
-                init_local_thread_vcpu(cpu.id);
-                if let Err(e) = CPU::init_signals() {
-                    error!("Failed to init cpu{} signal:{}", cpu.id, e);
+                if let Err(e) = cpu_thread_worker.handle(thread_barrier) {
+                    error!(
+                        "Some error occurred in cpu{} thread: {}",
+                        cpu_thread_worker.thread_cpu.id,
+                        error_chain::ChainedError::display_chain(&e)
+                    );
                 }
-
-                cpu.set_tid();
-
-                // The vcpu thread is going to run,
-                // reset its running environment.
-                cpu.reset().unwrap();
-
-                // Wait for all vcpu to complete the running
-                // environment initialization.
-                thread_barrier.wait();
-
-                info!("vcpu{} start running", cpu.id);
-                loop {
-                    if !cpu.ready_for_running() {
-                        break;
-                    }
-
-                    if !cpu.kvm_vcpu_exec().unwrap() {
-                        break;
-                    }
-                }
-
-                // The vcpu thread is about to exit, marking the state
-                // of the CPU state as Stopped.
-                let (cpu_state, cvar) = &*cpu.state;
-                *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
-                cvar.notify_one();
             })
-            .unwrap();
+            .chain_err(|| format!("Failed to create thread for CPU {}/KVM", local_cpu.id()))?;
         local_cpu.set_task(Some(handle));
         Ok(())
     }
@@ -452,11 +394,13 @@ impl CPUInterface for CPU {
         *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
         self.vm.destroy();
 
-        let shutdown_msg = schema::SHUTDOWN {
-            guest: true,
-            reason: "guest-shutdown".to_string(),
-        };
-        event!(SHUTDOWN; shutdown_msg);
+        if QmpChannel::is_connected() {
+            let shutdown_msg = schema::SHUTDOWN {
+                guest: true,
+                reason: "guest-shutdown".to_string(),
+            };
+            event!(SHUTDOWN; shutdown_msg);
+        }
 
         Ok(())
     }
@@ -481,7 +425,7 @@ impl CPUInterface for CPU {
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Hlt => {
                     info!("Vcpu{} received KVM_EXIT_HLT signal", self.id());
-                    panic!("Hlt vpu {}", self.id());
+                    return Err(ErrorKind::VcpuHltEvent(self.id()).into());
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Shutdown => {
@@ -499,7 +443,8 @@ impl CPUInterface for CPU {
                             "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
                             self.id()
                         );
-                        self.guest_shutdown()?;
+                        self.guest_shutdown()
+                            .chain_err(|| "Some error occurred in guest shutdown")?;
                     } else {
                         error!(
                             "Vcpu{} recevied unexpected system event with type 0x{:x}, flags 0x{:x}",
@@ -519,7 +464,9 @@ impl CPUInterface for CPU {
                     info!("Vcpu{} received KVM_EXIT_INTERNAL_ERROR signal", self.id());
                     return Ok(false);
                 }
-                r => panic!("Unexpected exit reason: {:?}", r),
+                r => {
+                    return Err(ErrorKind::VcpuExitReason(self.id(), format!("{:?}", r)).into());
+                }
             },
             Err(ref e) => {
                 match e.errno() {
@@ -528,8 +475,7 @@ impl CPUInterface for CPU {
                         self.fd.set_kvm_immediate_exit(0);
                     }
                     _ => {
-                        error!("Failure during vcpu run: {}", e);
-                        panic!("VcpuUnhandledKvmExit");
+                        return Err(ErrorKind::UnhandledKvmExit(self.id()).into());
                     }
                 };
             }
@@ -538,7 +484,53 @@ impl CPUInterface for CPU {
     }
 }
 
-impl CPUWorker for CPU {
+/// The struct to handle events in cpu thread.
+struct CPUThreadWorker {
+    thread_cpu: Arc<CPU>,
+}
+
+impl CPUThreadWorker {
+    /// Allocates a new `CPUThreadWorker`.
+    fn new(thread_cpu: Arc<CPU>) -> Self {
+        CPUThreadWorker { thread_cpu }
+    }
+
+    /// Init vcpu thread static variable.
+    fn init_local_thread_vcpu(&self) {
+        LOCAL_THREAD_VCPU.with(|thread_vcpu| {
+            let mut vcpu_signal = thread_vcpu.borrow_mut();
+            vcpu_signal.vcpu_id = u32::from(self.thread_cpu.id());
+            vcpu_signal.dirty_stamps = 0;
+        })
+    }
+
+    /// Init signal for `CPU` event.
+    fn init_signals() -> Result<()> {
+        extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
+            match signum {
+                VCPU_EXIT_SIGNAL => LOCAL_THREAD_VCPU.with(|thread_vcpu| {
+                    let mut vcpu_signal = thread_vcpu.borrow_mut();
+                    vcpu_signal.dirty_stamps = VCPU_EXIT_SIGNAL as u64;
+                }),
+                VCPU_PAUSE_SIGNAL => LOCAL_THREAD_VCPU.with(|thread_vcpu| {
+                    let mut vcpu_signal = thread_vcpu.borrow_mut();
+                    vcpu_signal.dirty_stamps = VCPU_PAUSE_SIGNAL as u64;
+                }),
+                _ => {}
+            }
+        }
+
+        register_signal_handler(VCPU_EXIT_SIGNAL, handle_signal)
+            .chain_err(|| "Failed to registe VCPU_EXIT_SIGNAL signal.")?;
+        register_signal_handler(VCPU_PAUSE_SIGNAL, handle_signal)
+            .chain_err(|| "Failed to registe VCPU_PAUSE_SIGNAL signal.")?;
+        register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
+            .chain_err(|| "Failed to registe VCPU_TASK_SIGNAL signal.")?;
+
+        Ok(())
+    }
+
+    /// Handle workqueue event in thread vcpu.
     fn handle_workqueue(&self) {
         LOCAL_THREAD_VCPU.with(|thread_vcpu| {
             let mut vcpu_signal = thread_vcpu.borrow_mut();
@@ -546,50 +538,91 @@ impl CPUWorker for CPU {
                 vcpu_signal.dirty_stamps = 0;
                 drop(vcpu_signal);
 
-                let (work_queue_locked, cvar) = &*self.work_queue;
+                let (work_queue_locked, cvar) = &*self.thread_cpu.work_queue;
                 let mut work_queue = work_queue_locked.lock().unwrap();
-                if *work_queue & Self::SYNC_READ_CPU_STATE == Self::SYNC_READ_CPU_STATE {
-                    *work_queue &= !Self::SYNC_READ_CPU_STATE;
+                if *work_queue & SYNC_READ_CPU_STATE == SYNC_READ_CPU_STATE {
+                    *work_queue &= !SYNC_READ_CPU_STATE;
                     cvar.notify_all();
                 }
 
-                if *work_queue & Self::SYNC_WRITE_CPU_STATE == Self::SYNC_WRITE_CPU_STATE {
-                    *work_queue &= !Self::SYNC_WRITE_CPU_STATE;
+                if *work_queue & SYNC_WRITE_CPU_STATE == SYNC_WRITE_CPU_STATE {
+                    *work_queue &= !SYNC_WRITE_CPU_STATE;
                     cvar.notify_all();
                 }
             }
         });
     }
 
-    fn ready_for_running(&self) -> bool {
+    /// Judge whether the kvm vcpu is ready to emulate.
+    fn ready_for_running(&self) -> Result<bool> {
         let mut flag = 0_u32;
-        let (cpu_state_locked, cvar) = &*self.state;
+        let (cpu_state_locked, cvar) = &*self.thread_cpu.state;
         let mut cpu_state = cpu_state_locked.lock().unwrap();
+
         loop {
             self.handle_workqueue();
 
             match *cpu_state {
                 CpuLifecycleState::Paused => {
                     if flag == 0 {
-                        info!("Vcpu{} paused", self.id);
+                        info!("Vcpu{} paused", self.thread_cpu.id);
                         flag = 1;
                     }
                     cpu_state = cvar.wait(cpu_state).unwrap();
                 }
                 CpuLifecycleState::Running => {
-                    return true;
+                    return Ok(true);
                 }
-                CpuLifecycleState::Stopping => {
-                    info!("Vcpu{} shutdown", self.id);
+                CpuLifecycleState::Stopping | CpuLifecycleState::Stopped => {
+                    info!("Vcpu{} shutdown", self.thread_cpu.id);
                     cvar.notify_all();
-                    return false;
+                    return Ok(false);
                 }
                 _ => {
                     warn!("Unknown Vmstate");
-                    return true;
+                    return Ok(true);
                 }
             }
         }
+    }
+
+    /// Handle the all events in vcpu thread.
+    fn handle(&self, thread_barrier: Arc<Barrier>) -> Result<()> {
+        self.init_local_thread_vcpu();
+        if let Err(e) = Self::init_signals() {
+            error!("Failed to init cpu{} signal:{}", self.thread_cpu.id, e);
+        }
+
+        self.thread_cpu.set_tid();
+
+        // The vcpu thread is going to run,
+        // reset its running environment.
+        self.thread_cpu
+            .reset()
+            .chain_err(|| "Failed to reset for cpu register state")?;
+
+        // Wait for all vcpu to complete the running
+        // environment initialization.
+        thread_barrier.wait();
+
+        info!("vcpu{} start running", self.thread_cpu.id);
+        while let Ok(true) = self.ready_for_running() {
+            if !self
+                .thread_cpu
+                .kvm_vcpu_exec()
+                .chain_err(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
+            {
+                break;
+            }
+        }
+
+        // The vcpu thread is about to exit, marking the state
+        // of the CPU state as Stopped.
+        let (cpu_state, cvar) = &*self.thread_cpu.state;
+        *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+        cvar.notify_one();
+
+        Ok(())
     }
 }
 
@@ -639,5 +672,359 @@ impl CpuTopology {
         let coreid: u8 = (vcpu_id as u8 % cpu_per_socket) / cpu_per_core;
         let threadid: u8 = (vcpu_id as u8 % cpu_per_socket) % cpu_per_core;
         (socketid, coreid, threadid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use kvm_ioctls::{Kvm, VmFd};
+    use machine_manager::machine::{
+        KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
+    };
+
+    struct TestVm {
+        #[cfg(target_arch = "x86_64")]
+        pio_in: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        #[cfg(target_arch = "x86_64")]
+        pio_out: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        mmio_read: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        mmio_write: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+    }
+
+    impl TestVm {
+        fn new() -> Self {
+            TestVm {
+                #[cfg(target_arch = "x86_64")]
+                pio_in: Arc::new(Mutex::new(Vec::new())),
+                #[cfg(target_arch = "x86_64")]
+                pio_out: Arc::new(Mutex::new(Vec::new())),
+                mmio_read: Arc::new(Mutex::new(Vec::new())),
+                mmio_write: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl MachineLifecycle for TestVm {
+        fn notify_lifecycle(&self, _old: KvmVmState, _new: KvmVmState) -> bool {
+            true
+        }
+    }
+
+    impl MachineAddressInterface for TestVm {
+        #[cfg(target_arch = "x86_64")]
+        fn pio_in(&self, addr: u64, data: &mut [u8]) -> bool {
+            self.pio_in.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        fn pio_out(&self, addr: u64, data: &[u8]) -> bool {
+            self.pio_out.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        fn mmio_read(&self, addr: u64, data: &mut [u8]) -> bool {
+            #[cfg(target_arch = "aarch64")]
+            {
+                data[3] = 0x0;
+                data[2] = 0x0;
+                data[1] = 0x5;
+                data[0] = 0x6;
+            }
+            self.mmio_read.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+
+        fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
+            self.mmio_write.lock().unwrap().push((addr, data.to_vec()));
+            true
+        }
+    }
+
+    impl MachineInterface for TestVm {}
+
+    fn test_memory_init(vm_fd: &VmFd, size: usize, guest_addr: u64) -> (*mut u8, u64) {
+        let load_addr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut() as *mut libc::c_void,
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANONYMOUS | libc::MAP_SHARED | libc::MAP_NORESERVE,
+                -1,
+                0,
+            )
+        };
+        if load_addr == libc::MAP_FAILED {
+            panic!("mmap failed.");
+        }
+        let slot: u32 = 0;
+        let mem_region = kvm_bindings::kvm_userspace_memory_region {
+            slot,
+            guest_phys_addr: guest_addr,
+            memory_size: size as u64,
+            userspace_addr: load_addr as u64,
+            flags: 0,
+        };
+        unsafe {
+            vm_fd.set_user_memory_region(mem_region).unwrap();
+        }
+        (load_addr as *mut u8, guest_addr)
+    }
+
+    fn prepare_env() -> Result<(Arc<VmFd>, Arc<TestVm>, CPU)> {
+        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(vm_fd) => Arc::new(vm_fd),
+            Err(_) => return Err(ErrorKind::CreateVcpu("Failed to open kvm".to_string()).into()),
+        };
+
+        let vm = Arc::new(TestVm::new());
+        let vm_arc: Arc<Box<Arc<dyn MachineInterface + Send + Sync>>> =
+            Arc::new(Box::new(vm.clone()));
+
+        let cpu = CPU::new(
+            Arc::new(vm_fd.create_vcpu(0).unwrap()),
+            0,
+            Arc::new(Mutex::new(ArchCPU::default())),
+            vm_arc.clone(),
+        );
+
+        Ok((vm_fd, vm, cpu))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn test_base_code() -> [u8; 24] {
+        [
+            0xba, 0xf8, 0x03, /* mov $0x3f8, %dx */
+            0x00, 0xd8, /* add %bl, %al */
+            0x04, b'0', /* add $'0', %al */
+            0xee, /* out %al, %dx */
+            0xec, /* in %dx, %al */
+            0xc6, 0x06, 0x00, 0x80, 0x00, /* movl $0, (0x8000); This generates a MMIO Write.*/
+            0x8a, 0x16, 0x00, 0x80, /* movl (0x8000), %dl; This generates a MMIO Read.*/
+            0xc6, 0x06, 0x00, 0x20,
+            0x00, /* movl $0, (0x2000); Dirty one page in guest mem. */
+            0xf4, /* hlt */
+        ]
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn test_base_code() -> [u8; 48] {
+        [
+            0x40, 0x20, 0x80, 0x52, /* mov w0, #0x102 */
+            0x00, 0x01, 0x00, 0xb9, /* str w0, [x8]; test physical memory write */
+            0x81, 0x60, 0x80, 0x52, /* mov w1, #0x304 */
+            0x02, 0x00, 0x80, 0x52, /* mov w2, #0x0 */
+            0x20, 0x01, 0x40, 0xb9, /* ldr w0, [x9]; test MMIO read */
+            0x1f, 0x18, 0x14, 0x71, /* cmp w0, #0x506 */
+            0x20, 0x00, 0x82, 0x1a, /* csel w0, w1, w2, eq */
+            0x20, 0x01, 0x00, 0xb9, /* str w0, [x9]; test MMIO write */
+            0x00, 0x80, 0xb0, 0x52, /* mov w0, #0x84000000 */
+            0x00, 0x00, 0x1d, 0x32, /* orr w0, w0, #0x08 */
+            0x02, 0x00, 0x00, 0xd4, /* hvc #0x0 */
+            0x00, 0x00, 0x00,
+            0x14, /* b <this address>; shouldn't get here, but if so loop forever */
+        ]
+    }
+
+    #[test]
+    #[allow(unused)]
+    fn test_cpu_lifecycle() {
+        let (vm_fd, vm, cpu) = match prepare_env() {
+            Ok((vm_fd, vm, cpu)) => (vm_fd, vm, cpu),
+            Err(_) => return,
+        };
+
+        let (cpu_state, _) = &*cpu.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);
+        drop(cpu_state);
+
+        let cpus_thread_barrier = Arc::new(Barrier::new(2));
+        let cpu_thread_barrier = cpus_thread_barrier.clone();
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut kvi = kvm_bindings::kvm_vcpu_init::default();
+            vm_fd.get_preferred_target(&mut kvi).unwrap();
+            kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
+            cpu.fd.vcpu_init(&kvi).unwrap();
+        }
+
+        // Test cpu life cycle as:
+        // Created -> Paused -> Running -> Paused -> Running -> Destroy
+        let cpu_arc = Arc::new(cpu);
+        CPU::start(cpu_arc.clone(), cpu_thread_barrier, true).unwrap();
+        cpus_thread_barrier.wait();
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
+        drop(cpu_state);
+
+        assert!(cpu_arc.resume().is_ok());
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
+        drop(cpu_state);
+
+        assert!(cpu_arc.pause().is_ok());
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
+        drop(cpu_state);
+
+        assert!(cpu_arc.resume().is_ok());
+        let _ = cpu_arc.destroy();
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Nothing);
+        drop(cpu_state);
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn test_cpu_command_emulate() {
+        let (vm_fd, vm, cpu) = match prepare_env() {
+            Ok((vm_fd, vm, cpu)) => (vm_fd, vm, cpu),
+            Err(_) => return,
+        };
+
+        let mem_size = 0x4000;
+        let (hva, gpa) = test_memory_init(&vm_fd, mem_size, 0x1000);
+
+        let code = test_base_code();
+        unsafe {
+            let mut slice = std::slice::from_raw_parts_mut(hva, mem_size);
+            slice.write_all(&code).unwrap();
+        }
+
+        let mut vcpu_sregs = cpu.fd.get_sregs().unwrap();
+        assert_ne!(vcpu_sregs.cs.base, 0);
+        assert_ne!(vcpu_sregs.cs.selector, 0);
+        vcpu_sregs.cs.base = 0;
+        vcpu_sregs.cs.selector = 0;
+        cpu.fd.set_sregs(&vcpu_sregs).unwrap();
+
+        let mut vcpu_regs = cpu.fd.get_regs().unwrap();
+        vcpu_regs.rip = gpa;
+        vcpu_regs.rax = 2;
+        vcpu_regs.rbx = 3;
+        vcpu_regs.rflags = 2;
+        cpu.fd.set_regs(&vcpu_regs).unwrap();
+
+        loop {
+            match cpu.kvm_vcpu_exec() {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(e) => {
+                    assert_eq!(e.to_string(), "CPU 0/KVM halted!");
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(*vm.pio_in.lock().unwrap(), vec![(1016, vec![0])]);
+        assert_eq!(*vm.pio_out.lock().unwrap(), vec![(1016, vec![53])]);
+        assert_eq!(*vm.mmio_read.lock().unwrap(), vec![(32768, vec![0])]);
+        assert_eq!(*vm.mmio_write.lock().unwrap(), vec![(32768, vec![0])]);
+    }
+
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn test_cpu_command_emulate() {
+        let (vm_fd, vm, cpu) = match prepare_env() {
+            Ok((vm_fd, vm, cpu)) => (vm_fd, vm, cpu),
+            Err(_) => return,
+        };
+
+        let mem_size = 0x20000;
+        let guest_addr = 0x10000;
+        let (hva, _) = test_memory_init(&vm_fd, mem_size, guest_addr);
+
+        let code = test_base_code();
+        unsafe {
+            let mut slice = std::slice::from_raw_parts_mut(hva, mem_size);
+            slice.write_all(&code).unwrap();
+        }
+
+        let mut kvi = kvm_bindings::kvm_vcpu_init::default();
+        vm_fd.get_preferred_target(&mut kvi).unwrap();
+        kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
+        cpu.fd.vcpu_init(&kvi).unwrap();
+
+        let core_reg_base: u64 = 0x6030_0000_0010_0000;
+        let mmio_addr: u64 = guest_addr + mem_size as u64;
+        println!("mmio addr is {}", mmio_addr);
+
+        cpu.fd
+            .set_one_reg(core_reg_base + 2 * 32, guest_addr)
+            .unwrap();
+        cpu.fd
+            .set_one_reg(core_reg_base + 2 * 8, guest_addr + 0x10000)
+            .unwrap();
+        cpu.fd
+            .set_one_reg(core_reg_base + 2 * 9, mmio_addr)
+            .unwrap();
+
+        QmpChannel::object_init();
+
+        loop {
+            match cpu.kvm_vcpu_exec() {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(e) => {
+                    assert_eq!(e.to_string(), "CPU 0/KVM halted!");
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(
+            *vm.mmio_read.lock().unwrap(),
+            vec![(196608, vec![6, 5, 0, 0])]
+        );
+        assert_eq!(
+            *vm.mmio_write.lock().unwrap(),
+            vec![(196608, vec![4, 3, 0, 0])]
+        );
+    }
+
+    #[test]
+    fn test_cpu_get_topu() {
+        let test_nr_cpus: u8 = 16;
+        let mask = Vec::with_capacity(test_nr_cpus as usize);
+
+        let microvm_cpu_topo = CpuTopology {
+            sockets: test_nr_cpus,
+            cores: 1,
+            threads: 1,
+            nrcpus: test_nr_cpus,
+            max_cpus: test_nr_cpus,
+            online_mask: Arc::new(Mutex::new(mask)),
+        };
+
+        assert_eq!(microvm_cpu_topo.get_topo(0), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo(4), (4, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo(8), (8, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo(15), (15, 0, 0));
+
+        let test_nr_cpus: u8 = 32;
+        let mask = Vec::with_capacity(test_nr_cpus as usize);
+        let test_cpu_topo = CpuTopology {
+            sockets: 2,
+            cores: 4,
+            threads: 2,
+            nrcpus: test_nr_cpus,
+            max_cpus: test_nr_cpus,
+            online_mask: Arc::new(Mutex::new(mask)),
+        };
+
+        assert_eq!(test_cpu_topo.get_topo(0), (0, 0, 0));
+        assert_eq!(test_cpu_topo.get_topo(4), (0, 2, 0));
+        assert_eq!(test_cpu_topo.get_topo(7), (0, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo(11), (1, 1, 1));
+        assert_eq!(test_cpu_topo.get_topo(15), (1, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo(17), (2, 0, 1));
+        assert_eq!(test_cpu_topo.get_topo(23), (2, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo(29), (3, 2, 1));
+        assert_eq!(test_cpu_topo.get_topo(31), (3, 3, 1));
     }
 }

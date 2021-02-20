@@ -67,9 +67,12 @@ impl FileBackend {
                 .chain_err(|| format!("Failed to Open file: {}", file_path))?
         };
 
-        if file.metadata().unwrap().len() == 0 {
+        let old_file_len = file.metadata().unwrap().len();
+        if old_file_len == 0 {
             file.set_len(file_len)
                 .chain_err(|| format!("Failed to set length of file: {}", file_path))?;
+        } else if old_file_len < file_len {
+            bail!("Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})", file_path, file_len);
         }
 
         Ok(FileBackend {
@@ -176,7 +179,7 @@ impl HostMemMapping {
         dump_guest_core: bool,
         is_share: bool,
     ) -> Result<HostMemMapping> {
-        let mut flags = libc::MAP_NORESERVE;
+        let mut flags = 0_i32;
         if file_back.is_none() {
             flags |= libc::MAP_ANONYMOUS;
         }
@@ -313,6 +316,10 @@ mod test {
         file.set_len(50_u64).unwrap();
 
         let file_size = 100_u64;
+        let f_back = FileBackend::new(&file_path, file_size);
+        assert!(f_back.is_err());
+
+        let file_size = 20_u64;
         let f_back = FileBackend::new(&file_path, file_size);
         assert!(f_back.is_ok());
         assert_eq!(f_back.as_ref().unwrap().offset, 0u64);

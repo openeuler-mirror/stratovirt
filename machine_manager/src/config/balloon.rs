@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::Result;
+use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ExBool, VmConfig};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -21,15 +21,16 @@ pub struct BalloonConfig {
 }
 
 impl BalloonConfig {
-    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
 impl VmConfig {
     pub fn update_balloon(&mut self, balloon_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("balloon");
-        cmd_parser.push("deflate-on-oom");
+        cmd_parser.push("").push("deflate-on-oom");
 
         cmd_parser.parse(balloon_config)?;
 
@@ -37,6 +38,12 @@ impl VmConfig {
         if let Some(default) = cmd_parser.get_value::<ExBool>("deflate-on-oom")? {
             balloon.deflate_on_oom = default.into();
         }
+        if let Some(should_empty) = cmd_parser.get_value::<String>("")? {
+            if should_empty != "" {
+                return Err(ErrorKind::InvalidParam(should_empty).into());
+            }
+        }
+
         self.balloon = Some(balloon);
 
         Ok(())
@@ -56,7 +63,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = BalloonConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         assert_eq!(config.unwrap().deflate_on_oom, true);
 
         let json = r#"
@@ -66,7 +73,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = BalloonConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         assert_eq!(config.unwrap().deflate_on_oom, false);
     }
 

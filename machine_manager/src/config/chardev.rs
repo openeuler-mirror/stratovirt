@@ -36,8 +36,9 @@ impl ConsoleConfig {
     /// # Arguments
     ///
     /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Vec<Self>> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -84,10 +85,14 @@ impl VmConfig {
         let mut console = ConsoleConfig::default();
         if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
             console.console_id = console_id;
-        }
+        } else {
+            return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
+        };
         if let Some(console_path) = cmd_parser.get_value::<String>("path")? {
             console.socket_path = console_path;
-        }
+        } else {
+            return Err(ErrorKind::FieldIsMissing("path", "chardev").into());
+        };
 
         self.add_console(console);
 
@@ -117,8 +122,9 @@ impl SerialConfig {
     /// # Arguments
     ///
     /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -133,8 +139,10 @@ impl VmConfig {
             if serial_type == "stdio" {
                 self.serial = Some(SerialConfig { stdio: true });
             } else {
-                self.serial = Some(SerialConfig { stdio: false });
+                return Err(ErrorKind::InvalidParam(serial_type).into());
             }
+        } else {
+            self.serial = Some(SerialConfig { stdio: false });
         }
 
         Ok(())
@@ -152,8 +160,9 @@ pub struct VsockConfig {
 impl VsockConfig {
     /// Create `VsockConfig` from `Value` structure.
     /// `Value` structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 }
 
@@ -185,13 +194,29 @@ impl VmConfig {
         cmd_parser.parse(vsock_config)?;
 
         if let Some(device_type) = cmd_parser.get_value::<String>("")? {
-            if device_type.contains("vsock") {
+            if device_type == "vsock" {
+                if self.vsock.is_some() {
+                    bail!("Device vsock can only be set one for one StratoVirt VM.");
+                }
+
+                let vsock_id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
+                    vsock_id
+                } else {
+                    return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
+                };
+                let guest_cid = if let Some(guest_cid) = cmd_parser.get_value::<u64>("guest-cid")? {
+                    guest_cid
+                } else {
+                    return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
+                };
                 let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
                 self.vsock = Some(VsockConfig {
-                    vsock_id: cmd_parser.get_value::<String>("id")?.unwrap(),
-                    guest_cid: cmd_parser.get_value::<u64>("guest-cid")?.unwrap(),
+                    vsock_id,
+                    guest_cid,
                     vhost_fd,
                 });
+            } else {
+                return Err(ErrorKind::UnknownDeviceType(device_type).into());
             }
         }
 
@@ -212,7 +237,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = ConsoleConfig::from_value(&value);
-        assert!(configs.is_some());
+        assert!(configs.is_ok());
         let console_configs = configs.unwrap();
         assert_eq!(console_configs.len(), 1);
         assert_eq!(console_configs[0].console_id, "test_console");
@@ -225,7 +250,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = ConsoleConfig::from_value(&value);
-        assert!(configs.is_none());
+        assert!(configs.is_err());
     }
 
     #[test]
@@ -250,9 +275,9 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = SerialConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         assert!(!config.as_ref().unwrap().stdio);
-        vm_config.serial = config;
+        vm_config.serial = config.ok();
         assert!(vm_config.update_serial("stdio").is_ok());
         assert!(vm_config.serial.as_ref().unwrap().stdio);
     }
@@ -267,7 +292,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = VsockConfig::from_value(&value);
-        assert!(config.is_some());
+        assert!(config.is_ok());
         let vsock_config = config.unwrap();
         assert_eq!(vsock_config.vsock_id, "test_vsock");
         assert_eq!(vsock_config.guest_cid, 3);
@@ -280,7 +305,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let config = VsockConfig::from_value(&value);
-        assert!(config.is_none());
+        assert!(config.is_err());
     }
     #[test]
     fn test_vsock_config_cmdline_parser() {

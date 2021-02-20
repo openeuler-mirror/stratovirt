@@ -38,8 +38,9 @@ pub struct NetworkInterfaceConfig {
 impl NetworkInterfaceConfig {
     /// Create `NetworkInterfacesConfig` from `Value` structure
     /// `Value` structure can be gotten by `json_file`
-    pub fn from_value(value: &serde_json::Value) -> Option<Vec<Self>> {
-        serde_json::from_value(value.clone()).ok()
+    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
+        let ret = serde_json::from_value(value.clone())?;
+        Ok(ret)
     }
 
     pub fn set_mac(&mut self, mac_addr: String) {
@@ -130,9 +131,13 @@ impl VmConfig {
         let mut net = NetworkInterfaceConfig::default();
         if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
             net.iface_id = net_id;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("id", "netdev").into());
         }
         if let Some(net_hostname) = cmd_parser.get_value::<String>("netdev")? {
             net.host_dev_name = net_hostname;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("netdev", "netdev").into());
         }
         if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
             if vhost.into() {
@@ -196,7 +201,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = NetworkInterfaceConfig::from_value(&value);
-        assert!(configs.is_some());
+        assert!(configs.is_ok());
         let network_configs = configs.unwrap();
         assert_eq!(network_configs[0].iface_id, "eth0");
         assert_eq!(network_configs[0].host_dev_name, "tap0");
@@ -218,7 +223,7 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let configs = NetworkInterfaceConfig::from_value(&value);
-        assert!(configs.is_some());
+        assert!(configs.is_ok());
         let network_configs = configs.unwrap();
         assert_eq!(network_configs[0].iface_id, "eth0");
         assert_eq!(network_configs[0].host_dev_name, "tap0");

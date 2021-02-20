@@ -306,7 +306,7 @@ impl EventLoopContext {
                 return true;
             }
         }
-        false
+        true
     }
 }
 
