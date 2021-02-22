@@ -28,6 +28,7 @@ use machine_manager::socket::Socket;
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     event_loop::EventLoop,
+    temp_cleaner::TempCleaner,
 };
 use machine_manager::{config::VmConfig, signal_handler::register_kill_signal};
 use util::loop_context::EventNotifierHelper;
@@ -81,9 +82,9 @@ fn run() -> Result<()> {
         } else {
             error!("Panic at [{}: {}].", panic_file, panic_line);
         }
-        if !EventLoop::clean() {
-            error!("Clean environment failed!");
-        }
+
+        // clean temporary file
+        TempCleaner::clean();
     }));
 
     let vm_config: VmConfig = create_vmconfig(&cmd_args)?;
@@ -109,9 +110,8 @@ fn run() -> Result<()> {
         }
     }
 
-    if !EventLoop::clean() {
-        error!("Clean environment failed!");
-    }
+    // clean temporary file
+    TempCleaner::clean();
 
     Ok(())
 }
@@ -129,6 +129,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             .chain_err(|| "Failed to set terminal to raw mode.")?;
     }
 
+    TempCleaner::object_init();
     QmpChannel::object_init();
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
@@ -140,9 +141,13 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
         let (api_path, _) = check_api_channel(&cmd_args)?;
         let listener = UnixListener::bind(&api_path)
             .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
+
+        // add file to temporary pool, so it could be clean when vm exit.
+        TempCleaner::add_path(api_path.clone());
+
         limit_permission(&api_path)
             .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
-        Socket::from_unix_listener(listener, Some(vm.clone()), api_path)
+        Socket::from_unix_listener(listener, Some(vm.clone()))
     };
 
     EventLoop::update_event(

@@ -34,6 +34,7 @@ pub mod machine;
 pub mod qmp;
 pub mod signal_handler;
 pub mod socket;
+pub mod temp_cleaner;
 
 pub mod errors {
     error_chain! {
