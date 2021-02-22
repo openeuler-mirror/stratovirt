@@ -935,108 +935,173 @@ impl VirtioDevice for Block {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
-    pub use super::*;
+    use super::super::*;
+    use super::*;
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+    use machine_manager::config::IothreadConfig;
+    use std::sync::Once;
+    use std::{thread, time::Duration};
+    use vmm_sys_util::tempfile::TempFile;
 
+    const VIRTQ_DESC_F_NEXT: u16 = 0x01;
+    const VIRTQ_DESC_F_WRITE: u16 = 0x02;
+    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
+    static INIT: Once = Once::new();
+
+    fn address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36);
+        let sys_space = AddressSpace::new(root).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
+
+    // Activate block device and add to unnamed thread to execute epoll.
+    fn run_block_device(
+        mem_space: Arc<AddressSpace>,
+        thread_name: &str,
+    ) -> (QueueConfig, EventFd, EventFd) {
+        // Create iothreads for each test case. iothreads will init only once.
+        INIT.call_once(|| {
+            let iothreads: Vec<IothreadConfig> = vec![
+                IothreadConfig {
+                    id: "test_valid_request".to_string(),
+                },
+                IothreadConfig {
+                    id: "test_invalid_request_type".to_string(),
+                },
+                IothreadConfig {
+                    id: "test_missing_queue_num".to_string(),
+                },
+                IothreadConfig {
+                    id: "test_address_out_of_bounds".to_string(),
+                },
+            ];
+            EventLoop::object_init(&Some(iothreads)).unwrap();
+        });
+
+        let mut block = Block::new();
+        block.blk_cfg.iothread = Some(thread_name.to_string());
+        block.realize().unwrap();
+
+        let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
+        queue_config.desc_table = GuestAddress(0);
+        queue_config.avail_ring = GuestAddress(4096);
+        queue_config.used_ring = GuestAddress(8192);
+        queue_config.ready = true;
+        queue_config.size = QUEUE_SIZE_BLK;
+
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let queue_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let queue_evts: Vec<EventFd> = vec![queue_evt.try_clone().unwrap()];
+        let queues: Vec<Arc<Mutex<Queue>>> =
+            vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
+
+        block
+            .activate(
+                mem_space.clone(),
+                interrupt_evt.try_clone().unwrap(),
+                interrupt_status,
+                queues,
+                queue_evts,
+            )
+            .unwrap();
+
+        return (queue_config, queue_evt, interrupt_evt);
+    }
+
+    // Set avail_ring and send notification to the block device.
+    fn signal_process_queue(
+        mem_space: Arc<AddressSpace>,
+        queue_config: QueueConfig,
+        queue_evt: EventFd,
+    ) -> Result<()> {
+        // Setting avail_ring idx
+        mem_space
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .unwrap();
+        // Setting avail_ring id
+        mem_space
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .unwrap();
+
+        // Imitating guest OS to send notification.
+        queue_evt.write(1).unwrap();
+        // Waiting for main loop epoll to handle Notification.
+        thread::sleep(Duration::from_millis(200));
+
+        Ok(())
+    }
+
+    // Use different input parameters to verify block `new()` and `realize()` functionality.
     #[test]
     fn test_block_init() {
-        // test block new method
+        // New block device
         let mut block = Block::new();
         assert_eq!(block.disk_sectors, 0);
         assert_eq!(block.device_features, 0);
         assert_eq!(block.driver_features, 0);
-
-        assert_eq!(block.disk_image.is_none(), true);
         assert_eq!(block.config_space.len(), 0);
-        assert_eq!(block.interrupt_cb.is_none(), true);
-        assert_eq!(block.sender.is_none(), true);
+        assert!(block.disk_image.is_none());
+        assert!(block.interrupt_cb.is_none());
+        assert!(block.sender.is_none());
 
-        // test block realize method
+        // Realize block device: create TempFile as backing file.
+        block.blk_cfg.read_only = true;
+        block.blk_cfg.direct = false;
+        let f = TempFile::new().unwrap();
+        block.blk_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
+        assert!(block.realize().is_ok());
+
+        assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
+        assert_eq!(block.queue_num(), QUEUE_NUM_BLK);
+        assert_eq!(block.queue_size(), QUEUE_SIZE_BLK);
+    }
+
+    // Test `write_config` and `read_config`. The main contests include: compare expect data and
+    // read date are same; Input invalid offset or date length, it will failed.
+    #[test]
+    fn test_read_write_config() {
+        let mut block = Block::new();
         block.realize().unwrap();
-        assert_eq!(block.device_type(), 2);
-        assert_eq!(block.queue_num(), 1);
-        assert_eq!(block.queue_size(), 256);
 
-        // test block device features
-        let device_features = (1_u64 << VIRTIO_F_VERSION_1)
-            | (1_u64 << VIRTIO_BLK_F_FLUSH)
-            | (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
-            | (1_u64 << VIRTIO_BLK_F_SIZE_MAX)
-            | (1_u64 << VIRTIO_BLK_F_SEG_MAX)
-            | (1_u64 << VIRTIO_F_RING_EVENT_IDX);
-        assert_eq!(block.device_features, device_features);
+        let expect_config_space: [u8; 8] = [0x00, 020, 0x00, 0x00, 0x00, 0x00, 0x50, 0x00];
+        let mut read_config_space = [0u8; 8];
+        block.write_config(0, &expect_config_space).unwrap();
+        block.read_config(0, &mut read_config_space).unwrap();
+        assert_eq!(read_config_space, expect_config_space);
 
-        // test read_config and write_config method
-        let write_data: Vec<u8> = vec![7; 4];
-        let mut random_data: Vec<u8> = vec![0; 4];
-        let mut origin_data: Vec<u8> = vec![0; 4];
-        block.read_config(0x00, &mut origin_data).unwrap();
-
-        block.write_config(0x00, &write_data).unwrap();
-        block.read_config(0x00, &mut random_data).unwrap();
-        assert_eq!(random_data, write_data);
-
-        block.write_config(0x00, &origin_data).unwrap();
-
-        // test boundary value of offset parameter
-        let mut data: Vec<u8> = vec![0; 10];
-        let offset: u64 = 17;
-        assert_eq!(block.read_config(offset, &mut data).is_ok(), false);
-
-        let offset: u64 = 16;
-        assert_eq!(block.read_config(offset, &mut data).is_ok(), false);
-
-        let offset: u64 = 15;
-        assert_eq!(block.read_config(offset, &mut data).is_ok(), true);
-
-        let offset: u64 = 0;
-        assert_eq!(block.read_config(offset, &mut data).is_ok(), true);
-
-        let mut data: Vec<u8> = vec![0; 65535];
-        assert_eq!(block.read_config(offset, &mut data).is_ok(), true);
-
-        let offset: u64 = 0;
-        let mut data: Vec<u8> = vec![0; 17];
-        assert_eq!(block.write_config(offset, &mut data).is_ok(), false);
-
-        let offset: u64 = 0;
-        let mut data: Vec<u8> = vec![0; 16];
-        assert_eq!(block.write_config(offset, &mut data).is_ok(), true);
-
-        let offset: u64 = 16;
-        let mut data: Vec<u8> = vec![0; 1];
-        assert_eq!(block.write_config(offset, &mut data).is_ok(), false);
-
-        let offset: u64 = 2;
-        let mut data: Vec<u8> = vec![0; 10];
-        assert_eq!(block.write_config(offset, &mut data).is_ok(), true);
+        // Invalid write
+        assert!(block
+            .write_config(CONFIG_SPACE_SIZE as u64 + 1, &expect_config_space)
+            .is_err());
+        let errlen_config_space = [0u8; 17];
+        assert!(block.write_config(0, &errlen_config_space).is_err());
+        // Invalid read
+        read_config_space = expect_config_space;
+        assert!(block
+            .read_config(CONFIG_SPACE_SIZE as u64 + 1, &mut read_config_space)
+            .is_err());
     }
 
+    // Test `get_device_features` and `set_driver_features`. The main contests include: If the
+    // device feature is 0, all driver features are not supported; If both the device feature bit
+    // and the front-end driver feature bit are supported at the same time,  this driver feature
+    // bit is supported.
     #[test]
-    fn test_serial_num_config() {
-        // test get_serial_num_config method
-        let serial_num = "qwertyuiopasdfghjklzxcvbnm";
-        let serial_num_arr = serial_num.as_bytes();
-        let id_bytes = get_serial_num_config(&serial_num);
-        assert_eq!(id_bytes[..], serial_num_arr[..20]);
-        assert_eq!(id_bytes.len(), 20);
-
-        let serial_num = "1234567890";
-        let serial_num_arr = serial_num.as_bytes();
-        let id_bytes = get_serial_num_config(&serial_num);
-        assert_eq!(id_bytes[..10], serial_num_arr[..]);
-        assert_eq!(id_bytes.len(), 20);
-
-        let serial_num = "";
-        let id_bytes = get_serial_num_config(&serial_num);
-        assert_eq!(id_bytes.len(), 20);
-    }
-
-    #[test]
-    fn test_set_driver_features() {
+    fn test_block_features() {
         let mut block = Block::new();
 
-        //If the device feature is 0, all driver features are not supported.
+        // If the device feature is 0, all driver features are not supported.
         block.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
@@ -1050,8 +1115,8 @@ mod tests {
         assert_eq!(block.driver_features, 0_u64);
         assert_eq!(block.get_device_features(1_u32), 0_u32);
 
-        //If both the device feature bit and the front-end driver feature bit are
-        //supported at the same time,  this driver feature bit is supported.
+        // If both the device feature bit and the front-end driver feature bit are
+        // supported at the same time,  this driver feature bit is supported.
         block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
         let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
         let page = 0_u32;
@@ -1073,40 +1138,219 @@ mod tests {
         assert_eq!(block.driver_features, 0);
         assert_eq!(block.get_device_features(page), 0_u32);
         block.driver_features = 0;
+    }
 
-        block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
-        let page = 0_u32;
-        block.set_driver_features(page, driver_feature);
-        assert_eq!(
-            block.driver_features,
-            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
-        );
-        assert_eq!(
-            block.get_device_features(page),
-            (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
-        );
+    // Test `get_serial_num_config`. The function will output the shorter length between 20
+    // with serial_num length.
+    #[test]
+    fn test_serial_num_config() {
+        let serial_num = "fldXlNNdCeqMvoIfEFogBxlL";
+        let serial_num_arr = serial_num.as_bytes();
+        let id_bytes = get_serial_num_config(&serial_num);
+        assert_eq!(id_bytes[..], serial_num_arr[..20]);
+        assert_eq!(id_bytes.len(), 20);
 
-        block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
-        let page = 0_u32;
-        block.set_driver_features(page, driver_feature);
-        let driver_feature: u32 = ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32;
-        let page = 1_u32;
-        block.set_driver_features(page, driver_feature);
-        assert_eq!(
-            block.driver_features,
-            (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
-        );
-        let page = 0_u32;
-        assert_eq!(
-            block.get_device_features(page),
-            (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
-        );
-        let page = 1_u32;
-        assert_eq!(
-            block.get_device_features(page),
-            ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32
-        );
+        let serial_num = "7681194149";
+        let serial_num_arr = serial_num.as_bytes();
+        let id_bytes = get_serial_num_config(&serial_num);
+        assert_eq!(id_bytes[..10], serial_num_arr[..]);
+        assert_eq!(id_bytes.len(), 20);
+
+        let serial_num = "";
+        let id_bytes_temp = get_serial_num_config(&serial_num);
+        assert_eq!(id_bytes_temp[..], [0; 20]);
+        assert_eq!(id_bytes_temp.len(), 20);
+    }
+
+    // Imitate guest OS to create a virtio_queue request and notify the block. Then block device
+    // will process queue and inject interrupt into guest OS.
+    #[test]
+    fn test_valid_request() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_valid_request");
+
+        // Setting the first desc. Note: a request requires at least two desc tables.
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x100),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        let req_head = RequestOutHeader {
+            request_type: VIRTIO_BLK_T_OUT,
+            io_prio: 0,
+            sector: 0,
+        };
+        mem_space
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .unwrap();
+
+        // Setting the second desc
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x200),
+            len: 16,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 2,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16 as u64),
+            )
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+
+        // Block device will return an interrupt, check it here.
+        assert_eq!(interrupt_evt.read().unwrap(), 1);
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        let id = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 4 as u64))
+            .unwrap();
+        let len = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 8 as u64))
+            .unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(id, 0);
+        assert_eq!(len, 1);
+    }
+
+    // A complete request must send tow desc table. It will not work with only one.
+    #[test]
+    fn test_missing_queue_num() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_missing_queue_num");
+
+        // Just Set one desc table, it will not create requests or trigger an interrupt.
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x100),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+        // Block process queue failed, so no interrupt is injected.
+        assert!(interrupt_evt.read().is_err());
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 0);
+    }
+
+    // Set RequestOutHeader invalid type, block can not process request.
+    #[test]
+    fn test_invalid_request_type() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_invalid_request_type");
+
+        // Test RequestOutHeader invalid type
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x100),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        let req_head = RequestOutHeader {
+            // invalid type
+            request_type: 16,
+            io_prio: 0,
+            sector: 0,
+        };
+        mem_space
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .unwrap();
+
+        // Setting the second desc
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x200),
+            len: 16,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 2,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16 as u64),
+            )
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+        // Block process queue failed, so no interrupt is injected.
+        assert!(interrupt_evt.read().is_err());
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 0);
+    }
+
+    // It will not work if the address set is out of bounds.
+    #[test]
+    fn test_address_out_of_bounds() {
+        let mem_space = address_space_init();
+        let (queue_config, queue_evt, interrupt_evt) =
+            run_block_device(mem_space.clone(), "test_address_out_of_bounds");
+
+        // Test GuestAddress plus len is out of bounds (addr + len > SYSTEM_SPACE_SIZE).
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x000f_fff4),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        let req_head = RequestOutHeader {
+            request_type: VIRTIO_BLK_T_OUT,
+            io_prio: 0,
+            sector: 0,
+        };
+        mem_space
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .unwrap();
+
+        // Setting the second desc
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x200),
+            len: 16,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 2,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16 as u64),
+            )
+            .unwrap();
+
+        signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
+        // Block process queue failed, so no interrupt is injected.
+        assert!(interrupt_evt.read().is_err());
+        // Get used_ring data
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 0);
     }
 }
