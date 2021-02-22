@@ -319,8 +319,15 @@ mod test {
     }
 
     #[test]
-    fn test_file_backend() {
-        let file_path = String::from("/tmp/");
+    fn test_file_backend_with_dir() {
+        // Create file backend in the current directory,
+        // and the file will be removed after test-thread exits.
+        let file_path = std::env::current_dir()
+            .unwrap()
+            .as_path()
+            .to_str()
+            .unwrap()
+            .to_string();
         let file_size = 100u64;
         let f_back = FileBackend::new(&file_path, file_size);
         assert!(f_back.is_ok());
@@ -328,7 +335,9 @@ mod test {
     }
 
     #[test]
-    fn test_create_file_backend() {
+    fn test_file_backend_with_file() {
+        // Create file backend in the current directory,
+        // and the file will be removed after test-thread exits.
         let file_path = String::from("back_mem_test1");
         let file_size = 100_u64;
         let f_back = FileBackend::new(&file_path, file_size);
@@ -341,17 +350,18 @@ mod test {
     }
 
     #[test]
-    fn test_exist_file_backend() {
+    fn test_file_backend_with_exist_file() {
+        // Create file backend in the current directory, and the file is removed manually.
         let file_path = String::from("back_mem_test2");
         let file = File::create(file_path.clone()).unwrap();
         file.set_len(50_u64).unwrap();
 
-        let file_size = 100_u64;
-        let f_back = FileBackend::new(&file_path, file_size);
+        let mem_size = 100_u64;
+        let f_back = FileBackend::new(&file_path, mem_size);
         assert!(f_back.is_err());
 
-        let file_size = 20_u64;
-        let f_back = FileBackend::new(&file_path, file_size);
+        let mem_size = 20_u64;
+        let f_back = FileBackend::new(&file_path, mem_size);
         assert!(f_back.is_ok());
         assert_eq!(f_back.as_ref().unwrap().offset, 0u64);
         assert_eq!(
@@ -365,9 +375,15 @@ mod test {
     #[test]
     fn test_create_host_mmaps() {
         let addr_ranges = [(0x0, 0x10_0000), (0x100000, 0x10_0000)];
+        let mem_path = std::env::current_dir()
+            .unwrap()
+            .as_path()
+            .to_str()
+            .unwrap()
+            .to_string();
         let mem_config = MachineMemConfig {
             mem_size: 0x20_0000,
-            mem_path: Some(String::from("/tmp")),
+            mem_path: Some(mem_path),
             dump_guest_core: false,
             mem_share: false,
         };
