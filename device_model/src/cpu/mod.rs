@@ -380,7 +380,7 @@ impl CPUInterface for CPU {
         let mut cpu_state = cpu_state.lock().unwrap();
 
         cpu_state = cvar
-            .wait_timeout(cpu_state, Duration::from_millis(16))
+            .wait_timeout(cpu_state, Duration::from_millis(32))
             .unwrap()
             .0;
 
@@ -632,7 +632,7 @@ impl CPUThreadWorker {
 
             #[cfg(test)]
             {
-                thread::sleep(Duration::from_millis(10));
+                thread::sleep(Duration::from_millis(5));
             }
         }
 
@@ -900,6 +900,9 @@ mod tests {
         drop(cpu_state);
 
         assert!(cpu_arc.resume().is_ok());
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
+
         assert!(cpu_arc.destroy().is_ok());
 
         // Wait for CPU finish state change.
