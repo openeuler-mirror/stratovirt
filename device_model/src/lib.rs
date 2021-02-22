@@ -46,7 +46,11 @@ mod mmio;
 mod virtio;
 
 pub use error_chain::*;
-pub use micro_vm::{micro_syscall::register_seccomp, LightMachine};
+pub use micro_vm::{
+    micro_syscall::{register_seccomp, syscall_allow_list},
+    LightMachine,
+};
+pub use virtio::balloon::balloon_allow_list;
 
 use address_space::GuestAddress;
 

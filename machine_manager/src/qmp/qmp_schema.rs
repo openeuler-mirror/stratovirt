@@ -891,6 +891,11 @@ pub enum QmpEvent {
         data: DEVICE_DELETED,
         timestamp: TimeStamp,
     },
+    #[serde(rename = "BALLOON_CHANGED")]
+    BALLOON_CHANGED {
+        data: BalloonInfo,
+        timestamp: TimeStamp,
+    },
 }
 
 /// query-balloon:
