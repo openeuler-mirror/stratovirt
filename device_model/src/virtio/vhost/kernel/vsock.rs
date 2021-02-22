@@ -254,3 +254,116 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::*;
+    pub use super::*;
+    pub use address_space::*;
+
+    fn vsock_address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(u64::max_value());
+        let sys_mem = AddressSpace::new(root).unwrap();
+        sys_mem
+    }
+
+    fn vsock_create_instance() -> Vsock {
+        let json = r#"
+        {
+            "vsock_id": "test_vsock_1",
+            "guest_cid": 3
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let vsock_conf = VsockConfig::from_value(&value).unwrap();
+        let sys_mem = vsock_address_space_init();
+        let vsock = Vsock::new(vsock_conf.clone(), sys_mem.clone());
+        vsock
+    }
+
+    #[test]
+    fn test_vsock_init() {
+        // test vsock new method
+        let mut vsock = vsock_create_instance();
+
+        assert_eq!(vsock.device_features, 0);
+        assert_eq!(vsock.driver_features, 0);
+        assert!(vsock.backend.is_none());
+
+        assert_eq!(vsock.device_type(), VIRTIO_TYPE_VSOCK);
+        assert_eq!(vsock.queue_num(), QUEUE_NUM_VSOCK);
+        assert_eq!(vsock.queue_size(), QUEUE_SIZE_VSOCK);
+
+        // test vsock get_device_features
+        vsock.device_features = 0x0123_4567_89ab_cdef;
+        let features = vsock.get_device_features(0);
+        assert_eq!(features, 0x89ab_cdef);
+        let features = vsock.get_device_features(1);
+        assert_eq!(features, 0x0123_4567);
+        let features = vsock.get_device_features(3);
+        assert_eq!(features, 0);
+
+        // test vsock set_driver_features
+        vsock.device_features = 0x0123_4567_89ab_cdef;
+        // check for unsupported feature
+        vsock.set_driver_features(0, 0x7000_0000);
+        assert_eq!(vsock.device_features, 0x0123_4567_89ab_cdef);
+        // check for supported feature
+        vsock.set_driver_features(0, 0x8000_0000);
+        assert_eq!(vsock.device_features, 0x0123_4567_89ab_cdef);
+
+        // test vsock write_config
+        let offset = 0;
+        let data: [u8; 4] = [0x01, 0x02, 0x03, 0x04];
+        vsock.config_space.resize(512, 0);
+        assert_eq!(vsock.write_config(offset, &data).is_ok(), true);
+        assert_eq!(&vsock.config_space[0..4], data);
+        let offset = 512;
+        assert_eq!(vsock.write_config(offset, &data).is_ok(), false);
+
+        // test vsock read_config
+        let mut buf: [u8; 8] = [0; 8];
+        assert_eq!(vsock.read_config(0, &mut buf).is_ok(), true);
+        let value = LittleEndian::read_u64(&buf);
+        assert_eq!(value, vsock.vsock_cfg.guest_cid);
+
+        let mut buf: [u8; 4] = [0; 4];
+        assert_eq!(vsock.read_config(0, &mut buf).is_ok(), true);
+        let value = LittleEndian::read_u32(&buf);
+        assert_eq!(value, vsock.vsock_cfg.guest_cid as u32);
+
+        let mut buf: [u8; 4] = [0; 4];
+        assert_eq!(vsock.read_config(4, &mut buf).is_ok(), true);
+        let value = LittleEndian::read_u32(&buf);
+        assert_eq!(value, (vsock.vsock_cfg.guest_cid >> 32) as u32);
+
+        let mut buf: [u8; 4] = [0; 4];
+        assert_eq!(vsock.read_config(5, &mut buf).is_err(), true);
+        assert_eq!(vsock.read_config(3, &mut buf).is_err(), true);
+    }
+
+    #[test]
+    fn test_vsock_realize() {
+        // test vsock new method
+        let mut vsock = vsock_create_instance();
+
+        // return directly if /dev/vhost-vsock does not exist
+        if !std::path::Path::new(VHOST_PATH).exists() {
+            return;
+        }
+
+        // test vsock realize method
+        assert!(vsock.realize().is_ok());
+        assert!(vsock.backend.is_some());
+
+        // test vsock set_guest_cid
+        let backend = vsock.backend.unwrap();
+        assert_eq!(backend.set_guest_cid(3).is_ok(), true);
+        assert_eq!(
+            backend.set_guest_cid(u32::max_value() as u64).is_ok(),
+            false
+        );
+        assert_eq!(backend.set_guest_cid(2).is_ok(), false);
+        assert_eq!(backend.set_guest_cid(0).is_ok(), false);
+    }
+}
