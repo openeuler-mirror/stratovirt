@@ -566,6 +566,10 @@ When some events happen, connected client will receive QMP events.
 
 Now StratoVirt supports four events: `SHUTDOWN`, `STOP`, `RESUME`, `DEVICE_DELETED`.
 
+### 3.7 Flow control
+
+QMP use `leak bucket` to control QMP command flow. Now QMP server accept 100 commands per second.
+
 ## 4. Other Features
 
 ### 4.1 Daemonize
