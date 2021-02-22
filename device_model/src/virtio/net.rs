@@ -556,8 +556,18 @@ impl Net {
 }
 
 impl VirtioDevice for Net {
-    /// Realize vhost virtio network device.
+    /// Realize virtio network device.
     fn realize(&mut self) -> Result<()> {
+        // if iothread not found, return err
+        if self.net_cfg.iothread.is_some()
+            && EventLoop::get_ctx(self.net_cfg.iothread.as_ref()).is_none()
+        {
+            bail!(
+                "IOThread {:?} of Net is not configured in params.",
+                self.net_cfg.iothread,
+            );
+        }
+
         self.device_features = 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_NET_F_CSUM
             | 1 << VIRTIO_NET_F_GUEST_CSUM
@@ -752,14 +762,14 @@ mod tests {
         assert_eq!(net.queue_size(), 256);
 
         // test read_config and write_config method
-        let wriet_data: Vec<u8> = vec![7; 4];
+        let write_data: Vec<u8> = vec![7; 4];
         let mut random_data: Vec<u8> = vec![0; 4];
         let mut origin_data: Vec<u8> = vec![0; 4];
         net.read_config(0x00, &mut origin_data).unwrap();
 
-        net.write_config(0x00, &wriet_data).unwrap();
+        net.write_config(0x00, &write_data).unwrap();
         net.read_config(0x00, &mut random_data).unwrap();
-        assert_eq!(random_data, wriet_data);
+        assert_eq!(random_data, write_data);
 
         net.write_config(0x00, &origin_data).unwrap();
 

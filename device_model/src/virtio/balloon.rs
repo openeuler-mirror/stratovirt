@@ -797,13 +797,13 @@ mod tests {
         };
 
         let mut balloon = Balloon::new(bln_cfg);
-        let wriet_data = [0, 0, 0, 0, 1, 0, 0, 0];
+        let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut random_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
         assert_eq!(balloon.get_memory_size(), 0);
         balloon.actual = 1;
         balloon.read_config(addr, &mut random_data).unwrap();
-        assert_eq!(random_data, wriet_data);
+        assert_eq!(random_data, write_data);
     }
 
     #[test]
@@ -813,10 +813,10 @@ mod tests {
         };
 
         let mut balloon = Balloon::new(bln_cfg);
-        let wriet_data = [1, 0, 0, 0];
+        let write_data = [1, 0, 0, 0];
         let addr = 0x00;
         assert_eq!(balloon.get_memory_size(), 0);
-        balloon.write_config(addr, &wriet_data).unwrap();
+        balloon.write_config(addr, &write_data).unwrap();
         assert_eq!(balloon.actual, 1);
     }
 }

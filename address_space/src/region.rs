@@ -707,6 +707,7 @@ mod test {
 
     use libc::EFD_NONBLOCK;
     use vmm_sys_util::eventfd::EventFd;
+    use vmm_sys_util::tempfile::TempFile;
 
     use super::*;
 
@@ -778,8 +779,9 @@ mod test {
         let rgn_start = GuestAddress(0);
         let host_mmap = HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false).unwrap();
         let ram_region = Region::init_ram_region(Arc::new(host_mmap));
-        let mut file = std::fs::File::create("/tmp/test_read_write_buffer.tmp").unwrap();
-        let mut file_read = std::fs::File::open("/tmp/test_read_write_buffer.tmp").unwrap();
+
+        let file = TempFile::new().unwrap();
+        let mut file_read = std::fs::File::open(file.as_path()).unwrap();
         let slice: [u8; 24] = [91; 24];
         let mut res_slice: [u8; 24] = [0; 24];
         let mut res_slice2: [u8; 24] = [0; 24];
@@ -790,7 +792,9 @@ mod test {
             .unwrap();
 
         // read the ram to the file, then check the file's content
-        assert!(ram_region.read(&mut file, rgn_start, 1000, 24).is_ok());
+        assert!(ram_region
+            .read(&mut file.as_file(), rgn_start, 1000, 24)
+            .is_ok());
         assert!(file_read.read(&mut res_slice).is_ok());
         assert_eq!(&slice, &mut res_slice);
 
@@ -802,8 +806,6 @@ mod test {
             .read(&mut res_slice2.as_mut(), rgn_start, 0, 24)
             .unwrap();
         assert_eq!(&slice, &mut res_slice2);
-
-        std::fs::remove_file("/tmp/test_read_write_buffer.tmp").unwrap();
     }
 
     #[test]

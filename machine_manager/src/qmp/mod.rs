@@ -44,11 +44,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use vmm_sys_util::terminal::Terminal;
 
+use crate::event_loop::EventLoop;
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
-use crate::{errors::Result, temp_cleaner::TempCleaner};
+use crate::{
+    errors::{Result, ResultExt},
+    temp_cleaner::TempCleaner,
+};
 use qmp_schema as schema;
 use schema::QmpCommand;
+use util::leak_bucket::LeakBucket;
 
 static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 
@@ -323,12 +328,31 @@ pub fn create_timestamp() -> TimeStamp {
 ///
 /// * `stream_fd` - The input stream file description.
 /// * `controller` - The controller which execute actual qmp command.
+/// * `leak_bucket` - The LeakBucket flow controller for qmp command.
 ///
 /// # Errors
 ///
 /// This function will fail when json parser failed or socket file description broke.
-pub fn handle_qmp(stream_fd: RawFd, controller: &Arc<dyn MachineExternalInterface>) -> Result<()> {
+pub fn handle_qmp(
+    stream_fd: RawFd,
+    controller: &Arc<dyn MachineExternalInterface>,
+    leak_bucket: &mut LeakBucket,
+) -> Result<()> {
     let mut qmp_service = crate::socket::SocketHandler::new(stream_fd);
+
+    // If flow over `LEAK_BUCKET_LIMIT` per seconds, discard the request and return
+    // a `OperationThrottled` error.
+    if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap()) {
+        qmp_service.discard()?;
+        let err_resp = schema::QmpErrorClass::OperationThrottled(crate::socket::LEAK_BUCKET_LIMIT);
+        qmp_service
+            .send_str(&serde_json::to_string(&Response::create_error_response(
+                err_resp, None,
+            ))?)
+            .chain_err(|| "Failed to send message to qmp client.")?;
+        return Ok(());
+    }
+
     match qmp_service.decode_line() {
         (Ok(None), _) => Ok(()),
         (Ok(buffer), if_fd) => {

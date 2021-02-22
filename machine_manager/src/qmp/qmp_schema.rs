@@ -31,6 +31,8 @@ pub enum QmpErrorClass {
     DeviceNotFound(String),
     #[serde(rename = "KVMMissingCap")]
     KVMMissingCap(String),
+    #[serde(rename = "OperationThrottled")]
+    OperationThrottled(u64),
 }
 
 impl QmpErrorClass {
@@ -41,6 +43,9 @@ impl QmpErrorClass {
             QmpErrorClass::DeviceNotActive(s) => s.to_string(),
             QmpErrorClass::DeviceNotFound(s) => s.to_string(),
             QmpErrorClass::KVMMissingCap(s) => s.to_string(),
+            QmpErrorClass::OperationThrottled(nr) => {
+                format!("More than {} requests received during 1 second", nr)
+            }
         }
     }
 }

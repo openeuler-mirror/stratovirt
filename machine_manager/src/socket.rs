@@ -16,7 +16,8 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex, RwLock};
 
-use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::leak_bucket::LeakBucket;
+use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 
 use super::errors::Result;
@@ -27,6 +28,7 @@ use crate::{
 };
 
 const MAX_SOCKET_MSG_LENGTH: usize = 8192;
+pub(crate) const LEAK_BUCKET_LIMIT: u64 = 100;
 
 /// The wrapper over Unix socket and socket handler.
 ///
@@ -181,6 +183,10 @@ impl Socket {
         let mut notifiers = Vec::new();
         self.accept();
 
+        let leak_bucket = Arc::new(Mutex::new(LeakBucket::new(LEAK_BUCKET_LIMIT)));
+        let shared_leak_bucket = leak_bucket.clone();
+        let leak_bucket_fd = leak_bucket.lock().unwrap().as_raw_fd();
+
         let mut handlers = Vec::new();
         let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
             Box::new(move |event, _| {
@@ -189,7 +195,11 @@ impl Socket {
                     let stream_fd = socket_mutexed.get_stream_fd();
 
                     let performer = &socket_mutexed.performer.as_ref().unwrap();
-                    if let Err(e) = crate::qmp::handle_qmp(stream_fd, performer) {
+                    if let Err(e) = crate::qmp::handle_qmp(
+                        stream_fd,
+                        performer,
+                        &mut shared_leak_bucket.lock().unwrap(),
+                    ) {
                         error!("{}", e);
                     }
                 }
@@ -200,28 +210,50 @@ impl Socket {
 
                     QmpChannel::unbind();
 
-                    Some(vec![EventNotifier::new(
-                        NotifierOperation::Delete,
-                        stream_fd,
-                        Some(listener_fd),
-                        EventSet::IN | EventSet::HANG_UP,
-                        Vec::new(),
-                    )])
+                    Some(vec![
+                        EventNotifier::new(
+                            NotifierOperation::Delete,
+                            stream_fd,
+                            Some(listener_fd),
+                            EventSet::IN | EventSet::HANG_UP,
+                            Vec::new(),
+                        ),
+                        EventNotifier::new(
+                            NotifierOperation::Delete,
+                            leak_bucket_fd,
+                            None,
+                            EventSet::IN,
+                            Vec::new(),
+                        ),
+                    ])
                 } else {
                     None
                 }
             });
         handlers.push(Arc::new(Mutex::new(handler)));
 
-        let notifier = EventNotifier::new(
+        let qmp_notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             self.get_stream_fd(),
             Some(self.get_listener_fd()),
             EventSet::IN | EventSet::HANG_UP,
             handlers,
         );
+        notifiers.push(qmp_notifier);
 
-        notifiers.push(notifier);
+        let leak_bucket_notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            leak_bucket_fd,
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(Box::new(move |_, fd| {
+                read_fd(fd);
+                leak_bucket.lock().unwrap().clear_timer();
+                None
+            })))],
+        );
+        notifiers.push(leak_bucket_notifier);
+
         notifiers
     }
 }
@@ -592,6 +624,14 @@ impl SocketHandler {
             }
             Err(e) => (Err(e), None),
         }
+    }
+
+    /// Discard message from `socket_fd`.
+    pub fn discard(&mut self) -> Result<()> {
+        self.stream.read_fd()?;
+        self.stream.clear();
+        self.buffer.clear();
+        Ok(())
     }
 
     /// Send String to `socket_fd`.

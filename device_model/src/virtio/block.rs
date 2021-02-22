@@ -762,7 +762,7 @@ impl Block {
 }
 
 impl VirtioDevice for Block {
-    /// Realize vhost virtio network device.
+    /// Realize virtio block device.
     fn realize(&mut self) -> Result<()> {
         // if iothread not found, return err
         if self.blk_cfg.iothread.is_some()
