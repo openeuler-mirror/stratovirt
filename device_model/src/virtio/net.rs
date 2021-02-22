@@ -558,6 +558,16 @@ impl Net {
 impl VirtioDevice for Net {
     /// Realize vhost virtio network device.
     fn realize(&mut self) -> Result<()> {
+        // if iothread not found, return err
+        if self.net_cfg.iothread.is_some()
+            && EventLoop::get_ctx(self.net_cfg.iothread.as_ref()).is_none()
+        {
+            bail!(
+                "IOThread {:?} of Net is not configured in params.",
+                self.net_cfg.iothread,
+            );
+        }
+
         self.device_features = 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_NET_F_CSUM
             | 1 << VIRTIO_NET_F_GUEST_CSUM
