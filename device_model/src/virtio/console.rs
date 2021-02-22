@@ -325,7 +325,7 @@ impl Console {
 }
 
 impl VirtioDevice for Console {
-    /// Realize vhost virtio network device.
+    /// Realize virtio console device.
     fn realize(&mut self) -> Result<()> {
         self.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
 
