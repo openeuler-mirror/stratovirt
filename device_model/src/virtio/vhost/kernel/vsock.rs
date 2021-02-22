@@ -347,8 +347,8 @@ mod tests {
         // test vsock new method
         let mut vsock = vsock_create_instance();
 
-        // return directly if /dev/vhost-vsock does not exist
-        if !std::path::Path::new(VHOST_PATH).exists() {
+        // if fail to open vsock device, no need to continue.
+        if let Err(_e) = std::fs::File::open(VHOST_PATH) {
             return;
         }
 
