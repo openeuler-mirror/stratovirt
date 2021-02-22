@@ -1004,6 +1004,7 @@ impl DeviceInterface for LightMachine {
             direct,
             serial_num: None,
             iothread: None,
+            iops: None,
         };
 
         match self.bus.add_replaceable_config(node_name, Arc::new(config)) {

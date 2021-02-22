@@ -28,6 +28,7 @@ use machine_manager::{
 };
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
+use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -381,31 +382,35 @@ impl Request {
 }
 
 /// Control block of Block IO.
-pub struct BlockIoHandler {
+struct BlockIoHandler {
     /// The virtqueue.
-    pub queue: Arc<Mutex<Queue>>,
+    queue: Arc<Mutex<Queue>>,
     /// Eventfd of the virtqueue for IO event.
-    pub queue_evt: EventFd,
+    queue_evt: EventFd,
     /// The address space to which the block device belongs.
-    pub mem_space: Arc<AddressSpace>,
+    mem_space: Arc<AddressSpace>,
     /// The image file opened by the block device.
-    pub disk_image: Option<File>,
+    disk_image: Option<File>,
     /// The number of sectors of the disk image.
-    pub disk_sectors: u64,
+    disk_sectors: u64,
     /// Serial number of the block device.
-    pub serial_num: Option<String>,
+    serial_num: Option<String>,
     /// if use direct access io.
-    pub direct: bool,
+    direct: bool,
     /// Aio context.
-    pub aio: Option<Box<Aio<AioCompleteCb>>>,
+    aio: Option<Box<Aio<AioCompleteCb>>>,
     /// Bit mask of features negotiated by the backend and the frontend.
-    pub driver_features: u64,
+    driver_features: u64,
     /// The receiving half of Rust's channel to receive the image file.
     receiver: Receiver<SenderConfig>,
     /// Eventfd for config space update.
     update_evt: RawFd,
     /// Callback to trigger an interrupt.
-    pub interrupt_cb: Arc<VirtioBlockInterrupt>,
+    interrupt_cb: Arc<VirtioBlockInterrupt>,
+    /// thread name of io handler
+    iothread: Option<String>,
+    /// Using the leak bucket to implement IO limits
+    leak_bucket: Option<LeakBucket>,
 }
 
 impl BlockIoHandler {
@@ -417,13 +422,24 @@ impl BlockIoHandler {
         let mut last_aio_req_index = 0;
         let mut need_interrupt = false;
 
-        while let Ok(elem) = self
-            .queue
-            .lock()
-            .unwrap()
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-        {
+        let mut queue = self.queue.lock().unwrap();
+
+        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            // limit io operations if iops is configured
+            if let Some(lb) = self.leak_bucket.as_mut() {
+                if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
+                    if lb.throttled(ctx) {
+                        queue.vring.push_back();
+                        break;
+                    }
+                } else {
+                    bail!(
+                        "IOThread {:?} of Block is not found in cmdline.",
+                        self.iothread,
+                    );
+                };
+            }
+
             match Request::new(&self.mem_space, &elem) {
                 Ok(req) => {
                     match req.out_header.request_type {
@@ -444,6 +460,9 @@ impl BlockIoHandler {
                 }
             };
         }
+
+        // unlock queue, because it will be hold below.
+        drop(queue);
 
         if let Some(disk_img) = self.disk_image.as_mut() {
             req_index = 0;
@@ -530,7 +549,7 @@ impl BlockIoHandler {
     }
 
     /// Build an aio context.
-    pub fn build_aio(&self) -> Result<Box<Aio<AioCompleteCb>>> {
+    fn build_aio(&self) -> Result<Box<Aio<AioCompleteCb>>> {
         let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
             let status = if ret < 0 {
                 ret
@@ -616,26 +635,25 @@ fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotif
 }
 
 impl EventNotifierHelper for BlockIoHandler {
-    fn internal_notifiers(block_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+    fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let handler_raw = handler.lock().unwrap();
         let mut notifiers = Vec::new();
-        let locked_block_io = block_io.lock().unwrap();
 
         // Register event notifier for update_evt.
-        let cloned_block_io = block_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h_clone = handler.clone();
+        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            cloned_block_io.lock().unwrap().update_evt_handler();
+            h_clone.lock().unwrap().update_evt_handler();
             None
         });
-        notifiers.push(build_event_notifier(locked_block_io.update_evt, handler));
+        notifiers.push(build_event_notifier(handler_raw.update_evt, h));
 
         // Register event notifier for queue_evt.
-        let cloned_block_io = block_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h_clone = handler.clone();
+        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            let mut locked_block_io = cloned_block_io.lock().unwrap();
-            if let Err(ref e) = locked_block_io.process_queue() {
+            if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
                 error!(
                     "Failed to handle block IO {}",
                     error_chain::ChainedError::display_chain(e)
@@ -643,18 +661,36 @@ impl EventNotifierHelper for BlockIoHandler {
             }
             None
         });
-        notifiers.push(build_event_notifier(
-            locked_block_io.queue_evt.as_raw_fd(),
-            handler,
-        ));
+        notifiers.push(build_event_notifier(handler_raw.queue_evt.as_raw_fd(), h));
 
-        // Register event notifier for aio.
-        let cloned_block_io = block_io.clone();
-        if let Some(ref aio) = locked_block_io.aio {
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        // Register timer event notifier for IO limits
+        if let Some(lb) = handler_raw.leak_bucket.as_ref() {
+            let h_clone = handler.clone();
+            let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
 
-                if let Some(aio) = &mut cloned_block_io.lock().unwrap().aio {
+                if let Some(lb) = h_clone.lock().unwrap().leak_bucket.as_mut() {
+                    lb.clear_timer();
+                }
+
+                if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
+                    error!(
+                        "Failed to handle block IO {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
+                }
+                None
+            });
+            notifiers.push(build_event_notifier(lb.as_raw_fd(), h));
+        }
+
+        // Register event notifier for aio.
+        if let Some(ref aio) = handler_raw.aio {
+            let h_clone = handler.clone();
+            let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+                read_fd(fd);
+
+                if let Some(aio) = &mut h_clone.lock().unwrap().aio {
                     if let Err(ref e) = aio.handle() {
                         error!(
                             "Failed to handle aio, {}",
@@ -664,7 +700,7 @@ impl EventNotifierHelper for BlockIoHandler {
                 }
                 None
             });
-            notifiers.push(build_event_notifier(aio.fd.as_raw_fd(), handler));
+            notifiers.push(build_event_notifier(aio.fd.as_raw_fd(), h));
         }
 
         notifiers
@@ -737,6 +773,16 @@ impl Block {
 impl VirtioDevice for Block {
     /// Realize vhost virtio network device.
     fn realize(&mut self) -> Result<()> {
+        // if iothread not found, return err
+        if self.blk_cfg.iothread.is_some()
+            && EventLoop::get_ctx(self.blk_cfg.iothread.as_ref()).is_none()
+        {
+            bail!(
+                "IOThread {:?} of Block is not configured in params.",
+                self.blk_cfg.iothread,
+            );
+        }
+
         self.device_features = (1_u64 << VIRTIO_F_VERSION_1) | (1_u64 << VIRTIO_BLK_F_FLUSH);
         if self.blk_cfg.read_only {
             self.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
@@ -889,6 +935,8 @@ impl VirtioDevice for Block {
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
             interrupt_cb: cb,
+            iothread: self.blk_cfg.iothread.clone(),
+            leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
         };
 
         handler.aio = Some(handler.build_aio()?);

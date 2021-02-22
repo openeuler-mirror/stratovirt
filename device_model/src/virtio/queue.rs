@@ -141,6 +141,9 @@ pub trait VringOps {
     /// * `features` - Bit mask of features negotiated by the backend and the frontend.
     fn pop_avail(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element>;
 
+    /// Rollback the entry which is pop from available queue by `pop_avail`.
+    fn push_back(&mut self);
+
     /// Fill the used vring after processing the IO request.
     ///
     /// # Arguments
@@ -761,6 +764,10 @@ impl VringOps for SplitVring {
                 Err(e.to_string().into())
             }
         }
+    }
+
+    fn push_back(&mut self) {
+        self.next_avail -= Wrapping(1);
     }
 
     fn add_used(&mut self, sys_mem: &Arc<AddressSpace>, index: u16, len: u32) -> Result<()> {

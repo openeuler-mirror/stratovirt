@@ -191,7 +191,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-Six properties are supported for virtio block device.
+Seven properties are supported for virtio block device.
 
 * drive_id: unique device-id in StratoVirt
 * path_on_host: the path of block device in host
@@ -199,13 +199,14 @@ Six properties are supported for virtio block device.
 * read_only: whether virtio block device is read-only or not
 * direct: open block device with `O_DIRECT` mode or not
 * iothread: indicate which iothread will be used, if not specified the main thread will be used
+* iops: used to limit IO operations for block device
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
 
 ```shell
 # cmdline
--drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off[,iothread=iothread1]
+-drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off[,iothread=iothread1,iops=200]
 
 # json
 {
@@ -217,7 +218,8 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
             "serial_num": "11111111",
             "direct": false,
             "read_only": false,
-            "iothread": "iothread1"
+            "iothread": "iothread1",
+            "iops": 200
         }
     ],
     ...

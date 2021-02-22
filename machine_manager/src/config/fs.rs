@@ -21,6 +21,7 @@ use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 const MAX_STRING_LENGTH: usize = 255;
 const MAX_PATH_LENGTH: usize = 4096;
 const MAX_SERIAL_NUM: usize = 20;
+const MAX_IOPS: u64 = 1000000;
 
 /// Config struct for `drive`.
 /// Contains block device's attr.
@@ -33,6 +34,7 @@ pub struct DriveConfig {
     pub direct: bool,
     pub serial_num: Option<String>,
     pub iothread: Option<String>,
+    pub iops: Option<u64>,
 }
 
 impl DriveConfig {
@@ -56,6 +58,7 @@ impl Default for DriveConfig {
             direct: true,
             serial_num: None,
             iothread: None,
+            iops: None,
         }
     }
 }
@@ -90,6 +93,17 @@ impl ConfigCheck for DriveConfig {
             return Err(ErrorKind::StringLengthTooLong(
                 "iothread name".to_string(),
                 MAX_STRING_LENGTH,
+            )
+            .into());
+        }
+
+        if self.iops.is_some() && self.iops.unwrap() > MAX_IOPS {
+            return Err(ErrorKind::IllegalValue(
+                "iops of block device".to_string(),
+                0,
+                true,
+                MAX_IOPS,
+                true,
             )
             .into());
         }
@@ -130,7 +144,8 @@ impl VmConfig {
             .push("readonly")
             .push("direct")
             .push("serial")
-            .push("iothread");
+            .push("iothread")
+            .push("iops");
 
         cmd_parser.parse(drive_config)?;
 
@@ -153,6 +168,7 @@ impl VmConfig {
         }
         drive.serial_num = cmd_parser.get_value::<String>("serial")?;
         drive.iothread = cmd_parser.get_value::<String>("iothread")?;
+        drive.iops = cmd_parser.get_value::<u64>("iops")?;
 
         self.add_drive(drive)
     }
