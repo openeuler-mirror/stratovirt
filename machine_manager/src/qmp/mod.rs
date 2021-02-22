@@ -310,7 +310,7 @@ pub fn create_timestamp() -> TimeStamp {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards");
     let seconds = u128::from(since_the_epoch.as_secs());
-    let microseconds = (since_the_epoch.as_nanos() - seconds * 1_000_000_000) / (1_000 as u128);
+    let microseconds = (since_the_epoch.as_nanos() - seconds * 1_000_000_000) / (1_000_u128);
     TimeStamp {
         seconds: seconds as u64,
         microseconds: microseconds as u64,

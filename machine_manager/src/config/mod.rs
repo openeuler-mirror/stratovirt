@@ -333,7 +333,7 @@ impl CmdParser {
     fn get_value<T: FromStr>(&self, param_field: &str) -> Result<Option<T>> {
         match self.params.get(param_field) {
             Some(value) => {
-                let field_msg = if param_field == "" {
+                let field_msg = if param_field.is_empty() {
                     &self.name
                 } else {
                     param_field
@@ -370,9 +370,9 @@ impl FromStr for ExBool {
     }
 }
 
-impl Into<bool> for ExBool {
-    fn into(self) -> bool {
-        self.inner
+impl From<ExBool> for bool {
+    fn from(item: ExBool) -> Self {
+        item.inner
     }
 }
 

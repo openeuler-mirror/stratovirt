@@ -357,10 +357,12 @@ impl LightMachine {
     #[cfg(target_arch = "x86_64")]
     fn arch_init(vm_fd: &VmFd) -> Result<()> {
         vm_fd.create_irq_chip()?;
-        vm_fd.set_tss_address(0xfffb_d000 as usize)?;
+        vm_fd.set_tss_address(0xfffb_d000_usize)?;
 
-        let mut pit_config = kvm_pit_config::default();
-        pit_config.flags = KVM_PIT_SPEAKER_DUMMY;
+        let pit_config = kvm_pit_config {
+            flags: KVM_PIT_SPEAKER_DUMMY,
+            pad: Default::default(),
+        };
         vm_fd.create_pit2(pit_config)?;
 
         Ok(())

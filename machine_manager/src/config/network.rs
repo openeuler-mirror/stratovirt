@@ -103,21 +103,17 @@ impl ConfigCheck for NetworkInterfaceConfig {
 impl VmConfig {
     /// Add new network device to `VmConfig`
     fn add_netdev(&mut self, net: NetworkInterfaceConfig) -> Result<()> {
-        if let Some(mut nets) = self.nets.clone() {
-            for n in &nets {
+        if self.nets.is_some() {
+            for n in self.nets.as_ref().unwrap() {
                 if n.iface_id == net.iface_id {
                     return Err(
                         ErrorKind::IdRepeat("netdev".to_string(), n.iface_id.to_string()).into(),
                     );
                 }
             }
-
-            nets.push(net);
-            self.nets = Some(nets);
+            self.nets.as_mut().unwrap().push(net);
         } else {
-            let mut nets: Vec<NetworkInterfaceConfig> = Vec::new();
-            nets.push(net);
-            self.nets = Some(nets);
+            self.nets = Some(vec![net]);
         }
 
         Ok(())

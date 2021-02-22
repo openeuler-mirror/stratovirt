@@ -115,21 +115,17 @@ impl ConfigCheck for DriveConfig {
 impl VmConfig {
     /// Add new block device to `VmConfig`.
     fn add_drive(&mut self, drive: DriveConfig) -> Result<()> {
-        if let Some(mut drives) = self.drives.clone() {
-            for d in &drives {
+        if self.drives.is_some() {
+            for d in self.drives.as_ref().unwrap() {
                 if d.drive_id == drive.drive_id {
                     return Err(
                         ErrorKind::IdRepeat("drive".to_string(), d.drive_id.to_string()).into(),
                     );
                 }
             }
-
-            drives.push(drive);
-            self.drives = Some(drives);
+            self.drives.as_mut().unwrap().push(drive);
         } else {
-            let mut drives: Vec<DriveConfig> = Vec::new();
-            drives.push(drive);
-            self.drives = Some(drives);
+            self.drives = Some(vec![drive]);
         }
 
         Ok(())
