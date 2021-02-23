@@ -296,7 +296,9 @@ pub struct Console {
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
     /// UnixListener for virtio-console to communicate in host.
-    listener: UnixListener,
+    listener: Option<UnixListener>,
+    /// Path to console socket file.
+    path: String,
 }
 
 impl Console {
@@ -307,19 +309,12 @@ impl Console {
     /// * `console_cfg` - Device configuration set by user.
     pub fn new(console_cfg: ConsoleConfig) -> Self {
         let path = console_cfg.socket_path;
-        let listener = UnixListener::bind(path.as_str())
-            .unwrap_or_else(|_| panic!("Failed to bind socket for console {}", path));
-
-        // add file to temporary pool, so it could be clean when vm exit.
-        TempCleaner::add_path(path.clone());
-
-        limit_permission(path.as_str())
-            .unwrap_or_else(|_| panic!("Failed to change file permission for console {}", path));
         Console {
             config: Arc::new(Mutex::new(VirtioConsoleConfig::new())),
             device_features: 0_u64,
             driver_features: 0_u64,
-            listener,
+            listener: None,
+            path,
         }
     }
 }
@@ -328,6 +323,19 @@ impl VirtioDevice for Console {
     /// Realize virtio console device.
     fn realize(&mut self) -> Result<()> {
         self.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        let sock = UnixListener::bind(self.path.clone())
+            .chain_err(|| format!("Failed to bind socket for console, path:{}", &self.path))?;
+        self.listener = Some(sock);
+
+        // add file to temporary pool, so it could be clean when vm exit.
+        TempCleaner::add_path(self.path.clone());
+
+        limit_permission(&self.path).chain_err(|| {
+            format!(
+                "Failed to change file permission for console, path:{}",
+                &self.path
+            )
+        })?;
 
         Ok(())
     }
@@ -396,6 +404,10 @@ impl VirtioDevice for Console {
     ) -> Result<()> {
         queue_evts.remove(0); // input_queue_evt never used
 
+        if self.listener.is_none() {
+            bail!("The console socket is empty");
+        }
+
         let handler = ConsoleHandler {
             input_queue: queues.remove(0),
             output_queue: queues.remove(0),
@@ -404,7 +416,7 @@ impl VirtioDevice for Console {
             interrupt_evt: interrupt_evt.try_clone()?,
             interrupt_status,
             driver_features: self.driver_features,
-            listener: self.listener.try_clone()?,
+            listener: self.listener.as_ref().unwrap().try_clone()?,
             client: None,
         };
 
@@ -431,6 +443,7 @@ mod tests {
             socket_path: "test_console.sock".to_string(),
         };
         let mut console = Console::new(console_cfg);
+        assert!(console.realize().is_ok());
 
         //If the device feature is 0, all driver features are not supported.
         console.device_features = 0;
@@ -484,7 +497,9 @@ mod tests {
             console_id: "console".to_string(),
             socket_path: "test_console1.sock".to_string(),
         };
-        let console = Console::new(console_cfg);
+
+        let mut console = Console::new(console_cfg);
+        assert!(console.realize().is_ok());
 
         //The offset of configuration that needs to be read exceeds the maximum
         let offset = size_of::<VirtioConsoleConfig>() as u64;
