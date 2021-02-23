@@ -117,6 +117,8 @@ fn run() -> Result<()> {
 }
 
 fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<()> {
+    let balloon_switch_on = vm_config.balloon.is_some();
+
     if cmd_args.is_present("daemonize") {
         match daemonize(cmd_args.value_of("pidfile")) {
             Ok(()) => info!("Daemonize mode start!"),
@@ -161,7 +163,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
 
     if !cmd_args.is_present("disable-seccomp") {
         let mut allow_list = syscall_allow_list();
-        if cmd_args.is_present("balloon") {
+        if balloon_switch_on {
             balloon_allow_list(&mut allow_list);
         }
         register_seccomp(allow_list)?;
