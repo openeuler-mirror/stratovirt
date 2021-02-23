@@ -894,11 +894,6 @@ pub fn qmp_query_balloon() -> Option<u64> {
 /// Create a syscall bpf rule for device `Balloon`.
 pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
     syscall_allow_list.extend(vec![
-        BpfRule::new(libc::SYS_mprotect),
-        BpfRule::new(libc::SYS_clone),
-        BpfRule::new(libc::SYS_set_robust_list),
-        BpfRule::new(libc::SYS_sched_getaffinity),
-        BpfRule::new(libc::SYS_nanosleep),
         BpfRule::new(libc::SYS_timerfd_create),
         BpfRule::new(libc::SYS_timerfd_settime),
         BpfRule::new(libc::SYS_timerfd_gettime),

@@ -51,8 +51,8 @@ const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 36 syscalls
-/// * x86_64-unknown-musl: 36 syscalls
+/// * x86_64-unknown-gnu: 39 syscalls
+/// * x86_64-unknown-musl: 39 syscalls
 /// * aarch64-unknown-gnu: 38 syscalls
 /// * aarch64-unknown-musl: 38 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
@@ -85,7 +85,6 @@ pub fn syscall_allow_list() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_rt_sigprocmask),
         #[cfg(target_arch = "x86_64")]
         BpfRule::new(libc::SYS_open),
-        #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_openat),
         BpfRule::new(libc::SYS_sigaltstack),
         BpfRule::new(libc::SYS_mmap),
@@ -108,9 +107,7 @@ pub fn syscall_allow_list() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_gettid),
         BpfRule::new(libc::SYS_getpid),
         BpfRule::new(libc::SYS_fstat),
-        #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_pread64),
-        #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_pwrite64),
         BpfRule::new(libc::SYS_statx),
         #[cfg(target_arch = "x86_64")]

@@ -452,11 +452,17 @@ impl BlockIoHandler {
                     req_index += 1;
                 }
                 Err(ref e) => {
+                    //  If it fails, also need to free descriptor table entry.
+                    queue
+                        .vring
+                        .add_used(&self.mem_space, elem.index, 0)
+                        .chain_err(|| "Failed to add used ring")?;
+                    need_interrupt = true;
+
                     error!(
                         "failed to create block request, {}",
                         error_chain::ChainedError::display_chain(e)
                     );
-                    break;
                 }
             };
         }
@@ -1280,13 +1286,17 @@ mod tests {
             .unwrap();
 
         signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
-        // Block process queue failed, so no interrupt is injected.
-        assert!(interrupt_evt.read().is_err());
+
+        assert!(interrupt_evt.read().is_ok());
         // Get used_ring data
         let idx = mem_space
             .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
             .unwrap();
-        assert_eq!(idx, 0);
+        let len = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 8 as u64))
+            .unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(len, 0);
     }
 
     // Set RequestOutHeader invalid type, block can not process request.
@@ -1332,13 +1342,17 @@ mod tests {
             .unwrap();
 
         signal_process_queue(mem_space.clone(), queue_config, queue_evt).unwrap();
-        // Block process queue failed, so no interrupt is injected.
-        assert!(interrupt_evt.read().is_err());
+
+        assert!(interrupt_evt.read().is_ok());
         // Get used_ring data
         let idx = mem_space
             .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
             .unwrap();
-        assert_eq!(idx, 0);
+        let len = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 8 as u64))
+            .unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(len, 0);
     }
 
     // It will not work if the address set is out of bounds.
