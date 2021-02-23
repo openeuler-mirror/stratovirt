@@ -593,7 +593,7 @@ And you can also restore StratoVirt's **pid number** to a file by:
 ### 4.2 Seccomp
 
 StratoVirt use [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html) to limit the syscalls
-in StratoVirt process by default. StratoVirt use only 36 syscalls in aarch64 (38 syscalls in x86_64) after running.
+in StratoVirt process by default. StratoVirt use only 36 syscalls in x86_64 (38 syscalls in aarch64) after running. 
 It will make a slight influence on performance to StratoVirt. If you want to disable seccomp, you can
 run StratoVirt with `-disable-seccomp`.
 
