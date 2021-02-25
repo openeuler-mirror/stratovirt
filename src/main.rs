@@ -23,14 +23,15 @@ use std::sync::{Arc, Mutex};
 use vmm_sys_util::terminal::Terminal;
 
 use device_model::{balloon_allow_list, register_seccomp, syscall_allow_list, LightMachine};
-use machine_manager::qmp::QmpChannel;
-use machine_manager::socket::Socket;
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
+    config::VmConfig,
     event_loop::EventLoop,
+    qmp::QmpChannel,
+    signal_handler::{exit_with_code, register_kill_signal, VM_EXIT_GENE_ERR},
+    socket::Socket,
     temp_cleaner::TempCleaner,
 };
-use machine_manager::{config::VmConfig, signal_handler::register_kill_signal};
 use util::loop_context::EventNotifierHelper;
 use util::unix::limit_permission;
 use util::{arg_parser, daemonize::daemonize, logger};
@@ -85,13 +86,18 @@ fn run() -> Result<()> {
 
         // clean temporary file
         TempCleaner::clean();
+        exit_with_code(VM_EXIT_GENE_ERR);
     }));
 
     let vm_config: VmConfig = create_vmconfig(&cmd_args)?;
     info!("VmConfig is {:?}", vm_config);
 
     match real_main(&cmd_args, vm_config) {
-        Ok(()) => info!("MainLoop over, Vm exit"),
+        Ok(()) => {
+            info!("MainLoop over, Vm exit");
+            // clean temporary file
+            TempCleaner::clean();
+        }
         Err(ref e) => {
             std::io::stdin()
                 .lock()
@@ -107,11 +113,11 @@ fn run() -> Result<()> {
                 )
                 .expect("Failed to write to stderr");
             }
+            // clean temporary file
+            TempCleaner::clean();
+            exit_with_code(VM_EXIT_GENE_ERR);
         }
     }
-
-    // clean temporary file
-    TempCleaner::clean();
 
     Ok(())
 }

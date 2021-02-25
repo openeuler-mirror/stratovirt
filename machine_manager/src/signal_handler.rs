@@ -17,7 +17,7 @@ use libc::{c_int, c_void, siginfo_t};
 use vmm_sys_util::signal::register_signal_handler;
 use vmm_sys_util::terminal::Terminal;
 
-const VM_EXIT_GENE_ERR: i32 = -1;
+pub const VM_EXIT_GENE_ERR: i32 = -1;
 const SYSTEMCALL_OFFSET: isize = 6;
 
 fn basic_clean() {
@@ -32,7 +32,7 @@ fn basic_clean() {
         .expect("Failed to set terminal to canon mode.");
 }
 
-fn exit_with_code(code: i32) {
+pub fn exit_with_code(code: i32) {
     // Safe, because the basic_clean function has been executed before exit.
     unsafe {
         libc::_exit(code);
