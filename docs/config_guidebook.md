@@ -289,7 +289,7 @@ $ ifconfig qbr0 up; ifconfig tap0 up
 $ ifconfig qbr0 1.1.1.1
 
 # Run StratoVirt
-... -netdev id=iface_0,netdev=tap0 ...
+... -netdev id=net-0,netdev=tap0 ...
 
 # In guest
 $ ip link set eth0 up
@@ -458,8 +458,8 @@ Stop all guest VCPUs execution.
 
 ```json
 <- {"execute":"stop"}
--> {"return":{}}
 -> {"event":"STOP","data":{},"timestamp":{"seconds":1583908726,"microseconds":162739}}
+-> {"return":{}}
 ```
 
 #### 3.3.2 Command `cont`
@@ -468,8 +468,8 @@ Resume all guest VCPUs execution.
 
 ```json
 <- {"execute":"cont"}
--> {"return":{}}
 -> {"event":"RESUME","data":{},"timestamp":{"seconds":1583908853,"microseconds":411394}}
+-> {"return":{}}
 ```
 
 #### 3.3.3 Command `quit`
@@ -478,8 +478,8 @@ This command will cause StratoVirt process to exit gracefully.
 
 ```json
 <- {"execute":"quit"}
--> {"event":"SHUTDOWN","data":{"guest":false,"reason":"host-qmp-quit"},"timestamp":{"ds":1590563776,"microseconds":519808}}
 -> {"return":{}}
+-> {"event":"SHUTDOWN","data":{"guest":false,"reason":"host-qmp-quit"},"timestamp":{"ds":1590563776,"microseconds":519808}}
 ```
 
 #### 3.3.4 Command `query-status`
@@ -530,7 +530,9 @@ You can also remove the replaceable block device by:
 
 ```json
 <- {"execute":"netdev_add", "arguments":{"id":"net-0", "ifname":"tap0"}}
--> {"execute":"device_add", "arguments":{"id":"net-0", "driver":"virtio-net-mmio", "addr":"0x0"}}
+-> {"return": {}}
+<- {"execute":"device_add", "arguments":{"id":"net-0", "driver":"virtio-net-mmio", "addr":"0x0"}}
+-> {"return": {}}
 ```
 
 **`id` in `netdev_add` should be same as `id` in `device_add`.**
@@ -541,6 +543,7 @@ You can also remove the replaceable net device by:
 
 ```json
 <- {"execute": "device_del", "arguments": {"id": "net-0"}}
+-> {"event":"DEVICE_DELETED","data":{"device":"net-0","path":"net-0"},"timestamp":{"seconds":1614310541,"microseconds":554250}}
 -> {"return": {}}
 ```
 

@@ -21,7 +21,7 @@ use crate::loop_context::EventLoopContext;
 /// Used to improve the accuracy of bucket level.
 const ACCURACY_SCALE: u64 = 1000;
 /// Nanoseconds per second.
-const NANOS_PER_SEC: u64 = 1000000000;
+const NANOS_PER_SEC: u64 = 1_000_000_000;
 
 /// Structure used to describe a Leaky Bucket.
 pub struct LeakBucket {
