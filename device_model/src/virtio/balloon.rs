@@ -616,6 +616,8 @@ pub struct Balloon {
     interrupt_cb: Option<Arc<VirtioBalloonInterrupt>>,
     /// Balloon memory information.
     mem_info: BlnMemInfo,
+    /// Memory space
+    mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
 }
@@ -626,7 +628,7 @@ impl Balloon {
     /// # Arguments
     ///
     /// * `bln_cfg` - Balloon configuration.
-    pub fn new(bln_cfg: BalloonConfig) -> Balloon {
+    pub fn new(bln_cfg: BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
         let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
         if bln_cfg.deflate_on_oom {
             device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
@@ -639,6 +641,7 @@ impl Balloon {
             num_pages: 0u32,
             interrupt_cb: None,
             mem_info: BlnMemInfo::new(),
+            mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
         }
     }
@@ -670,10 +673,6 @@ impl Balloon {
     ///
     /// * `size` - Target momery size.
     pub fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
-        let msg = BalloonInfo {
-            actual: self.get_guest_memory_size(),
-        };
-        event!(BALLOON_CHANGED; msg);
         let host_page_size = host_page_size();
         if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.has_huge_page() {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
@@ -685,6 +684,10 @@ impl Balloon {
         self.signal_config_change().chain_err(|| {
             "Failed to notify about configuration change after setting balloon memory"
         })?;
+        let msg = BalloonInfo {
+            actual: self.get_guest_memory_size(),
+        };
+        event!(BALLOON_CHANGED; msg);
         Ok(())
     }
 
@@ -702,6 +705,11 @@ impl Balloon {
 impl VirtioDevice for Balloon {
     /// Realize a balloon device.
     fn realize(&mut self) -> Result<()> {
+        let bln_mem_info = BlnMemInfo::new();
+        self.mem_info = bln_mem_info.clone();
+        self.mem_space
+            .register_listener(Box::new(bln_mem_info))
+            .chain_err(|| "Failed to register memory listener defined by balloon device.")?;
         Ok(())
     }
 
@@ -825,24 +833,19 @@ impl VirtioDevice for Balloon {
         }) as VirtioBalloonInterrupt);
 
         self.interrupt_cb = Some(cb.clone());
-        let bln_mem_info = BlnMemInfo::new();
-        self.mem_info = bln_mem_info.clone();
         let handler = BalloonIoHandler {
             driver_features: self.driver_features,
-            mem_space: mem_space.clone(),
+            mem_space,
             inf_queue,
             inf_evt: inf_queue_evt,
             def_queue,
             def_evt: def_queue_evt,
             interrupt_cb: cb.clone(),
-            mem_info: bln_mem_info.clone(),
+            mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
             balloon_actual: self.actual.clone(),
         };
 
-        mem_space
-            .register_listener(Box::new(bln_mem_info))
-            .chain_err(|| "Failed to register memory listener defined by balloon device.")?;
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
@@ -873,11 +876,16 @@ pub fn qmp_balloon(target: u64) -> bool {
                 return true;
             }
             Err(ref e) => {
-                error!("Failed to set balloon memory size: {}, {}", target, e);
+                error!(
+                    "Failed to set balloon memory size: {}, :{}",
+                    target,
+                    error_chain::ChainedError::display_chain(e)
+                );
                 return false;
             }
         }
     }
+    error!("Balloon device not configured");
     false
 }
 
@@ -905,13 +913,34 @@ mod tests {
     pub use super::super::*;
     pub use super::*;
 
+    use address_space::{HostMemMapping, Region};
+
+    const MEMORY_SIZE: u64 = (1024 * 1024) as u64;
+
+    fn address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36);
+        let sys_space = AddressSpace::new(root).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), MEMORY_SIZE, None, false, false).unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
+
     #[test]
     fn test_balloon_init() {
         let bln_cfg = BalloonConfig {
             deflate_on_oom: true,
         };
 
-        let mut bln = Balloon::new(bln_cfg);
+        let mem_space = address_space_init();
+        let mut bln = Balloon::new(bln_cfg, mem_space);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
@@ -932,7 +961,8 @@ mod tests {
             deflate_on_oom: true,
         };
 
-        let balloon = Arc::new(Mutex::new(Balloon::new(bln_cfg)));
+        let mem_space = address_space_init();
+        let balloon = Arc::new(Mutex::new(Balloon::new(bln_cfg, mem_space)));
         Balloon::object_init(balloon);
         let balloon_get = unsafe { &BALLOON_DEV };
         assert!(balloon_get.is_some());
@@ -944,7 +974,8 @@ mod tests {
             deflate_on_oom: true,
         };
 
-        let balloon = Balloon::new(bln_cfg);
+        let mem_space = address_space_init();
+        let balloon = Balloon::new(bln_cfg, mem_space);
         let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut random_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
@@ -960,7 +991,8 @@ mod tests {
             deflate_on_oom: true,
         };
 
-        let mut balloon = Balloon::new(bln_cfg);
+        let mem_space = address_space_init();
+        let mut balloon = Balloon::new(bln_cfg, mem_space);
         let write_data = [1, 0, 0, 0];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
