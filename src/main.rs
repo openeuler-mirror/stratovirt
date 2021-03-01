@@ -125,19 +125,28 @@ fn run() -> Result<()> {
 fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<()> {
     let balloon_switch_on = vm_config.balloon.is_some();
 
+    TempCleaner::object_init();
+
     if cmd_args.is_present("daemonize") {
         match daemonize(cmd_args.value_of("pidfile")) {
-            Ok(()) => info!("Daemonize mode start!"),
-            Err(e) => error!("Daemonize start failed: {}", e),
+            Ok(()) => {
+                if let Some(pidfile) = cmd_args.value_of("pidfile") {
+                    TempCleaner::add_path(pidfile);
+                }
+                info!("Daemonize mode start!");
+            }
+            Err(e) => bail!("Daemonize start failed: {}", e),
         }
     } else {
+        if cmd_args.value_of("pidfile").is_some() {
+            bail!("-pidfile must be used with -daemonize together.");
+        }
         std::io::stdin()
             .lock()
             .set_raw_mode()
             .chain_err(|| "Failed to set terminal to raw mode.")?;
     }
 
-    TempCleaner::object_init();
     QmpChannel::object_init();
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
