@@ -69,7 +69,7 @@ use std::sync::Arc;
 use kvm_bindings::kvm_segment;
 
 use address_space::{AddressSpace, GuestAddress};
-use bootparam::{BootParams, RealModeKernelHeader, BOOT_VERSION, E820_RAM, E820_RESERVED, HDRS};
+use bootparam::{BootParams, RealModeKernelHeader, BOOT_VERSION, HDRS};
 use gdt::GdtEntry;
 use mptable::{
     BusEntry, ConfigTableHeader, FloatingPointer, IOApicEntry, IOInterruptEntry,
@@ -369,31 +369,7 @@ fn setup_boot_params(
         ))
     };
 
-    boot_params.add_e820_entry(
-        REAL_MODE_IVT_BEGIN,
-        EBDA_START - REAL_MODE_IVT_BEGIN,
-        E820_RAM,
-    );
-    boot_params.add_e820_entry(EBDA_START, VGA_RAM_BEGIN - EBDA_START, E820_RESERVED);
-    boot_params.add_e820_entry(MB_BIOS_BEGIN, 0, E820_RESERVED);
-
-    let high_memory_start = VMLINUX_RAM_START;
-    let layout_32bit_gap_end = config.gap_range.0 + config.gap_range.1;
-    let mem_end = sys_mem.memory_end_address().raw_value();
-    if mem_end < layout_32bit_gap_end {
-        boot_params.add_e820_entry(high_memory_start, mem_end - high_memory_start, E820_RAM);
-    } else {
-        boot_params.add_e820_entry(
-            high_memory_start,
-            config.gap_range.0 - high_memory_start,
-            E820_RAM,
-        );
-        boot_params.add_e820_entry(
-            layout_32bit_gap_end,
-            mem_end - layout_32bit_gap_end,
-            E820_RAM,
-        );
-    }
+    boot_params.setup_e820_entries(&config, &sys_mem);
 
     sys_mem
         .write_object(&boot_params, GuestAddress(ZERO_PAGE_START))

@@ -10,7 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::Arc;
+
+use address_space::AddressSpace;
 use util::byte_code::ByteCode;
+
+use super::{
+    X86BootLoaderConfig, EBDA_START, MB_BIOS_BEGIN, REAL_MODE_IVT_BEGIN, VGA_RAM_BEGIN,
+    VMLINUX_RAM_START,
+};
 
 pub const E820_RAM: u32 = 1;
 pub const E820_RESERVED: u32 = 2;
@@ -162,6 +170,38 @@ impl BootParams {
         self.e820_table[self.e820_entries as usize] = E820Entry { addr, size, type_ };
         self.e820_entries += 1;
     }
+
+    pub fn setup_e820_entries(
+        &mut self,
+        config: &X86BootLoaderConfig,
+        sys_mem: &Arc<AddressSpace>,
+    ) {
+        self.add_e820_entry(
+            REAL_MODE_IVT_BEGIN,
+            EBDA_START - REAL_MODE_IVT_BEGIN,
+            E820_RAM,
+        );
+        self.add_e820_entry(EBDA_START, VGA_RAM_BEGIN - EBDA_START, E820_RESERVED);
+        self.add_e820_entry(MB_BIOS_BEGIN, 0, E820_RESERVED);
+
+        let high_memory_start = VMLINUX_RAM_START;
+        let layout_32bit_gap_end = config.gap_range.0 + config.gap_range.1;
+        let mem_end = sys_mem.memory_end_address().raw_value();
+        if mem_end < layout_32bit_gap_end {
+            self.add_e820_entry(high_memory_start, mem_end - high_memory_start, E820_RAM);
+        } else {
+            self.add_e820_entry(
+                high_memory_start,
+                config.gap_range.0 - high_memory_start,
+                E820_RAM,
+            );
+            self.add_e820_entry(
+                layout_32bit_gap_end,
+                mem_end - layout_32bit_gap_end,
+                E820_RAM,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -171,12 +211,11 @@ mod test {
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 
-    use super::super::{setup_boot_params, X86BootLoaderConfig};
+    use super::super::X86BootLoaderConfig;
     use super::*;
 
     #[test]
     fn test_boot_param() {
-        // test setup_boot_params function
         let root = Region::init_container_region(0x2000_0000);
         let space = AddressSpace::new(root.clone()).unwrap();
         let ram1 = Arc::new(
@@ -196,29 +235,28 @@ mod test {
             ioapic_addr: 0xFEC0_0000,
             lapic_addr: 0xFEE0_0000,
         };
-        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
-        assert_eq!(initrd_addr_tmp, 0xfff_0000);
-        let test_zero_page = space
-            .read_object::<BootParams>(GuestAddress(0x0000_7000))
-            .unwrap();
-        assert_eq!(test_zero_page.e820_entries, 4);
+
+        let boot_hdr = RealModeKernelHeader::default();
+        let mut boot_params = BootParams::new(boot_hdr);
+        boot_params.setup_e820_entries(&config, &space);
+        assert_eq!(boot_params.e820_entries, 4);
 
         unsafe {
-            assert_eq!(test_zero_page.e820_table[0].addr, 0);
-            assert_eq!(test_zero_page.e820_table[0].size, 0x0009_FC00);
-            assert_eq!(test_zero_page.e820_table[0].type_, 1);
+            assert_eq!(boot_params.e820_table[0].addr, 0);
+            assert_eq!(boot_params.e820_table[0].size, 0x0009_FC00);
+            assert_eq!(boot_params.e820_table[0].type_, 1);
 
-            assert_eq!(test_zero_page.e820_table[1].addr, 0x0009_FC00);
-            assert_eq!(test_zero_page.e820_table[1].size, 0x400);
-            assert_eq!(test_zero_page.e820_table[1].type_, 2);
+            assert_eq!(boot_params.e820_table[1].addr, 0x0009_FC00);
+            assert_eq!(boot_params.e820_table[1].size, 0x400);
+            assert_eq!(boot_params.e820_table[1].type_, 2);
 
-            assert_eq!(test_zero_page.e820_table[2].addr, 0x000F_0000);
-            assert_eq!(test_zero_page.e820_table[2].size, 0);
-            assert_eq!(test_zero_page.e820_table[2].type_, 2);
+            assert_eq!(boot_params.e820_table[2].addr, 0x000F_0000);
+            assert_eq!(boot_params.e820_table[2].size, 0);
+            assert_eq!(boot_params.e820_table[2].type_, 2);
 
-            assert_eq!(test_zero_page.e820_table[3].addr, 0x0010_0000);
-            assert_eq!(test_zero_page.e820_table[3].size, 0x0ff0_0000);
-            assert_eq!(test_zero_page.e820_table[3].type_, 1);
+            assert_eq!(boot_params.e820_table[3].addr, 0x0010_0000);
+            assert_eq!(boot_params.e820_table[3].size, 0x0ff0_0000);
+            assert_eq!(boot_params.e820_table[3].type_, 1);
         }
     }
 }
