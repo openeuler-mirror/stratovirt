@@ -15,8 +15,10 @@ use std::sync::Arc;
 use address_space::{AddressSpace, GuestAddress};
 use kvm_bindings::kvm_segment;
 
-use super::BootGdtSegment;
-use super::{BOOT_GDT_MAX, BOOT_GDT_OFFSET, BOOT_IDT_OFFSET, GDT_ENTRY_BOOT_CS, GDT_ENTRY_BOOT_DS};
+use super::super::BootGdtSegment;
+use super::super::{
+    BOOT_GDT_MAX, BOOT_GDT_OFFSET, BOOT_IDT_OFFSET, GDT_ENTRY_BOOT_CS, GDT_ENTRY_BOOT_DS,
+};
 use crate::errors::{Result, ResultExt};
 
 // /*

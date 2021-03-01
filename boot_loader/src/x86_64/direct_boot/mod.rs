@@ -1,0 +1,401 @@
+// Copyright (c) 2020 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// StratoVirt is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan
+// PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//         http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
+mod gdt;
+mod mptable;
+
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
+
+use address_space::{AddressSpace, GuestAddress};
+use util::byte_code::ByteCode;
+
+use super::bootparam::{BootParams, RealModeKernelHeader, BOOT_VERSION, HDRS};
+use super::{X86BootLoader, X86BootLoaderConfig};
+use super::{
+    BOOT_HDR_START, BOOT_LOADER_SP, BZIMAGE_BOOT_OFFSET, CMDLINE_START, EBDA_START,
+    INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
+};
+use crate::errors::{ErrorKind, Result, ResultExt};
+use gdt::setup_gdt;
+use mptable::setup_isa_mptable;
+
+/// Load linux kernel or initrd image file to Guest Memory.
+///
+/// # Arguments
+/// * `image` - image file for kernel or initrd.
+/// * `start_addr` - image start address in guest memory.
+/// * `sys_mem` - guest memory.
+///
+/// # Errors
+/// * `BootLoaderOpenKernel`: Open image failed.
+/// * `AddressSpace`: Write image to guest memory failed.
+fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
+    let curr_loc = image.seek(SeekFrom::Current(0))?;
+    let len = image.seek(SeekFrom::End(0))?;
+    image.seek(SeekFrom::Start(curr_loc))?;
+
+    sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
+
+    Ok(())
+}
+
+/// Load bzImage linux kernel to Guest Memory.
+///
+/// # Notes
+/// According to Linux `Documentation/x86/boot.txt`, bzImage includes two parts:
+/// * the setup
+/// * the compressed kernel
+/// The setup `RealModeKernelHeader` can be load at offset `0x01f1` in bzImage kernel image.
+/// The compressed kernel will be loaded into guest memory at `code32_start` in
+/// `RealModeKernelHeader`.
+/// The start address of compressed kernel is the loader address + 0x200. It will be
+/// set in `kernel_start` in `BootLoader` structure set.
+///
+/// # Arguments
+///
+/// * `kernel_image` - Guest kernel image.
+///
+/// # Errors
+///
+/// * Invalid BzImage header or version.
+/// * Failed to write bzImage linux kernel to guest memory.
+pub fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
+    kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
+    let mut boot_hdr_buf = [0_u8; std::mem::size_of::<RealModeKernelHeader>()];
+    kernel_image
+        .read_exact(&mut boot_hdr_buf)
+        .chain_err(|| "Failed to read boot_hdr from bzImage kernel")?;
+    let boot_hdr = RealModeKernelHeader::from_bytes(&boot_hdr_buf).unwrap();
+
+    if boot_hdr.header != HDRS {
+        kernel_image.seek(SeekFrom::Start(0))?;
+        return Err(ErrorKind::InvalidBzImage.into());
+    }
+
+    if (boot_hdr.version < BOOT_VERSION) || ((boot_hdr.loadflags & 0x1) == 0x0) {
+        kernel_image.seek(SeekFrom::Start(0))?;
+        return Err(ErrorKind::InvalidBzImage.into());
+    }
+
+    let mut setup_size = boot_hdr.setup_sects as u64;
+    if setup_size == 0 {
+        setup_size = 4;
+    }
+    setup_size = (setup_size + 1) << 9;
+
+    kernel_image.seek(SeekFrom::Start(setup_size as u64))?;
+
+    Ok(*boot_hdr)
+}
+
+fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
+    // Initial pagetables.
+
+    // Puts PML4 right after zero page but aligned to 4k.
+    let boot_pml4_addr = PML4_START;
+    let boot_pdpte_addr = PDPTE_START;
+    let boot_pde_addr = PDE_START;
+
+    // Entry covering VA [0..512GB)
+    let pdpte = boot_pdpte_addr | 0x03;
+    sys_mem
+        .write_object(&pdpte, GuestAddress(boot_pml4_addr))
+        .chain_err(|| format!("Failed to load PD PTE to 0x{:x}", boot_pml4_addr))?;
+
+    // Entry covering VA [0..1GB)
+    let pde = boot_pde_addr | 0x03;
+    sys_mem
+        .write_object(&pde, GuestAddress(boot_pdpte_addr))
+        .chain_err(|| format!("Failed to load PDE to 0x{:x}", boot_pdpte_addr))?;
+
+    // 512 2MB entries together covering VA [0..1GB). Note we are assuming
+    // CPU supports 2MB pages (/proc/cpuinfo has 'pse'). All modern CPUs do.
+    for i in 0..512u64 {
+        let pde = (i << 21) + 0x83u64;
+        sys_mem
+            .write_object(&pde, GuestAddress(boot_pde_addr + i * 8))
+            .chain_err(|| format!("Failed to load PDE to 0x{:x}", boot_pde_addr + i * 8))?;
+    }
+
+    Ok(boot_pml4_addr)
+}
+
+fn setup_boot_params(
+    config: &X86BootLoaderConfig,
+    sys_mem: &Arc<AddressSpace>,
+    boot_hdr: Option<RealModeKernelHeader>,
+) -> Result<(u64, u64)> {
+    let (ramdisk_size, ramdisk_image, initrd_addr) = if config.initrd_size > 0 {
+        let mut initrd_addr_max = INITRD_ADDR_MAX as u32;
+        if initrd_addr_max as u64 > sys_mem.memory_end_address().raw_value() as u64 {
+            initrd_addr_max = sys_mem.memory_end_address().raw_value() as u32;
+        };
+
+        let img = (initrd_addr_max - config.initrd_size as u32) & !0xfffu32;
+        (config.initrd_size as u32, img, img as u64)
+    } else {
+        info!("No initrd image file.");
+        (0u32, 0u32, 0u64)
+    };
+
+    let mut boot_params = if let Some(mut boot_hdr) = boot_hdr {
+        boot_hdr.setup(
+            CMDLINE_START as u32,
+            config.kernel_cmdline.len() as u32,
+            ramdisk_image,
+            ramdisk_size,
+        );
+        BootParams::new(boot_hdr)
+    } else {
+        BootParams::new(RealModeKernelHeader::new(
+            CMDLINE_START as u32,
+            config.kernel_cmdline.len() as u32,
+            ramdisk_image,
+            ramdisk_size,
+        ))
+    };
+
+    boot_params.setup_e820_entries(&config, &sys_mem);
+
+    sys_mem
+        .write_object(&boot_params, GuestAddress(ZERO_PAGE_START))
+        .chain_err(|| format!("Failed to load zero page to 0x{:x}", ZERO_PAGE_START))?;
+
+    Ok((ZERO_PAGE_START, initrd_addr))
+}
+
+pub fn linux_bootloader(
+    config: &X86BootLoaderConfig,
+    sys_mem: &Arc<AddressSpace>,
+    boot_hdr: Option<RealModeKernelHeader>,
+) -> Result<X86BootLoader> {
+    let (kernel_start, vmlinux_start) = if let Some(boot_hdr) = boot_hdr {
+        (
+            boot_hdr.code32_start as u64 + BZIMAGE_BOOT_OFFSET,
+            boot_hdr.code32_start as u64,
+        )
+    } else {
+        (VMLINUX_STARTUP, VMLINUX_STARTUP)
+    };
+
+    let boot_pml4 = setup_page_table(sys_mem).chain_err(|| "Failed to setup page table")?;
+
+    setup_isa_mptable(
+        sys_mem,
+        EBDA_START,
+        config.cpu_count,
+        config.ioapic_addr,
+        config.lapic_addr,
+    )
+    .chain_err(|| "Failed to setup isa mptable")?;
+
+    let (zero_page, initrd_addr) = setup_boot_params(&config, sys_mem, boot_hdr)
+        .chain_err(|| "Failed to setup boot params")?;
+
+    let gdt_seg = setup_gdt(sys_mem)?;
+
+    Ok(X86BootLoader {
+        kernel_start,
+        vmlinux_start,
+        kernel_sp: BOOT_LOADER_SP,
+        initrd_start: initrd_addr,
+        boot_pml4_addr: boot_pml4,
+        zero_page_addr: zero_page,
+        segments: gdt_seg,
+    })
+}
+
+pub fn setup_kernel_cmdline(
+    config: &X86BootLoaderConfig,
+    sys_mem: &Arc<AddressSpace>,
+) -> Result<()> {
+    let mut cmdline = config.kernel_cmdline.as_bytes();
+    sys_mem.write(
+        &mut cmdline,
+        GuestAddress(CMDLINE_START),
+        config.kernel_cmdline.len() as u64,
+    )?;
+
+    Ok(())
+}
+
+/// Load PE(vmlinux.bin) linux kernel / bzImage linux kernel and
+/// other boot source to Guest Memory.
+///
+/// # Steps
+///
+/// 1. Prepare for linux kernel boot env, return guest memory layout.
+/// 2. According guest memory layout, load linux kernel to guest memory.
+/// 3. According guest memory layout, load initrd image to guest memory.
+/// 4. Inject cmdline to guest memory.
+///
+/// # Arguments
+///
+/// * `config` - boot source config, contains kernel, initrd and kernel cmdline.
+/// * `sys_mem` - guest memory.
+///
+/// # Errors
+///
+/// Load kernel, initrd or kernel cmdline to guest memory failed. Boot source
+/// is broken or guest memory is abnormal.
+pub fn load_kernel(
+    config: &X86BootLoaderConfig,
+    sys_mem: &Arc<AddressSpace>,
+) -> Result<X86BootLoader> {
+    let mut kernel_image =
+        File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+
+    let boot_loader = {
+        let boot_hdr = load_bzimage(&mut kernel_image).ok();
+        linux_bootloader(config, sys_mem, boot_hdr)
+            .chain_err(|| "Failed to init x86_64 boot_loader")?
+    };
+
+    load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)
+        .chain_err(|| "Failed to load kernel image to vm memory")?;
+
+    match &config.initrd {
+        Some(initrd) => {
+            let mut initrd_image =
+                File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+            load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)
+                .chain_err(|| "Failed to load initrd image to vm memory")?;
+        }
+        None => {}
+    };
+
+    setup_kernel_cmdline(&config, sys_mem).chain_err(|| "Failed to setup kernel cmdline")?;
+
+    Ok(boot_loader)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::sync::Arc;
+
+    use address_space::*;
+    use kvm_bindings::kvm_segment;
+    use std::path::PathBuf;
+
+    use crate::x86_64::BOOT_GDT_MAX;
+
+    #[test]
+    fn test_x86_bootloader_and_kernel_cmdline() {
+        let root = Region::init_container_region(0x2000_0000);
+        let space = AddressSpace::new(root.clone()).unwrap();
+        let ram1 = Arc::new(
+            HostMemMapping::new(GuestAddress(0), 0x1000_0000, None, false, false).unwrap(),
+        );
+        let region_a = Region::init_ram_region(ram1.clone());
+        root.add_subregion(region_a, ram1.start_address().raw_value())
+            .unwrap();
+        assert_eq!(setup_page_table(&space).unwrap(), 0x0000_9000);
+        assert_eq!(
+            space.read_object::<u64>(GuestAddress(0x0000_9000)).unwrap(),
+            0x0000_a003
+        );
+        assert_eq!(
+            space.read_object::<u64>(GuestAddress(0x0000_a000)).unwrap(),
+            0x0000_b003
+        );
+        let mut page_addr: u64 = 0x0000_b000;
+        let mut tmp_value: u64 = 0x83;
+        for _ in 0..512u64 {
+            assert_eq!(
+                space.read_object::<u64>(GuestAddress(page_addr)).unwrap(),
+                tmp_value
+            );
+            page_addr += 8;
+            tmp_value += 0x20_0000;
+        }
+
+        let config = X86BootLoaderConfig {
+            kernel: PathBuf::new(),
+            initrd: Some(PathBuf::new()),
+            initrd_size: 0x1_0000,
+            kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
+            cpu_count: 2,
+            gap_range: (0xC000_0000, 0x4000_0000),
+            ioapic_addr: 0xFEC0_0000,
+            lapic_addr: 0xFEE0_0000,
+        };
+        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
+        assert_eq!(initrd_addr_tmp, 0xfff_0000);
+
+        //test setup_gdt function
+        let c_seg = kvm_segment {
+            base: 0,
+            limit: 1048575,
+            selector: 16,
+            type_: 11,
+            present: 1,
+            dpl: 0,
+            db: 0,
+            s: 1,
+            l: 1,
+            g: 1,
+            avl: 0,
+            unusable: 0,
+            padding: 0,
+        };
+        let d_seg = kvm_segment {
+            base: 0,
+            limit: 1048575,
+            selector: 24,
+            type_: 3,
+            present: 1,
+            dpl: 0,
+            db: 1,
+            s: 1,
+            l: 0,
+            g: 1,
+            avl: 0,
+            unusable: 0,
+            padding: 0,
+        };
+
+        let boot_gdt_seg = setup_gdt(&space).unwrap();
+
+        assert_eq!(boot_gdt_seg.code_segment, c_seg);
+        assert_eq!(boot_gdt_seg.data_segment, d_seg);
+        assert_eq!(boot_gdt_seg.gdt_limit, 31);
+        assert_eq!(boot_gdt_seg.idt_limit, 7);
+        let mut arr: Vec<u64> = Vec::new();
+        let mut boot_addr: u64 = 0x500;
+        for _ in 0..BOOT_GDT_MAX {
+            arr.push(space.read_object(GuestAddress(boot_addr)).unwrap());
+            boot_addr += 8;
+        }
+        assert_eq!(arr[0], 0);
+        assert_eq!(arr[1], 0);
+        assert_eq!(arr[2], 0xaf9b000000ffff);
+        assert_eq!(arr[3], 0xcf93000000ffff);
+
+        //test setup_kernel_cmdline function
+        let cmd_len: u64 = config.kernel_cmdline.len() as u64;
+        let mut read_buffer: [u8; 30] = [0; 30];
+        //let mut read_buffer:Vec<u8> = Vec::with_capacity();
+        assert!(setup_kernel_cmdline(&config, &space).is_ok());
+        space
+            .read(
+                &mut read_buffer.as_mut(),
+                GuestAddress(0x0002_0000),
+                cmd_len,
+            )
+            .unwrap();
+        let s = String::from_utf8(read_buffer.to_vec()).unwrap();
+        assert_eq!(s, "this_is_a_piece_of_test_string".to_string());
+    }
+}
