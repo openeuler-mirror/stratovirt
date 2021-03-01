@@ -71,13 +71,8 @@ use kvm_bindings::kvm_segment;
 use address_space::{AddressSpace, GuestAddress};
 use bootparam::{BootParams, RealModeKernelHeader, BOOT_VERSION, HDRS};
 use gdt::GdtEntry;
-use mptable::{
-    BusEntry, ConfigTableHeader, FloatingPointer, IOApicEntry, IOInterruptEntry,
-    LocalInterruptEntry, ProcessEntry, DEST_ALL_LAPIC_MASK, INTERRUPT_TYPE_EXTINT,
-    INTERRUPT_TYPE_INT, INTERRUPT_TYPE_NMI,
-};
+use mptable::setup_isa_mptable;
 use util::byte_code::ByteCode;
-use util::checksum::obj_checksum;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 
@@ -244,94 +239,6 @@ fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
     }
 
     Ok(boot_pml4_addr)
-}
-
-macro_rules! write_entry {
-    ( $d:expr, $t:ty, $m:expr, $o:expr, $s:expr ) => {
-        let entry = $d;
-        $m.write_object(&entry, GuestAddress($o))?;
-        $o += std::mem::size_of::<$t>() as u64;
-        $s = $s.wrapping_add(obj_checksum(&entry));
-    };
-}
-
-fn setup_isa_mptable(
-    sys_mem: &Arc<AddressSpace>,
-    start_addr: u64,
-    num_cpus: u8,
-    ioapic_addr: u32,
-    lapic_addr: u32,
-) -> Result<()> {
-    const BUS_ID: u8 = 0;
-    const MPTABLE_MAX_CPUS: u32 = 254; // mptable max support 255 cpus, reserve one for ioapic id
-    const MPTABLE_IOAPIC_NR: u8 = 16;
-
-    if u32::from(num_cpus) > MPTABLE_MAX_CPUS {
-        return Err(ErrorKind::MaxCpus(num_cpus).into());
-    }
-
-    let ioapic_id: u8 = num_cpus + 1;
-    let header = start_addr + std::mem::size_of::<FloatingPointer>() as u64;
-    sys_mem.write_object(
-        &FloatingPointer::new(header as u32),
-        GuestAddress(start_addr),
-    )?;
-
-    let mut offset = header + std::mem::size_of::<ConfigTableHeader>() as u64;
-    let mut sum = 0u8;
-
-    for cpu_id in 0..num_cpus {
-        write_entry!(
-            ProcessEntry::new(cpu_id as u8, true, cpu_id == 0),
-            ProcessEntry,
-            sys_mem,
-            offset,
-            sum
-        );
-    }
-
-    write_entry!(BusEntry::new(BUS_ID), BusEntry, sys_mem, offset, sum);
-
-    write_entry!(
-        IOApicEntry::new(ioapic_id, true, ioapic_addr),
-        IOApicEntry,
-        sys_mem,
-        offset,
-        sum
-    );
-
-    for i in 0..MPTABLE_IOAPIC_NR {
-        write_entry!(
-            IOInterruptEntry::new(INTERRUPT_TYPE_INT, BUS_ID, i, ioapic_id, i),
-            IOInterruptEntry,
-            sys_mem,
-            offset,
-            sum
-        );
-    }
-
-    write_entry!(
-        LocalInterruptEntry::new(INTERRUPT_TYPE_EXTINT, BUS_ID, 0, ioapic_id, 0),
-        LocalInterruptEntry,
-        sys_mem,
-        offset,
-        sum
-    );
-
-    write_entry!(
-        LocalInterruptEntry::new(INTERRUPT_TYPE_NMI, BUS_ID, 0, DEST_ALL_LAPIC_MASK, 1),
-        LocalInterruptEntry,
-        sys_mem,
-        offset,
-        sum
-    );
-
-    sys_mem.write_object(
-        &ConfigTableHeader::new((offset - header) as u16, sum, lapic_addr),
-        GuestAddress(header),
-    )?;
-
-    Ok(())
 }
 
 fn setup_boot_params(
