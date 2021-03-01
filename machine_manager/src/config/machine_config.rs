@@ -22,11 +22,11 @@ use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 use util::num_ops::round_down;
 
 const DEFAULT_CPUS: u8 = 1;
-const DEFAULT_MEMSIZE: u64 = 128;
+const DEFAULT_MEMSIZE: u64 = 256;
 const MAX_NR_CPUS: u64 = 254;
 const MIN_NR_CPUS: u64 = 1;
 const MAX_MEMSIZE: u64 = 549_755_813_888;
-const MIN_MEMSIZE: u64 = 134_217_728;
+const MIN_MEMSIZE: u64 = 268_435_456;
 const M: u64 = 1024 * 1024;
 const G: u64 = 1024 * 1024 * 1024;
 
