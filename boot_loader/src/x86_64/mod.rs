@@ -105,6 +105,26 @@ const BOOT_IDT_OFFSET: u64 = 0x520;
 
 const BOOT_GDT_MAX: usize = 4;
 
+/// Load linux kernel or initrd image file to Guest Memory.
+///
+/// # Arguments
+/// * `image` - image file for kernel or initrd.
+/// * `start_addr` - image start address in guest memory.
+/// * `sys_mem` - guest memory.
+///
+/// # Errors
+/// * `BootLoaderOpenKernel`: Open image failed.
+/// * `AddressSpace`: Write image to guest memory failed.
+fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
+    let curr_loc = image.seek(SeekFrom::Current(0))?;
+    let len = image.seek(SeekFrom::End(0))?;
+    image.seek(SeekFrom::Start(curr_loc))?;
+
+    sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
+
+    Ok(())
+}
+
 /// Load bzImage linux kernel to Guest Memory.
 ///
 /// # Notes
@@ -481,6 +501,56 @@ pub fn setup_kernel_cmdline(
     )?;
 
     Ok(())
+}
+
+/// Load PE(vmlinux.bin) linux kernel / bzImage linux kernel and
+/// other boot source to Guest Memory.
+///
+/// # Steps
+///
+/// 1. Prepare for linux kernel boot env, return guest memory layout.
+/// 2. According guest memory layout, load linux kernel to guest memory.
+/// 3. According guest memory layout, load initrd image to guest memory.
+/// 4. Inject cmdline to guest memory.
+///
+/// # Arguments
+///
+/// * `config` - boot source config, contains kernel, initrd and kernel cmdline.
+/// * `sys_mem` - guest memory.
+///
+/// # Errors
+///
+/// Load kernel, initrd or kernel cmdline to guest memory failed. Boot source
+/// is broken or guest memory is abnormal.
+pub fn load_kernel(
+    config: &X86BootLoaderConfig,
+    sys_mem: &Arc<AddressSpace>,
+) -> Result<X86BootLoader> {
+    let mut kernel_image =
+        File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+
+    let boot_loader = {
+        let boot_hdr = load_bzimage(&mut kernel_image).ok();
+        linux_bootloader(config, sys_mem, boot_hdr)
+            .chain_err(|| "Failed to init x86_64 boot_loader")?
+    };
+
+    load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)
+        .chain_err(|| "Failed to load kernel image to vm memory")?;
+
+    match &config.initrd {
+        Some(initrd) => {
+            let mut initrd_image =
+                File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+            load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)
+                .chain_err(|| "Failed to load initrd image to vm memory")?;
+        }
+        None => {}
+    };
+
+    setup_kernel_cmdline(&config, sys_mem).chain_err(|| "Failed to setup kernel cmdline")?;
+
+    Ok(boot_loader)
 }
 
 #[cfg(test)]

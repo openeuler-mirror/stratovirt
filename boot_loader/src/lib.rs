@@ -83,21 +83,15 @@ mod aarch64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
-use std::fs::File;
-use std::io::{Seek, SeekFrom};
-use std::sync::Arc;
-
-use address_space::{AddressSpace, GuestAddress};
-
 #[cfg(target_arch = "aarch64")]
-use aarch64::linux_bootloader;
+pub use aarch64::load_kernel;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoader as BootLoader;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoaderConfig as BootLoaderConfig;
 
 #[cfg(target_arch = "x86_64")]
-use x86_64::linux_bootloader;
+pub use x86_64::load_kernel;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86BootLoader as BootLoader;
 #[cfg(target_arch = "x86_64")]
@@ -140,80 +134,4 @@ pub mod errors {
             }
         }
     }
-}
-
-use self::errors::{ErrorKind, Result, ResultExt};
-
-/// Load linux kernel or initrd image file to Guest Memory.
-///
-/// # Arguments
-/// * `image` - image file for kernel or initrd.
-/// * `start_addr` - image start address in guest memory.
-/// * `sys_mem` - guest memory.
-///
-/// # Errors
-/// * `BootLoaderOpenKernel`: Open image failed.
-/// * `AddressSpace`: Write image to guest memory failed.
-fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
-    let curr_loc = image.seek(SeekFrom::Current(0))?;
-    let len = image.seek(SeekFrom::End(0))?;
-    image.seek(SeekFrom::Start(curr_loc))?;
-
-    sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
-
-    Ok(())
-}
-
-/// Load PE(vmlinux.bin) linux kernel / bzImage linux kernel (only x86_64) and
-/// other boot source to Guest Memory.
-///
-/// # Steps
-///
-/// 1. Prepare for linux kernel boot env, return guest memory layout.
-/// 2. According guest memory layout, load linux kernel to guest memory.
-/// 3. According guest memory layout, load initrd image to guest memory.
-/// 4. For `x86_64` arch, inject cmdline to guest memory.
-///
-/// # Arguments
-///
-/// * `config` - boot source config, contains kernel, initrd and kernel
-///   cmdline(only `x86_64`).
-/// * `sys_mem` - guest memory.
-///
-/// # Errors
-///
-/// Load kernel, initrd or kernel cmdline to guest memory failed. Boot source
-/// is broken or guest memory is unnormal.
-pub fn load_kernel(config: &BootLoaderConfig, sys_mem: &Arc<AddressSpace>) -> Result<BootLoader> {
-    let mut kernel_image =
-        File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
-
-    #[cfg(target_arch = "x86_64")]
-    let boot_loader = {
-        let boot_hdr = x86_64::load_bzimage(&mut kernel_image).ok();
-        linux_bootloader(config, sys_mem, boot_hdr)
-            .chain_err(|| "Failed to init x86_64 boot_loader")?
-    };
-    #[cfg(target_arch = "aarch64")]
-    let boot_loader =
-        linux_bootloader(config, sys_mem).chain_err(|| "Failed to init aarch64 boot_loader")?;
-
-    load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)
-        .chain_err(|| "Failed to load kernel image to vm memory")?;
-
-    match &config.initrd {
-        Some(initrd) => {
-            let mut initrd_image =
-                File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
-            load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)
-                .chain_err(|| "Failed to load initrd image to vm memory")?;
-        }
-        None => {}
-    };
-
-    #[cfg(target_arch = "x86_64")]
-    x86_64::setup_kernel_cmdline(&config, sys_mem)
-        .chain_err(|| "Failed to setup kernel cmdline")?;
-
-    Ok(boot_loader)
 }
