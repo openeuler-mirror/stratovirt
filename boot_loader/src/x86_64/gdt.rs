@@ -10,6 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::Arc;
+
+use address_space::{AddressSpace, GuestAddress};
+use kvm_bindings::kvm_segment;
+
+use super::BootGdtSegment;
+use super::{BOOT_GDT_MAX, BOOT_GDT_OFFSET, BOOT_IDT_OFFSET, GDT_ENTRY_BOOT_CS, GDT_ENTRY_BOOT_DS};
+use crate::errors::{Result, ResultExt};
+
 // /*
 //  * Constructor for a conventional segment GDT (or LDT) entry.
 //  * This is a macro so it can be used in initializers.
@@ -77,6 +86,52 @@ impl From<GdtEntry> for u64 {
     fn from(item: GdtEntry) -> Self {
         item.0
     }
+}
+
+fn write_gdt_table(table: &[u64], guest_mem: &Arc<AddressSpace>) -> Result<()> {
+    let mut boot_gdt_addr = BOOT_GDT_OFFSET as u64;
+    for (_, entry) in table.iter().enumerate() {
+        guest_mem
+            .write_object(entry, GuestAddress(boot_gdt_addr))
+            .chain_err(|| format!("Failed to load gdt to 0x{:x}", boot_gdt_addr))?;
+        boot_gdt_addr += 8;
+    }
+    Ok(())
+}
+
+fn write_idt_value(val: u64, guest_mem: &Arc<AddressSpace>) -> Result<()> {
+    let boot_idt_addr = BOOT_IDT_OFFSET;
+    guest_mem
+        .write_object(&val, GuestAddress(boot_idt_addr))
+        .chain_err(|| format!("Failed to load gdt to 0x{:x}", boot_idt_addr))?;
+
+    Ok(())
+}
+
+pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
+    let gdt_table: [u64; BOOT_GDT_MAX as usize] = [
+        GdtEntry::new(0, 0, 0).into(),            // NULL
+        GdtEntry::new(0, 0, 0).into(),            // NULL
+        GdtEntry::new(0xa09b, 0, 0xfffff).into(), // CODE
+        GdtEntry::new(0xc093, 0, 0xfffff).into(), // DATA
+    ];
+
+    let mut code_seg: kvm_segment = GdtEntry(gdt_table[GDT_ENTRY_BOOT_CS as usize]).into();
+    code_seg.selector = GDT_ENTRY_BOOT_CS as u16 * 8;
+    let mut data_seg: kvm_segment = GdtEntry(gdt_table[GDT_ENTRY_BOOT_DS as usize]).into();
+    data_seg.selector = GDT_ENTRY_BOOT_DS as u16 * 8;
+
+    write_gdt_table(&gdt_table[..], guest_mem)?;
+    write_idt_value(0, guest_mem)?;
+
+    Ok(BootGdtSegment {
+        code_segment: code_seg,
+        data_segment: data_seg,
+        gdt_base: BOOT_GDT_OFFSET,
+        gdt_limit: std::mem::size_of_val(&gdt_table) as u16 - 1,
+        idt_base: BOOT_IDT_OFFSET,
+        idt_limit: std::mem::size_of::<u64>() as u16 - 1,
+    })
 }
 
 #[cfg(test)]
