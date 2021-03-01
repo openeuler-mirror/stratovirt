@@ -68,7 +68,6 @@ use std::sync::Arc;
 
 use kvm_bindings::kvm_segment;
 
-use self::errors::{ErrorKind, Result, ResultExt};
 use address_space::{AddressSpace, GuestAddress};
 use bootparam::{BootParams, RealModeKernelHeader, BOOT_VERSION, E820_RAM, E820_RESERVED, HDRS};
 use gdt::GdtEntry;
@@ -80,24 +79,7 @@ use mptable::{
 use util::byte_code::ByteCode;
 use util::checksum::obj_checksum;
 
-pub mod errors {
-    error_chain! {
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-        }
-        foreign_links {
-            Io(std::io::Error);
-        }
-        errors {
-            MaxCpus(cpus: u8) {
-                display("Configure cpu number({}) above supported max cpu numbers(254)", cpus)
-            }
-            InvalidBzImage {
-                display("Invalid bzImage kernel file")
-            }
-        }
-    }
-}
+use crate::errors::{ErrorKind, Result, ResultExt};
 
 const ZERO_PAGE_START: u64 = 0x0000_7000;
 const PML4_START: u64 = 0x0000_9000;

@@ -13,34 +13,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use self::errors::{ErrorKind, Result};
 use address_space::{AddressSpace, GuestAddress};
 use util::device_tree;
 
-pub mod errors {
-    use util::device_tree;
-    error_chain! {
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-        }
-        errors {
-            DTBOverflow(size: u64) {
-                display(
-                    "guest memory size {} should bigger than {}",
-                    size,
-                    device_tree::FDT_MAX_SIZE
-                )
-            }
-            InitrdOverflow(addr: u64, size: u32) {
-                display(
-                    "Failed to allocate initrd image {} to memory {}.",
-                     size,
-                     addr
-                )
-            }
-        }
-    }
-}
+use crate::errors::{ErrorKind, Result};
 
 const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
 

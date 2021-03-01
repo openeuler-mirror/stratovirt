@@ -104,25 +104,39 @@ pub use x86_64::X86BootLoader as BootLoader;
 pub use x86_64::X86BootLoaderConfig as BootLoaderConfig;
 
 pub mod errors {
-    #[cfg(target_arch = "aarch64")]
-    use super::aarch64 as arch;
-    #[cfg(target_arch = "x86_64")]
-    use super::x86_64 as arch;
-
     error_chain! {
         foreign_links {
             Io(std::io::Error);
         }
         links {
-            ArchErrors(arch::errors::Error, arch::errors::ErrorKind);
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
         }
         errors {
+            #[cfg(target_arch = "aarch64")] DTBOverflow(size: u64) {
+                display(
+                    "guest memory size {} should bigger than {}",
+                    size,
+                    util::device_tree::FDT_MAX_SIZE
+                )
+            }
+            InitrdOverflow(addr: u64, size: u32) {
+                display(
+                    "Failed to load initrd image {} to memory {}.",
+                     size,
+                     addr
+                )
+            }
             BootLoaderOpenKernel {
                 display("Failed to open kernel image")
             }
             BootLoaderOpenInitrd {
                 display("Failed to open initrd image")
+            }
+            MaxCpus(cpus: u8) {
+                display("Configure cpu number({}) above supported max cpu numbers(254)", cpus)
+            }
+            #[cfg(target_arch = "x86_64")] InvalidBzImage {
+                display("Invalid bzImage kernel file")
             }
         }
     }
