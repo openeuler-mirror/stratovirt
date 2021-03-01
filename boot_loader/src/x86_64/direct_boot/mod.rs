@@ -30,26 +30,6 @@ use crate::errors::{ErrorKind, Result, ResultExt};
 use gdt::setup_gdt;
 use mptable::setup_isa_mptable;
 
-/// Load linux kernel or initrd image file to Guest Memory.
-///
-/// # Arguments
-/// * `image` - image file for kernel or initrd.
-/// * `start_addr` - image start address in guest memory.
-/// * `sys_mem` - guest memory.
-///
-/// # Errors
-/// * `BootLoaderOpenKernel`: Open image failed.
-/// * `AddressSpace`: Write image to guest memory failed.
-fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
-    let curr_loc = image.seek(SeekFrom::Current(0))?;
-    let len = image.seek(SeekFrom::End(0))?;
-    image.seek(SeekFrom::Start(curr_loc))?;
-
-    sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
-
-    Ok(())
-}
-
 /// Load bzImage linux kernel to Guest Memory.
 ///
 /// # Notes
@@ -99,9 +79,28 @@ pub fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
     Ok(*boot_hdr)
 }
 
-fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
-    // Initial pagetables.
+/// Load linux kernel or initrd image file to Guest Memory.
+///
+/// # Arguments
+/// * `image` - image file for kernel or initrd.
+/// * `start_addr` - image start address in guest memory.
+/// * `sys_mem` - guest memory.
+///
+/// # Errors
+///
+/// * Write image to guest memory failed.
+fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) -> Result<()> {
+    let curr_loc = image.seek(SeekFrom::Current(0))?;
+    let len = image.seek(SeekFrom::End(0))?;
+    image.seek(SeekFrom::Start(curr_loc))?;
 
+    sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
+
+    Ok(())
+}
+
+/// Initial pagetables.
+fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
     // Puts PML4 right after zero page but aligned to 4k.
     let boot_pml4_addr = PML4_START;
     let boot_pdpte_addr = PDPTE_START;
@@ -131,11 +130,11 @@ fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
     Ok(boot_pml4_addr)
 }
 
-fn setup_boot_params(
+pub fn linux_bootloader(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
-    boot_hdr: Option<RealModeKernelHeader>,
-) -> Result<(u64, u64)> {
+    kernel_image: &mut File,
+) -> Result<X86BootLoader> {
     let (ramdisk_size, ramdisk_image, initrd_addr) = if config.initrd_size > 0 {
         let mut initrd_addr_max = INITRD_ADDR_MAX as u32;
         if initrd_addr_max as u64 > sys_mem.memory_end_address().raw_value() as u64 {
@@ -149,44 +148,28 @@ fn setup_boot_params(
         (0u32, 0u32, 0u64)
     };
 
-    let mut boot_params = if let Some(mut boot_hdr) = boot_hdr {
-        boot_hdr.setup(
+    let (boot_hdr, kernel_start, vmlinux_start) = if let Ok(mut hdr) = load_bzimage(kernel_image) {
+        hdr.setup(
             CMDLINE_START as u32,
             config.kernel_cmdline.len() as u32,
             ramdisk_image,
             ramdisk_size,
         );
-        BootParams::new(boot_hdr)
+
+        (
+            hdr,
+            hdr.code32_start as u64 + BZIMAGE_BOOT_OFFSET,
+            hdr.code32_start as u64,
+        )
     } else {
-        BootParams::new(RealModeKernelHeader::new(
+        let hdr = RealModeKernelHeader::new(
             CMDLINE_START as u32,
             config.kernel_cmdline.len() as u32,
             ramdisk_image,
             ramdisk_size,
-        ))
-    };
+        );
 
-    boot_params.setup_e820_entries(&config, &sys_mem);
-
-    sys_mem
-        .write_object(&boot_params, GuestAddress(ZERO_PAGE_START))
-        .chain_err(|| format!("Failed to load zero page to 0x{:x}", ZERO_PAGE_START))?;
-
-    Ok((ZERO_PAGE_START, initrd_addr))
-}
-
-pub fn linux_bootloader(
-    config: &X86BootLoaderConfig,
-    sys_mem: &Arc<AddressSpace>,
-    boot_hdr: Option<RealModeKernelHeader>,
-) -> Result<X86BootLoader> {
-    let (kernel_start, vmlinux_start) = if let Some(boot_hdr) = boot_hdr {
-        (
-            boot_hdr.code32_start as u64 + BZIMAGE_BOOT_OFFSET,
-            boot_hdr.code32_start as u64,
-        )
-    } else {
-        (VMLINUX_STARTUP, VMLINUX_STARTUP)
+        (hdr, VMLINUX_STARTUP, VMLINUX_STARTUP)
     };
 
     let boot_pml4 = setup_page_table(sys_mem).chain_err(|| "Failed to setup page table")?;
@@ -200,8 +183,11 @@ pub fn linux_bootloader(
     )
     .chain_err(|| "Failed to setup isa mptable")?;
 
-    let (zero_page, initrd_addr) = setup_boot_params(&config, sys_mem, boot_hdr)
-        .chain_err(|| "Failed to setup boot params")?;
+    let mut boot_params = BootParams::new(boot_hdr);
+    boot_params.setup_e820_entries(&config, sys_mem);
+    sys_mem
+        .write_object(&boot_params, GuestAddress(ZERO_PAGE_START))
+        .chain_err(|| format!("Failed to load zero page to 0x{:x}", ZERO_PAGE_START))?;
 
     let gdt_seg = setup_gdt(sys_mem)?;
 
@@ -211,7 +197,7 @@ pub fn linux_bootloader(
         kernel_sp: BOOT_LOADER_SP,
         initrd_start: initrd_addr,
         boot_pml4_addr: boot_pml4,
-        zero_page_addr: zero_page,
+        zero_page_addr: ZERO_PAGE_START,
         segments: gdt_seg,
     })
 }
@@ -256,24 +242,17 @@ pub fn load_kernel(
     let mut kernel_image =
         File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
 
-    let boot_loader = {
-        let boot_hdr = load_bzimage(&mut kernel_image).ok();
-        linux_bootloader(config, sys_mem, boot_hdr)
-            .chain_err(|| "Failed to init x86_64 boot_loader")?
-    };
+    let boot_loader = linux_bootloader(config, sys_mem, &mut kernel_image)
+        .chain_err(|| "Failed to init x86_64 boot_loader")?;
 
     load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)
         .chain_err(|| "Failed to load kernel image to vm memory")?;
 
-    match &config.initrd {
-        Some(initrd) => {
-            let mut initrd_image =
-                File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
-            load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)
-                .chain_err(|| "Failed to load initrd image to vm memory")?;
-        }
-        None => {}
-    };
+    if let Some(initrd) = &config.initrd {
+        let mut initrd_image = File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+        load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)
+            .chain_err(|| "Failed to load initrd image to vm memory")?;
+    }
 
     setup_kernel_cmdline(&config, sys_mem).chain_err(|| "Failed to setup kernel cmdline")?;
 
@@ -283,13 +262,12 @@ pub fn load_kernel(
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
+    use super::super::BOOT_GDT_MAX;
     use address_space::*;
     use kvm_bindings::kvm_segment;
-    use std::path::PathBuf;
-
-    use crate::x86_64::BOOT_GDT_MAX;
 
     #[test]
     fn test_x86_bootloader_and_kernel_cmdline() {
@@ -331,8 +309,6 @@ mod test {
             ioapic_addr: 0xFEC0_0000,
             lapic_addr: 0xFEE0_0000,
         };
-        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
-        assert_eq!(initrd_addr_tmp, 0xfff_0000);
 
         //test setup_gdt function
         let c_seg = kvm_segment {
