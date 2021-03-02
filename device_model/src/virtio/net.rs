@@ -272,6 +272,7 @@ impl NetIoHandler {
 
     fn handle_tx(&mut self) -> Result<()> {
         let mut queue = self.tx.queue.lock().unwrap();
+        let mut need_irq = false;
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             let mut read_count = 0;
@@ -299,6 +300,16 @@ impl NetIoHandler {
                 .vring
                 .add_used(&self.mem_space, elem.index, 0)
                 .chain_err(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
+
+            need_irq = true;
+        }
+
+        if need_irq {
+            self.interrupt_status
+                .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
+            self.interrupt_evt
+                .write(1)
+                .chain_err(|| ErrorKind::EventFdWrite)?;
         }
 
         Ok(())

@@ -47,10 +47,6 @@ use crate::errors::{ErrorKind, Result};
 fn create_pid_file(path: &str) -> Result<()> {
     let pid: u32 = std::process::id();
 
-    if Path::new(path).exists() {
-        return Err(ErrorKind::PidFileExist.into());
-    }
-
     let mut pid_file: File = OpenOptions::new()
         .write(true)
         .create(true)
@@ -150,6 +146,12 @@ fn redirect_stdio(fd: RawFd) -> Result<()> {
 /// 4. Disassociate from the control terminal.
 /// 5. Write pid to pidfile.
 pub fn daemonize(pid_file: Option<String>) -> Result<()> {
+    if let Some(path) = pid_file.as_ref() {
+        if Path::new(path).exists() {
+            return Err(ErrorKind::PidFileExist.into());
+        }
+    }
+
     // The first fork make parent process quit, child process inherit parent's
     // session ID and have a new process ID. It can guarantee child
     // process will not be the first process in a session.

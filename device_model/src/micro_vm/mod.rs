@@ -143,7 +143,7 @@ impl ConfigDevBuilder for ConsoleConfig {
 
 impl ConfigDevBuilder for BalloonConfig {
     fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
-        let balloon = Arc::new(Mutex::new(Balloon::new(self.clone())));
+        let balloon = Arc::new(Mutex::new(Balloon::new(self.clone(), sys_mem.clone())));
         Balloon::object_init(balloon.clone());
         let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, balloon)));
         bus.attach_device(device)

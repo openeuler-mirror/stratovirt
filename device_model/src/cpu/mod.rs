@@ -611,6 +611,7 @@ impl CPUThreadWorker {
 
         // The vcpu thread is going to run,
         // reset its running environment.
+        #[cfg(not(test))]
         self.thread_cpu
             .reset()
             .chain_err(|| "Failed to reset for cpu register state")?;
@@ -697,7 +698,6 @@ impl CpuTopology {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -767,34 +767,6 @@ mod tests {
 
     impl MachineInterface for TestVm {}
 
-    fn test_memory_init(vm_fd: &VmFd, size: usize, guest_addr: u64) -> (*mut u8, u64) {
-        let load_addr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut() as *mut libc::c_void,
-                size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANONYMOUS | libc::MAP_SHARED | libc::MAP_NORESERVE,
-                -1,
-                0,
-            )
-        };
-        if load_addr == libc::MAP_FAILED {
-            panic!("mmap failed.");
-        }
-        let slot: u32 = 0;
-        let mem_region = kvm_bindings::kvm_userspace_memory_region {
-            slot,
-            guest_phys_addr: guest_addr,
-            memory_size: size as u64,
-            userspace_addr: load_addr as u64,
-            flags: 0,
-        };
-        unsafe {
-            vm_fd.set_user_memory_region(mem_region).unwrap();
-        }
-        (load_addr as *mut u8, guest_addr)
-    }
-
     fn prepare_env() -> Result<(Arc<VmFd>, Arc<TestVm>, CPU)> {
         let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
             Ok(vm_fd) => Arc::new(vm_fd),
@@ -811,41 +783,6 @@ mod tests {
         );
 
         Ok((vm_fd, vm, cpu))
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn test_base_code() -> [u8; 24] {
-        [
-            0xba, 0xf8, 0x03, /* mov $0x3f8, %dx */
-            0x00, 0xd8, /* add %bl, %al */
-            0x04, b'0', /* add $'0', %al */
-            0xee, /* out %al, %dx */
-            0xec, /* in %dx, %al */
-            0xc6, 0x06, 0x00, 0x80, 0x00, /* movl $0, (0x8000); This generates a MMIO Write.*/
-            0x8a, 0x16, 0x00, 0x80, /* movl (0x8000), %dl; This generates a MMIO Read.*/
-            0xc6, 0x06, 0x00, 0x20,
-            0x00, /* movl $0, (0x2000); Dirty one page in guest mem. */
-            0xf4, /* hlt */
-        ]
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    fn test_base_code() -> [u8; 48] {
-        [
-            0x40, 0x20, 0x80, 0x52, /* mov w0, #0x102 */
-            0x00, 0x01, 0x00, 0xb9, /* str w0, [x8]; test physical memory write */
-            0x81, 0x60, 0x80, 0x52, /* mov w1, #0x304 */
-            0x02, 0x00, 0x80, 0x52, /* mov w2, #0x0 */
-            0x20, 0x01, 0x40, 0xb9, /* ldr w0, [x9]; test MMIO read */
-            0x1f, 0x18, 0x14, 0x71, /* cmp w0, #0x506 */
-            0x20, 0x00, 0x82, 0x1a, /* csel w0, w1, w2, eq */
-            0x20, 0x01, 0x00, 0xb9, /* str w0, [x9]; test MMIO write */
-            0x00, 0x80, 0xb0, 0x52, /* mov w0, #0x84000000 */
-            0x00, 0x00, 0x1d, 0x32, /* orr w0, w0, #0x08 */
-            0x02, 0x00, 0x00, 0xd4, /* hvc #0x0 */
-            0x00, 0x00, 0x00,
-            0x14, /* b <this address>; shouldn't get here, but if so loop forever */
-        ]
     }
 
     #[test]
@@ -910,113 +847,6 @@ mod tests {
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Nothing);
         drop(cpu_state);
-    }
-
-    #[test]
-    #[cfg(target_arch = "x86_64")]
-    fn test_cpu_command_emulate() {
-        let (vm_fd, vm, cpu) = match prepare_env() {
-            Ok((vm_fd, vm, cpu)) => (vm_fd, vm, cpu),
-            Err(_) => return,
-        };
-
-        let mem_size = 0x4000;
-        let (hva, gpa) = test_memory_init(&vm_fd, mem_size, 0x1000);
-
-        let code = test_base_code();
-        unsafe {
-            let mut slice = std::slice::from_raw_parts_mut(hva, mem_size);
-            slice.write_all(&code).unwrap();
-        }
-
-        let mut vcpu_sregs = cpu.fd.get_sregs().unwrap();
-        assert_ne!(vcpu_sregs.cs.base, 0);
-        assert_ne!(vcpu_sregs.cs.selector, 0);
-        vcpu_sregs.cs.base = 0;
-        vcpu_sregs.cs.selector = 0;
-        cpu.fd.set_sregs(&vcpu_sregs).unwrap();
-
-        let mut vcpu_regs = cpu.fd.get_regs().unwrap();
-        vcpu_regs.rip = gpa;
-        vcpu_regs.rax = 2;
-        vcpu_regs.rbx = 3;
-        vcpu_regs.rflags = 2;
-        cpu.fd.set_regs(&vcpu_regs).unwrap();
-
-        loop {
-            match cpu.kvm_vcpu_exec() {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(e) => {
-                    assert_eq!(e.to_string(), "CPU 0/KVM halted!");
-                    break;
-                }
-            }
-        }
-
-        assert_eq!(*vm.pio_in.lock().unwrap(), vec![(1016, vec![0])]);
-        assert_eq!(*vm.pio_out.lock().unwrap(), vec![(1016, vec![53])]);
-        assert_eq!(*vm.mmio_read.lock().unwrap(), vec![(32768, vec![0])]);
-        assert_eq!(*vm.mmio_write.lock().unwrap(), vec![(32768, vec![0])]);
-    }
-
-    #[test]
-    #[cfg(target_arch = "aarch64")]
-    fn test_cpu_command_emulate() {
-        let (vm_fd, vm, cpu) = match prepare_env() {
-            Ok((vm_fd, vm, cpu)) => (vm_fd, vm, cpu),
-            Err(_) => return,
-        };
-
-        let mem_size = 0x20000;
-        let guest_addr = 0x10000;
-        let (hva, _) = test_memory_init(&vm_fd, mem_size, guest_addr);
-
-        let code = test_base_code();
-        unsafe {
-            let mut slice = std::slice::from_raw_parts_mut(hva, mem_size);
-            slice.write_all(&code).unwrap();
-        }
-
-        let mut kvi = kvm_bindings::kvm_vcpu_init::default();
-        vm_fd.get_preferred_target(&mut kvi).unwrap();
-        kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
-        cpu.fd.vcpu_init(&kvi).unwrap();
-
-        let core_reg_base: u64 = 0x6030_0000_0010_0000;
-        let mmio_addr: u64 = guest_addr + mem_size as u64;
-
-        cpu.fd
-            .set_one_reg(core_reg_base + 2 * 32, guest_addr)
-            .unwrap();
-        cpu.fd
-            .set_one_reg(core_reg_base + 2 * 8, guest_addr + 0x10000)
-            .unwrap();
-        cpu.fd
-            .set_one_reg(core_reg_base + 2 * 9, mmio_addr)
-            .unwrap();
-
-        QmpChannel::object_init();
-
-        loop {
-            match cpu.kvm_vcpu_exec() {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(e) => {
-                    assert_eq!(e.to_string(), "CPU 0/KVM halted!");
-                    break;
-                }
-            }
-        }
-
-        assert_eq!(
-            *vm.mmio_read.lock().unwrap(),
-            vec![(196608, vec![6, 5, 0, 0])]
-        );
-        assert_eq!(
-            *vm.mmio_write.lock().unwrap(),
-            vec![(196608, vec![4, 3, 0, 0])]
-        );
     }
 
     #[test]
