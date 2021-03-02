@@ -205,7 +205,7 @@ pub struct LightMachine {
     cpus: Arc<Mutex<Vec<Arc<CPU>>>>,
     /// Interrupt controller device.
     #[cfg(target_arch = "aarch64")]
-    irq_chip: Arc<InterruptController>,
+    irq_chip: Option<Arc<InterruptController>>,
     /// Memory address space.
     sys_mem: Arc<AddressSpace>,
     /// IO address space.
@@ -227,7 +227,7 @@ impl LightMachine {
     /// # Arguments
     ///
     /// * `vm_config` - Represents the configuration for VM.
-    pub fn new(vm_config: VmConfig) -> Result<Arc<LightMachine>> {
+    pub fn new(vm_config: &VmConfig) -> Result<Self> {
         let kvm = Kvm::new().chain_err(|| "Failed to open /dev/kvm.")?;
         let vm_fd = Arc::new(
             kvm.create_vm()
@@ -246,26 +246,10 @@ impl LightMachine {
         #[cfg(target_arch = "x86_64")]
         sys_io.register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))?;
 
-        // Init guest-memory
-        // Define ram-region ranges according to architectures
-        let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_config.mem_size);
-        let mem_mappings = create_host_mmaps(&ram_ranges, &vm_config.machine_config.mem_config)?;
-        for mmap in mem_mappings.iter() {
-            sys_mem.root().add_subregion(
-                Region::init_ram_region(mmap.clone()),
-                mmap.start_address().raw_value(),
-            )?;
-        }
-
-        #[cfg(target_arch = "x86_64")]
-        Self::arch_init(&vm_fd)?;
-
-        // Pre init vcpu and cpu topology
         let mut mask: Vec<u8> = Vec::with_capacity(vm_config.machine_config.nr_cpus as usize);
         for _i in 0..vm_config.machine_config.nr_cpus {
             mask.push(1)
         }
-
         let cpu_topo = CpuTopology {
             sockets: vm_config.machine_config.nr_cpus,
             cores: 1,
@@ -275,38 +259,13 @@ impl LightMachine {
             online_mask: Arc::new(Mutex::new(mask)),
         };
 
-        let nrcpus = vm_config.machine_config.nr_cpus;
-        let mut vcpu_fds = vec![];
-        for cpu_id in 0..nrcpus {
-            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
-        }
-
-        // Interrupt Controller Chip init
-        #[cfg(target_arch = "aarch64")]
-        let intc_conf = InterruptControllerConfig {
-            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
-            vcpu_count: u64::from(vm_config.machine_config.nr_cpus),
-            max_irq: 192,
-            msi: true,
-            dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
-            redist_region_ranges: vec![
-                MEM_LAYOUT[LayoutEntryType::GicRedist as usize],
-                MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize],
-            ],
-            its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
-        };
-        #[cfg(target_arch = "aarch64")]
-        let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)?;
-
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
-
-        // Create vm object
-        let mut vm = LightMachine {
+        Ok(LightMachine {
             cpu_topo,
             cpus: Arc::new(Mutex::new(Vec::new())),
             #[cfg(target_arch = "aarch64")]
-            irq_chip: Arc::new(irq_chip),
+            irq_chip: None,
             sys_mem: sys_mem.clone(),
             #[cfg(target_arch = "x86_64")]
             sys_io,
@@ -324,34 +283,7 @@ impl LightMachine {
             vm_state,
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| "Create EventFd for power-button failed.")?,
-        };
-
-        // Add mmio devices
-        vm.add_devices(vm_config)?;
-
-        let vm = Arc::new(vm);
-
-        // Add vcpu object to vm
-        for vcpu_id in 0..nrcpus {
-            #[cfg(target_arch = "aarch64")]
-            let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
-
-            #[cfg(target_arch = "x86_64")]
-            let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(nrcpus));
-
-            let cpu = CPU::new(
-                vcpu_fds[vcpu_id as usize].clone(),
-                vcpu_id,
-                Arc::new(Mutex::new(arch_cpu)),
-                vm.clone(),
-            );
-
-            let mut vcpus = vm.cpus.lock().unwrap();
-            let newcpu = Arc::new(cpu);
-            vcpus.push(newcpu.clone());
-        }
-
-        Ok(vm)
+        })
     }
 
     /// Calculate the ranges of memory according to architecture.
@@ -399,113 +331,155 @@ impl LightMachine {
         Ok(())
     }
 
-    /// Realize `LightMachine` means let all members of `LightMachine` enabled.
-    #[cfg(target_arch = "aarch64")]
-    pub fn realize(&self) -> Result<()> {
-        self.irq_chip
+    /// Realize micro VM.
+    pub fn realize(mut vm: Self, vm_config: &VmConfig) -> Result<Arc<Self>> {
+        // Init guest-memory
+        // Define ram-region ranges according to architectures
+        let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_config.mem_size);
+        let mem_mappings = create_host_mmaps(&ram_ranges, &vm_config.machine_config.mem_config)?;
+        for mmap in mem_mappings.iter() {
+            vm.sys_mem.root().add_subregion(
+                Region::init_ram_region(mmap.clone()),
+                mmap.start_address().raw_value(),
+            )?;
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        Self::arch_init(&vm.vm_fd)?;
+
+        let nrcpus = vm_config.machine_config.nr_cpus;
+        let mut vcpu_fds = vec![];
+        for cpu_id in 0..nrcpus {
+            vcpu_fds.push(Arc::new(vm.vm_fd.create_vcpu(cpu_id)?));
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            // Interrupt Controller Chip init
+            let intc_conf = InterruptControllerConfig {
+                version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+                vcpu_count: u64::from(vm_config.machine_config.nr_cpus),
+                max_irq: 192,
+                msi: true,
+                dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
+                redist_region_ranges: vec![
+                    MEM_LAYOUT[LayoutEntryType::GicRedist as usize],
+                    MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize],
+                ],
+                its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
+            };
+            vm.irq_chip = Some(Arc::new(InterruptController::new(
+                vm.vm_fd.clone(),
+                &intc_conf,
+            )?));
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        vm.irq_chip
+            .as_ref()
+            .unwrap()
             .realize()
             .chain_err(|| "Failed to realize interrupt controller")?;
-        self.bus
-            .realize_devices(&self.vm_fd, &self.boot_source, &self.sys_mem)?;
 
-        let boot_source = self.boot_source.lock().unwrap();
+        // Add mmio devices
+        vm.add_devices(vm_config)?;
+        vm.bus.realize_devices(
+            &vm.vm_fd,
+            &vm.boot_source,
+            &vm.sys_mem,
+            #[cfg(target_arch = "x86_64")]
+            vm.sys_io.clone(),
+        )?;
 
+        let vm = Arc::new(vm);
+        for vcpu_id in 0..nrcpus {
+            #[cfg(target_arch = "aarch64")]
+            let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
+            #[cfg(target_arch = "x86_64")]
+            let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(nrcpus));
+
+            let cpu = CPU::new(
+                vcpu_fds[vcpu_id as usize].clone(),
+                vcpu_id,
+                Arc::new(Mutex::new(arch_cpu)),
+                vm.clone(),
+            );
+            let mut vcpus = vm.cpus.lock().unwrap();
+            let newcpu = Arc::new(cpu);
+            vcpus.push(newcpu.clone());
+        }
+
+        let boot_source = vm.boot_source.lock().unwrap();
+        let boot_config: CPUBootConfig;
         let (initrd, initrd_size) = match &boot_source.initrd {
             Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
             None => (None, 0),
         };
+        #[cfg(target_arch = "aarch64")]
+        {
+            let bootloader_config = BootLoaderConfig {
+                kernel: boot_source.kernel_file.clone(),
+                initrd,
+                initrd_size: initrd_size as u32,
+                mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+            };
+            let layout = load_kernel(&bootloader_config, &vm.sys_mem)?;
+            if let Some(rd) = &boot_source.initrd {
+                *rd.initrd_addr.lock().unwrap() = layout.initrd_start;
+            }
 
-        let bootloader_config = BootLoaderConfig {
-            kernel: boot_source.kernel_file.clone(),
-            initrd,
-            initrd_size: initrd_size as u32,
-            mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-        };
+            boot_config = CPUBootConfig {
+                fdt_addr: layout.dtb_start,
+                kernel_addr: layout.kernel_start,
+            };
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+            let bootloader_config = BootLoaderConfig {
+                kernel: boot_source.kernel_file.clone(),
+                initrd,
+                initrd_size: initrd_size as u32,
+                kernel_cmdline: boot_source.kernel_cmdline.to_string(),
+                cpu_count: vm.cpu_topo.nrcpus,
+                gap_range: (gap_start, gap_end - gap_start),
+                ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
+                lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+            };
 
-        let layout = load_kernel(&bootloader_config, &self.sys_mem)?;
-        if let Some(rd) = &boot_source.initrd {
-            *rd.initrd_addr.lock().unwrap() = layout.initrd_start;
+            let layout = load_kernel(&bootloader_config, &vm.sys_mem)?;
+            boot_config = CPUBootConfig {
+                boot_ip: layout.kernel_start,
+                boot_sp: layout.kernel_sp,
+                zero_page: layout.zero_page_addr,
+                code_segment: layout.segments.code_segment,
+                data_segment: layout.segments.data_segment,
+                gdt_base: layout.segments.gdt_base,
+                gdt_size: layout.segments.gdt_limit,
+                idt_base: layout.segments.idt_base,
+                idt_size: layout.segments.idt_limit,
+                pml4_start: layout.boot_pml4_addr,
+            };
+        }
+        for cpu_index in 0..vm.cpu_topo.max_cpus {
+            vm.cpus.lock().unwrap()[cpu_index as usize].realize(&vm.vm_fd, &boot_config)?;
         }
 
-        // need to release lock here, as generate_fdt_node will acquire it later
+        // Needed to release lock here which generate_fdt_node() will acquire later.
         drop(boot_source);
-
-        let boot_config = CPUBootConfig {
-            fdt_addr: layout.dtb_start,
-            kernel_addr: layout.kernel_start,
-        };
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].realize(&self.vm_fd, &boot_config)?;
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
+            vm.generate_fdt_node(&mut fdt)?;
+            vm.sys_mem.write(
+                &mut fdt.as_slice(),
+                GuestAddress(boot_config.fdt_addr as u64),
+                fdt.len() as u64,
+            )?;
         }
-
-        let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
-        self.generate_fdt_node(&mut fdt)?;
-
-        self.sys_mem.write(
-            &mut fdt.as_slice(),
-            GuestAddress(boot_config.fdt_addr as u64),
-            fdt.len() as u64,
-        )?;
-
-        self.register_power_event()?;
-
-        Ok(())
-    }
-
-    /// Realize `LightMachine` means let all members of `LightMachine` enabled.
-    #[cfg(target_arch = "x86_64")]
-    pub fn realize(&self) -> Result<()> {
-        self.bus.realize_devices(
-            &self.vm_fd,
-            &self.boot_source,
-            &self.sys_mem,
-            self.sys_io.clone(),
-        )?;
-
-        let boot_source = self.boot_source.lock().unwrap();
-
-        // Load kernel image
-        let (initrd, initrd_size) = match &boot_source.initrd {
-            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
-            None => (None, 0),
-        };
-
-        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-        let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-        let bootloader_config = BootLoaderConfig {
-            kernel: boot_source.kernel_file.clone(),
-            initrd,
-            initrd_size: initrd_size as u32,
-            kernel_cmdline: boot_source.kernel_cmdline.to_string(),
-            cpu_count: self.cpu_topo.nrcpus,
-            gap_range: (gap_start, gap_end - gap_start),
-            ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
-            lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
-        };
-
-        let layout = load_kernel(&bootloader_config, &self.sys_mem)?;
-        let boot_config = CPUBootConfig {
-            boot_ip: layout.kernel_start,
-            boot_sp: layout.kernel_sp,
-            zero_page: layout.zero_page_addr,
-            code_segment: layout.segments.code_segment,
-            data_segment: layout.segments.data_segment,
-            gdt_base: layout.segments.gdt_base,
-            gdt_size: layout.segments.gdt_limit,
-            idt_base: layout.segments.idt_base,
-            idt_size: layout.segments.idt_limit,
-            pml4_start: layout.boot_pml4_addr,
-        };
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].realize(&self.vm_fd, &boot_config)?;
-        }
-
-        self.register_power_event()?;
-
-        Ok(())
+        vm.register_power_event()?;
+        Ok(vm)
     }
 
     /// Start VM, changed `LightMachine`'s `vmstate` to `Paused` or
@@ -542,7 +516,7 @@ impl LightMachine {
         }
 
         #[cfg(target_arch = "aarch64")]
-        self.irq_chip.stop();
+        self.irq_chip.as_ref().unwrap().stop();
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
         *vmstate = KvmVmState::Paused;
@@ -582,7 +556,7 @@ impl LightMachine {
         dev_builder_ops.build_dev(self.sys_mem.clone(), &mut self.bus)
     }
 
-    fn add_devices(&mut self, vm_config: VmConfig) -> Result<()> {
+    fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         {
             let rtc = Arc::new(Mutex::new(PL031::new()));
@@ -591,40 +565,40 @@ impl LightMachine {
                 .chain_err(|| "add rtc to bus failed")?;
         }
 
-        if let Some(serial) = vm_config.serial {
-            self.register_device(&serial)
+        if let Some(serial) = vm_config.serial.as_ref() {
+            self.register_device(serial)
                 .chain_err(|| "Failed to register serial device")?;
         }
 
-        if let Some(vsock) = vm_config.vsock {
-            self.register_device(&vsock)
+        if let Some(vsock) = vm_config.vsock.as_ref() {
+            self.register_device(vsock)
                 .chain_err(|| "Failed to register vsock device")?;
         }
 
-        if let Some(drives) = vm_config.drives {
+        if let Some(drives) = vm_config.drives.as_ref() {
             for drive in drives {
-                self.register_device(&drive)
+                self.register_device(drive)
                     .chain_err(|| format!("Failed to register drive device {}", drive.drive_id))?;
             }
         }
 
-        if let Some(nets) = vm_config.nets {
+        if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
-                self.register_device(&net)
+                self.register_device(net)
                     .chain_err(|| format!("Failed to register net device {}", net.iface_id))?;
             }
         }
 
-        if let Some(consoles) = vm_config.consoles {
+        if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
-                self.register_device(&console).chain_err(|| {
+                self.register_device(console).chain_err(|| {
                     format!("Failed to register console device {}", console.console_id)
                 })?;
             }
         }
 
-        if let Some(balloon) = vm_config.balloon {
-            self.register_device(&balloon)
+        if let Some(balloon) = vm_config.balloon.as_ref() {
+            self.register_device(balloon)
                 .chain_err(|| "Failed to register balloon device")?;
         }
 
@@ -1450,7 +1424,7 @@ impl device_tree::CompileFDT for LightMachine {
         self.generate_memory_node(fdt)?;
         self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
-        self.irq_chip.generate_fdt_node(fdt)?;
+        self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
 
         Ok(())
     }
