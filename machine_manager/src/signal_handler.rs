@@ -17,7 +17,7 @@ use libc::{c_int, c_void, siginfo_t};
 use vmm_sys_util::signal::register_signal_handler;
 use vmm_sys_util::terminal::Terminal;
 
-pub const VM_EXIT_GENE_ERR: i32 = -1;
+pub const VM_EXIT_GENE_ERR: i32 = 1;
 const SYSTEMCALL_OFFSET: isize = 6;
 
 fn basic_clean() {
