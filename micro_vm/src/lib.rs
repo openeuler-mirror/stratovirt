@@ -168,8 +168,6 @@ impl MmioReplaceableInfo {
 
 /// A wrapper around creating and using a kvm-based micro VM.
 pub struct LightMachine {
-    // KVM VM file descriptor, represent VM entry in kvm module.
-    vm_fd: Arc<VmFd>,
     // `vCPU` topology, support sockets, cores, threads.
     cpu_topo: CpuTopology,
     // `vCPU` devices.
@@ -201,22 +199,9 @@ impl LightMachine {
     ///
     /// * `vm_config` - Represents the configuration for VM.
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
-        let kvm = Kvm::new().chain_err(|| "Failed to open /dev/kvm.")?;
-        let vm_fd = Arc::new(
-            kvm.create_vm()
-                .chain_err(|| "KVM: failed to create VM fd failed")?,
-        );
-
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))?;
-        let nr_slots = kvm.get_nr_memslots();
-        sys_mem.register_listener(Box::new(KvmMemoryListener::new(
-            nr_slots as u32,
-            vm_fd.clone(),
-        )))?;
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))?;
-        #[cfg(target_arch = "x86_64")]
-        sys_io.register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))?;
 
         let mut mask: Vec<u8> = Vec::with_capacity(vm_config.machine_config.nr_cpus as usize);
         for _i in 0..vm_config.machine_config.nr_cpus {
@@ -255,7 +240,6 @@ impl LightMachine {
             bus,
             replaceable_info: MmioReplaceableInfo::new(),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
-            vm_fd,
             vm_state,
             power_button,
         })
@@ -488,7 +472,24 @@ impl LightMachine {
     }
 
     /// Realize micro VM.
-    pub fn realize(mut vm: Self, vm_config: &VmConfig) -> Result<Arc<Self>> {
+    pub fn realize(
+        mut vm: Self,
+        vm_config: &VmConfig,
+        fds: (Kvm, &Arc<VmFd>),
+    ) -> Result<Arc<Self>> {
+        let kvm_fd = fds.0;
+        let vm_fd = fds.1;
+
+        let nr_slots = kvm_fd.get_nr_memslots();
+        vm.sys_mem
+            .register_listener(Box::new(KvmMemoryListener::new(
+                nr_slots as u32,
+                vm_fd.clone(),
+            )))?;
+        #[cfg(target_arch = "x86_64")]
+        vm.sys_io
+            .register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))?;
+
         // Init guest-memory
         // Define ram-region ranges according to architectures
         let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_config.mem_size);
@@ -501,12 +502,12 @@ impl LightMachine {
         }
 
         #[cfg(target_arch = "x86_64")]
-        Self::arch_init(&vm.vm_fd)?;
+        Self::arch_init(vm_fd)?;
 
         let nrcpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nrcpus {
-            vcpu_fds.push(Arc::new(vm.vm_fd.create_vcpu(cpu_id)?));
+            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
         }
         #[cfg(target_arch = "aarch64")]
         {
@@ -524,7 +525,7 @@ impl LightMachine {
                 its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
             };
             vm.irq_chip = Some(Arc::new(InterruptController::new(
-                vm.vm_fd.clone(),
+                vm_fd.clone(),
                 &intc_conf,
             )?));
         }
@@ -540,7 +541,7 @@ impl LightMachine {
         vm.create_replaceable_devices();
         vm.add_devices(vm_config)?;
         vm.bus.realize_devices(
-            &vm.vm_fd,
+            &vm_fd,
             &vm.boot_source,
             &vm.sys_mem,
             #[cfg(target_arch = "x86_64")]
@@ -620,7 +621,7 @@ impl LightMachine {
             };
         }
         for cpu_index in 0..vm.cpu_topo.max_cpus {
-            vm.cpus.lock().unwrap()[cpu_index as usize].realize(&vm.vm_fd, &boot_config)?;
+            vm.cpus.lock().unwrap()[cpu_index as usize].realize(vm_fd, &boot_config)?;
         }
 
         // Needed to release lock here which generate_fdt_node() will acquire later.

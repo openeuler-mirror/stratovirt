@@ -5,6 +5,7 @@ name = "StratoVirt"
 version = "0.2.0"
 dependencies = [
  "error-chain",
+ "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",
