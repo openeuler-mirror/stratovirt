@@ -14,13 +14,12 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use kvm_ioctls::VmFd;
-use machine_manager::config::{BootSource, ConfigCheck};
+use machine_manager::config::BootSource;
 
 use super::{
     errors::{Result, ResultExt},
-    DeviceResource, DeviceType, MmioDevice, MmioDeviceOps, VirtioMmioDevice,
+    DeviceResource, DeviceType, MmioDevice, MmioDeviceOps,
 };
-use virtio::{Block, Net};
 
 #[cfg(target_arch = "aarch64")]
 const IRQ_RANGE: (u32, u32) = (32, 191);
@@ -31,58 +30,10 @@ const MMIO_SERIAL_IRQ: u32 = 4;
 #[cfg(target_arch = "x86_64")]
 const MMIO_SERIAL_ADDR: u64 = 0x3f8;
 
-/// The replaceable block device maximum count.
-pub const MMIO_REPLACEABLE_BLK_NR: usize = 6;
-/// The replaceable network device maximum count.
-pub const MMIO_REPLACEABLE_NET_NR: usize = 2;
-
-/// The config of replaceable device.
-struct MmioReplaceableConfig {
-    /// Device id.
-    id: String,
-    /// The dev_config of the related backend device.
-    dev_config: Arc<dyn ConfigCheck>,
-}
-
-/// The device information of replaceable device.
-struct MmioReplaceableDevInfo {
-    /// The related MMIO device.
-    device: MmioDevice,
-    /// Device id.
-    id: String,
-    /// Identify if this device is be used.
-    used: bool,
-}
-
-/// The gather of config, info and count of all replaceable devices.
-struct MmioReplaceableInfo {
-    /// The arrays of all replaceable configs.
-    configs: Arc<Mutex<Vec<MmioReplaceableConfig>>>,
-    /// The arrays of all replaceable device information.
-    devices: Arc<Mutex<Vec<MmioReplaceableDevInfo>>>,
-    /// The count of block device which is plugin.
-    block_count: usize,
-    /// The count of network device which is plugin.
-    net_count: usize,
-}
-
-impl MmioReplaceableInfo {
-    pub fn new() -> Self {
-        MmioReplaceableInfo {
-            configs: Arc::new(Mutex::new(Vec::new())),
-            devices: Arc::new(Mutex::new(Vec::new())),
-            block_count: 0_usize,
-            net_count: 0_usize,
-        }
-    }
-}
-
 /// MMIO Bus.
 pub struct Bus {
     /// The devices inserted in bus.
     devices: Vec<MmioDevice>,
-    /// All replaceable device information.
-    replaceable_info: MmioReplaceableInfo,
     /// Base address of resource that MMIO devices can use.
     mmio_base: u64,
     /// The length of address resource for each MMIO device.
@@ -107,56 +58,20 @@ impl Bus {
     ///
     /// * `sys_mem` - guest memory.
     pub fn new(
-        sys_mem: Arc<AddressSpace>,
         mmio_base: u64,
         mmio_len: u64,
         #[cfg(target_arch = "aarch64")] serial_range: (u64, u64),
         #[cfg(target_arch = "aarch64")] rtc_range: (u64, u64),
     ) -> Self {
-        let mut bus = Bus {
+        Bus {
             devices: Vec::new(),
-            replaceable_info: MmioReplaceableInfo::new(),
             mmio_base,
             mmio_len,
             #[cfg(target_arch = "aarch64")]
             serial_range,
             #[cfg(target_arch = "aarch64")]
             rtc_range,
-        };
-
-        for _ in 0..MMIO_REPLACEABLE_BLK_NR {
-            let block = Arc::new(Mutex::new(Block::new()));
-            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&sys_mem, block)));
-            if let Ok(dev) = bus.attach_device(device.clone()) {
-                bus.replaceable_info
-                    .devices
-                    .lock()
-                    .unwrap()
-                    .push(MmioReplaceableDevInfo {
-                        device: dev,
-                        id: "".to_string(),
-                        used: false,
-                    });
-            }
         }
-
-        for _ in 0..MMIO_REPLACEABLE_NET_NR {
-            let net = Arc::new(Mutex::new(Net::new()));
-            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&sys_mem, net)));
-            if let Ok(dev) = bus.attach_device(device.clone()) {
-                bus.replaceable_info
-                    .devices
-                    .lock()
-                    .unwrap()
-                    .push(MmioReplaceableDevInfo {
-                        device: dev,
-                        id: "".to_string(),
-                        used: false,
-                    });
-            }
-        }
-
-        bus
     }
 
     /// Attach a MMIO device to Bus.
@@ -238,212 +153,6 @@ impl Bus {
         }
 
         infos
-    }
-
-    /// Get an unused entry of replaceable_info, then fill the fields and mark it as `used`.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Device id.
-    /// * `path` - Related backend device path.
-    /// * `dev_type` - MMIO device type.
-    ///
-    /// # Errors
-    ///
-    /// Returns Error if the device number exceed the Max count.
-    pub fn fill_replaceable_device(
-        &mut self,
-        id: &str,
-        dev_config: Arc<dyn ConfigCheck>,
-        dev_type: DeviceType,
-    ) -> Result<()> {
-        let index = match dev_type {
-            DeviceType::BLK => {
-                let index = self.replaceable_info.block_count;
-                if index >= MMIO_REPLACEABLE_BLK_NR {
-                    bail!(
-                        "Index {} is out of bounds {} for block to fill replaceable device",
-                        index,
-                        MMIO_REPLACEABLE_BLK_NR,
-                    );
-                }
-                self.replaceable_info.block_count += 1;
-                index
-            }
-            DeviceType::NET => {
-                let index = self.replaceable_info.net_count + MMIO_REPLACEABLE_BLK_NR;
-                if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
-                    bail!(
-                        "Index {} is out of bounds {} for net to fill replaceable device",
-                        index,
-                        MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR,
-                    );
-                }
-                self.replaceable_info.net_count += 1;
-                index
-            }
-            _ => {
-                bail!("Unsupported replaceable device type to fill replaceable device, id: {} type: {:?}",
-                    id, dev_type);
-            }
-        };
-
-        let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
-        if let Some(device_info) = replaceable_devices.get_mut(index) {
-            if device_info.used {
-                return Err(format!("The index{} is used, {}", index, id).into());
-            } else {
-                device_info.id = id.to_string();
-                device_info.used = true;
-                device_info.device.update_config(Some(dev_config.clone()))?;
-            }
-        }
-
-        self.add_replaceable_config(id.to_string(), dev_config)?;
-
-        Ok(())
-    }
-
-    /// Add new config into replaceable_info configs arrays.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Device id.
-    /// * `path` - Related backend device path.
-    pub fn add_replaceable_config(
-        &self,
-        id: String,
-        dev_config: Arc<dyn ConfigCheck>,
-    ) -> Result<()> {
-        let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
-        if configs_lock.len() >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
-            bail!(
-                "The size {} of replaceable configs extend the max size {}, id {}.",
-                configs_lock.len(),
-                MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR,
-                id,
-            );
-        }
-
-        for config in configs_lock.iter() {
-            if config.id == id {
-                bail!("Add the id {} repeatedly", id);
-            }
-        }
-
-        let config = MmioReplaceableConfig { id, dev_config };
-        configs_lock.push(config);
-
-        Ok(())
-    }
-
-    /// Get an unused entry of replaceable_info which is indexed by `slot`,
-    /// then update the fields and mark it as `used`.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Device id.
-    /// * `driver` - Driver type passed in by HotPlug.
-    /// * `slot` - The index of replaceable_info entries.
-    ///
-    /// # Errors
-    ///
-    /// Returns Error if the entry is already used.
-    pub fn add_replaceable_device(&self, id: &str, driver: &str, slot: usize) -> Result<()> {
-        let index = if driver.contains("net") {
-            if slot >= MMIO_REPLACEABLE_NET_NR {
-                bail!(
-                    "Index {} is out of bounds {} for net to add replaceable device",
-                    slot,
-                    MMIO_REPLACEABLE_NET_NR
-                );
-            }
-            slot + MMIO_REPLACEABLE_BLK_NR
-        } else if driver.contains("blk") {
-            if slot >= MMIO_REPLACEABLE_BLK_NR {
-                bail!(
-                    "Index {} is out of bounds {} for block to add replaceable device",
-                    slot,
-                    MMIO_REPLACEABLE_BLK_NR
-                );
-            }
-            slot
-        } else {
-            bail!(
-                "Unsupported replaceable device type to add replaceable device, id: {} driver: {}",
-                id,
-                driver,
-            );
-        };
-
-        let configs_lock = self.replaceable_info.configs.lock().unwrap();
-        // find the configuration by id
-        let mut dev_config = None;
-        for config in configs_lock.iter() {
-            if config.id == id {
-                dev_config = Some(config.dev_config.clone());
-            }
-        }
-
-        if dev_config.is_none() {
-            bail!(
-                "Failed to find the configuration to add replaceable device, id: {} driver: {}",
-                id,
-                driver
-            );
-        }
-
-        // find the replaceable device and replace it
-        let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
-        if let Some(device_info) = replaceable_devices.get_mut(index) {
-            if device_info.used {
-                bail!(
-                    "The slot {} is already used for adding replaceable device, {}",
-                    slot,
-                    id
-                );
-            } else {
-                device_info.id = id.to_string();
-                device_info.used = true;
-                device_info.device.update_config(dev_config)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Find the entry of replaceable_info which is specified by `id`,
-    /// then update the fields and mark it as `unused`.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Device id.
-    pub fn del_replaceable_device(&self, id: &str) -> Result<String> {
-        // find the index of configuration by name and remove it
-        let mut is_exist = false;
-        let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
-        for (index, config) in configs_lock.iter().enumerate() {
-            if config.id == id {
-                configs_lock.remove(index);
-                is_exist = true;
-                break;
-            }
-        }
-
-        // set the status of the device to 'unused'
-        let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
-        for device_info in replaceable_devices.iter_mut() {
-            if device_info.id == id {
-                device_info.id = "".to_string();
-                device_info.used = false;
-                device_info.device.update_config(None)?;
-            }
-        }
-
-        if !is_exist {
-            bail!("Device {} not found", id);
-        }
-        Ok(id.to_string())
     }
 
     /// Realize all the devices inserted in this Bus.

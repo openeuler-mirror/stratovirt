@@ -97,11 +97,11 @@ pub mod errors {
 mod queue;
 mod vhost;
 
-pub use balloon::balloon_allow_list;
+pub use balloon::*;
 pub use block::Block;
 pub use console::Console;
 pub use errors::*;
-pub use net::Net;
+pub use net::*;
 pub use queue::*;
 pub use vhost::kernel as VhostKern;
 
