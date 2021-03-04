@@ -35,6 +35,9 @@ pub mod errors {
             CreateKvmDevice(err: kvm_ioctls::Error) {
                 display("Failed to create KVM device: {:#?}.", err)
             }
+            AttachSysBusErr {
+                display("Failed to attach to sysbus.")
+            }
         }
     }
 }

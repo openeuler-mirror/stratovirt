@@ -15,21 +15,18 @@ use std::sync::{Arc, Mutex};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
+use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
-use machine_manager::config::ConfigCheck;
+#[cfg(target_arch = "x86_64")]
+use machine_manager::config::{BootSource, Param};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
-use virtio::{
-    virtio_has_feature, Queue, QueueConfig, VirtioDevice, NOTIFY_REG_OFFSET,
-    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BALLOON,
-    VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_CONSOLE, VIRTIO_TYPE_NET,
-};
-
-use super::DeviceOps;
 use super::{
-    errors::{ErrorKind, Result, ResultExt},
-    DeviceResource, DeviceType, MmioDeviceOps,
+    virtio_has_feature, Queue, QueueConfig, VirtioDevice, NOTIFY_REG_OFFSET,
+    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED,
 };
+use crate::errors::{ErrorKind, Result, ResultExt};
 
 /// Registers of virtio-mmio device refer to Virtio Spec.
 /// Magic value - Read Only.
@@ -172,7 +169,7 @@ impl VirtioMmioCommonConfig {
                     .into()
                 })
         } else {
-            Err(ErrorKind::DeviceStatus(self.device_status).into())
+            Err(ErrorKind::DevStatErr(self.device_status).into())
         }
     }
 
@@ -224,7 +221,7 @@ impl VirtioMmioCommonConfig {
             STATUS_REG => self.device_status,
             CONFIG_GENERATION_REG => self.config_generation,
             _ => {
-                return Err(ErrorKind::MmioRegister(offset).into());
+                return Err(ErrorKind::MmioRegErr(offset).into());
             }
         };
 
@@ -265,7 +262,7 @@ impl VirtioMmioCommonConfig {
                         self.queue_type = QUEUE_TYPE_PACKED_VRING;
                     }
                 } else {
-                    return Err(ErrorKind::DeviceStatus(self.device_status).into());
+                    return Err(ErrorKind::DevStatErr(self.device_status).into());
                 }
             }
             DRIVER_FEATURES_SEL_REG => self.acked_features_select = value,
@@ -301,7 +298,7 @@ impl VirtioMmioCommonConfig {
                 config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
             })?,
             _ => {
-                return Err(ErrorKind::MmioRegister(offset).into());
+                return Err(ErrorKind::MmioRegErr(offset).into());
             }
         };
         Ok(())
@@ -310,18 +307,20 @@ impl VirtioMmioCommonConfig {
 
 /// virtio-mmio device structure.
 pub struct VirtioMmioDevice {
-    /// The entity of low level device.
-    device: Arc<Mutex<dyn VirtioDevice>>,
-    /// Identify if this device is activated by frontend driver.
+    // The entity of low level device.
+    pub device: Arc<Mutex<dyn VirtioDevice>>,
+    // Identify if this device is activated by frontend driver.
     device_activated: bool,
-    /// EventFd used to send interrupt to VM
+    // EventFd used to send interrupt to VM
     interrupt_evt: EventFd,
-    /// HostNotifyInfo used for guest notifier
+    // HostNotifyInfo used for guest notifier
     host_notify_info: HostNotifyInfo,
-    /// Virtio common config refer to Virtio Spec.
+    // Virtio common config refer to Virtio Spec.
     common_config: VirtioMmioCommonConfig,
-    /// System address space.
+    // System address space.
     mem_space: Arc<AddressSpace>,
+    // System Resource of device.
+    res: SysRes,
 }
 
 impl VirtioMmioDevice {
@@ -336,7 +335,55 @@ impl VirtioMmioDevice {
             host_notify_info: HostNotifyInfo::new(queue_num),
             common_config: VirtioMmioCommonConfig::new(&device_clone),
             mem_space: mem_space.clone(),
+            res: SysRes::default(),
         }
+    }
+
+    pub fn realize(
+        mut self,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+        #[cfg(target_arch = "x86_64")] bs: &Arc<Mutex<BootSource>>,
+        vm_fd: &VmFd,
+    ) -> Result<Arc<Mutex<Self>>> {
+        self.device
+            .lock()
+            .unwrap()
+            .realize()
+            .chain_err(|| "Failed to realize virtio mmio device.")?;
+
+        if region_base >= sysbus.mmio_region.1 {
+            bail!("Mmio region space exhausted.");
+        }
+        match self.set_sys_resource(sysbus, region_base, region_size, vm_fd) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("{}", e.display_chain());
+                bail!("Failed to allocate system resource.");
+            }
+        }
+
+        let dev = Arc::new(Mutex::new(self));
+        match sysbus.attach_device(&dev, region_base, region_size) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("{}", e);
+                bail!("Failed to attach to sysbus.");
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        bs.lock().unwrap().kernel_cmdline.push(Param {
+            param_type: "virtio_mmio.device".to_string(),
+            value: format!(
+                "{}@0x{:08x}:{}",
+                region_size,
+                region_base,
+                dev.lock().unwrap().res.irq
+            ),
+        });
+        Ok(dev)
     }
 
     /// Activate the virtio device, this function is called by vcpu thread when frontend
@@ -375,7 +422,7 @@ impl VirtioMmioDevice {
     }
 }
 
-impl DeviceOps for VirtioMmioDevice {
+impl SysBusDevOps for VirtioMmioDevice {
     /// Read data by virtio driver from VM.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
@@ -447,8 +494,8 @@ impl DeviceOps for VirtioMmioDevice {
                     CONFIG_STATUS_FAILED,
                 ) && !self.device_activated
                 {
-                    let res = self.activate().map(|_| self.device_activated = true);
-                    if let Err(ref e) = res {
+                    let ret = self.activate().map(|_| self.device_activated = true);
+                    if let Err(ref e) = ret {
                         error!(
                             "Failed to activate dev, type: {}, {}",
                             self.device.lock().unwrap().device_type(),
@@ -495,57 +542,6 @@ impl DeviceOps for VirtioMmioDevice {
         }
         true
     }
-}
-
-impl MmioDeviceOps for VirtioMmioDevice {
-    /// Realize this MMIO device for VM.
-    fn realize(&mut self, vm_fd: &VmFd, resource: DeviceResource) -> Result<()> {
-        let device_type = self.device.lock().unwrap().device_type();
-        vm_fd
-            .register_irqfd(&self.interrupt_evt, resource.irq)
-            .chain_err(|| {
-                format!(
-                    "Failed to register irqfd for virtio mmio device, irq: {}, type: {}",
-                    resource.irq, device_type,
-                )
-            })?;
-
-        self.device.lock().unwrap().realize().chain_err(|| {
-            format!(
-                "Failed to realize device for virtio mmio device, type: {}",
-                device_type,
-            )
-        })?;
-
-        Ok(())
-    }
-
-    /// Get the resource requirement of MMIO device.
-    fn get_type(&self) -> DeviceType {
-        match self.device.lock().unwrap().device_type() {
-            VIRTIO_TYPE_NET => DeviceType::NET,
-            VIRTIO_TYPE_BLOCK => DeviceType::BLK,
-            VIRTIO_TYPE_BALLOON => DeviceType::BALLOON,
-            VIRTIO_TYPE_CONSOLE => DeviceType::CONSOLE,
-            _ => DeviceType::OTHER,
-        }
-    }
-
-    /// Update the low level config of MMIO device.
-    fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
-        let device_type = self.device.lock().unwrap().device_type();
-        self.device
-            .lock()
-            .unwrap()
-            .update_config(dev_config)
-            .chain_err(|| {
-                format!(
-                    "Failed to update configuration, device type: {}",
-                    device_type
-                )
-            })?;
-        Ok(())
-    }
 
     fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         let mut ret = Vec::new();
@@ -565,8 +561,19 @@ impl MmioDeviceOps for VirtioMmioDevice {
                 data: index as u64,
             })
         }
-
         ret
+    }
+
+    fn interrupt_evt(&self) -> Option<&EventFd> {
+        Some(&self.interrupt_evt)
+    }
+
+    fn get_sys_resource(&mut self) -> &mut SysRes {
+        &mut self.res
+    }
+
+    fn get_type(&self) -> SysBusDevType {
+        SysBusDevType::VirtioMmio
     }
 }
 
@@ -578,7 +585,7 @@ mod tests {
     use util::num_ops::{read_u32, write_u32};
 
     use super::*;
-    type VirtioResult<T> = std::result::Result<T, virtio::Error>;
+    use crate::VIRTIO_TYPE_BLOCK;
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36);
@@ -627,13 +634,13 @@ mod tests {
     }
 
     impl VirtioDevice for VirtioDeviceTest {
-        fn realize(&mut self) -> VirtioResult<()> {
+        fn realize(&mut self) -> Result<()> {
             self.b_realized = true;
             Ok(())
         }
 
         fn device_type(&self) -> u32 {
-            DeviceType::BLK as u32
+            VIRTIO_TYPE_BLOCK
         }
 
         fn queue_num(&self) -> usize {
@@ -657,7 +664,7 @@ mod tests {
             self.driver_features |= v;
         }
 
-        fn read_config(&self, offset: u64, mut data: &mut [u8]) -> VirtioResult<()> {
+        fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
             let config_len = self.config_space.len() as u64;
             if offset >= config_len {
                 bail!(
@@ -675,7 +682,7 @@ mod tests {
             Ok(())
         }
 
-        fn write_config(&mut self, offset: u64, data: &[u8]) -> VirtioResult<()> {
+        fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
             let data_len = data.len();
             let config_len = self.config_space.len();
             if offset as usize + data_len > config_len {
@@ -700,7 +707,7 @@ mod tests {
             _interrupt_status: Arc<AtomicU32>,
             mut _queues: Vec<Arc<Mutex<Queue>>>,
             mut _queue_evts: Vec<EventFd>,
-        ) -> VirtioResult<()> {
+        ) -> Result<()> {
             self.b_active = true;
             Ok(())
         }
@@ -763,7 +770,7 @@ mod tests {
             virtio_mmio_device.read(&mut buf[..], addr, DEVICE_ID_REG),
             true
         );
-        assert_eq!(LittleEndian::read_u32(&buf[..]), DeviceType::BLK as u32);
+        assert_eq!(LittleEndian::read_u32(&buf[..]), VIRTIO_TYPE_BLOCK);
 
         // read the register of vendor id
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];

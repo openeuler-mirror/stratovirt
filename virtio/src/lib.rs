@@ -34,10 +34,6 @@ extern crate machine_manager;
 #[macro_use]
 extern crate vmm_sys_util;
 
-pub mod balloon;
-pub mod block;
-pub mod console;
-pub mod net;
 pub mod errors {
     error_chain! {
         foreign_links {
@@ -90,12 +86,23 @@ pub mod errors {
             FailedToWriteConfig {
                 display("Failed to Write config")
             }
+            DevStatErr(status: u32) {
+                display("Invalid device status: 0x{:x}.", status)
+            }
+            MmioRegErr(offset: u64) {
+                display("Unsupported mmio register at offset 0x{:x}.", offset)
+            }
         }
     }
 }
 
+mod balloon;
+mod block;
+mod console;
+mod net;
 mod queue;
 mod vhost;
+mod virtio_mmio;
 
 pub use balloon::*;
 pub use block::Block;
@@ -104,6 +111,7 @@ pub use errors::*;
 pub use net::*;
 pub use queue::*;
 pub use vhost::kernel as VhostKern;
+pub use virtio_mmio::VirtioMmioDevice;
 
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};

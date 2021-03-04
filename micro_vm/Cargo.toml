@@ -20,7 +20,7 @@ machine_manager = { path = "../machine_manager" }
 boot_loader = { path = "../boot_loader" }
 cpu = { path = "../cpu" }
 devices = { path = "../devices" }
-mmio = { path = "../mmio" }
+sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 virtio = { path = "../virtio" }
 

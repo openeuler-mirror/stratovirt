@@ -79,15 +79,15 @@ pub struct Vsock {
 }
 
 impl Vsock {
-    pub fn new(vsock_cfg: VsockConfig, mem_space: Arc<AddressSpace>) -> Self {
+    pub fn new(cfg: &VsockConfig, mem_space: &Arc<AddressSpace>) -> Self {
         let config: Vec<u8> = [0; VSOCK_CONFIG_SIZE].to_vec();
         Vsock {
-            vsock_cfg,
+            vsock_cfg: cfg.clone(),
             backend: None,
             device_features: 0_u64,
             driver_features: 0_u64,
             config_space: config,
-            mem_space,
+            mem_space: mem_space.clone(),
         }
     }
 }
@@ -277,7 +277,7 @@ mod tests {
         let value = serde_json::from_str(json).unwrap();
         let vsock_conf = VsockConfig::from_value(&value).unwrap();
         let sys_mem = vsock_address_space_init();
-        let vsock = Vsock::new(vsock_conf.clone(), sys_mem.clone());
+        let vsock = Vsock::new(&vsock_conf, &sys_mem);
         vsock
     }
 

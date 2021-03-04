@@ -15,7 +15,7 @@ vmm-sys-util = "0.7.0"
 address_space = { path = "../address_space" }
 boot_loader = { path = "../boot_loader" }
 machine_manager = { path = "../machine_manager" }
-mmio = { path = "../mmio" }
+sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 
 [target.'cfg(target_arch = "aarch64")'.dependencies]
