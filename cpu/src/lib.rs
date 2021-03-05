@@ -679,6 +679,23 @@ pub struct CpuTopology {
 }
 
 impl CpuTopology {
+    /// Init CpuTopology structure.
+    ///
+    /// # Arguments
+    ///
+    /// * `nr_cpus`: Number of vcpus.
+    pub fn new(nr_cpus: u8) -> Self {
+        let mask: Vec<u8> = vec![1; nr_cpus as usize];
+        Self {
+            sockets: nr_cpus,
+            cores: 1,
+            threads: 1,
+            nrcpus: nr_cpus,
+            max_cpus: nr_cpus,
+            online_mask: Arc::new(Mutex::new(mask)),
+        }
+    }
+
     /// Get online mask for a cpu.
     ///
     /// # Notes

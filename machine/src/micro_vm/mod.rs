@@ -215,26 +215,13 @@ impl LightMachine {
             mmio_region,
         );
 
-        let mut mask: Vec<u8> = Vec::with_capacity(vm_config.machine_config.nr_cpus as usize);
-        for _i in 0..vm_config.machine_config.nr_cpus {
-            mask.push(1)
-        }
-        let cpu_topo = CpuTopology {
-            sockets: vm_config.machine_config.nr_cpus,
-            cores: 1,
-            threads: 1,
-            nrcpus: vm_config.machine_config.nr_cpus,
-            max_cpus: vm_config.machine_config.nr_cpus,
-            online_mask: Arc::new(Mutex::new(mask)),
-        };
-
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
         let power_button = EventFd::new(libc::EFD_NONBLOCK)
             .chain_err(|| "Create EventFd for power-button failed.")?;
 
         Ok(LightMachine {
-            cpu_topo,
+            cpu_topo: CpuTopology::new(vm_config.machine_config.nr_cpus),
             cpus: Arc::new(Mutex::new(Vec::new())),
             #[cfg(target_arch = "aarch64")]
             irq_chip: None,
