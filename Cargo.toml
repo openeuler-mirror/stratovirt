@@ -12,8 +12,8 @@ kvm-ioctls = "0.6.0"
 libc = "0.2.71"
 log = "0.4.8"
 vmm-sys-util = "0.7.0"
+machine = { path = "machine" }
 machine_manager = { path = "machine_manager" }
-micro_vm = { path = "micro_vm" }
 util = { path = "util" }
 virtio = { path = "virtio" }
 
@@ -23,8 +23,8 @@ members = [
     "boot_loader",
     "cpu",
     "devices",
+    "machine",
     "machine_manager",
-    "micro_vm",
     "sysbus",
     "util",
     "virtio",

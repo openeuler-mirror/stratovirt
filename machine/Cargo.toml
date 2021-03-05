@@ -1,10 +1,10 @@
 [package]
-name = "micro_vm"
+name = "machine"
 version = "0.2.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2018"
 license = "Mulan PSL v2"
-description = "Micro VM Emulation"
+description = "Emulation machines"
 
 [dependencies]
 error-chain = "0.12.4"

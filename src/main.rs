@@ -20,8 +20,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
-use error_chain::ChainedError;
 use kvm_ioctls::{Kvm, VmFd};
+use machine::{LightMachine, MachineOps};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     config::VmConfig,
@@ -31,18 +31,15 @@ use machine_manager::{
     socket::Socket,
     temp_cleaner::TempCleaner,
 };
-use micro_vm::{register_seccomp, syscall_allow_list, LightMachine};
 use util::loop_context::EventNotifierHelper;
 use util::unix::limit_permission;
 use util::{arg_parser, daemonize::daemonize, logger};
-use virtio::balloon_allow_list;
 use vmm_sys_util::terminal::Terminal;
 
 error_chain! {
     links {
        Manager(machine_manager::errors::Error, machine_manager::errors::ErrorKind);
        Util(util::errors::Error, util::errors::ErrorKind);
-       Vm(micro_vm::errors::Error, micro_vm::errors::ErrorKind);
     }
     foreign_links {
         Io(std::io::Error);
@@ -164,20 +161,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     register_kill_signal();
 
     let (kvm_fd, vm_fd) = get_vm_fds()?;
-    let vm = match LightMachine::new(&vm_config) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("{}", e.display_chain());
-            bail!("Failed to init micro VM.");
-        }
-    };
-    let vm = match LightMachine::realize(vm, &vm_config, (kvm_fd, &vm_fd)) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("{}", e.display_chain());
-            bail!("Failed to realize micro VM.");
-        }
-    };
+    let vm = LightMachine::new(&vm_config).chain_err(|| "Failed to init micro VM.")?;
+    let vm = MachineOps::realize(vm, &vm_config, (kvm_fd, &vm_fd))
+        .chain_err(|| "Failed to realize micro VM.")?;
+
     EventLoop::set_manager(vm.clone(), None);
     let api_socket = {
         let (api_path, _) = check_api_channel(&cmd_args)?;
@@ -197,13 +184,11 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     )
     .chain_err(|| "Failed to add api event to MainLoop")?;
 
-    vm.vm_start(cmd_args.is_present("freeze_cpu"))?;
+    vm.vm_start(cmd_args.is_present("freeze_cpu"))
+        .chain_err(|| "Failed to start VM.")?;
     if !cmd_args.is_present("disable-seccomp") {
-        let mut allow_list = syscall_allow_list();
-        if balloon_switch_on {
-            balloon_allow_list(&mut allow_list);
-        }
-        register_seccomp(allow_list)?;
+        vm.register_seccomp(balloon_switch_on)
+            .chain_err(|| "Failed to register seccomp rules.")?;
     }
 
     EventLoop::loop_run().chain_err(|| "MainLoop exits unexpectedly: error occurs")?;
