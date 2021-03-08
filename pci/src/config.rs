@@ -28,7 +28,11 @@ pub const REG_SIZE: usize = 4;
 pub const COMMAND: u8 = 0x04;
 /// Base address register 0.
 pub const BAR_0: u8 = 0x10;
-/// I/O Base register.
+/// Secondary bus number register.
+pub const SECONDARY_BUS_NUM: u8 = 0x19;
+/// Subordinate bus number register.
+pub const SUBORDINATE_BUS_NUM: u8 = 0x1a;
+/// I/O base register.
 pub const IO_BASE: u8 = 0x1c;
 /// Memory base register.
 pub const MEMORY_BASE: u8 = 0x20;

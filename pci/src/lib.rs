@@ -12,6 +12,8 @@
 
 #[macro_use]
 extern crate error_chain;
+#[macro_use]
+extern crate log;
 
 pub mod errors {
     error_chain! {
@@ -29,6 +31,7 @@ pub mod errors {
     }
 }
 
+mod bus;
 #[allow(dead_code)]
 mod config;
 
