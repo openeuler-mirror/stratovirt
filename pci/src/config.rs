@@ -10,9 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::{Arc, Mutex};
+
 use address_space::Region;
+use kvm_ioctls::VmFd;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::msix::Msix;
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, BDF_FUNC_SHIFT,
 };
@@ -236,6 +240,8 @@ pub struct PciConfig {
     pub last_ext_cap_offset: u16,
     /// End offset of the last PCIe extended capability.
     pub last_ext_cap_end: u16,
+    /// MSI-X information.
+    pub msix: Option<Arc<Mutex<Msix>>>,
 }
 
 impl PciConfig {
@@ -264,6 +270,7 @@ impl PciConfig {
             last_cap_end: PCI_CONFIG_HEAD_END as u16,
             last_ext_cap_offset: 0,
             last_ext_cap_end: PCI_CONFIG_SPACE_SIZE as u16,
+            msix: None,
         }
     }
 
@@ -357,12 +364,17 @@ impl PciConfig {
     /// * `data` - Data to write.
     /// * `vm_fd` - The file descriptor of VM.
     /// * `dev_id` - Device id to send MSI/MSI-X.
-    pub fn write(&mut self, mut offset: usize, data: &mut [u8]) {
+    pub fn write(&mut self, mut offset: usize, data: &mut [u8], vm_fd: &VmFd, dev_id: u16) {
         for i in 0..data.len() {
             data[i] &= self.write_mask[offset];
             self.config[offset] = (self.config[offset] & (!self.write_mask[offset])) | data[i];
             self.config[offset] &= !self.write_clear_mask[offset];
             offset += 1;
+        }
+        if let Some(msix) = &mut self.msix {
+            msix.lock()
+                .unwrap()
+                .write_config(&self.config, vm_fd, dev_id);
         }
     }
 

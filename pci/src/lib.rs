@@ -34,6 +34,7 @@ pub mod errors {
 mod bus;
 #[allow(dead_code)]
 mod config;
+mod msix;
 
 use std::mem::size_of;
 use std::sync::Arc;
