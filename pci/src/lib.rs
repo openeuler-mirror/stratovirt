@@ -34,6 +34,7 @@ pub mod errors {
 mod bus;
 #[allow(dead_code)]
 mod config;
+mod host;
 mod msix;
 
 use std::mem::size_of;
@@ -119,7 +120,7 @@ pub trait PciDevOps: Send {
     ///
     /// * `offset` - Offset in configuration space.
     /// * `data` - Data to write.
-    fn write_config(&mut self, offset: usize, data: &mut [u8]);
+    fn write_config(&mut self, offset: usize, data: &[u8]);
 
     /// Set device id to send MSI/MSI-X.
     ///
