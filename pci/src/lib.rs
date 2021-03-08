@@ -14,8 +14,23 @@
 extern crate error_chain;
 
 pub mod errors {
-    error_chain! {}
+    error_chain! {
+        errors {
+            AddPciCap(id: u8, size: usize) {
+                display("Failed to add PCI capability: id 0x{:x}, size: 0x{:x}.", id, size)
+            }
+            AddPcieExtCap(id: u8, size: usize) {
+                display("Failed to add PCIe extended capability: id 0x{:x}, size: 0x{:x}.", id, size)
+            }
+            UnregMemBar(id: usize) {
+                display("Failed to unmap BAR {} in memory space.", id)
+            }
+        }
+    }
 }
+
+#[allow(dead_code)]
+mod config;
 
 use std::mem::size_of;
 use std::sync::Arc;
@@ -24,6 +39,8 @@ use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
 
 use errors::Result;
+
+const BDF_FUNC_SHIFT: u8 = 3;
 
 macro_rules! le_write {
     ($name: ident, $func: ident, $type: tt) => {
