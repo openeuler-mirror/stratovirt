@@ -28,8 +28,16 @@ pub const PCIE_CONFIG_SPACE_SIZE: usize = 4096;
 /// Size in bytes of dword.
 pub const REG_SIZE: usize = 4;
 
+/// Vendor ID Register.
+pub const VENDOR_ID: u8 = 0x0;
+/// Device ID register.
+pub const DEVICE_ID: u8 = 0x02;
 /// Command register.
 pub const COMMAND: u8 = 0x04;
+/// Sub-Class Code Register.
+pub const SUB_CLASS_CODE: u8 = 0x0a;
+/// Header Type register.
+pub const HEADER_TYPE: u8 = 0x0e;
 /// Base address register 0.
 pub const BAR_0: u8 = 0x10;
 /// Secondary bus number register.
@@ -42,11 +50,24 @@ pub const IO_BASE: u8 = 0x1c;
 pub const MEMORY_BASE: u8 = 0x20;
 /// Prefetchable memory base register.
 pub const PREF_MEMORY_BASE: u8 = 0x24;
+/// Prefetchable memory limit register.
+pub const PREF_MEMORY_LIMIT: u8 = 0x26;
+
+/// 64-bit prefetchable memory addresses.
+pub const PREF_MEM_RANGE_64BIT: u8 = 0x01;
 
 /// I/O space enable.
 pub const COMMAND_IO_SPACE: u16 = 0x0001;
 /// Memory space enable.
 pub const COMMAND_MEMORY_SPACE: u16 = 0x0002;
+
+/// Class code of PCI-to-PCI bridge.
+pub const CLASS_CODE_PCI_BRIDGE: u16 = 0x0604;
+
+/// Type 1 configuration Space Header Layout.
+pub const HEADER_TYPE_BRIDGE: u8 = 0x01;
+/// Multi-function device.
+pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
 
 const PCI_CONFIG_HEAD_END: u8 = 64;
 const NEXT_CAP_OFFSET: u8 = 0x01;
@@ -364,9 +385,11 @@ impl PciConfig {
     /// * `data` - Data to write.
     /// * `vm_fd` - The file descriptor of VM.
     /// * `dev_id` - Device id to send MSI/MSI-X.
-    pub fn write(&mut self, mut offset: usize, data: &mut [u8], vm_fd: &VmFd, dev_id: u16) {
-        for i in 0..data.len() {
-            data[i] &= self.write_mask[offset];
+    pub fn write(&mut self, mut offset: usize, data: &[u8], vm_fd: &VmFd, dev_id: u16) {
+        let mut masked_data = Vec::new();
+        masked_data.extend_from_slice(data);
+        for i in 0..masked_data.len() {
+            masked_data[i] &= self.write_mask[offset];
             self.config[offset] = (self.config[offset] & (!self.write_mask[offset])) | data[i];
             self.config[offset] &= !self.write_clear_mask[offset];
             offset += 1;

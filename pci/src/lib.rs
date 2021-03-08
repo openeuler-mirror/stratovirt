@@ -36,13 +36,15 @@ mod bus;
 mod config;
 mod host;
 mod msix;
+mod root_port;
 
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
 
+use bus::PciBus;
 use errors::Result;
 
 const BDF_FUNC_SHIFT: u8 = 3;
@@ -137,6 +139,16 @@ pub trait PciDevOps: Send {
         ((bus_num as u16) << bus_shift) | (devfn as u16)
     }
 
+    /// Get parent bus which the device is attached to.
+    fn parent_bus(&self) -> Weak<Mutex<PciBus>>;
+
     /// Get device name.
     fn name(&self) -> String;
+}
+
+pub fn ranges_overlap(start: usize, end: usize, range_start: usize, range_end: usize) -> bool {
+    if start > range_end || range_start > end {
+        return false;
+    }
+    true
 }
