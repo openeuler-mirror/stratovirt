@@ -334,7 +334,6 @@ dependencies = [
  "address_space",
  "error-chain",
  "kvm-ioctls",
- "log",
  "vmm-sys-util",
 ]
 

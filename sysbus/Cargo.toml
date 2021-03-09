@@ -9,6 +9,5 @@ description = "Emulate system bus"
 [dependencies]
 error-chain = "0.12.4"
 kvm-ioctls = "0.6.0"
-log = "0.4.8"
 vmm-sys-util = "0.7.0"
 address_space = { path = "../address_space" }
