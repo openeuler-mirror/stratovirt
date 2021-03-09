@@ -200,6 +200,7 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
+ "pci",
  "serde",
  "serde_json",
  "sysbus",

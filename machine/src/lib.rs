@@ -51,6 +51,7 @@ pub mod errors {
 }
 
 mod micro_vm;
+mod standard_vm;
 
 pub use micro_vm::LightMachine;
 
