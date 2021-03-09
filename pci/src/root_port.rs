@@ -107,7 +107,7 @@ impl PciDevOps for RootPort {
         self.config.init_bridge_write_clear_mask()
     }
 
-    fn realize(&mut self, vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn realize(mut self, vm_fd: &Arc<VmFd>) -> Result<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -133,17 +133,19 @@ impl PciDevOps for RootPort {
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();
-        let locked_sec_bus = self.sec_bus.lock().unwrap();
         #[cfg(target_arch = "x86_64")]
         locked_parent_bus
             .io_region
-            .add_subregion(locked_sec_bus.io_region.clone(), 0)
+            .add_subregion(self.sec_bus.lock().unwrap().io_region.clone(), 0)
             .chain_err(|| "Failed to register subregion in I/O space.")?;
         locked_parent_bus
             .mem_region
-            .add_subregion(locked_sec_bus.mem_region.clone(), 0)
+            .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
             .chain_err(|| "Failed to register subregion in memory space.")?;
         locked_parent_bus.child_buses.push(self.sec_bus.clone());
+        locked_parent_bus
+            .devices
+            .insert(self.devfn, Arc::new(Mutex::new(self)));
 
         Ok(())
     }

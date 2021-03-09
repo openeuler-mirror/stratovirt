@@ -42,6 +42,7 @@ pub use bus::PciBus;
 pub use config::{
     PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
+pub use host::PciHost;
 
 use std::mem::size_of;
 use std::sync::{Arc, Mutex, Weak};
@@ -110,7 +111,7 @@ pub trait PciDevOps: Send {
     /// # Arguments
     ///
     /// * `vm_fd` - File descriptor of VM.
-    fn realize(&mut self, vm_fd: &Arc<VmFd>) -> Result<()>;
+    fn realize(self, vm_fd: &Arc<VmFd>) -> Result<()>;
 
     /// Configuration space read.
     ///

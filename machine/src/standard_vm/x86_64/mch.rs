@@ -112,7 +112,7 @@ impl PciDevOps for Mch {
         self.config.init_common_write_clear_mask()
     }
 
-    fn realize(&mut self, _vm_fd: &Arc<VmFd>) -> PciResult<()> {
+    fn realize(mut self, _vm_fd: &Arc<VmFd>) -> PciResult<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -128,6 +128,14 @@ impl PciDevOps for Mch {
             CLASS_CODE_HOST_BRIDGE,
         )?;
 
+        let parent_bus = self.parent_bus.clone();
+        parent_bus
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .devices
+            .insert(0, Arc::new(Mutex::new(self)));
         Ok(())
     }
 
@@ -156,9 +164,8 @@ impl PciDevOps for Mch {
 
         self.config.write(offset, data, &self.vm_fd, 0);
         if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8) {
-            match self.update_pciexbar_mapping() {
-                Err(e) => error! {"{}", e.display_chain()},
-                Ok(_) => (),
+            if let Err(e) = self.update_pciexbar_mapping() {
+                error!("{}", e.display_chain());
             }
         }
     }

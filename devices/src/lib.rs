@@ -44,6 +44,6 @@ pub mod errors {
 
 #[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{InterruptController, InterruptControllerConfig};
-pub use legacy::Serial;
 #[cfg(target_arch = "aarch64")]
 pub use legacy::PL031;
+pub use legacy::{Serial, SERIAL_ADDR};

@@ -29,5 +29,5 @@ mod pl031;
 mod serial;
 
 #[cfg(target_arch = "aarch64")]
-pub use self::pl031::PL031;
-pub use self::serial::Serial;
+pub use pl031::PL031;
+pub use serial::{Serial, SERIAL_ADDR};

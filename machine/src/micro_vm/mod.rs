@@ -56,7 +56,7 @@ pub mod errors {
 mod mem_layout;
 mod syscall;
 
-pub use syscall::syscall_allow_list;
+pub use syscall::syscall_whitelist;
 
 use std::fs::metadata;
 use std::ops::Deref;
@@ -70,6 +70,8 @@ use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_kernel, BootLoaderConfig};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::Serial;
+#[cfg(target_arch = "x86_64")]
+use devices::SERIAL_ADDR;
 #[cfg(target_arch = "aarch64")]
 use devices::{InterruptController, InterruptControllerConfig, PL031};
 use error_chain::ChainedError;
@@ -550,7 +552,7 @@ impl MachineOps for LightMachine {
         use crate::errors::ResultExt;
 
         #[cfg(target_arch = "x86_64")]
-        let region_base: u64 = 0x3f8;
+        let region_base: u64 = SERIAL_ADDR;
         #[cfg(target_arch = "aarch64")]
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         #[cfg(target_arch = "x86_64")]
@@ -738,7 +740,7 @@ impl MachineOps for LightMachine {
     }
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
-        syscall_allow_list()
+        syscall_whitelist()
     }
 
     fn realize(mut self, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> MachineResult<Arc<Self>> {

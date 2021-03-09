@@ -14,6 +14,7 @@ pub mod errors {
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            Cpu(cpu::errors::Error, cpu::errors::ErrorKind);
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
         }
     }
@@ -27,6 +28,7 @@ use std::sync::Arc;
 use errors::Result;
 use kvm_ioctls::VmFd;
 
+#[allow(dead_code)]
 const PCIE_MMCONFIG_REGION_SIZE: u32 = 256 << 20;
 
 trait StdMachineOps {

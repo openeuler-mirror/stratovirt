@@ -33,6 +33,8 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
 use errors::Result;
 
+pub const SERIAL_ADDR: u64 = 0x3f8;
+
 const UART_IER_RDI: u8 = 0x01;
 const UART_IER_THRI: u8 = 0x02;
 const UART_IIR_NO_INT: u8 = 0x01;

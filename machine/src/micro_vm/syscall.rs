@@ -44,7 +44,7 @@ const KVM_RUN: u32 = 0xae80;
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 
-/// Create a syscall allowlist for seccomp.
+/// Create a syscall whitelist for seccomp.
 ///
 /// # Notes
 /// This allowlist limit syscall with:
@@ -53,7 +53,7 @@ const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 /// * aarch64-unknown-gnu: 38 syscalls
 /// * aarch64-unknown-musl: 38 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
-pub fn syscall_allow_list() -> Vec<BpfRule> {
+pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
         BpfRule::new(libc::SYS_read),
         BpfRule::new(libc::SYS_write),
