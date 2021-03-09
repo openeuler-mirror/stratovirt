@@ -24,6 +24,25 @@
 //!
 //! - `x86_64`
 //! - `aarch64`
+
+pub mod errors {
+    error_chain! {
+        links {
+            SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);
+        }
+
+        foreign_links {
+            Io(std::io::Error);
+        }
+
+        errors {
+            SetSysResErr {
+                display("Failed to allocate system bus resource.")
+            }
+        }
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 mod pl031;
 mod serial;
