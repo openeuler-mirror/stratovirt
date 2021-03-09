@@ -66,7 +66,7 @@ use std::vec::Vec;
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_kernel, BootLoaderConfig};
-use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::Serial;
 #[cfg(target_arch = "x86_64")]
 use devices::SERIAL_ADDR;
@@ -163,7 +163,7 @@ pub struct LightMachine {
     // `vCPU` topology, support sockets, cores, threads.
     cpu_topo: CpuTopology,
     // `vCPU` devices.
-    cpus: Arc<Mutex<Vec<Arc<CPU>>>>,
+    cpus: Vec<Arc<CPU>>,
     // Interrupt controller device.
     #[cfg(target_arch = "aarch64")]
     irq_chip: Option<Arc<InterruptController>>,
@@ -221,7 +221,7 @@ impl LightMachine {
 
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(vm_config.machine_config.nr_cpus),
-            cpus: Arc::new(Mutex::new(Vec::new())),
+            cpus: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             irq_chip: None,
             sys_mem,
@@ -239,9 +239,6 @@ impl LightMachine {
     fn arch_init(vm_fd: &VmFd) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
-        vm_fd
-            .create_irq_chip()
-            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
         vm_fd
             .set_tss_address(0xfffb_d000_usize)
             .chain_err(|| MachineErrorKind::SetTssErr)?;
@@ -448,7 +445,7 @@ impl LightMachine {
         let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
         for cpu_index in 0..self.cpu_topo.max_cpus {
             let cpu_thread_barrier = cpus_thread_barrier.clone();
-            let cpu = self.cpus.lock().unwrap()[cpu_index as usize].clone();
+            let cpu = self.cpus[cpu_index as usize].clone();
             CPU::start(cpu, cpu_thread_barrier, paused)
                 .chain_err(|| MachineErrorKind::StartVcpuErr(cpu_index))?;
         }
@@ -470,7 +467,7 @@ impl LightMachine {
         use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize]
+            self.cpus[cpu_index as usize]
                 .pause()
                 .chain_err(|| MachineErrorKind::PauseVcpuErr(cpu_index))?;
         }
@@ -490,7 +487,7 @@ impl LightMachine {
         use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize]
+            self.cpus[cpu_index as usize]
                 .resume()
                 .chain_err(|| MachineErrorKind::ResumeVcpuErr(cpu_index))?;
         }
@@ -509,13 +506,11 @@ impl LightMachine {
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
         *vmstate = KvmVmState::Shutdown;
 
-        let mut cpus = self.cpus.lock().unwrap();
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            cpus[cpu_index as usize]
+            self.cpus[cpu_index as usize]
                 .destroy()
                 .chain_err(|| MachineErrorKind::DestroyVcpuErr(cpu_index))?;
         }
-        cpus.clear();
 
         Ok(())
     }
@@ -539,6 +534,44 @@ impl MachineOps for LightMachine {
             }
         }
         ranges
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn init_interrupt_controller(
+        &mut self,
+        vm_fd: &Arc<VmFd>,
+        _vcpu_count: u64,
+    ) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        vm_fd
+            .create_irq_chip()
+            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn init_interrupt_controller(
+        &mut self,
+        vm_fd: &Arc<VmFd>,
+        vcpu_count: u64,
+    ) -> MachineResult<()> {
+        let intc_conf = InterruptControllerConfig {
+            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+            vcpu_count,
+            max_irq: 192,
+            msi: true,
+            dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
+            redist_region_ranges: vec![
+                MEM_LAYOUT[LayoutEntryType::GicRedist as usize],
+                MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize],
+            ],
+            its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
+        };
+        let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)?;
+        self.irq_chip = Some(Arc::new(irq_chip));
+        self.irq_chip.as_ref().unwrap().realize()?;
+        Ok(())
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -789,70 +822,45 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn realize(mut self, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> MachineResult<Arc<Self>> {
+    fn realize(
+        vm: &Arc<Mutex<Self>>,
+        vm_config: &VmConfig,
+        fds: (Kvm, &Arc<VmFd>),
+    ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
+        let mut locked_vm = vm.lock().unwrap();
+        let kvm_fd = fds.0;
         let vm_fd = fds.1;
-        self.init_memory(
-            fds,
+
+        locked_vm.init_memory(
+            (kvm_fd, vm_fd),
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]
-            &self.sys_io,
-            &self.sys_mem,
+            &locked_vm.sys_io,
+            &locked_vm.sys_mem,
         )?;
 
         #[cfg(target_arch = "x86_64")]
-        LightMachine::arch_init(vm_fd)?;
-
-        let nrcpus = vm_config.machine_config.nr_cpus;
+        {
+            locked_vm
+                .init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
+            LightMachine::arch_init(vm_fd)?;
+        }
         let mut vcpu_fds = vec![];
-        for cpu_id in 0..nrcpus {
-            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
+        for vcpu_id in 0..vm_config.machine_config.nr_cpus {
+            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(vcpu_id)?));
         }
         #[cfg(target_arch = "aarch64")]
-        {
-            // Interrupt Controller Chip init
-            let intc_conf = InterruptControllerConfig {
-                version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
-                vcpu_count: u64::from(vm_config.machine_config.nr_cpus),
-                max_irq: 192,
-                msi: true,
-                dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
-                redist_region_ranges: vec![
-                    MEM_LAYOUT[LayoutEntryType::GicRedist as usize],
-                    MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize],
-                ],
-                its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
-            };
-            let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)?;
-            self.irq_chip = Some(Arc::new(irq_chip));
-            self.irq_chip.as_ref().unwrap().realize()?;
-        }
+        locked_vm.init_interrupt_controller(vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
 
         // Add mmio devices
-        self.create_replaceable_devices(&vm_fd)
+        locked_vm
+            .create_replaceable_devices(&vm_fd)
             .chain_err(|| "Failed to create replaceable device.")?;
-        self.add_devices(vm_config, &vm_fd)?;
+        locked_vm.add_devices(vm_config, &vm_fd)?;
 
-        let vm = Arc::new(self);
-        for vcpu_id in 0..nrcpus {
-            #[cfg(target_arch = "aarch64")]
-            let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
-            #[cfg(target_arch = "x86_64")]
-            let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(nrcpus));
-
-            let cpu = CPU::new(
-                vcpu_fds[vcpu_id as usize].clone(),
-                vcpu_id,
-                Arc::new(Mutex::new(arch_cpu)),
-                vm.clone(),
-            );
-            let mut vcpus = vm.cpus.lock().unwrap();
-            let newcpu = Arc::new(cpu);
-            vcpus.push(newcpu.clone());
-        }
-
-        let boot_source = vm.boot_source.lock().unwrap();
+        let boot_source = locked_vm.boot_source.lock().unwrap();
         let boot_config: CPUBootConfig;
         let (initrd, initrd_size) = match &boot_source.initrd {
             Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
@@ -866,7 +874,7 @@ impl MachineOps for LightMachine {
                 initrd_size: initrd_size as u32,
                 mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
             };
-            let layout = load_kernel(&bootloader_config, &vm.sys_mem)
+            let layout = load_kernel(&bootloader_config, &locked_vm.sys_mem)
                 .chain_err(|| MachineErrorKind::LoadKernErr)?;
             if let Some(rd) = &boot_source.initrd {
                 *rd.initrd_addr.lock().unwrap() = layout.initrd_start;
@@ -887,13 +895,13 @@ impl MachineOps for LightMachine {
                 initrd,
                 initrd_size: initrd_size as u32,
                 kernel_cmdline: boot_source.kernel_cmdline.to_string(),
-                cpu_count: vm.cpu_topo.nrcpus,
+                cpu_count: locked_vm.cpu_topo.nrcpus,
                 gap_range: (gap_start, gap_end - gap_start),
                 ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
                 lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
             };
 
-            let layout = load_kernel(&bootloader_config, &vm.sys_mem)
+            let layout = load_kernel(&bootloader_config, &locked_vm.sys_mem)
                 .chain_err(|| MachineErrorKind::LoadKernErr)?;
             boot_config = CPUBootConfig {
                 boot_ip: layout.kernel_start,
@@ -908,23 +916,26 @@ impl MachineOps for LightMachine {
                 pml4_start: layout.boot_pml4_addr,
             };
         }
-        for cpu_index in 0..vm.cpu_topo.max_cpus {
-            vm.cpus.lock().unwrap()[cpu_index as usize]
-                .realize(vm_fd, &boot_config)
-                .chain_err(|| format!("Failed to realize vcpu{}.", cpu_index))?;
-        }
 
         // Needed to release lock here because generate_fdt_node() will
         // acquire it later, and the ownership of vm will be passed out
         // of the function.
         drop(boot_source);
+        locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+            vm.clone(),
+            vm_config.machine_config.nr_cpus,
+            (&vm_fd, &vcpu_fds),
+            &boot_config,
+        )?);
 
         #[cfg(target_arch = "aarch64")]
         {
             let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
-            vm.generate_fdt_node(&mut fdt)
+            locked_vm
+                .generate_fdt_node(&mut fdt)
                 .chain_err(|| MachineErrorKind::GenFdtErr)?;
-            vm.sys_mem
+            locked_vm
+                .sys_mem
                 .write(
                     &mut fdt.as_slice(),
                     GuestAddress(boot_config.fdt_addr as u64),
@@ -932,9 +943,10 @@ impl MachineOps for LightMachine {
                 )
                 .chain_err(|| MachineErrorKind::WrtFdtErr(boot_config.fdt_addr, fdt.len()))?;
         }
-        vm.register_power_event(&vm.power_button)
+        locked_vm
+            .register_power_event(&locked_vm.power_button)
             .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
-        Ok(vm)
+        Ok(())
     }
 }
 
@@ -1079,7 +1091,7 @@ impl DeviceInterface for LightMachine {
         let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
         for cpu_index in 0..self.cpu_topo.max_cpus {
             if self.cpu_topo.get_mask(cpu_index as usize) == 1 {
-                let thread_id = self.cpus.lock().unwrap()[cpu_index as usize].tid();
+                let thread_id = self.cpus[cpu_index as usize].tid();
                 let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
                 let cpu_instance = qmp_schema::CpuInstanceProperties {
                     node_id: None,
@@ -1576,13 +1588,12 @@ impl CompileFDTHelper for LightMachine {
             }
         }
 
-        let cpu_list = self.cpus.lock().unwrap();
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            let mpidr = cpu_list[cpu_index as usize]
+            let mpidr = self.cpus[cpu_index as usize]
                 .arch()
                 .lock()
                 .unwrap()
-                .get_mpidr(cpu_list[cpu_index as usize].fd());
+                .get_mpidr(self.cpus[cpu_index as usize].fd());
 
             let node = format!("/cpus/cpu@{:x}", mpidr);
             device_tree::add_sub_node(fdt, &node)?;

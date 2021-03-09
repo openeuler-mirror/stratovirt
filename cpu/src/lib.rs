@@ -214,7 +214,7 @@ pub struct CPU {
     /// The thread tid of this VCPU.
     tid: Arc<Mutex<Option<u64>>>,
     /// The VM combined by this VCPU.
-    vm: Weak<dyn MachineInterface + Send + Sync>,
+    vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
 }
 
 impl CPU {
@@ -230,7 +230,7 @@ impl CPU {
         vcpu_fd: Arc<VcpuFd>,
         id: u8,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        vm: Arc<dyn MachineInterface + Send + Sync>,
+        vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
     ) -> Self {
         CPU {
             id,
@@ -411,7 +411,7 @@ impl CPUInterface for CPU {
         *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
 
         if let Some(vm) = self.vm.upgrade() {
-            vm.destroy();
+            vm.lock().unwrap().destroy();
         } else {
             return Err(ErrorKind::NoMachineInterface.into());
         }
@@ -438,17 +438,17 @@ impl CPUInterface for CPU {
             Ok(run) => match run {
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoIn(addr, data) => {
-                    vm.pio_in(u64::from(addr), data);
+                    vm.lock().unwrap().pio_in(u64::from(addr), data);
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoOut(addr, data) => {
-                    vm.pio_out(u64::from(addr), data);
+                    vm.lock().unwrap().pio_out(u64::from(addr), data);
                 }
                 VcpuExit::MmioRead(addr, data) => {
-                    vm.mmio_read(addr, data);
+                    vm.lock().unwrap().mmio_read(addr, data);
                 }
                 VcpuExit::MmioWrite(addr, data) => {
-                    vm.mmio_write(addr, data);
+                    vm.lock().unwrap().mmio_write(addr, data);
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Hlt => {
@@ -798,13 +798,13 @@ mod tests {
 
     impl MachineInterface for TestVm {}
 
-    fn prepare_env() -> Result<(Arc<VmFd>, Arc<TestVm>, CPU)> {
+    fn prepare_env() -> Result<(Arc<VmFd>, Arc<Mutex<TestVm>>, CPU)> {
         let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
             Ok(vm_fd) => Arc::new(vm_fd),
             Err(_) => return Err(ErrorKind::CreateVcpu("Failed to open kvm".to_string()).into()),
         };
 
-        let vm = Arc::new(TestVm::new());
+        let vm = Arc::new(Mutex::new(TestVm::new()));
 
         let cpu = CPU::new(
             Arc::new(vm_fd.create_vcpu(0).unwrap()),

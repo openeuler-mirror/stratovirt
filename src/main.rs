@@ -128,6 +128,7 @@ fn get_vm_fds() -> Result<(Kvm, Arc<VmFd>)> {
             .create_vm()
             .chain_err(|| "KVM: failed to create VM fd failed")?,
     );
+
     Ok((kvm_fd, vm_fd))
 }
 
@@ -161,8 +162,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     register_kill_signal();
 
     let (kvm_fd, vm_fd) = get_vm_fds()?;
-    let vm = LightMachine::new(&vm_config).chain_err(|| "Failed to init micro VM.")?;
-    let vm = MachineOps::realize(vm, &vm_config, (kvm_fd, &vm_fd))
+    let vm = Arc::new(Mutex::new(
+        LightMachine::new(&vm_config).chain_err(|| "Failed to init micro VM.")?,
+    ));
+    MachineOps::realize(&vm, &vm_config, (kvm_fd, &vm_fd))
         .chain_err(|| "Failed to realize micro VM.")?;
 
     EventLoop::set_manager(vm.clone(), None);
@@ -184,10 +187,14 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     )
     .chain_err(|| "Failed to add api event to MainLoop")?;
 
-    vm.vm_start(cmd_args.is_present("freeze_cpu"))
+    vm.lock()
+        .unwrap()
+        .vm_start(cmd_args.is_present("freeze_cpu"))
         .chain_err(|| "Failed to start VM.")?;
     if !cmd_args.is_present("disable-seccomp") {
-        vm.register_seccomp(balloon_switch_on)
+        vm.lock()
+            .unwrap()
+            .register_seccomp(balloon_switch_on)
             .chain_err(|| "Failed to register seccomp rules.")?;
     }
 

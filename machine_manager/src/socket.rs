@@ -61,7 +61,7 @@ pub struct Socket {
     /// Socket stream with RwLock
     stream: RwLock<Option<SocketStream>>,
     /// Perform socket command
-    performer: Option<Arc<dyn MachineExternalInterface>>,
+    performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
 }
 
 impl Socket {
@@ -73,7 +73,7 @@ impl Socket {
     /// * `performer` - The `VM` to perform socket command.
     pub fn from_unix_listener(
         listener: UnixListener,
-        performer: Option<Arc<dyn MachineExternalInterface>>,
+        performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
     ) -> Self {
         Socket {
             sock_type: SocketType::Unix,
@@ -197,7 +197,7 @@ impl Socket {
                     let performer = &socket_mutexed.performer.as_ref().unwrap();
                     if let Err(e) = crate::qmp::handle_qmp(
                         stream_fd,
-                        performer,
+                        &performer,
                         &mut shared_leak_bucket.lock().unwrap(),
                     ) {
                         error!("{}", e);
