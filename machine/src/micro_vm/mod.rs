@@ -56,8 +56,6 @@ pub mod errors {
 mod mem_layout;
 mod syscall;
 
-pub use syscall::syscall_whitelist;
-
 use std::fs::metadata;
 use std::ops::Deref;
 use std::os::linux::fs::MetadataExt;
@@ -112,6 +110,7 @@ use super::{
 };
 use errors::{ErrorKind, Result};
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
+use syscall::syscall_whitelist;
 
 // The replaceable block device maximum count.
 const MMIO_REPLACEABLE_BLK_NR: usize = 6;

@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 mod mch;
+mod syscall;
 
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
@@ -46,6 +47,7 @@ use super::{StdMachineOps, PCIE_MMCONFIG_REGION_SIZE};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
 use mch::Mch;
+use syscall::syscall_whitelist;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
@@ -340,6 +342,10 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn syscall_whitelist(&self) -> Vec<BpfRule> {
+        syscall_whitelist()
+    }
+
     fn realize(mut self, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> MachineResult<Arc<Self>> {
         use crate::errors::ResultExt;
 
@@ -438,10 +444,6 @@ impl MachineOps for StdMachine {
         vm_fd.set_tss_address(0xfffb_d000 as usize)?;
         vm.register_power_event(&vm.power_button)?;
         Ok(vm)
-    }
-
-    fn syscall_whitelist(&self) -> Vec<BpfRule> {
-        Vec::new()
     }
 }
 
