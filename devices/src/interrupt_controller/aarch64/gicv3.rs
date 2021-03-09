@@ -17,7 +17,7 @@ use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::device_tree;
 
 use super::{GICConfig, GICDevice, UtilResult};
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
