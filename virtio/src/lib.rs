@@ -42,6 +42,7 @@ pub mod errors {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);
         }
         errors {
             EventFdCreate {
