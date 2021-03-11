@@ -14,6 +14,8 @@
 pub mod acpi_table;
 #[allow(dead_code)]
 pub(crate) mod aml_compiler;
+#[allow(dead_code)]
+mod table_loader;
 
 pub use acpi_table::madt_subtable::*;
 pub use acpi_table::*;
