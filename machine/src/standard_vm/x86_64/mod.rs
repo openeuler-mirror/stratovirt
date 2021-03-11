@@ -21,7 +21,6 @@ use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_kernel, BootLoaderConfig};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::{Serial, SERIAL_ADDR};
-use error_chain::ChainedError;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
@@ -42,7 +41,7 @@ use virtio::{qmp_balloon, qmp_query_balloon};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
-use super::errors::Result;
+use super::errors::{ErrorKind, Result};
 use super::{StdMachineOps, PCIE_MMCONFIG_REGION_SIZE};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
@@ -94,12 +93,14 @@ pub struct StdMachine {
 
 impl StdMachine {
     #[allow(dead_code)]
-    pub fn new(vm_config: &VmConfig) -> Result<Self> {
-        use super::errors::ResultExt;
+    pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
+        use crate::errors::ResultExt;
 
         let cpu_topo = CpuTopology::new(vm_config.machine_config.nr_cpus);
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))?;
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))?;
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
+            .chain_err(|| MachineErrorKind::CrtMemSpaceErr)?;
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
+            .chain_err(|| MachineErrorKind::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
             &sys_io,
             &sys_mem,
@@ -122,7 +123,7 @@ impl StdMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             power_button: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| "Create EventFd for power-button failed.")?,
+                .chain_err(|| MachineErrorKind::InitPwrBtnErr)?,
         })
     }
 
@@ -132,15 +133,15 @@ impl StdMachine {
     /// # Arguments
     ///
     /// * `paused` - After started, paused all vcpu or not.
-    pub fn vm_start(&self, paused: bool) -> Result<()> {
-        use super::errors::ResultExt;
+    pub fn vm_start(&self, paused: bool) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
         for cpu_index in 0..self.cpu_topo.max_cpus {
             let cpu_thread_barrier = cpus_thread_barrier.clone();
             let cpu = self.cpus.lock().unwrap()[cpu_index as usize].clone();
             CPU::start(cpu, cpu_thread_barrier, paused)
-                .chain_err(|| format!("Failed to start vcpu{}", cpu_index))?;
+                .chain_err(|| MachineErrorKind::StartVcpuErr(cpu_index))?;
         }
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
@@ -156,13 +157,13 @@ impl StdMachine {
 
     /// Pause VM, sleepy all vcpu thread. Changed `StdMachine`'s `vmstate`
     /// from `Running` to `Paused`.
-    fn vm_pause(&self) -> Result<()> {
-        use super::errors::ResultExt;
+    fn vm_pause(&self) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
             self.cpus.lock().unwrap()[cpu_index as usize]
                 .pause()
-                .chain_err(|| format!("Failed to pause vcpu{}", cpu_index))?;
+                .chain_err(|| MachineErrorKind::PauseVcpuErr(cpu_index))?;
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -176,13 +177,13 @@ impl StdMachine {
 
     /// Resume VM, awaken all vcpu thread. Changed `StdMachine`'s `vmstate`
     /// from `Paused` to `Running`.
-    fn vm_resume(&self) -> Result<()> {
-        use super::errors::ResultExt;
+    fn vm_resume(&self) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
             self.cpus.lock().unwrap()[cpu_index as usize]
                 .resume()
-                .chain_err(|| format!("Failed to resume vcpu{}", cpu_index))?;
+                .chain_err(|| MachineErrorKind::ResumeVcpuErr(cpu_index))?;
         }
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
@@ -193,8 +194,8 @@ impl StdMachine {
 
     /// Destroy VM, kill all vcpu thread. Changed `StdMachine`'s `vmstate`
     /// to `KVM_VMSTATE_DESTROY`.
-    fn vm_destroy(&self) -> Result<()> {
-        use super::errors::ResultExt;
+    fn vm_destroy(&self) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
         *vmstate = KvmVmState::Shutdown;
@@ -203,7 +204,7 @@ impl StdMachine {
         for cpu_index in 0..self.cpu_topo.max_cpus {
             cpus[cpu_index as usize]
                 .destroy()
-                .chain_err(|| format!("Failed to destroy vcpu{}", cpu_index))?;
+                .chain_err(|| MachineErrorKind::DestroyVcpuErr(cpu_index))?;
         }
         cpus.clear();
 
@@ -246,33 +247,22 @@ impl MachineOps for StdMachine {
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
-        let err = Err(MachineErrorKind::AddDevErr("serial".to_string()).into());
+        use crate::errors::ResultExt;
+
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
-
-        let serial = match Serial::realize(
+        let serial = Serial::realize(
             Serial::default(),
             &mut self.sysbus,
             region_base,
             region_size,
             vm_fd,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to realize serial: {}", e.display_chain());
-                return err;
-            }
-        };
-        if config.stdio {
-            match EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None) {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Failed to register event notifer in the main thread: {}", e);
-                    return err;
-                }
-            }
-        }
+        )?;
 
+        if config.stdio {
+            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
+                .chain_err(|| MachineErrorKind::RegNotifierErr)?;
+        }
         Ok(())
     }
 
@@ -309,34 +299,42 @@ impl MachineOps for StdMachine {
     }
 
     fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
         if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(&serial, vm_fd)?;
+            self.add_serial_device(&serial, vm_fd)
+                .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
         }
 
         if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(&vsock, vm_fd)?;
+            self.add_vsock_device(&vsock, vm_fd)
+                .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
         }
 
         if let Some(drives) = vm_config.drives.as_ref() {
             for drive in drives {
-                self.add_block_device(&drive)?;
+                self.add_block_device(&drive)
+                    .chain_err(|| MachineErrorKind::AddDevErr("block".to_string()))?;
             }
         }
 
         if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
-                self.add_net_device(&net, vm_fd)?;
+                self.add_net_device(&net, vm_fd)
+                    .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
             }
         }
 
         if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
-                self.add_console_device(&console, vm_fd)?;
+                self.add_console_device(&console, vm_fd)
+                    .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
             }
         }
 
         if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon, vm_fd)?;
+            self.add_balloon_device(balloon, vm_fd)
+                .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
         }
 
         Ok(())
@@ -358,7 +356,9 @@ impl MachineOps for StdMachine {
             &self.sys_mem,
         )?;
 
-        vm_fd.create_irq_chip()?;
+        vm_fd
+            .create_irq_chip()
+            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nr_cpus {
@@ -366,9 +366,8 @@ impl MachineOps for StdMachine {
         }
 
         self.init_pci_host(&vm_fd)
-            .chain_err(|| "Failed to init PCIe host.")?;
-        self.add_devices(vm_config, &vm_fd)
-            .chain_err(|| "Failed to add peripheral devcies.")?;
+            .chain_err(|| ErrorKind::InitPCIeHostErr)?;
+        self.add_devices(vm_config, &vm_fd)?;
 
         let vm = Arc::new(self);
         for vcpu_id in 0..nr_cpus {
@@ -404,13 +403,8 @@ impl MachineOps for StdMachine {
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
         };
 
-        let layout = match load_kernel(&bootloader_config, &vm.sys_mem) {
-            Ok(l) => l,
-            Err(e) => {
-                error!("{}", e.display_chain());
-                return Err(MachineErrorKind::LoadKernErr.into());
-            }
-        };
+        let layout = load_kernel(&bootloader_config, &vm.sys_mem)
+            .chain_err(|| MachineErrorKind::LoadKernErr)?;
         boot_config = CPUBootConfig {
             boot_ip: layout.kernel_start,
             boot_sp: layout.kernel_sp,
@@ -424,13 +418,9 @@ impl MachineOps for StdMachine {
             pml4_start: layout.boot_pml4_addr,
         };
         for cpu_index in 0..vm.cpu_topo.max_cpus {
-            match vm.cpus.lock().unwrap()[cpu_index as usize].realize(vm_fd, &boot_config) {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("{}", e.display_chain());
-                    bail!("Failed to realize vcpu{}.", cpu_index);
-                }
-            }
+            vm.cpus.lock().unwrap()[cpu_index as usize]
+                .realize(vm_fd, &boot_config)
+                .chain_err(|| format!("Failed to realize vcpu{}.", cpu_index))?;
         }
 
         // Needed to release lock here because generate_fdt_node() will
@@ -440,9 +430,14 @@ impl MachineOps for StdMachine {
 
         let mut pit_config = kvm_pit_config::default();
         pit_config.flags = KVM_PIT_SPEAKER_DUMMY;
-        vm_fd.create_pit2(pit_config)?;
-        vm_fd.set_tss_address(0xfffb_d000 as usize)?;
-        vm.register_power_event(&vm.power_button)?;
+        vm_fd
+            .create_pit2(pit_config)
+            .chain_err(|| MachineErrorKind::CrtPitErr)?;
+        vm_fd
+            .set_tss_address(0xfffb_d000 as usize)
+            .chain_err(|| MachineErrorKind::SetTssErr)?;
+        vm.register_power_event(&vm.power_button)
+            .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
         Ok(vm)
     }
 }
@@ -714,7 +709,6 @@ impl EventLoopManager for StdMachine {
                 e
             );
         }
-
         Ok(())
     }
 }

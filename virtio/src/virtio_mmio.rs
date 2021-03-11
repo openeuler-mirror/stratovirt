@@ -350,7 +350,7 @@ impl VirtioMmioDevice {
             .lock()
             .unwrap()
             .realize()
-            .chain_err(|| "Failed to realize virtio mmio device.")?;
+            .chain_err(|| "Failed to realize virtio.")?;
 
         if region_base >= sysbus.mmio_region.1 {
             bail!("Mmio region space exhausted.");

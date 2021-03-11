@@ -25,7 +25,9 @@ mod interrupt_controller;
 mod legacy;
 
 #[cfg(target_arch = "aarch64")]
-pub use interrupt_controller::{InterruptController, InterruptControllerConfig};
+pub use interrupt_controller::{
+    errors as IntCtrlErrs, InterruptController, InterruptControllerConfig,
+};
 #[cfg(target_arch = "aarch64")]
 pub use legacy::PL031;
-pub use legacy::{Serial, SERIAL_ADDR};
+pub use legacy::{errors as LegacyErrs, Serial, SERIAL_ADDR};

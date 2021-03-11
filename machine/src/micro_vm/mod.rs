@@ -40,14 +40,14 @@ pub mod errors {
             Nul(std::ffi::NulError);
         }
         errors {
-            RplDevLimitErr(dev: String, nr: usize) {
+            RplDevLmtErr(dev: String, nr: usize) {
                 display("A maximum of {} {} replaceble devices are supported.", nr, dev)
-            }
-            CreateRplDev {
-                display("Failed to create replaceable device.")
             }
             UpdCfgErr(id: String) {
                 display("{}: failed to update config.", id)
+            }
+            RlzVirtioMmioErr {
+                display("Failed to realize virtio mmio.")
             }
         }
     }
@@ -194,10 +194,10 @@ impl LightMachine {
         use crate::errors::ResultExt;
 
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .chain_err(|| MachineErrorKind::CrtAddrSpaceErr("memory".to_string()))?;
+            .chain_err(|| MachineErrorKind::CrtMemSpaceErr)?;
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
-            .chain_err(|| MachineErrorKind::CrtAddrSpaceErr("I/O".to_string()))?;
+            .chain_err(|| MachineErrorKind::CrtIoSpaceErr)?;
         #[cfg(target_arch = "x86_64")]
         let free_irqs: (i32, i32) = (5, 15);
         #[cfg(target_arch = "aarch64")]
@@ -216,8 +216,8 @@ impl LightMachine {
 
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
-        let power_button = EventFd::new(libc::EFD_NONBLOCK)
-            .chain_err(|| "Create EventFd for power-button failed.")?;
+        let power_button =
+            EventFd::new(libc::EFD_NONBLOCK).chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
 
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(vm_config.machine_config.nr_cpus),
@@ -236,20 +236,30 @@ impl LightMachine {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn arch_init(vm_fd: &VmFd) -> Result<()> {
-        vm_fd.create_irq_chip()?;
-        vm_fd.set_tss_address(0xfffb_d000_usize)?;
+    fn arch_init(vm_fd: &VmFd) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        vm_fd
+            .create_irq_chip()
+            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
+        vm_fd
+            .set_tss_address(0xfffb_d000_usize)
+            .chain_err(|| MachineErrorKind::SetTssErr)?;
 
         let pit_config = kvm_pit_config {
             flags: KVM_PIT_SPEAKER_DUMMY,
             pad: Default::default(),
         };
-        vm_fd.create_pit2(pit_config)?;
+        vm_fd
+            .create_pit2(pit_config)
+            .chain_err(|| MachineErrorKind::CrtPitErr)?;
 
         Ok(())
     }
 
     fn create_replaceable_devices(&mut self, vm_fd: &Arc<VmFd>) -> Result<()> {
+        use errors::ResultExt;
+
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for _ in 0..MMIO_REPLACEABLE_BLK_NR {
             let block = Arc::new(Mutex::new(Block::new()));
@@ -282,7 +292,8 @@ impl LightMachine {
                 #[cfg(target_arch = "x86_64")]
                 &self.boot_source,
                 vm_fd,
-            )?;
+            )
+            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
             region_base += region_size;
         }
         self.sysbus.min_free_base = region_base;
@@ -321,7 +332,7 @@ impl LightMachine {
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         let limit = MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR;
         if configs_lock.len() >= limit {
-            return Err(ErrorKind::RplDevLimitErr("".to_string(), limit).into());
+            return Err(ErrorKind::RplDevLmtErr("".to_string(), limit).into());
         }
 
         for config in configs_lock.iter() {
@@ -344,17 +355,15 @@ impl LightMachine {
         let index = if driver.contains("net") {
             if slot >= MMIO_REPLACEABLE_NET_NR {
                 return Err(
-                    ErrorKind::RplDevLimitErr("net".to_string(), MMIO_REPLACEABLE_NET_NR).into(),
+                    ErrorKind::RplDevLmtErr("net".to_string(), MMIO_REPLACEABLE_NET_NR).into(),
                 );
             }
             slot + MMIO_REPLACEABLE_BLK_NR
         } else if driver.contains("blk") {
             if slot >= MMIO_REPLACEABLE_BLK_NR {
-                return Err(ErrorKind::RplDevLimitErr(
-                    "block".to_string(),
-                    MMIO_REPLACEABLE_BLK_NR,
-                )
-                .into());
+                return Err(
+                    ErrorKind::RplDevLmtErr("block".to_string(), MMIO_REPLACEABLE_BLK_NR).into(),
+                );
             }
             slot
         } else {
@@ -370,14 +379,14 @@ impl LightMachine {
             }
         }
         if dev_config.is_none() {
-            bail!("Failed to find the configuration.");
+            bail!("Failed to find device configuration.");
         }
 
         // Find the replaceable device and replace it.
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
         if let Some(device_info) = replaceable_devices.get_mut(index) {
             if device_info.used {
-                bail!("The slot {} is occupied", slot);
+                bail!("The slot {} is occupied already.", slot);
             }
 
             device_info.id = id.to_string();
@@ -433,15 +442,15 @@ impl LightMachine {
     /// # Arguments
     ///
     /// * `paused` - After started, paused all vcpu or not.
-    pub fn vm_start(&self, paused: bool) -> Result<()> {
-        use errors::ResultExt;
+    pub fn vm_start(&self, paused: bool) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
         for cpu_index in 0..self.cpu_topo.max_cpus {
             let cpu_thread_barrier = cpus_thread_barrier.clone();
             let cpu = self.cpus.lock().unwrap()[cpu_index as usize].clone();
             CPU::start(cpu, cpu_thread_barrier, paused)
-                .chain_err(|| format!("Failed to run vcpu{}.", cpu_index))?;
+                .chain_err(|| MachineErrorKind::StartVcpuErr(cpu_index))?;
         }
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
@@ -457,13 +466,13 @@ impl LightMachine {
 
     /// Pause VM, sleepy all vcpu thread. Changed `LightMachine`'s `vmstate`
     /// from `Running` to `Paused`.
-    fn vm_pause(&self) -> Result<()> {
-        use errors::ResultExt;
+    fn vm_pause(&self) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
             self.cpus.lock().unwrap()[cpu_index as usize]
                 .pause()
-                .chain_err(|| format!("Failed to pause vcpu{}.", cpu_index))?;
+                .chain_err(|| MachineErrorKind::PauseVcpuErr(cpu_index))?;
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -477,13 +486,13 @@ impl LightMachine {
 
     /// Resume VM, awaken all vcpu thread. Changed `LightMachine`'s `vmstate`
     /// from `Paused` to `Running`.
-    fn vm_resume(&self) -> Result<()> {
-        use errors::ResultExt;
+    fn vm_resume(&self) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
             self.cpus.lock().unwrap()[cpu_index as usize]
                 .resume()
-                .chain_err(|| format!("Failed to resume vcpu{}.", cpu_index))?;
+                .chain_err(|| MachineErrorKind::ResumeVcpuErr(cpu_index))?;
         }
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
@@ -494,8 +503,8 @@ impl LightMachine {
 
     /// Destroy VM, kill all vcpu thread. Changed `LightMachine`'s `vmstate`
     /// to `KVM_VMSTATE_DESTROY`.
-    fn vm_destroy(&self) -> Result<()> {
-        use errors::ResultExt;
+    fn vm_destroy(&self) -> MachineResult<()> {
+        use crate::errors::ResultExt;
 
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
         *vmstate = KvmVmState::Shutdown;
@@ -504,7 +513,7 @@ impl LightMachine {
         for cpu_index in 0..self.cpu_topo.max_cpus {
             cpus[cpu_index as usize]
                 .destroy()
-                .chain_err(|| format!("Failed to destroy vcpu{}", cpu_index))?;
+                .chain_err(|| MachineErrorKind::DestroyVcpuErr(cpu_index))?;
         }
         cpus.clear();
 
@@ -571,7 +580,7 @@ impl MachineOps for LightMachine {
         .chain_err(|| "Failed to realize serial device.")?;
         if config.stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
-                .chain_err(|| MachineErrorKind::RegNotiferErr)?;
+                .chain_err(|| MachineErrorKind::RegNotifierErr)?;
         }
         Ok(())
     }
@@ -591,6 +600,8 @@ impl MachineOps for LightMachine {
     }
 
     fn add_vsock_device(&mut self, config: &VsockConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(config, &self.sys_mem)));
         let device = VirtioMmioDevice::new(&self.sys_mem, vsock);
         let region_base = self.sysbus.min_free_base;
@@ -604,7 +615,8 @@ impl MachineOps for LightMachine {
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
             vm_fd,
-        )?;
+        )
+        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
@@ -614,6 +626,8 @@ impl MachineOps for LightMachine {
         config: &NetworkInterfaceConfig,
         vm_fd: &Arc<VmFd>,
     ) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
         if config.vhost_type.is_some() {
             let net = Arc::new(Mutex::new(VhostKern::Net::new(config, &self.sys_mem)));
             let device = VirtioMmioDevice::new(&self.sys_mem, net);
@@ -628,7 +642,8 @@ impl MachineOps for LightMachine {
                 #[cfg(target_arch = "x86_64")]
                 &self.boot_source,
                 vm_fd,
-            )?;
+            )
+            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
             self.sysbus.min_free_base += region_size;
         } else {
             let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
@@ -650,6 +665,8 @@ impl MachineOps for LightMachine {
         config: &ConsoleConfig,
         vm_fd: &Arc<VmFd>,
     ) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
         let console = Arc::new(Mutex::new(Console::new(config.clone())));
         let device = VirtioMmioDevice::new(&self.sys_mem, console);
         let region_base = self.sysbus.min_free_base;
@@ -663,7 +680,8 @@ impl MachineOps for LightMachine {
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
             vm_fd,
-        )?;
+        )
+        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
@@ -673,6 +691,8 @@ impl MachineOps for LightMachine {
         config: &BalloonConfig,
         vm_fd: &Arc<VmFd>,
     ) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
         let balloon = Arc::new(Mutex::new(Balloon::new(config, self.sys_mem.clone())));
         Balloon::object_init(balloon.clone());
         let device = VirtioMmioDevice::new(&self.sys_mem, balloon);
@@ -687,7 +707,8 @@ impl MachineOps for LightMachine {
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
             vm_fd,
-        )?;
+        )
+        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
@@ -777,19 +798,14 @@ impl MachineOps for LightMachine {
                 ],
                 its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
             };
-            let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)
-                .chain_err(|| "Failed to create interrupt controller.")?;
+            let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)?;
             self.irq_chip = Some(Arc::new(irq_chip));
-            self.irq_chip
-                .as_ref()
-                .unwrap()
-                .realize()
-                .chain_err(|| "Failed to realize interrupt controller.")?;
+            self.irq_chip.as_ref().unwrap().realize()?;
         }
 
         // Add mmio devices
         self.create_replaceable_devices(&vm_fd)
-            .chain_err(|| ErrorKind::CreateRplDev)?;
+            .chain_err(|| "Failed to create replaceable device.")?;
         self.add_devices(vm_config, &vm_fd)?;
 
         let vm = Arc::new(self);
@@ -888,15 +904,10 @@ impl MachineOps for LightMachine {
                     GuestAddress(boot_config.fdt_addr as u64),
                     fdt.len() as u64,
                 )
-                .chain_err(|| {
-                    format!(
-                        "Failed to write guest memory: addr={},size={}",
-                        boot_config.fdt_addr,
-                        fdt.len()
-                    )
-                })?;
+                .chain_err(|| MachineErrorKind::WrtFdtErr(boot_config.fdt_addr, fdt.len()))?;
         }
-        vm.register_power_event(&vm.power_button)?;
+        vm.register_power_event(&vm.power_button)
+            .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
         Ok(vm)
     }
 }
@@ -905,7 +916,6 @@ impl MachineLifecycle for LightMachine {
     fn pause(&self) -> bool {
         if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
             event!(STOP);
-
             true
         } else {
             false
@@ -918,7 +928,6 @@ impl MachineLifecycle for LightMachine {
         }
 
         event!(RESUME);
-
         true
     }
 
@@ -931,7 +940,6 @@ impl MachineLifecycle for LightMachine {
         if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
             return false;
         }
-
         true
     }
 
@@ -978,7 +986,6 @@ impl MachineLifecycle for LightMachine {
             error!("Vm lifecycle error: state transform failed.");
             return false;
         }
-
         true
     }
 }
@@ -1273,7 +1280,6 @@ impl DeviceInterface for LightMachine {
             );
         }
 
-        use errors::ResultExt;
         let config = DriveConfig {
             drive_id: node_name.clone(),
             path_on_host: file.filename,
@@ -1283,10 +1289,7 @@ impl DeviceInterface for LightMachine {
             iothread: None,
             iops: None,
         };
-        match self
-            .add_replaceable_config(&node_name, Arc::new(config))
-            .chain_err(|| "Failed to add virtio-blk.")
-        {
+        match self.add_replaceable_config(&node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{}", e.display_chain());
@@ -1354,7 +1357,6 @@ impl DeviceInterface for LightMachine {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{}", e.display_chain());
-                error!("Failed to add net device {}", id);
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
@@ -1391,7 +1393,6 @@ impl EventLoopManager for LightMachine {
                 e
             );
         }
-
         Ok(())
     }
 }
@@ -1634,10 +1635,9 @@ impl CompileFDTHelper for LightMachine {
 
     fn generate_chosen_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()> {
         let node = "/chosen";
-
         let boot_source = self.boot_source.lock().unwrap();
-
         device_tree::add_sub_node(fdt, node)?;
+
         let cmdline = &boot_source.kernel_cmdline.to_string();
         device_tree::set_property_string(fdt, node, "bootargs", cmdline.as_str())?;
 
