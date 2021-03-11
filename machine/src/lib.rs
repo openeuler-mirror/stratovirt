@@ -134,6 +134,8 @@ pub trait MachineOps {
     /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
 
+    fn load_boot_source(&self) -> Result<CPUBootConfig>;
+
     /// Init I/O & memory address space and mmap guest memory.
     ///
     /// # Arguments
@@ -209,9 +211,10 @@ pub trait MachineOps {
             );
             cpus.push(Arc::new(cpu));
         }
+
         for cpu_index in 0..nr_cpus as usize {
             cpus[cpu_index as usize]
-                .realize(fds.0, &boot_cfg)
+                .realize(fds.0, boot_cfg)
                 .chain_err(|| {
                     format!(
                         "Failed to realize arch cpu register in CPU {}/KVM",
