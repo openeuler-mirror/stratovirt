@@ -224,10 +224,6 @@ impl PciDevOps for RootPort {
         }
     }
 
-    fn parent_bus(&self) -> Weak<Mutex<PciBus>> {
-        self.parent_bus.clone()
-    }
-
     fn name(&self) -> String {
         self.name.clone()
     }
