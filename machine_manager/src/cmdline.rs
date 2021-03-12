@@ -191,6 +191,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("pflash")
+                .multiple(true)
+                .long("pflash")
+                .value_name("[file=path][,if=str][,readonly=][,unit=]")
+                .help("use 'file' as a pflash image")
+                .takes_values(true),
+        )
+        .arg(
             Arg::with_name("display log")
                 .long("D")
                 .value_name("log path")
@@ -312,6 +320,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     update_args_to_config_multi!((args.values_of("netdev")), vm_cfg, update_net);
     update_args_to_config_multi!((args.values_of("chardev")), vm_cfg, update_console);
     update_args_to_config_multi!((args.values_of("iothread")), vm_cfg, update_iothread);
+    update_args_to_config_multi!((args.values_of("pflash")), vm_cfg, update_pflash);
 
     // Check the mini-set for Vm to start is ok
     vm_cfg

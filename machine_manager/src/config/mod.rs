@@ -20,6 +20,7 @@ mod fs;
 mod iothread;
 mod machine_config;
 mod network;
+mod pflash;
 mod rng;
 
 use std::any::Any;
@@ -39,6 +40,7 @@ pub use fs::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
+pub use pflash::*;
 pub use rng::*;
 
 pub mod errors {
@@ -96,6 +98,10 @@ pub mod errors {
             Unaligned(param: String, value: u64, align: u64) {
                 display("Input value {} is unaligned with {} for {}.", value, align, param)
             }
+            UnitIDError(id: usize, max: usize){
+                description("Check unit id of pflash device.")
+                display("PFlash unit id given {} should not be more than {}", id, max)
+            }
         }
     }
 }
@@ -116,6 +122,7 @@ pub struct VmConfig {
     pub iothreads: Option<Vec<IothreadConfig>>,
     pub balloon: Option<BalloonConfig>,
     pub rng: Option<RngConfig>,
+    pub pflashs: Option<Vec<PFlashConfig>>,
 }
 
 impl VmConfig {
@@ -135,6 +142,7 @@ impl VmConfig {
         let mut iothreads = None;
         let mut balloon = None;
         let mut rng = None;
+        let mut pflashs = None;
 
         if let serde_json::Value::Object(items) = value {
             for (name, item) in items {
@@ -149,6 +157,7 @@ impl VmConfig {
                     "iothread" => iothreads = Some(IothreadConfig::from_value(&item)?),
                     "balloon" => balloon = Some(BalloonConfig::from_value(&item)?),
                     "rng" => rng = Some(RngConfig::from_value(&item)?),
+                    "pflash" => pflashs = Some(PFlashConfig::from_value(&item)?),
                     _ => return Err(ErrorKind::InvalidJsonField(name).into()),
                 }
             }
@@ -166,6 +175,7 @@ impl VmConfig {
             iothreads,
             balloon,
             rng,
+            pflashs,
         })
     }
 
