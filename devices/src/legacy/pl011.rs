@@ -11,13 +11,18 @@
 // See the Mulan PSL v2 for more details.
 
 use std::io;
+use std::os::unix::io::RawFd;
+use std::sync::{Arc, Mutex};
 
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
+use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::terminal::Terminal;
 
 use crate::legacy::errors::Result;
 
@@ -318,5 +323,44 @@ impl SysBusDevOps for PL011 {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::PL011
+    }
+}
+
+impl EventNotifierHelper for PL011 {
+    /// Add PL011 to `EventNotifier`.
+    ///
+    /// # Arguments
+    ///
+    /// * `pl011` - PL011 Serial instance.
+    fn internal_notifiers(pl011: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
+        let mut handlers = Vec::new();
+        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Box::new(move |_, _| {
+                let mut out = [0_u8; 64];
+                match std::io::stdin().lock().read_raw(&mut out) {
+                    Ok(count) => {
+                        pl011.lock().unwrap().receive(&out[..count]);
+                    }
+                    Err(e) => {
+                        error!("PL011 receive error: error is {}", e);
+                    }
+                }
+                None
+            });
+
+        handlers.push(Arc::new(Mutex::new(handler)));
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            libc::STDIN_FILENO,
+            None,
+            EventSet::IN,
+            handlers,
+        );
+
+        notifiers.push(notifier);
+        notifiers
     }
 }
