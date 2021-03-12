@@ -99,4 +99,44 @@ impl PL011 {
             res: SysRes::default(),
         })
     }
+
+    fn interrupt(&self) {
+        let irq_mask = INT_E | INT_MS | INT_RT | INT_TX | INT_RX;
+
+        let flag = self.int_level & self.int_enabled;
+        if flag & irq_mask != 0 {
+            if let Err(e) = self.interrupt_evt.write(1) {
+                error!(
+                    "Failed to trigger interrupt for PL011, flag is 0x{:x}, error is {}",
+                    flag, e,
+                )
+            }
+        }
+    }
+
+    /// Append `data` to receiver buffer register, and trigger interrupt if necessary.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - A u8-type array.
+    pub fn receive(&mut self, data: &[u8]) {
+        self.flags &= !PL011_FLAG_RXFE as u32;
+        for val in data {
+            let mut slot = (self.read_pos + self.read_count) as usize;
+            if slot >= PL011_FIFO_SIZE {
+                slot -= PL011_FIFO_SIZE;
+            }
+            self.rfifo[slot] = *val as u32;
+            self.read_count += 1;
+        }
+
+        // If in character-mode, or in FIFO-mode and FIFO is full, trigger the interrupt.
+        if ((self.lcr & 0x10) == 0) || (self.read_count as usize == PL011_FIFO_SIZE) {
+            self.flags |= PL011_FLAG_RXFF as u32;
+        }
+        if self.read_count >= self.read_trigger {
+            self.int_level |= INT_RX as u32;
+            self.interrupt();
+        }
+    }
 }
