@@ -141,6 +141,8 @@ pub enum SysBusDevType {
     Serial,
     Rtc,
     VirtioMmio,
+    #[cfg(target_arch = "aarch64")]
+    PL011,
     Others,
 }
 

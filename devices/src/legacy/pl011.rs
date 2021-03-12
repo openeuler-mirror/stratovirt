@@ -12,7 +12,11 @@
 
 use std::io;
 
-use sysbus::SysRes;
+use address_space::GuestAddress;
+use byteorder::{ByteOrder, LittleEndian};
+use kvm_ioctls::VmFd;
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::legacy::errors::Result;
@@ -138,5 +142,181 @@ impl PL011 {
             self.int_level |= INT_RX as u32;
             self.interrupt();
         }
+    }
+}
+
+impl SysBusDevOps for PL011 {
+    fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        let ret;
+
+        match offset >> 2 {
+            0 => {
+                // Data register.
+                self.flags &= !(PL011_FLAG_RXFF as u32);
+                let c = self.rfifo[self.read_pos as usize];
+
+                if self.read_count > 0 {
+                    self.read_count -= 1;
+                    self.read_pos += 1;
+                    if self.read_pos as usize == PL011_FIFO_SIZE {
+                        self.read_pos = 0;
+                    }
+                }
+                if self.read_count == 0 {
+                    self.flags |= PL011_FLAG_RXFE as u32;
+                }
+                if self.read_count == self.read_trigger - 1 {
+                    self.int_level &= !(INT_RX as u32);
+                }
+                self.rsr = c >> 8;
+                self.interrupt();
+                ret = c;
+            }
+            1 => {
+                ret = self.rsr;
+            }
+            6 => {
+                ret = self.flags;
+            }
+            8 => {
+                ret = self.ilpr;
+            }
+            9 => {
+                ret = self.ibrd;
+            }
+            10 => {
+                ret = self.fbrd;
+            }
+            11 => {
+                ret = self.lcr;
+            }
+            12 => {
+                ret = self.cr;
+            }
+            13 => {
+                ret = self.ifl;
+            }
+            14 => {
+                // Interrupt Mask Set/Clear Register
+                ret = self.int_enabled;
+            }
+            15 => {
+                // Raw Interrupt Status Register
+                ret = self.int_level;
+            }
+            16 => {
+                // Masked Interrupt Status Register
+                ret = self.int_level & self.int_enabled;
+            }
+            18 => {
+                ret = self.dmacr;
+            }
+            0x3f8..=0x400 => {
+                // Register 0xFE0~0xFFC is UART Peripheral Identification Registers
+                // and PrimeCell Identification Registers.
+                ret = *self.id.get(((offset - 0xfe0) >> 2) as usize).unwrap() as u32;
+            }
+            _ => {
+                error!("Failed to read pl011: Invalid offset 0x{:x}", offset);
+                return false;
+            }
+        }
+        data.copy_from_slice(&ret.as_bytes()[0..data.len()]);
+
+        true
+    }
+
+    fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
+        let value = match data.len() {
+            1 => data[0] as u32,
+            2 => LittleEndian::read_u16(data) as u32,
+            4 => LittleEndian::read_u32(data) as u32,
+            _ => return false,
+        };
+
+        match offset >> 2 {
+            0 => {
+                let ch = value as u8;
+
+                let output = match &mut self.output {
+                    Some(output_) => output_,
+                    None => {
+                        error!("Failed to get output fd.");
+                        return false;
+                    }
+                };
+                if let Err(e) = output.write_all(&[ch]) {
+                    error!("Failed to write to pl011 output fd, error is {}", e);
+                }
+                if let Err(e) = output.flush() {
+                    error!("Failed to flush pl011, error is {}", e);
+                }
+
+                self.int_level |= INT_TX as u32;
+                self.interrupt();
+            }
+            1 => {
+                self.rsr = 0;
+            }
+            8 => {
+                self.ilpr = value;
+            }
+            9 => {
+                self.ibrd = value;
+            }
+            10 => {
+                self.fbrd = value;
+            }
+            11 => {
+                // PL011 works in two modes: character mode or FIFO mode.
+                // Reset FIFO if the mode is changed.
+                if (self.lcr ^ value) & 0x10 != 0 {
+                    self.read_count = 0;
+                    self.read_pos = 0;
+                }
+                self.lcr = value;
+                self.read_trigger = 1;
+            }
+            12 => {
+                self.cr = value;
+            }
+            13 => {
+                self.ifl = value;
+                self.read_trigger = 1;
+            }
+            14 => {
+                self.int_enabled = value;
+                self.interrupt();
+            }
+            17 => {
+                // Interrupt Clear Register, write only
+                self.int_level &= !value;
+                self.interrupt();
+            }
+            18 => {
+                self.dmacr = value;
+                if value & 3 != 0 {
+                    error!("pl011: DMA not implemented");
+                }
+            }
+            _ => {
+                error!("Failed to write pl011: Invalid offset 0x{:x}", offset);
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn interrupt_evt(&self) -> Option<&EventFd> {
+        Some(&self.interrupt_evt)
+    }
+
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        Some(&mut self.res)
+    }
+
+    fn get_type(&self) -> SysBusDevType {
+        SysBusDevType::PL011
     }
 }
