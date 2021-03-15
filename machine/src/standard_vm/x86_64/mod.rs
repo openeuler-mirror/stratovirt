@@ -42,7 +42,7 @@ use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
 use super::errors::{ErrorKind, Result};
-use super::{StdMachineOps, PCIE_MMCONFIG_REGION_SIZE};
+use super::StdMachineOps;
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
 use mch::Mch;
@@ -224,7 +224,7 @@ impl StdMachineOps for StdMachine {
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
-            PCIE_MMCONFIG_REGION_SIZE as u64,
+            MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1,
             mmconfig_region_ops.clone(),
         );
         self.sys_mem
