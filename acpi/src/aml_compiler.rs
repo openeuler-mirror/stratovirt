@@ -2366,4 +2366,50 @@ mod test {
         ];
         assert_eq!(resource.aml_bytes(), target);
     }
+
+    #[test]
+    fn test_interrupt() {
+        // ResourceTemplate ()
+        // {
+        //     Interrupt(ResourceConsumer, Level, ActiveHigh, Exclusive) {41}
+        //     Interrupt(ResourceConsumer, Edge, ActiveHigh, Shared) {42}
+        //     Interrupt(ResourceProducer, Level, ActiveHigh, ExclusiveAndWake) {43}
+        //     IRQNoFlags(INT4) {7}
+        // }
+        let mut resource = AmlResTemplate::new();
+        let int1 = AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Level,
+            AmlActiveLevel::High,
+            AmlIntShare::Exclusive,
+            vec![41],
+        );
+        let int2 = AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Edge,
+            AmlActiveLevel::High,
+            AmlIntShare::Share,
+            vec![42],
+        );
+        let int3 = AmlExtendedInterrupt::new(
+            AmlResourceUsage::Producer,
+            AmlEdgeLevel::Level,
+            AmlActiveLevel::High,
+            AmlIntShare::ExclusiveWake,
+            vec![43],
+        );
+        let int4 = AmlIrqNoFlags::new(7);
+
+        resource.append_child(int1);
+        resource.append_child(int2);
+        resource.append_child(int3);
+        resource.append_child(int4);
+
+        let res_bytes = vec![
+            0x11, 0x23, 0x0A, 0x20, 0x89, 0x06, 0x00, 0x01, 0x01, 0x29, 0x00, 0x00, 0x00, 0x89,
+            0x06, 0x00, 0x0B, 0x01, 0x2A, 0x00, 0x00, 0x00, 0x89, 0x06, 0x00, 0x10, 0x01, 0x2B,
+            0x00, 0x00, 0x00, 0x22, 0x80, 0x00, 0x79, 0x00,
+        ];
+        assert_eq!(resource.aml_bytes(), res_bytes);
+    }
 }
