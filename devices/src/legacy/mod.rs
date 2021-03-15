@@ -29,6 +29,7 @@ pub mod errors {
     error_chain! {
         links {
             SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);
+            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
         }
 
         foreign_links {

@@ -14,9 +14,10 @@ use std::io;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
-use address_space::GuestAddress;
+use address_space::{errors::ResultExt, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
+use machine_manager::config::{BootSource, Param};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
@@ -147,6 +148,29 @@ impl PL011 {
             self.int_level |= INT_RX as u32;
             self.interrupt();
         }
+    }
+
+    pub fn realize(
+        mut self,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+        bs: &Arc<Mutex<BootSource>>,
+        vm_fd: &VmFd,
+    ) -> Result<Arc<Mutex<Self>>> {
+        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+            .chain_err(|| "Failed to allocate system resource for PL011.")?;
+
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev, region_base, region_size)
+            .chain_err(|| "Failed to attach PL011 to system bus.")?;
+
+        bs.lock().unwrap().kernel_cmdline.push(Param {
+            param_type: "earlycon".to_string(),
+            value: format!("pl011,mmio,0x{:08x}", region_base),
+        });
+        Ok(dev)
     }
 }
 
