@@ -50,19 +50,26 @@ use syscall::syscall_whitelist;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
+/// The type of memory layout entry on x86_64
 #[allow(dead_code)]
+#[cfg(target_arch = "x86_64")]
 #[repr(usize)]
-enum LayoutEntryType {
+pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
+    PcieMmio,
+    PcieEcam,
     Mmio,
     IoApic,
     LocalApic,
     MemAbove4g,
 }
 
-/// Memory Layout.
-const MEM_LAYOUT: &[(u64, u64)] = &[
+/// Layout of x86_64
+#[cfg(target_arch = "x86_64")]
+pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0, 0xC000_0000),                // MemBelow4g
+    (0xB000_0000, 0x1000_0000),      // PcieEcam
+    (0xC000_0000, 0x3000_0000),      // PcieMmio
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
@@ -212,12 +219,35 @@ impl StdMachine {
 
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()> {
+        use super::errors::ResultExt;
+
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
             PCIE_MMCONFIG_REGION_SIZE as u64,
             mmconfig_region_ops.clone(),
         );
+        self.sys_mem
+            .root()
+            .add_subregion(
+                mmconfig_region.clone(),
+                MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0,
+            )
+            .chain_err(|| "Failed to register ECAM in memory space.")?;
+
+        let pio_addr_ops = PciHost::build_pio_addr_ops(self.pci_host.clone());
+        let pio_addr_region = Region::init_io_region(4, pio_addr_ops);
+        self.sys_io
+            .root()
+            .add_subregion(pio_addr_region, 0xcf8)
+            .chain_err(|| "Failed to register CONFIG_ADDR port in I/O space.")?;
+        let pio_data_ops = PciHost::build_pio_data_ops(self.pci_host.clone());
+        let pio_data_region = Region::init_io_region(4, pio_data_ops);
+        self.sys_io
+            .root()
+            .add_subregion(pio_data_region, 0xcfc)
+            .chain_err(|| "Failed to register CONFIG_DATA port in I/O space.")?;
+
         let mch = Mch::new(
             vm_fd.clone(),
             root_bus,
