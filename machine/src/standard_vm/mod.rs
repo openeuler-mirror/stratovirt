@@ -33,6 +33,12 @@ use std::sync::Arc;
 use errors::Result;
 use kvm_ioctls::VmFd;
 
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::StdMachine;
+
 trait StdMachineOps {
     fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()>;
 }
