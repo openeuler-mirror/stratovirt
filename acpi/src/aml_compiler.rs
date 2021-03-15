@@ -1224,6 +1224,218 @@ create_word_field_define!(AmlCreateWordField, 0x8B);
 create_word_field_define!(AmlCreateDWordField, 0x8A);
 create_word_field_define!(AmlCreateQWordField, 0x8F);
 
+/// Resource Template are used to create resource descriptors.
+/// In its scope, multiple resource descriptors are listed to
+/// specify the resource owned by a device.
+pub struct AmlResTemplate {
+    buf: Vec<u8>,
+}
+
+impl AmlResTemplate {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> AmlResTemplate {
+        AmlResTemplate { buf: Vec::new() }
+    }
+}
+
+impl AmlBuilder for AmlResTemplate {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // fill buffer and end tag
+        let end_tag_len = 2_u64;
+        bytes.extend(AmlInteger(self.buf.len() as u64 + end_tag_len).aml_bytes());
+        bytes.extend(self.buf.clone());
+        bytes.push(0x79); // end tag
+        bytes.push(0x00);
+
+        // fill prepend PkgLength
+        let pkg_length = build_pkg_length(bytes.len(), true);
+        pkg_length.iter().rev().for_each(|b| {
+            bytes.insert(0, *b);
+        });
+
+        // fill resource template opcode.
+        bytes.insert(0, 0x11);
+        bytes
+    }
+}
+
+impl AmlScopeBuilder for AmlResTemplate {
+    fn append_child<T: AmlBuilder>(&mut self, child: T) {
+        self.buf.extend(child.aml_bytes());
+    }
+}
+
+/// The type of DMA cycle.
+#[derive(Copy, Clone)]
+pub enum AmlDmaType {
+    /// ISA compatible.
+    Compatibility = 0,
+    /// EISA TypeA.
+    TypeA = 1,
+    /// EISA TypeB.
+    TypeB = 2,
+    /// EISA TypeF.
+    TypeF = 3,
+}
+
+/// The size of DMA cycles that the device is capable of generating.
+#[derive(Copy, Clone)]
+pub enum AmlDmaTransSize {
+    Size8 = 0,
+    Size8_16 = 1,
+    Size16 = 2,
+}
+
+#[derive(Copy, Clone)]
+pub struct AmlDmaResource {
+    /// The type of DMA cycle
+    dma_type: AmlDmaType,
+    /// Whether the device can generate DMA bus master cycles.
+    is_master: bool,
+    /// The size of DMA cycle.
+    trans_sz: AmlDmaTransSize,
+    /// DMA channel used by the device, range 0~7.
+    channel: u8,
+}
+
+impl AmlDmaResource {
+    pub fn new(
+        dma_type: AmlDmaType,
+        is_master: bool,
+        trans_sz: AmlDmaTransSize,
+        channel: u8,
+    ) -> AmlDmaResource {
+        if channel > 7 {
+            panic!("acpi: DMA channel exceeds range 0~7.");
+        }
+        AmlDmaResource {
+            dma_type,
+            is_master,
+            trans_sz,
+            channel,
+        }
+    }
+}
+
+impl AmlBuilder for AmlDmaResource {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x2A);
+        bytes.push(1 << self.channel);
+
+        let mut flags = (self.trans_sz as u8) | (self.dma_type as u8) << 5;
+        if self.is_master {
+            flags |= 1 << 2; // Bit-2 represents bus master
+        }
+        bytes.push(flags);
+
+        bytes
+    }
+}
+
+/// Decode type of IO resource.
+#[derive(Copy, Clone)]
+pub enum AmlIoDecode {
+    /// 10-bit decode is used.
+    Decode10 = 0,
+    /// 16-bit decode is used.
+    Decode16 = 1,
+}
+
+/// IO Resource descriptor.
+#[derive(Copy, Clone)]
+pub struct AmlIoResource {
+    /// Decode type.
+    decode: AmlIoDecode,
+    /// The minimum acceptable start address.
+    min_addr: u16,
+    /// The maximum acceptable start address.
+    max_addr: u16,
+    /// The alignment granularity for the I/O address assigned.
+    align: u8,
+    /// The number of bytes in the I/O range.
+    length: u8,
+}
+
+impl AmlIoResource {
+    pub fn new(
+        decode: AmlIoDecode,
+        min_addr: u16,
+        max_addr: u16,
+        align: u8,
+        length: u8,
+    ) -> AmlIoResource {
+        AmlIoResource {
+            decode,
+            min_addr,
+            max_addr,
+            align,
+            length,
+        }
+    }
+}
+
+impl AmlBuilder for AmlIoResource {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x47);
+        bytes.push(self.decode as u8);
+        bytes.push((self.min_addr & 0xFF) as u8);
+        bytes.push((self.min_addr >> 8) as u8);
+        bytes.push((self.max_addr & 0xFF) as u8);
+        bytes.push((self.max_addr >> 8) as u8);
+        bytes.push(self.align);
+        bytes.push(self.length);
+
+        bytes
+    }
+}
+
+/// Access status of memory resource.
+#[derive(Copy, Clone)]
+pub enum AmlReadAndWrite {
+    /// Non-writeable (read-only)
+    ReadOnly = 0,
+    /// Writeable (read/write)
+    ReadWrite = 1,
+}
+
+/// Memory resource within 32-bit address space.
+pub struct AmlMemory32Fixed {
+    /// Access right.
+    rw_access: AmlReadAndWrite,
+    /// Start address.
+    addr: u32,
+    /// Range length.
+    length: u32,
+}
+
+impl AmlMemory32Fixed {
+    pub fn new(rw_access: AmlReadAndWrite, addr: u32, length: u32) -> AmlMemory32Fixed {
+        AmlMemory32Fixed {
+            rw_access,
+            addr,
+            length,
+        }
+    }
+}
+
+impl AmlBuilder for AmlMemory32Fixed {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x86);
+        bytes.push(0x09);
+        bytes.push(0x00);
+        bytes.push(self.rw_access as u8);
+        bytes.extend(self.addr.as_bytes());
+        bytes.extend(self.length.as_bytes());
+
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1724,5 +1936,37 @@ mod test {
             0x5A, 0x45, 0x60, 0xA4, 0x60,
         ];
         assert_eq!(method.aml_bytes(), method_bytes);
+    }
+
+    #[test]
+    fn test_res_template() {
+        // ResourceTemplate(){
+        //     IO(Decode16, 0x62, 0x62, 0, 1)
+        //     IO(Decode10, 0x66, 0x66, 0, 1)
+        //     DMA(Compatibility, BusMaster, Transfer8_16) {0x3}
+        //     Memory32Fixed(ReadOnly, 0xfed00000, 0x400)
+        // }
+        let io_res1 = AmlIoResource::new(AmlIoDecode::Decode16, 0x62, 0x62, 0, 0x1);
+        let io_res2 = AmlIoResource::new(AmlIoDecode::Decode10, 0x66, 0x66, 0, 0x1);
+        let dma_res = AmlDmaResource::new(
+            AmlDmaType::Compatibility,
+            true,
+            AmlDmaTransSize::Size8_16,
+            0x3,
+        );
+        let fixed_mem32 = AmlMemory32Fixed::new(AmlReadAndWrite::ReadOnly, 0xfed00000, 0x400);
+
+        let mut resource = AmlResTemplate::new();
+        resource.append_child(io_res1);
+        resource.append_child(io_res2);
+        resource.append_child(dma_res);
+        resource.append_child(fixed_mem32);
+
+        let target = vec![
+            0x11, 0x24, 0x0A, 0x21, 0x47, 0x01, 0x62, 0x00, 0x62, 0x00, 0x00, 0x01, 0x47, 0x00,
+            0x66, 0x00, 0x66, 0x00, 0x00, 0x01, 0x2A, 0x08, 0x05, 0x86, 0x09, 0x00, 0x00, 0x00,
+            0x00, 0xD0, 0xFE, 0x00, 0x04, 0x00, 0x00, 0x79, 0x00,
+        ];
+        assert_eq!(resource.aml_bytes(), target);
     }
 }
