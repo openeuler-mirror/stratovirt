@@ -1706,6 +1706,133 @@ space_desc_define!(AmlQWordDesc, 0x8A, 0x2B, u64);
 // Define `AmlQWordDesc::new_memory()` function to construct QWordMemory-type resource.
 struct_new_memory_define!(AmlQWordDesc, u64);
 
+/// Active-high, edge-triggered IRQ resource descriptor.
+pub struct AmlIrqNoFlags {
+    /// Irq number.
+    irq: u8,
+}
+
+impl AmlIrqNoFlags {
+    pub fn new(irq: u8) -> AmlIrqNoFlags {
+        if irq > 15 {
+            panic!("acpi: Irq exceeds range 0~15.");
+        }
+        AmlIrqNoFlags { irq }
+    }
+}
+
+impl AmlBuilder for AmlIrqNoFlags {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x22);
+        let irq_mask = 1 << (self.irq as u16);
+        bytes.push((irq_mask & 0xFF) as u8);
+        bytes.push((irq_mask >> 8) as u8);
+
+        bytes
+    }
+}
+
+/// Flags that indicates whether device consume or produce the interrupt resource.
+#[derive(Copy, Clone)]
+pub enum AmlResourceUsage {
+    /// Device will produce the interrupt for use by child device.
+    Producer = 0,
+    /// Device will consume the interrupt.
+    Consumer = 1,
+}
+
+/// Flags that indicates how the interrupt been triggered.
+#[derive(Copy, Clone)]
+pub enum AmlEdgeLevel {
+    /// Level triggered.
+    Level = 0,
+    /// Edge triggered.
+    Edge = 1,
+}
+
+/// Flags that indicates the interrupt is actively high or low.
+#[derive(Copy, Clone)]
+pub enum AmlActiveLevel {
+    /// Active-high.
+    High = 0,
+    /// Active-low.
+    Low = 1,
+}
+
+/// Flags that indicates whether the interrupt can be shared with other device.
+#[derive(Copy, Clone)]
+pub enum AmlIntShare {
+    /// Cannot be shared. Not Wake Capable.
+    Exclusive = 0,
+    /// Can share with other device. Not Wake Capable.
+    Share = 1,
+    /// Cannot be shared. Wake Capable.
+    ExclusiveWake = 2,
+    /// Can share with other device. Wake Capable.
+    ShareWake = 3,
+}
+
+/// Extended interrupt descriptor.
+pub struct AmlExtendedInterrupt {
+    /// Produce or consume the interrupt.
+    usage: AmlResourceUsage,
+    /// Trigger mode.
+    int_mode: AmlEdgeLevel,
+    /// Active level.
+    int_polar: AmlActiveLevel,
+    /// Can be share or not.
+    share: AmlIntShare,
+    /// interrupt list.
+    irq_list: Vec<u32>,
+}
+
+impl AmlExtendedInterrupt {
+    pub fn new(
+        usage: AmlResourceUsage,
+        mode: AmlEdgeLevel,
+        polar: AmlActiveLevel,
+        share: AmlIntShare,
+        irq_list: Vec<u32>,
+    ) -> AmlExtendedInterrupt {
+        if irq_list.is_empty() {
+            panic!("the list of irqs must not be empty.");
+        }
+        AmlExtendedInterrupt {
+            usage,
+            int_mode: mode,
+            int_polar: polar,
+            share,
+            irq_list,
+        }
+    }
+}
+
+impl AmlBuilder for AmlExtendedInterrupt {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x89);
+
+        let header_len = 2_u16;
+        let total_len = header_len + (self.irq_list.len() * std::mem::size_of::<u32>()) as u16;
+        // the length is at least 6, for only one element in irq-list
+        bytes.extend(total_len.as_bytes());
+
+        let flags = self.usage as u8
+            | (self.int_mode as u8) << 1
+            | (self.int_polar as u8) << 2
+            | (self.share as u8) << 3;
+        bytes.push(flags);
+
+        bytes.push(self.irq_list.len() as u8);
+        self.irq_list
+            .iter()
+            .for_each(|irq| bytes.extend(irq.as_bytes()));
+
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
