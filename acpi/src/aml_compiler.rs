@@ -822,6 +822,146 @@ impl AmlBuilder for AmlCall {
     }
 }
 
+/// Macro that helps to define Aml Data structures that
+/// contains two arguments and one destination.
+macro_rules! ops_2args_dst_define {
+    ($name:ident, $op:expr) => {
+        pub struct $name {
+            arg1: Vec<u8>,
+            arg2: Vec<u8>,
+            dst: Vec<u8>,
+        }
+
+        impl $name {
+            pub fn new<A: AmlBuilder, B: AmlBuilder, D: AmlBuilder>(a1: A, a2: B, d: D) -> $name {
+                $name {
+                    arg1: a1.aml_bytes(),
+                    arg2: a2.aml_bytes(),
+                    dst: d.aml_bytes(),
+                }
+            }
+        }
+
+        impl AmlBuilder for $name {
+            fn aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.push($op);
+                bytes.extend(self.arg1.clone());
+                bytes.extend(self.arg2.clone());
+                bytes.extend(self.dst.clone());
+
+                bytes
+            }
+        }
+    };
+}
+
+ops_2args_dst_define!(AmlAdd, 0x72);
+ops_2args_dst_define!(AmlSubtract, 0x74);
+// Concatenate two strings, integers or buffers and store the result in Destination.
+ops_2args_dst_define!(AmlConcat, 0x73);
+ops_2args_dst_define!(AmlAnd, 0x7B);
+ops_2args_dst_define!(AmlOr, 0x7D);
+ops_2args_dst_define!(AmlShiftLeft, 0x79);
+ops_2args_dst_define!(AmlShiftRight, 0x7A);
+// Indexed Reference to member object.
+// The first argument refers to the source that can be Buffer, Package or String.
+// The second argument refers to the index.
+// The corresponding reference to the field is stored in Destination.
+ops_2args_dst_define!(AmlIndex, 0x88);
+
+/// Macro that helps to define Aml Data structures that contains one argument.
+macro_rules! ops_1arg_define {
+    ($name:ident, $op:expr) => {
+        pub struct $name {
+            arg: Vec<u8>,
+        }
+
+        impl $name {
+            pub fn new<T: AmlBuilder>(a1: T) -> $name {
+                $name {
+                    arg: a1.aml_bytes(),
+                }
+            }
+        }
+
+        impl AmlBuilder for $name {
+            fn aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.push($op);
+                bytes.extend(self.arg.clone());
+
+                bytes
+            }
+        }
+    };
+}
+
+// Increment/Decrement: Arg1 is an Integer.
+ops_1arg_define!(AmlIncrement, 0x75);
+ops_1arg_define!(AmlDecrement, 0x76);
+// Logical Not: Arg1 is an Integer.
+ops_1arg_define!(AmlLNot, 0x92);
+// SizeOf: Arg1 must be an Buffer, String or Package.
+ops_1arg_define!(AmlSizeOf, 0x87);
+
+// DeRefOf is necessary in the first operand of the Store operator
+// in order to get the actual object, rather than just a reference to the object.
+// If DeRefOf were not used, then `Index` would contain an object reference to the element.
+// Below is an example:
+//
+// ```
+// let buffer = AmlBuffer::new(vec![0x1, 0x2, 0x3]);
+// let arg1 = AmlDeRefOf::new(AmlIndex::new(buffer, 1));
+// let store = AmlStore::new(arg1, Local(0));
+// ```
+ops_1arg_define!(AmlDeRefOf, 0x83);
+
+/// Macro that helps to define Aml Data structures that contains two arguments.
+macro_rules! ops_2arg_define {
+    ($name:ident, $op:expr) => {
+        pub struct $name {
+            arg1: Vec<u8>,
+            arg2: Vec<u8>,
+        }
+
+        impl $name {
+            pub fn new<A: AmlBuilder, B: AmlBuilder>(a1: A, a2: B) -> $name {
+                $name {
+                    arg1: a1.aml_bytes(),
+                    arg2: a2.aml_bytes(),
+                }
+            }
+        }
+
+        impl AmlBuilder for $name {
+            fn aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.push($op);
+                bytes.extend(self.arg1.clone());
+                bytes.extend(self.arg2.clone());
+
+                bytes
+            }
+        }
+    };
+}
+
+// Store the source value(Arg1) to the destination(Arg2).
+ops_2arg_define!(AmlStore, 0x70);
+// Notify the Object(Arg1) that the NotificationValue(Arg2) has occurred.
+ops_2arg_define!(AmlNotify, 0x86);
+
+// Logical Equal/Greater/Less/And/Or:
+// Arg1 and Arg2 must be the same type. Integer, String and Buffer are supported.
+// Return True or False;
+ops_2arg_define!(AmlEqual, 0x93);
+ops_2arg_define!(AmlLGreater, 0x94);
+ops_2arg_define!(AmlLLess, 0x95);
+ops_2arg_define!(AmlLAnd, 0x90);
+ops_2arg_define!(AmlLOr, 0x91);
+
+
 #[cfg(test)]
 mod test {
     use super::*;
