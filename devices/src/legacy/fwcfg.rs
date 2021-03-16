@@ -17,7 +17,7 @@ use byteorder::{BigEndian, ByteOrder};
 use util::byte_code::ByteCode;
 use util::{__offset_of, offset_of};
 
-use crate::legacy::errors::{Result, ResultExt};
+use crate::legacy::errors::{ErrorKind, Result, ResultExt};
 
 // FwCfg Signature
 const FW_CFG_DMA_SIGNATURE: u128 = 0x51454d5520434647;
@@ -307,4 +307,205 @@ fn write_dma_result(addr_space: &Arc<AddressSpace>, addr: GuestAddress, value: u
         )
     })?;
     Ok(())
+}
+
+pub struct FwCfgCommon {
+    // Firmware file slot count
+    file_slots: u16,
+    // Arch related firmware entry
+    arch_entries: Vec<FwCfgEntry>,
+    // Arch independent firmware entry
+    entries: Vec<FwCfgEntry>,
+    // Firmware configuration files
+    files: Vec<FwCfgFile>,
+    // The current entry index selected
+    cur_entry: u16,
+    // The current entry data offset of the entry selected
+    cur_offset: u32,
+    // DMA enable flag
+    dma_enabled: bool,
+    // DMA guest address
+    dma_addr: GuestAddress,
+    // System memory address space
+    mem_space: Arc<AddressSpace>,
+}
+
+impl FwCfgCommon {
+    fn new(sys_mem: Arc<AddressSpace>) -> Self {
+        FwCfgCommon {
+            file_slots: FW_CFG_FILE_SLOTS_DFLT as u16,
+            arch_entries: vec![
+                FwCfgEntry::default();
+                (FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT) as usize
+            ],
+            entries: vec![
+                FwCfgEntry::default();
+                (FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT) as usize
+            ],
+            files: Vec::new(),
+            cur_entry: 0,
+            cur_offset: 0,
+            dma_enabled: true,
+            dma_addr: GuestAddress(0),
+            mem_space: sys_mem,
+        }
+    }
+
+    /// Check whether the selected entry has a arch_local flag
+    fn is_arch_local(&self) -> bool {
+        (self.cur_entry & FW_CFG_ARCH_LOCAL) > 0
+    }
+
+    /// Get the max entry size
+    fn max_entry(&self) -> u16 {
+        FW_CFG_FILE_FIRST + self.file_slots
+    }
+
+    /// Get a mutable reference of the current selected entry
+    fn get_entry_mut(&mut self) -> Result<&mut FwCfgEntry> {
+        let key = self.cur_entry & FW_CFG_ENTRY_MASK;
+        if key >= self.max_entry() || self.cur_entry == FW_CFG_INVALID {
+            return Err(
+                ErrorKind::EntryNotFound(get_key_name(self.cur_entry as usize).to_owned()).into(),
+            );
+        };
+
+        // unwrap is safe bacause the count of arch_entries and entries is initialized
+        // as `FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT`, which is equal to the return
+        // value of `max_entry` function.
+        if self.is_arch_local() {
+            Ok(self.arch_entries.get_mut(key as usize).unwrap())
+        } else {
+            Ok(self.entries.get_mut(key as usize).unwrap())
+        }
+    }
+
+    /// Select the entry by the key specified
+    fn select_entry(&mut self, key: u16) {
+        self.cur_offset = 0;
+        if (key & FW_CFG_ENTRY_MASK) >= self.max_entry() {
+            self.cur_entry = FW_CFG_INVALID;
+        } else {
+            self.cur_entry = key;
+
+            // unwrap() is safe because we have checked the range of `key`.
+            let selected_entry = self.get_entry_mut().unwrap();
+            if let Some(ref mut cb) = selected_entry.select_cb {
+                cb.select_callback();
+            }
+        }
+    }
+
+    fn add_entry(
+        &mut self,
+        key: FwCfgEntryType,
+        select_cb: Option<FwCfgCallbackType>,
+        write_cb: Option<FwCfgWriteCallbackType>,
+        data: Vec<u8>,
+        allow_write: bool,
+    ) -> Result<()> {
+        let key = (key as u16) & FW_CFG_ENTRY_MASK;
+
+        if key >= self.max_entry() || data.len() >= std::u32::MAX as usize {
+            return Err(ErrorKind::InvalidFwCfgEntry(key).into());
+        }
+
+        let entry = if self.is_arch_local() {
+            self.arch_entries.get_mut(key as usize)
+        } else {
+            self.entries.get_mut(key as usize)
+        };
+
+        if entry.is_none() {
+            warn!("entry not initialized in construction function");
+        }
+
+        let entry = entry.unwrap();
+        if !entry.data.is_empty() {
+            warn!("Entry not empty, will override");
+        }
+
+        entry.data = data;
+        entry.select_cb = select_cb;
+        entry.allow_write = allow_write;
+        entry.write_cb = write_cb;
+
+        Ok(())
+    }
+
+    // Update a FwCfgEntry
+    fn update_entry_data(&mut self, key: u16, mut data: Vec<u8>) -> Result<()> {
+        if key >= self.max_entry() || data.len() >= std::u32::MAX as usize {
+            return Err(ErrorKind::InvalidFwCfgEntry(key).into());
+        }
+
+        let entry = if self.is_arch_local() {
+            self.arch_entries.get_mut(key as usize)
+        } else {
+            self.entries.get_mut(key as usize)
+        };
+
+        if let Some(e) = entry {
+            e.data.clear();
+            e.data.append(&mut data);
+            Ok(())
+        } else {
+            Err(ErrorKind::EntryNotFound(get_key_name(key as usize).to_owned()).into())
+        }
+    }
+
+    fn add_file_callback(
+        &mut self,
+        filename: &str,
+        data: Vec<u8>,
+        select_cb: Option<FwCfgCallbackType>,
+        write_cb: Option<FwCfgWriteCallbackType>,
+        allow_write: bool,
+    ) -> Result<()> {
+        if self.files.len() >= self.file_slots as usize {
+            return Err(ErrorKind::FileSlotsNotAvailable(filename.to_owned()).into());
+        }
+
+        let file_name_bytes = filename.to_string().as_bytes().to_vec();
+        // Check against duplicate file here
+        if self
+            .files
+            .iter()
+            .any(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
+        {
+            return Err(ErrorKind::DuplicateFile(filename.to_owned()).into());
+        }
+
+        let mut index = self.files.len();
+        for (i, file_entry) in self.files.iter().enumerate() {
+            if file_name_bytes < file_entry.name.to_vec() {
+                index = i;
+                break;
+            }
+        }
+
+        let file = FwCfgFile::new(
+            data.len() as u32,
+            FW_CFG_FILE_FIRST + index as u16,
+            filename,
+        );
+        self.files.insert(index, file);
+        self.files.iter_mut().skip(index + 1).for_each(|f| {
+            f.select += 1;
+        });
+
+        let mut bytes = Vec::new();
+        let file_length_be = BigEndian::read_u32((self.files.len() as u32).as_bytes());
+        bytes.append(&mut file_length_be.as_bytes().to_vec());
+        for value in self.files.iter() {
+            bytes.append(&mut value.as_be_bytes());
+        }
+        self.update_entry_data(FwCfgEntryType::FileDir as u16, bytes)?;
+
+        self.entries.insert(
+            FW_CFG_FILE_FIRST as usize + index,
+            FwCfgEntry::new(data, select_cb, write_cb, allow_write),
+        );
+        Ok(())
+    }
 }

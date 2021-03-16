@@ -31,14 +31,30 @@ pub mod errors {
             SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
         }
-
         foreign_links {
             Io(std::io::Error);
         }
-
         errors {
             SetSysResErr {
                 display("Failed to allocate system bus resource.")
+            }
+            AddEntryErr(key: String) {
+                display("Failed to add FwCfg entry, key is {}", key)
+            }
+            EntryNotFound(key: String) {
+                display("Failed to find FwCfg entry, key is {}.", key)
+            }
+            DuplicateFile(key: String) {
+                display("Duplicate FwCfg file-entry, name is {}", key)
+            }
+            FileSlotsNotAvailable(key: String) {
+                display("No available FwCfg file-slot for this file entry with filename {}", key)
+            }
+            ReadDMARequest(addr: u64, size: u64) {
+                display("Failed to read DMA request, dma_addr=0x{:x} size=0x{:x}", addr, size)
+            }
+            InvalidFwCfgEntry(key: u16) {
+                display("Invalid FwCfg entry key {}", key)
             }
         }
     }
