@@ -12,6 +12,8 @@
 
 use std::sync::Arc;
 
+use byteorder::{BigEndian, ByteOrder};
+
 // FwCfg Signature
 const FW_CFG_DMA_SIGNATURE: u128 = 0x51454d5520434647;
 /// FwCfg version bits
@@ -162,5 +164,51 @@ impl Default for FwCfgFile {
             reserved: 0_u16,
             name: [0_u8; 56],
         }
+    }
+}
+
+impl FwCfgFile {
+    fn new(size: u32, select: u16, name: &str) -> Self {
+        let len = std::cmp::min(56, name.len());
+        let mut bytes = [0; 56];
+        bytes[..len].copy_from_slice(&name.as_bytes()[..len]);
+
+        FwCfgFile {
+            size,
+            select,
+            reserved: 0_u16,
+            name: bytes,
+        }
+    }
+
+    /// Convert FwCfgFile item into a big endian format data array
+    fn as_be_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![0; 64_usize];
+
+        let mut curr_offset = 0_usize;
+        let mut next_size = std::mem::size_of::<u32>();
+        BigEndian::write_u32(
+            &mut bytes[curr_offset..(curr_offset + next_size)],
+            self.size,
+        );
+
+        curr_offset += next_size;
+        next_size = std::mem::size_of::<u16>();
+        BigEndian::write_u16(
+            &mut bytes[curr_offset..(curr_offset + next_size)],
+            self.select,
+        );
+
+        curr_offset += next_size;
+        next_size = std::mem::size_of::<u16>();
+        BigEndian::write_u16(
+            &mut bytes[curr_offset..(curr_offset + next_size)],
+            self.reserved,
+        );
+
+        curr_offset += next_size;
+        bytes[curr_offset..].copy_from_slice(&self.name);
+
+        bytes
     }
 }
