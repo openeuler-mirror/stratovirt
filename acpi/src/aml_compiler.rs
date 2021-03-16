@@ -1302,4 +1302,151 @@ mod test {
         ];
         assert_eq!(scope2.aml_bytes(), scope2_bytes);
     }
+
+    #[test]
+    fn test_arithmetic_ops() {
+        // Method(INCR, 3) {
+        //     If (Arg1 == Arg2) {
+        //         Return
+        //     }
+        //     Local0 = Arg0
+        //     While (Local0 < Arg1) {
+        //         Local0++;
+        //     }
+        //     Local0--;
+        //     Local0 += 2;
+        //     If (Local0 > Arg2) {
+        //         Local0 -= Arg2;
+        //     }
+        // }
+        let mut method1 = AmlMethod::new("INCR", 3, false);
+        let mut if_scope1 = AmlIf::new(AmlEqual::new(AmlArg(1), AmlArg(2)));
+        if_scope1.append_child(AmlReturn::new());
+        method1.append_child(if_scope1);
+
+        let store1 = AmlStore::new(AmlArg(0), AmlLocal(0).clone());
+        method1.append_child(store1);
+
+        let mut while_scope = AmlWhile::new(AmlLLess::new(AmlLocal(0), AmlArg(1)));
+        while_scope.append_child(AmlIncrement::new(AmlLocal(0)));
+        method1.append_child(while_scope);
+
+        method1.append_child(AmlDecrement::new(AmlLocal(0)));
+        method1.append_child(AmlAdd::new(AmlLocal(0), AmlInteger(2), AmlLocal(0)));
+
+        let mut if_scope2 = AmlIf::new(AmlLGreater::new(AmlLocal(0), AmlArg(2)));
+        if_scope2.append_child(AmlSubtract::new(AmlLocal(0), AmlArg(2), AmlLocal(0)));
+        method1.append_child(if_scope2);
+
+        let method1_bytes = vec![
+            0x14, 0x27, 0x49, 0x4E, 0x43, 0x52, 0x03, 0xA0, 0x06, 0x93, 0x69, 0x6A, 0xA4, 0x00,
+            0x70, 0x68, 0x60, 0xA2, 0x06, 0x95, 0x60, 0x69, 0x75, 0x60, 0x76, 0x60, 0x72, 0x60,
+            0x0A, 0x02, 0x60, 0xA0, 0x08, 0x94, 0x60, 0x6A, 0x74, 0x60, 0x6A, 0x60,
+        ];
+        assert_eq!(method1.aml_bytes(), method1_bytes);
+
+        // Method(MTD2, 1) {
+        //     Local0 = SizeOf(Arg0)
+        //     Name (PKG1, Package () {
+        //         0x01, 0x03F8, 0x03FF
+        //     })
+        //
+        //     Name (PKG2, Package(2){0x1234, "Hello world"})
+        //
+        //     Store (DeRefOf (Index (PKG1, 5)), Local0)
+        //     Concatenate(PKG1, PKG2, Local1)
+        //
+        //     Return(Local0)
+        // }
+        let mut method2 = AmlMethod::new("MTD2", 1, false);
+
+        let store2 = AmlStore::new(AmlSizeOf::new(AmlArg(0)), AmlLocal(0));
+        method2.append_child(store2);
+
+        let mut pkg1 = AmlPackage::new(3);
+        vec![0x01, 0x03F8, 0x03FF].iter().for_each(|&x| {
+            pkg1.append_child(AmlInteger(x as u64));
+        });
+        let named_pkg1 = AmlNameDecl::new("PKG1", pkg1);
+        method2.append_child(named_pkg1);
+
+        let mut pkg2 = AmlPackage::new(2);
+        pkg2.append_child(AmlInteger(0x1234));
+        pkg2.append_child(AmlString("Hello world".to_string()));
+        let named_pkg2 = AmlNameDecl::new("PKG2", pkg2);
+        method2.append_child(named_pkg2);
+
+        let pkg1_str = AmlName("PKG1".to_string());
+        let pkg2_str = AmlName("PKG2".to_string());
+        let store3 = AmlStore::new(
+            AmlDeRefOf::new(AmlIndex::new(pkg1_str.clone(), AmlInteger(5), AmlZero)),
+            AmlLocal(0),
+        );
+        let concat = AmlConcat::new(pkg1_str, pkg2_str, AmlLocal(1));
+        method2.append_child(store3);
+        method2.append_child(concat);
+
+        let return_value = AmlReturn::with_value(AmlLocal(0));
+        method2.append_child(return_value);
+
+        let method2_bytes = vec![
+            0x14, 0x49, 0x04, 0x4D, 0x54, 0x44, 0x32, 0x01, 0x70, 0x87, 0x68, 0x60, 0x08, 0x50,
+            0x4B, 0x47, 0x31, 0x12, 0x09, 0x03, 0x01, 0x0B, 0xF8, 0x03, 0x0B, 0xFF, 0x03, 0x08,
+            0x50, 0x4B, 0x47, 0x32, 0x12, 0x12, 0x02, 0x0B, 0x34, 0x12, 0x0D, 0x48, 0x65, 0x6C,
+            0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x00, 0x70, 0x83, 0x88, 0x50, 0x4B,
+            0x47, 0x31, 0x0A, 0x05, 0x00, 0x60, 0x73, 0x50, 0x4B, 0x47, 0x31, 0x50, 0x4B, 0x47,
+            0x32, 0x61, 0xA4, 0x60,
+        ];
+        assert_eq!(method2.aml_bytes(), method2_bytes);
+    }
+
+    #[test]
+    fn test_logical_ops() {
+        // Method(MTD3, 1) {
+        //     Local0 = Arg0
+        //
+        //     Local1 = (Local0 << 3) | 0xFF
+        //     Local2 = (Local0 >> 3) & 0xFF
+        //
+        //     If (Local1 && Local2) {
+        //         Return(2)
+        //     }
+        //
+        //     if (Local1 || Local2) {
+        //         Return(1)
+        //     }
+        //
+        //     Return(0)
+        // }
+        let mut method = AmlMethod::new("MTD3", 1, false);
+
+        let store1 = AmlStore::new(AmlArg(0), AmlLocal(0));
+        method.append_child(store1);
+
+        let shift_left = AmlShiftLeft::new(AmlLocal(0), AmlInteger(0x3), AmlZero);
+        let store2 = AmlOr::new(shift_left, AmlInteger(0xFF), AmlLocal(1));
+        method.append_child(store2);
+
+        let shift_right = AmlShiftRight::new(AmlLocal(0), AmlInteger(0x3), AmlZero);
+        let store3 = AmlAnd::new(shift_right, AmlInteger(0xFF), AmlLocal(2));
+        method.append_child(store3);
+
+        let mut if_scope1 = AmlIf::new(AmlLAnd::new(AmlLocal(1), AmlLocal(2)));
+        if_scope1.append_child(AmlReturn::with_value(AmlInteger(2)));
+        method.append_child(if_scope1);
+
+        let mut if_scope2 = AmlIf::new(AmlLOr::new(AmlLocal(1), AmlLocal(2)));
+        if_scope2.append_child(AmlReturn::with_value(AmlInteger(1)));
+        method.append_child(if_scope2);
+
+        method.append_child(AmlReturn::with_value(AmlInteger(0)));
+
+        let method_bytes = vec![
+            0x14, 0x2C, 0x4D, 0x54, 0x44, 0x33, 0x01, 0x70, 0x68, 0x60, 0x7D, 0x79, 0x60, 0x0A,
+            0x03, 0x00, 0x0A, 0xFF, 0x61, 0x7B, 0x7A, 0x60, 0x0A, 0x03, 0x00, 0x0A, 0xFF, 0x62,
+            0xA0, 0x07, 0x90, 0x61, 0x62, 0xA4, 0x0A, 0x02, 0xA0, 0x06, 0x91, 0x61, 0x62, 0xA4,
+            0x01, 0xA4, 0x00,
+        ];
+        assert_eq!(method.aml_bytes(), method_bytes);
+    }
 }
