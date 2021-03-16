@@ -45,8 +45,13 @@ pub mod errors {
 
 #[cfg(target_arch = "aarch64")]
 mod pl031;
+#[allow(dead_code)]
+#[cfg(target_arch = "x86_64")]
+mod rtc;
 mod serial;
 
+#[cfg(target_arch = "x86_64")]
+pub use self::rtc::{RTC, RTC_IRQ, RTC_PORT_INDEX};
 #[cfg(target_arch = "aarch64")]
 pub use pl031::PL031;
 pub use serial::{Serial, SERIAL_ADDR};
