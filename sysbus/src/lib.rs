@@ -139,7 +139,6 @@ impl Default for SysRes {
 
 pub enum SysBusDevType {
     Serial,
-    #[cfg(target_arch = "aarch64")]
     Rtc,
     VirtioMmio,
     Others,

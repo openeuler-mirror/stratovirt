@@ -10,7 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use sysbus::SysRes;
+use std::sync::{Arc, Mutex};
+
+use address_space::GuestAddress;
+use kvm_ioctls::VmFd;
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::Result;
@@ -208,5 +212,54 @@ impl RTC {
             }
         }
         true
+    }
+
+    pub fn realize(
+        mut self,
+        sysbus: &mut SysBus,
+        base: u64,
+        size: u64,
+        vm_fd: &VmFd,
+    ) -> Result<()> {
+        self.set_sys_resource(sysbus, base, size, vm_fd)?;
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev, base, size)?;
+        Ok(())
+    }
+}
+
+impl SysBusDevOps for RTC {
+    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
+        if offset == 0 {
+            warn!(
+                "Only reading data for 0x71 is permitted, ioport is 0x{:x}",
+                base.0 + offset
+            );
+            data[0] = 0xFF;
+            false
+        } else {
+            self.read_data(data)
+        }
+    }
+
+    fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
+        if offset == 0 {
+            self.cur_index = data[0] & 0x7F;
+            true
+        } else {
+            self.write_data(data)
+        }
+    }
+
+    fn interrupt_evt(&self) -> Option<&EventFd> {
+        Some(&self.interrupt_evt)
+    }
+
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        Some(&mut self.res)
+    }
+
+    fn get_type(&self) -> SysBusDevType {
+        SysBusDevType::Rtc
     }
 }
