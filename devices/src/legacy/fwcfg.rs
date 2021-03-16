@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::Arc;
+
 // FwCfg Signature
 const FW_CFG_DMA_SIGNATURE: u128 = 0x51454d5520434647;
 /// FwCfg version bits
@@ -92,5 +94,73 @@ fn get_key_name(key: usize) -> &'static str {
         FW_CFG_KEYS[key]
     } else {
         "unknown"
+    }
+}
+
+/// FwCfg select callback and write callback type definition
+type FwCfgCallbackType = Arc<dyn FwCfgCallback + Send + Sync>;
+type FwCfgWriteCallbackType = Arc<dyn FwCfgWriteCallback + Send + Sync>;
+
+/// FwCfg select callback
+pub trait FwCfgCallback {
+    fn select_callback(&self);
+}
+
+/// FwCfg write callback
+pub trait FwCfgWriteCallback {
+    fn write_callback(&self, start: u64, len: usize);
+}
+
+/// The FwCfgEntry type which holds the firmware item
+#[derive(Clone, Default)]
+struct FwCfgEntry {
+    data: Vec<u8>,
+    select_cb: Option<FwCfgCallbackType>,
+    write_cb: Option<FwCfgWriteCallbackType>,
+    allow_write: bool,
+}
+
+impl FwCfgEntry {
+    fn new(
+        data: Vec<u8>,
+        select_cb: Option<FwCfgCallbackType>,
+        write_cb: Option<FwCfgWriteCallbackType>,
+        allow_write: bool,
+    ) -> Self {
+        FwCfgEntry {
+            data,
+            select_cb,
+            write_cb,
+            allow_write,
+        }
+    }
+}
+
+/// The FwCfgFile entry used to retrieve firwmware files by os loader
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+struct FwCfgFile {
+    size: u32,
+    select: u16,
+    reserved: u16,
+    name: [u8; 56],
+}
+
+impl Eq for FwCfgFile {}
+
+impl PartialEq for FwCfgFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.name.to_vec() == other.name.to_vec()
+    }
+}
+
+impl Default for FwCfgFile {
+    fn default() -> Self {
+        FwCfgFile {
+            size: 0_u32,
+            select: 0_u16,
+            reserved: 0_u16,
+            name: [0_u8; 56],
+        }
     }
 }
