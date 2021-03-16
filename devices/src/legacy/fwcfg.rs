@@ -12,7 +12,12 @@
 
 use std::sync::Arc;
 
+use address_space::{AddressSpace, GuestAddress};
 use byteorder::{BigEndian, ByteOrder};
+use util::byte_code::ByteCode;
+use util::{__offset_of, offset_of};
+
+use crate::legacy::errors::{Result, ResultExt};
 
 // FwCfg Signature
 const FW_CFG_DMA_SIGNATURE: u128 = 0x51454d5520434647;
@@ -26,6 +31,12 @@ const FW_CFG_WRITE_CHANNEL: u16 = 0x4000;
 const FW_CFG_ARCH_LOCAL: u16 = 0x8000;
 const FW_CFG_ENTRY_MASK: u16 = !(FW_CFG_WRITE_CHANNEL | FW_CFG_ARCH_LOCAL);
 const FW_CFG_INVALID: u16 = 0xffff;
+/// FwCfg DMA control bits
+const FW_CFG_DMA_CTL_ERROR: u32 = 0x01;
+const FW_CFG_DMA_CTL_READ: u32 = 0x02;
+const FW_CFG_DMA_CTL_SKIP: u32 = 0x04;
+const FW_CFG_DMA_CTL_SELECT: u32 = 0x08;
+const FW_CFG_DMA_CTL_WRITE: u32 = 0x10;
 
 /// Define the Firmware Configuration Entry Type
 #[repr(u16)]
@@ -211,4 +222,89 @@ impl FwCfgFile {
 
         bytes
     }
+}
+
+/// The FwCfgDmaAccess entry used as DMA descriptor in memory for operation
+#[repr(C, packed)]
+#[derive(Copy, Clone, Default)]
+struct FwCfgDmaAccess {
+    control: u32,
+    length: u32,
+    address: u64,
+}
+
+impl ByteCode for FwCfgDmaAccess {}
+
+/// set DMA memory zone with char
+fn set_dma_memory(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    char: u8,
+    len: u64,
+) -> Result<()> {
+    const FILLBUF_SIZE: usize = 512;
+    let fill_buf: &[u8; FILLBUF_SIZE] = &[char; FILLBUF_SIZE];
+
+    addr_space
+        .write(&mut fill_buf.as_ref(), addr, len)
+        .chain_err(|| {
+            format!(
+                "Failed to set dma memory for fwcfg at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
+
+    Ok(())
+}
+
+/// write data to DMA memory zone
+fn write_dma_memory(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    mut buf: &[u8],
+    len: u64,
+) -> Result<()> {
+    addr_space.write(&mut buf, addr, len).chain_err(|| {
+        format!(
+            "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+            addr.0, len
+        )
+    })?;
+
+    Ok(())
+}
+
+/// read data form DMA memory zone
+fn read_dma_memory(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    mut buf: &mut [u8],
+    len: u64,
+) -> Result<()> {
+    addr_space.read(&mut buf, addr, len).chain_err(|| {
+        format!(
+            "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+            addr.0, len
+        )
+    })?;
+    Ok(())
+}
+
+/// Write DMA result to DMA response zone
+fn write_dma_result(addr_space: &Arc<AddressSpace>, addr: GuestAddress, value: u32) -> Result<()> {
+    let mut dma_buf: [u8; 4] = [0; 4];
+    BigEndian::write_u32(&mut dma_buf, value);
+    write_dma_memory(
+        addr_space,
+        addr.unchecked_add(offset_of!(FwCfgDmaAccess, control) as u64),
+        &dma_buf,
+        dma_buf.len() as u64,
+    )
+    .chain_err(|| {
+        format!(
+            "Failed to write dma result of fwcfg at gpa=0x{:x} value=0x{:x}",
+            addr.0, value
+        )
+    })?;
+    Ok(())
 }
