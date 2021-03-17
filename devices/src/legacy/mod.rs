@@ -59,6 +59,9 @@ pub mod errors {
             DMASizeOverflow {
                 display("The size of DMA request overflows.")
             }
+            FlashWriteOverflow {
+                display("The size of write request overflows.")
+            }
         }
     }
 }
