@@ -10,23 +10,26 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::Arc;
-#[cfg(target_arch = "aarch64")]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress};
+#[cfg(target_arch = "x86_64")]
+use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
-#[cfg(target_arch = "aarch64")]
 use error_chain::ChainedError;
-#[cfg(target_arch = "aarch64")]
 use kvm_ioctls::VmFd;
-#[cfg(target_arch = "aarch64")]
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::{__offset_of, offset_of};
 
 use crate::legacy::errors::{ErrorKind, Result, ResultExt};
+
+#[cfg(target_arch = "x86_64")]
+const FW_CFG_IO_BASE: u64 = 0x510;
+// Size of ioports including control/data registers and DMA.
+#[cfg(target_arch = "x86_64")]
+const FW_CFG_IO_SIZE: u64 = 0x12;
 
 // FwCfg Signature
 const FW_CFG_DMA_SIGNATURE: u128 = 0x51454d5520434647;
@@ -892,6 +895,152 @@ impl SysBusDevOps for FwCfgMem {
     }
 
     /// Get device type.
+    fn get_type(&self) -> SysBusDevType {
+        SysBusDevType::FwCfg
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub struct FwCfgIO {
+    fwcfg: FwCfgCommon,
+    /// System Resource of device.
+    res: SysRes,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl FwCfgIO {
+    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
+        FwCfgIO {
+            fwcfg: FwCfgCommon::new(sys_mem),
+            res: SysRes {
+                region_base: FW_CFG_IO_BASE,
+                region_size: FW_CFG_IO_SIZE,
+                irq: 0,
+            },
+        }
+    }
+
+    pub fn realize(mut self, sysbus: &mut SysBus, vm_fd: &VmFd) -> Result<Arc<Mutex<Self>>> {
+        self.fwcfg.common_realize()?;
+        let region_base = self.res.region_base;
+        let region_size = self.res.region_size;
+        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+            .chain_err(|| "Failed to allocate system resource for FwCfg.")?;
+
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev, region_base, region_size)
+            .chain_err(|| "Failed to attach FwCfg device to system bus.")?;
+        Ok(dev)
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl SysBusDevOps for FwCfgIO {
+    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
+        let value: u64 = match offset {
+            0..=1 => match self.fwcfg.read_data_reg(offset, data.len() as u32) {
+                Err(e) => {
+                    error!(
+                        "Failed to read from FwCfg data register, error is {}",
+                        e.display_chain()
+                    );
+                    return false;
+                }
+                Ok(val) => val,
+            },
+            4..=11 => match self.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
+                Err(e) => {
+                    error!("Failed to handle FwCfg DMA-read, error is {}", e);
+                    return false;
+                }
+                Ok(val) => val,
+            },
+            _ => {
+                // This should never happen
+                error!(
+                    "Failed to read FwCfg, ioport 0x{:x} is invalid",
+                    base.0 + offset
+                );
+                return false;
+            }
+        };
+
+        match data.len() {
+            1 => data[0] = value as u8,
+            2 => BigEndian::write_u16(data, value as u16),
+            4 => BigEndian::write_u32(data, value as u32),
+            8 => BigEndian::write_u64(data, value as u64),
+            _ => {
+                warn!(
+                    "Failed to read from FwCfg data register, data length {} is invalid",
+                    data.len()
+                );
+                return false;
+            }
+        }
+        true
+    }
+
+    fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool {
+        let size = data.len() as u32;
+        match offset {
+            0..=1 => {
+                if size != 2 {
+                    error!(
+                        "Failed to write FwCfg control register, data length {} is invalid",
+                        data.len()
+                    );
+                    return false;
+                }
+                self.fwcfg.select_entry(LittleEndian::read_u16(data));
+            }
+            4..=11 => {
+                let value = match size {
+                    1 => data[0] as u64,
+                    2 => BigEndian::read_u16(data) as u64,
+                    4 => BigEndian::read_u32(data) as u64,
+                    8 => BigEndian::read_u64(data) as u64,
+                    _ => 0,
+                };
+                if let Err(e) = self.fwcfg.dma_mem_write(offset - 4, value, size) {
+                    error!(
+                        "Failed to handle FWCFg DMA-write, error is {}",
+                        e.display_chain()
+                    );
+                    return false;
+                }
+            }
+            _ => {
+                // This should never happen
+                error!(
+                    "Failed to write FwCfg, ioport 0x{:x} is invalid",
+                    base.0 + offset
+                );
+                return false;
+            }
+        }
+        true
+    }
+
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        Some(&mut self.res)
+    }
+
+    fn set_sys_resource(
+        &mut self,
+        _sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+        _vm_fd: &VmFd,
+    ) -> sysbus::errors::Result<()> {
+        let mut res = self.get_sys_resource().unwrap();
+        res.region_base = region_base;
+        res.region_size = region_size;
+        res.irq = 0;
+        Ok(())
+    }
+
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::FwCfg
     }

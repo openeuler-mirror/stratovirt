@@ -78,6 +78,8 @@ mod serial;
 #[cfg(target_arch = "x86_64")]
 pub use self::rtc::{RTC, RTC_IRQ, RTC_PORT_INDEX};
 pub use fwcfg::FwCfgEntryType;
+#[cfg(target_arch = "x86_64")]
+pub use fwcfg::FwCfgIO;
 #[cfg(target_arch = "aarch64")]
 pub use fwcfg::FwCfgMem;
 #[cfg(target_arch = "aarch64")]
