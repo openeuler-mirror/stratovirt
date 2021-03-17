@@ -56,6 +56,9 @@ pub mod errors {
             InvalidFwCfgEntry(key: u16) {
                 display("Invalid FwCfg entry key {}", key)
             }
+            DMASizeOverflow {
+                display("The size of DMA request overflows.")
+            }
         }
     }
 }

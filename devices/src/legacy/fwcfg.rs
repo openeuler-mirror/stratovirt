@@ -15,6 +15,7 @@ use std::sync::Arc;
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{BigEndian, ByteOrder};
 use util::byte_code::ByteCode;
+use util::num_ops::extract_u64;
 use util::{__offset_of, offset_of};
 
 use crate::legacy::errors::{ErrorKind, Result, ResultExt};
@@ -618,6 +619,150 @@ impl FwCfgCommon {
 
         self.cur_offset = offset;
         write_dma_result(&self.mem_space, dma_addr, dma.control)?;
+        Ok(())
+    }
+
+    /// Write DMA mem register
+    ///
+    /// # Arguments
+    ///
+    /// * `addr`    - The address to write to
+    /// * `value`   - Value to write
+    /// * `size`    - Length of raw bytes to write
+    ///
+    /// # Errors
+    ///
+    /// Return Error if fail to add the file entry.
+    ///
+    fn dma_mem_write(&mut self, addr: u64, value: u64, size: u32) -> Result<()> {
+        if size == 4 {
+            if addr == 0 {
+                self.dma_addr = GuestAddress(value << 32);
+            } else if addr == 4 {
+                self.dma_addr = GuestAddress(self.dma_addr.raw_value() | value as u64);
+                self.handle_dma_request()?;
+            }
+        } else if size == 8 && addr == 0 {
+            self.dma_addr = GuestAddress(value);
+            self.handle_dma_request()?;
+        } else {
+            bail!(
+                "Failed to set DMA address, offset is 0x{:x}, size is 0x{:x}",
+                addr,
+                size
+            );
+        }
+        Ok(())
+    }
+
+    /// Read DMA mem register
+    ///
+    /// # Arguments
+    ///
+    /// * `addr`    - The address to read to
+    /// * `size`    - Length of raw bytes to read
+    ///
+    /// # Return
+    ///
+    /// Return the value of the register
+    ///
+    fn dma_mem_read(&self, addr: u64, size: u32) -> Result<u64> {
+        extract_u64(
+            FW_CFG_DMA_SIGNATURE as u64,
+            ((8 - addr - size as u64) * 8) as u32,
+            (size * 8) as u32,
+        )
+        .ok_or_else(|| ErrorKind::Msg("Failed to extract bits from u64".to_string()).into())
+    }
+
+    /// Read data register
+    ///
+    /// # Arguments
+    ///
+    /// * `_addr`    - The address to read to
+    /// * `size`    - Length of raw bytes to read
+    ///
+    /// # Return
+    ///
+    /// Return the value of the register
+    ///
+    fn read_data_reg(&mut self, _addr: u64, mut size: u32) -> Result<u64> {
+        if size == 0 || size >= std::mem::size_of::<u64>() as u32 {
+            bail!(
+                "Failed to read from FWcfg data register, size {} overflows",
+                size
+            );
+        }
+
+        let cur_entry = self.cur_entry;
+        let mut cur_offset = self.cur_offset;
+        let entry = self.get_entry_mut()?;
+        let mut value: u64 = 0;
+
+        if cur_entry != FW_CFG_INVALID
+            && !entry.data.is_empty()
+            && cur_offset < entry.data.len() as u32
+        {
+            loop {
+                value = (value << 8) | entry.data[cur_offset as usize] as u64;
+                cur_offset += 1;
+                size -= 1;
+
+                if size == 0 || cur_offset >= entry.data.len() as u32 {
+                    break;
+                }
+            }
+            value <<= 8 * size as u64;
+        }
+        self.cur_offset = cur_offset;
+        Ok(value)
+    }
+
+    fn common_realize(&mut self) -> Result<()> {
+        // Firmware configurations add Signature item
+        let sig = &[b'Q', b'E', b'M', b'U'];
+        self.add_entry(FwCfgEntryType::Signature, None, None, sig.to_vec(), false)?;
+
+        self.add_entry(
+            FwCfgEntryType::NoGraphic,
+            None,
+            None,
+            (0_u16).as_bytes().to_vec(),
+            false,
+        )?;
+
+        self.add_entry(
+            FwCfgEntryType::BootMenu,
+            None,
+            None,
+            (0_u16).as_bytes().to_vec(),
+            false,
+        )?;
+
+        // Add FileDir item
+        self.add_entry(FwCfgEntryType::FileDir, None, None, Vec::new(), false)?;
+
+        // Add boot-fail-wait file item, default to 5s
+        self.add_file_callback(
+            "etc/boot-fail-wait",
+            (5_u32).as_bytes().to_vec(),
+            None,
+            None,
+            false,
+        )?;
+
+        // Firmware version
+        let mut version = FW_CFG_VERSION;
+        if self.dma_enabled {
+            version |= FW_CFG_VERSION_DMA;
+        }
+        self.add_entry(
+            FwCfgEntryType::Id,
+            None,
+            None,
+            version.as_bytes().to_vec(),
+            false,
+        )?;
         Ok(())
     }
 }
