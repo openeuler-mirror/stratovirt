@@ -1436,6 +1436,184 @@ impl AmlBuilder for AmlMemory32Fixed {
     }
 }
 
+/// Cacheable features.
+#[derive(Copy, Clone)]
+pub enum AmlCacheable {
+    NonCacheable = 0,
+    Cacheable = 1,
+    WriteCombining = 2,
+    Prefetchable = 3,
+}
+
+/// This enum determines how the IO resource are limited.
+#[derive(Copy, Clone)]
+pub enum AmlISARanges {
+    /// Limited to valid ISA I/O ranges.
+    ISAOnly = 1,
+    /// Limited to valid non-ISA I/O ranges.
+    NonISAOnly = 2,
+    /// No limitation
+    EntireRange = 3,
+}
+
+/// The type of resource.
+#[derive(Copy, Clone)]
+pub enum AmlResourceType {
+    Memory = 0,
+    IO = 1,
+    BusNumber = 2,
+}
+
+/// Decode type of bus number range.
+#[derive(Copy, Clone)]
+pub enum AmlAddressSpaceDecode {
+    /// Positive decode.
+    Positive = 0,
+    /// Subtract decode.
+    Subtract = 1,
+}
+
+/// Macro that helps to define Word/DWord/QWord address space descriptors.
+macro_rules! space_desc_define {
+    ($name: ident, $op:expr, $ml: expr, $ty: tt) => {
+        pub struct $name {
+            res_type: AmlResourceType,
+            decode: AmlAddressSpaceDecode,
+            type_flags: u8,
+            granularity: $ty,
+            addr_min: $ty,
+            addr_max: $ty,
+            addr_trans: $ty,
+            length: $ty,
+        }
+
+        impl AmlBuilder for $name {
+            fn aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.push($op);
+                bytes.push($ml);
+                bytes.push(0x00);
+                bytes.push(self.res_type as u8);
+
+                // min_addr and max_addr are fixed
+                let flags = (self.decode as u8) << 1 | 1 << 2 | 1 << 3;
+                bytes.push(flags);
+                bytes.push(self.type_flags);
+
+                bytes.extend(self.granularity.as_bytes());
+                bytes.extend(self.addr_min.as_bytes());
+                bytes.extend(self.addr_max.as_bytes());
+                bytes.extend(self.addr_trans.as_bytes());
+                bytes.extend(self.length.as_bytes());
+
+                bytes
+            }
+        }
+    };
+}
+
+/// Macro that helps to define DWordDesc/QWordDesc's construct function.
+macro_rules! struct_new_memory_define {
+    ($name: ident, $ty: tt) => {
+        impl $name {
+            #[allow(clippy::too_many_arguments)]
+            pub fn new_memory(
+                decode: AmlAddressSpaceDecode,
+                cache: AmlCacheable,
+                rw: AmlReadAndWrite,
+                gran: $ty,
+                min: $ty,
+                max: $ty,
+                trans: $ty,
+                len: $ty,
+            ) -> $name {
+                let type_flags = rw as u8 | (cache as u8) << 1;
+
+                $name {
+                    res_type: AmlResourceType::Memory,
+                    decode,
+                    type_flags,
+                    granularity: gran,
+                    addr_min: min,
+                    addr_max: max,
+                    addr_trans: trans,
+                    length: len,
+                }
+            }
+        }
+    };
+}
+
+/// Macro that helps to define WordDesc/DWordDesc/QWordDesc's construct function.
+macro_rules! struct_new_io_define {
+    ($name: ident, $ty: tt) => {
+        impl $name {
+            #[allow(clippy::too_many_arguments)]
+            pub fn new_io(
+                decode: AmlAddressSpaceDecode,
+                isa_ranges: AmlISARanges,
+                gran: $ty,
+                min: $ty,
+                max: $ty,
+                trans: $ty,
+                len: $ty,
+            ) -> $name {
+                $name {
+                    res_type: AmlResourceType::IO,
+                    decode,
+                    type_flags: isa_ranges as u8,
+                    granularity: gran,
+                    addr_min: min,
+                    addr_max: max,
+                    addr_trans: trans,
+                    length: len,
+                }
+            }
+        }
+    };
+}
+
+// Word address space descriptor, which can be used to describe IO and BusNumber.
+space_desc_define!(AmlWordDesc, 0x88, 0x0D, u16);
+// Define `AmlWordDesc::new_io()` function to construct WordIO-type resource.
+struct_new_io_define!(AmlWordDesc, u16);
+
+// Define `AmlWordDesc::new_bus_number()` function to construct WordBusNumber-type resource.
+impl AmlWordDesc {
+    pub fn new_bus_number(
+        decode: AmlAddressSpaceDecode,
+        gran: u16,
+        min: u16,
+        max: u16,
+        trans: u16,
+        len: u16,
+    ) -> AmlWordDesc {
+        AmlWordDesc {
+            res_type: AmlResourceType::BusNumber,
+            decode,
+            type_flags: 0,
+            granularity: gran,
+            addr_min: min,
+            addr_max: max,
+            addr_trans: trans,
+            length: len,
+        }
+    }
+}
+
+// DWord address space descriptor, which can be used to describe IO and Memory.
+space_desc_define!(AmlDWordDesc, 0x87, 23, u32);
+// Define `AmlDWordDesc::new_io()` function to construct DWordIO-type resource.
+struct_new_io_define!(AmlDWordDesc, u32);
+// Define `AmlDWordDesc::new_memory()` function to construct DWordMemory-type resource.
+struct_new_memory_define!(AmlDWordDesc, u32);
+
+// QWord address space descriptor, which can be used to describe Memory.
+space_desc_define!(AmlQWordDesc, 0x8A, 0x2B, u64);
+// Define `AmlQWordDesc::new_memory()` function to construct QWordMemory-type resource.
+struct_new_memory_define!(AmlQWordDesc, u64);
+
+
 #[cfg(test)]
 mod test {
     use super::*;
