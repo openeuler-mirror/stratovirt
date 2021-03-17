@@ -175,3 +175,195 @@ impl AmlBuilder for AcpiRsdp {
         self.as_bytes().to_vec()
     }
 }
+
+/// This module describes ACPI MADT's sub-tables on x86_64 platform.
+#[cfg(target_arch = "x86_64")]
+pub mod madt_subtable {
+    use super::*;
+    pub const IOAPIC_BASE_ADDR: u32 = 0xfec0_0000;
+    pub const LAPIC_BASE_ADDR: u32 = 0xfee0_0000;
+
+    /// MADT processor Local APIC structure.
+    #[repr(C, packed)]
+    #[derive(Default, Copy, Clone)]
+    pub struct AcpiLocalApic {
+        /// Type ID.
+        pub type_id: u8,
+        /// The length of this structure.
+        pub length: u8,
+        /// ACPI processor UID.
+        pub processor_uid: u8,
+        /// The processor's Local APIC ID.
+        pub apic_id: u8,
+        /// Local APIC flags.
+        pub flags: u32,
+    }
+
+    impl ByteCode for AcpiLocalApic {}
+
+    impl AmlBuilder for AcpiLocalApic {
+        fn aml_bytes(&self) -> Vec<u8> {
+            Vec::from(self.as_bytes())
+        }
+    }
+
+    /// IO APIC structure.
+    #[repr(C, packed)]
+    #[derive(Default, Copy, Clone)]
+    pub struct AcpiIoApic {
+        /// Type ID.
+        pub type_id: u8,
+        /// The length of this structure.
+        pub length: u8,
+        /// This IO APIC's ID.
+        pub io_apic_id: u8,
+        /// Reserved field.
+        pub reserved: u8,
+        /// The 32-bit address of this IO APIC.
+        pub io_apic_addr: u32,
+        /// The GSI number where this I/O APIC’s interrupt inputs start.
+        pub gsi_base: u32,
+    }
+
+    impl ByteCode for AcpiIoApic {}
+
+    impl AmlBuilder for AcpiIoApic {
+        fn aml_bytes(&self) -> Vec<u8> {
+            Vec::from(self.as_bytes())
+        }
+    }
+}
+
+/// This module describes ACPI MADT's sub-tables on aarch64 platform.
+#[cfg(target_arch = "aarch64")]
+pub mod madt_subtable {
+    use super::*;
+
+    pub const ARCH_GIC_MAINT_IRQ: u32 = 9;
+
+    /// GIC CPU Interface structure.
+    #[repr(C, packed)]
+    #[derive(Default, Copy, Clone)]
+    pub struct AcpiGicCpu {
+        /// Type ID.
+        pub type_id: u8,
+        /// The length of this structure.
+        pub length: u8,
+        /// Reserved field.
+        reserved_1: u16,
+        /// CPU interface number.
+        pub cpu_interface_num: u32,
+        /// ACPI processor UID.
+        pub processor_uid: u32,
+        /// Flags.
+        pub flags: u32,
+        /// The version of Arm processor parking protocol.
+        pub parking_version: u32,
+        /// The GSIV used for performance monitoring interrupts.
+        pub perf_interrupt: u32,
+        /// The 64-bit address of the processor’s parking protocol mailbox.
+        pub parked_addr: u64,
+        /// CPU can access this CPU interface via this 64-bit address.
+        pub base_addr: u64,
+        /// Address of the GIC virtual CPU interface registers.
+        pub gicv_addr: u64,
+        /// Address of the GIC virtual interface control block registers.
+        pub gich_addr: u64,
+        /// GSIV for Virtual GIC maintenance interrupt.
+        pub vgic_interrupt: u32,
+        /// If GIC's version is above 3, this field is 64-bit address of redistributor.
+        pub gicr_addr: u64,
+        /// MPIDR.
+        pub mpidr: u64,
+        /// Reserved field.
+        reserved_2: u32,
+    }
+
+    impl ByteCode for AcpiGicCpu {}
+
+    impl AmlBuilder for AcpiGicCpu {
+        fn aml_bytes(&self) -> Vec<u8> {
+            Vec::from(self.as_bytes())
+        }
+    }
+
+    /// GIC distributor structure.
+    #[repr(C, packed)]
+    #[derive(Default, Copy, Clone)]
+    pub struct AcpiGicDistributor {
+        /// Type ID.
+        pub type_id: u8,
+        /// The length of this structure.
+        pub length: u8,
+        /// Reserved field.
+        reserved_1: u16,
+        /// This distributor's hardware ID.
+        pub gic_id: u32,
+        /// The 64-bit address of this distributor.
+        pub base_addr: u64,
+        /// System vector base, must be zero.
+        pub sys_vector_base: u32,
+        /// GIC version.
+        pub gic_version: u8,
+        /// Reserved field.
+        reserved_2: [u8; 3],
+    }
+
+    impl ByteCode for AcpiGicDistributor {}
+
+    impl AmlBuilder for AcpiGicDistributor {
+        fn aml_bytes(&self) -> Vec<u8> {
+            Vec::from(self.as_bytes())
+        }
+    }
+
+    /// GIC Redistributor structure.
+    #[repr(C, packed)]
+    #[derive(Default, Copy, Clone)]
+    pub struct AcpiGicRedistributor {
+        /// Type ID.
+        pub type_id: u8,
+        /// The length of this structure.
+        pub length: u8,
+        /// Reserved field.
+        reserved_1: u16,
+        /// The 64-bit address of this redistributor.
+        pub base_addr: u64,
+        /// Length of the GIC redistributor discovery page range.
+        pub range_length: u32,
+    }
+
+    impl ByteCode for AcpiGicRedistributor {}
+
+    impl AmlBuilder for AcpiGicRedistributor {
+        fn aml_bytes(&self) -> Vec<u8> {
+            Vec::from(self.as_bytes())
+        }
+    }
+
+    /// GIC Interrupt Translation Service (ITS) Structure.
+    #[repr(C, packed)]
+    #[derive(Default, Copy, Clone)]
+    pub struct AcpiGicIts {
+        /// Type ID.
+        pub type_id: u8,
+        /// The length of this structure.
+        pub length: u8,
+        /// Reserved field.
+        reserved_1: u16,
+        /// ITS ID, must be unique.
+        pub its_id: u32,
+        /// The 64-bit address of this ITS.
+        pub base_addr: u64,
+        /// Reserved field.
+        reserved_2: u32,
+    }
+
+    impl ByteCode for AcpiGicIts {}
+
+    impl AmlBuilder for AcpiGicIts {
+        fn aml_bytes(&self) -> Vec<u8> {
+            Vec::from(self.as_bytes())
+        }
+    }
+}
