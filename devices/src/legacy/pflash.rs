@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
-use address_space::Region;
+use address_space::{GuestAddress, Region};
 use sysbus::SysRes;
 use util::num_ops::deposit_u32;
 
@@ -348,5 +348,57 @@ impl PFlash {
         self.fd_blk.seek(SeekFrom::Start(offset))?;
         self.fd_blk.write_all(src)?;
         Ok(())
+    }
+
+    fn read_data(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> Result<bool> {
+        if offset >= data.len() as u64 {
+            return Err(ErrorKind::FlashReadOverflow.into());
+        }
+
+        match &self.rom {
+            Some(mr) => {
+                if let Some(host_addr) = mr.get_host_address() {
+                    // Safe because host_addr of the region is local allocated and sanity has been checked
+                    let src = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (host_addr + offset) as *mut u8,
+                            data.len() as usize,
+                        )
+                    };
+                    data.as_mut().write_all(&src)?;
+                }
+            }
+            None => {
+                error!("No memory region available for read");
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn write_data(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> Result<bool> {
+        if offset >= data.len() as u64 {
+            return Err(ErrorKind::FlashWriteOverflow.into());
+        }
+
+        match &self.rom {
+            Some(mr) => {
+                if let Some(host_addr) = mr.get_host_address() {
+                    // Safe because host_addr of the region is local allocated and sanity has been checked
+                    let mut dst = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (host_addr + offset) as *mut u8,
+                            data.len() as usize,
+                        )
+                    };
+                    dst.write_all(&data)?;
+                }
+            }
+            None => {
+                error!("No memory region available for write");
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }

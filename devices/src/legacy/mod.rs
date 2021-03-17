@@ -62,6 +62,9 @@ pub mod errors {
             FlashWriteOverflow {
                 display("The size of write request overflows.")
             }
+            FlashReadOverflow {
+                display("The size of read request overflows.")
+            }
         }
     }
 }
