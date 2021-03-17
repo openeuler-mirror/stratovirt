@@ -14,11 +14,11 @@ mod syscall;
 
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Barrier, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031};
 use devices::{InterruptController, InterruptControllerConfig};
 use kvm_ioctls::{Kvm, VmFd};
@@ -141,85 +141,13 @@ impl StdMachine {
         })
     }
 
-    /// Start VM, changed `StdMachine`'s `vmstate` to `Paused` or
-    /// `Running`.
+    /// Run `LightMachine` with `paused` flag.
     ///
     /// # Arguments
     ///
-    /// * `paused` - After started, paused all vcpu or not.
-    pub fn vm_start(&self, paused: bool) -> Result<()> {
-        use crate::errors::ResultExt;
-
-        let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            let cpu_thread_barrier = cpus_thread_barrier.clone();
-            let cpu = self.cpus[cpu_index as usize].clone();
-            CPU::start(cpu, cpu_thread_barrier, paused)
-                .chain_err(|| format!("Failed to run vcpu{}", cpu_index))?;
-        }
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        if paused {
-            *vmstate = KvmVmState::Paused;
-        } else {
-            *vmstate = KvmVmState::Running;
-        }
-        cpus_thread_barrier.wait();
-
-        Ok(())
-    }
-
-    /// Pause VM, sleepy all vcpu thread. Changed `StdMachine`'s `vmstate`
-    /// from `Running` to `Paused`.
-    fn vm_pause(&self) -> Result<()> {
-        use crate::errors::ResultExt;
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus[cpu_index as usize]
-                .pause()
-                .chain_err(|| format!("Failed to pause vcpu{}", cpu_index))?;
-        }
-
-        self.irq_chip.as_ref().unwrap().stop();
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Paused;
-
-        Ok(())
-    }
-
-    /// Resume VM, awaken all vcpu thread. Changed `StdMachine`'s `vmstate`
-    /// from `Paused` to `Running`.
-    fn vm_resume(&self) -> Result<()> {
-        use crate::errors::ResultExt;
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus[cpu_index as usize]
-                .resume()
-                .chain_err(|| format!("Failed to resume vcpu{}", cpu_index))?;
-        }
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Running;
-
-        Ok(())
-    }
-
-    /// Destroy VM, kill all vcpu thread. Changed `StdMachine`'s `vmstate`
-    /// to `KVM_VMSTATE_DESTROY`.
-    fn vm_destroy(&self) -> Result<()> {
-        use crate::errors::ResultExt;
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Shutdown;
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus[cpu_index as usize]
-                .destroy()
-                .chain_err(|| format!("Failed to destroy vcpu{}", cpu_index))?;
-        }
-
-        Ok(())
+    /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
+    pub fn run(&self, paused: bool) -> Result<()> {
+        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 
@@ -534,49 +462,15 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        use KvmVmState::*;
-
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
-        if *vmstate != old {
-            error!("Vm lifecycle error: state check failed.");
-            return false;
-        }
-        drop(vmstate);
-
-        match (old, new) {
-            (Created, Running) => {
-                if let Err(e) = self.vm_start(false) {
-                    error!("Vm lifecycle error:{}", e);
-                };
-            }
-            (Running, Paused) => {
-                if let Err(e) = self.vm_pause() {
-                    error!("Vm lifecycle error:{}", e);
-                };
-            }
-            (Paused, Running) => {
-                if let Err(e) = self.vm_resume() {
-                    error!("Vm lifecycle error:{}", e);
-                };
-            }
-            (_, Shutdown) => {
-                if let Err(e) = self.vm_destroy() {
-                    error!("Vm lifecycle error:{}", e);
-                };
-                self.power_button.write(1).unwrap();
-            }
-            (_, _) => {
-                error!("Vm lifecycle error: this transform is illegal.");
-                return false;
-            }
-        }
-
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
-        if *vmstate != new {
-            error!("Vm lifecycle error: state transform failed.");
-            return false;
-        }
-        true
+        <Self as MachineOps>::vm_state_transfer(
+            &self.cpus,
+            #[cfg(target_arch = "aarch64")]
+            &self.irq_chip,
+            &mut self.vm_state.0.lock().unwrap(),
+            old,
+            new,
+        )
+        .is_ok()
     }
 }
 

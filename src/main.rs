@@ -189,7 +189,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
 
     vm.lock()
         .unwrap()
-        .vm_start(cmd_args.is_present("freeze_cpu"))
+        .run(cmd_args.is_present("freeze_cpu"))
         .chain_err(|| "Failed to start VM.")?;
     if !cmd_args.is_present("disable-seccomp") {
         vm.lock()
