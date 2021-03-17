@@ -11,9 +11,17 @@
 // See the Mulan PSL v2 for more details.
 
 use std::sync::Arc;
+#[cfg(target_arch = "aarch64")]
+use std::sync::Mutex;
 
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{BigEndian, ByteOrder};
+#[cfg(target_arch = "aarch64")]
+use error_chain::ChainedError;
+#[cfg(target_arch = "aarch64")]
+use kvm_ioctls::VmFd;
+#[cfg(target_arch = "aarch64")]
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::{__offset_of, offset_of};
@@ -764,5 +772,127 @@ impl FwCfgCommon {
             false,
         )?;
         Ok(())
+    }
+}
+
+/// FwCfg MMIO Device use for AArch64 platform
+#[cfg(target_arch = "aarch64")]
+pub struct FwCfgMem {
+    fwcfg: FwCfgCommon,
+    /// System Resource of device.
+    res: SysRes,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl FwCfgMem {
+    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
+        FwCfgMem {
+            fwcfg: FwCfgCommon::new(sys_mem),
+            res: SysRes::default(),
+        }
+    }
+
+    pub fn realize(
+        mut self,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+        vm_fd: &VmFd,
+    ) -> Result<Arc<Mutex<Self>>> {
+        self.fwcfg.common_realize()?;
+        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+            .chain_err(|| "Failed to allocate system resource for FwCfg.")?;
+
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev, region_base, region_size)
+            .chain_err(|| "Failed to attach FwCfg device to system bus.")?;
+        Ok(dev)
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl SysBusDevOps for FwCfgMem {
+    fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        let value = match offset {
+            0..=7 => match self.fwcfg.read_data_reg(offset, data.len() as u32) {
+                Ok(val) => val,
+                Err(e) => {
+                    error!(
+                        "Failed to read from FwCfg data register, error is {}",
+                        e.display_chain()
+                    );
+                    return false;
+                }
+            },
+            8..=15 => {
+                error!("Read from FwCfg control register is not supported.");
+                0
+            }
+            16..=23 => match self.fwcfg.dma_mem_read(offset - 0x10, data.len() as u32) {
+                Ok(val) => val,
+                Err(e) => {
+                    error!("Failed to handle FWCFg DMA-read, error is {}", e);
+                    return false;
+                }
+            },
+            _ => {
+                error!("Failed to read FWCFg, offset 0x{:x} is invalid", offset);
+                return false;
+            }
+        };
+
+        match data.len() {
+            1 => data[0] = value as u8,
+            2 => BigEndian::write_u16(data, value as u16),
+            4 => BigEndian::write_u32(data, value as u32),
+            8 => BigEndian::write_u64(data, value as u64),
+            _ => {}
+        }
+        true
+    }
+
+    fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
+        let size = data.len() as u32;
+        let value = match size {
+            1 => data[0] as u64,
+            2 => BigEndian::read_u16(data) as u64,
+            4 => BigEndian::read_u32(data) as u64,
+            8 => BigEndian::read_u64(data) as u64,
+            _ => 0,
+        };
+        match offset {
+            0..=7 => {
+                error!("Write to FwCfg data register is not supported.");
+            }
+            8..=15 => {
+                // Write to FwCfg control register
+                self.fwcfg.select_entry(value as u16);
+            }
+            16..=23 => {
+                if self
+                    .fwcfg
+                    .dma_mem_write(offset - 0x10, value, size)
+                    .is_err()
+                {
+                    error!("Failed to write dma at offset=0x{:x}.", offset);
+                    return false;
+                }
+            }
+            _ => {
+                error!("Failed to write FWCFg, offset 0x{:x} is invalid", offset);
+                return false;
+            }
+        }
+        true
+    }
+
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        Some(&mut self.res)
+    }
+
+    /// Get device type.
+    fn get_type(&self) -> SysBusDevType {
+        SysBusDevType::FwCfg
     }
 }
