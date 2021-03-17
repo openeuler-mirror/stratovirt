@@ -7,6 +7,7 @@ license = "Mulan PSL v2"
 description = "acpi module"
 
 [dependencies]
+error-chain = "0.12.4"
 log = "0.4.8"
 
 util = {path = "../util"}
