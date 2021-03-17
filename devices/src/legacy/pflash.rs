@@ -12,16 +12,16 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use address_space::{GuestAddress, Region};
+use address_space::{GuestAddress, HostMemMapping, Region};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::num_ops::{deposit_u32, extract_u32};
 
-use super::errors::{ErrorKind, Result};
+use super::errors::{ErrorKind, Result, ResultExt};
 
 /// PFlash structure
 pub struct PFlash {
@@ -202,6 +202,43 @@ impl PFlash {
             rom: None,
             res: SysRes::default(),
         })
+    }
+
+    pub fn realize(
+        mut self,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+        vm_fd: &VmFd,
+    ) -> Result<Arc<Mutex<Self>>> {
+        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+            .chain_err(|| "Failed to allocate system resource for PFlash.")?;
+
+        let dev = Arc::new(Mutex::new(self));
+        let region_ops = sysbus.build_region_ops(&dev);
+        let mem_mapping =
+            match HostMemMapping::new(GuestAddress(region_base), region_size, None, false, false) {
+                Ok(m) => m,
+                Err(e) => {
+                    bail!(
+                        "Failed to new HostMemMapping for PFlash {}.",
+                        e.display_chain()
+                    );
+                }
+            };
+        let mem_mapping = Arc::new(mem_mapping);
+        let rom_region = Region::init_rom_device_region(mem_mapping, region_ops);
+
+        sysbus
+            .sys_mem
+            .root()
+            .add_subregion(rom_region.clone(), region_base)
+            .chain_err(|| "Failed to attach PFlash to system bus")?;
+
+        dev.lock().unwrap().set_mem(Some(Arc::new(rom_region)))?;
+        sysbus.devices.push(dev.clone());
+
+        Ok(dev)
     }
 
     fn set_mem(&mut self, rom_region: Option<Arc<Region>>) -> Result<bool> {
