@@ -66,6 +66,8 @@ pub mod errors {
 #[allow(dead_code)]
 mod fwcfg;
 #[allow(dead_code)]
+mod pflash;
+#[allow(dead_code)]
 #[cfg(target_arch = "aarch64")]
 mod pl011;
 #[cfg(target_arch = "aarch64")]
@@ -82,6 +84,7 @@ pub use fwcfg::FwCfgIO;
 #[cfg(target_arch = "aarch64")]
 pub use fwcfg::FwCfgMem;
 pub use fwcfg::{FwCfgEntryType, FwCfgOps};
+pub use pflash::PFlash;
 #[cfg(target_arch = "aarch64")]
 pub use pl011::PL011;
 #[cfg(target_arch = "aarch64")]
