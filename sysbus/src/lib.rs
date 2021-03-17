@@ -144,6 +144,7 @@ pub enum SysBusDevType {
     #[cfg(target_arch = "aarch64")]
     PL011,
     FwCfg,
+    Flash,
     Others,
 }
 
