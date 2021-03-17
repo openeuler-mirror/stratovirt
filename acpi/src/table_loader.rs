@@ -351,3 +351,99 @@ impl TableLoader {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_alloc_cmd() {
+        let mut table_loader = TableLoader::new();
+
+        let file_name = "etc/table-loader".to_string();
+        let file_blob = Arc::new(Mutex::new(Vec::new()));
+        assert!(table_loader
+            .add_alloc_entry(&file_name, file_blob.clone(), 4_u32, false)
+            .is_ok());
+
+        let file_bytes = file_name.as_bytes();
+        assert_eq!(
+            unsafe {
+                table_loader.cmds.get(0).unwrap().entry.alloc.file[0..file_bytes.len()].to_vec()
+            },
+            file_bytes.to_vec()
+        );
+        assert_eq!(
+            unsafe { table_loader.cmds.get(0).unwrap().entry.alloc.align },
+            4_u32
+        );
+        assert_eq!(
+            unsafe { table_loader.cmds.get(0).unwrap().entry.alloc.zone },
+            0x1
+        );
+
+        assert!(table_loader
+            .add_alloc_entry("etc/table-loader", file_blob, 4_u32, false)
+            .is_err());
+    }
+
+    #[test]
+    fn test_add_pointer_cmd() {
+        let mut table_loader = TableLoader::new();
+
+        let dst_file = "etc/rdsp".to_string();
+        let src_file = "etc/table-loader".to_string();
+        let dst_file_blob = Arc::new(Mutex::new(vec![0_u8; 19]));
+        let src_file_blob = Arc::new(Mutex::new(vec![0_u8; 5]));
+        table_loader
+            .add_alloc_entry(&src_file, src_file_blob, 4_u32, false)
+            .unwrap();
+
+        // Cannot find src file in file list, error occurs.
+        assert!(table_loader
+            .add_pointer_entry(&dst_file, 16, 4, &src_file, 0)
+            .is_err());
+
+        table_loader
+            .add_alloc_entry(&dst_file, dst_file_blob, 4_u32, false)
+            .unwrap();
+        // The offset exceeds file_blob's length, error occurs.
+        assert!(table_loader
+            .add_pointer_entry(&dst_file, 8, 8, &src_file, 0)
+            .is_err());
+
+        assert!(table_loader
+            .add_pointer_entry(&dst_file, 16, 2, &src_file, 0)
+            .is_ok());
+
+        // The length of pointer is illegal, expected 1/2/4/8.
+        assert!(table_loader
+            .add_pointer_entry(&dst_file, 16, 3, &src_file, 0)
+            .is_err());
+    }
+
+    #[test]
+    fn test_add_cksum_pointer() {
+        let mut table_loader = TableLoader::new();
+
+        let file = "etc/table-loader".to_string();
+        let file_len = 100_u32;
+        let file_blob = Arc::new(Mutex::new(vec![0_u8; file_len as usize]));
+        table_loader
+            .add_alloc_entry(&file, file_blob, 4_u32, false)
+            .unwrap();
+
+        assert!(table_loader.add_cksum_entry(&file, 100, 80, 100).is_err());
+        assert!(table_loader.add_cksum_entry(&file, 0_u32, 80, 20).is_err());
+
+        assert!(table_loader
+            .add_cksum_entry(&file, 0_u32, 0_u32, file_len + 1)
+            .is_err());
+        assert!(table_loader
+            .add_cksum_entry(&file, (file_len - 1) as u32, 80, 20)
+            .is_ok());
+        assert!(table_loader
+            .add_cksum_entry(&file, file_len - 1, 0, 50)
+            .is_ok());
+    }
+}
