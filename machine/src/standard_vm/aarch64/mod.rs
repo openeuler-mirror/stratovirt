@@ -641,6 +641,31 @@ impl EventLoopManager for StdMachine {
     }
 }
 
+// Function that helps to generate Virtio-Mmio device's node in device-tree.
+//
+// # Arguments
+//
+// * `dev_info` - Device resource info of Virtio-Mmio device.
+// * `fdt` - Flatted device-tree blob where node will be filled into.
+fn generate_virtio_devices_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors::Result<()> {
+    let node = format!("/virtio_mmio@{:x}", res.region_base);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "virtio,mmio")?;
+    device_tree::set_property_u32(fdt, &node, "interrupt-parent", device_tree::GIC_PHANDLE)?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[res.region_base, res.region_size])?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
+            res.irq as u32,
+            device_tree::IRQ_TYPE_EDGE_RISING,
+        ],
+    )?;
+    Ok(())
+}
+
 // Function that helps to generate serial node in device-tree.
 //
 // # Arguments
@@ -670,6 +695,32 @@ fn generate_serial_device_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors:
         ],
     )?;
 
+    Ok(())
+}
+
+// Function that helps to generate RTC node in device-tree.
+//
+// # Arguments
+//
+// * `dev_info` - Device resource info of RTC device.
+// * `fdt` - Flatted device-tree blob where RTC node will be filled into.
+fn generate_rtc_device_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors::Result<()> {
+    let node = format!("/pl031@{:x}", res.region_base);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "arm,pl031\0arm,primecell\0")?;
+    device_tree::set_property_string(fdt, &node, "clock-names", "apb_pclk")?;
+    device_tree::set_property_u32(fdt, &node, "clocks", device_tree::CLK_PHANDLE)?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[res.region_base, res.region_size])?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
+            res.irq as u32,
+            device_tree::IRQ_TYPE_LEVEL_HIGH,
+        ],
+    )?;
     Ok(())
 }
 
@@ -814,8 +865,17 @@ impl CompileFDTHelper for StdMachine {
         // Reversing vector is needed because FDT node is added in reverse.
         for dev in self.sysbus.devices.iter().rev() {
             let mut locked_dev = dev.lock().unwrap();
-            if let SysBusDevType::PL011 = locked_dev.get_type() {
-                generate_serial_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+            match locked_dev.get_type() {
+                SysBusDevType::PL011 => {
+                    generate_serial_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                }
+                SysBusDevType::Rtc => {
+                    generate_rtc_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                }
+                SysBusDevType::VirtioMmio => {
+                    generate_virtio_devices_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                }
+                _ => (),
             }
         }
         Ok(())
