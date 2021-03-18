@@ -19,22 +19,23 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
-use devices::legacy::PL031;
+use devices::legacy::{PL011, PL031};
 use devices::{InterruptController, InterruptControllerConfig};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
     BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig,
     VmConfig, VsockConfig,
 };
+use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::PciHost;
-use sysbus::SysBus;
+use sysbus::{SysBus, SysBusDevType, SysRes};
 use util::device_tree;
-use util::loop_context::EventLoopManager;
+use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use virtio::{qmp_balloon, qmp_query_balloon};
 use vmm_sys_util::eventfd::EventFd;
@@ -294,7 +295,26 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_serial_device(&mut self, _config: &SerialConfig, _vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
+        use crate::errors::ResultExt;
+
+        let dev = PL011::new().chain_err(|| "Failed to create PL011")?;
+        let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
+        let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
+
+        let serial = PL011::realize(
+            dev,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            &self.boot_source,
+            vm_fd,
+        )
+        .chain_err(|| "Failed to realize PL011")?;
+
+        if config.stdio {
+            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
+        }
         Ok(())
     }
 
@@ -621,6 +641,38 @@ impl EventLoopManager for StdMachine {
     }
 }
 
+// Function that helps to generate serial node in device-tree.
+//
+// # Arguments
+//
+// * `dev_info` - Device resource info of serial device.
+// * `fdt` - Flatted device-tree blob where serial node will be filled into.
+fn generate_serial_device_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors::Result<()> {
+    let node = format!("/pl011@{:x}", res.region_base);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "arm,pl011\0arm,primecell")?;
+    device_tree::set_property_string(fdt, &node, "clock-names", "uartclk\0apb_pclk")?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "clocks",
+        &[device_tree::CLK_PHANDLE, device_tree::CLK_PHANDLE],
+    )?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[res.region_base, res.region_size])?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
+            res.irq as u32,
+            device_tree::IRQ_TYPE_EDGE_RISING,
+        ],
+    )?;
+
+    Ok(())
+}
+
 /// Trait that helps to generate all nodes in device-tree.
 trait CompileFDTHelper {
     /// Function that helps to generate cpu nodes.
@@ -761,7 +813,10 @@ impl CompileFDTHelper for StdMachine {
 
         // Reversing vector is needed because FDT node is added in reverse.
         for dev in self.sysbus.devices.iter().rev() {
-            let _locked_dev = dev.lock().unwrap();
+            let mut locked_dev = dev.lock().unwrap();
+            if let SysBusDevType::PL011 = locked_dev.get_type() {
+                generate_serial_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
+            }
         }
         Ok(())
     }
