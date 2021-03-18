@@ -39,6 +39,18 @@ const RTC_REG_C: u8 = 0x0C;
 const RTC_REG_D: u8 = 0x0D;
 const RTC_CENTURY_BCD: u8 = 0x32;
 
+// Index of memory data in RTC static RAM.
+// 0x15/0x16 stores low/high byte below 1MB, range is [0, 640KB].
+const CMOS_BASE_MEM: (u8, u8) = (0x15, 0x16);
+// 0x17/0x18 stores low/high byte of memory between [1MB, 64MB], unit is KB.
+const CMOS_EXT_MEM: (u8, u8) = (0x17, 0x18);
+// 0x30/0x31 stores low/high byte of memory between [1MB, 64MB], unit is KB.
+const CMOS_ACTUAL_EXT_MEM: (u8, u8) = (0x30, 0x31);
+// 0x34/0x35 stores low/high byte of memory between [16MB, 4GB], unit is 64KB.
+const CMOS_MEM_BELOW_4GB: (u8, u8) = (0x34, 0x35);
+// 0x5B/0x5C/0x5D stores low/middle/high byte of memory above 4GB, unit is 64KB.
+const CMOS_MEM_ABOVE_4GB: (u8, u8, u8) = (0x5B, 0x5C, 0x5D);
+
 fn get_utc_time() -> libc::tm {
     let time_val: libc::time_t = 0_i64;
 
@@ -97,6 +109,43 @@ impl RTC {
         rtc.cmos_data[RTC_REG_D as usize] = 0x80;
 
         Ok(rtc)
+    }
+
+    /// Set memory info stored in RTC static RAM.
+    ///
+    /// # Arguments
+    ///
+    /// * `mem_size` - Guest memory size.
+    /// * `gap_start` - The start address of gap on x86_64 platform.
+    ///                 This value can be found in memory layout.
+    pub fn set_memory(&mut self, mem_size: u64, gap_start: u64) {
+        let (mem_below_4g, mem_above_4g) = if mem_size > gap_start {
+            (gap_start, mem_size - gap_start)
+        } else {
+            (mem_size, 0)
+        };
+
+        let kb = 1024_u64;
+        let base_mem_kb = 640;
+        self.cmos_data[CMOS_BASE_MEM.0 as usize] = base_mem_kb as u8;
+        self.cmos_data[CMOS_BASE_MEM.1 as usize] = (base_mem_kb >> 8) as u8;
+
+        let ext_mem_kb = 63_u64 * kb;
+        self.cmos_data[CMOS_EXT_MEM.0 as usize] = ext_mem_kb as u8;
+        self.cmos_data[CMOS_EXT_MEM.1 as usize] = (ext_mem_kb >> 8) as u8;
+        self.cmos_data[CMOS_ACTUAL_EXT_MEM.0 as usize] = ext_mem_kb as u8;
+        self.cmos_data[CMOS_ACTUAL_EXT_MEM.1 as usize] = (ext_mem_kb >> 8) as u8;
+
+        let mem_data = (mem_below_4g - 16 * kb * kb) / (64 * kb);
+        self.cmos_data[CMOS_MEM_BELOW_4GB.0 as usize] = mem_data as u8;
+        self.cmos_data[CMOS_MEM_BELOW_4GB.1 as usize] = (mem_data >> 8) as u8;
+
+        if mem_above_4g > 0 {
+            let mem_data = mem_above_4g / (64 * kb);
+            self.cmos_data[CMOS_MEM_ABOVE_4GB.0 as usize] = mem_data as u8;
+            self.cmos_data[CMOS_MEM_ABOVE_4GB.1 as usize] = (mem_data >> 8) as u8;
+            self.cmos_data[CMOS_MEM_ABOVE_4GB.2 as usize] = (mem_data >> 16) as u8;
+        }
     }
 
     fn read_data(&self, data: &mut [u8]) -> bool {
