@@ -33,6 +33,7 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::PciHost;
 use sysbus::SysBus;
+use util::device_tree;
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use virtio::{qmp_balloon, qmp_query_balloon};
@@ -616,6 +617,196 @@ impl EventLoopManager for StdMachine {
                 e
             );
         }
+        Ok(())
+    }
+}
+
+/// Trait that helps to generate all nodes in device-tree.
+trait CompileFDTHelper {
+    /// Function that helps to generate cpu nodes.
+    fn generate_cpu_nodes(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
+    /// Function that helps to generate memory nodes.
+    fn generate_memory_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
+    /// Function that helps to generate Virtio-mmio devices' nodes.
+    fn generate_devices_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
+    /// Function that helps to generate the chosen node.
+    fn generate_chosen_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
+}
+
+impl CompileFDTHelper for StdMachine {
+    fn generate_cpu_nodes(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+        let node = "/cpus";
+
+        device_tree::add_sub_node(fdt, node)?;
+        device_tree::set_property_u32(fdt, node, "#address-cells", 0x02)?;
+        device_tree::set_property_u32(fdt, node, "#size-cells", 0x0)?;
+
+        // Generate CPU topology
+        if self.cpu_topo.max_cpus > 0 && self.cpu_topo.max_cpus % 8 == 0 {
+            device_tree::add_sub_node(fdt, "/cpus/cpu-map")?;
+
+            let sockets = self.cpu_topo.max_cpus / 8;
+            for cluster in 0..u32::from(sockets) {
+                let clster = format!("/cpus/cpu-map/cluster{}", cluster);
+                device_tree::add_sub_node(fdt, &clster)?;
+
+                for i in 0..2 as u32 {
+                    let sub_cluster = format!("{}/cluster{}", clster, i);
+                    device_tree::add_sub_node(fdt, &sub_cluster)?;
+
+                    let core0 = format!("{}/core0", sub_cluster);
+                    device_tree::add_sub_node(fdt, &core0)?;
+                    let thread0 = format!("{}/thread0", core0);
+                    device_tree::add_sub_node(fdt, &thread0)?;
+                    device_tree::set_property_u32(fdt, &thread0, "cpu", cluster * 8 + i * 4 + 10)?;
+
+                    let thread1 = format!("{}/thread1", core0);
+                    device_tree::add_sub_node(fdt, &thread1)?;
+                    device_tree::set_property_u32(
+                        fdt,
+                        &thread1,
+                        "cpu",
+                        cluster * 8 + i * 4 + 10 + 1,
+                    )?;
+
+                    let core1 = format!("{}/core1", sub_cluster);
+                    device_tree::add_sub_node(fdt, &core1)?;
+                    let thread0 = format!("{}/thread0", core1);
+                    device_tree::add_sub_node(fdt, &thread0)?;
+                    device_tree::set_property_u32(
+                        fdt,
+                        &thread0,
+                        "cpu",
+                        cluster * 8 + i * 4 + 10 + 2,
+                    )?;
+
+                    let thread1 = format!("{}/thread1", core1);
+                    device_tree::add_sub_node(fdt, &thread1)?;
+                    device_tree::set_property_u32(
+                        fdt,
+                        &thread1,
+                        "cpu",
+                        cluster * 8 + i * 4 + 10 + 3,
+                    )?;
+                }
+            }
+        }
+
+        for cpu_index in 0..self.cpu_topo.max_cpus {
+            let mpidr = self.cpus[cpu_index as usize]
+                .arch()
+                .lock()
+                .unwrap()
+                .get_mpidr(self.cpus[cpu_index as usize].fd());
+
+            let node = format!("/cpus/cpu@{:x}", mpidr);
+            device_tree::add_sub_node(fdt, &node)?;
+            device_tree::set_property_u32(
+                fdt,
+                &node,
+                "phandle",
+                u32::from(cpu_index) + device_tree::CPU_PHANDLE_START,
+            )?;
+            device_tree::set_property_string(fdt, &node, "device_type", "cpu")?;
+            device_tree::set_property_string(fdt, &node, "compatible", "arm,arm-v8")?;
+            if self.cpu_topo.max_cpus > 1 {
+                device_tree::set_property_string(fdt, &node, "enable-method", "psci")?;
+            }
+            device_tree::set_property_u64(fdt, &node, "reg", mpidr & 0x007F_FFFF)?;
+        }
+
+        Ok(())
+    }
+
+    fn generate_memory_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+        let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        let mem_size = self.sys_mem.memory_end_address().raw_value()
+            - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        let node = "/memory";
+        device_tree::add_sub_node(fdt, node)?;
+        device_tree::set_property_string(fdt, node, "device_type", "memory")?;
+        device_tree::set_property_array_u64(fdt, node, "reg", &[mem_base, mem_size as u64])?;
+
+        Ok(())
+    }
+
+    fn generate_devices_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+        // timer
+        let mut cells: Vec<u32> = Vec::new();
+        for &irq in [13, 14, 11, 10].iter() {
+            cells.push(device_tree::GIC_FDT_IRQ_TYPE_PPI);
+            cells.push(irq);
+            cells.push(device_tree::IRQ_TYPE_LEVEL_HIGH);
+        }
+        let node = "/timer";
+        device_tree::add_sub_node(fdt, node)?;
+        device_tree::set_property_string(fdt, node, "compatible", "arm,armv8-timer")?;
+        device_tree::set_property(fdt, node, "always-on", None)?;
+        device_tree::set_property_array_u32(fdt, node, "interrupts", &cells)?;
+
+        // clock
+        let node = "/apb-pclk";
+        device_tree::add_sub_node(fdt, node)?;
+        device_tree::set_property_string(fdt, node, "compatible", "fixed-clock")?;
+        device_tree::set_property_string(fdt, node, "clock-output-names", "clk24mhz")?;
+        device_tree::set_property_u32(fdt, node, "#clock-cells", 0x0)?;
+        device_tree::set_property_u32(fdt, node, "clock-frequency", 24_000_000)?;
+        device_tree::set_property_u32(fdt, node, "phandle", device_tree::CLK_PHANDLE)?;
+
+        // psci
+        let node = "/psci";
+        device_tree::add_sub_node(fdt, node)?;
+        device_tree::set_property_string(fdt, node, "compatible", "arm,psci-0.2")?;
+        device_tree::set_property_string(fdt, node, "method", "hvc")?;
+
+        // Reversing vector is needed because FDT node is added in reverse.
+        for dev in self.sysbus.devices.iter().rev() {
+            let _locked_dev = dev.lock().unwrap();
+        }
+        Ok(())
+    }
+
+    fn generate_chosen_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+        let node = "/chosen";
+
+        let boot_source = self.boot_source.lock().unwrap();
+
+        device_tree::add_sub_node(fdt, node)?;
+        let cmdline = &boot_source.kernel_cmdline.to_string();
+        device_tree::set_property_string(fdt, node, "bootargs", cmdline.as_str())?;
+
+        match &boot_source.initrd {
+            Some(initrd) => {
+                device_tree::set_property_u64(fdt, node, "linux,initrd-start", initrd.initrd_addr)?;
+                device_tree::set_property_u64(
+                    fdt,
+                    node,
+                    "linux,initrd-end",
+                    initrd.initrd_addr + initrd.initrd_size,
+                )?;
+            }
+            None => {}
+        }
+
+        Ok(())
+    }
+}
+
+impl device_tree::CompileFDT for StdMachine {
+    fn generate_fdt_node(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+        device_tree::create_device_tree(fdt)?;
+
+        device_tree::set_property_string(fdt, "/", "compatible", "linux,dummy-virt")?;
+        device_tree::set_property_u32(fdt, "/", "#address-cells", 0x2)?;
+        device_tree::set_property_u32(fdt, "/", "#size-cells", 0x2)?;
+        device_tree::set_property_u32(fdt, "/", "interrupt-parent", device_tree::GIC_PHANDLE)?;
+
+        self.generate_cpu_nodes(fdt)?;
+        self.generate_memory_node(fdt)?;
+        self.generate_devices_node(fdt)?;
+        self.generate_chosen_node(fdt)?;
+        self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
+
         Ok(())
     }
 }
