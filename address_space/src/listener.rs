@@ -13,12 +13,15 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use error_chain::ChainedError;
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
 use util::num_ops::round_down;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{host_page_size, AddressRange, FlatRange, RegionIoEventFd, RegionType};
+
+const MEM_READ_ONLY: u32 = 1 << 1;
 
 /// Request type of listener.
 #[derive(Debug, Copy, Clone)]
@@ -200,7 +203,21 @@ impl KvmMemoryListener {
     ///
     /// Return Error if fail to delete kvm_mem_slot.
     fn add_region(&self, flat_range: &FlatRange) -> Result<()> {
-        if flat_range.owner.region_type() != RegionType::Ram {
+        if flat_range.owner.region_type() == RegionType::RomDevice
+            && !flat_range.owner.get_rom_device_romd().unwrap()
+        {
+            if let Err(ref e) = self.delete_region(flat_range) {
+                warn!(
+                    "Rom-device Region changes to IO mode, Failed to delete region: {}",
+                    e.display_chain()
+                );
+            }
+            return Ok(());
+        }
+
+        if flat_range.owner.region_type() != RegionType::Ram
+            && flat_range.owner.region_type() != RegionType::RomDevice
+        {
             return Ok(());
         }
 
@@ -219,12 +236,16 @@ impl KvmMemoryListener {
             .get_free_slot(aligned_addr.raw_value(), aligned_size, aligned_hva)
             .chain_err(|| "Failed to get available KVM mem slot")?;
 
+        let mut flags = 0_u32;
+        if flat_range.owner.get_rom_device_romd().unwrap_or(false) {
+            flags |= MEM_READ_ONLY;
+        }
         let kvm_region = kvm_userspace_memory_region {
             slot: slot_idx | (self.as_id.load(Ordering::SeqCst) << 16),
             guest_phys_addr: aligned_addr.raw_value(),
             memory_size: aligned_size,
             userspace_addr: aligned_hva,
-            flags: 0,
+            flags,
         };
         unsafe {
             self.fd.set_user_memory_region(kvm_region).or_else(|e| {
@@ -248,7 +269,9 @@ impl KvmMemoryListener {
     ///
     /// * `flat_range` - Corresponding FlatRange of new-deleted region.
     fn delete_region(&self, flat_range: &FlatRange) -> Result<()> {
-        if flat_range.owner.region_type() != RegionType::Ram {
+        if flat_range.owner.region_type() != RegionType::Ram
+            && flat_range.owner.region_type() != RegionType::RomDevice
+        {
             return Ok(());
         }
 
@@ -257,9 +280,13 @@ impl KvmMemoryListener {
                 .map(|r| (r.base, r.size))
                 .chain_err(|| "Failed to align mem slot")?;
 
-        let mem_slot = self
-            .delete_slot(aligned_addr.raw_value(), aligned_size)
-            .chain_err(|| "Failed to delete KVM mem slot")?;
+        let mem_slot = match self.delete_slot(aligned_addr.raw_value(), aligned_size) {
+            Ok(m) => m,
+            Err(_) => {
+                debug!("no match mem slot registered to KVM, just return");
+                return Ok(());
+            }
+        };
 
         let kvm_region = kvm_userspace_memory_region {
             slot: mem_slot.index | (self.as_id.load(Ordering::SeqCst) << 16),
@@ -579,6 +606,7 @@ mod test {
             ),
             owner: Region::init_ram_region(mem_mapping.clone()),
             offset_in_region,
+            rom_dev_romd: None,
         }
     }
 
@@ -626,7 +654,7 @@ mod test {
         // flat-range already deleted, deleting again should make an error
         assert!(kml
             .handle_request(Some(&ram_fr1), None, ListenerReqType::DeleteRegion)
-            .is_err());
+            .is_ok());
     }
 
     #[test]

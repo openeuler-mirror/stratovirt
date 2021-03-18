@@ -944,6 +944,7 @@ mod tests {
             ),
             owner: Region::init_ram_region(mem_mapping.clone()),
             offset_in_region,
+            rom_dev_romd: None,
         }
     }
 

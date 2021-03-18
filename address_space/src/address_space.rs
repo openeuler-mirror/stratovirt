@@ -158,25 +158,17 @@ impl AddressSpace {
 
             if let Some(old_r) = old_range {
                 if let Some(new_r) = new_range {
-                    if old_r.addr_range == new_r.addr_range {
-                        old_idx += 1;
-                        new_idx += 1;
-                        continue;
-                    } else if old_r.addr_range.base < new_r.addr_range.base
-                        || (old_r.addr_range.base == new_r.addr_range.base
-                            && old_r.addr_range.size != new_r.addr_range.size)
+                    if old_r.addr_range.base < new_r.addr_range.base
+                        || (old_r.addr_range.base == new_r.addr_range.base && old_r != new_r)
                     {
                         if !is_add {
-                            self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)
-                                .chain_err(|| {
-                                    ErrorKind::UpdateTopology(
-                                        old_r.addr_range.base.raw_value(),
-                                        old_r.addr_range.size,
-                                        old_r.owner.region_type(),
-                                    )
-                                })?;
+                            self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)?;
                         }
                         old_idx += 1;
+                        continue;
+                    } else if old_r.addr_range == new_r.addr_range && old_r == new_r {
+                        old_idx += 1;
+                        new_idx += 1;
                         continue;
                     }
                 } else {
