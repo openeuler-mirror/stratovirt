@@ -771,6 +771,28 @@ fn generate_virtio_devices_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors
     Ok(())
 }
 
+/// Function that helps to generate flash node in device-tree.
+///
+/// # Arguments
+///
+/// * `dev_info` - Device resource info of fw-cfg device.
+/// * `flash` - Flatted device-tree blob where fw-cfg node will be filled into.
+fn generate_flash_device_node(fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+    let flash_base = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
+    let flash_size = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
+    let node = format!("/flash@{:x}", flash_base);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "cfi-flash")?;
+    device_tree::set_property_array_u64(
+        fdt,
+        &node,
+        "reg",
+        &[flash_base, flash_size, flash_base + flash_size, flash_size],
+    )?;
+    device_tree::set_property_u32(fdt, &node, "bank-width", 4)?;
+    Ok(())
+}
+
 /// Function that helps to generate fw-cfg node in device-tree.
 ///
 /// # Arguments
@@ -997,6 +1019,9 @@ impl CompileFDTHelper for StdMachine {
                 }
                 SysBusDevType::FwCfg => {
                     generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
+                }
+                SysBusDevType::Flash => {
+                    generate_flash_device_node(fdt)?;
                 }
                 _ => (),
             }
