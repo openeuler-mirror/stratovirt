@@ -741,6 +741,21 @@ fn generate_virtio_devices_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors
     Ok(())
 }
 
+/// Function that helps to generate fw-cfg node in device-tree.
+///
+/// # Arguments
+///
+/// * `dev_info` - Device resource info of fw-cfg device.
+/// * `fdt` - Flatted device-tree blob where fw-cfg node will be filled into.
+fn generate_fwcfg_device_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors::Result<()> {
+    let node = format!("/fw-cfg@{:x}", res.region_base);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "qemu,fw-cfg-mmio")?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[res.region_base, res.region_size])?;
+
+    Ok(())
+}
+
 // Function that helps to generate serial node in device-tree.
 //
 // # Arguments
@@ -949,6 +964,9 @@ impl CompileFDTHelper for StdMachine {
                 }
                 SysBusDevType::VirtioMmio => {
                     generate_virtio_devices_node(fdt, locked_dev.get_sys_resource().unwrap())?
+                }
+                SysBusDevType::FwCfg => {
+                    generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
                 }
                 _ => (),
             }
