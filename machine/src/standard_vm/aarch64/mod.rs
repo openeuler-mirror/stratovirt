@@ -428,6 +428,10 @@ impl MachineOps for StdMachine {
         locked_vm.register_power_event(&locked_vm.power_button)?;
         Ok(())
     }
+
+    fn run(&self, paused: bool) -> Result<()> {
+        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+    }
 }
 
 impl MachineLifecycle for StdMachine {

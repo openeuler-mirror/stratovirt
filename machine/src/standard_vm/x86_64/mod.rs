@@ -51,9 +51,9 @@ use syscall::syscall_whitelist;
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
 /// The type of memory layout entry on x86_64
-#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 #[repr(usize)]
+#[allow(dead_code)]
 pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
     PcieMmio,
@@ -99,7 +99,6 @@ pub struct StdMachine {
 }
 
 impl StdMachine {
-    #[allow(dead_code)]
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
         use crate::errors::ResultExt;
 
@@ -132,16 +131,6 @@ impl StdMachine {
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| MachineErrorKind::InitPwrBtnErr)?,
         })
-    }
-
-    /// Run `StdMachine` with `paused` flag.
-    ///
-    /// # Arguments
-    ///
-    /// * `paused` - Flag for `paused` when `StdMachine` starts to run.
-    #[allow(dead_code)]
-    pub fn run(&self, paused: bool) -> MachineResult<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 
@@ -400,6 +389,10 @@ impl MachineOps for StdMachine {
             .register_power_event(&locked_vm.power_button)
             .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
         Ok(())
+    }
+
+    fn run(&self, paused: bool) -> MachineResult<()> {
+        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 

@@ -33,6 +33,7 @@ const G: u64 = 1024 * 1024 * 1024;
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum MachineType {
     MicroVm,
+    StandardVm,
 }
 
 impl FromStr for MachineType {
@@ -41,6 +42,7 @@ impl FromStr for MachineType {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "microvm" => Ok(MachineType::MicroVm),
+            "standard_vm" => Ok(MachineType::StandardVm),
             _ => Err(()),
         }
     }

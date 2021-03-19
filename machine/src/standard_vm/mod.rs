@@ -10,6 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
+
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::StdMachine;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::StdMachine;
+
 pub mod errors {
     error_chain! {
         links {
@@ -29,21 +40,12 @@ pub mod errors {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-mod x86_64;
-
 use std::sync::{Arc, Mutex};
 
 use devices::legacy::FwCfgOps;
 use errors::Result;
 use kvm_ioctls::VmFd;
 use machine_manager::config::PFlashConfig;
-
-#[allow(dead_code)]
-#[cfg(target_arch = "aarch64")]
-mod aarch64;
-#[cfg(target_arch = "aarch64")]
-pub use aarch64::StdMachine;
 
 trait StdMachineOps {
     fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()>;

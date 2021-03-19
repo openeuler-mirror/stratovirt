@@ -98,6 +98,7 @@ mod micro_vm;
 mod standard_vm;
 
 pub use micro_vm::LightMachine;
+pub use standard_vm::StdMachine;
 
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Barrier, Mutex};
@@ -196,7 +197,10 @@ pub trait MachineOps {
         nr_cpus: u8,
         fds: (&Arc<VmFd>, &[Arc<VcpuFd>]),
         boot_cfg: &CPUBootConfig,
-    ) -> Result<Vec<Arc<CPU>>> {
+    ) -> Result<Vec<Arc<CPU>>>
+    where
+        Self: Sized,
+    {
         let mut cpus = Vec::<Arc<CPU>>::new();
 
         for vcpu_id in 0..nr_cpus {
@@ -361,7 +365,16 @@ pub trait MachineOps {
     /// * `vm` - The machine structure.
     /// * `vm_config` - VM configuration.
     /// * `fds` - File descriptors obtained by opening KVM module and creating a new VM.
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> Result<()>;
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> Result<()>
+    where
+        Self: Sized;
+
+    /// Run `LightMachine` with `paused` flag.
+    ///
+    /// # Arguments
+    ///
+    /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
+    fn run(&self, paused: bool) -> Result<()>;
 
     /// Start machine as `Running` or `Paused` state.
     ///
@@ -370,7 +383,10 @@ pub trait MachineOps {
     /// * `paused` - After started, paused all vcpu or not.
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_start(paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    fn vm_start(paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
+    where
+        Self: Sized,
+    {
         let nr_vcpus = cpus.len();
         let cpus_thread_barrier = Arc::new(Barrier::new((nr_vcpus + 1) as usize));
         for cpu_index in 0..nr_vcpus {
@@ -400,7 +416,10 @@ pub trait MachineOps {
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
         vm_state: &mut KvmVmState,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.pause()
                 .chain_err(|| format!("Failed to pause vcpu{}", cpu_index))?;
@@ -420,7 +439,10 @@ pub trait MachineOps {
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_resume(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    fn vm_resume(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
+    where
+        Self: Sized,
+    {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.resume()
                 .chain_err(|| format!("Failed to resume vcpu{}", cpu_index))?;
@@ -437,7 +459,10 @@ pub trait MachineOps {
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_destroy(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+    fn vm_destroy(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
+    where
+        Self: Sized,
+    {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.destroy()
                 .chain_err(|| format!("Failed to destroy vcpu{}", cpu_index))?;
@@ -462,7 +487,10 @@ pub trait MachineOps {
         vm_state: &mut KvmVmState,
         old_state: KvmVmState,
         new_state: KvmVmState,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
         use KvmVmState::*;
 
         if *vm_state != old_state {

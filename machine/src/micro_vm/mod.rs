@@ -237,15 +237,6 @@ impl LightMachine {
         })
     }
 
-    /// Run `LightMachine` with `paused` flag.
-    ///
-    /// # Arguments
-    ///
-    /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
-    pub fn run(&self, paused: bool) -> MachineResult<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
-    }
-
     #[cfg(target_arch = "x86_64")]
     fn arch_init(vm_fd: &VmFd) -> MachineResult<()> {
         use crate::errors::ResultExt;
@@ -880,6 +871,10 @@ impl MachineOps for LightMachine {
             .register_power_event(&locked_vm.power_button)
             .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
         Ok(())
+    }
+
+    fn run(&self, paused: bool) -> MachineResult<()> {
+        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 
