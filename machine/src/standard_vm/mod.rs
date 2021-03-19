@@ -18,6 +18,9 @@ pub mod errors {
             Legacy(devices::LegacyErrs::Error, devices::LegacyErrs::ErrorKind);
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
         }
+        foreign_links{
+            Io(std::io::Error);
+        }
         errors {
             InitPCIeHostErr {
                 display("Failed to init PCIe host.")
@@ -34,6 +37,7 @@ use std::sync::{Arc, Mutex};
 use devices::legacy::FwCfgOps;
 use errors::Result;
 use kvm_ioctls::VmFd;
+use machine_manager::config::PFlashConfig;
 
 #[allow(dead_code)]
 #[cfg(target_arch = "aarch64")]
@@ -46,5 +50,9 @@ trait StdMachineOps {
 
     fn add_fwcfg_device(&mut self, _vm_fd: &VmFd) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
         bail!("Not implemented");
+    }
+
+    fn add_pflash_device(&mut self, _config: &PFlashConfig, _vm_fd: &VmFd) -> Result<()> {
+        Ok(())
     }
 }

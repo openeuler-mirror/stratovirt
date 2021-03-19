@@ -19,12 +19,12 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
-use devices::legacy::{FwCfgEntryType, FwCfgMem, FwCfgOps, PL011, PL031};
+use devices::legacy::{FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031};
 use devices::{InterruptController, InterruptControllerConfig};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig,
-    VmConfig, VsockConfig,
+    BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
+    SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -257,6 +257,36 @@ impl StdMachineOps for StdMachine {
         .chain_err(|| "Failed to realize fwcfg device")?;
 
         Ok(fwcfg_dev)
+    }
+
+    fn add_pflash_device(
+        &mut self,
+        config: &PFlashConfig,
+        vm_fd: &VmFd,
+    ) -> super::errors::Result<()> {
+        let fd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(config.path_on_host.clone())?;
+        let sector_len: u32 = 1024 * 256;
+        let read_only: i32 = config.read_only as i32;
+        let index: usize = config.unit;
+        let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
+        let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
+        if index == 1 {
+            flash_base += flash_size;
+        }
+        let pflash = super::errors::ResultExt::chain_err(
+            PFlash::new(flash_size, fd, sector_len, 4, 2, read_only),
+            || "Failed to create PFlash.",
+        )?;
+
+        super::errors::ResultExt::chain_err(
+            PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size, vm_fd),
+            || "Failed to realize PFlash.",
+        )?;
+
+        Ok(())
     }
 }
 
