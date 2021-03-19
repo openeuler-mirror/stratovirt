@@ -34,7 +34,7 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::PciHost;
 use sysbus::{SysBus, SysBusDevType, SysRes};
-use util::device_tree;
+use util::device_tree::{self, CompileFDT};
 use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use virtio::{qmp_balloon, qmp_query_balloon};
@@ -388,11 +388,54 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(
-        _vm: &Arc<Mutex<Self>>,
-        _vm_config: &VmConfig,
-        _fds: (Kvm, &Arc<VmFd>),
-    ) -> Result<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> Result<()> {
+        use crate::errors::ResultExt;
+
+        let mut locked_vm = vm.lock().unwrap();
+        let kvm_fd = fds.0;
+        let vm_fd = fds.1;
+        locked_vm.init_memory(
+            (kvm_fd, &vm_fd),
+            &vm_config.machine_config.mem_config,
+            &locked_vm.sys_mem,
+        )?;
+
+        let vcpu_fds = {
+            let mut fds = vec![];
+            for vcpu_id in 0..vm_config.machine_config.nr_cpus {
+                fds.push(Arc::new(vm_fd.create_vcpu(vcpu_id)?));
+            }
+            fds
+        };
+
+        // Interrupt Controller Chip init
+        locked_vm.init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm
+            .add_devices(vm_config, &vm_fd)
+            .chain_err(|| "Failed to add devices")?;
+
+        let boot_config = locked_vm.load_boot_source()?;
+        locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+            vm.clone(),
+            vm_config.machine_config.nr_cpus,
+            (&vm_fd, &vcpu_fds),
+            &boot_config,
+        )?);
+
+        let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
+        locked_vm
+            .generate_fdt_node(&mut fdt)
+            .chain_err(|| ErrorKind::GenFdtErr)?;
+        locked_vm
+            .sys_mem
+            .write(
+                &mut fdt.as_slice(),
+                GuestAddress(boot_config.fdt_addr as u64),
+                fdt.len() as u64,
+            )
+            .chain_err(|| ErrorKind::WrtFdtErr(boot_config.fdt_addr, fdt.len()))?;
+
+        locked_vm.register_power_event(&locked_vm.power_button)?;
         Ok(())
     }
 }
