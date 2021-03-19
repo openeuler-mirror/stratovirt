@@ -19,7 +19,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
-use devices::legacy::{PL011, PL031};
+use devices::legacy::{FwCfgEntryType, FwCfgMem, FwCfgOps, PL011, PL031};
 use devices::{InterruptController, InterruptControllerConfig};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
@@ -34,6 +34,7 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::PciHost;
 use sysbus::{SysBus, SysBusDevType, SysRes};
+use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT};
 use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
@@ -225,6 +226,37 @@ impl StdMachine {
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self, _vm_fd: &Arc<VmFd>) -> super::errors::Result<()> {
         Ok(())
+    }
+
+    fn add_fwcfg_device(
+        &mut self,
+        vm_fd: &VmFd,
+    ) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
+        use super::errors::ResultExt;
+
+        let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
+        let ncpus = self.cpus.len();
+        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
+
+        let cmdline = self.boot_source.lock().unwrap().kernel_cmdline.to_string();
+        fwcfg.add_string_entry(FwCfgEntryType::CmdlineSize, cmdline.as_str())?;
+
+        let boot_order = Vec::<u8>::new();
+        fwcfg.add_file_entry("bootorder", boot_order)?;
+
+        let bios_geometry = Vec::<u8>::new();
+        fwcfg.add_file_entry("bios-geometry", bios_geometry)?;
+
+        let fwcfg_dev = FwCfgMem::realize(
+            fwcfg,
+            &mut self.sysbus,
+            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
+            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
+            vm_fd,
+        )
+        .chain_err(|| "Failed to realize fwcfg device")?;
+
+        Ok(fwcfg_dev)
     }
 }
 
