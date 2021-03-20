@@ -962,11 +962,29 @@ mod tests {
         let feature = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM);
         assert_eq!(bln.device_features, feature);
 
-        // test realize function.
+        let fts = bln.get_device_features(0);
+        assert_eq!(fts, feature as u32);
+        let fts = bln.get_device_features(1);
+        assert_eq!(fts, (feature >> 32) as u32);
+        bln.driver_features = 0;
+        bln.device_features = 1;
+        bln.set_driver_features(0, 1);
+        assert_eq!(bln.driver_features, 1);
+        bln.driver_features = 1 << 32;
+        bln.set_driver_features(1, 1);
+        assert_eq!(bln.driver_features, 1 << 32);
+
+        // Test realize function.
         bln.realize().unwrap();
         assert_eq!(bln.device_type(), 5);
         assert_eq!(bln.queue_num(), 2);
-        assert_eq!(bln.queue_size(), 256);
+        assert_eq!(bln.queue_size(), QUEUE_SIZE);
+        // Test methods of balloon.
+        let ram_size = bln.mem_info.get_ram_size();
+        assert_eq!(ram_size, MEMORY_SIZE);
+
+        assert!(bln.reset().is_none());
+        assert!(bln.update_config(None).is_err());
     }
 
     #[test]
@@ -1119,5 +1137,90 @@ mod tests {
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_DEFLATE_EVENT).is_ok());
+    }
+
+    #[test]
+    fn test_balloon_activate() {
+        let mem_space = address_space_init();
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+
+        let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
+        queue_config_inf.desc_table = GuestAddress(0);
+        queue_config_inf.avail_ring = GuestAddress(4096);
+        queue_config_inf.used_ring = GuestAddress(8192);
+        queue_config_inf.ready = true;
+        queue_config_inf.size = QUEUE_SIZE;
+
+        let mut queues: Vec<Arc<Mutex<Queue>>> = Vec::new();
+        let queue1 = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
+        queues.push(queue1);
+        let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let queue_evts: Vec<EventFd> = vec![event_inf.try_clone().unwrap()];
+
+        let bln_cfg = BalloonConfig {
+            deflate_on_oom: true,
+        };
+        let mut bln = Balloon::new(bln_cfg, mem_space.clone());
+        assert!(bln
+            .activate(
+                mem_space,
+                interrupt_evt,
+                interrupt_status,
+                queues,
+                queue_evts
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn test_balloon_memory_listener() {
+        let mut blndef = BlnMemoryRegion::default();
+        blndef.flags_padding = 0;
+        blndef.guest_phys_addr = 0x400;
+        blndef.memory_size = 0x8000;
+        blndef.userspace_addr = 0;
+
+        let blninfo = BlnMemInfo::new();
+        assert_eq!(blninfo.priority(), 0);
+
+        blninfo.regions.lock().unwrap().push(blndef);
+        assert_eq!(blninfo.get_host_address(GuestAddress(0x200)), None);
+        assert_eq!(blninfo.get_host_address(GuestAddress(0x420)), Some(0x20));
+
+        let ram_size = 0x800;
+        let ram_fr1 = create_flat_range(0, ram_size, 0);
+        let blninfo = BlnMemInfo::new();
+        assert!(blninfo
+            .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
+            .is_ok());
+        let host_addr = blninfo.get_host_address(GuestAddress(0));
+        assert!(host_addr.is_some());
+        let host_addr = blninfo.get_host_address(GuestAddress(0x7ff));
+        assert!(host_addr.is_some());
+        let host_addr = blninfo.get_host_address(GuestAddress(0x800));
+        assert!(host_addr.is_none());
+        assert!(blninfo
+            .handle_request(Some(&ram_fr1), None, ListenerReqType::DeleteRegion)
+            .is_ok());
+        let host_addr = blninfo.get_host_address(GuestAddress(0));
+        assert_eq!(host_addr, None);
+    }
+
+    #[test]
+    fn test_balloon_bitmap() {
+        let mut btp = BalloonedPageBitmap::new(8);
+        assert!(btp.set_bit(0).is_ok());
+        assert!(btp.set_bit(1).is_ok());
+        assert!(btp.set_bit(2).is_ok());
+        assert!(btp.set_bit(3).is_ok());
+        assert!(btp.set_bit(4).is_ok());
+        assert!(btp.set_bit(5).is_ok());
+        assert!(btp.set_bit(6).is_ok());
+        assert!(!btp.is_full(8));
+        assert!(btp.set_bit(7).is_ok());
+        assert!(btp.is_full(8));
+        // Out of range.
+        assert!(!btp.is_full(65));
     }
 }
