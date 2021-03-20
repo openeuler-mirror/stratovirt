@@ -913,9 +913,10 @@ mod tests {
     pub use super::super::*;
     pub use super::*;
 
-    use address_space::{HostMemMapping, Region};
+    use address_space::{AddressRange, HostMemMapping, Region};
 
-    const MEMORY_SIZE: u64 = (1024 * 1024) as u64;
+    const MEMORY_SIZE: u64 = 1024 * 1024;
+    const QUEUE_SIZE: u16 = 256;
 
     fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36);
@@ -931,6 +932,19 @@ mod tests {
             )
             .unwrap();
         sys_space
+    }
+
+    fn create_flat_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
+        let mem_mapping =
+            Arc::new(HostMemMapping::new(GuestAddress(addr), size, None, false, false).unwrap());
+        FlatRange {
+            addr_range: AddressRange::new(
+                mem_mapping.start_address().unchecked_add(offset_in_region),
+                mem_mapping.size() - offset_in_region,
+            ),
+            owner: Region::init_ram_region(mem_mapping.clone()),
+            offset_in_region,
+        }
     }
 
     #[test]
@@ -953,19 +967,6 @@ mod tests {
         assert_eq!(bln.device_type(), 5);
         assert_eq!(bln.queue_num(), 2);
         assert_eq!(bln.queue_size(), 256);
-    }
-
-    #[test]
-    fn test_object_init() {
-        let bln_cfg = BalloonConfig {
-            deflate_on_oom: true,
-        };
-
-        let mem_space = address_space_init();
-        let balloon = Arc::new(Mutex::new(Balloon::new(bln_cfg, mem_space)));
-        Balloon::object_init(balloon);
-        let balloon_get = unsafe { &BALLOON_DEV };
-        assert!(balloon_get.is_some());
     }
 
     #[test]
@@ -998,5 +999,125 @@ mod tests {
         assert_eq!(balloon.get_balloon_memory_size(), 0);
         balloon.write_config(addr, &write_data).unwrap();
         assert_eq!(balloon.actual.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn test_balloon_process() {
+        let mem_space = address_space_init();
+        let bln_cfg = BalloonConfig {
+            deflate_on_oom: true,
+        };
+        let mut bln = Balloon::new(bln_cfg, mem_space.clone());
+        bln.realize().unwrap();
+        let ram_fr1 = create_flat_range(0, MEMORY_SIZE, 0);
+        let blninfo = BlnMemInfo::new();
+        assert!(blninfo
+            .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
+            .is_ok());
+        bln.mem_info = blninfo;
+
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let cb = Arc::new(Box::new(move |status: u32| {
+            interrupt_status.fetch_or(status, Ordering::SeqCst);
+            interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+        }) as VirtioBalloonInterrupt);
+
+        bln.interrupt_cb = Some(cb.clone());
+        assert_eq!(bln.get_guest_memory_size(), MEMORY_SIZE);
+
+        let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
+        queue_config_inf.desc_table = GuestAddress(0x100);
+        queue_config_inf.avail_ring = GuestAddress(0x300);
+        queue_config_inf.used_ring = GuestAddress(0x600);
+        queue_config_inf.ready = true;
+        queue_config_inf.size = QUEUE_SIZE;
+
+        let mut queue_config_def = QueueConfig::new(QUEUE_SIZE);
+        queue_config_def.desc_table = GuestAddress(0x1100);
+        queue_config_def.avail_ring = GuestAddress(0x1300);
+        queue_config_def.used_ring = GuestAddress(0x1600);
+        queue_config_def.ready = true;
+        queue_config_def.size = QUEUE_SIZE;
+
+        let queue1 = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
+        let queue2 = Arc::new(Mutex::new(Queue::new(queue_config_def, 1).unwrap()));
+
+        let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let event_def = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+
+        let mut handler = BalloonIoHandler {
+            driver_features: bln.driver_features,
+            mem_space: mem_space.clone(),
+            inf_queue: queue1,
+            inf_evt: event_inf.try_clone().unwrap(),
+            def_queue: queue2,
+            def_evt: event_def,
+            interrupt_cb: cb.clone(),
+            mem_info: bln.mem_info.clone(),
+            event_timer: bln.event_timer.clone(),
+            balloon_actual: bln.actual.clone(),
+        };
+
+        let balloon = Arc::new(Mutex::new(bln));
+        Balloon::object_init(balloon);
+
+        // Query balloon.
+        assert_eq!(qmp_query_balloon(), Some(MEMORY_SIZE));
+
+        // Create SplitVringDesc and set addr to be 0x2000.
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x2000),
+            len: 4,
+            flags: 1,
+            next: 1,
+        };
+
+        // Set desc table.
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_inf.desc_table.0))
+            .unwrap();
+
+        let ele = Iovec {
+            iov_base: GuestAddress(0xff),
+            iov_len: std::mem::size_of::<Iovec>() as u64,
+        };
+        mem_space
+            .write_object::<Iovec>(&ele, GuestAddress(0x2000))
+            .unwrap();
+        mem_space
+            .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4 as u64))
+            .unwrap();
+        mem_space
+            .write_object::<u16>(&1, GuestAddress(queue_config_inf.avail_ring.0 + 2 as u64))
+            .unwrap();
+
+        assert!(handler.process_balloon_queue(BALLOON_INFLATE_EVENT).is_ok());
+        assert_eq!(handler.get_balloon_memory_size(), 0);
+        assert_eq!(qmp_query_balloon(), Some(MEMORY_SIZE));
+
+        // SplitVringDesc for deflate.
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x2000),
+            len: 4,
+            flags: 1,
+            next: 1,
+        };
+
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_def.desc_table.0))
+            .unwrap();
+
+        mem_space
+            .write_object::<Iovec>(&ele, GuestAddress(0x3000))
+            .unwrap();
+        mem_space
+            .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4 as u64))
+            .unwrap();
+        mem_space
+            .write_object::<u16>(&1, GuestAddress(queue_config_def.avail_ring.0 + 2 as u64))
+            .unwrap();
+
+        assert!(handler.process_balloon_queue(BALLOON_DEFLATE_EVENT).is_ok());
     }
 }
