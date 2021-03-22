@@ -10,21 +10,26 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
-use address_space::GuestAddress;
+use address_space::{AddressSpace, GuestAddress};
+use kvm_ioctls::VmFd;
+use pci::config::PCIE_CONFIG_SPACE_SIZE;
 use pci::errors::{ErrorKind, Result as PciResult};
+use pci::{PciBus, PciConfig};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::{virtio_has_feature, QueueConfig, VirtioDevice};
+use crate::{virtio_has_feature, QueueConfig, VirtioDevice, VirtioInterrupt};
 use crate::{
     CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED, CONFIG_STATUS_FEATURES_OK,
     QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
+
+const VIRTIO_PCI_BAR_MAX: u8 = 5;
 
 /// Device (host) features set selector - Read Write.
 const COMMON_DFSELECT_REG: u64 = 0x0;
@@ -367,5 +372,63 @@ impl Clone for NotifyEventFds {
             queue_evts.push(cloned_evt_fd);
         }
         NotifyEventFds { events: queue_evts }
+    }
+}
+
+/// Virtio-PCI device structure
+pub struct VirtioPciDevice {
+    /// Name of this device
+    name: String,
+    /// The entity of virtio device
+    device: Arc<Mutex<dyn VirtioDevice>>,
+    /// Device id
+    dev_id: u16,
+    /// Devfn
+    devfn: u8,
+    /// If this device is activated or not.
+    device_activated: Arc<AtomicBool>,
+    /// Memory AddressSpace
+    sys_mem: Arc<AddressSpace>,
+    /// Pci config space.
+    config: PciConfig,
+    /// Virtio common config refer to Virtio Spec.
+    common_config: Arc<Mutex<VirtioPciCommonConfig>>,
+    /// Primary Bus
+    parent_bus: Weak<Mutex<PciBus>>,
+    /// Eventfds used for notifying the guest.
+    notify_eventfds: NotifyEventFds,
+    /// The function for interrupt triggerring
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    vm_fd: Arc<VmFd>,
+}
+
+impl VirtioPciDevice {
+    pub fn new(
+        name: String,
+        devfn: u8,
+        sys_mem: Arc<AddressSpace>,
+        device: Arc<Mutex<dyn VirtioDevice>>,
+        parent_bus: Weak<Mutex<PciBus>>,
+        vm_fd: Arc<VmFd>,
+    ) -> Self {
+        let queue_num = device.lock().unwrap().queue_num();
+        let queue_size = device.lock().unwrap().queue_size();
+
+        VirtioPciDevice {
+            name,
+            device,
+            dev_id: 0_u16,
+            devfn,
+            device_activated: Arc::new(AtomicBool::new(false)),
+            sys_mem,
+            config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
+            common_config: Arc::new(Mutex::new(VirtioPciCommonConfig::new(
+                queue_size, queue_num,
+            ))),
+            parent_bus,
+            notify_eventfds: NotifyEventFds::new(queue_num),
+            interrupt_cb: None,
+            vm_fd,
+        }
     }
 }
