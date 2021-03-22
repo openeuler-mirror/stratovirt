@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{AddressSpace, GuestAddress, Region};
+use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd};
 use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
 use pci::config::{
@@ -26,7 +26,9 @@ use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciConfig, PciDevOps}
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::{virtio_has_feature, QueueConfig, VirtioDevice, VirtioInterrupt};
+use crate::{
+    virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+};
 use crate::{
     CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED, CONFIG_STATUS_FEATURES_OK,
     QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BLOCK,
@@ -473,13 +475,72 @@ impl VirtioPciDevice {
         }
     }
 
-    fn assign_interrupt_cb(&mut self) {}
+    fn assign_interrupt_cb(&mut self) {
+        let cloned_common_cfg = self.common_config.clone();
+        let cloned_vm_fd = self.vm_fd.clone();
+        let cloned_msix = self.config.msix.clone();
+        let dev_id = self.dev_id;
+        let cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, queue: Option<&Queue>| {
+                let vector = match int_type {
+                    VirtioInterruptType::Config => cloned_common_cfg
+                        .lock()
+                        .unwrap()
+                        .msix_config
+                        .load(Ordering::SeqCst),
+                    VirtioInterruptType::Vring => {
+                        queue.map_or(0, |q| q.vring.get_queue_config().vector)
+                    }
+                };
 
-    fn modern_mem_region_init(&mut self, _modern_mem_region: &Region) -> PciResult<()> {
+                if let Some(msix) = &cloned_msix {
+                    msix.lock().unwrap().notify(&cloned_vm_fd, vector, dev_id);
+                } else {
+                    bail!("Failed to send interrupt, msix does not exist");
+                }
+                Ok(())
+            },
+        ) as VirtioInterrupt);
+
+        self.interrupt_cb = Some(cb);
+    }
+
+    fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
+        let mut ret = Vec::new();
+        for (index, eventfd) in self.notify_eventfds.events.iter().enumerate() {
+            let addr = index as u64 * u64::from(VIRTIO_PCI_CAP_NOTIFY_OFF_MULTIPLIER);
+            let eventfd_clone = match eventfd.try_clone() {
+                Err(e) => {
+                    error!("Failed to clone ioeventfd, error is {}", e);
+                    continue;
+                }
+                Ok(fd) => fd,
+            };
+            ret.push(RegionIoEventFd {
+                fd: eventfd_clone,
+                addr_range: AddressRange::from((addr, 2u64)),
+                data_match: false,
+                data: index as u64,
+            })
+        }
+
+        ret
+    }
+
+    fn modern_mem_region_map<T: ByteCode>(&mut self, data: T) -> PciResult<()> {
+        let cap_offset = self.config.add_pci_cap(
+            PCI_CAP_ID_VNDR,
+            size_of::<T>() + PCI_CAP_VNDR_AND_NEXT_SIZE as usize,
+        )?;
+
+        let write_start = cap_offset + PCI_CAP_VNDR_AND_NEXT_SIZE as usize;
+        self.config.config[write_start..(write_start + size_of::<T>())]
+            .copy_from_slice(data.as_bytes());
+
         Ok(())
     }
 
-    fn modern_mem_region_map<T: ByteCode>(&mut self, _data: T) -> PciResult<()> {
+    fn modern_mem_region_init(&mut self, _modern_mem_region: &Region) -> PciResult<()> {
         Ok(())
     }
 }
