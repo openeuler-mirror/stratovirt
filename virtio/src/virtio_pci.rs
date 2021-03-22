@@ -14,7 +14,8 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd};
+use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
 use pci::config::{
@@ -30,9 +31,9 @@ use crate::{
     virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
 };
 use crate::{
-    CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED, CONFIG_STATUS_FEATURES_OK,
-    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BLOCK,
-    VIRTIO_TYPE_NET,
+    CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
+    CONFIG_STATUS_FEATURES_OK, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
+    VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
@@ -540,7 +541,204 @@ impl VirtioPciDevice {
         Ok(())
     }
 
-    fn modern_mem_region_init(&mut self, _modern_mem_region: &Region) -> PciResult<()> {
+    fn build_common_cfg_ops(&self) -> RegionOps {
+        let cloned_virtio_dev = self.device.clone();
+        let cloned_common_cfg = self.common_config.clone();
+        let common_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
+            let value = match cloned_common_cfg
+                .lock()
+                .unwrap()
+                .read_common_config(&cloned_virtio_dev, offset)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        "Failed to read common config of virtio-pci device, error is {}",
+                        e.display_chain(),
+                    );
+                    return false;
+                }
+            };
+
+            match data.len() {
+                1 => data[0] = value as u8,
+                2 => {
+                    LittleEndian::write_u16(data, value as u16);
+                }
+                4 => {
+                    LittleEndian::write_u32(data, value);
+                }
+                _ => {
+                    error!(
+                        "invalid data length for reading pci common config: offset 0x{:x}, data len {}",
+                        offset, data.len()
+                    );
+                    return false;
+                }
+            };
+
+            true
+        };
+
+        let cloned_virtio_dev = self.device.clone();
+        let cloned_common_cfg = self.common_config.clone();
+        let cloned_activated_flag = self.device_activated.clone();
+        let cloned_notify_evts = self.notify_eventfds.clone();
+        let cloned_sys_mem = self.sys_mem.clone();
+        let cloned_int_cb = self.interrupt_cb.clone();
+        let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
+            let value = match data.len() {
+                1 => data[0] as u32,
+                2 => LittleEndian::read_u16(data) as u32,
+                4 => LittleEndian::read_u32(data),
+                _ => {
+                    error!(
+                        "Invalid data length for writing pci common config: offset 0x{:x}, data len {}",
+                        offset, data.len()
+                    );
+                    return false;
+                }
+            };
+
+            if let Err(e) = cloned_common_cfg.lock().unwrap().write_common_config(
+                &cloned_virtio_dev,
+                offset,
+                value,
+            ) {
+                error!(
+                    "Failed to read common config of virtio-pci device, error is {}",
+                    e.display_chain(),
+                );
+                return false;
+            }
+
+            if !cloned_activated_flag.load(Ordering::Acquire)
+                && cloned_common_cfg.lock().unwrap().check_device_status(
+                    CONFIG_STATUS_ACKNOWLEDGE
+                        | CONFIG_STATUS_DRIVER
+                        | CONFIG_STATUS_DRIVER_OK
+                        | CONFIG_STATUS_FEATURES_OK,
+                    CONFIG_STATUS_FAILED,
+                )
+            {
+                let queue_type = cloned_common_cfg.lock().unwrap().queue_type;
+                let queues_config = &cloned_common_cfg.lock().unwrap().queues_config;
+                let mut queues: Vec<Arc<Mutex<Queue>>> = Vec::with_capacity(queues_config.len());
+                for q_config in queues_config.iter() {
+                    let queue = Queue::new(*q_config, queue_type).unwrap();
+                    if !queue.is_valid(&cloned_sys_mem) {
+                        error!("Failed to activate device: Invalid queue");
+                        return false;
+                    }
+                    queues.push(Arc::new(Mutex::new(queue)))
+                }
+
+                let queue_evts = cloned_notify_evts.clone().events;
+                if let Some(cb) = cloned_int_cb.clone() {
+                    if let Err(e) = cloned_virtio_dev.lock().unwrap().activate(
+                        cloned_sys_mem.clone(),
+                        cb,
+                        queues,
+                        queue_evts,
+                    ) {
+                        error!("Failed to activate device, error is {}", e.display_chain());
+                    }
+                } else {
+                    error!("Failed to activate device: No interrupt callback");
+                    return false;
+                }
+                cloned_activated_flag.store(true, Ordering::Release);
+            }
+
+            true
+        };
+
+        RegionOps {
+            read: Arc::new(common_read),
+            write: Arc::new(common_write),
+        }
+    }
+
+    fn modern_mem_region_init(&self, modern_mem_region: &Region) -> PciResult<()> {
+        // 1. PCI common cap sub-region.
+        let common_region_ops = self.build_common_cfg_ops();
+        let common_region =
+            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_COMMON_LENGTH), common_region_ops);
+        modern_mem_region
+            .add_subregion(common_region, u64::from(VIRTIO_PCI_CAP_COMMON_OFFSET))
+            .chain_err(|| "Failed to register pci-common-cap region.")?;
+
+        // 2. PCI ISR cap sub-region.
+        let cloned_common_cfg = self.common_config.clone();
+        let isr_read = move |data: &mut [u8], _: GuestAddress, _: u64| -> bool {
+            if let Some(val) = data.get_mut(0) {
+                *val = cloned_common_cfg
+                    .lock()
+                    .unwrap()
+                    .interrupt_status
+                    .swap(0, Ordering::SeqCst) as u8;
+            }
+            true
+        };
+        let isr_write = move |_: &[u8], _: GuestAddress, _: u64| -> bool { true };
+        let isr_region_ops = RegionOps {
+            read: Arc::new(isr_read),
+            write: Arc::new(isr_write),
+        };
+        let isr_region =
+            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_ISR_LENGTH), isr_region_ops);
+        modern_mem_region
+            .add_subregion(isr_region, u64::from(VIRTIO_PCI_CAP_ISR_OFFSET))
+            .chain_err(|| "Failed to register pci-isr-cap region.")?;
+
+        // 3. PCI dev cap sub-region.
+        let cloned_virtio_dev = self.device.clone();
+        let device_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
+            if let Err(e) = cloned_virtio_dev.lock().unwrap().read_config(offset, data) {
+                error!(
+                    "Failed to read virtio-dev config space, error is {}",
+                    e.display_chain()
+                );
+                return false;
+            }
+            true
+        };
+
+        let cloned_virtio_dev = self.device.clone();
+        let device_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
+            if let Err(e) = cloned_virtio_dev.lock().unwrap().write_config(offset, data) {
+                error!(
+                    "Failed to write virtio-dev config space, error is {}",
+                    e.display_chain()
+                );
+                return false;
+            }
+            true
+        };
+        let device_region_ops = RegionOps {
+            read: Arc::new(device_read),
+            write: Arc::new(device_write),
+        };
+        let device_region =
+            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_DEVICE_LENGTH), device_region_ops);
+        modern_mem_region
+            .add_subregion(device_region, u64::from(VIRTIO_PCI_CAP_DEVICE_OFFSET))
+            .chain_err(|| "Failed to register pci-dev-cap region.")?;
+
+        // 4. PCI notify cap sub-region.
+        let notify_read = move |_: &mut [u8], _: GuestAddress, _: u64| -> bool { true };
+        let notify_write = move |_: &[u8], _: GuestAddress, _: u64| -> bool { true };
+        let notify_region_ops = RegionOps {
+            read: Arc::new(notify_read),
+            write: Arc::new(notify_write),
+        };
+        let notify_region =
+            Region::init_io_region(u64::from(VIRTIO_PCI_CAP_NOTIFY_LENGTH), notify_region_ops);
+        notify_region.set_ioeventfds(&self.ioeventfds());
+        modern_mem_region
+            .add_subregion(notify_region, u64::from(VIRTIO_PCI_CAP_NOTIFY_OFFSET))
+            .chain_err(|| "Failed to register pci-notify-cap region.")?;
+
         Ok(())
     }
 }
