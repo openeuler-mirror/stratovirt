@@ -10,16 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{AtomicU16, AtomicU32};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
+use address_space::GuestAddress;
 use pci::errors::{ErrorKind, Result as PciResult};
+use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::QueueConfig;
+use crate::{virtio_has_feature, QueueConfig, VirtioDevice};
 use crate::{
     CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED, CONFIG_STATUS_FEATURES_OK,
-    QUEUE_TYPE_SPLIT_VRING,
+    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
@@ -128,6 +130,149 @@ impl VirtioPciCommonConfig {
             .get(self.queue_select as usize)
             .ok_or_else(|| "pci-reg queue_select overflows".into())
     }
+
+    /// Read data from the common config of virtio device.
+    /// Return the config value in u32.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Virtio device entity.
+    /// * `offset` - The offset of common config.
+    fn read_common_config(
+        &self,
+        device: &Arc<Mutex<dyn VirtioDevice>>,
+        offset: u64,
+    ) -> PciResult<u32> {
+        let value = match offset {
+            COMMON_DFSELECT_REG => self.features_select,
+            COMMON_DF_REG => device
+                .lock()
+                .unwrap()
+                .get_device_features(self.features_select),
+            COMMON_GFSELECT_REG => self.acked_features_select,
+            COMMON_MSIX_REG => self.msix_config.load(Ordering::SeqCst) as u32,
+            COMMON_NUMQ_REG => self.queues_config.len() as u32,
+            COMMON_STATUS_REG => self.device_status,
+            COMMON_CFGGENERATION_REG => self.config_generation,
+            COMMON_Q_SELECT_REG => self.queue_select as u32,
+            COMMON_Q_SIZE_REG => self
+                .get_queue_config()
+                .map(|config| u32::from(config.max_size))?,
+            COMMON_Q_MSIX_REG => self
+                .get_queue_config()
+                .map(|config| u32::from(config.vector))?,
+            COMMON_Q_ENABLE_REG => self
+                .get_queue_config()
+                .map(|config| u32::from(config.ready))?,
+            COMMON_Q_NOFF_REG => self.queue_select as u32,
+            COMMON_Q_DESCLO_REG => self
+                .get_queue_config()
+                .map(|config| config.desc_table.0 as u32)?,
+            COMMON_Q_DESCHI_REG => self
+                .get_queue_config()
+                .map(|config| (config.desc_table.0 >> 32) as u32)?,
+            COMMON_Q_AVAILLO_REG => self
+                .get_queue_config()
+                .map(|config| config.avail_ring.0 as u32)?,
+            COMMON_Q_AVAILHI_REG => self
+                .get_queue_config()
+                .map(|config| (config.avail_ring.0 >> 32) as u32)?,
+            COMMON_Q_USEDLO_REG => self
+                .get_queue_config()
+                .map(|config| config.used_ring.0 as u32)?,
+            COMMON_Q_USEDHI_REG => self
+                .get_queue_config()
+                .map(|config| (config.used_ring.0 >> 32) as u32)?,
+            _ => {
+                return Err(ErrorKind::PciRegister(offset).into());
+            }
+        };
+
+        Ok(value)
+    }
+
+    /// Write data to the common config of virtio device.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Virtio device entity.
+    /// * `offset` - The offset of common config.
+    /// * `value` - The value to write.
+    ///
+    /// # Errors
+    ///
+    /// Returns Error if the offset is out of bound.
+    fn write_common_config(
+        &mut self,
+        device: &Arc<Mutex<dyn VirtioDevice>>,
+        offset: u64,
+        value: u32,
+    ) -> PciResult<()> {
+        match offset {
+            COMMON_DFSELECT_REG => {
+                self.features_select = value;
+            }
+            COMMON_GFSELECT_REG => {
+                self.acked_features_select = value;
+            }
+            COMMON_GF_REG => {
+                device
+                    .lock()
+                    .unwrap()
+                    .set_driver_features(self.acked_features_select, value);
+
+                if self.acked_features_select == 1
+                    && virtio_has_feature(u64::from(value) << 32, VIRTIO_F_RING_PACKED)
+                {
+                    error!("Set packed virtqueue, which is not supported");
+                    self.queue_type = QUEUE_TYPE_PACKED_VRING;
+                }
+            }
+            COMMON_MSIX_REG => {
+                self.msix_config.store(value as u16, Ordering::SeqCst);
+            }
+            COMMON_STATUS_REG => {
+                self.device_status = value;
+            }
+            COMMON_Q_SELECT_REG => {
+                if value < VIRTIO_QUEUE_MAX {
+                    self.queue_select = value as u16;
+                }
+            }
+            COMMON_Q_SIZE_REG => self
+                .get_mut_queue_config()
+                .map(|config| config.size = value as u16)?,
+            COMMON_Q_ENABLE_REG => self
+                .get_mut_queue_config()
+                .map(|config| config.ready = value == 1)?,
+            COMMON_Q_MSIX_REG => self
+                .get_mut_queue_config()
+                .map(|config| config.vector = value as u16)?,
+            COMMON_Q_DESCLO_REG => self.get_mut_queue_config().map(|config| {
+                config.desc_table = GuestAddress(config.desc_table.0 | u64::from(value));
+            })?,
+            COMMON_Q_DESCHI_REG => self.get_mut_queue_config().map(|config| {
+                config.desc_table = GuestAddress(config.desc_table.0 | (u64::from(value) << 32));
+            })?,
+            COMMON_Q_AVAILLO_REG => self.get_mut_queue_config().map(|config| {
+                config.avail_ring = GuestAddress(config.avail_ring.0 | u64::from(value));
+            })?,
+            COMMON_Q_AVAILHI_REG => self.get_mut_queue_config().map(|config| {
+                config.avail_ring = GuestAddress(config.avail_ring.0 | (u64::from(value) << 32));
+            })?,
+            COMMON_Q_USEDLO_REG => self.get_mut_queue_config().map(|config| {
+                config.used_ring = GuestAddress(config.used_ring.0 | u64::from(value));
+            })?,
+            COMMON_Q_USEDHI_REG => self.get_mut_queue_config().map(|config| {
+                config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
+            })?,
+            _ => {
+                return Err(ErrorKind::PciRegister(offset).into());
+            }
+        };
+
+        Ok(())
+    }
 }
 
 #[repr(u8)]
@@ -156,6 +301,21 @@ struct VirtioPciCap {
     length: u32,
 }
 
+impl ByteCode for VirtioPciCap {}
+
+impl VirtioPciCap {
+    fn new(cap_len: u8, cfg_type: u8, bar_id: u8, offset: u32, length: u32) -> Self {
+        VirtioPciCap {
+            cap_len,
+            cfg_type,
+            bar_id,
+            padding: [0u8; 3],
+            offset,
+            length,
+        }
+    }
+}
+
 /// The struct of virtio pci capability for notifying the host
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -166,6 +326,46 @@ struct VirtioPciNotifyCap {
     notify_off_multiplier: u32,
 }
 
+impl ByteCode for VirtioPciNotifyCap {}
+
+impl VirtioPciNotifyCap {
+    fn new(
+        cap_len: u8,
+        cfg_type: u8,
+        bar_id: u8,
+        offset: u32,
+        length: u32,
+        notify_off_multiplier: u32,
+    ) -> Self {
+        VirtioPciNotifyCap {
+            cap: VirtioPciCap::new(cap_len, cfg_type, bar_id, offset, length),
+            notify_off_multiplier,
+        }
+    }
+}
+
 struct NotifyEventFds {
     events: Vec<EventFd>,
+}
+
+impl NotifyEventFds {
+    fn new(queue_num: usize) -> Self {
+        let mut events = Vec::new();
+        for _i in 0..queue_num {
+            events.push(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        }
+
+        NotifyEventFds { events }
+    }
+}
+
+impl Clone for NotifyEventFds {
+    fn clone(&self) -> NotifyEventFds {
+        let mut queue_evts = Vec::<EventFd>::new();
+        for fd in self.events.iter() {
+            let cloned_evt_fd = fd.try_clone().unwrap();
+            queue_evts.push(cloned_evt_fd);
+        }
+        NotifyEventFds { events: queue_evts }
+    }
 }
