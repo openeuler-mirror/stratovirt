@@ -105,6 +105,8 @@ mod queue;
 mod rng;
 mod vhost;
 mod virtio_mmio;
+#[allow(dead_code)]
+mod virtio_pci;
 
 pub use balloon::*;
 pub use block::Block;
@@ -135,6 +137,13 @@ pub const VIRTIO_TYPE_RNG: u32 = 4;
 pub const VIRTIO_TYPE_BALLOON: u32 = 5;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const _VIRTIO_TYPE_FS: u32 = 26;
+
+// The Status of Virtio Device.
+const CONFIG_STATUS_ACKNOWLEDGE: u32 = 0x01;
+const CONFIG_STATUS_DRIVER: u32 = 0x02;
+const CONFIG_STATUS_DRIVER_OK: u32 = 0x04;
+const CONFIG_STATUS_FEATURES_OK: u32 = 0x08;
+const CONFIG_STATUS_FAILED: u32 = 0x80;
 
 /// Feature Bits, refer to Virtio Spec.
 /// Negotiating this feature indicates that the driver can use descriptors

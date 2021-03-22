@@ -23,8 +23,9 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::{
     virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
-    NOTIFY_REG_OFFSET, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED,
-    VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
+    CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
+    CONFIG_STATUS_FEATURES_OK, NOTIFY_REG_OFFSET, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
+    VIRTIO_F_RING_PACKED, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
 };
 use crate::errors::{ErrorKind, Result, ResultExt};
 
@@ -77,12 +78,6 @@ const CONFIG_GENERATION_REG: u64 = 0xfc;
 const VENDOR_ID: u32 = 0;
 const MMIO_MAGIC_VALUE: u32 = 0x7472_6976;
 const MMIO_VERSION: u32 = 2;
-
-const CONFIG_STATUS_ACKNOWLEDGE: u32 = 0x01;
-const CONFIG_STATUS_DRIVER: u32 = 0x02;
-const CONFIG_STATUS_DRIVER_OK: u32 = 0x04;
-const CONFIG_STATUS_FEATURES_OK: u32 = 0x08;
-const CONFIG_STATUS_FAILED: u32 = 0x80;
 
 /// HostNotifyInfo includes the info needed for notifying backend from guest.
 pub struct HostNotifyInfo {

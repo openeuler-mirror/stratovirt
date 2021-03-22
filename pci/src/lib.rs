@@ -27,6 +27,12 @@ pub mod errors {
             UnregMemBar(id: usize) {
                 display("Failed to unmap BAR {} in memory space.", id)
             }
+            DeviceStatus(status: u32) {
+                display("Invalid device status 0x{:x}", status)
+            }
+            PciRegister(offset: u64) {
+                display("Unsupported pci register, 0x{:x}", offset)
+            }
         }
     }
 }
