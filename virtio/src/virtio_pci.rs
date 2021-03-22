@@ -10,26 +10,54 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressSpace, GuestAddress, Region};
+use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
-use pci::config::PCIE_CONFIG_SPACE_SIZE;
-use pci::errors::{ErrorKind, Result as PciResult};
-use pci::{PciBus, PciConfig};
+use pci::config::{
+    RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
+    ROM_ADDRESS, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+};
+use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
+use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciConfig, PciDevOps};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{virtio_has_feature, QueueConfig, VirtioDevice, VirtioInterrupt};
 use crate::{
     CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED, CONFIG_STATUS_FEATURES_OK,
-    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED,
+    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BLOCK,
+    VIRTIO_TYPE_NET,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
 
-const VIRTIO_PCI_BAR_MAX: u8 = 5;
+const VIRTIO_PCI_VENDOR_ID: u16 = 0x1af4;
+const VIRTIO_PCI_DEVICE_ID_BASE: u16 = 0x1040;
+const VIRTIO_PCI_ABI_VERSION: u8 = 1;
+const VIRTIO_PCI_CLASS_ID_NET: u16 = 0x0280;
+const VIRTIO_PCI_CLASS_ID_BLOCK: u16 = 0x0100;
+const VIRTIO_PCI_CLASS_ID_OTHERS: u16 = 0x00ff;
+
+const VIRTIO_PCI_CAP_COMMON_OFFSET: u32 = 0x0;
+const VIRTIO_PCI_CAP_COMMON_LENGTH: u32 = 0x1000;
+const VIRTIO_PCI_CAP_ISR_OFFSET: u32 = 0x1000;
+const VIRTIO_PCI_CAP_ISR_LENGTH: u32 = 0x1000;
+const VIRTIO_PCI_CAP_DEVICE_OFFSET: u32 = 0x2000;
+const VIRTIO_PCI_CAP_DEVICE_LENGTH: u32 = 0x1000;
+const VIRTIO_PCI_CAP_NOTIFY_OFFSET: u32 = 0x3000;
+const VIRTIO_PCI_CAP_NOTIFY_LENGTH: u32 = 0x1000;
+const VIRTIO_PCI_CAP_NOTIFY_OFF_MULTIPLIER: u32 = 4;
+
+const VIRTIO_PCI_BAR_MAX: u8 = 3;
+const VIRTIO_PCI_MSIX_BAR_IDX: u8 = 1;
+const VIRTIO_PCI_MEM_BAR_IDX: u8 = 2;
+
+const PCI_CAP_VNDR_AND_NEXT_SIZE: u8 = 2;
+const PCI_CAP_ID_VNDR: u8 = 0x9;
 
 /// Device (host) features set selector - Read Write.
 const COMMON_DFSELECT_REG: u64 = 0x0;
@@ -69,6 +97,19 @@ const COMMON_Q_AVAILHI_REG: u64 = 0x2c;
 const COMMON_Q_USEDLO_REG: u64 = 0x30;
 /// The high 32bit of queue's Used Ring address - Read Write.
 const COMMON_Q_USEDHI_REG: u64 = 0x34;
+
+/// Get class id according to device type.
+///
+/// # Arguments
+///
+/// * `device_type` - Device type set by the host.
+fn get_virtio_class_id(device_type: u32) -> u16 {
+    match device_type {
+        VIRTIO_TYPE_BLOCK => VIRTIO_PCI_CLASS_ID_BLOCK,
+        VIRTIO_TYPE_NET => VIRTIO_PCI_CLASS_ID_NET,
+        _ => VIRTIO_PCI_CLASS_ID_OTHERS,
+    }
+}
 
 /// The configuration of virtio-pci device, the fields refer to Virtio Spec.
 #[derive(Clone)]
@@ -430,5 +471,191 @@ impl VirtioPciDevice {
             interrupt_cb: None,
             vm_fd,
         }
+    }
+
+    fn assign_interrupt_cb(&mut self) {}
+
+    fn modern_mem_region_init(&mut self, _modern_mem_region: &Region) -> PciResult<()> {
+        Ok(())
+    }
+
+    fn modern_mem_region_map<T: ByteCode>(&mut self, _data: T) -> PciResult<()> {
+        Ok(())
+    }
+}
+
+impl PciDevOps for VirtioPciDevice {
+    fn init_write_mask(&mut self) -> PciResult<()> {
+        self.config.init_common_write_mask()
+    }
+
+    fn init_write_clear_mask(&mut self) -> PciResult<()> {
+        self.config.init_common_write_clear_mask()
+    }
+
+    fn realize(mut self, vm_fd: &Arc<VmFd>) -> PciResult<()> {
+        self.init_write_mask()?;
+        self.init_write_clear_mask()?;
+
+        let device_type = self.device.lock().unwrap().device_type();
+        le_write_u16(
+            &mut self.config.config,
+            VENDOR_ID as usize,
+            VIRTIO_PCI_VENDOR_ID,
+        )?;
+        le_write_u16(
+            &mut self.config.config,
+            DEVICE_ID as usize,
+            VIRTIO_PCI_DEVICE_ID_BASE + device_type as u16,
+        )?;
+        self.config.config[REVISION_ID] = VIRTIO_PCI_ABI_VERSION;
+        let class_id = get_virtio_class_id(device_type);
+        le_write_u16(&mut self.config.config, SUB_CLASS_CODE as usize, class_id)?;
+        le_write_u16(
+            &mut self.config.config,
+            SUBSYSTEM_VENDOR_ID,
+            VIRTIO_PCI_VENDOR_ID,
+        )?;
+        le_write_u16(
+            &mut self.config.config,
+            SUBSYSTEM_ID,
+            0x40 + device_type as u16,
+        )?;
+
+        let common_cap = VirtioPciCap::new(
+            size_of::<VirtioPciCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
+            VirtioPciCapType::Common as u8,
+            VIRTIO_PCI_MEM_BAR_IDX,
+            VIRTIO_PCI_CAP_COMMON_OFFSET,
+            VIRTIO_PCI_CAP_COMMON_LENGTH,
+        );
+        self.modern_mem_region_map(common_cap)?;
+
+        let isr_cap = VirtioPciCap::new(
+            size_of::<VirtioPciCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
+            VirtioPciCapType::ISR as u8,
+            VIRTIO_PCI_MEM_BAR_IDX,
+            VIRTIO_PCI_CAP_ISR_OFFSET,
+            VIRTIO_PCI_CAP_ISR_LENGTH,
+        );
+        self.modern_mem_region_map(isr_cap)?;
+
+        let device_cap = VirtioPciCap::new(
+            size_of::<VirtioPciCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
+            VirtioPciCapType::Device as u8,
+            VIRTIO_PCI_MEM_BAR_IDX,
+            VIRTIO_PCI_CAP_DEVICE_OFFSET,
+            VIRTIO_PCI_CAP_DEVICE_LENGTH,
+        );
+        self.modern_mem_region_map(device_cap)?;
+
+        let notify_cap = VirtioPciNotifyCap::new(
+            size_of::<VirtioPciNotifyCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
+            VirtioPciCapType::Notify as u8,
+            VIRTIO_PCI_MEM_BAR_IDX,
+            VIRTIO_PCI_CAP_NOTIFY_OFFSET,
+            VIRTIO_PCI_CAP_NOTIFY_LENGTH,
+            VIRTIO_PCI_CAP_NOTIFY_OFF_MULTIPLIER,
+        );
+        self.modern_mem_region_map(notify_cap)?;
+
+        let nvectors = self.device.lock().unwrap().queue_num() + 1;
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.dev_id = self.set_dev_id(0, self.devfn);
+        }
+        init_msix(
+            vm_fd,
+            VIRTIO_PCI_MSIX_BAR_IDX as usize,
+            nvectors as u32,
+            &mut self.config,
+            self.dev_id,
+        )?;
+
+        self.assign_interrupt_cb();
+
+        let mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
+            as u64)
+            .next_power_of_two();
+        let modern_mem_region = Region::init_container_region(mem_region_size);
+        self.modern_mem_region_init(&modern_mem_region)?;
+
+        self.config.register_bar(
+            VIRTIO_PCI_MEM_BAR_IDX as usize,
+            modern_mem_region,
+            RegionType::Mem32Bit,
+            false,
+            mem_region_size,
+        );
+
+        self.device
+            .lock()
+            .unwrap()
+            .realize()
+            .chain_err(|| "Failed to realize virtio device")?;
+
+        let devfn = self.devfn;
+        let dev = Arc::new(Mutex::new(self));
+        dev.lock()
+            .unwrap()
+            .parent_bus
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .devices
+            .insert(devfn, dev.clone());
+
+        Ok(())
+    }
+
+    fn read_config(&self, offset: usize, data: &mut [u8]) {
+        let data_size = data.len();
+        if offset + data_size > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
+            error!(
+                "Failed to read pcie config space at offset 0x{:x} with data size {}",
+                offset, data_size
+            );
+            return;
+        }
+
+        self.config.read(offset, data);
+    }
+
+    fn write_config(&mut self, offset: usize, data: &[u8]) {
+        let data_size = data.len();
+        let end = offset + data_size;
+        if end > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
+            error!(
+                "Failed to write pcie config space at offset 0x{:x} with data size {}",
+                offset, data_size
+            );
+            return;
+        }
+
+        self.config.write(offset, data, &self.vm_fd, self.dev_id);
+
+        if ranges_overlap(
+            offset,
+            end,
+            BAR_0 as usize,
+            BAR_0 as usize + REG_SIZE as usize * VIRTIO_PCI_BAR_MAX as usize,
+        ) || ranges_overlap(offset, end, ROM_ADDRESS, ROM_ADDRESS + 4)
+            || ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + 1)
+        {
+            let parent_bus = self.parent_bus.upgrade().unwrap();
+            let locked_parent_bus = parent_bus.lock().unwrap();
+            if let Err(e) = self.config.update_bar_mapping(
+                #[cfg(target_arch = "x86_64")]
+                &locked_parent_bus.io_region,
+                &locked_parent_bus.mem_region,
+            ) {
+                error!("Failed to update bar, error is {}", e.display_chain());
+            }
+        }
+    }
+
+    fn name(&self) -> String {
+        self.name.clone()
     }
 }
