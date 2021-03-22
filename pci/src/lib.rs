@@ -38,8 +38,7 @@ pub mod errors {
 }
 
 mod bus;
-#[allow(dead_code)]
-mod config;
+pub mod config;
 mod host;
 mod msix;
 mod root_port;
@@ -49,6 +48,7 @@ pub use config::{
     PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 pub use host::PciHost;
+pub use msix::init_msix;
 
 use std::mem::size_of;
 use std::sync::Arc;

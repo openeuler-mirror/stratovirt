@@ -34,8 +34,11 @@ pub const VENDOR_ID: u8 = 0x0;
 pub const DEVICE_ID: u8 = 0x02;
 /// Command register.
 pub const COMMAND: u8 = 0x04;
+pub const REVISION_ID: usize = 0x08;
 /// Sub-Class Code Register.
 pub const SUB_CLASS_CODE: u8 = 0x0a;
+pub const SUBSYSTEM_VENDOR_ID: usize = 0x2c;
+pub const SUBSYSTEM_ID: usize = 0x2e;
 /// Header Type register.
 pub const HEADER_TYPE: u8 = 0x0e;
 /// Base address register 0.
@@ -52,6 +55,8 @@ pub const MEMORY_BASE: u8 = 0x20;
 pub const PREF_MEMORY_BASE: u8 = 0x24;
 /// Prefetchable memory limit register.
 pub const PREF_MEMORY_LIMIT: u8 = 0x26;
+pub const ROM_ADDRESS: usize = 0x30;
+pub const ROM_ADDRESS1: usize = 0x38;
 
 /// 64-bit prefetchable memory addresses.
 pub const PREF_MEM_RANGE_64BIT: u8 = 0x01;
