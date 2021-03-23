@@ -589,11 +589,11 @@ pub struct AmlFieldUnit {
     /// The name of this Field unit. `None` value indicate that this field is reserved.
     name: Option<String>,
     /// The Byte length of this Field unit.
-    length: u8,
+    length: u32,
 }
 
 impl AmlFieldUnit {
-    pub fn new(name: Option<&str>, length: u8) -> AmlFieldUnit {
+    pub fn new(name: Option<&str>, length: u32) -> AmlFieldUnit {
         AmlFieldUnit {
             name: name.map(|s| s.to_string()),
             length,
@@ -791,34 +791,127 @@ impl AmlBuilder for AmlReturn {
     }
 }
 
-/// Call a method.
-pub struct AmlCall {
-    /// Name of the method that will be called.
-    name: String,
-    /// The arguments that will be passed to the method. Note that
-    /// the arguments provided must match to the arguments' count of the method.
-    buf: Vec<u8>,
+// Macro that helps to define `MethodCallWithArgsx`.
+macro_rules! method_call_define {
+    ($name: ident) => {
+        #[derive(Clone)]
+        /// Call a method.
+        pub struct $name {
+            /// Name of the method that will be called.
+            name: String,
+            /// The arguments that will be passed to the method. Note that
+            /// the arguments provided must match to the arguments' count of the method.
+            buf: Vec<u8>,
+        }
+
+        impl AmlBuilder for $name {
+            fn aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.extend(build_name_string(&self.name));
+                bytes.extend(self.buf.clone());
+
+                bytes
+            }
+        }
+    };
 }
 
-impl AmlCall {
-    pub fn new<T: AmlBuilder>(name: &str, args: Vec<T>) -> AmlCall {
-        let mut bytes = Vec::new();
-        args.iter().for_each(|arg| bytes.extend(arg.aml_bytes()));
+// AmlCallWithArgs1 represents calling method with 1 argument.
+method_call_define!(AmlCallWithArgs1);
+// AmlCallWithArgs2 represents calling method with 2 arguments.
+method_call_define!(AmlCallWithArgs2);
+// AmlCallWithArgs3 represents calling method with 3 arguments.
+method_call_define!(AmlCallWithArgs3);
+// AmlCallWithArgs4 represents calling method with 4 arguments.
+method_call_define!(AmlCallWithArgs4);
+// AmlCallWithArgs5 represents calling method with 5 arguments.
+method_call_define!(AmlCallWithArgs5);
 
-        AmlCall {
+impl AmlCallWithArgs1 {
+    pub fn new<A: AmlBuilder>(name: &str, arg0: A) -> AmlCallWithArgs1 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+
+        AmlCallWithArgs1 {
             name: name.to_string(),
             buf: bytes,
         }
     }
 }
 
-impl AmlBuilder for AmlCall {
-    fn aml_bytes(&self) -> Vec<u8> {
+impl AmlCallWithArgs2 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder>(name: &str, arg0: A, arg1: B) -> AmlCallWithArgs2 {
         let mut bytes = Vec::new();
-        bytes.extend(build_name_string(&self.name));
-        bytes.extend(self.buf.clone());
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
 
-        bytes
+        AmlCallWithArgs2 {
+            name: name.to_string(),
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlCallWithArgs3 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder, C: AmlBuilder>(
+        name: &str,
+        arg0: A,
+        arg1: B,
+        arg2: C,
+    ) -> AmlCallWithArgs3 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
+        bytes.extend(arg2.aml_bytes());
+
+        AmlCallWithArgs3 {
+            name: name.to_string(),
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlCallWithArgs4 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder, C: AmlBuilder, D: AmlBuilder>(
+        name: &str,
+        arg0: A,
+        arg1: B,
+        arg2: C,
+        arg3: D,
+    ) -> AmlCallWithArgs4 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
+        bytes.extend(arg2.aml_bytes());
+        bytes.extend(arg3.aml_bytes());
+
+        AmlCallWithArgs4 {
+            name: name.to_string(),
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlCallWithArgs5 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder, C: AmlBuilder, D: AmlBuilder, E: AmlBuilder>(
+        name: &str,
+        arg0: A,
+        arg1: B,
+        arg2: C,
+        arg3: D,
+        arg4: E,
+    ) -> AmlCallWithArgs5 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
+        bytes.extend(arg2.aml_bytes());
+        bytes.extend(arg3.aml_bytes());
+        bytes.extend(arg4.aml_bytes());
+
+        AmlCallWithArgs5 {
+            name: name.to_string(),
+            buf: bytes,
+        }
     }
 }
 
