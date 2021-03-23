@@ -42,7 +42,7 @@ use virtio::{qmp_balloon, qmp_query_balloon};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
-use super::StdMachineOps;
+use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind, Result};
 use crate::MachineOps;
 use syscall::syscall_whitelist;
@@ -433,6 +433,8 @@ impl MachineOps for StdMachine {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
+
+impl AcpiBuilder for StdMachine {}
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {

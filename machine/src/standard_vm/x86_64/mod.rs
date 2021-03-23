@@ -42,7 +42,7 @@ use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
 use super::errors::{ErrorKind, Result};
-use super::StdMachineOps;
+use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
 use mch::Mch;
@@ -395,6 +395,8 @@ impl MachineOps for StdMachine {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
+
+impl AcpiBuilder for StdMachine {}
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
