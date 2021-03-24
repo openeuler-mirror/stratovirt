@@ -10,12 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::io::Write;
+#[allow(dead_code)]
+mod helper;
+#[allow(dead_code)]
+mod memory;
+
 use std::sync::Arc;
 
-use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::Kvm;
 use kvm_ioctls::VcpuExit;
+
+use crate::memory::GuestMemory;
 
 // Run a simple VM on x86_64 platfrom.
 // Reference: https://lwn.net/Articles/658511/.
@@ -38,35 +43,11 @@ fn main() {
     let vm_fd = Arc::new(kvm.create_vm().expect("Failed to create a vm"));
 
     // 2. Initialize Guest Memory.
-    let host_addr: *mut u8 = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            mem_size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-            -1,
-            0,
-        ) as *mut u8
-    };
-
-    let kvm_region = kvm_userspace_memory_region {
-        slot: 0,
-        guest_phys_addr: guest_addr,
-        memory_size: mem_size as u64,
-        userspace_addr: host_addr as u64,
-        flags: 0,
-    };
-    unsafe {
-        vm_fd
-            .set_user_memory_region(kvm_region)
-            .expect("Failed to set memory region to KVM")
-    };
-    unsafe {
-        let mut slice = std::slice::from_raw_parts_mut(host_addr, mem_size);
-        slice
-            .write_all(&asm_code)
-            .expect("Failed to load asm code to memory");
-    }
+    let guest_memory = GuestMemory::new(&vm_fd, mem_size).expect("Failed to init guest memory");
+    let asm_code_len = asm_code.len() as u64;
+    guest_memory
+        .write(&mut asm_code[..].as_ref(), guest_addr, asm_code_len)
+        .expect("Failed to load asm code to memory");
 
     // 3. Create vCPUs, and initialize registers.
     let vcpu_fd = vm_fd.create_vcpu(0).expect("Failed to create vCPU");
