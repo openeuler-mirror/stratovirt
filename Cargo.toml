@@ -1,0 +1,24 @@
+[package]
+name = "StratoVirt"
+version = "0.2.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2018"
+description = "a lightweight hypervisor with low memory overhead and fast booting speed"
+license = "Mulan PSL v2"
+
+[dependencies]
+libc = ">=0.2.39"
+vmm-sys-util = "0.7.0"
+kvm-ioctls = "0.6.0"
+kvm-bindings = "0.3.0"
+
+[[bin]]
+name = "stratovirt"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
