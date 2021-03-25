@@ -981,7 +981,31 @@ impl VirtioDevice for Block {
 mod tests {
     use super::super::*;
     use super::*;
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+    use machine_manager::config::IothreadConfig;
+    use std::{thread, time::Duration};
     use vmm_sys_util::tempfile::TempFile;
+
+    const VIRTQ_DESC_F_NEXT: u16 = 0x01;
+    const VIRTQ_DESC_F_WRITE: u16 = 0x02;
+    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
+
+    // build dummy address space of vm
+    fn address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36);
+        let sys_space = AddressSpace::new(root).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
 
     // Use different input parameters to verify block `new()` and `realize()` functionality.
     #[test]
@@ -1101,5 +1125,120 @@ mod tests {
         let id_bytes_temp = get_serial_num_config(&serial_num);
         assert_eq!(id_bytes_temp[..], [0; 20]);
         assert_eq!(id_bytes_temp.len(), 20);
+    }
+
+    // Test iothread and qos capability. The function will spawn a thread called 'iothread', then
+    // io request will be handled by this thread.
+    #[test]
+    fn test_iothread() {
+        let thread_name = "io1".to_string();
+
+        // spawn io thread
+        let io_conf = IothreadConfig {
+            id: thread_name.clone(),
+        };
+        EventLoop::object_init(&Some(vec![io_conf])).unwrap();
+
+        let mut block = Block::new();
+        let file = TempFile::new().unwrap();
+        block.blk_cfg.path_on_host = file.as_path().to_str().unwrap().to_string();
+
+        // config iothread and iops
+        block.blk_cfg.iothread = Some(thread_name);
+        block.blk_cfg.iops = Some(100);
+
+        let mem_space = address_space_init();
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+
+        let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
+        queue_config.desc_table = GuestAddress(0);
+        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_BLK as u64);
+        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_BLK as u64);
+        queue_config.size = QUEUE_SIZE_BLK;
+        queue_config.ready = true;
+
+        let queues: Vec<Arc<Mutex<Queue>>> =
+            vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
+
+        let event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+
+        // activate block device
+        block
+            .activate(
+                mem_space.clone(),
+                interrupt_evt,
+                interrupt_status,
+                queues,
+                vec![event.try_clone().unwrap()],
+            )
+            .unwrap();
+
+        // make first descriptor entry
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x100),
+            len: 16,
+            flags: VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .unwrap();
+
+        // write RequestOutHeader to first desc
+        let req_head = RequestOutHeader {
+            request_type: 0, // read
+            io_prio: 0,
+            sector: 0,
+        };
+        mem_space
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .unwrap();
+
+        // making the second descriptor entry to receive data from device
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x200),
+            len: 16,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 2,
+        };
+        mem_space
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16 as u64),
+            )
+            .unwrap();
+
+        // write avail_ring idx
+        mem_space
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .unwrap();
+
+        // write avail_ring id
+        mem_space
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .unwrap();
+
+        // imitating guest OS to send notification.
+        event.write(1).unwrap();
+
+        // waiting for io handled
+        let mut wait = 10; // wait for 2 seconds
+        loop {
+            thread::sleep(Duration::from_millis(200));
+
+            wait -= 1;
+            if wait == 0 {
+                assert_eq!(0, 1); // timeout failed
+            }
+
+            // get used_ring data
+            let idx = mem_space
+                .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+                .unwrap();
+            if idx == 1 {
+                break;
+            }
+        }
     }
 }
