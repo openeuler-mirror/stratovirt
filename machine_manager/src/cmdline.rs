@@ -11,13 +11,13 @@
 // See the Mulan PSL v2 for more details.
 
 use error_chain::bail;
-use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
 use crate::{
     config::VmConfig,
     errors::{Result, ResultExt},
-    socket::SocketType,
 };
+use util::arg_parser::{Arg, ArgMatches, ArgParser};
+use util::unix::{parse_uri, UnixPath};
 
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
@@ -310,64 +310,12 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
 /// # Errors
 ///
 /// The value of `api-channel` is illegel.
-pub fn check_api_channel(args: &ArgMatches) -> Result<(String, SocketType)> {
+pub fn check_api_channel(args: &ArgMatches) -> Result<(String, UnixPath)> {
     if let Some(api) = args.value_of("api-channel") {
-        let (api_path, api_type) = parse_path(&api)
-            .map(|(path, type_)| (path, type_))
-            .chain_err(|| "Failed to parse api-channel socket path")?;
+        let (api_type, api_path) =
+            parse_uri(&api).chain_err(|| "Failed to parse api-channel socket path")?;
         Ok((api_path, api_type))
     } else {
         bail!("Please use \'-api-channel\' to give a api-channel path for Unix socket");
-    }
-}
-
-/// This function is to parse a `String` to socket path string and socket type.
-///
-/// # Arguments
-///
-/// * `args_str` - The arguments `String` would be parsed.
-///
-/// # Errors
-///
-/// The arguments `String` is illegal.
-fn parse_path(args_str: &str) -> Result<(String, SocketType)> {
-    let arg: Vec<&str> = args_str.split(',').collect();
-    let item = arg[0].to_string();
-    let path_vec: Vec<&str> = item.split(':').collect();
-    if path_vec.len() > 1 {
-        if path_vec[0] == "unix" {
-            let unix_path = String::from(path_vec[1]);
-            Ok((unix_path, SocketType::Unix))
-        } else {
-            bail!("{} type is not support yet!", path_vec[0]);
-        }
-    } else {
-        bail!("Failed to parse path: {}", args_str);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_path() {
-        let test_path = "unix:/tmp/stratovirt.sock";
-        assert_eq!(
-            parse_path(test_path).unwrap(),
-            ("/tmp/stratovirt.sock".to_string(), SocketType::Unix)
-        );
-
-        let test_path = "unix:/tmp/stratovirt.sock,nowait,server";
-        assert_eq!(
-            parse_path(test_path).unwrap(),
-            ("/tmp/stratovirt.sock".to_string(), SocketType::Unix)
-        );
-
-        let test_path = "tcp:127.0.0.1:8080,nowait,server";
-        assert!(parse_path(test_path).is_err());
-
-        let test_path = "file:/tmp/stratovirt-file";
-        assert!(parse_path(test_path).is_err());
     }
 }
