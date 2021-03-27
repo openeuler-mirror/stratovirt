@@ -20,7 +20,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
-use devices::legacy::{Serial, SERIAL_ADDR};
+use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, Serial, SERIAL_ADDR};
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
@@ -47,6 +47,7 @@ use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
 use mch::Mch;
 use syscall::syscall_whitelist;
+use util::byte_code::ByteCode;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
@@ -173,6 +174,24 @@ impl StdMachineOps for StdMachine {
         );
         PciDevOps::realize(mch, &vm_fd)?;
         Ok(())
+    }
+
+    fn add_fwcfg_device(
+        &mut self,
+        vm_fd: &VmFd,
+    ) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
+        use super::errors::ResultExt;
+
+        let mut fwcfg = FwCfgIO::new(self.sys_mem.clone());
+        let ncpus = self.cpus.len();
+        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
+
+        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus, vm_fd)
+            .chain_err(|| "Failed to realize fwcfg device")?;
+
+        Ok(fwcfg_dev)
     }
 }
 
@@ -368,6 +387,7 @@ impl MachineOps for StdMachine {
             .init_pci_host(&vm_fd)
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
         locked_vm.add_devices(vm_config, &vm_fd)?;
+        let _fw_cfg = locked_vm.add_fwcfg_device(&vm_fd)?;
 
         let boot_config = locked_vm.load_boot_source()?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
