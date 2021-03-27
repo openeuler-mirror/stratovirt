@@ -267,6 +267,7 @@ checksum = "1a5b3dd1c072ee7963717671d1ca129f1048fda25edea6b752bfc71ac8854170"
 name = "pci"
 version = "0.3.0"
 dependencies = [
+ "acpi",
  "address_space",
  "byteorder",
  "error-chain",

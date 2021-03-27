@@ -133,7 +133,11 @@ impl StdMachine {
             irq_chip: None,
             sys_mem: sys_mem.clone(),
             sysbus,
-            pci_host: Arc::new(Mutex::new(PciHost::new(&sys_mem))),
+            pci_host: Arc::new(Mutex::new(PciHost::new(
+                &sys_mem,
+                MEM_LAYOUT[LayoutEntryType::PcieEcam as usize],
+                MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
+            ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
             power_button: EventFd::new(libc::EFD_NONBLOCK)

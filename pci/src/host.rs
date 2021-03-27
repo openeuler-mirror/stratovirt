@@ -12,6 +12,17 @@
 
 use std::sync::{Arc, Mutex};
 
+use acpi::{
+    AmlAddressSpaceDecode, AmlBuilder, AmlByte, AmlCacheable, AmlDWord, AmlDWordDesc, AmlDevice,
+    AmlEisaId, AmlNameDecl, AmlPackage, AmlReadAndWrite, AmlResTemplate, AmlScopeBuilder,
+    AmlWordDesc, AmlZero,
+};
+#[cfg(target_arch = "x86_64")]
+use acpi::{
+    AmlAnd, AmlArg, AmlCreateDWordField, AmlElse, AmlEqual, AmlISARanges, AmlIf, AmlInteger,
+    AmlIoDecode, AmlIoResource, AmlLNot, AmlLocal, AmlMethod, AmlName, AmlOr, AmlReturn, AmlStore,
+    AmlToUuid,
+};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use sysbus::SysBusDevOps;
 
@@ -37,12 +48,14 @@ const ECAM_DEVFN_SHIFT: u32 = 12;
 #[allow(dead_code)]
 const ECAM_OFFSET_MASK: u64 = 0xfff;
 
-#[allow(dead_code)]
+#[derive(Clone)]
 pub struct PciHost {
     pub root_bus: Arc<Mutex<PciBus>>,
     device: Option<Arc<Mutex<dyn PciDevOps>>>,
     #[cfg(target_arch = "x86_64")]
     config_addr: u32,
+    pcie_ecam_range: (u64, u64),
+    pcie_mmio_range: (u64, u64),
 }
 
 impl PciHost {
@@ -52,10 +65,11 @@ impl PciHost {
     ///
     /// * `sys_io` - IO space which the host bridge maps (only on x86_64).
     /// * `sys_mem`- Memory space which the host bridge maps.
-    #[allow(dead_code)]
     pub fn new(
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
+        pcie_ecam_range: (u64, u64),
+        pcie_mmio_range: (u64, u64),
     ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = sys_io.root().clone();
@@ -71,6 +85,8 @@ impl PciHost {
             device: None,
             #[cfg(target_arch = "x86_64")]
             config_addr: 0,
+            pcie_ecam_range,
+            pcie_mmio_range,
         }
     }
 
@@ -226,5 +242,113 @@ impl SysBusDevOps for PciHost {
             }
             None => true,
         }
+    }
+}
+
+impl AmlBuilder for PciHost {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut pci_host_bridge = AmlDevice::new("PCI0");
+        pci_host_bridge.append_child(AmlNameDecl::new("_HID", AmlEisaId::new("PNP0A08")));
+        pci_host_bridge.append_child(AmlNameDecl::new("_CID", AmlEisaId::new("PNP0A03")));
+        pci_host_bridge.append_child(AmlNameDecl::new("_ADR", AmlZero));
+        pci_host_bridge.append_child(AmlNameDecl::new("_UID", AmlZero));
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut method = AmlMethod::new("_OSC", 4, false);
+            method.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(0), "CDW1"));
+            let mut if_obj_0 = AmlIf::new(AmlEqual::new(
+                AmlArg(0),
+                AmlToUuid::new("33db4d5b-1ff7-401c-9657-7441c03dd766"),
+            ));
+            if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(4), "CDW2"));
+            if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(8), "CDW3"));
+            let cdw3 = AmlName("CDW3".to_string());
+            if_obj_0.append_child(AmlStore::new(cdw3.clone(), AmlLocal(0)));
+            if_obj_0.append_child(AmlAnd::new(AmlLocal(0), AmlInteger(0x1f), AmlLocal(0)));
+            let mut if_obj_1 = AmlIf::new(AmlLNot::new(AmlEqual::new(AmlArg(1), AmlInteger(1))));
+            let cdw1 = AmlName("CDW1".to_string());
+            if_obj_1.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x08), cdw1.clone()));
+            if_obj_0.append_child(if_obj_1);
+            let mut if_obj_2 = AmlIf::new(AmlLNot::new(AmlEqual::new(cdw3.clone(), AmlLocal(0))));
+            if_obj_2.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x10), cdw1.clone()));
+            if_obj_0.append_child(if_obj_2);
+            if_obj_0.append_child(AmlStore::new(AmlLocal(0), cdw3));
+            method.append_child(if_obj_0);
+            let mut else_obj_0 = AmlElse::new();
+            else_obj_0.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x04), cdw1));
+            method.append_child(else_obj_0);
+            method.append_child(AmlReturn::with_value(AmlArg(3)));
+            pci_host_bridge.append_child(method);
+        }
+
+        let pcie_ecam = self.pcie_ecam_range;
+        let pcie_mmio = self.pcie_mmio_range;
+        // Build and append "\_SB.PCI0._CRS" to PCI host bridge node.
+        let max_nr_bus = (pcie_ecam.1 >> 20) as u16;
+        let mut crs = AmlResTemplate::new();
+        crs.append_child(AmlWordDesc::new_bus_number(
+            AmlAddressSpaceDecode::Positive,
+            0,
+            0,
+            max_nr_bus - 1,
+            0,
+            max_nr_bus,
+        ));
+        #[cfg(target_arch = "x86_64")]
+        {
+            crs.append_child(AmlIoResource::new(
+                AmlIoDecode::Decode16,
+                0xcf8,
+                0xcf8,
+                1,
+                8,
+            ));
+            crs.append_child(AmlWordDesc::new_io(
+                AmlAddressSpaceDecode::Positive,
+                AmlISARanges::EntireRange,
+                0,
+                0,
+                0x0cf7,
+                0,
+                0xcf8,
+            ));
+            crs.append_child(AmlWordDesc::new_io(
+                AmlAddressSpaceDecode::Positive,
+                AmlISARanges::EntireRange,
+                0,
+                0x0d00,
+                0xffff,
+                0,
+                0xf300,
+            ));
+        }
+        crs.append_child(AmlDWordDesc::new_memory(
+            AmlAddressSpaceDecode::Positive,
+            AmlCacheable::NonCacheable,
+            AmlReadAndWrite::ReadWrite,
+            0,
+            pcie_mmio.0 as u32,
+            (pcie_mmio.0 + pcie_mmio.1) as u32 - 1,
+            0,
+            pcie_mmio.1 as u32,
+        ));
+        pci_host_bridge.append_child(AmlNameDecl::new("_CRS", crs));
+
+        // Build and append pci-routing-table to PCI host bridge node.
+        let slot_num = 32_u8;
+        let mut prt_pkg = AmlPackage::new(slot_num);
+        let pci_irq_base = 16_u32;
+        (0..slot_num).for_each(|slot| {
+            let mut pkg = AmlPackage::new(4);
+            pkg.append_child(AmlDWord(((slot as u32) << 16) as u32 | 0xFFFF));
+            pkg.append_child(AmlByte(0));
+            pkg.append_child(AmlByte(0));
+            pkg.append_child(AmlDWord(pci_irq_base + (slot as u32 % 8)));
+            prt_pkg.append_child(pkg);
+        });
+        pci_host_bridge.append_child(AmlNameDecl::new("_PRT", prt_pkg));
+
+        pci_host_bridge.aml_bytes()
     }
 }
