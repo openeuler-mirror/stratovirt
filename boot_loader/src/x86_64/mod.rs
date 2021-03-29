@@ -54,6 +54,8 @@
 
 mod bootparam;
 mod direct_boot;
+#[allow(dead_code)]
+mod standard_boot;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -68,6 +70,7 @@ const ZERO_PAGE_START: u64 = 0x0000_7000;
 const PML4_START: u64 = 0x0000_9000;
 const PDPTE_START: u64 = 0x0000_a000;
 const PDE_START: u64 = 0x0000_b000;
+const SETUP_START: u64 = 0x0001_0000;
 const CMDLINE_START: u64 = 0x0002_0000;
 const BOOT_HDR_START: u64 = 0x0000_01F1;
 const BZIMAGE_BOOT_OFFSET: u64 = 0x0200;
