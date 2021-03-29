@@ -14,6 +14,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 
+use acpi::AmlBuilder;
 use address_space::{GuestAddress, HostMemMapping, Region};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
@@ -832,5 +833,11 @@ impl SysBusDevOps for PFlash {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Flash
+    }
+}
+
+impl AmlBuilder for PFlash {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::new()
     }
 }

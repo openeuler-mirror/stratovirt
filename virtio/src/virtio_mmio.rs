@@ -574,6 +574,12 @@ impl SysBusDevOps for VirtioMmioDevice {
     }
 }
 
+impl acpi::AmlBuilder for VirtioMmioDevice {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;

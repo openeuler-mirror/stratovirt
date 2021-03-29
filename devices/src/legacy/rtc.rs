@@ -12,6 +12,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use acpi::{
+    AmlBuilder, AmlDevice, AmlEisaId, AmlIoDecode, AmlIoResource, AmlIrqNoFlags, AmlNameDecl,
+    AmlResTemplate, AmlScopeBuilder,
+};
 use address_space::GuestAddress;
 use kvm_ioctls::VmFd;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
@@ -261,5 +265,25 @@ impl SysBusDevOps for RTC {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Rtc
+    }
+}
+
+impl AmlBuilder for RTC {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut acpi_dev = AmlDevice::new("RTC");
+        acpi_dev.append_child(AmlNameDecl::new("_HID", AmlEisaId::new("PNP0B00")));
+
+        let mut res = AmlResTemplate::new();
+        res.append_child(AmlIoResource::new(
+            AmlIoDecode::Decode16,
+            self.res.region_base as u16,
+            self.res.region_base as u16,
+            0x01,
+            self.res.region_size as u8,
+        ));
+        res.append_child(AmlIrqNoFlags::new(self.res.irq as u8));
+        acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
+
+        acpi_dev.aml_bytes()
     }
 }

@@ -449,6 +449,9 @@ impl AcpiBuilder for StdMachine {
         sb_scope.append_child(self.pci_host.lock().unwrap().clone());
         dsdt.append_child(sb_scope.aml_bytes().as_slice());
 
+        // 3. Info of devices attached to system bus.
+        dsdt.append_child(self.sysbus.aml_bytes().as_slice());
+
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let dsdt_begin = locked_acpi_data.len() as u32;
         locked_acpi_data.extend(dsdt.aml_bytes());

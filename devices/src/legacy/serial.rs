@@ -14,6 +14,11 @@ use std::collections::VecDeque;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
+use acpi::{
+    AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlExtendedInterrupt,
+    AmlIntShare, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
+    AmlResourceUsage, AmlScopeBuilder,
+};
 use address_space::GuestAddress;
 use kvm_ioctls::VmFd;
 #[cfg(target_arch = "aarch64")]
@@ -380,6 +385,34 @@ impl EventNotifierHelper for Serial {
 
         notifiers.push(notifier);
         notifiers
+    }
+}
+
+impl AmlBuilder for Serial {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut acpi_dev = AmlDevice::new("COM1");
+        acpi_dev.append_child(AmlNameDecl::new("_HID", AmlEisaId::new("PNP0501")));
+        acpi_dev.append_child(AmlNameDecl::new("_UID", AmlInteger(1)));
+        acpi_dev.append_child(AmlNameDecl::new("_STA", AmlInteger(0xF)));
+
+        let mut res = AmlResTemplate::new();
+        res.append_child(AmlIoResource::new(
+            AmlIoDecode::Decode16,
+            self.res.region_base as u16,
+            self.res.region_base as u16,
+            0x00,
+            self.res.region_size as u8,
+        ));
+        res.append_child(AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Edge,
+            AmlActiveLevel::High,
+            AmlIntShare::Exclusive,
+            vec![self.res.irq as u32],
+        ));
+        acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
+
+        acpi_dev.aml_bytes()
     }
 }
 

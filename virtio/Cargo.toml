@@ -19,3 +19,4 @@ machine_manager = { path = "../machine_manager" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 pci = { path = "../pci" }
+acpi = { path = "../acpi" }

@@ -628,6 +628,10 @@ impl AmlScope {
             buf: build_name_string(name),
         }
     }
+
+    pub fn append(&mut self, data: &[u8]) {
+        self.buf.extend(data);
+    }
 }
 
 impl AmlBuilder for AmlScope {

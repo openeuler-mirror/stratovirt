@@ -17,6 +17,7 @@ boot_loader = { path = "../boot_loader" }
 machine_manager = { path = "../machine_manager" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
+acpi = { path = "../acpi" }
 byteorder = "1.3.4"
 kvm-bindings = ">=0.3.0"
 
