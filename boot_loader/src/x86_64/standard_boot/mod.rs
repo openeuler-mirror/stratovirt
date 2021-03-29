@@ -10,6 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[allow(dead_code)]
+#[allow(non_camel_case_types)]
+mod elf;
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
