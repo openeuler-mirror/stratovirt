@@ -20,7 +20,7 @@ use std::sync::Arc;
 use address_space::{AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 
-use super::bootparam::{BootParams, RealModeKernelHeader, BOOT_VERSION, HDRS};
+use super::bootparam::{BootParams, RealModeKernelHeader};
 use super::{X86BootLoader, X86BootLoaderConfig};
 use super::{
     BOOT_HDR_START, BOOT_LOADER_SP, BZIMAGE_BOOT_OFFSET, CMDLINE_START, EBDA_START,
@@ -58,14 +58,9 @@ pub fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
         .chain_err(|| "Failed to read boot_hdr from bzImage kernel")?;
     let boot_hdr = RealModeKernelHeader::from_bytes(&boot_hdr_buf).unwrap();
 
-    if boot_hdr.header != HDRS {
+    if let Err(e) = boot_hdr.check_valid_kernel() {
         kernel_image.seek(SeekFrom::Start(0))?;
-        return Err(ErrorKind::InvalidBzImage.into());
-    }
-
-    if (boot_hdr.version < BOOT_VERSION) || ((boot_hdr.loadflags & 0x1) == 0x0) {
-        kernel_image.seek(SeekFrom::Start(0))?;
-        return Err(ErrorKind::InvalidBzImage.into());
+        return Err(e);
     }
 
     let mut setup_size = boot_hdr.setup_sects as u64;

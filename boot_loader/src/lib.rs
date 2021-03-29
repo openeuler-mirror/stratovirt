@@ -103,6 +103,7 @@ pub mod errors {
         }
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            FwCfg(devices::legacy::errors::Error, devices::legacy::errors::ErrorKind);
         }
         errors {
             #[cfg(target_arch = "aarch64")] DTBOverflow(size: u64) {
@@ -130,6 +131,12 @@ pub mod errors {
             }
             #[cfg(target_arch = "x86_64")] InvalidBzImage {
                 display("Invalid bzImage kernel file")
+            }
+            #[cfg(target_arch = "x86_64")] OldVersionKernel {
+                display("Kernel version is too old.")
+            }
+            #[cfg(target_arch = "x86_64")] ElfKernel {
+                display("ELF-format kernel is not supported")
             }
         }
     }
