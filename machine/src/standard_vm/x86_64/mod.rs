@@ -279,7 +279,10 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn load_boot_source(&self) -> MachineResult<CPUBootConfig> {
+    fn load_boot_source(
+        &self,
+        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+    ) -> MachineResult<CPUBootConfig> {
         use crate::errors::ResultExt;
 
         let boot_source = self.boot_source.lock().unwrap();
@@ -298,7 +301,7 @@ impl MachineOps for StdMachine {
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
             prot64_mode: false,
         };
-        let layout = load_linux(&bootloader_config, &self.sys_mem)
+        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
 
         Ok(CPUBootConfig {
@@ -443,9 +446,9 @@ impl MachineOps for StdMachine {
             .init_pci_host()
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
         locked_vm.add_devices(vm_config)?;
-        let _fw_cfg = locked_vm.add_fwcfg_device()?;
+        let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let boot_config = locked_vm.load_boot_source()?;
+        let boot_config = locked_vm.load_boot_source(Some(&fwcfg))?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,

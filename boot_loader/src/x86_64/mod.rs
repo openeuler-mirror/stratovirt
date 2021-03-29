@@ -56,9 +56,10 @@ mod bootparam;
 mod direct_boot;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
+use devices::legacy::FwCfgOps;
 use kvm_bindings::kvm_segment;
 
 use crate::errors::Result;
@@ -133,10 +134,14 @@ pub struct BootGdtSegment {
 pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
+    fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
 ) -> Result<X86BootLoader> {
-    if !config.prot64_mode {
-        bail!("Only support boot from 64-bit protection mode.");
+    if config.prot64_mode {
+        direct_boot::load_linux(config, sys_mem)
+    } else {
+        if fwcfg.is_none() {
+            bail!("Failed to load linux: No FwCfg provided");
+        }
+        bail!("Failed to load linux: Booting from real mode is not implemented");
     }
-
-    direct_boot::load_linux(config, sys_mem)
 }

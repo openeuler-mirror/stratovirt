@@ -107,6 +107,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use address_space::KvmIoListener;
 use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
+use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use hypervisor::KVM_FDS;
@@ -138,7 +139,7 @@ pub trait MachineOps {
     /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
 
-    fn load_boot_source(&self) -> Result<CPUBootConfig>;
+    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
 
     /// Init I/O & memory address space and mmap guest memory.
     ///

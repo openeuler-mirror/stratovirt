@@ -12,9 +12,10 @@
 
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress};
+use devices::legacy::FwCfgOps;
 use util::device_tree;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
@@ -66,9 +67,13 @@ pub struct AArch64BootLoader {
 pub fn load_linux(
     config: &AArch64BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
+    fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
 ) -> Result<AArch64BootLoader> {
-    let kernel_start = config.mem_start + AARCH64_KERNEL_OFFSET;
+    if fwcfg.is_some() {
+        bail!("Failed to load linux: Booting from UEFI is not implemented");
+    }
 
+    let kernel_start = config.mem_start + AARCH64_KERNEL_OFFSET;
     let mut kernel_image =
         File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
     let kernel_size = kernel_image.metadata().unwrap().len();

@@ -53,7 +53,7 @@
 //!         prot64_mode: true,
 //!     };
 //!
-//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem, None).unwrap();
 //!     // Now PE linux kernel and kernel cmdline are loaded to guest memory...
 //! }
 //!
@@ -67,7 +67,7 @@
 //!         mem_start: 0x4000_0000,
 //!     };
 //!
-//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem, None).unwrap();
 //!     // Now PE linux kernel is loaded to guest memory...
 //! }
 //! ```
