@@ -68,6 +68,7 @@ pub enum LayoutEntryType {
     Mmio,
     IoApic,
     LocalApic,
+    IdentTss,
     MemAbove4g,
 }
 
@@ -79,6 +80,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
+    (0xFEF0_C000, 0x4000),           // Identity map address and TSS
     (0x1_0000_0000, 0x80_0000_0000), // MemAbove4g
 ];
 
@@ -142,6 +144,38 @@ impl StdMachine {
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| MachineErrorKind::InitPwrBtnErr)?,
         })
+    }
+
+    fn arch_init() -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
+        let identity_addr: u64 = MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0;
+
+        ioctl_iow_nr!(
+            KVM_SET_IDENTITY_MAP_ADDR,
+            kvm_bindings::KVMIO,
+            0x48,
+            std::os::raw::c_ulong
+        );
+        // Safe because the following ioctl only sets identity map address to KVM.
+        unsafe {
+            vmm_sys_util::ioctl::ioctl_with_ref(vm_fd, KVM_SET_IDENTITY_MAP_ADDR(), &identity_addr);
+        }
+        // Page table takes 1 page, TSS takes the following 3 pages.
+        vm_fd
+            .set_tss_address((identity_addr + 0x1000) as usize)
+            .chain_err(|| MachineErrorKind::SetTssErr)?;
+
+        let pit_config = kvm_pit_config {
+            flags: KVM_PIT_SPEAKER_DUMMY,
+            pad: Default::default(),
+        };
+        vm_fd
+            .create_pit2(pit_config)
+            .chain_err(|| MachineErrorKind::CrtPitErr)?;
+        Ok(())
     }
 }
 
@@ -299,6 +333,7 @@ impl MachineOps for StdMachine {
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+            ident_tss_range: Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]),
             prot64_mode: false,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
@@ -459,17 +494,8 @@ impl MachineOps for StdMachine {
             .build_acpi_tables(&fwcfg)
             .chain_err(|| "Failed to create ACPI tables")?;
 
-        let mut pit_config = kvm_pit_config::default();
-        pit_config.flags = KVM_PIT_SPEAKER_DUMMY;
-        vm_fd
-            .create_pit2(pit_config)
-            .chain_err(|| MachineErrorKind::CrtPitErr)?;
-        vm_fd
-            .set_tss_address(0xfffb_d000 as usize)
-            .chain_err(|| MachineErrorKind::SetTssErr)?;
-        locked_vm
-            .register_power_event(&locked_vm.power_button)
-            .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
+        StdMachine::arch_init()?;
+        locked_vm.register_power_event(&locked_vm.power_button)?;
         Ok(())
     }
 

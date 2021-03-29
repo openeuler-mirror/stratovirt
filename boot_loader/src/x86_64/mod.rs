@@ -109,6 +109,8 @@ pub struct X86BootLoaderConfig {
     pub ioapic_addr: u32,
     /// Local APIC base address
     pub lapic_addr: u32,
+    /// Range of identity-map and TSS
+    pub ident_tss_range: Option<(u64, u64)>,
     /// Boot from 64-bit protection mode or not.
     pub prot64_mode: bool,
 }

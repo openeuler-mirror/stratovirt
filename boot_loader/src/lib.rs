@@ -51,6 +51,7 @@
 //!         ioapic_addr: 0xFEC0_0000,
 //!         lapic_addr: 0xFEE0_0000,
 //!         prot64_mode: true,
+//!         ident_tss_range: None,
 //!     };
 //!
 //!     let layout = load_linux(&bootloader_config, &guest_mem, None).unwrap();

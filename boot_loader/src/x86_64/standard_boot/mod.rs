@@ -25,7 +25,7 @@ use super::bootparam::RealModeKernelHeader;
 use super::X86BootLoaderConfig;
 use super::{BOOT_HDR_START, CMDLINE_START};
 use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::x86_64::bootparam::{E820Entry, E820_RAM};
+use crate::x86_64::bootparam::{E820Entry, E820_RAM, E820_RESERVED};
 use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
 use elf::load_elf_kernel;
 
@@ -141,6 +141,13 @@ fn setup_e820_table(
             mem_end - mem_above_4g_start,
             E820_RAM,
         ));
+    }
+
+    if let Some(identity_range) = config.ident_tss_range {
+        let identity_entry = E820Entry::new(identity_range.0, identity_range.1, E820_RESERVED);
+        e820_table.push(identity_entry);
+    } else {
+        error!("The page-table and TSS address is not provided");
     }
 
     let bytes = e820_table.iter().fold(Vec::new(), |mut bytes, entry| {

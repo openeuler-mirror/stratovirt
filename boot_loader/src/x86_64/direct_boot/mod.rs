@@ -314,6 +314,7 @@ mod test {
             ioapic_addr: 0xFEC0_0000,
             lapic_addr: 0xFEE0_0000,
             prot64_mode: false,
+            ident_tss_range: None,
         };
         let mut boot_hdr = RealModeKernelHeader::new();
         assert!(setup_boot_params(&config, &space, &boot_hdr).is_ok());

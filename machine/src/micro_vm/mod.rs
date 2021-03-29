@@ -513,6 +513,7 @@ impl MachineOps for LightMachine {
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+            ident_tss_range: None,
             prot64_mode: true,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
