@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[allow(dead_code)]
 #[allow(non_camel_case_types)]
 mod elf;
 
@@ -28,6 +27,7 @@ use super::{BOOT_HDR_START, CMDLINE_START};
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::x86_64::bootparam::{E820Entry, E820_RAM};
 use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
+use elf::load_elf_kernel;
 
 fn load_image(
     image: &mut File,
@@ -181,7 +181,7 @@ fn load_kernel_cmdline(
     Ok(())
 }
 
-/// Load bzImage-format linux kernel and other boot source.
+/// Load ELF-format / bzImage linux kernel and other boot source.
 ///
 /// # Arguments
 ///
@@ -203,7 +203,15 @@ pub fn load_linux(
     load_kernel_cmdline(config, &mut boot_header, fwcfg)?;
     setup_e820_table(config, sys_mem, fwcfg)?;
     load_initrd(config, sys_mem, &mut boot_header, fwcfg)?;
-    boot_header.check_valid_kernel()?;
+    if let Err(e) = boot_header.check_valid_kernel() {
+        match e.kind() {
+            ErrorKind::ElfKernel => {
+                load_elf_kernel(&mut kernel_image, &sys_mem, fwcfg)?;
+                return Ok(());
+            }
+            _ => return Err(e),
+        }
+    }
 
     let mut setup_data = load_kernel_image(&mut kernel_image, &boot_header, fwcfg)?;
     let min_setup_len = std::cmp::min(

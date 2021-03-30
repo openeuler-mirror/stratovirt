@@ -12,10 +12,14 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 
+use address_space::{AddressSpace, GuestAddress};
+use devices::legacy::{FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
+use util::num_ops::round_up;
 
-use crate::errors::Result;
+use crate::errors::{Result, ResultExt};
 
 const EI_MAG0: usize = 0;
 const EI_MAG1: usize = 1;
@@ -120,3 +124,107 @@ struct Elf64NoteHeader {
 }
 
 impl ByteCode for Elf64NoteHeader {}
+
+/// Parse ELF_format kernel file and find the PVH entry.
+///
+/// # Arguments
+///
+/// `kernel_image` - ELF-format kernel file.
+/// `sys_mem` - Guest memory.
+/// `fwcfg` - FwCfg device.
+pub fn load_elf_kernel(
+    kernel_image: &mut File,
+    sys_mem: &Arc<AddressSpace>,
+    fwcfg: &mut dyn FwCfgOps,
+) -> Result<()> {
+    kernel_image.seek(SeekFrom::Start(0))?;
+    let kernel_length = kernel_image.metadata().map(|m| m.len())?;
+
+    let mut elf_header = Elf64Header::default();
+    kernel_image.read_exact(elf_header.as_mut_bytes())?;
+    elf_header
+        .is_valid()
+        .chain_err(|| "ELF header is invalid")?;
+
+    let ep_hdrs = elf_header
+        .parse_prog_hdrs(kernel_image)
+        .chain_err(|| "Failed to parse ELF program header")?;
+
+    let mut pvh_start_addr: Option<u64> = None;
+    let mut addr_low = u64::MAX;
+    let mut addr_max = 0_u64;
+    for ph in &ep_hdrs {
+        let ph_offset = ph.p_offset;
+        let ph_size = ph.p_filesz;
+        if ph_offset + ph_size > kernel_length {
+            bail!(
+                "ELF program header overflows: offset 0x{:x}, size 0x{:x}, ELF file size 0x{:x}",
+                ph_offset,
+                ph_size,
+                kernel_length,
+            );
+        }
+
+        if ph.p_type == PT_LOAD {
+            kernel_image.seek(SeekFrom::Start(ph.p_offset))?;
+            sys_mem.write(kernel_image, GuestAddress(ph.p_paddr), ph.p_filesz)?;
+
+            addr_low = std::cmp::min(addr_low, ph.p_paddr);
+            addr_max = std::cmp::max(addr_max, ph.p_paddr);
+        }
+        if ph.p_type == PT_NOTE {
+            kernel_image.seek(SeekFrom::Start(ph.p_offset))?;
+            let mut note_hdr = Elf64NoteHeader::default();
+            let note_size = std::mem::size_of::<Elf64NoteHeader>() as u64;
+
+            // Search for the target note header that contains PVH entry.
+            let mut offset = 0;
+            while offset + note_size <= ph.p_filesz {
+                kernel_image.read_exact(note_hdr.as_mut_bytes())?;
+                offset += note_size;
+
+                let p_align = ph.p_align;
+                let aligned_namesz = round_up(note_hdr.namesz as u64, p_align).ok_or(format!(
+                    "Overflows when align up: num 0x{:x}, alignment 0x{:x}",
+                    note_hdr.namesz as u64, p_align,
+                ))?;
+                if note_hdr.type_ == XEN_ELFNOTE_PHYS32_ENTRY {
+                    kernel_image.seek(SeekFrom::Current(aligned_namesz as i64))?;
+
+                    let mut entry_addr = 0_u64;
+                    kernel_image.read_exact(entry_addr.as_mut_bytes())?;
+                    pvh_start_addr = Some(entry_addr);
+                    break;
+                } else {
+                    let aligned_descsz =
+                        round_up(note_hdr.descsz as u64, p_align).ok_or(format!(
+                            "Overflows when align up, num 0x{:x}, alignment 0x{:x}",
+                            note_hdr.descsz as u64, p_align,
+                        ))?;
+                    let tail_size = aligned_namesz + aligned_descsz;
+
+                    kernel_image.seek(SeekFrom::Current(tail_size as i64))?;
+                    offset += tail_size;
+                    continue;
+                }
+            }
+        }
+    }
+    if pvh_start_addr.is_none() {
+        bail!("No Note header contains PVH entry info in ELF kernel image.");
+    }
+
+    fwcfg.add_data_entry(
+        FwCfgEntryType::KernelEntry,
+        (pvh_start_addr.unwrap() as u32).as_bytes().to_vec(),
+    )?;
+    fwcfg.add_data_entry(
+        FwCfgEntryType::KernelAddr,
+        (addr_low as u32).as_bytes().to_vec(),
+    )?;
+    fwcfg.add_data_entry(
+        FwCfgEntryType::KernelSize,
+        (addr_max as u32 - addr_low as u32).as_bytes().to_vec(),
+    )?;
+    Ok(())
+}
