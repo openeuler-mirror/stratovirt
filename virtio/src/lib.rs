@@ -117,6 +117,7 @@ pub use queue::*;
 pub use rng::Rng;
 pub use vhost::kernel as VhostKern;
 pub use virtio_mmio::VirtioMmioDevice;
+pub use virtio_pci::VirtioPciDevice;
 
 use std::sync::{Arc, Mutex};
 

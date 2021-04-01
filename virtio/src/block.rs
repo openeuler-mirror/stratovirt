@@ -707,9 +707,18 @@ impl Default for Block {
 }
 
 impl Block {
-    /// Create a block device.
-    pub fn new() -> Block {
-        Self::default()
+    pub fn new(blk_cfg: DriveConfig) -> Block {
+        Self {
+            blk_cfg,
+            disk_image: None,
+            disk_sectors: 0,
+            device_features: 0,
+            driver_features: 0,
+            config_space: [0u8; CONFIG_SPACE_SIZE],
+            interrupt_cb: None,
+            sender: None,
+            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+        }
     }
 
     fn build_device_config_space(&mut self) {

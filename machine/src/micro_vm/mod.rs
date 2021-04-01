@@ -263,7 +263,7 @@ impl LightMachine {
 
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for _ in 0..MMIO_REPLACEABLE_BLK_NR {
-            let block = Arc::new(Mutex::new(Block::new()));
+            let block = Arc::new(Mutex::new(Block::default()));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block);
             rpl_devs.push(virtio_mmio);
         }
