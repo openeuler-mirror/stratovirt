@@ -388,12 +388,11 @@ impl PciConfig {
     /// * `vm_fd` - The file descriptor of VM.
     /// * `dev_id` - Device id to send MSI/MSI-X.
     pub fn write(&mut self, mut offset: usize, data: &[u8], vm_fd: &VmFd, dev_id: u16) {
-        let mut masked_data = Vec::new();
-        masked_data.extend_from_slice(data);
-        for i in 0..masked_data.len() {
-            masked_data[i] &= self.write_mask[offset];
-            self.config[offset] = (self.config[offset] & (!self.write_mask[offset])) | data[i];
-            self.config[offset] &= !self.write_clear_mask[offset];
+        let cloned_data = data.to_vec();
+        for data in &cloned_data {
+            self.config[offset] = (self.config[offset] & (!self.write_mask[offset]))
+                | (data & self.write_mask[offset]);
+            self.config[offset] &= !(data & self.write_clear_mask[offset]);
             offset += 1;
         }
         if let Some(msix) = &mut self.msix {
