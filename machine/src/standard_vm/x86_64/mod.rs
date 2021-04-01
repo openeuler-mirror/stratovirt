@@ -452,6 +452,9 @@ impl MachineOps for StdMachine {
             &vcpu_fds,
             &boot_config,
         )?);
+        locked_vm
+            .build_acpi_tables(&fwcfg)
+            .chain_err(|| "Failed to create ACPI tables")?;
 
         let mut pit_config = kvm_pit_config::default();
         pit_config.flags = KVM_PIT_SPEAKER_DUMMY;
