@@ -570,6 +570,11 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
+    #[cfg(target_arch = "x86_64")]
+    fn add_rtc_device(&mut self, _mem_size: u64) -> MachineResult<()> {
+        Ok(())
+    }
+
     fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 

@@ -234,8 +234,7 @@ pub trait MachineOps {
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()>;
 
     /// Add RTC device.
-    #[cfg(target_arch = "aarch64")]
-    fn add_rtc_device(&mut self) -> Result<()>;
+    fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] mem_size: u64) -> Result<()>;
 
     /// Add serial device.
     ///

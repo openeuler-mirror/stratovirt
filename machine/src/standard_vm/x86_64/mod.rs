@@ -26,7 +26,7 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
-use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, Serial, SERIAL_ADDR};
+use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, Serial, RTC, SERIAL_ADDR};
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
@@ -264,6 +264,20 @@ impl MachineOps for StdMachine {
         })
     }
 
+    fn add_rtc_device(&mut self, mem_size: u64) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        let mut rtc = RTC::new().chain_err(|| "Failed to create RTC device")?;
+        rtc.set_memory(
+            mem_size,
+            MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
+        );
+        RTC::realize(rtc, &mut self.sysbus).chain_err(|| "Failed to realize RTC device")?;
+
+        Ok(())
+    }
+
     fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -305,6 +319,9 @@ impl MachineOps for StdMachine {
 
     fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
+
+        self.add_rtc_device(vm_config.machine_config.mem_config.mem_size)
+            .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
 
         if let Some(serial) = vm_config.serial.as_ref() {
             self.add_serial_device(&serial)
