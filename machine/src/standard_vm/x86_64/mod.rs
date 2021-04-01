@@ -58,13 +58,12 @@ use util::byte_code::ByteCode;
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
 /// The type of memory layout entry on x86_64
-#[cfg(target_arch = "x86_64")]
 #[repr(usize)]
 #[allow(dead_code)]
 pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
-    PcieMmio,
     PcieEcam,
+    PcieMmio,
     Mmio,
     IoApic,
     LocalApic,
@@ -72,9 +71,8 @@ pub enum LayoutEntryType {
 }
 
 /// Layout of x86_64
-#[cfg(target_arch = "x86_64")]
 pub const MEM_LAYOUT: &[(u64, u64)] = &[
-    (0, 0xC000_0000),                // MemBelow4g
+    (0, 0x8000_0000),                // MemBelow4g
     (0xB000_0000, 0x1000_0000),      // PcieEcam
     (0xC000_0000, 0x3000_0000),      // PcieMmio
     (0xF010_0000, 0x200),            // Mmio
