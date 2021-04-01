@@ -10,7 +10,22 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod byte_code;
-pub mod checksum;
-pub mod cpuid;
-pub mod num_ops;
+use core::arch::x86_64::__cpuid_count;
+
+pub fn host_cpuid(
+    leaf: u32,
+    subleaf: u32,
+    eax: *mut u32,
+    ebx: *mut u32,
+    ecx: *mut u32,
+    edx: *mut u32,
+) {
+    unsafe {
+        let cpuid = __cpuid_count(leaf, subleaf);
+
+        *eax = cpuid.eax;
+        *ebx = cpuid.ebx;
+        *ecx = cpuid.ecx;
+        *edx = cpuid.edx;
+    }
+}

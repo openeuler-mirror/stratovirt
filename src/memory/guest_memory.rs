@@ -173,4 +173,17 @@ impl GuestMemory {
         )?;
         Ok(obj)
     }
+
+    /// Get guest memory end address.
+    pub fn memory_end_address(&self) -> u64 {
+        let mut end_address = 0;
+        for host_mmap in self.host_mmaps.iter() {
+            let addr = host_mmap.guest_address() + host_mmap.size();
+            if addr > end_address {
+                end_address = addr;
+            }
+        }
+
+        end_address
+    }
 }

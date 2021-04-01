@@ -10,41 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod boot_loader;
 mod cpu;
 #[allow(dead_code)]
 mod helper;
 #[allow(dead_code)]
 mod memory;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::Kvm;
 
-use crate::cpu::CPU;
-use crate::memory::GuestMemory;
+use crate::boot_loader::{load_kernel, BootLoaderConfig};
+use crate::cpu::{CPUBootConfig, CPU};
+use crate::memory::{GuestMemory, LayoutEntryType, MEM_LAYOUT};
 
 // Run a simple VM on x86_64 platfrom.
 // Reference: https://lwn.net/Articles/658511/.
 fn main() {
-    let mem_size = 0x4000;
-    let guest_addr_01 = 0x1000;
-    let guest_addr_02 = 0x2000;
-
-    let asm_code: &[u8] = &[
-        0xba, 0xf8, 0x03, // mov $0x3f8, %dx
-        0x00, 0xd8, // add %bl, %al
-        0x04, b'0', // add $'0', %al
-        0xee, // out %al, (%dx)
-        0xb0, b'\n', // mov $'\n', %al
-        0xee,  // out %al, (%dx)
-        0xf4,  // hlt
-    ];
-
-    let asm_mmio_code: &[u8] = &[
-        0xc6, 0x06, 0x00, 0x80, 0x00, // movl $0, (0x8000); This generates a MMIO Write.
-        0x8a, 0x16, 0x00, 0x80, // movl (0x8000), %dl; This generates a MMIO Read.
-        0xf4, // hlt
-    ];
+    let mem_size = 512 * 1024 * 1024;
 
     // 1. Open /dev/kvm and create a VM.
     let kvm = Kvm::new().expect("Failed to open /dev/kvm");
@@ -52,49 +38,62 @@ fn main() {
 
     // 2. Initialize Guest Memory.
     let guest_memory = GuestMemory::new(&vm_fd, mem_size).expect("Failed to init guest memory");
-    let asm_code_len = asm_code.len() as u64;
-    let asm_mmio_code_len = asm_mmio_code.len() as u64;
-    guest_memory
-        .write(&mut asm_code[..].as_ref(), guest_addr_01, asm_code_len)
-        .expect("Failed to load asm code to memory");
-    guest_memory
-        .write(
-            &mut asm_mmio_code[..].as_ref(),
-            guest_addr_02,
-            asm_mmio_code_len,
-        )
-        .expect("Failed to load asm code to memory");
 
-    // 3. Create vCPUs, and initialize registers.
-    let mut vcpu_0 = CPU::new(&vm_fd, 0);
-    let mut vcpu_1 = CPU::new(&vm_fd, 1);
+    // 3. Prepare boot source.
+    let initrd_path = PathBuf::from("/tmp/initrd.img");
+    let initrd_size = match std::fs::metadata("/tmp/initrd.img") {
+        Ok(meta) => meta.len() as u32,
+        _ => panic!("initrd file init failed!"),
+    };
+    let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+        + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+    let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+    let boot_cfg = BootLoaderConfig {
+        kernel: PathBuf::from("/tmp/vmlinux.bin"),
+        initrd: initrd_path,
+        initrd_size,
+        kernel_cmdline: String::from("console=ttyS0 panic=1 reboot=k root=/dev/ram rdinit=/bin/sh"),
+        cpu_count: 1_u8,
+        gap_range: (gap_start, gap_end - gap_start),
+        ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
+        lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+    };
+    let layout = load_kernel(&boot_cfg, &guest_memory);
+    let cpu_boot_cfg = CPUBootConfig {
+        boot_ip: layout.kernel_start,
+        boot_sp: layout.kernel_sp,
+        zero_page: layout.zero_page_addr,
+        code_segment: layout.segments.code_segment,
+        data_segment: layout.segments.data_segment,
+        gdt_base: layout.segments.gdt_base,
+        gdt_size: layout.segments.gdt_limit,
+        idt_base: layout.segments.idt_base,
+        idt_size: layout.segments.idt_limit,
+        pml4_start: layout.boot_pml4_addr,
+    };
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        vcpu_0.realize();
-        vcpu_0.sregs.cs.base = 0;
-        vcpu_0.sregs.cs.selector = 0;
-        vcpu_0.regs.rip = guest_addr_01;
-        vcpu_0.regs.rax = 2;
-        vcpu_0.regs.rbx = 3;
-        vcpu_0.regs.rflags = 2;
+    // 4. Init kvm_based devices.
+    vm_fd.create_irq_chip().expect("Failed to create irq chip.");
+    vm_fd
+        .set_tss_address(0xfffb_d000_usize)
+        .expect("Failed to set tss address.");
 
-        vcpu_1.realize();
-        vcpu_1.sregs.cs.base = 0;
-        vcpu_1.sregs.cs.selector = 0;
-        vcpu_1.regs.rip = guest_addr_02;
-        vcpu_1.regs.rflags = 2;
-    }
+    let pit_config = kvm_pit_config {
+        flags: KVM_PIT_SPEAKER_DUMMY,
+        pad: Default::default(),
+    };
+    vm_fd
+        .create_pit2(pit_config)
+        .expect("Failed to create pit2.");
 
-    // 4. Run vCPU.
-    let cpu_task_0 = CPU::start(Arc::new(vcpu_0));
-    let cpu_task_1 = CPU::start(Arc::new(vcpu_1));
+    // 5. Init vCPU.
+    let arc_memory = Arc::new(guest_memory);
+    let mut vcpu = CPU::new(&vm_fd, arc_memory.clone(), 0, 1);
 
-    // Wait for task running over.
-    cpu_task_0
-        .join()
-        .expect("Failed to join thread task for cpu 0");
-    cpu_task_1
-        .join()
-        .expect("Failed to join thread task for cpu 1");
+    vcpu.realize(cpu_boot_cfg);
+
+    // 6. Run vcpu.
+    let cpu_task_0 = CPU::start(Arc::new(vcpu));
+    println!("Start to run linux kernel!");
+    cpu_task_0.join().expect("Failed to wait cpu task 0");
 }

@@ -10,21 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod register;
+
+pub use register::CPUBootConfig;
+
 use std::sync::Arc;
 use std::thread;
 
-use kvm_bindings::{kvm_regs, kvm_sregs};
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
+
+use crate::GuestMemory;
+use register::CPUState;
 
 pub struct CPU {
     /// ID of this virtual CPU, `0` means this cpu is primary `CPU`.
     pub id: u8,
     /// The file descriptor of this kvm_based vCPU.
     fd: VcpuFd,
-    /// Common registers for kvm_based vCPU.
-    pub regs: kvm_regs,
-    /// Special registers for kvm_based vCPU.
-    pub sregs: kvm_sregs,
+    /// Registers state for kvm_based vCPU.
+    state: CPUState,
+    /// System memory space.
+    sys_mem: Arc<GuestMemory>,
 }
 
 impl CPU {
@@ -33,35 +39,28 @@ impl CPU {
     /// # Arguments
     ///
     /// - `vcpu_id` - vcpu_id for `CPU`, started from `0`.
-    pub fn new(vm_fd: &Arc<VmFd>, vcpu_id: u8) -> Self {
-        let vcpu_fd = vm_fd.create_vcpu(vcpu_id).expect("Failed to create vCPU");
+    pub fn new(vm_fd: &Arc<VmFd>, sys_mem: Arc<GuestMemory>, vcpu_id: u32, nr_vcpus: u32) -> Self {
+        let vcpu_fd = vm_fd
+            .create_vcpu(vcpu_id as u8)
+            .expect("Failed to create vCPU");
 
         Self {
-            id: vcpu_id,
+            id: vcpu_id as u8,
             fd: vcpu_fd,
-            regs: kvm_regs::default(),
-            sregs: kvm_sregs::default(),
+            sys_mem,
+            state: CPUState::new(vcpu_id, nr_vcpus),
         }
     }
 
     /// Realize vcpu status.
     /// Get register state from kvm.
-    pub fn realize(&mut self) {
-        self.regs = self.fd.get_regs().expect("Failed to get common registers");
-        self.sregs = self
-            .fd
-            .get_sregs()
-            .expect("Failed to get special registers")
+    pub fn realize(&mut self, bootconfig: register::CPUBootConfig) {
+        self.state.set_boot_config(&self.fd, &bootconfig);
     }
 
     /// Reset kvm_based vCPU registers state by registers state in `CPU`.
     pub fn reset(&self) {
-        self.fd
-            .set_regs(&self.regs)
-            .expect("Failed to set common registers");
-        self.fd
-            .set_sregs(&self.sregs)
-            .expect("Failed to set special registers");
+        self.state.reset_vcpu(&self.fd);
     }
 
     /// Start run `CPU` in seperate vcpu thread.
@@ -90,27 +89,36 @@ impl CPU {
     ///
     /// Whether to continue to emulate or not.
     fn kvm_vcpu_exec(&self) -> bool {
-        match self.fd.run().unwrap() {
+        match self.fd.run().expect("Unhandled error in vcpu emulation!") {
             VcpuExit::IoIn(addr, data) => {
-                println!(
-                    "vCPU{} VmExit IO in: addr 0x{:x}, data is {}",
-                    self.id, addr, data[0]
-                )
+                if addr == 0x3f8 {
+                    print!("{}", String::from_utf8_lossy(data));
+                }
             }
             VcpuExit::IoOut(addr, data) => {
-                println!(
-                    "vCPU{} VmExit IO out: addr 0x{:x}, data is {}",
-                    self.id, addr, data[0]
-                )
+                if addr == 0x3f8 {
+                    print!("{}", String::from_utf8_lossy(data));
+                }
             }
-            VcpuExit::MmioRead(addr, _data) => {
-                println!("vCPU{} MMIO read: addr 0x{:x}", self.id, addr)
+            VcpuExit::MmioRead(addr, mut data) => {
+                let data_len = data.len() as u64;
+                self.sys_mem
+                    .read(&mut data, addr as u64, data_len)
+                    .expect("Invalid mmio read.");
             }
-            VcpuExit::MmioWrite(addr, _data) => {
-                println!("vCPU{} VmExit MMIO write: addr 0x{:x}", self.id, addr)
+            VcpuExit::MmioWrite(addr, mut data) => {
+                let data_len = data.len() as u64;
+                self.sys_mem
+                    .write(&mut data, addr as u64, data_len)
+                    .expect("Invalid mmio write.");
             }
             VcpuExit::Hlt => {
                 println!("KVM_EXIT_HLT");
+                return false;
+            }
+            VcpuExit::Shutdown => {
+                println!("Guest shutdown");
+
                 return false;
             }
             r => panic!("Unexpected exit reason: {:?}", r),

@@ -10,7 +10,26 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod byte_code;
-pub mod checksum;
-pub mod cpuid;
-pub mod num_ops;
+use super::byte_code::ByteCode;
+
+pub fn checksum(slice: &[u8]) -> u8 {
+    let mut sum: u32 = 0;
+
+    for byte in slice.iter() {
+        sum += u32::from(*byte);
+        sum &= 0xff;
+    }
+
+    (sum & 0xff) as u8
+}
+
+pub fn obj_checksum<T: ByteCode>(t: &T) -> u8 {
+    let mut sum: u32 = 0;
+
+    for byte in t.as_bytes().iter() {
+        sum += u32::from(*byte);
+        sum &= 0xff;
+    }
+
+    (sum & 0xff) as u8
+}
