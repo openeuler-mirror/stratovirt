@@ -128,7 +128,8 @@ impl X86CPU {
                 1 => {
                     if entry.index == 0 {
                         entry.ecx |= 1u32 << X86_FEATURE_HYPERVISOR;
-                        entry.ecx |= 1u32 << X86_FEATURE_TSC_DEADLINE_TIMER
+                        entry.ecx |= 1u32 << X86_FEATURE_TSC_DEADLINE_TIMER;
+                        entry.ebx = self.id << 24 | 8 << 8;
                     }
                 }
                 2 => {
@@ -342,14 +343,17 @@ impl X86CPU {
     }
 
     fn setup_regs(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
-        let regs: kvm_regs = kvm_regs {
+        let mut regs: kvm_regs = kvm_regs {
             rflags: 0x0002, /* Means processor has been initialized */
             rip: self.boot_ip,
             rsp: self.boot_sp,
             rbp: self.boot_sp,
-            rsi: self.zero_page,
             ..Default::default()
         };
+        if self.prot64_mode {
+            regs.rsi = self.zero_page;
+        }
+
         vcpu_fd.set_regs(&regs)?;
 
         Ok(())

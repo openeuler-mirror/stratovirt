@@ -344,14 +344,7 @@ impl MachineOps for StdMachine {
             boot_ip: layout.boot_ip,
             boot_sp: layout.boot_sp,
             boot_selector: layout.boot_selector,
-            zero_page: layout.zero_page_addr,
-            code_segment: layout.segments.code_segment,
-            data_segment: layout.segments.data_segment,
-            gdt_base: layout.segments.gdt_base,
-            gdt_size: layout.segments.gdt_limit,
-            idt_base: layout.segments.idt_base,
-            idt_size: layout.segments.idt_limit,
-            pml4_start: layout.boot_pml4_addr,
+            ..Default::default()
         })
     }
 
