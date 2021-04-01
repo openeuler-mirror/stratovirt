@@ -116,6 +116,18 @@ impl SysBus {
                         )
                     })?;
             }
+            SysBusDevType::Rtc if cfg!(target_arch = "x86_64") => {
+                #[cfg(target_arch = "x86_64")]
+                self.sys_io
+                    .root()
+                    .add_subregion(region, region_base)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to register region in I/O space: offset 0x{:x}, size {}",
+                            region_base, region_size
+                        )
+                    })?;
+            }
             _ => self
                 .sys_mem
                 .root()
