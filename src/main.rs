@@ -12,6 +12,7 @@
 
 mod boot_loader;
 mod cpu;
+mod device;
 #[allow(dead_code)]
 mod helper;
 #[allow(dead_code)]
@@ -25,6 +26,7 @@ use kvm_ioctls::Kvm;
 
 use crate::boot_loader::{load_kernel, BootLoaderConfig};
 use crate::cpu::{CPUBootConfig, CPU};
+use crate::device::Serial;
 use crate::memory::{GuestMemory, LayoutEntryType, MEM_LAYOUT};
 
 // Run a simple VM on x86_64 platfrom.
@@ -86,13 +88,16 @@ fn main() {
         .create_pit2(pit_config)
         .expect("Failed to create pit2.");
 
-    // 5. Init vCPU.
+    // 5. Initialize serial.
+    let serial = Serial::new(&vm_fd);
+
+    // 6. Init vCPU.
     let arc_memory = Arc::new(guest_memory);
-    let mut vcpu = CPU::new(&vm_fd, arc_memory.clone(), 0, 1);
+    let mut vcpu = CPU::new(&vm_fd, arc_memory.clone(), 0, 1, serial);
 
     vcpu.realize(cpu_boot_cfg);
 
-    // 6. Run vcpu.
+    // 7. Run vcpu.
     let cpu_task_0 = CPU::start(Arc::new(vcpu));
     println!("Start to run linux kernel!");
     cpu_task_0.join().expect("Failed to wait cpu task 0");

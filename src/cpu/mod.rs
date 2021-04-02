@@ -14,11 +14,12 @@ mod register;
 
 pub use register::CPUBootConfig;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
 
+use crate::device::{judge_serial_addr, Serial};
 use crate::GuestMemory;
 use register::CPUState;
 
@@ -31,6 +32,8 @@ pub struct CPU {
     state: CPUState,
     /// System memory space.
     sys_mem: Arc<GuestMemory>,
+    /// Serial device is used for debugging.
+    serial: Arc<Mutex<Serial>>,
 }
 
 impl CPU {
@@ -39,7 +42,13 @@ impl CPU {
     /// # Arguments
     ///
     /// - `vcpu_id` - vcpu_id for `CPU`, started from `0`.
-    pub fn new(vm_fd: &Arc<VmFd>, sys_mem: Arc<GuestMemory>, vcpu_id: u32, nr_vcpus: u32) -> Self {
+    pub fn new(
+        vm_fd: &Arc<VmFd>,
+        sys_mem: Arc<GuestMemory>,
+        vcpu_id: u32,
+        nr_vcpus: u32,
+        serial: Arc<Mutex<Serial>>,
+    ) -> Self {
         let vcpu_fd = vm_fd
             .create_vcpu(vcpu_id as u8)
             .expect("Failed to create vCPU");
@@ -49,6 +58,7 @@ impl CPU {
             fd: vcpu_fd,
             sys_mem,
             state: CPUState::new(vcpu_id, nr_vcpus),
+            serial,
         }
     }
 
@@ -91,13 +101,15 @@ impl CPU {
     fn kvm_vcpu_exec(&self) -> bool {
         match self.fd.run().expect("Unhandled error in vcpu emulation!") {
             VcpuExit::IoIn(addr, data) => {
-                if addr == 0x3f8 {
-                    print!("{}", String::from_utf8_lossy(data));
+                if let Some(offset) = judge_serial_addr(addr as u64) {
+                    data[0] = self.serial.lock().unwrap().read(offset);
                 }
             }
             VcpuExit::IoOut(addr, data) => {
-                if addr == 0x3f8 {
-                    print!("{}", String::from_utf8_lossy(data));
+                if let Some(offset) = judge_serial_addr(addr as u64) {
+                    if self.serial.lock().unwrap().write(offset, data[0]).is_err() {
+                        println!("Failed to write data for serial, offset: {}", offset);
+                    }
                 }
             }
             VcpuExit::MmioRead(addr, mut data) => {
