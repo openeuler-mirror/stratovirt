@@ -15,213 +15,79 @@
     ```shell
     $ sudo setfacl -m u:${USER}:rw /dev/kvm
     ```
-## 2. Build StratoVirt from source
 
-### 2.1 Check rust environment
+## 2. Getting the StratoVirt Binary
 
-To build StratoVirt, make sure that Rust language environment and Cargo have already been installed.
- The recommended version of rustc is 1.42 or later.
+StratoVirt is offerred by openEuler 20.09 or later. You can install by yum directly.
 
 ```shell
-$ rustc -version
-rustc 1.42.0
+$ sudo yum install stratovirt
 ```
 
-If you want to deploy rust environment, the following link will help you:
+Now you can find StratoVirt binary with path: `/usr/bin/stratovirt`.
 
-<https://www.rust-lang.org/tools/install>
+If you'd like to build StratoVirt yourself, you should check out the [build_guide](../build_guide.md).
 
-### 2.2 Build with musl-libc
+## 3. Running StratoVirt
 
-With musl-libc, StratoVirt is linked statically and has no library dependencies. It's the
- default target to build StratoVirt.
+With StratoVirt binary (either installed with yum, or built from source), we can boot a guest linux machine
+ by StratoVirt.
+
+First, you will need an PE format Linux kernel binary, and an ext4 file system image (as rootfs).
+* `x86_64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/vmlinux.bin) and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/openEuler-21.03-stratovirt-x86_64.img.xz).
+* `aarch64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/vmlinux.bin) and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/openEuler-21.03-stratovirt-aarch64.img.xz).
+
+Or get the kernel and rootfs with shell:
 
 ```shell
-# Add musl rust tool-chain, if installed, skip
-$ arch=`uname -m`
-$ rustup target add ${arch}-unknown-linux-musl
+arch=`uname -m`
+dest_kernel="vmlinux.bin"
+dest_rootfs="rootfs.ext4"
+image_bucket_url="https://repo.openeuler.org/openEuler-21.03/stratovirt_img"
 
-# Build StratoVirt
-$ cargo build --release --target ${arch}-unknown-linux-musl
+if [ ${arch} = "x86_64" ] || [ ${arch} = "aarch64" ]; then
+    kernel="${image_bucket_url}/${arch}/vmlinux.bin"
+    rootfs="${image_bucket_url}/${arch}/openEuler-21.03-stratovirt-${arch}.img.xz"
+else
+    echo "Cannot run StratoVirt on ${arch} architecture!"
+    exit 1
+fi
+
+echo "Downloading $kernel..."
+wget ${kernel} -O ${dest_kernel} --no-check-certificate
+
+echo "Downloading $rootfs..."
+wget ${rootfs} -O ${dest_rootfs}.xz --no-check-certificate
+xz -d ${dest_rootfs}.xz
+
+echo "kernel file: ${dest_kernel} and rootfs image: ${dest_rootfs} download over."
 ```
 
-Now you can find StratoVirt binary file in `target/${arch}-unknown-linux-musl/release/stratovirt`.
-
-### 2.3 Build with glibc
-
-StratoVirt can also be built using glibc toolchains. By this way, StratoVirt is linked dynamically.
-
+Start guest linux machine with StratoVirt:
 ```shell
-# Add gnu rust tool-chain, if installed, skip
-$ arch=`uname -m`
-$ rustup target add ${arch}-unknown-linux-gnu
+socket_path=`pwd`"/stratovirt.sock"
+kernel_path=`pwd`"/vmlinux.bin"
+rootfs_path=`pwd`"/rootfs.ext4"
 
-# Build StratoVirt
-$ cargo build --release --target ${arch}-unknown-linux-gnu
-```
-
-Now you can find StratoVirt binary file in `target/${arch}-unknown-linux-gnu/release/stratovirt`.
-
-## 3. Prepare kernel and rootfs image
-
-### 3.1 Build kernel
-
-The StratoVirt in current version supports PE or bzImage (only x86_64) format kernel images on
-both x86_64 and aarch64 platforms, which can be built with:
-
-1. Firstly, get the openEuler kernel source code:
-
-   ```shell
-   $ git clone -b kernel-4.19 --depth=1 https://gitee.com/openeuler/kernel
-   $ cd kernel
-   ```
-
-2. Configure your linux kernel. You can use [our recommended config](./kernel_config) and
-copy it to `kernel` path as `.config`. You can also modify config options by:
-
-   ```shell
-   $ make menuconfig
-   ```
-
-3. Build and transform kernel image to PE format.
-
-   ```shell
-   $ make -j vmlinux && objcopy -O binary vmlinux vmlinux.bin
-   ```
-
-5. If you want compile bzImage format kernel in x86_64.
-   ```shell
-   $ make -j bzImage
-   ```
-
-### 3.2 Make rootfs
-
-Rootfs image is a file system image.  An EXT4-format image with `/sbin/init` can be mounted at
- boot time in StratoVirt. Below is a simple way to make a EXT4 rootfs image:
-
-1. Prepare a properly-sized file(e.g. 1G):
-
-   ```shell
-   $ dd if=/dev/zero of=./rootfs.ext4 bs=1G count=20
-   ```
-
-2. Create an empty EXT4 file system on this file:
-
-   ```shell
-   $ mkfs.ext4 ./rootfs.ext4
-   ```
-
-3. Mount the file image:
-
-   ```shell
-   $ mkdir -p /mnt/rootfs
-   $ sudo mount ./rootfs.ext4 /mnt/rootfs && cd /mnt/rootfs
-   ```
-
-4. Get the [latest alpine-minirootfs](http://dl-cdn.alpinelinux.org/alpine) for your platform(e.g.
- aarch64 3.12.0):
-
-   ```shell
-   $ wget http://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/alpine-minirootfs-3.12.0-aarch64.tar.gz
-   $ tar -zxvf alpine-minirootfs-3.12.0-aarch64.tar.gz
-   $ rm alpine-minirootfs-3.12.0-aarch64.tar.gz
-   ```
-
-5. Make a simple `/sbin/init` for EXT4 file image.
-
-   ```shell
-   $ rm sbin/init && touch sbin/init && cat > sbin/init <<EOF
-   #! /bin/sh
-   mount -t devtmpfs dev /dev
-   mount -t proc proc /proc
-   mount -t sysfs sysfs /sys
-   ip link set up dev lo
-
-   exec /sbin/getty -n -l /bin/sh 115200 /dev/ttyS0
-   poweroff -f
-   EOF
-
-   $ sudo chmod +x sbin/init
-   ```
-
-6.  Unmount rootfs image:
-
-    ```shell
-    $ cd ~ && umount /mnt/rootfs
-    ```
-
-## 4. Run StratoVirt
-
-With kernel and rootfs image, we can boot a guest linux machine by StratoVirt.
-
-### 4.1 Run with cmdline
-
-The minimum configuration for StratoVirt is:
-
-* A PE or bzImage (only x86_64) format linux kernel
-* A rootfs image as virtio-blk device, which has to be added to kernel parameters
-* Api-channel to control StratoVirt
-* If you want to login with ttyS0, you may need a serial and add ttyS0 to kernel parameters
-
-You can deploy StratoVirt with cmdline arguments:
-
-```shell
 # Make sure api-channel can be created.
-$ rm -f /path/to/socket
+rm -f ${socket_path}
 
-# Start StratoVirt
-$ ./stratovirt \
-    -kernel /path/to/vmlinux.bin \
-    -append console=ttyS0 pci=off reboot=k panic=1 root=/dev/vda \
-    -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -api-channel unix:/path/to/socket \
+# Start StratoVirt guest linux machine.
+/usr/bin/stratovirt \
+    -kernel ${kernel_path} \
+    -smp 1 \
+    -m 1024m \
+    -append console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda \
+    -drive file=${rootfs_path},id=rootfs,readonly=off,direct=off \
+    -api-channel unix:${socket_path} \
     -serial stdio
 ```
 
-### 4.2 Running with json
+You should now see a serial in stdio prompting you to log into the guest machine. If you used our 
+`openEuler-21.03-stratovirt-aarch64.img` image, you can login as `root`, using the password 
+`openEuler12#$`.
 
-StratoVirt can also boot from a json configuration file like provided [sample default.json](./default.json).
-
-```shell
-# Json configuration file
-$ cat default.json
-{
-  "boot-source": {
-    "kernel_image_path": "/path/to/kernel",
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/vda"
-  },
-  "machine-config": {
-    "vcpu_count": 1,
-    "mem_size": 268435456
-  },
-  "drive": [
-    {
-      "drive_id": "rootfs",
-      "path_on_host": "/path/to/rootfs/image",
-      "direct": false,
-      "read_only": false
-    }
-  ],
-  "balloon": {
-    "deflate_on_oom": true
-  },
-  "serial": {
-    "stdio": true
-  }
-}
-
-# Start StratoVirt
-$ ./stratovirt \
-    -config ./default.json \
-    -api-channel unix:/path/to/socket
-```
-
-You can also run StratoVirt with initrdfs, read [initrd_guide](./mk_initrd.md).
-
-### 4.3 Close the VM
-
-ACPI(Advanced Configuration and Power Interface) has not been implemented yet in StratoVirt. Power management, such as `shutdown` 
-or `reboot` behavior, is not allowed. So it is not feasible to use `shutdown` or `poweroff` command to close the VM.
-Instead, use `reboot` command in the guest or `quit` command with QMP to close the VM.
+If you want to quit the guest machine, using a `reboot` command inside the guest will actually shutdown
+StratoVirt. This is due to that StratoVirt didn't implement guest power management in microvm type.
 
 If you want to know more information on running StratoVirt, go to the [Configuration Guidebook](./config_guidebook.md).

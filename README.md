@@ -25,6 +25,10 @@ To run StratoVirt quickly, requires
 * A PE or bzImage (only x86_64) format Linux kernel
 * An EXT4-format rootfs image
 
+You can get kernel and rootfs image from the following link:
+
+https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
+
 ```shell
 # If the socket of api-channel exists, remove if first.
 $ ./target/release/stratovirt \
