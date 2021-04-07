@@ -83,7 +83,7 @@ impl QueueConfig {
             avail_ring: GuestAddress(0),
             used_ring: GuestAddress(0),
             max_size,
-            size: 0,
+            size: max_size,
             ready: false,
             vector: 0,
         }
