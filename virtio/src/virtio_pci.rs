@@ -278,9 +278,20 @@ impl VirtioPciCommonConfig {
             }
             COMMON_MSIX_REG => {
                 self.msix_config.store(value as u16, Ordering::SeqCst);
+                self.interrupt_status.store(0_u32, Ordering::SeqCst);
             }
             COMMON_STATUS_REG => {
                 self.device_status = value;
+                if self.device_status == 0 {
+                    self.queues_config.iter_mut().for_each(|q| {
+                        q.ready = false;
+                        q.vector = 0;
+                        q.avail_ring = GuestAddress(0);
+                        q.desc_table = GuestAddress(0);
+                        q.used_ring = GuestAddress(0);
+                    });
+                    self.msix_config.store(0_u16, Ordering::SeqCst)
+                }
             }
             COMMON_Q_SELECT_REG => {
                 if value < VIRTIO_QUEUE_MAX {
@@ -581,6 +592,7 @@ impl VirtioPciDevice {
         let cloned_notify_evts = self.notify_eventfds.clone();
         let cloned_sys_mem = self.sys_mem.clone();
         let cloned_int_cb = self.interrupt_cb.clone();
+        let cloned_msix = self.config.msix.as_ref().unwrap().clone();
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
             let value = match data.len() {
                 1 => data[0] as u32,
@@ -594,6 +606,7 @@ impl VirtioPciDevice {
                     return false;
                 }
             };
+            let old_dev_status = cloned_common_cfg.lock().unwrap().device_status;
 
             if let Err(e) = cloned_common_cfg.lock().unwrap().write_common_config(
                 &cloned_virtio_dev,
@@ -643,6 +656,17 @@ impl VirtioPciDevice {
                     return false;
                 }
                 cloned_activated_flag.store(true, Ordering::Release);
+            }
+
+            if old_dev_status != 0 && cloned_common_cfg.lock().unwrap().device_status == 0 {
+                cloned_activated_flag.store(false, Ordering::Release);
+                cloned_msix.lock().unwrap().reset();
+                if let Err(e) = cloned_virtio_dev.lock().unwrap().reset() {
+                    error!(
+                        "Failed to reset virtio device, error is {}",
+                        e.display_chain()
+                    );
+                }
             }
 
             true
@@ -1232,5 +1256,9 @@ mod tests {
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
         assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), true);
+
+        // If device status(not zero) is set to zero, reset the device
+        (common_cfg_ops.write)(0_u32.as_bytes(), GuestAddress(0), COMMON_STATUS_REG);
+        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), false);
     }
 }

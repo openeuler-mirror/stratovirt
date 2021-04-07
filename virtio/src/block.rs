@@ -56,7 +56,7 @@ const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
 
-type SenderConfig = (Option<File>, u64, Option<String>, bool);
+type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool);
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -233,7 +233,7 @@ impl Request {
     fn execute(
         &self,
         aio: &mut Box<Aio<AioCompleteCb>>,
-        disk: &mut File,
+        disk: &File,
         disk_sectors: u64,
         serial_num: &Option<String>,
         direct: bool,
@@ -341,7 +341,7 @@ struct BlockIoHandler {
     /// The address space to which the block device belongs.
     mem_space: Arc<AddressSpace>,
     /// The image file opened by the block device.
-    disk_image: Option<File>,
+    disk_image: Option<Arc<File>>,
     /// The number of sectors of the disk image.
     disk_sectors: u64,
     /// Serial number of the block device.
@@ -356,6 +356,8 @@ struct BlockIoHandler {
     receiver: Receiver<SenderConfig>,
     /// Eventfd for config space update.
     update_evt: RawFd,
+    /// Eventfd for device reset.
+    reset_evt: RawFd,
     /// Callback to trigger an interrupt.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// thread name of io handler
@@ -583,6 +585,51 @@ impl BlockIoHandler {
             );
         }
     }
+
+    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Delete,
+            self.update_evt,
+            None,
+            EventSet::IN,
+            Vec::new(),
+        ));
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Delete,
+            self.reset_evt,
+            None,
+            EventSet::IN,
+            Vec::new(),
+        ));
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Delete,
+            self.queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            Vec::new(),
+        ));
+        if let Some(lb) = self.leak_bucket.as_ref() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                lb.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+        if let Some(aio) = &self.aio {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                aio.fd.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+
+        notifiers
+    }
 }
 
 fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
@@ -608,6 +655,14 @@ impl EventNotifierHelper for BlockIoHandler {
             None
         });
         notifiers.push(build_event_notifier(handler_raw.update_evt, h));
+
+        // Register event notifier for reset_evt.
+        let h_clone = handler.clone();
+        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(h_clone.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(build_event_notifier(handler_raw.reset_evt, h));
 
         // Register event notifier for queue_evt.
         let h_clone = handler.clone();
@@ -673,7 +728,7 @@ pub struct Block {
     /// Configuration of the block device.
     blk_cfg: DriveConfig,
     /// Image file opened.
-    disk_image: Option<File>,
+    disk_image: Option<Arc<File>>,
     /// Number of sectors of the image file.
     disk_sectors: u64,
     /// Bit mask of features supported by the backend.
@@ -688,6 +743,8 @@ pub struct Block {
     sender: Option<Sender<SenderConfig>>,
     /// Eventfd for config space update.
     update_evt: EventFd,
+    /// Eventfd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Default for Block {
@@ -702,6 +759,7 @@ impl Default for Block {
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -718,6 +776,7 @@ impl Block {
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -793,7 +852,7 @@ impl VirtioDevice for Block {
                 .seek(SeekFrom::End(0))
                 .chain_err(|| "Failed to seek the end for block")? as u64;
 
-            self.disk_image = Some(file);
+            self.disk_image = Some(Arc::new(file));
         } else {
             self.disk_image = None;
         }
@@ -882,7 +941,7 @@ impl VirtioDevice for Block {
             queue: queues.remove(0),
             queue_evt: queue_evts.remove(0),
             mem_space,
-            disk_image: self.disk_image.take(),
+            disk_image: self.disk_image.clone(),
             disk_sectors: self.disk_sectors,
             direct: self.blk_cfg.direct,
             serial_num: self.blk_cfg.serial_num.clone(),
@@ -890,6 +949,7 @@ impl VirtioDevice for Block {
             driver_features: self.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
+            reset_evt: self.reset_evt.as_raw_fd(),
             interrupt_cb,
             iothread: self.blk_cfg.iothread.clone(),
             leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
@@ -903,6 +963,12 @@ impl VirtioDevice for Block {
         )?;
 
         Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.reset_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)
     }
 
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
@@ -973,7 +1039,7 @@ mod tests {
     #[test]
     fn test_block_init() {
         // New block device
-        let mut block = Block::new();
+        let mut block = Block::default();
         assert_eq!(block.disk_sectors, 0);
         assert_eq!(block.device_features, 0);
         assert_eq!(block.driver_features, 0);
@@ -998,7 +1064,7 @@ mod tests {
     // read date are same; Input invalid offset or date length, it will failed.
     #[test]
     fn test_read_write_config() {
-        let mut block = Block::new();
+        let mut block = Block::default();
         block.realize().unwrap();
 
         let expect_config_space: [u8; 8] = [0x00, 020, 0x00, 0x00, 0x00, 0x00, 0x50, 0x00];
@@ -1026,7 +1092,7 @@ mod tests {
     // bit is supported.
     #[test]
     fn test_block_features() {
-        let mut block = Block::new();
+        let mut block = Block::default();
 
         // If the device feature is 0, all driver features are not supported.
         block.device_features = 0;
@@ -1101,7 +1167,7 @@ mod tests {
         };
         EventLoop::object_init(&Some(vec![io_conf])).unwrap();
 
-        let mut block = Block::new();
+        let mut block = Block::default();
         let file = TempFile::new().unwrap();
         block.blk_cfg.path_on_host = file.as_path().to_str().unwrap().to_string();
 

@@ -275,8 +275,11 @@ pub trait VirtioDevice: Send {
     ) -> Result<()>;
 
     /// Reset virtio device.
-    fn reset(&mut self) -> Option<()> {
-        None
+    fn reset(&mut self) -> Result<()> {
+        bail!(
+            "Reset this device is not supported, virtio dev type is {}",
+            self.device_type()
+        );
     }
 
     /// Update the low level config of MMIO device,

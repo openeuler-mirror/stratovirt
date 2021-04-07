@@ -74,6 +74,14 @@ impl Msix {
         msix
     }
 
+    pub fn reset(&mut self) {
+        self.table.resize_with(self.table.len(), || 0);
+        self.pba.resize_with(self.pba.len(), || 0);
+        self.func_masked = true;
+        self.enabled = true;
+        self.mask_all_vectors();
+    }
+
     fn mask_all_vectors(&mut self) {
         let nr_vectors: usize = self.table.len() / MSIX_TABLE_ENTRY_SIZE as usize;
         for v in 0..nr_vectors {
