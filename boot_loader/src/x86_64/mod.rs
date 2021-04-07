@@ -147,6 +147,14 @@ pub fn load_linux(
         if fwcfg.is_none() {
             bail!("Failed to load linux: No FwCfg provided");
         }
-        bail!("Failed to load linux: Booting from real mode is not implemented");
+        let mut locked_fwcfg = fwcfg.unwrap().lock().unwrap();
+        standard_boot::load_linux(config, sys_mem, &mut *locked_fwcfg)?;
+
+        Ok(X86BootLoader {
+            boot_ip: 0xFFF0,
+            boot_sp: 0x8000,
+            boot_selector: 0xF000,
+            ..Default::default()
+        })
     }
 }
