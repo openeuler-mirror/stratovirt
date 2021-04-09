@@ -13,4 +13,5 @@
 pub mod byte_code;
 pub mod checksum;
 pub mod cpuid;
+pub mod epoll;
 pub mod num_ops;

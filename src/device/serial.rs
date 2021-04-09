@@ -12,14 +12,15 @@
 
 use std::collections::VecDeque;
 use std::io;
+use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use kvm_ioctls::VmFd;
-use vmm_sys_util::{eventfd::EventFd, terminal::Terminal};
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
 use super::{Error, Result};
+use crate::helper::epoll::{EpollContext, EventNotifier};
 
 const UART_IER_RDI: u8 = 0x01;
 const UART_IER_THRI: u8 = 0x02;
@@ -112,14 +113,27 @@ impl Serial {
         }));
 
         let serial_clone = serial.clone();
+        let mut epoll = EpollContext::new();
+        let handler: Box<dyn Fn(EventSet, RawFd) + Send + Sync> = Box::new(move |event, _| {
+            if event == EventSet::IN && serial_clone.lock().unwrap().stdin_exce().is_err() {
+                println!("Failed to excecute the stdin");
+            }
+        });
+
+        let notifier = EventNotifier::new(
+            libc::STDIN_FILENO,
+            EventSet::IN,
+            Arc::new(Mutex::new(handler)),
+        );
+
+        epoll.add_event(notifier);
+
         let _ = thread::Builder::new()
             .name("serial".to_string())
             .spawn(move || loop {
-                if serial_clone.lock().unwrap().stdin_exce().is_err() {
-                    println!("Failed to excecute the stdin");
+                if !epoll.run() {
+                    break;
                 }
-
-                thread::sleep(Duration::from_millis(10));
             });
 
         serial
