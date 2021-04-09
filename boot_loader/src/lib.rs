@@ -43,7 +43,7 @@
 //!     let guest_mem = AddressSpace::new(Region::init_container_region(std::u64::MAX)).unwrap();
 //!     let kernel_file = std::path::PathBuf::from("/path/to/my/kernel");
 //!     let bootloader_config = BootLoaderConfig {
-//!         kernel: kernel_file,
+//!         kernel: Some(kernel_file),
 //!         initrd: None,
 //!         kernel_cmdline: String::new(),
 //!         cpu_count: 0,
@@ -63,7 +63,7 @@
 //!     let guest_mem = AddressSpace::new(Region::init_container_region(u64::MAX)).unwrap();
 //!     let kernel_file = std::path::PathBuf::from("/path/to/my/kernel");
 //!     let bootloader_config = BootLoaderConfig {
-//!         kernel: kernel_file,
+//!         kernel: Some(kernel_file),
 //!         initrd: None,
 //!         mem_start: 0x4000_0000,
 //!     };

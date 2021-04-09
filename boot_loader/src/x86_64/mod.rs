@@ -96,7 +96,7 @@ const REAL_MODE_IVT_BEGIN: u64 = 0x0000_0000;
 /// Boot loader config used for x86_64.
 pub struct X86BootLoaderConfig {
     /// Path of the kernel image.
-    pub kernel: std::path::PathBuf,
+    pub kernel: Option<std::path::PathBuf>,
     /// Path of the initrd image.
     pub initrd: Option<PathBuf>,
     /// Kernel cmdline parameters.

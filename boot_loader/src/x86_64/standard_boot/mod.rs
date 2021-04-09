@@ -200,8 +200,13 @@ pub fn load_linux(
     sys_mem: &Arc<AddressSpace>,
     fwcfg: &mut dyn FwCfgOps,
 ) -> Result<()> {
-    let mut kernel_image =
-        File::open(config.kernel.clone()).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+    if config.kernel.is_none() {
+        setup_e820_table(config, sys_mem, fwcfg)?;
+        return Ok(());
+    }
+
+    let mut kernel_image = File::open(config.kernel.as_ref().unwrap().clone())
+        .chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
 
     let mut boot_header = RealModeKernelHeader::default();
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;

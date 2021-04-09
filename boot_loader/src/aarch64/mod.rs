@@ -26,7 +26,7 @@ const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
 #[derive(Default, Debug)]
 pub struct AArch64BootLoaderConfig {
     /// Path of kernel image.
-    pub kernel: PathBuf,
+    pub kernel: Option<PathBuf>,
     /// Path of initrd image.
     pub initrd: Option<PathBuf>,
     /// Start address of guest memory.
@@ -73,9 +73,13 @@ pub fn load_linux(
         bail!("Failed to load linux: Booting from UEFI is not implemented");
     }
 
+    if config.kernel.is_none() {
+        bail!("Failed to load linux: Booting from disk in UEFI booting mode is not supported");
+    }
+
     let kernel_start = config.mem_start + AARCH64_KERNEL_OFFSET;
-    let mut kernel_image =
-        File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+    let mut kernel_image = File::open(&config.kernel.as_ref().unwrap())
+        .chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
     let kernel_size = kernel_image.metadata().unwrap().len();
     let kernel_end = kernel_start + kernel_size;
     sys_mem.write(&mut kernel_image, GuestAddress(kernel_start), kernel_size)?;

@@ -240,7 +240,7 @@ mod test {
             .unwrap();
 
         let config = X86BootLoaderConfig {
-            kernel: PathBuf::new(),
+            kernel: Some(PathBuf::new()),
             initrd: Some(PathBuf::new()),
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,

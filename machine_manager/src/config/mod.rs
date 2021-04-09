@@ -191,6 +191,11 @@ impl VmConfig {
             )
             .into());
         }
+        if self.boot_source.kernel_file.is_none()
+            && self.machine_config.mach_type == MachineType::MicroVm
+        {
+            bail!("kernel file is required for microvm machine type, which is not provided");
+        }
 
         if self.drives.is_some() {
             for drive in self.drives.as_ref().unwrap() {
