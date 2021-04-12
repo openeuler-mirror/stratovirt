@@ -22,7 +22,6 @@ use std::sync::{Arc, Mutex};
 
 use vmm_sys_util::terminal::Terminal;
 
-use device_model::{balloon_allow_list, register_seccomp, syscall_allow_list, LightMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     config::VmConfig,
@@ -32,15 +31,17 @@ use machine_manager::{
     socket::Socket,
     temp_cleaner::TempCleaner,
 };
+use micro_vm::{register_seccomp, syscall_allow_list, LightMachine};
 use util::loop_context::EventNotifierHelper;
 use util::unix::limit_permission;
 use util::{arg_parser, daemonize::daemonize, logger};
+use virtio::balloon_allow_list;
 
 error_chain! {
     links {
        Manager(machine_manager::errors::Error, machine_manager::errors::ErrorKind);
-       Vm(device_model::errors::Error, device_model::errors::ErrorKind);
        Util(util::errors::Error, util::errors::ErrorKind);
+       Vm(micro_vm::errors::Error, micro_vm::errors::ErrorKind);
     }
     foreign_links {
         Io(std::io::Error);

@@ -7,22 +7,26 @@ description = "a lightweight hypervisor with low memory overhead and fast bootin
 license = "Mulan PSL v2"
 
 [dependencies]
-util = { path = "util" }
-machine_manager = { path = "machine_manager" }
-device_model = { path = "device_model" }
-
+error-chain = "0.12.4"
 libc = "0.2.71"
 log = "0.4.8"
-error-chain = "0.12.4"
-vmm-sys-util = "0.6.1"
+vmm-sys-util = "0.7.0"
+machine_manager = { path = "machine_manager" }
+micro_vm = { path = "micro_vm" }
+util = { path = "util" }
+virtio = { path = "virtio" }
 
 [workspace]
 members = [
     "address_space",
-    "machine_manager",
     "boot_loader",
+    "cpu",
+    "devices",
+    "machine_manager",
+    "micro_vm",
+    "mmio",
     "util",
-    "device_model",
+    "virtio",
 ]
 
 [[bin]]
