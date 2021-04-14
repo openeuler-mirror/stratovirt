@@ -20,8 +20,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
-use vmm_sys_util::terminal::Terminal;
-
+use error_chain::ChainedError;
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     config::VmConfig,
@@ -36,6 +35,7 @@ use util::loop_context::EventNotifierHelper;
 use util::unix::limit_permission;
 use util::{arg_parser, daemonize::daemonize, logger};
 use virtio::balloon_allow_list;
+use vmm_sys_util::terminal::Terminal;
 
 error_chain! {
     links {
@@ -152,9 +152,21 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
 
-    let vm = LightMachine::new(vm_config)?;
+    let vm = match LightMachine::new(&vm_config) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{}", e.display_chain());
+            bail!("Failed to init micro VM.");
+        }
+    };
+    let vm = match LightMachine::realize(vm, &vm_config) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("{}", e.display_chain());
+            bail!("Failed to realize micro VM.");
+        }
+    };
     EventLoop::set_manager(vm.clone(), None);
-
     let api_socket = {
         let (api_path, _) = check_api_channel(&cmd_args)?;
         let listener = UnixListener::bind(&api_path)
@@ -167,16 +179,13 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
         Socket::from_unix_listener(listener, Some(vm.clone()))
     };
-
     EventLoop::update_event(
         EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(api_socket))),
         None,
     )
     .chain_err(|| "Failed to add api event to MainLoop")?;
 
-    vm.realize()?;
     vm.vm_start(cmd_args.is_present("freeze_cpu"))?;
-
     if !cmd_args.is_present("disable-seccomp") {
         let mut allow_list = syscall_allow_list();
         if balloon_switch_on {
@@ -186,6 +195,5 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     }
 
     EventLoop::loop_run().chain_err(|| "MainLoop exits unexpectedly: error occurs")?;
-
     Ok(())
 }
