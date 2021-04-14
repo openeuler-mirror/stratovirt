@@ -38,7 +38,6 @@ pub mod balloon;
 pub mod block;
 pub mod console;
 pub mod net;
-pub mod vhost;
 pub mod errors {
     error_chain! {
         foreign_links {
@@ -96,6 +95,7 @@ pub mod errors {
 }
 
 mod queue;
+mod vhost;
 
 pub use balloon::balloon_allow_list;
 pub use block::Block;
@@ -103,6 +103,7 @@ pub use console::Console;
 pub use errors::*;
 pub use net::Net;
 pub use queue::*;
+pub use vhost::kernel as VhostKern;
 
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};

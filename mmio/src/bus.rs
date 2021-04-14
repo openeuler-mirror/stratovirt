@@ -126,7 +126,7 @@ impl Bus {
 
         for _ in 0..MMIO_REPLACEABLE_BLK_NR {
             let block = Arc::new(Mutex::new(Block::new()));
-            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem.clone(), block)));
+            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&sys_mem, block)));
             if let Ok(dev) = bus.attach_device(device.clone()) {
                 bus.replaceable_info
                     .devices
@@ -142,7 +142,7 @@ impl Bus {
 
         for _ in 0..MMIO_REPLACEABLE_NET_NR {
             let net = Arc::new(Mutex::new(Net::new()));
-            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem.clone(), net)));
+            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&sys_mem, net)));
             if let Ok(dev) = bus.attach_device(device.clone()) {
                 bus.replaceable_info
                     .devices

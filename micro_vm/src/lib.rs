@@ -51,6 +51,11 @@ pub mod errors {
             Kvm(kvm_ioctls::Error);
             Nul(std::ffi::NulError);
         }
+        errors {
+            AddDevErr(dev: String) {
+                display("Failed to add {} for micro VM.", dev)
+            }
+        }
     }
 }
 
@@ -75,6 +80,7 @@ use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::Serial;
 #[cfg(target_arch = "aarch64")]
 use devices::{InterruptController, InterruptControllerConfig, PL031};
+use error_chain::ChainedError;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::{Kvm, VmFd};
@@ -103,97 +109,13 @@ use util::loop_context::{
 };
 use virtio::balloon::{qmp_balloon, qmp_query_balloon, Balloon};
 use virtio::net::create_tap;
-use virtio::{vhost, Console};
+use virtio::{Console, VhostKern};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
-use crate::errors::{Result, ResultExt};
+use crate::errors::{ErrorKind, Result, ResultExt};
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
-
-/// Every type of devices depends on this configure-related trait to perform
-/// initialization.
-pub trait ConfigDevBuilder {
-    /// Constructs device in `Bus` according configuration structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `sys_mem` - The guest memory to device constructs over.
-    /// * `bus` - The `mmio` bus where the device initializing.
-    fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()>;
-}
-
-impl ConfigDevBuilder for DriveConfig {
-    fn build_dev(&self, _sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
-        bus.fill_replaceable_device(&self.drive_id, Arc::new(self.clone()), DeviceType::BLK)
-            .chain_err(|| "build dev from config failed")
-    }
-}
-
-impl ConfigDevBuilder for NetworkInterfaceConfig {
-    fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
-        if self.vhost_type.is_some() {
-            let net = Arc::new(Mutex::new(vhost::kernel::Net::new(
-                self.clone(),
-                sys_mem.clone(),
-            )));
-            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, net)));
-            bus.attach_device(device)
-                .chain_err(|| "build dev from config failed")?;
-            Ok(())
-        } else {
-            bus.fill_replaceable_device(&self.iface_id, Arc::new(self.clone()), DeviceType::NET)
-                .chain_err(|| "build dev from config failed")
-        }
-    }
-}
-
-impl ConfigDevBuilder for ConsoleConfig {
-    fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
-        let console = Arc::new(Mutex::new(Console::new(self.clone())));
-        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, console)));
-        bus.attach_device(device)
-            .chain_err(|| "build dev from config failed")?;
-        Ok(())
-    }
-}
-
-impl ConfigDevBuilder for BalloonConfig {
-    fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
-        let balloon = Arc::new(Mutex::new(Balloon::new(self.clone(), sys_mem.clone())));
-        Balloon::object_init(balloon.clone());
-        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, balloon)));
-        bus.attach_device(device)
-            .chain_err(|| "Failed to build balloon device from config")?;
-        Ok(())
-    }
-}
-
-impl ConfigDevBuilder for VsockConfig {
-    fn build_dev(&self, sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
-        let vsock = Arc::new(Mutex::new(vhost::kernel::Vsock::new(
-            self.clone(),
-            sys_mem.clone(),
-        )));
-        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(sys_mem, vsock)));
-        bus.attach_device(device)
-            .chain_err(|| "build dev from config failed")?;
-        Ok(())
-    }
-}
-
-impl ConfigDevBuilder for SerialConfig {
-    fn build_dev(&self, _sys_mem: Arc<AddressSpace>, bus: &mut Bus) -> Result<()> {
-        let serial = Arc::new(Mutex::new(Serial::new()));
-        bus.attach_device(serial.clone())
-            .chain_err(|| "build dev from config failed")?;
-
-        if self.stdio {
-            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
-        }
-        Ok(())
-    }
-}
 
 /// A wrapper around creating and using a kvm-based micro VM.
 pub struct LightMachine {
@@ -552,54 +474,154 @@ impl LightMachine {
         Ok(())
     }
 
-    fn register_device<T: ConfigDevBuilder>(&mut self, dev_builder_ops: &T) -> Result<()> {
-        dev_builder_ops.build_dev(self.sys_mem.clone(), &mut self.bus)
+    #[cfg(target_arch = "aarch64")]
+    fn add_rtc_device(&mut self) -> Result<()> {
+        let rtc = Arc::new(Mutex::new(PL031::new()));
+        match self.bus.attach_device(rtc) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("{}", e.display_chain());
+                Err(ErrorKind::AddDevErr("pl031".to_string()).into())
+            }
+        }
+    }
+
+    fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
+        let serial = Arc::new(Mutex::new(Serial::new()));
+        match self.bus.attach_device(serial.clone()) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("{}", e.display_chain());
+                return Err(ErrorKind::AddDevErr("serial".to_string()).into());
+            }
+        }
+        if config.stdio {
+            match EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None) {
+                Ok(_) => (),
+                Err(e) => {
+                    error!("{}", e.display_chain());
+                    return Err(ErrorKind::AddDevErr("serial".to_string()).into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_block_device(&mut self, config: &DriveConfig) -> Result<()> {
+        match self.bus.fill_replaceable_device(
+            &config.drive_id,
+            Arc::new(config.clone()),
+            DeviceType::BLK,
+        ) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("{}", e.display_chain());
+                Err(ErrorKind::AddDevErr("virtio-blk".to_string()).into())
+            }
+        }
+    }
+
+    fn add_vsock_device(&mut self, config: &VsockConfig) -> Result<()> {
+        let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(
+            config.clone(),
+            self.sys_mem.clone(),
+        )));
+        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&self.sys_mem, vsock)));
+        match self.bus.attach_device(device) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("{}", e.display_chain());
+                Err(ErrorKind::AddDevErr("vhost-vsock".to_string()).into())
+            }
+        }
+    }
+
+    fn add_net_device(&mut self, config: &NetworkInterfaceConfig) -> Result<()> {
+        if config.vhost_type.is_some() {
+            let net = Arc::new(Mutex::new(VhostKern::Net::new(
+                config.clone(),
+                self.sys_mem.clone(),
+            )));
+            let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&self.sys_mem, net)));
+            match self.bus.attach_device(device) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    error!("{}", e.display_chain());
+                    Err(ErrorKind::AddDevErr("vhost-net".to_string()).into())
+                }
+            }
+        } else {
+            match self.bus.fill_replaceable_device(
+                &config.iface_id,
+                Arc::new(config.clone()),
+                DeviceType::NET,
+            ) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    error!("{}", e.display_chain());
+                    Err(ErrorKind::AddDevErr("virtio-net".to_string()).into())
+                }
+            }
+        }
+    }
+
+    fn add_console_device(&mut self, config: &ConsoleConfig) -> Result<()> {
+        let console = Arc::new(Mutex::new(Console::new(config.clone())));
+        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&self.sys_mem, console)));
+        match self.bus.attach_device(device) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("{}", e.display_chain());
+                Err(ErrorKind::AddDevErr("virtio-console".to_string()).into())
+            }
+        }
+    }
+
+    fn add_balloon_device(&mut self, config: &BalloonConfig) -> Result<()> {
+        let balloon = Arc::new(Mutex::new(Balloon::new(config, self.sys_mem.clone())));
+        Balloon::object_init(balloon.clone());
+        let device = Arc::new(Mutex::new(VirtioMmioDevice::new(&self.sys_mem, balloon)));
+        match self.bus.attach_device(device) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("{}", e.display_chain());
+                Err(ErrorKind::AddDevErr("virtio-balloon".to_string()).into())
+            }
+        }
     }
 
     fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
-        {
-            let rtc = Arc::new(Mutex::new(PL031::new()));
-            self.bus
-                .attach_device(rtc)
-                .chain_err(|| "add rtc to bus failed")?;
-        }
+        self.add_rtc_device()?;
 
         if let Some(serial) = vm_config.serial.as_ref() {
-            self.register_device(serial)
-                .chain_err(|| "Failed to register serial device")?;
+            self.add_serial_device(serial)?;
         }
 
         if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.register_device(vsock)
-                .chain_err(|| "Failed to register vsock device")?;
+            self.add_vsock_device(vsock)?;
         }
 
         if let Some(drives) = vm_config.drives.as_ref() {
             for drive in drives {
-                self.register_device(drive)
-                    .chain_err(|| format!("Failed to register drive device {}", drive.drive_id))?;
+                self.add_block_device(drive)?;
             }
         }
 
         if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
-                self.register_device(net)
-                    .chain_err(|| format!("Failed to register net device {}", net.iface_id))?;
+                self.add_net_device(net)?;
             }
         }
 
         if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
-                self.register_device(console).chain_err(|| {
-                    format!("Failed to register console device {}", console.console_id)
-                })?;
+                self.add_console_device(console)?;
             }
         }
 
         if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.register_device(balloon)
-                .chain_err(|| "Failed to register balloon device")?;
+            self.add_balloon_device(balloon)?;
         }
 
         Ok(())

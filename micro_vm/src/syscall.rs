@@ -15,7 +15,7 @@ extern crate libc;
 use crate::errors::Result;
 use util::seccomp::{BpfRule, SeccompCmpOpt, SeccompOpt, SyscallFilter};
 use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
-use virtio::vhost::kernel::*;
+use virtio::VhostKern::*;
 
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/futex.h
 const FUTEX_WAIT: u32 = 0;

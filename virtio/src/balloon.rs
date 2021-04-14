@@ -628,7 +628,7 @@ impl Balloon {
     /// # Arguments
     ///
     /// * `bln_cfg` - Balloon configuration.
-    pub fn new(bln_cfg: BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
+    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
         let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
         if bln_cfg.deflate_on_oom {
             device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
@@ -954,7 +954,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(bln_cfg, mem_space);
+        let mut bln = Balloon::new(&bln_cfg, mem_space);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
@@ -994,7 +994,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(bln_cfg, mem_space);
+        let balloon = Balloon::new(&bln_cfg, mem_space);
         let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut random_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
@@ -1011,7 +1011,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut balloon = Balloon::new(bln_cfg, mem_space);
+        let mut balloon = Balloon::new(&bln_cfg, mem_space);
         let write_data = [1, 0, 0, 0];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
@@ -1025,7 +1025,7 @@ mod tests {
         let bln_cfg = BalloonConfig {
             deflate_on_oom: true,
         };
-        let mut bln = Balloon::new(bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         bln.realize().unwrap();
         let ram_fr1 = create_flat_range(0, MEMORY_SIZE, 0);
         let blninfo = BlnMemInfo::new();
@@ -1161,7 +1161,7 @@ mod tests {
         let bln_cfg = BalloonConfig {
             deflate_on_oom: true,
         };
-        let mut bln = Balloon::new(bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         assert!(bln
             .activate(
                 mem_space,
