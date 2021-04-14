@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod syscall;
+
 use std::sync::{Arc, Condvar, Mutex};
 
 use address_space::{AddressSpace, Region};
