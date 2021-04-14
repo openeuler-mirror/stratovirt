@@ -20,7 +20,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
-use devices::{Serial, SERIAL_ADDR};
+use devices::legacy::{Serial, SERIAL_ADDR};
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{

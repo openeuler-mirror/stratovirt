@@ -22,12 +22,10 @@ extern crate log;
 extern crate error_chain;
 
 mod interrupt_controller;
-mod legacy;
+pub mod legacy;
 
 #[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{
     errors as IntCtrlErrs, InterruptController, InterruptControllerConfig,
 };
-#[cfg(target_arch = "aarch64")]
-pub use legacy::PL031;
-pub use legacy::{errors as LegacyErrs, Serial, SERIAL_ADDR};
+pub use legacy::errors as LegacyErrs;

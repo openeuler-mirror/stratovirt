@@ -67,11 +67,13 @@ use std::vec::Vec;
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
-use devices::Serial;
-#[cfg(target_arch = "x86_64")]
-use devices::SERIAL_ADDR;
+use devices::legacy::Serial;
 #[cfg(target_arch = "aarch64")]
-use devices::{InterruptController, InterruptControllerConfig, PL031};
+use devices::legacy::PL031;
+#[cfg(target_arch = "x86_64")]
+use devices::legacy::SERIAL_ADDR;
+#[cfg(target_arch = "aarch64")]
+use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
