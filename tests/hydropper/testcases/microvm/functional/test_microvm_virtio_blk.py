@@ -17,9 +17,6 @@ from subprocess import run
 from subprocess import PIPE
 import pytest
 from utils.config import CONFIG
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
-
 
 def _check_virtio_blk_vectors(microvm):
     _cmd = "lspci |grep -w Virtio"
@@ -55,12 +52,6 @@ def test_microvm_virtio_blk_configuration(test_session_root_path, microvm, reado
     _cmd = "ls /sys/bus/virtio/drivers/virtio_blk/ | grep -c virtio[0-9]*"
     _, output = test_vm.serial_cmd(_cmd)
     virtio_blk_number_in_guest = int(output.split('\n')[-2].strip())
-    if CONFIG.stratovirt_feature == "pci":
-        assert virtio_blk_number_in_guest == 2
-
-    # check virtio-blk irq vectors
-    if CONFIG.stratovirt_feature == "pci":
-        _check_virtio_blk_vectors(test_vm)
 
     # check readonly
     _cmd = "lsblk | grep vdb | awk '{print $5}'"

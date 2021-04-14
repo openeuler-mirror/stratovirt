@@ -17,8 +17,6 @@ import logging
 from subprocess import run
 from threading import Thread
 import pytest
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
 # Constants for nc-vsock setup and usage
 NC_VSOCK_DIR = '/tmp/nc-vsock'
 NC_VSOCK_CMD = os.path.join(NC_VSOCK_DIR, 'nc-vsock')

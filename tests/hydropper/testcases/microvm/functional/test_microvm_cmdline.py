@@ -22,9 +22,6 @@ import utils.exception
 import utils.utils_common
 from utils.config import CONFIG
 
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
-
 def _get_corefilesize(vm_pid, dump_guestcore):
     """
     Check corefile size

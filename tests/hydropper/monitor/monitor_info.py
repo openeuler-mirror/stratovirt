@@ -51,10 +51,6 @@ class MonitorInfo(threading.Thread):
         """Run monitor"""
         self.set_state('running')
         while self._state != 'stop':
-            if self._enable:
-                (ret, level, err) = self.check()
-                if ret:
-                    self.enqueue(level, err)
             time.sleep(self.monitor_cycle)
 
     def check(self):

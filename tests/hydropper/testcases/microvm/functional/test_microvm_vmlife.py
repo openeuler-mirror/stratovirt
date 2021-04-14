@@ -16,20 +16,13 @@ import pytest
 from utils import utils_qmp
 from utils.config import CONFIG
 from utils.exception import QMPTimeoutError
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
-
 
 @pytest.mark.acceptance
 @pytest.mark.parametrize("vcpu_count, memsize, vnetnums",
                          [(1, 256, 1),
-                          (2, 1024, 2),
-                          (8, 8192, 3),
-                          (32, 40960, 4)])
+                          (2, 1024, 2)])
 def test_microvm_start(microvm, vcpu_count, memsize, vnetnums):
     """Test a normal microvm start"""
-    if CONFIG.stratovirt_feature != "pci" and vnetnums > 2:
-        pytest.skip('It is not supportted if vnet number is greater than 2 in mmio.')
     test_vm = microvm
     test_vm.basic_config(vcpu_count=vcpu_count, mem_size=memsize * 1024 * 1024, vnetnums=vnetnums)
     test_vm.launch()
@@ -37,14 +30,8 @@ def test_microvm_start(microvm, vcpu_count, memsize, vnetnums):
     logging.debug("current vmhwinfo is %s", vmhwinfo)
     assert vmhwinfo["cpu"]["vcpu_count"] == vcpu_count
     assert vmhwinfo["mem"]["memsize"] > (memsize * 1024 * 90 / 100)
-    if CONFIG.stratovirt_feature == "pci":
-        assert len(vmhwinfo["virtio"]["virtio_blk"]) == 1
-        assert len(vmhwinfo["virtio"]["virtio_net"]) == vnetnums
-    else:
-        assert len(vmhwinfo["virtio"]["virtio_blk"]) == 6
-        assert len(vmhwinfo["virtio"]["virtio_net"]) == 2
-    # virtio_rng is not supported yet.
-    # assert len(vmhwinfo["virtio"]["virtio_rng"]) == vrngnums
+    assert len(vmhwinfo["virtio"]["virtio_blk"]) == 6
+    assert len(vmhwinfo["virtio"]["virtio_net"]) == 2
     assert len(vmhwinfo["virtio"]["virtio_console"]) == 1
     test_vm.shutdown()
 

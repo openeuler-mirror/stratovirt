@@ -14,9 +14,6 @@
 import logging
 import threading
 import pytest
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
-
 
 @pytest.mark.system
 def test_microvm_concurrency(microvms):

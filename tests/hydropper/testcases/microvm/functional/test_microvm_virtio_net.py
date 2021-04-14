@@ -17,9 +17,6 @@ from subprocess import PIPE
 import pytest
 from utils.config import CONFIG
 from utils.resources import NETWORKS
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
-
 
 def _start_iperf_on_guest(microvm):
     """Start iperf in server mode on guest through serial session"""
@@ -54,7 +51,7 @@ def _check_virtio_net_vectors(microvm, mqueue=1):
 
 
 @pytest.mark.acceptance
-@pytest.mark.parametrize("vhost_type", ["vhost-kernel", None])
+@pytest.mark.parametrize("vhost_type", [None])
 def test_microvm_vnet_send_recv(microvm, vhost_type):
     """
     Test virtio-net send and recv:
@@ -64,24 +61,15 @@ def test_microvm_vnet_send_recv(microvm, vhost_type):
     3) Test the vnet by ping
     4) Test TCP/UDP by iperf3
     """
-    if vhost_type == "vhost-kernel":
-        pytest.skip('vhost is not supportted in serverless.')
-
     test_vm = microvm
     test_vm.basic_config(vhost_type=vhost_type)
     test_vm.launch()
     # check nic numbers
-    if CONFIG.stratovirt_feature == "pci":
-        assert len(test_vm.get_interfaces_inner()) == len(test_vm.taps)
     _cmd = "ls /sys/bus/virtio/drivers/virtio_net/ | grep -c virtio[0-9]*"
     _, output = test_vm.serial_cmd(_cmd)
     logging.debug("virtio net output is %s", output)
     virtio_net_number_in_guest = int(output.split('\n')[-2].strip())
     assert virtio_net_number_in_guest == len(test_vm.get_interfaces_inner())
-
-    # check nic irq vectors (multi queues is not support yet, so one virtio-net has 3 vectors)
-    if CONFIG.stratovirt_feature == "pci":
-        _check_virtio_net_vectors(test_vm)
 
     # test ICMP (ping to vm)
     run("ping -c 2 %s" % test_vm.guest_ip, shell=True, check=True)
@@ -165,8 +153,6 @@ def test_microvm_with_multi_vnet(microvm, usemac):
     assert status == expect_status
 
     # check nic numbers
-    if CONFIG.stratovirt_feature == "pci":
-        assert len(test_vm.get_interfaces_inner()) == len(test_vm.taps)
     _cmd = "ls /sys/bus/virtio/drivers/virtio_net/ | grep -c virtio[0-9]*"
     _, output = test_vm.serial_cmd(_cmd)
     virtio_net_number_in_guest = int(output.split('\n')[-2].strip())
