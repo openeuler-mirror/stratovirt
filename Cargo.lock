@@ -5,6 +5,7 @@ name = "StratoVirt"
 version = "0.3.0"
 dependencies = [
  "error-chain",
+ "hypervisor",
  "kvm-ioctls",
  "libc",
  "log",
@@ -171,6 +172,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e4075386626662786ddb0ec9081e7c7eeb1ba31951f447ca780ef9f5d568189"
 
 [[package]]
+name = "hypervisor"
+version = "0.3.0"
+dependencies = [
+ "arc-swap",
+ "error-chain",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "lazy_static",
+ "log",
+]
+
+[[package]]
 name = "itoa"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -195,6 +208,12 @@ dependencies = [
  "libc",
  "vmm-sys-util",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
