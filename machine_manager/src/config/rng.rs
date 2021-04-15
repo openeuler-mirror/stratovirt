@@ -19,7 +19,8 @@ use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_PATH_LENGTH: usize = 4096;
-const MAX_BYTE_PER_SEC: u64 = 1_000_000_000;
+const MIN_BYTES_PER_SEC: u64 = 64;
+const MAX_BYTES_PER_SEC: u64 = 1_000_000_000;
 
 /// Config structure for virtio-rng.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -48,12 +49,12 @@ impl ConfigCheck for RngConfig {
         }
 
         if let Some(bytes_per_sec) = self.bytes_per_sec {
-            if bytes_per_sec > MAX_BYTE_PER_SEC {
+            if !(MIN_BYTES_PER_SEC..=MAX_BYTES_PER_SEC).contains(&bytes_per_sec) {
                 return Err(ErrorKind::IllegalValue(
                     "The bytes per second of rng device".to_string(),
-                    0,
+                    MIN_BYTES_PER_SEC,
                     true,
-                    MAX_BYTE_PER_SEC,
+                    MAX_BYTES_PER_SEC,
                     true,
                 )
                 .into());
