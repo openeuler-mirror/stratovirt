@@ -18,7 +18,6 @@ use acpi::AmlBuilder;
 use address_space::{GuestAddress, HostMemMapping, Region};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
-use kvm_ioctls::VmFd;
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::num_ops::{deposit_u32, extract_u32};
 
@@ -210,9 +209,8 @@ impl PFlash {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        vm_fd: &VmFd,
     ) -> Result<Arc<Mutex<Self>>> {
-        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+        self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| "Failed to allocate system resource for PFlash.")?;
 
         let dev = Arc::new(Mutex::new(self));
@@ -822,7 +820,6 @@ impl SysBusDevOps for PFlash {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        _vm_fd: &VmFd,
     ) -> SysBusResult<()> {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;

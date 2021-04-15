@@ -75,9 +75,9 @@ use devices::legacy::SERIAL_ADDR;
 #[cfg(target_arch = "aarch64")]
 use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
+use hypervisor::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle,
@@ -238,9 +238,11 @@ impl LightMachine {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn arch_init(vm_fd: &VmFd) -> MachineResult<()> {
+    fn arch_init() -> MachineResult<()> {
         use crate::errors::ResultExt;
 
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         vm_fd
             .set_tss_address(0xfffb_d000_usize)
             .chain_err(|| MachineErrorKind::SetTssErr)?;
@@ -256,7 +258,7 @@ impl LightMachine {
         Ok(())
     }
 
-    fn create_replaceable_devices(&mut self, vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn create_replaceable_devices(&mut self) -> Result<()> {
         use errors::ResultExt;
 
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
@@ -290,7 +292,6 @@ impl LightMachine {
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].1,
                 #[cfg(target_arch = "x86_64")]
                 &self.boot_source,
-                vm_fd,
             )
             .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
             region_base += region_size;
@@ -457,25 +458,22 @@ impl MachineOps for LightMachine {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn init_interrupt_controller(
-        &mut self,
-        vm_fd: &Arc<VmFd>,
-        _vcpu_count: u64,
-    ) -> MachineResult<()> {
+    fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
-        vm_fd
+        KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
             .create_irq_chip()
             .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
         Ok(())
     }
 
     #[cfg(target_arch = "aarch64")]
-    fn init_interrupt_controller(
-        &mut self,
-        vm_fd: &Arc<VmFd>,
-        vcpu_count: u64,
-    ) -> MachineResult<()> {
+    fn init_interrupt_controller(&mut self, vcpu_count: u64) -> MachineResult<()> {
+        // Interrupt Controller Chip init
         let intc_conf = InterruptControllerConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
             vcpu_count,
@@ -488,7 +486,7 @@ impl MachineOps for LightMachine {
             ],
             its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
         };
-        let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)?;
+        let irq_chip = InterruptController::new(&intc_conf)?;
         self.irq_chip = Some(Arc::new(irq_chip));
         self.irq_chip.as_ref().unwrap().realize()?;
         Ok(())
@@ -559,7 +557,7 @@ impl MachineOps for LightMachine {
     }
 
     #[cfg(target_arch = "aarch64")]
-    fn add_rtc_device(&mut self, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_rtc_device(&mut self) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         PL031::realize(
@@ -567,13 +565,12 @@ impl MachineOps for LightMachine {
             &mut self.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
-            vm_fd,
         )
         .chain_err(|| "Failed to realize pl031.")?;
         Ok(())
     }
 
-    fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         #[cfg(target_arch = "x86_64")]
@@ -592,9 +589,9 @@ impl MachineOps for LightMachine {
             region_size,
             #[cfg(target_arch = "aarch64")]
             &self.boot_source,
-            vm_fd,
         )
         .chain_err(|| "Failed to realize serial device.")?;
+
         if config.stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
                 .chain_err(|| MachineErrorKind::RegNotifierErr)?;
@@ -616,7 +613,7 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_vsock_device(&mut self, config: &VsockConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_vsock_device(&mut self, config: &VsockConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(config, &self.sys_mem)));
@@ -631,18 +628,13 @@ impl MachineOps for LightMachine {
             region_size,
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
-            vm_fd,
         )
         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
 
-    fn add_net_device(
-        &mut self,
-        config: &NetworkInterfaceConfig,
-        vm_fd: &Arc<VmFd>,
-    ) -> MachineResult<()> {
+    fn add_net_device(&mut self, config: &NetworkInterfaceConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         if config.vhost_type.is_some() {
@@ -658,7 +650,6 @@ impl MachineOps for LightMachine {
                 region_size,
                 #[cfg(target_arch = "x86_64")]
                 &self.boot_source,
-                vm_fd,
             )
             .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
             self.sysbus.min_free_base += region_size;
@@ -677,11 +668,7 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_console_device(
-        &mut self,
-        config: &ConsoleConfig,
-        vm_fd: &Arc<VmFd>,
-    ) -> MachineResult<()> {
+    fn add_console_device(&mut self, config: &ConsoleConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let console = Arc::new(Mutex::new(Console::new(config.clone())));
@@ -696,18 +683,13 @@ impl MachineOps for LightMachine {
             region_size,
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
-            vm_fd,
         )
         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
 
-    fn add_balloon_device(
-        &mut self,
-        config: &BalloonConfig,
-        vm_fd: &Arc<VmFd>,
-    ) -> MachineResult<()> {
+    fn add_balloon_device(&mut self, config: &BalloonConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let balloon = Arc::new(Mutex::new(Balloon::new(config, self.sys_mem.clone())));
@@ -723,14 +705,13 @@ impl MachineOps for LightMachine {
             region_size,
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
-            vm_fd,
         )
         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
 
-    fn add_rng_device(&mut self, config: &RngConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_rng_device(&mut self, config: &RngConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let rng = Arc::new(Mutex::new(Rng::new(config.clone())));
@@ -745,27 +726,26 @@ impl MachineOps for LightMachine {
             region_size,
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
-            vm_fd,
         )
         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
 
-    fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         #[cfg(target_arch = "aarch64")]
-        self.add_rtc_device(vm_fd)
+        self.add_rtc_device()
             .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
 
         if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(serial, vm_fd)
+            self.add_serial_device(serial)
                 .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
         }
 
         if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(vsock, vm_fd)
+            self.add_vsock_device(vsock)
                 .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
         }
 
@@ -778,25 +758,25 @@ impl MachineOps for LightMachine {
 
         if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
-                self.add_net_device(net, vm_fd)
+                self.add_net_device(net)
                     .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
             }
         }
 
         if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
-                self.add_console_device(console, vm_fd)
+                self.add_console_device(console)
                     .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
             }
         }
 
         if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon, vm_fd)
+            self.add_balloon_device(balloon)
                 .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
         }
 
         if let Some(rng) = vm_config.rng.as_ref() {
-            self.add_rng_device(rng, vm_fd)?;
+            self.add_rng_device(rng)?;
         }
 
         Ok(())
@@ -806,19 +786,11 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn realize(
-        vm: &Arc<Mutex<Self>>,
-        vm_config: &VmConfig,
-        fds: (Kvm, &Arc<VmFd>),
-    ) -> MachineResult<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
-        let kvm_fd = fds.0;
-        let vm_fd = fds.1;
-
         locked_vm.init_memory(
-            (kvm_fd, vm_fd),
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]
             &locked_vm.sys_io,
@@ -827,28 +799,34 @@ impl MachineOps for LightMachine {
 
         #[cfg(target_arch = "x86_64")]
         {
-            locked_vm
-                .init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
-            LightMachine::arch_init(vm_fd)?;
+            locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+            LightMachine::arch_init()?;
         }
         let mut vcpu_fds = vec![];
         for vcpu_id in 0..vm_config.machine_config.nr_cpus {
-            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(vcpu_id)?));
+            vcpu_fds.push(Arc::new(
+                KVM_FDS
+                    .load()
+                    .vm_fd
+                    .as_ref()
+                    .unwrap()
+                    .create_vcpu(vcpu_id)?,
+            ));
         }
         #[cfg(target_arch = "aarch64")]
-        locked_vm.init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
         // Add mmio devices
         locked_vm
-            .create_replaceable_devices(&vm_fd)
-            .chain_err(|| "Failed to create replaceable device.")?;
-        locked_vm.add_devices(vm_config, &vm_fd)?;
+            .create_replaceable_devices()
+            .chain_err(|| "Failed to create replaceable devices.")?;
+        locked_vm.add_devices(vm_config)?;
 
         let boot_config = locked_vm.load_boot_source()?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
-            (&vm_fd, &vcpu_fds),
+            &vcpu_fds,
             &boot_config,
         )?);
 

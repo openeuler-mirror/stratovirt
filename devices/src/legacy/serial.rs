@@ -20,7 +20,7 @@ use acpi::{
     AmlResourceUsage, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
-use kvm_ioctls::VmFd;
+use hypervisor::KVM_FDS;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
@@ -110,13 +110,12 @@ impl Serial {
         region_base: u64,
         region_size: u64,
         #[cfg(target_arch = "aarch64")] bs: &Arc<Mutex<BootSource>>,
-        vm_fd: &VmFd,
     ) -> Result<Arc<Mutex<Self>>> {
         use super::errors::ResultExt;
 
         self.output = Some(Box::new(std::io::stdout()));
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
-        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+        self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| ErrorKind::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
@@ -332,13 +331,17 @@ impl SysBusDevOps for Serial {
         self.interrupt_evt.as_ref()
     }
 
-    fn set_irq(&mut self, _sysbus: &mut SysBus, vm_fd: &VmFd) -> SysBusResult<i32> {
+    fn set_irq(&mut self, _sysbus: &mut SysBus) -> SysBusResult<i32> {
         use sysbus::errors::ResultExt;
 
         let mut irq: i32 = -1;
         if let Some(e) = self.interrupt_evt() {
             irq = 4;
-            vm_fd
+            KVM_FDS
+                .load()
+                .vm_fd
+                .as_ref()
+                .unwrap()
                 .register_irqfd(e, irq as u32)
                 .chain_err(|| "Failed to register irqfd.")?;
         }

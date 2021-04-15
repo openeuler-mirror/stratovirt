@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use kvm_ioctls::VmFd;
+use hypervisor::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
 
 use errors::{Result, ResultExt};
@@ -178,12 +178,16 @@ pub trait SysBusDevOps: Send + AmlBuilder {
         None
     }
 
-    fn set_irq(&mut self, sysbus: &mut SysBus, vm_fd: &VmFd) -> Result<i32> {
+    fn set_irq(&mut self, sysbus: &mut SysBus) -> Result<i32> {
         let irq = sysbus.min_free_irq;
         if irq > sysbus.free_irqs.1 {
             bail!("IRQ number exhausted.");
         }
-        vm_fd
+        KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
             .register_irqfd(self.interrupt_evt().unwrap(), irq as u32)
             .chain_err(|| "Failed to register irqfd")?;
         sysbus.min_free_irq = irq + 1;
@@ -199,9 +203,8 @@ pub trait SysBusDevOps: Send + AmlBuilder {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        vm_fd: &VmFd,
     ) -> Result<()> {
-        let irq = self.set_irq(sysbus, vm_fd)?;
+        let irq = self.set_irq(sysbus)?;
         if let Some(res) = self.get_sys_resource() {
             res.region_base = region_base;
             res.region_size = region_size;

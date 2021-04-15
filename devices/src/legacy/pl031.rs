@@ -16,7 +16,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
-use kvm_ioctls::VmFd;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -87,10 +86,9 @@ impl PL031 {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        vm_fd: &VmFd,
     ) -> Result<()> {
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
-        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+        self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| ErrorKind::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));

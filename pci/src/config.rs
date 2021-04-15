@@ -13,7 +13,6 @@
 use std::sync::{Arc, Mutex};
 
 use address_space::Region;
-use kvm_ioctls::VmFd;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::msix::Msix;
@@ -390,9 +389,8 @@ impl PciConfig {
     ///
     /// * `offset` - Offset in the configuration space from which to write.
     /// * `data` - Data to write.
-    /// * `vm_fd` - The file descriptor of VM.
     /// * `dev_id` - Device id to send MSI/MSI-X.
-    pub fn write(&mut self, mut offset: usize, data: &[u8], vm_fd: &VmFd, dev_id: u16) {
+    pub fn write(&mut self, mut offset: usize, data: &[u8], dev_id: u16) {
         let cloned_data = data.to_vec();
         for data in &cloned_data {
             self.config[offset] = (self.config[offset] & (!self.write_mask[offset]))
@@ -401,9 +399,7 @@ impl PciConfig {
             offset += 1;
         }
         if let Some(msix) = &mut self.msix {
-            msix.lock()
-                .unwrap()
-                .write_config(&self.config, vm_fd, dev_id);
+            msix.lock().unwrap().write_config(&self.config, dev_id);
         }
     }
 

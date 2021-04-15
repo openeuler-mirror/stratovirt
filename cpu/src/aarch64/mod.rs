@@ -14,11 +14,12 @@ use std::convert::Into;
 use std::mem;
 use std::sync::Arc;
 
+use hypervisor::KVM_FDS;
 use kvm_bindings::{
     kvm_regs, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64, KVM_REG_ARM_CORE,
     KVM_REG_SIZE_U128, KVM_REG_SIZE_U32, KVM_REG_SIZE_U64,
 };
-use kvm_ioctls::{VcpuFd, VmFd};
+use kvm_ioctls::VcpuFd;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 
@@ -176,7 +177,6 @@ impl CPUAArch64 {
 
     pub fn realize(
         &mut self,
-        vm_fd: &Arc<VmFd>,
         vcpu_fd: &Arc<VcpuFd>,
         boot_config: &AArch64CPUBootConfig,
     ) -> Result<()> {
@@ -184,7 +184,11 @@ impl CPUAArch64 {
         self.fdt_addr = boot_config.fdt_addr;
 
         let mut kvi = kvm_bindings::kvm_vcpu_init::default();
-        vm_fd
+        KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
             .get_preferred_target(&mut kvi)
             .chain_err(|| "Failed to get kvm vcpu preferred target")?;
 

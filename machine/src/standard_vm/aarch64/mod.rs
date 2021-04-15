@@ -21,7 +21,7 @@ use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031};
 use devices::{InterruptController, InterruptControllerConfig};
-use kvm_ioctls::{Kvm, VmFd};
+use hypervisor::KVM_FDS;
 use machine_manager::config::{
     BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
     SerialConfig, VmConfig, VsockConfig,
@@ -156,14 +156,11 @@ impl StdMachine {
 }
 
 impl StdMachineOps for StdMachine {
-    fn init_pci_host(&self, _vm_fd: &Arc<VmFd>) -> super::errors::Result<()> {
+    fn init_pci_host(&self) -> super::errors::Result<()> {
         Ok(())
     }
 
-    fn add_fwcfg_device(
-        &mut self,
-        vm_fd: &VmFd,
-    ) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
+    fn add_fwcfg_device(&mut self) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
         use super::errors::ResultExt;
 
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
@@ -184,18 +181,15 @@ impl StdMachineOps for StdMachine {
             &mut self.sysbus,
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
-            vm_fd,
         )
         .chain_err(|| "Failed to realize fwcfg device")?;
 
         Ok(fwcfg_dev)
     }
 
-    fn add_pflash_device(
-        &mut self,
-        config: &PFlashConfig,
-        vm_fd: &VmFd,
-    ) -> super::errors::Result<()> {
+    fn add_pflash_device(&mut self, config: &PFlashConfig) -> super::errors::Result<()> {
+        use super::errors::ResultExt;
+
         let fd = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -208,15 +202,11 @@ impl StdMachineOps for StdMachine {
         if index == 1 {
             flash_base += flash_size;
         }
-        let pflash = super::errors::ResultExt::chain_err(
-            PFlash::new(flash_size, fd, sector_len, 4, 2, read_only),
-            || "Failed to create PFlash.",
-        )?;
+        let pflash = PFlash::new(flash_size, fd, sector_len, 4, 2, read_only)
+            .chain_err(|| "Failed to create PFlash.")?;
 
-        super::errors::ResultExt::chain_err(
-            PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size, vm_fd),
-            || "Failed to realize PFlash.",
-        )?;
+        PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size)
+            .chain_err(|| "Failed to realize pflash device")?;
 
         Ok(())
     }
@@ -231,7 +221,7 @@ impl MachineOps for StdMachine {
         ranges
     }
 
-    fn init_interrupt_controller(&mut self, vm_fd: &Arc<VmFd>, vcpu_count: u64) -> Result<()> {
+    fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
         let intc_conf = InterruptControllerConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
             vcpu_count,
@@ -244,7 +234,7 @@ impl MachineOps for StdMachine {
             ],
             its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
         };
-        let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)?;
+        let irq_chip = InterruptController::new(&intc_conf)?;
         self.irq_chip = Some(Arc::new(irq_chip));
         self.irq_chip.as_ref().unwrap().realize()?;
         Ok(())
@@ -274,7 +264,7 @@ impl MachineOps for StdMachine {
         })
     }
 
-    fn add_rtc_device(&mut self, vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn add_rtc_device(&mut self) -> Result<()> {
         use crate::errors::ResultExt;
 
         let rtc = PL031::default();
@@ -283,13 +273,12 @@ impl MachineOps for StdMachine {
             &mut self.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
-            vm_fd,
         )
         .chain_err(|| "Failed to realize PL031")?;
         Ok(())
     }
 
-    fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         use crate::errors::ResultExt;
 
         let dev = PL011::new().chain_err(|| "Failed to create PL011")?;
@@ -302,7 +291,6 @@ impl MachineOps for StdMachine {
             region_base,
             region_size,
             &self.boot_source,
-            vm_fd,
         )
         .chain_err(|| "Failed to realize PL011")?;
 
@@ -316,36 +304,32 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_vsock_device(&mut self, _config: &VsockConfig, _vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn add_vsock_device(&mut self, _config: &VsockConfig) -> Result<()> {
         Ok(())
     }
 
-    fn add_net_device(
-        &mut self,
-        _config: &NetworkInterfaceConfig,
-        _vm_fd: &Arc<VmFd>,
-    ) -> Result<()> {
+    fn add_net_device(&mut self, _config: &NetworkInterfaceConfig) -> Result<()> {
         Ok(())
     }
 
-    fn add_console_device(&mut self, _config: &ConsoleConfig, _vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn add_console_device(&mut self, _config: &ConsoleConfig) -> Result<()> {
         Ok(())
     }
 
-    fn add_balloon_device(&mut self, _config: &BalloonConfig, _vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn add_balloon_device(&mut self, _config: &BalloonConfig) -> Result<()> {
         Ok(())
     }
 
-    fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
         use crate::errors::ResultExt;
 
         if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(&serial, vm_fd)
+            self.add_serial_device(&serial)
                 .chain_err(|| ErrorKind::AddDevErr("serial".to_string()))?;
         }
 
         if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(&vsock, vm_fd)
+            self.add_vsock_device(&vsock)
                 .chain_err(|| ErrorKind::AddDevErr("vsock".to_string()))?;
         }
 
@@ -358,20 +342,20 @@ impl MachineOps for StdMachine {
 
         if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
-                self.add_net_device(&net, vm_fd)
+                self.add_net_device(&net)
                     .chain_err(|| ErrorKind::AddDevErr("net".to_string()))?;
             }
         }
 
         if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
-                self.add_console_device(&console, vm_fd)
+                self.add_console_device(&console)
                     .chain_err(|| ErrorKind::AddDevErr("console".to_string()))?;
             }
         }
 
         if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon, vm_fd)
+            self.add_balloon_device(balloon)
                 .chain_err(|| ErrorKind::AddDevErr("balloon".to_string()))?;
         }
 
@@ -382,37 +366,38 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> Result<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig) -> Result<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
-        let kvm_fd = fds.0;
-        let vm_fd = fds.1;
-        locked_vm.init_memory(
-            (kvm_fd, &vm_fd),
-            &vm_config.machine_config.mem_config,
-            &locked_vm.sys_mem,
-        )?;
+        locked_vm.init_memory(&vm_config.machine_config.mem_config, &locked_vm.sys_mem)?;
 
         let vcpu_fds = {
             let mut fds = vec![];
             for vcpu_id in 0..vm_config.machine_config.nr_cpus {
-                fds.push(Arc::new(vm_fd.create_vcpu(vcpu_id)?));
+                fds.push(Arc::new(
+                    KVM_FDS
+                        .load()
+                        .vm_fd
+                        .as_ref()
+                        .unwrap()
+                        .create_vcpu(vcpu_id)?,
+                ));
             }
             fds
         };
 
         // Interrupt Controller Chip init
-        locked_vm.init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
         locked_vm
-            .add_devices(vm_config, &vm_fd)
+            .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
 
         let boot_config = locked_vm.load_boot_source()?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
-            (&vm_fd, &vcpu_fds),
+            &vcpu_fds,
             &boot_config,
         )?);
 

@@ -51,10 +51,8 @@ pub use host::PciHost;
 pub use msix::init_msix;
 
 use std::mem::size_of;
-use std::sync::Arc;
 
 use byteorder::{ByteOrder, LittleEndian};
-use kvm_ioctls::VmFd;
 
 use errors::Result;
 
@@ -113,11 +111,7 @@ pub trait PciDevOps: Send {
     fn init_write_clear_mask(&mut self) -> Result<()>;
 
     /// Realize PCI/PCIe device.
-    ///
-    /// # Arguments
-    ///
-    /// * `vm_fd` - File descriptor of VM.
-    fn realize(self, vm_fd: &Arc<VmFd>) -> Result<()>;
+    fn realize(self) -> Result<()>;
 
     /// Configuration space read.
     ///

@@ -370,3 +370,9 @@ Copyright notice:
 Copyright (c) 2010 The Rust Project Developers
 License: MIT or Apache License Version 2.0
 Please see above.
+
+Software: serial_test 0.5.1
+Copyright notice:
+Copyright (c) 2018 Tom Parker-Shemilt
+License: MIT
+Please see above.

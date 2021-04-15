@@ -50,7 +50,6 @@ use acpi::{
 };
 use devices::legacy::FwCfgOps;
 use errors::{Result, ResultExt};
-use kvm_ioctls::VmFd;
 use machine_manager::config::PFlashConfig;
 use util::byte_code::ByteCode;
 
@@ -60,7 +59,7 @@ use aarch64::{LayoutEntryType, MEM_LAYOUT};
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
 trait StdMachineOps: AcpiBuilder {
-    fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()>;
+    fn init_pci_host(&self) -> Result<()>;
 
     /// Build all ACPI tables and RSDP, and add them to FwCfg as file entries.
     ///
@@ -113,11 +112,11 @@ trait StdMachineOps: AcpiBuilder {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self, _vm_fd: &VmFd) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
+    fn add_fwcfg_device(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
         bail!("Not implemented");
     }
 
-    fn add_pflash_device(&mut self, _config: &PFlashConfig, _vm_fd: &VmFd) -> Result<()> {
+    fn add_pflash_device(&mut self, _config: &PFlashConfig) -> Result<()> {
         Ok(())
     }
 }
