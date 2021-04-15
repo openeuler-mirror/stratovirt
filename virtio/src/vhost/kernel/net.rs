@@ -92,16 +92,16 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new(net_cfg: NetworkInterfaceConfig, mem_space: Arc<AddressSpace>) -> Self {
+    pub fn new(cfg: &NetworkInterfaceConfig, mem_space: &Arc<AddressSpace>) -> Self {
         Net {
-            net_cfg,
+            net_cfg: cfg.clone(),
             tap: None,
             backend: None,
             device_features: 0_u64,
             driver_features: 0_u64,
             vhost_features: 0_u64,
             device_config: VirtioNetConfig::default(),
-            mem_space,
+            mem_space: mem_space.clone(),
         }
     }
 }
@@ -354,7 +354,7 @@ mod tests {
         let vhost_net_confs = confs.unwrap();
         let vhost_net_conf = vhost_net_confs[0].clone();
         let vhost_net_space = vhost_address_space_init();
-        let mut vhost_net = Net::new(vhost_net_conf, vhost_net_space.clone());
+        let mut vhost_net = Net::new(&vhost_net_conf, &vhost_net_space);
         // the tap_fd and vhost_fd attribute of vhost-net can't be assigned.
         assert_eq!(vhost_net.realize().is_ok(), false);
 
@@ -370,7 +370,7 @@ mod tests {
         let confs = NetworkInterfaceConfig::from_value(&value);
         let vhost_net_confs = confs.unwrap();
         let vhost_net_conf = vhost_net_confs[0].clone();
-        let mut vhost_net = Net::new(vhost_net_conf, vhost_net_space.clone());
+        let mut vhost_net = Net::new(&vhost_net_conf, &vhost_net_space);
 
         // if fail to open vhost-net device, no need to continue.
         if let Err(_e) = File::open("/dev/vhost-net") {

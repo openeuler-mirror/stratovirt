@@ -21,6 +21,7 @@ use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
 use error_chain::ChainedError;
+use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     config::VmConfig,
@@ -123,6 +124,16 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+fn get_vm_fds() -> Result<(Kvm, Arc<VmFd>)> {
+    let kvm_fd = Kvm::new().chain_err(|| "Failed to open /dev/kvm.")?;
+    let vm_fd = Arc::new(
+        kvm_fd
+            .create_vm()
+            .chain_err(|| "KVM: failed to create VM fd failed")?,
+    );
+    Ok((kvm_fd, vm_fd))
+}
+
 fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<()> {
     let balloon_switch_on = vm_config.balloon.is_some();
 
@@ -152,6 +163,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
 
+    let (kvm_fd, vm_fd) = get_vm_fds()?;
     let vm = match LightMachine::new(&vm_config) {
         Ok(v) => v,
         Err(e) => {
@@ -159,7 +171,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             bail!("Failed to init micro VM.");
         }
     };
-    let vm = match LightMachine::realize(vm, &vm_config) {
+    let vm = match LightMachine::realize(vm, &vm_config, (kvm_fd, &vm_fd)) {
         Ok(v) => v,
         Err(e) => {
             error!("{}", e.display_chain());

@@ -10,15 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod errors {
+    error_chain! {
+        foreign_links {
+            Io(std::io::Error);
+        }
+    }
+}
+
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
+use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
-use mmio::{errors::Result as MmioResult, DeviceOps, DeviceResource, DeviceType, MmioDeviceOps};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
-/// Registers for pl032 from ARM PrimeCell Real Time Clock Technical Reference Manual.
+use errors::Result;
+
+/// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
 const RTC_DR: u64 = 0x00;
 /// Match Register.
@@ -38,7 +50,7 @@ const RTC_ICR: u64 = 0x1c;
 /// Peripheral ID registers, default value.
 const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1];
 
-/// Pl032 structure.
+/// Pl031 structure.
 pub struct PL031 {
     /// Match register value.
     mr: u32,
@@ -54,6 +66,8 @@ pub struct PL031 {
     base_time: Instant,
     /// Interrupt eventfd.
     interrupt_evt: Option<EventFd>,
+    /// System resource.
+    res: SysRes,
 }
 
 impl Default for PL031 {
@@ -63,35 +77,58 @@ impl Default for PL031 {
             lr: 0,
             imsr: 0,
             risr: 0,
+            // since 1970-01-01 00:00:00,it never cause overflow.
             tick_offset: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("time wrong")
-                .as_secs() as u32, // since 1970-01-01 00:00:00,it never cause overflow.
+                .as_secs() as u32,
             base_time: Instant::now(),
             interrupt_evt: None,
+            res: SysRes::default(),
         }
     }
 }
 
 impl PL031 {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Send interrupt to guest.
-    fn interrupt(&self) {
-        if let Some(evt) = &self.interrupt_evt {
-            let _ = evt.write(1);
+    pub fn realize(
+        mut self,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+        vm_fd: &VmFd,
+    ) -> Result<()> {
+        self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
+        if let Err(e) = self.set_sys_resource(sysbus, region_base, region_size, vm_fd) {
+            error!("{}", e.display_chain());
+            bail!("Failed to allocate system resource.");
         }
+
+        let dev = Arc::new(Mutex::new(self));
+        if let Err(e) = sysbus.attach_device(&dev, region_base, region_size) {
+            error!("{}", e.display_chain());
+            bail!("Failed to attach to system bus.");
+        }
+
+        Ok(())
     }
 
     /// Get current clock value.
     fn get_current_value(&self) -> u32 {
         self.base_time.elapsed().as_secs() as u32 + self.tick_offset
     }
+
+    fn inject_interrupt(&self) {
+        if let Some(evt_fd) = self.interrupt_evt() {
+            if let Err(e) = evt_fd.write(1) {
+                error!("pl031: failed to write interrupt eventfd ({}).", e);
+            }
+            return;
+        }
+        error!("pl031: failed to get interrupt event fd.");
+    }
 }
 
-impl DeviceOps for PL031 {
+impl SysBusDevOps for PL031 {
     /// Read data from registers by guest.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if offset >= 0xFE0 && offset < 0x1000 {
@@ -156,39 +193,27 @@ impl DeviceOps for PL031 {
             }
             RTC_IMSC => {
                 self.imsr = value & 1;
-                self.interrupt();
+                self.inject_interrupt();
             }
             RTC_ICR => {
                 self.risr = 0;
-                self.interrupt();
+                self.inject_interrupt();
             }
             _ => {}
         }
 
         true
     }
-}
 
-impl MmioDeviceOps for PL031 {
-    /// Realize RTC device when VM starting.
-    fn realize(&mut self, vm_fd: &VmFd, resource: DeviceResource) -> MmioResult<()> {
-        use mmio::errors::ResultExt;
-
-        match EventFd::new(libc::EFD_NONBLOCK) {
-            Ok(evt) => {
-                vm_fd.register_irqfd(&evt, resource.irq).chain_err(|| {
-                    format!("Failed to register irqfd for rtc, irq {}", resource.irq,)
-                })?;
-                self.interrupt_evt = Some(evt);
-
-                Ok(())
-            }
-            Err(_) => Err("Failed to create new EventFd for rtc".into()),
-        }
+    fn interrupt_evt(&self) -> Option<&EventFd> {
+        self.interrupt_evt.as_ref()
     }
 
-    /// Get device type.
-    fn get_type(&self) -> DeviceType {
-        DeviceType::RTC
+    fn get_sys_resource(&mut self) -> &mut SysRes {
+        &mut self.res
+    }
+
+    fn get_type(&self) -> SysBusDevType {
+        SysBusDevType::Rtc
     }
 }

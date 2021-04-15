@@ -10,19 +10,28 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod errors {
+    error_chain! {
+        foreign_links {
+            Io(std::io::Error);
+        }
+    }
+}
+
 use std::collections::VecDeque;
-use std::io;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
 use address_space::GuestAddress;
+use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
-use mmio::{
-    errors::{Result, ResultExt},
-    DeviceOps, DeviceResource, DeviceType, MmioDeviceOps,
-};
+#[cfg(target_arch = "aarch64")]
+use machine_manager::config::{BootSource, Param};
+use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
+
+use errors::Result;
 
 const UART_IER_RDI: u8 = 0x01;
 const UART_IER_THRI: u8 = 0x02;
@@ -71,7 +80,9 @@ pub struct Serial {
     /// Interrupt event file descriptor.
     interrupt_evt: Option<EventFd>,
     /// Operation methods.
-    output: Option<Box<dyn io::Write + Send + Sync>>,
+    output: Option<Box<dyn std::io::Write + Send + Sync>>,
+    /// System resource.
+    res: SysRes,
 }
 
 impl Default for Serial {
@@ -89,35 +100,45 @@ impl Default for Serial {
             thr_pending: 0,
             interrupt_evt: None,
             output: None,
+            res: SysRes::default(),
         }
     }
 }
 
 impl Serial {
-    /// Create a new `Serial` instance with default parameters.
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn realize(
+        mut self,
+        sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+        #[cfg(target_arch = "aarch64")] bs: &Arc<Mutex<BootSource>>,
+        vm_fd: &VmFd,
+    ) -> Result<Arc<Mutex<Self>>> {
+        self.output = Some(Box::new(std::io::stdout()));
+        self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
 
-    /// Set EventFd for serial.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if
-    /// * fail to write EventFd.
-    /// * fail to get an interrupt event fd.
-    fn interrupt(&self) -> Result<()> {
-        match &self.interrupt_evt {
-            Some(evt) => evt.write(1).chain_err(|| "Failed to write fd for serial")?,
-            None => bail!("Failed to get an interrupt event fd for serial"),
-        };
+        if let Err(e) = self.set_sys_resource(sysbus, region_base, region_size, vm_fd) {
+            error!("{}", e.display_chain());
+            bail!("Failed to allocate system resource.");
+        }
 
-        Ok(())
+        let dev = Arc::new(Mutex::new(self));
+        if let Err(e) = sysbus.attach_device(&dev, region_base, region_size) {
+            error!("{}", e.display_chain());
+            bail!("Failed to attach to system bus.");
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        bs.lock().unwrap().kernel_cmdline.push(Param {
+            param_type: "earlycon".to_string(),
+            value: format!("uart,mmio,0x{:08x}", region_base),
+        });
+        Ok(dev)
     }
 
     /// Update interrupt identification register,
     /// this method would be called when the interrupt identification changes.
-    fn update_iir(&mut self) -> Result<()> {
+    fn update_iir(&mut self) {
         let mut iir = UART_IIR_NO_INT;
 
         if self.ier & UART_IER_RDI != 0 && self.lsr & UART_LSR_DR != 0 {
@@ -129,12 +150,15 @@ impl Serial {
         }
 
         self.iir = iir;
-
         if iir != UART_IIR_NO_INT {
-            self.interrupt()?;
+            if let Some(evt) = self.interrupt_evt() {
+                if let Err(e) = evt.write(1) {
+                    error!("serial: failed to write interrupt eventfd ({}).", e);
+                }
+                return;
+            }
+            error!("serial: failed to update iir.");
         }
-
-        Ok(())
     }
 
     /// Append `data` to receiver buffer register, and update IIR.
@@ -142,30 +166,30 @@ impl Serial {
     /// # Arguments
     ///
     /// * `data` - A u8-type array.
-    pub fn receive(&mut self, data: &[u8]) -> Result<()> {
+    pub fn receive(&mut self, data: &[u8]) {
         if self.mcr & UART_MCR_LOOP == 0 {
             if self.rbr.len() >= RECEIVER_BUFF_SIZE {
-                bail!("Serial receive buffer extend the Max size.");
+                error!(
+                    "serial: receive buffer length exceeds the maximum size limit ({}).",
+                    RECEIVER_BUFF_SIZE
+                );
             }
 
             self.rbr.extend(data);
             self.lsr |= UART_LSR_DR;
-
-            self.update_iir()?;
+            self.update_iir();
         }
-
-        Ok(())
     }
 
-    /// Read one byte data from a certain register selected by `offset`.
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - Used to select a register.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if fail to update iir.
+    // Read one byte data from a certain register selected by `offset`.
+    //
+    // # Arguments
+    //
+    // * `offset` - Used to select a register.
+    //
+    // # Errors
+    //
+    // Return Error if fail to update iir.
     fn read_internal(&mut self, offset: u64) -> u8 {
         let mut ret: u8 = 0;
 
@@ -180,10 +204,7 @@ impl Serial {
                     if self.rbr.is_empty() {
                         self.lsr &= !UART_LSR_DR;
                     }
-
-                    if self.update_iir().is_err() {
-                        error!("Failed to update iir.");
-                    }
+                    self.update_iir();
                 }
             }
             1 => {
@@ -225,20 +246,22 @@ impl Serial {
         ret
     }
 
-    /// Write one byte data to a certain register selected by `offset`.
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - Used to select a register.
-    /// * `data` - A u8-type data, which will be written to the register.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if
-    /// * fail to get output file descriptor.
-    /// * fail to write serial.
-    /// * fail to flush serial.
+    // Write one byte data to a certain register selected by `offset`.
+    //
+    // # Arguments
+    //
+    // * `offset` - Used to select a register.
+    // * `data` - A u8-type data, which will be written to the register.
+    //
+    // # Errors
+    //
+    // Return Error if
+    // * fail to get output file descriptor.
+    // * fail to write serial.
+    // * fail to flush serial.
     fn write_internal(&mut self, offset: u64, data: u8) -> Result<()> {
+        use errors::ResultExt;
+
         match offset {
             0 => {
                 if self.lcr & UART_LCR_DLAB != 0 {
@@ -256,17 +279,16 @@ impl Serial {
                         self.lsr |= UART_LSR_DR;
                     } else {
                         let output = match &mut self.output {
-                            Some(output_) => output_,
-                            None => bail!("Failed to get output fd for serial."),
+                            Some(o) => o,
+                            None => bail!("serial: failed to get output fd."),
                         };
-
                         output
                             .write_all(&[data])
                             .chain_err(|| "Failed to write for serial.")?;
                         output.flush().chain_err(|| "Failed to flush for serial.")?;
                     }
 
-                    self.update_iir()?;
+                    self.update_iir();
                 }
             }
             1 => {
@@ -277,7 +299,7 @@ impl Serial {
                     self.ier = data & 0x0f;
 
                     if changed != 0 {
-                        self.update_iir()?;
+                        self.update_iir();
                     }
                 }
             }
@@ -297,75 +319,39 @@ impl Serial {
     }
 }
 
-impl DeviceOps for Serial {
-    /// Read one byte data to `data` from a certain register selected by `offset`.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The destination that the data would be read to.
-    /// * `offset` - Used to select a register.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if fail to update iir.
+impl SysBusDevOps for Serial {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         data[0] = self.read_internal(offset);
-
         true
     }
 
-    /// Write one byte data to a certain register selected by `offset`.
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - Used to select a register.
-    /// * `data` - A u8-type array, but only the first data would be written to the register.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if
-    /// * fail to get output file descriptor.
-    /// * fail to write serial.
-    /// * fail to flush serial.
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
         self.write_internal(offset, data[0]).is_ok()
     }
-}
-impl MmioDeviceOps for Serial {
-    /// Realize a serial for VM.
-    /// * Create a new output component.
-    /// * Register DeviceResource IRQ to VM.
-    /// * Set interrupt_evt component.
-    ///
-    /// # Arguments
-    ///
-    /// * `vm_fd` - File descriptor of VM.
-    /// * `resource` - Device resource.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if
-    /// * fail to register.
-    /// * fail to create a new EventFd.
-    fn realize(&mut self, vm_fd: &VmFd, resource: DeviceResource) -> Result<()> {
-        self.output = Some(Box::new(std::io::stdout()));
 
-        match EventFd::new(libc::EFD_NONBLOCK) {
-            Ok(evt) => {
-                vm_fd.register_irqfd(&evt, resource.irq).chain_err(|| {
-                    format!("Failed to register irqfd for serial, irq {}", resource.irq)
-                })?;
-                self.interrupt_evt = Some(evt);
-
-                Ok(())
-            }
-            Err(_) => Err("Failed to create new EventFd for serial".into()),
-        }
+    fn interrupt_evt(&self) -> Option<&EventFd> {
+        self.interrupt_evt.as_ref()
     }
 
-    /// Get type of Device.
-    fn get_type(&self) -> DeviceType {
-        DeviceType::SERIAL
+    fn set_irq(&mut self, _sysbus: &mut SysBus, vm_fd: &VmFd) -> SysBusResult<i32> {
+        use sysbus::errors::ResultExt;
+
+        let mut irq: i32 = -1;
+        if let Some(e) = self.interrupt_evt() {
+            irq = 4;
+            vm_fd
+                .register_irqfd(e, irq as u32)
+                .chain_err(|| "Failed to register irqfd")?;
+        }
+        Ok(irq)
+    }
+
+    fn get_sys_resource(&mut self) -> &mut SysRes {
+        &mut self.res
+    }
+
+    fn get_type(&self) -> SysBusDevType {
+        SysBusDevType::Serial
     }
 }
 
@@ -383,7 +369,7 @@ impl EventNotifierHelper for Serial {
             Box::new(move |_, _| {
                 let mut out = [0_u8; 64];
                 if let Ok(count) = std::io::stdin().lock().read_raw(&mut out) {
-                    let _ = serial.lock().unwrap().receive(&out[..count]);
+                    serial.lock().unwrap().receive(&out[..count]);
                 }
                 None
             });
@@ -410,7 +396,7 @@ mod test {
     #[test]
     fn test_methods_of_serial() {
         // test new method
-        let mut usart = Serial::new();
+        let mut usart = Serial::default();
         assert_eq!(usart.ier, 0);
         assert_eq!(usart.iir, 1);
         assert_eq!(usart.lcr, 3);
@@ -421,18 +407,9 @@ mod test {
         assert_eq!(usart.div, 0x0c);
         assert_eq!(usart.thr_pending, 0);
 
-        // test interrupt method
-        // for interrupt method to work,
-        // you need to set interrupt_evt at first
-        assert!(usart.interrupt().is_err());
-
-        let evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        usart.interrupt_evt = Some(evt);
-        assert!(usart.interrupt().is_ok());
-
         // test receive method
         let data = [0x01, 0x02];
-        assert!(usart.receive(&data).is_ok());
+        usart.receive(&data);
         assert_eq!(usart.rbr.is_empty(), false);
         assert_eq!(usart.rbr.len(), 2);
         assert_eq!(usart.rbr.front(), Some(&0x01));

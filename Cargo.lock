@@ -5,6 +5,7 @@ name = "StratoVirt"
 version = "0.2.0"
 dependencies = [
  "error-chain",
+ "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",
@@ -122,8 +123,8 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
- "mmio",
  "serde",
+ "sysbus",
  "util",
  "vmm-sys-util",
 ]
@@ -212,9 +213,9 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
- "mmio",
  "serde",
  "serde_json",
+ "sysbus",
  "util",
  "virtio",
  "vmm-sys-util",
@@ -228,22 +229,6 @@ checksum = "0f2d26ec3309788e423cfbf68ad1800f061638098d76a83681af979dc4eda19d"
 dependencies = [
  "adler",
  "autocfg",
-]
-
-[[package]]
-name = "mmio"
-version = "0.2.0"
-dependencies = [
- "address_space",
- "byteorder",
- "error-chain",
- "kvm-ioctls",
- "libc",
- "log",
- "machine_manager",
- "util",
- "virtio",
- "vmm-sys-util",
 ]
 
 [[package]]
@@ -325,6 +310,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysbus"
+version = "0.2.0"
+dependencies = [
+ "address_space",
+ "error-chain",
+ "kvm-ioctls",
+ "log",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "unicode-xid"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -360,6 +356,7 @@ dependencies = [
  "log",
  "machine_manager",
  "serde_json",
+ "sysbus",
  "util",
  "vmm-sys-util",
 ]

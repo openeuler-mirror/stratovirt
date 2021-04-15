@@ -24,10 +24,10 @@
 //!
 //! - `x86_64`
 //! - `aarch64`
-mod serial;
-pub use self::serial::Serial;
-
 #[cfg(target_arch = "aarch64")]
 mod pl031;
+mod serial;
+
 #[cfg(target_arch = "aarch64")]
 pub use self::pl031::PL031;
+pub use self::serial::Serial;
