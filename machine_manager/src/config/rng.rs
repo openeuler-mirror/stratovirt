@@ -89,3 +89,112 @@ impl VmConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rng_config_json_parser() {
+        let json = r#"
+        {
+            "random_file": "/dev/random"
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let config = RngConfig::from_value(&value);
+        assert!(config.is_ok());
+        let rng_config = config.unwrap();
+        assert_eq!(rng_config.random_file, "/dev/random");
+        assert_eq!(rng_config.bytes_per_sec, None);
+
+        let json = r#"
+        {
+            "random_file": "/dev/urandom",
+            "bytes_per_sec": 1000
+        }
+        "#;
+        let value = serde_json::from_str(json).unwrap();
+        let config = RngConfig::from_value(&value);
+        assert!(config.is_ok());
+        let rng_config = config.unwrap();
+        assert_eq!(rng_config.random_file, "/dev/urandom");
+        assert_eq!(rng_config.bytes_per_sec, Some(1000));
+    }
+
+    #[test]
+    fn test_rng_config_cmdline_parser_01() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.update_rng("random_file=/dev/random").is_ok());
+        if let Some(rng_config) = vm_config.rng {
+            assert_eq!(rng_config.random_file, "/dev/random");
+            assert_eq!(rng_config.bytes_per_sec, None);
+            assert!(rng_config.check().is_ok());
+        } else {
+            assert!(false);
+        }
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_rng("random_file=/dev/random,bytes_per_sec=1000")
+            .is_ok());
+        if let Some(rng_config) = vm_config.rng {
+            assert_eq!(rng_config.random_file, "/dev/random");
+            assert_eq!(rng_config.bytes_per_sec, Some(1000));
+            assert!(rng_config.check().is_ok());
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn test_rng_config_cmdline_parser_02() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_rng("random_file=/dev/random,bytes_per_sec=63")
+            .is_ok());
+        if let Some(rng_config) = vm_config.rng {
+            assert_eq!(rng_config.random_file, "/dev/random");
+            assert_eq!(rng_config.bytes_per_sec, Some(63));
+            assert!(rng_config.check().is_err());
+        } else {
+            assert!(false);
+        }
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_rng("random_file=/dev/random,bytes_per_sec=64")
+            .is_ok());
+        if let Some(rng_config) = vm_config.rng {
+            assert_eq!(rng_config.random_file, "/dev/random");
+            assert_eq!(rng_config.bytes_per_sec, Some(64));
+            assert!(rng_config.check().is_ok());
+        } else {
+            assert!(false);
+        }
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_rng("random_file=/dev/random,bytes_per_sec=1000000000")
+            .is_ok());
+        if let Some(rng_config) = vm_config.rng {
+            assert_eq!(rng_config.random_file, "/dev/random");
+            assert_eq!(rng_config.bytes_per_sec, Some(1000000000));
+            assert!(rng_config.check().is_ok());
+        } else {
+            assert!(false);
+        }
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .update_rng("random_file=/dev/random,bytes_per_sec=1000000001")
+            .is_ok());
+        if let Some(rng_config) = vm_config.rng {
+            assert_eq!(rng_config.random_file, "/dev/random");
+            assert_eq!(rng_config.bytes_per_sec, Some(1000000001));
+            assert!(rng_config.check().is_err());
+        } else {
+            assert!(false);
+        }
+    }
+}
