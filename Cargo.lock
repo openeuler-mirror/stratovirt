@@ -8,8 +8,8 @@ dependencies = [
  "kvm-ioctls",
  "libc",
  "log",
+ "machine",
  "machine_manager",
- "micro_vm",
  "util",
  "virtio",
  "vmm-sys-util",
@@ -187,20 +187,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "machine_manager"
-version = "0.2.0"
-dependencies = [
- "error-chain",
- "libc",
- "log",
- "serde",
- "serde_json",
- "util",
- "vmm-sys-util",
-]
-
-[[package]]
-name = "micro_vm"
+name = "machine"
 version = "0.2.0"
 dependencies = [
  "address_space",
@@ -218,6 +205,19 @@ dependencies = [
  "sysbus",
  "util",
  "virtio",
+ "vmm-sys-util",
+]
+
+[[package]]
+name = "machine_manager"
+version = "0.2.0"
+dependencies = [
+ "error-chain",
+ "libc",
+ "log",
+ "serde",
+ "serde_json",
+ "util",
  "vmm-sys-util",
 ]
 

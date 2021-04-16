@@ -10,10 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate libc;
-
-use crate::errors::Result;
-use util::seccomp::{BpfRule, SeccompCmpOpt, SeccompOpt, SyscallFilter};
+use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
 use virtio::VhostKern::*;
 
@@ -145,17 +142,4 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
-}
-
-/// Register seccomp rules in syscall allowlist to seccomp.
-pub fn register_seccomp(bpf_rules: Vec<BpfRule>) -> Result<()> {
-    let mut seccomp_filter = SyscallFilter::new(SeccompOpt::Trap);
-
-    for mut bpf_rule in bpf_rules {
-        seccomp_filter.push(&mut bpf_rule);
-    }
-
-    seccomp_filter.realize()?;
-
-    Ok(())
 }

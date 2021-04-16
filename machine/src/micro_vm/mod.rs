@@ -28,22 +28,10 @@
 //! - `x86_64`
 //! - `aarch64`
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate machine_manager;
-
 pub mod errors {
     error_chain! {
         links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
             Util(util::errors::Error, util::errors::ErrorKind);
-            BootLoader(boot_loader::errors::Error, boot_loader::errors::ErrorKind);
-            Manager(machine_manager::errors::Error, machine_manager::errors::ErrorKind);
-            Cpu(cpu::errors::Error, cpu::errors::ErrorKind);
-            Devices(devices::errors::Error, devices::errors::ErrorKind);
             Virtio(virtio::errors::Error, virtio::errors::ErrorKind);
         }
         foreign_links {
@@ -52,17 +40,14 @@ pub mod errors {
             Nul(std::ffi::NulError);
         }
         errors {
-            AddDevErr(dev: String) {
-                display("Failed to add {} for micro VM.", dev)
-            }
             RplDevLimitErr(dev: String, nr: usize) {
                 display("A maximum of {} {} replaceble devices are supported.", nr, dev)
             }
-            InvalidRplDevType {
-                display("Unsupported replaceable device type.")
-            }
             CreateRplDev {
                 display("Failed to create replaceable device.")
+            }
+            UpdCfgErr(id: String) {
+                display("{}: failed to update config.", id)
             }
         }
     }
@@ -71,12 +56,12 @@ pub mod errors {
 mod mem_layout;
 mod syscall;
 
-pub use syscall::{register_seccomp, syscall_allow_list};
+pub use syscall::syscall_allow_list;
 
 use std::fs::metadata;
 use std::ops::Deref;
 use std::os::linux::fs::MetadataExt;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::vec::Vec;
@@ -112,18 +97,20 @@ use sysbus::{SysBusDevType, SysRes};
 use util::device_tree;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::CompileFDT;
-use util::loop_context::{
-    EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
+use util::loop_context::{EventLoopManager, EventNotifierHelper};
+use util::seccomp::BpfRule;
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, Console, Net, VhostKern,
     VirtioDevice, VirtioMmioDevice,
 };
-use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use super::{
+    errors::{ErrorKind as MachineErrorKind, Result as MachineResult},
+    MachineOps,
+};
+use errors::{ErrorKind, Result};
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 
 // The replaceable block device maximum count.
@@ -204,10 +191,14 @@ impl LightMachine {
     /// # Arguments
     ///
     /// * `vm_config` - Represents the configuration for VM.
-    pub fn new(vm_config: &VmConfig) -> Result<Self> {
-        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))?;
+    pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
+        use crate::errors::ResultExt;
+
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
+            .chain_err(|| MachineErrorKind::CrtAddrSpaceErr("memory".to_string()))?;
         #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))?;
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
+            .chain_err(|| MachineErrorKind::CrtAddrSpaceErr("I/O".to_string()))?;
         #[cfg(target_arch = "x86_64")]
         let free_irqs: (i32, i32) = (5, 15);
         #[cfg(target_arch = "aarch64")]
@@ -328,7 +319,7 @@ impl LightMachine {
                     id: "".to_string(),
                     used: false,
                 });
-            if let Err(e) = VirtioMmioDevice::realize(
+            VirtioMmioDevice::realize(
                 dev,
                 &mut self.sysbus,
                 region_base,
@@ -336,10 +327,7 @@ impl LightMachine {
                 #[cfg(target_arch = "x86_64")]
                 &self.boot_source,
                 vm_fd,
-            ) {
-                error! {"{}", e};
-                return Err(ErrorKind::CreateRplDev.into());
-            }
+            )?;
             region_base += region_size;
         }
         self.sysbus.min_free_base = region_base;
@@ -352,23 +340,22 @@ impl LightMachine {
         dev_config: Arc<dyn ConfigCheck>,
         index: usize,
     ) -> Result<()> {
+        use errors::ResultExt;
+
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
         if let Some(device_info) = replaceable_devices.get_mut(index) {
             if device_info.used {
                 bail!("{}: index {} is already used.", id, index);
-            } else {
-                device_info.id = id.to_string();
-                device_info.used = true;
-                if let Err(e) = device_info
-                    .device
-                    .lock()
-                    .unwrap()
-                    .update_config(Some(dev_config.clone()))
-                {
-                    error!("{}", e.display_chain());
-                    bail!("{}: failed to update config.", id);
-                }
             }
+
+            device_info.id = id.to_string();
+            device_info.used = true;
+            device_info
+                .device
+                .lock()
+                .unwrap()
+                .update_config(Some(dev_config.clone()))
+                .chain_err(|| ErrorKind::UpdCfgErr(id.to_string()))?;
         }
 
         self.add_replaceable_config(id, dev_config)?;
@@ -397,6 +384,8 @@ impl LightMachine {
     }
 
     fn add_replaceable_device(&self, id: &str, driver: &str, slot: usize) -> Result<()> {
+        use errors::ResultExt;
+
         let index = if driver.contains("net") {
             if slot >= MMIO_REPLACEABLE_NET_NR {
                 return Err(
@@ -414,7 +403,7 @@ impl LightMachine {
             }
             slot
         } else {
-            return Err(ErrorKind::InvalidRplDevType.into());
+            bail!("Unsupported replaceable device type.");
         };
 
         // Find the configuration by id.
@@ -434,20 +423,23 @@ impl LightMachine {
         if let Some(device_info) = replaceable_devices.get_mut(index) {
             if device_info.used {
                 bail!("The slot {} is occupied", slot);
-            } else {
-                device_info.id = id.to_string();
-                device_info.used = true;
-                device_info
-                    .device
-                    .lock()
-                    .unwrap()
-                    .update_config(dev_config)?;
             }
+
+            device_info.id = id.to_string();
+            device_info.used = true;
+            device_info
+                .device
+                .lock()
+                .unwrap()
+                .update_config(dev_config)
+                .chain_err(|| ErrorKind::UpdCfgErr(id.to_string()))?;
         }
         Ok(())
     }
 
     fn del_replaceable_device(&self, id: &str) -> Result<String> {
+        use errors::ResultExt;
+
         // find the index of configuration by name and remove it
         let mut is_exist = false;
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
@@ -465,7 +457,12 @@ impl LightMachine {
             if device_info.id == id {
                 device_info.id = "".to_string();
                 device_info.used = false;
-                device_info.device.lock().unwrap().update_config(None)?;
+                device_info
+                    .device
+                    .lock()
+                    .unwrap()
+                    .update_config(None)
+                    .chain_err(|| ErrorKind::UpdCfgErr(id.to_string()))?;
             }
         }
 
@@ -475,38 +472,360 @@ impl LightMachine {
         Ok(id.to_string())
     }
 
-    /// Realize micro VM.
-    pub fn realize(
-        mut vm: Self,
-        vm_config: &VmConfig,
-        fds: (Kvm, &Arc<VmFd>),
-    ) -> Result<Arc<Self>> {
+    /// Start VM, changed `LightMachine`'s `vmstate` to `Paused` or
+    /// `Running`.
+    ///
+    /// # Arguments
+    ///
+    /// * `paused` - After started, paused all vcpu or not.
+    pub fn vm_start(&self, paused: bool) -> Result<()> {
+        use errors::ResultExt;
+
+        let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
+        for cpu_index in 0..self.cpu_topo.max_cpus {
+            let cpu_thread_barrier = cpus_thread_barrier.clone();
+            let cpu = self.cpus.lock().unwrap()[cpu_index as usize].clone();
+            CPU::start(cpu, cpu_thread_barrier, paused)
+                .chain_err(|| format!("Failed to run vcpu{}.", cpu_index))?;
+        }
+
+        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
+        if paused {
+            *vmstate = KvmVmState::Paused;
+        } else {
+            *vmstate = KvmVmState::Running;
+        }
+        cpus_thread_barrier.wait();
+
+        Ok(())
+    }
+
+    /// Pause VM, sleepy all vcpu thread. Changed `LightMachine`'s `vmstate`
+    /// from `Running` to `Paused`.
+    fn vm_pause(&self) -> Result<()> {
+        use errors::ResultExt;
+
+        for cpu_index in 0..self.cpu_topo.max_cpus {
+            self.cpus.lock().unwrap()[cpu_index as usize]
+                .pause()
+                .chain_err(|| format!("Failed to pause vcpu{}.", cpu_index))?;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        self.irq_chip.as_ref().unwrap().stop();
+
+        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
+        *vmstate = KvmVmState::Paused;
+
+        Ok(())
+    }
+
+    /// Resume VM, awaken all vcpu thread. Changed `LightMachine`'s `vmstate`
+    /// from `Paused` to `Running`.
+    fn vm_resume(&self) -> Result<()> {
+        use errors::ResultExt;
+
+        for cpu_index in 0..self.cpu_topo.max_cpus {
+            self.cpus.lock().unwrap()[cpu_index as usize]
+                .resume()
+                .chain_err(|| format!("Failed to resume vcpu{}.", cpu_index))?;
+        }
+
+        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
+        *vmstate = KvmVmState::Running;
+
+        Ok(())
+    }
+
+    /// Destroy VM, kill all vcpu thread. Changed `LightMachine`'s `vmstate`
+    /// to `KVM_VMSTATE_DESTROY`.
+    fn vm_destroy(&self) -> Result<()> {
+        use errors::ResultExt;
+
+        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
+        *vmstate = KvmVmState::Shutdown;
+
+        let mut cpus = self.cpus.lock().unwrap();
+        for cpu_index in 0..self.cpu_topo.max_cpus {
+            cpus[cpu_index as usize]
+                .destroy()
+                .chain_err(|| format!("Failed to destroy vcpu{}", cpu_index))?;
+        }
+        cpus.clear();
+
+        Ok(())
+    }
+}
+
+impl MachineOps for LightMachine {
+    fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)> {
+        // ranges is the vector of (start_addr, size)
+        let mut ranges = Vec::<(u64, u64)>::new();
+
+        #[cfg(target_arch = "aarch64")]
+        ranges.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
+        #[cfg(target_arch = "x86_64")]
+        {
+            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+            ranges.push((0, std::cmp::min(gap_start, mem_size)));
+            if mem_size > gap_start {
+                let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+                ranges.push((gap_end, mem_size - gap_start));
+            }
+        }
+        ranges
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn add_rtc_device(&mut self, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        PL031::realize(
+            PL031::default(),
+            &mut self.sysbus,
+            MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
+            MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
+            vm_fd,
+        )
+        .chain_err(|| "Failed to realize pl031.")?;
+        Ok(())
+    }
+
+    fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        #[cfg(target_arch = "x86_64")]
+        let region_base: u64 = 0x3f8;
+        #[cfg(target_arch = "aarch64")]
+        let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
+        #[cfg(target_arch = "x86_64")]
+        let region_size: u64 = 8;
+        #[cfg(target_arch = "aarch64")]
+        let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
+
+        let serial = Serial::realize(
+            Serial::default(),
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "aarch64")]
+            &self.boot_source,
+            vm_fd,
+        )
+        .chain_err(|| "Failed to realize serial device.")?;
+        if config.stdio {
+            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
+                .chain_err(|| MachineErrorKind::RegNotiferErr)?;
+        }
+        Ok(())
+    }
+
+    fn add_block_device(&mut self, config: &DriveConfig) -> MachineResult<()> {
+        if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
+            bail!(
+                "A maximum of {} replaceble block devices are supported.",
+                MMIO_REPLACEABLE_BLK_NR
+            );
+        }
+
+        let index = self.replaceable_info.block_count;
+        self.fill_replaceable_device(&config.drive_id, Arc::new(config.clone()), index)?;
+        self.replaceable_info.block_count += 1;
+        Ok(())
+    }
+
+    fn add_vsock_device(&mut self, config: &VsockConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+        let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(config, &self.sys_mem)));
+        let device = VirtioMmioDevice::new(&self.sys_mem, vsock);
+        let region_base = self.sysbus.min_free_base;
+        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+
+        VirtioMmioDevice::realize(
+            device,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "x86_64")]
+            &self.boot_source,
+            vm_fd,
+        )?;
+        self.sysbus.min_free_base += region_size;
+        Ok(())
+    }
+
+    fn add_net_device(
+        &mut self,
+        config: &NetworkInterfaceConfig,
+        vm_fd: &Arc<VmFd>,
+    ) -> MachineResult<()> {
+        if config.vhost_type.is_some() {
+            let net = Arc::new(Mutex::new(VhostKern::Net::new(config, &self.sys_mem)));
+            let device = VirtioMmioDevice::new(&self.sys_mem, net);
+            let region_base = self.sysbus.min_free_base;
+            let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+
+            VirtioMmioDevice::realize(
+                device,
+                &mut self.sysbus,
+                region_base,
+                region_size,
+                #[cfg(target_arch = "x86_64")]
+                &self.boot_source,
+                vm_fd,
+            )?;
+            self.sysbus.min_free_base += region_size;
+        } else {
+            let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
+            if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
+                bail!(
+                    "A maximum of {} net replaceble devices are supported.",
+                    MMIO_REPLACEABLE_NET_NR
+                );
+            }
+
+            self.fill_replaceable_device(&config.iface_id, Arc::new(config.clone()), index)?;
+            self.replaceable_info.net_count += 1;
+        }
+        Ok(())
+    }
+
+    fn add_console_device(
+        &mut self,
+        config: &ConsoleConfig,
+        vm_fd: &Arc<VmFd>,
+    ) -> MachineResult<()> {
+        let console = Arc::new(Mutex::new(Console::new(config.clone())));
+        let device = VirtioMmioDevice::new(&self.sys_mem, console);
+        let region_base = self.sysbus.min_free_base;
+        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+
+        VirtioMmioDevice::realize(
+            device,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "x86_64")]
+            &self.boot_source,
+            vm_fd,
+        )?;
+        self.sysbus.min_free_base += region_size;
+        Ok(())
+    }
+
+    fn add_balloon_device(
+        &mut self,
+        config: &BalloonConfig,
+        vm_fd: &Arc<VmFd>,
+    ) -> MachineResult<()> {
+        let balloon = Arc::new(Mutex::new(Balloon::new(config, self.sys_mem.clone())));
+        Balloon::object_init(balloon.clone());
+        let device = VirtioMmioDevice::new(&self.sys_mem, balloon);
+        let region_base = self.sysbus.min_free_base;
+        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+
+        VirtioMmioDevice::realize(
+            device,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "x86_64")]
+            &self.boot_source,
+            vm_fd,
+        )?;
+        self.sysbus.min_free_base += region_size;
+        Ok(())
+    }
+
+    fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        #[cfg(target_arch = "aarch64")]
+        self.add_rtc_device(vm_fd)
+            .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
+
+        if let Some(serial) = vm_config.serial.as_ref() {
+            self.add_serial_device(serial, vm_fd)
+                .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
+        }
+
+        if let Some(vsock) = vm_config.vsock.as_ref() {
+            self.add_vsock_device(vsock, vm_fd)
+                .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
+        }
+
+        if let Some(drives) = vm_config.drives.as_ref() {
+            for drive in drives {
+                self.add_block_device(drive)
+                    .chain_err(|| MachineErrorKind::AddDevErr("block".to_string()))?;
+            }
+        }
+
+        if let Some(nets) = vm_config.nets.as_ref() {
+            for net in nets {
+                self.add_net_device(net, vm_fd)
+                    .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
+            }
+        }
+
+        if let Some(consoles) = vm_config.consoles.as_ref() {
+            for console in consoles {
+                self.add_console_device(console, vm_fd)
+                    .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
+            }
+        }
+
+        if let Some(balloon) = vm_config.balloon.as_ref() {
+            self.add_balloon_device(balloon, vm_fd)
+                .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    fn syscall_whitelist(&self) -> Vec<BpfRule> {
+        syscall_allow_list()
+    }
+
+    fn realize(mut self, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> MachineResult<Arc<Self>> {
+        use crate::errors::ResultExt;
+
         let kvm_fd = fds.0;
         let vm_fd = fds.1;
 
         let nr_slots = kvm_fd.get_nr_memslots();
-        vm.sys_mem
+        self.sys_mem
             .register_listener(Box::new(KvmMemoryListener::new(
                 nr_slots as u32,
                 vm_fd.clone(),
-            )))?;
+            )))
+            .chain_err(|| "Failed to register KVM listener for memory space.")?;
         #[cfg(target_arch = "x86_64")]
-        vm.sys_io
-            .register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))?;
+        self.sys_io
+            .register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))
+            .chain_err(|| "Failed to register KVM listener for I/O space.")?;
 
         // Init guest-memory
         // Define ram-region ranges according to architectures
         let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_config.mem_size);
-        let mem_mappings = create_host_mmaps(&ram_ranges, &vm_config.machine_config.mem_config)?;
+        let mem_mappings = create_host_mmaps(&ram_ranges, &vm_config.machine_config.mem_config)
+            .chain_err(|| "Failed to mmap guest ram.")?;
         for mmap in mem_mappings.iter() {
-            vm.sys_mem.root().add_subregion(
-                Region::init_ram_region(mmap.clone()),
-                mmap.start_address().raw_value(),
-            )?;
+            let base = mmap.start_address().raw_value();
+            self.sys_mem
+                .root()
+                .add_subregion(Region::init_ram_region(mmap.clone()), base)
+                .chain_err(|| {
+                    format!(
+                        "Failed to register region in memory space: base={}, size={}",
+                        base,
+                        mmap.size()
+                    )
+                })?;
         }
 
         #[cfg(target_arch = "x86_64")]
-        Self::arch_init(vm_fd)?;
+        LightMachine::arch_init(vm_fd)?;
 
         let nrcpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
@@ -528,24 +847,22 @@ impl LightMachine {
                 ],
                 its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
             };
-            vm.irq_chip = Some(Arc::new(InterruptController::new(
-                vm_fd.clone(),
-                &intc_conf,
-            )?));
+            let irq_chip = InterruptController::new(vm_fd.clone(), &intc_conf)
+                .chain_err(|| "Failed to create interrupt controller.")?;
+            self.irq_chip = Some(Arc::new(irq_chip));
+            self.irq_chip
+                .as_ref()
+                .unwrap()
+                .realize()
+                .chain_err(|| "Failed to realize interrupt controller.")?;
         }
 
-        #[cfg(target_arch = "aarch64")]
-        vm.irq_chip
-            .as_ref()
-            .unwrap()
-            .realize()
-            .chain_err(|| "Failed to realize interrupt controller")?;
-
         // Add mmio devices
-        vm.create_replaceable_devices(&vm_fd)?;
-        vm.add_devices(vm_config, &vm_fd)?;
+        self.create_replaceable_devices(&vm_fd)
+            .chain_err(|| ErrorKind::CreateRplDev)?;
+        self.add_devices(vm_config, &vm_fd)?;
 
-        let vm = Arc::new(vm);
+        let vm = Arc::new(self);
         for vcpu_id in 0..nrcpus {
             #[cfg(target_arch = "aarch64")]
             let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
@@ -577,7 +894,8 @@ impl LightMachine {
                 initrd_size: initrd_size as u32,
                 mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
             };
-            let layout = load_kernel(&bootloader_config, &vm.sys_mem)?;
+            let layout = load_kernel(&bootloader_config, &vm.sys_mem)
+                .chain_err(|| MachineErrorKind::LoadKernErr)?;
             if let Some(rd) = &boot_source.initrd {
                 *rd.initrd_addr.lock().unwrap() = layout.initrd_start;
             }
@@ -603,7 +921,8 @@ impl LightMachine {
                 lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
             };
 
-            let layout = load_kernel(&bootloader_config, &vm.sys_mem)?;
+            let layout = load_kernel(&bootloader_config, &vm.sys_mem)
+                .chain_err(|| MachineErrorKind::LoadKernErr)?;
             boot_config = CPUBootConfig {
                 boot_ip: layout.kernel_start,
                 boot_sp: layout.kernel_sp,
@@ -618,330 +937,37 @@ impl LightMachine {
             };
         }
         for cpu_index in 0..vm.cpu_topo.max_cpus {
-            vm.cpus.lock().unwrap()[cpu_index as usize].realize(vm_fd, &boot_config)?;
+            vm.cpus.lock().unwrap()[cpu_index as usize]
+                .realize(vm_fd, &boot_config)
+                .chain_err(|| format!("Failed to realize vcpu{}.", cpu_index))?;
         }
 
-        // Needed to release lock here which generate_fdt_node() will acquire later.
+        // Needed to release lock here because generate_fdt_node() will
+        // acquire it later, and the ownership of vm will be passed out
+        // of the function.
         drop(boot_source);
+
         #[cfg(target_arch = "aarch64")]
         {
             let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
-            vm.generate_fdt_node(&mut fdt)?;
-            vm.sys_mem.write(
-                &mut fdt.as_slice(),
-                GuestAddress(boot_config.fdt_addr as u64),
-                fdt.len() as u64,
-            )?;
+            vm.generate_fdt_node(&mut fdt)
+                .chain_err(|| MachineErrorKind::GenFdtErr)?;
+            vm.sys_mem
+                .write(
+                    &mut fdt.as_slice(),
+                    GuestAddress(boot_config.fdt_addr as u64),
+                    fdt.len() as u64,
+                )
+                .chain_err(|| {
+                    format!(
+                        "Failed to write guest memory: addr={},size={}",
+                        boot_config.fdt_addr,
+                        fdt.len()
+                    )
+                })?;
         }
-        vm.register_power_event()?;
+        vm.register_power_event(&vm.power_button)?;
         Ok(vm)
-    }
-
-    /// Start VM, changed `LightMachine`'s `vmstate` to `Paused` or
-    /// `Running`.
-    ///
-    /// # Arguments
-    ///
-    /// * `paused` - After started, paused all vcpu or not.
-    pub fn vm_start(&self, paused: bool) -> Result<()> {
-        let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            let cpu_thread_barrier = cpus_thread_barrier.clone();
-            let cpu = self.cpus.lock().unwrap()[cpu_index as usize].clone();
-            CPU::start(cpu, cpu_thread_barrier, paused)?;
-        }
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        if paused {
-            *vmstate = KvmVmState::Paused;
-        } else {
-            *vmstate = KvmVmState::Running;
-        }
-        cpus_thread_barrier.wait();
-
-        Ok(())
-    }
-
-    /// Pause VM, sleepy all vcpu thread. Changed `LightMachine`'s `vmstate`
-    /// from `Running` to `Paused`.
-    fn vm_pause(&self) -> Result<()> {
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].pause()?;
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        self.irq_chip.as_ref().unwrap().stop();
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Paused;
-
-        Ok(())
-    }
-
-    /// Resume VM, awaken all vcpu thread. Changed `LightMachine`'s `vmstate`
-    /// from `Paused` to `Running`.
-    fn vm_resume(&self) -> Result<()> {
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize].resume()?;
-        }
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Running;
-
-        Ok(())
-    }
-
-    /// Destroy VM, kill all vcpu thread. Changed `LightMachine`'s `vmstate`
-    /// to `KVM_VMSTATE_DESTROY`.
-    fn vm_destroy(&self) -> Result<()> {
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Shutdown;
-
-        let mut cpus = self.cpus.lock().unwrap();
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            cpus[cpu_index as usize].destroy()?;
-        }
-        cpus.clear();
-
-        Ok(())
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    fn add_rtc_device(&mut self, vm_fd: &Arc<VmFd>) -> Result<()> {
-        let err = Err(ErrorKind::AddDevErr("pl031".to_string()).into());
-        let rtc = PL031::default();
-        if let Err(e) = PL031::realize(
-            rtc,
-            &mut self.sysbus,
-            MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
-            MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
-            vm_fd,
-        ) {
-            error!("Failed to realize RTC: {}", e.display_chain());
-            return err;
-        }
-        Ok(())
-    }
-
-    fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
-        let err = Err(ErrorKind::AddDevErr("serial".to_string()).into());
-        let serial = Serial::default();
-
-        #[cfg(target_arch = "x86_64")]
-        let region_base: u64 = 0x3f8;
-        #[cfg(target_arch = "aarch64")]
-        let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
-        #[cfg(target_arch = "x86_64")]
-        let region_size: u64 = 8;
-        #[cfg(target_arch = "aarch64")]
-        let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
-
-        let serial = match Serial::realize(
-            serial,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "aarch64")]
-            &self.boot_source,
-            vm_fd,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to realize serial: {}", e.display_chain());
-                return err;
-            }
-        };
-        if config.stdio {
-            if let Err(e) =
-                EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
-            {
-                error!("Failed to register event notifer in the main thread: {}", e);
-                return err;
-            }
-        }
-        Ok(())
-    }
-
-    fn add_block_device(&mut self, config: &DriveConfig) -> Result<()> {
-        let e = ErrorKind::AddDevErr("virtio-blk".to_string()).into();
-        if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
-            error!(
-                "A maximum of {} replaceble block devices are supported.",
-                MMIO_REPLACEABLE_BLK_NR
-            );
-            return Err(e);
-        }
-        let index = self.replaceable_info.block_count;
-        self.fill_replaceable_device(&config.drive_id, Arc::new(config.clone()), index)
-            .chain_err(|| e)?;
-        self.replaceable_info.block_count += 1;
-        Ok(())
-    }
-
-    fn add_vsock_device(&mut self, config: &VsockConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
-        let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(config, &self.sys_mem)));
-        let device = VirtioMmioDevice::new(&self.sys_mem, vsock);
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        match VirtioMmioDevice::realize(
-            device,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
-            vm_fd,
-        ) {
-            Ok(_) => self.sysbus.min_free_base += region_size,
-            Err(e) => {
-                error!("Failed to realize vhost-vsock: {}", e.display_chain());
-                return Err(ErrorKind::AddDevErr("vhost-vsock".to_string()).into());
-            }
-        }
-        Ok(())
-    }
-
-    fn add_net_device(&mut self, config: &NetworkInterfaceConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
-        if config.vhost_type.is_some() {
-            let net = Arc::new(Mutex::new(VhostKern::Net::new(config, &self.sys_mem)));
-            let device = VirtioMmioDevice::new(&self.sys_mem, net);
-            let region_base = self.sysbus.min_free_base;
-            let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-            match VirtioMmioDevice::realize(
-                device,
-                &mut self.sysbus,
-                region_base,
-                region_size,
-                #[cfg(target_arch = "x86_64")]
-                &self.boot_source,
-                vm_fd,
-            ) {
-                Ok(_) => self.sysbus.min_free_base += region_size,
-                Err(e) => {
-                    error!("Failed to realize vhost-net: {}", e.display_chain());
-                    return Err(ErrorKind::AddDevErr("vhost-net".to_string()).into());
-                }
-            }
-        } else {
-            let e = ErrorKind::AddDevErr("vhost-net".to_string()).into();
-            let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
-            if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
-                return Err(e);
-            }
-            self.fill_replaceable_device(&config.iface_id, Arc::new(config.clone()), index)
-                .chain_err(|| e)?;
-            self.replaceable_info.net_count += 1;
-        }
-        Ok(())
-    }
-
-    fn add_console_device(&mut self, config: &ConsoleConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
-        let console = Arc::new(Mutex::new(Console::new(config.clone())));
-        let device = VirtioMmioDevice::new(&self.sys_mem, console);
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        match VirtioMmioDevice::realize(
-            device,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
-            vm_fd,
-        ) {
-            Ok(_) => self.sysbus.min_free_base += region_size,
-            Err(e) => {
-                error!("{}", e.display_chain());
-                return Err(ErrorKind::AddDevErr("virtio-console".to_string()).into());
-            }
-        }
-        Ok(())
-    }
-
-    fn add_balloon_device(&mut self, config: &BalloonConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
-        let balloon = Arc::new(Mutex::new(Balloon::new(config, self.sys_mem.clone())));
-        Balloon::object_init(balloon.clone());
-        let device = VirtioMmioDevice::new(&self.sys_mem, balloon);
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        match VirtioMmioDevice::realize(
-            device,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
-            vm_fd,
-        ) {
-            Ok(_) => self.sysbus.min_free_base += region_size,
-            Err(e) => {
-                error!("{}", e.display_chain());
-                return Err(ErrorKind::AddDevErr("virtio-balloon".to_string()).into());
-            }
-        }
-        Ok(())
-    }
-
-    fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
-        #[cfg(target_arch = "aarch64")]
-        self.add_rtc_device(vm_fd)?;
-
-        if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(serial, vm_fd)?;
-        }
-
-        if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(vsock, vm_fd)?;
-        }
-
-        if let Some(drives) = vm_config.drives.as_ref() {
-            for drive in drives {
-                self.add_block_device(drive)?;
-            }
-        }
-
-        if let Some(nets) = vm_config.nets.as_ref() {
-            for net in nets {
-                self.add_net_device(net, vm_fd)?;
-            }
-        }
-
-        if let Some(consoles) = vm_config.consoles.as_ref() {
-            for console in consoles {
-                self.add_console_device(console, vm_fd)?;
-            }
-        }
-
-        if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon, vm_fd)?;
-        }
-
-        Ok(())
-    }
-
-    fn register_power_event(&self) -> Result<()> {
-        let power_button = self.power_button.try_clone().unwrap();
-        let button_fd = power_button.as_raw_fd();
-        let power_button_handler: Arc<Mutex<Box<NotifierCallback>>> =
-            Arc::new(Mutex::new(Box::new(move |_, _| {
-                let _ret = power_button.read().unwrap();
-                None
-            })));
-
-        let notifier = EventNotifier::new(
-            NotifierOperation::AddShared,
-            button_fd,
-            None,
-            EventSet::IN,
-            vec![power_button_handler],
-        );
-
-        EventLoop::update_event(vec![notifier], None)?;
-        Ok(())
     }
 }
 
@@ -1317,6 +1343,7 @@ impl DeviceInterface for LightMachine {
             );
         }
 
+        use errors::ResultExt;
         let config = DriveConfig {
             drive_id: node_name.clone(),
             path_on_host: file.filename,
@@ -1328,7 +1355,7 @@ impl DeviceInterface for LightMachine {
         };
         match self
             .add_replaceable_config(&node_name, Arc::new(config))
-            .chain_err(|| ErrorKind::AddDevErr("virtio-blk".to_string()))
+            .chain_err(|| "Failed to add virtio-blk.")
         {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
