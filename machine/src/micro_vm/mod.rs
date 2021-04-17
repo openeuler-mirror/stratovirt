@@ -66,9 +66,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::vec::Vec;
 
-#[cfg(target_arch = "x86_64")]
-use address_space::KvmIoListener;
-use address_space::{create_host_mmaps, AddressSpace, GuestAddress, KvmMemoryListener, Region};
+use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_kernel, BootLoaderConfig};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::Serial;
@@ -234,37 +232,6 @@ impl LightMachine {
             vm_state,
             power_button,
         })
-    }
-
-    /// Calculate the ranges of memory according to architecture.
-    ///
-    /// # Arguments
-    ///
-    /// * `mem_size` - memory size of VM.
-    ///
-    /// # Returns
-    ///
-    /// A array of ranges, it's element represents (start_addr, size).
-    /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
-    fn arch_ram_ranges(mem_size: u64) -> Vec<(u64, u64)> {
-        // ranges is the vector of (start_addr, size)
-        let mut ranges = Vec::<(u64, u64)>::new();
-
-        #[cfg(target_arch = "aarch64")]
-        ranges.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
-
-        #[cfg(target_arch = "x86_64")]
-        {
-            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-            ranges.push((0, std::cmp::min(gap_start, mem_size)));
-            if mem_size > gap_start {
-                let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-                ranges.push((gap_end, mem_size - gap_start));
-            }
-        }
-
-        ranges
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -777,39 +744,14 @@ impl MachineOps for LightMachine {
     fn realize(mut self, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> MachineResult<Arc<Self>> {
         use crate::errors::ResultExt;
 
-        let kvm_fd = fds.0;
         let vm_fd = fds.1;
-
-        let nr_slots = kvm_fd.get_nr_memslots();
-        self.sys_mem
-            .register_listener(Box::new(KvmMemoryListener::new(
-                nr_slots as u32,
-                vm_fd.clone(),
-            )))
-            .chain_err(|| "Failed to register KVM listener for memory space.")?;
-        #[cfg(target_arch = "x86_64")]
-        self.sys_io
-            .register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))
-            .chain_err(|| "Failed to register KVM listener for I/O space.")?;
-
-        // Init guest-memory
-        // Define ram-region ranges according to architectures
-        let ram_ranges = Self::arch_ram_ranges(vm_config.machine_config.mem_config.mem_size);
-        let mem_mappings = create_host_mmaps(&ram_ranges, &vm_config.machine_config.mem_config)
-            .chain_err(|| "Failed to mmap guest ram.")?;
-        for mmap in mem_mappings.iter() {
-            let base = mmap.start_address().raw_value();
-            self.sys_mem
-                .root()
-                .add_subregion(Region::init_ram_region(mmap.clone()), base)
-                .chain_err(|| {
-                    format!(
-                        "Failed to register region in memory space: base={}, size={}",
-                        base,
-                        mmap.size()
-                    )
-                })?;
-        }
+        self.init_memory(
+            fds,
+            &vm_config.machine_config.mem_config,
+            #[cfg(target_arch = "x86_64")]
+            &self.sys_io,
+            &self.sys_mem,
+        )?;
 
         #[cfg(target_arch = "x86_64")]
         LightMachine::arch_init(vm_fd)?;

@@ -57,10 +57,13 @@ pub use micro_vm::LightMachine;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_arch = "x86_64")]
+use address_space::KvmIoListener;
+use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
-    BalloonConfig, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig, VmConfig,
-    VsockConfig,
+    BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig, NetworkInterfaceConfig,
+    SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
@@ -83,6 +86,56 @@ pub trait MachineOps {
     /// A array of ranges, it's element represents (start_addr, size).
     /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
+
+    /// Init I/O & memory address space and mmap guest memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `fds` - File descriptors obtained by opening KVM module and creating new VM.
+    /// * `mem_config` - Memory setting.
+    /// * `sys_io` - IO address space required for x86_64.
+    /// * `sys_mem` - Memory address space.
+    fn init_memory(
+        &self,
+        fds: (Kvm, &Arc<VmFd>),
+        mem_config: &MachineMemConfig,
+        #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
+        sys_mem: &Arc<AddressSpace>,
+    ) -> Result<()> {
+        let kvm_fd = fds.0;
+        let vm_fd = fds.1;
+        sys_mem
+            .register_listener(Box::new(KvmMemoryListener::new(
+                kvm_fd.get_nr_memslots() as u32,
+                vm_fd.clone(),
+            )))
+            .chain_err(|| "Failed to register KVM listener for memory space.")?;
+        #[cfg(target_arch = "x86_64")]
+        sys_io
+            .register_listener(Box::new(KvmIoListener::new(vm_fd.clone())))
+            .chain_err(|| "Failed to register KVM listener for I/O space.")?;
+
+        // Init guest-memory
+        // Define ram-region ranges according to architectures
+        let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
+        let mem_mappings = create_host_mmaps(&ram_ranges, &mem_config)
+            .chain_err(|| "Failed to mmap guest ram.")?;
+        for mmap in mem_mappings.iter() {
+            let base = mmap.start_address().raw_value();
+            let size = mmap.size();
+            sys_mem
+                .root()
+                .add_subregion(Region::init_ram_region(mmap.clone()), base)
+                .chain_err(|| {
+                    format!(
+                        "Failed to register region in memory space: base={}, size={}",
+                        base, size,
+                    )
+                })?;
+        }
+
+        Ok(())
+    }
 
     /// Add RTC device.
     ///
