@@ -411,6 +411,24 @@ This feature can prevent OOM occur in guest.
 }
 ```
 
+### 2.8 Virtio-rng
+Virtio rng is a paravirtualized random number generator device, it provides a hardware rng device to the guest.
+
+Only two property is supported for virtio-rng.
+* random_file: the path of character device generates with random number in host
+* bytes_per_sec: the number of bytes that the character device generates with a random number per second,
+it should satisfy `64<=bytes_per_sec<1000000000`
+
+```shell
+# cmdline
+-rng random_file=/path/to/random_file[,bytes_per_sec=1000000]
+# json
+{
+    "rng": {
+    "random_file": "/path/to/random_file",
+    "bytes_per_sec": 1000000
+    },
+}
 
 ## 3. StratoVirt Management
 
