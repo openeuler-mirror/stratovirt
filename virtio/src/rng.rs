@@ -11,7 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs::File;
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -70,6 +72,7 @@ impl RngHandler {
 
         Ok(())
     }
+
     fn process_queue(&mut self) -> Result<()> {
         let mut queue_lock = self.queue.lock().unwrap();
         let mut need_interrupt = false;
@@ -80,6 +83,7 @@ impl RngHandler {
         {
             let size =
                 get_req_data_size(&elem.in_iovec).chain_err(|| "Failed to get request size")?;
+
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(None) {
                     if leak_bucket.throttled(ctx, size as u64) {
@@ -207,11 +211,32 @@ impl Rng {
             driver_features: 0,
         }
     }
+
+    fn check_random_file(&self) -> Result<()> {
+        let path = Path::new(&self.rng_cfg.random_file);
+        if !path.exists() {
+            bail!(
+                "The path of random file {} is not existed",
+                self.rng_cfg.random_file
+            );
+        }
+
+        if !path.metadata().unwrap().file_type().is_char_device() {
+            bail!(
+                "The type of random file {} is not a character special file",
+                self.rng_cfg.random_file
+            );
+        }
+
+        Ok(())
+    }
 }
 
 impl VirtioDevice for Rng {
-    /// Realize virtio network device.
+    /// Realize virtio rng device.
     fn realize(&mut self) -> Result<()> {
+        self.check_random_file()
+            .chain_err(|| "Failed to check random file")?;
         let file = File::open(&self.rng_cfg.random_file)
             .chain_err(|| "Failed to open file of random number generator")?;
 
@@ -348,17 +373,12 @@ mod tests {
             random_file: random_file.clone(),
             bytes_per_sec: Some(64),
         };
-        let mut rng = Rng::new(rng_config);
+        let rng = Rng::new(rng_config);
         assert!(rng.random_file.is_none());
         assert_eq!(rng.driver_features, 0_u64);
         assert_eq!(rng.device_features, 0_u64);
         assert_eq!(rng.rng_cfg.random_file, random_file);
         assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
-
-        assert!(rng.realize().is_ok());
-        assert_eq!(rng.device_features, 1 << VIRTIO_F_VERSION_1 as u64);
-        assert_eq!(rng.driver_features, 0_u64);
-        assert!(rng.random_file.is_some());
 
         assert_eq!(rng.queue_num(), QUEUE_NUM_RNG);
         assert_eq!(rng.queue_size(), QUEUE_SIZE_RNG);
