@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use address_space::AddressSpace;
 use machine_manager::{config::RngConfig, event_loop::EventLoop};
 use util::aio::raw_read;
+use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -54,6 +55,7 @@ struct RngHandler {
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
     random_file: File,
+    leak_bucket: Option<LeakBucket>,
 }
 
 impl RngHandler {
@@ -78,6 +80,17 @@ impl RngHandler {
         {
             let size =
                 get_req_data_size(&elem.in_iovec).chain_err(|| "Failed to get request size")?;
+            if let Some(leak_bucket) = self.leak_bucket.as_mut() {
+                if let Some(ctx) = EventLoop::get_ctx(None) {
+                    if leak_bucket.throttled(ctx, size as u64) {
+                        queue_lock.vring.push_back();
+                        break;
+                    }
+                } else {
+                    bail!("Failed to get ctx in event loop context for virtio rng");
+                }
+            }
+
             let mut buffer = vec![0_u8; size as usize];
             raw_read(
                 self.random_file.as_raw_fd(),
@@ -140,6 +153,35 @@ impl EventNotifierHelper for RngHandler {
             vec![Arc::new(Mutex::new(handler))],
         ));
 
+        // Register timer event notifier for the limit of request bytes per second
+        if let Some(lb) = rng_handler.lock().unwrap().leak_bucket.as_ref() {
+            let rng_handler_clone = rng_handler.clone();
+            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+                read_fd(fd);
+
+                if let Some(leak_bucket) = rng_handler_clone.lock().unwrap().leak_bucket.as_mut() {
+                    leak_bucket.clear_timer();
+                }
+
+                if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
+                    error!(
+                        "Failed to process queue for virtio rng, err: {}",
+                        error_chain::ChainedError::display_chain(e),
+                    );
+                }
+
+                None
+            });
+
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::AddShared,
+                lb.as_raw_fd(),
+                None,
+                EventSet::IN,
+                vec![Arc::new(Mutex::new(handler))],
+            ));
+        }
+
         notifiers
     }
 }
@@ -157,7 +199,6 @@ pub struct Rng {
 }
 
 impl Rng {
-    #[allow(dead_code)]
     pub fn new(rng_cfg: RngConfig) -> Self {
         Rng {
             rng_cfg,
@@ -251,6 +292,7 @@ impl VirtioDevice for Rng {
                 .unwrap()
                 .try_clone()
                 .chain_err(|| "Failed to clone random file for virtio rng")?,
+            leak_bucket: self.rng_cfg.bytes_per_sec.map(LeakBucket::new),
         };
 
         EventLoop::update_event(

@@ -43,7 +43,7 @@ impl LeakBucket {
     ///
     /// # Arguments
     ///
-    /// * `units_ps` - iops value, eg. 100
+    /// * `units_ps` - units per second.
     pub fn new(units_ps: u64) -> Self {
         LeakBucket {
             capacity: units_ps * ACCURACY_SCALE,
@@ -60,7 +60,7 @@ impl LeakBucket {
     /// # Arguments
     ///
     /// * `loop_context` - used for delay function call.
-    pub fn throttled(&mut self, loop_context: &mut EventLoopContext) -> bool {
+    pub fn throttled(&mut self, loop_context: &mut EventLoopContext, need_units: u64) -> bool {
         // capacity value is zero, indicating that there is no need to limit
         if self.capacity == 0 {
             return false;
@@ -99,7 +99,7 @@ impl LeakBucket {
             return true;
         }
 
-        self.level += ACCURACY_SCALE;
+        self.level += need_units * ACCURACY_SCALE;
 
         false
     }

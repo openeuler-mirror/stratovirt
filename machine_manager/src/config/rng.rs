@@ -19,13 +19,13 @@ use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_PATH_LENGTH: usize = 4096;
-const MAX_BYTE_PER_SEC: u64 = 1_000_000;
+const MAX_BYTE_PER_SEC: u64 = 1_000_000_000;
 
 /// Config structure for virtio-rng.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RngConfig {
     pub random_file: String,
-    pub byte_per_sec: Option<u64>,
+    pub bytes_per_sec: Option<u64>,
 }
 
 impl RngConfig {
@@ -47,8 +47,8 @@ impl ConfigCheck for RngConfig {
             .into());
         }
 
-        if let Some(byte_per_sec) = self.byte_per_sec {
-            if byte_per_sec > MAX_BYTE_PER_SEC {
+        if let Some(bytes_per_sec) = self.bytes_per_sec {
+            if bytes_per_sec > MAX_BYTE_PER_SEC {
                 return Err(ErrorKind::IllegalValue(
                     "The bytes per second of rng device".to_string(),
                     0,
@@ -67,7 +67,7 @@ impl ConfigCheck for RngConfig {
 impl VmConfig {
     pub fn update_rng(&mut self, rng_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("rng");
-        cmd_parser.push("random_file").push("byte_per_sec");
+        cmd_parser.push("random_file").push("bytes_per_sec");
 
         cmd_parser.parse(rng_config)?;
 
@@ -78,11 +78,11 @@ impl VmConfig {
                 return Err(ErrorKind::FieldIsMissing("random_file", "rng").into());
             };
 
-        let byte_per_sec = cmd_parser.get_value::<u64>("byte_per_sec")?;
+        let bytes_per_sec = cmd_parser.get_value::<u64>("bytes_per_sec")?;
 
         self.rng = Some(RngConfig {
             random_file,
-            byte_per_sec,
+            bytes_per_sec,
         });
 
         Ok(())
