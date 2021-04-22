@@ -428,7 +428,7 @@ impl BlockIoHandler {
             // limit io operations if iops is configured
             if let Some(lb) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
-                    if lb.throttled(ctx) {
+                    if lb.throttled(ctx, 1_u64) {
                         queue.vring.push_back();
                         break;
                     }

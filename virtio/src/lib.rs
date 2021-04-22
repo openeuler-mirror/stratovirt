@@ -101,6 +101,7 @@ mod block;
 mod console;
 mod net;
 mod queue;
+mod rng;
 mod vhost;
 mod virtio_mmio;
 
@@ -110,6 +111,7 @@ pub use console::Console;
 pub use errors::*;
 pub use net::*;
 pub use queue::*;
+pub use rng::Rng;
 pub use vhost::kernel as VhostKern;
 pub use virtio_mmio::VirtioMmioDevice;
 
@@ -129,7 +131,7 @@ pub fn virtio_has_feature(feature: u64, fbit: u32) -> bool {
 pub const VIRTIO_TYPE_NET: u32 = 1;
 pub const VIRTIO_TYPE_BLOCK: u32 = 2;
 pub const VIRTIO_TYPE_CONSOLE: u32 = 3;
-pub const _VIRTIO_TYPE_RNG: u32 = 4;
+pub const VIRTIO_TYPE_RNG: u32 = 4;
 pub const VIRTIO_TYPE_BALLOON: u32 = 5;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const _VIRTIO_TYPE_FS: u32 = 26;
