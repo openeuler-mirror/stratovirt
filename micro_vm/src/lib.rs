@@ -100,7 +100,7 @@ use machine_manager::machine::{
 use machine_manager::{
     config::{
         BalloonConfig, BootSource, ConfigCheck, ConsoleConfig, DriveConfig, NetworkInterfaceConfig,
-        SerialConfig, VmConfig, VsockConfig,
+        RngConfig, SerialConfig, VmConfig, VsockConfig,
     },
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
@@ -116,7 +116,7 @@ use util::loop_context::{
     EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, Console, Net, VhostKern,
+    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, Console, Net, Rng, VhostKern,
     VirtioDevice, VirtioMmioDevice,
 };
 use vmm_sys_util::epoll::EventSet;
@@ -886,6 +886,30 @@ impl LightMachine {
         Ok(())
     }
 
+    fn add_rng_device(&mut self, config: &RngConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
+        let rng = Arc::new(Mutex::new(Rng::new(config.clone())));
+        let device = VirtioMmioDevice::new(&self.sys_mem, rng);
+        let region_base = self.sysbus.min_free_base;
+        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+
+        match VirtioMmioDevice::realize(
+            device,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "x86_64")]
+            &self.boot_source,
+            vm_fd,
+        ) {
+            Ok(_) => self.sysbus.min_free_base += region_size,
+            Err(e) => {
+                error!("{}", e.display_chain());
+                return Err(ErrorKind::AddDevErr("virtio-rng".to_string()).into());
+            }
+        }
+        Ok(())
+    }
+
     fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         self.add_rtc_device(vm_fd)?;
@@ -918,6 +942,10 @@ impl LightMachine {
 
         if let Some(balloon) = vm_config.balloon.as_ref() {
             self.add_balloon_device(balloon, vm_fd)?;
+        }
+
+        if let Some(rng) = vm_config.rng.as_ref() {
+            self.add_rng_device(rng, vm_fd)?;
         }
 
         Ok(())
