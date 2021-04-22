@@ -1,16 +1,17 @@
 [package]
-name = "util"
+name = "cpu"
 version = "0.2.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2018"
 license = "Mulan PSL v2"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "CPU emulation"
 
 [dependencies]
 error-chain = "0.12.4"
 kvm-bindings = "0.3.0"
 kvm-ioctls = "0.6.0"
+log = "0.4.8"
 libc = "0.2.71"
-log = { version = "0.4.8", features = ["std"]}
 vmm-sys-util = "0.7.0"
+machine_manager = { path = "../machine_manager" }
+util = { path = "../util" }
