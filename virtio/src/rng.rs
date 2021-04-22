@@ -303,3 +303,127 @@ impl VirtioDevice for Rng {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use super::*;
+
+    use address_space::GuestAddress;
+    use machine_manager::config::RngConfig;
+
+    use vmm_sys_util::tempfile::TempFile;
+
+    #[test]
+    fn test_rng_init() {
+        let file = TempFile::new().unwrap();
+        let random_file = file.as_path().to_str().unwrap().to_string();
+        let rng_config = RngConfig {
+            random_file: random_file.clone(),
+            bytes_per_sec: Some(64),
+        };
+        let mut rng = Rng::new(rng_config);
+        assert!(rng.random_file.is_none());
+        assert_eq!(rng.driver_features, 0_u64);
+        assert_eq!(rng.device_features, 0_u64);
+        assert_eq!(rng.rng_cfg.random_file, random_file);
+        assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
+
+        assert!(rng.realize().is_ok());
+        assert_eq!(rng.device_features, 1 << VIRTIO_F_VERSION_1 as u64);
+        assert_eq!(rng.driver_features, 0_u64);
+        assert!(rng.random_file.is_some());
+
+        assert_eq!(rng.queue_num(), QUEUE_NUM_RNG);
+        assert_eq!(rng.queue_size(), QUEUE_SIZE_RNG);
+        assert_eq!(rng.device_type(), VIRTIO_TYPE_RNG);
+    }
+
+    #[test]
+    fn test_rng_features() {
+        let random_file = TempFile::new()
+            .unwrap()
+            .as_path()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let rng_config = RngConfig {
+            random_file,
+            bytes_per_sec: Some(64),
+        };
+        let mut rng = Rng::new(rng_config);
+
+        // If the device feature is 0, all driver features are not supported.
+        rng.device_features = 0;
+        let driver_feature: u32 = 0xFF;
+        let page = 0_u32;
+        rng.set_driver_features(page, driver_feature);
+        assert_eq!(rng.driver_features, 0_u64);
+        assert_eq!(rng.get_device_features(0_u32), 0_u32);
+
+        let driver_feature: u32 = 0xFF;
+        let page = 1_u32;
+        rng.set_driver_features(page, driver_feature);
+        assert_eq!(rng.driver_features, 0_u64);
+        assert_eq!(rng.get_device_features(1_u32), 0_u32);
+
+        // If both the device feature bit and the front-end driver feature bit are
+        // supported at the same time,  this driver feature bit is supported.
+        rng.device_features =
+            1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64;
+        let driver_feature: u32 = 1_u32 << VIRTIO_F_RING_INDIRECT_DESC;
+        let page = 0_u32;
+        rng.set_driver_features(page, driver_feature);
+        assert_eq!(
+            rng.driver_features,
+            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
+        );
+        assert_eq!(
+            rng.get_device_features(page),
+            (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        rng.driver_features = 0;
+
+        rng.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        let driver_feature: u32 = 1_u32 << VIRTIO_F_RING_INDIRECT_DESC;
+        let page = 0_u32;
+        rng.set_driver_features(page, driver_feature);
+        assert_eq!(rng.driver_features, 0);
+        assert_eq!(rng.get_device_features(page), 0_u32);
+        rng.driver_features = 0;
+    }
+
+    #[test]
+    fn test_get_req_data_size() {
+        // The size of request overflows
+        let in_iov = vec![
+            ElemIovec {
+                addr: GuestAddress(0_u64),
+                len: u32::max_value(),
+            },
+            ElemIovec {
+                addr: GuestAddress(u32::max_value() as u64),
+                len: 1_u32,
+            },
+        ];
+        assert!(get_req_data_size(&in_iov).is_err());
+
+        // It is ok to get the size of request
+        let len = 1000_u32;
+        let in_iov = vec![
+            ElemIovec {
+                addr: GuestAddress(0_u64),
+                len,
+            },
+            ElemIovec {
+                addr: GuestAddress(u32::max_value() as u64),
+                len,
+            },
+        ];
+        if let Ok(size) = get_req_data_size(&in_iov) {
+            assert_eq!(size, len * 2);
+        } else {
+            assert!(false);
+        }
+    }
+}
