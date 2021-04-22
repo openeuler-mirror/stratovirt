@@ -309,10 +309,36 @@ mod tests {
     use super::super::*;
     use super::*;
 
-    use address_space::GuestAddress;
+    use std::mem::size_of;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::{Arc, Mutex};
+
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::RngConfig;
 
+    use std::io::Write;
     use vmm_sys_util::tempfile::TempFile;
+
+    const VIRTQ_DESC_F_NEXT: u16 = 0x01;
+    const VIRTQ_DESC_F_WRITE: u16 = 0x02;
+    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
+
+    // build dummy address space of vm
+    fn address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36);
+        let sys_space = AddressSpace::new(root).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
 
     #[test]
     fn test_rng_init() {
@@ -425,5 +451,159 @@ mod tests {
         } else {
             assert!(false);
         }
+    }
+
+    #[test]
+    fn test_rng_process_queue_01() {
+        let mem_space = address_space_init();
+
+        let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
+        queue_config.desc_table = GuestAddress(0);
+        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_RNG as u64);
+        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_RNG as u64);
+        queue_config.size = QUEUE_SIZE_RNG;
+        queue_config.ready = true;
+
+        let file = TempFile::new().unwrap();
+        let mut rng_handler = RngHandler {
+            queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
+            queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            interrupt_status: Arc::new(AtomicU32::new(0)),
+            driver_features: 0_u64,
+            mem_space: mem_space.clone(),
+            random_file: file.into_file(),
+            leak_bucket: None,
+        };
+
+        let data_len = 64;
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x40000),
+            len: data_len,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 0,
+        };
+        // write table descriptor for queue
+        mem_space
+            .write_object(&desc, queue_config.desc_table)
+            .unwrap();
+        // write avail_ring idx
+        mem_space
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .unwrap();
+        // write avail_ring idx
+        mem_space
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .unwrap();
+
+        let buffer = vec![1_u8; data_len as usize];
+        rng_handler.random_file.write(&buffer).unwrap();
+        assert!(rng_handler.process_queue().is_ok());
+        let mut read_buffer = vec![0_u8; data_len as usize];
+        assert!(mem_space
+            .read(
+                &mut read_buffer.as_mut_slice(),
+                GuestAddress(0x40000),
+                data_len as u64
+            )
+            .is_ok());
+        assert_eq!(read_buffer, buffer);
+
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(rng_handler.interrupt_evt.read().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_rng_process_queue_02() {
+        let mem_space = address_space_init();
+
+        let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
+        queue_config.desc_table = GuestAddress(0);
+        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_RNG as u64);
+        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_RNG as u64);
+        queue_config.size = QUEUE_SIZE_RNG;
+        queue_config.ready = true;
+
+        let file = TempFile::new().unwrap();
+        let mut rng_handler = RngHandler {
+            queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
+            queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            interrupt_status: Arc::new(AtomicU32::new(0)),
+            driver_features: 0_u64,
+            mem_space: mem_space.clone(),
+            random_file: file.into_file(),
+            leak_bucket: None,
+        };
+
+        let data_len = 64;
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x40000),
+            len: data_len,
+            flags: VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT,
+            next: 1,
+        };
+        // write table descriptor for queue
+        mem_space
+            .write_object(&desc, queue_config.desc_table)
+            .unwrap();
+
+        let desc = SplitVringDesc {
+            addr: GuestAddress(0x50000),
+            len: data_len,
+            flags: VIRTQ_DESC_F_WRITE,
+            next: 0,
+        };
+        // write table descriptor for queue
+        mem_space
+            .write_object(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + size_of::<SplitVringDesc>() as u64),
+            )
+            .unwrap();
+
+        // write avail_ring idx
+        mem_space
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .unwrap();
+        // write avail_ring idx
+        mem_space
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .unwrap();
+
+        let mut buffer1 = vec![1_u8; data_len as usize];
+        let mut buffer2 = vec![2_u8; data_len as usize];
+        let buffer1_check = vec![1_u8; data_len as usize];
+        let buffer2_check = vec![2_u8; data_len as usize];
+        buffer1.append(&mut buffer2);
+        rng_handler.random_file.write(&buffer1).unwrap();
+
+        assert!(rng_handler.process_queue().is_ok());
+        let mut read_buffer = vec![0_u8; data_len as usize];
+        assert!(mem_space
+            .read(
+                &mut read_buffer.as_mut_slice(),
+                GuestAddress(0x40000),
+                data_len as u64
+            )
+            .is_ok());
+        assert_eq!(read_buffer, buffer1_check);
+        assert!(mem_space
+            .read(
+                &mut read_buffer.as_mut_slice(),
+                GuestAddress(0x50000),
+                data_len as u64
+            )
+            .is_ok());
+        assert_eq!(read_buffer, buffer2_check);
+
+        let idx = mem_space
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(rng_handler.interrupt_evt.read().unwrap(), 1);
     }
 }
