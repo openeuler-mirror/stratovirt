@@ -39,7 +39,7 @@ const QUEUE_SIZE_CONSOLE: u16 = 256;
 
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
-pub struct VirtioConsoleConfig {
+struct VirtioConsoleConfig {
     max_nr_ports: u32,
     emerg_wr: u32,
 }
@@ -56,36 +56,21 @@ impl VirtioConsoleConfig {
     }
 }
 
-/// Console device's IO handle context.
 struct ConsoleHandler {
-    /// Virtqueue for console input.
     input_queue: Arc<Mutex<Queue>>,
-    /// Virtqueue for console output.
     output_queue: Arc<Mutex<Queue>>,
-    /// Eventfd of output_queue.
     output_queue_evt: EventFd,
-    /// The address space to which the console device belongs.
     mem_space: Arc<AddressSpace>,
-    /// Eventfd for triggering interrupts.
     interrupt_evt: EventFd,
-    /// State of the interrupt in the device/function.
     interrupt_status: Arc<AtomicU32>,
-    /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
-    /// Unix domain socket server.
     listener: UnixListener,
-    /// Unix stream socket got by the incoming connection.
     client: Option<UnixStream>,
 }
 
 impl ConsoleHandler {
     #[allow(clippy::useless_asref)]
-    /// Handler for console input.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer` - where to put the input data.
-    pub fn input_handle(&mut self, buffer: &mut [u8]) -> Result<()> {
+    fn input_handle(&mut self, buffer: &mut [u8]) -> Result<()> {
         let mut queue_lock = self.input_queue.lock().unwrap();
 
         let count = buffer.len();
@@ -150,8 +135,7 @@ impl ConsoleHandler {
         Ok(())
     }
 
-    /// Handler for console output.
-    pub fn output_handle(&mut self) -> Result<()> {
+    fn output_handle(&mut self) {
         let mut queue_lock = self.output_queue.lock().unwrap();
         let mut buffer = [0_u8; 4096];
 
@@ -201,8 +185,6 @@ impl ConsoleHandler {
                 break;
             }
         }
-
-        Ok(())
     }
 }
 
@@ -270,7 +252,7 @@ impl EventNotifierHelper for ConsoleHandler {
         let handler = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            let _ = cls.clone().lock().unwrap().output_handle();
+            cls.clone().lock().unwrap().output_handle();
 
             None as Option<Vec<EventNotifier>>
         });
