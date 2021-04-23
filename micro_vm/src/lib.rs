@@ -127,7 +127,7 @@ use crate::errors::{ErrorKind, Result, ResultExt};
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 
 // The replaceable block device maximum count.
-const MMIO_REPLACEABLE_BLK_NR: usize = 6;
+const MMIO_REPLACEABLE_BLK_NR: usize = 4;
 // The replaceable network device maximum count.
 const MMIO_REPLACEABLE_NET_NR: usize = 2;
 
