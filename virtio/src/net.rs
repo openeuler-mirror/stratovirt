@@ -68,23 +68,13 @@ pub struct VirtioNetConfig {
 
 impl ByteCode for VirtioNetConfig {}
 
-/// Transmit virtqueue.
 struct TxVirtio {
-    /// Virtqueue.
     queue: Arc<Mutex<Queue>>,
-    /// Eventfd of this virtqueue for notifing.
     queue_evt: EventFd,
-    /// Buffer data to transmit.
     frame_buf: [u8; FRAME_BUF_SIZE],
 }
 
 impl TxVirtio {
-    /// Create a transmit virqueue.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - The virtqueue.
-    /// * `queue_evt` - Eventfd of this virtqueue for notifing.
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
         TxVirtio {
             queue,
@@ -94,29 +84,16 @@ impl TxVirtio {
     }
 }
 
-/// Receive virtqueue.
 struct RxVirtio {
-    /// True if some frame not received successfully.
     unfinished_frame: bool,
-    /// True if interrupt is required to notify the guest.
     need_irqs: bool,
-    /// Virtqueue.
     queue: Arc<Mutex<Queue>>,
-    /// Eventfd of this virtqueue for notifing.
     queue_evt: EventFd,
-    /// Size of data received.
     bytes_read: usize,
-    /// Buffer data received.
     frame_buf: [u8; FRAME_BUF_SIZE],
 }
 
 impl RxVirtio {
-    /// Create a receive virqueue.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - The virtqueue.
-    /// * `queue_evt` - Eventfd of this virtqueue for notifing.
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
         RxVirtio {
             unfinished_frame: false,
@@ -129,26 +106,16 @@ impl RxVirtio {
     }
 }
 
-/// Control block of network IO.
-pub struct NetIoHandler {
-    /// The receive virtqueue.
+struct NetIoHandler {
     rx: RxVirtio,
-    /// The transmit virtqueue.
     tx: TxVirtio,
-    /// Tap device opened.
     tap: Option<Tap>,
     tap_fd: RawFd,
-    /// The address space to which the network device belongs.
     mem_space: Arc<AddressSpace>,
-    /// Eventfd for interrupt.
     interrupt_evt: EventFd,
-    /// State of the interrupt in the device/function.
     interrupt_status: Arc<AtomicU32>,
-    /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
-    /// The receiving half of Rust's channel to receive tap information.
     receiver: Receiver<SenderConfig>,
-    /// Eventfd for config space update.
     update_evt: RawFd,
 }
 
