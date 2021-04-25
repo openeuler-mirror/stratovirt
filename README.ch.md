@@ -24,6 +24,10 @@ $ cargo build --release
 * PE格式或bzImage格式(仅x86_64)的Linux内核镜像
 * EXT4格式的rootfs镜像
 
+可以通过以下链接获取我们准备好的linux内核镜像和rootfs镜像：
+
+https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
+
 ```shell
 # 如果-api-channel的socket文件已经存在，请先删除它
 $ ./target/release/stratovirt \
