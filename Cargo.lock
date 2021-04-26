@@ -503,6 +503,7 @@ dependencies = [
  "error-chain",
  "kvm-bindings",
  "kvm-ioctls",
+ "lazy_static",
  "libc",
  "log",
  "vmm-sys-util",

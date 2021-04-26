@@ -25,6 +25,7 @@ use hypervisor::KVM_FDS;
 use machine_manager::config::{BootSource, Param};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::set_termi_raw_mode;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
 use super::errors::{ErrorKind, Result};
@@ -113,6 +114,7 @@ impl Serial {
     ) -> Result<Arc<Mutex<Self>>> {
         use super::errors::ResultExt;
 
+        set_termi_raw_mode().chain_err(|| "Failed to set terminal to raw mode")?;
         self.output = Some(Box::new(std::io::stdout()));
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
         self.set_sys_resource(sysbus, region_base, region_size)

@@ -17,8 +17,8 @@ extern crate error_chain;
 extern crate vmm_sys_util;
 #[macro_use]
 extern crate log;
-extern crate kvm_bindings;
-extern crate kvm_ioctls;
+#[macro_use]
+extern crate lazy_static;
 
 pub mod aio;
 pub mod arg_parser;
@@ -133,4 +133,51 @@ pub mod errors {
             }
         }
     }
+}
+
+use libc::{tcgetattr, tcsetattr, termios, TCSANOW};
+use std::sync::{Arc, Mutex};
+use vmm_sys_util::terminal::Terminal;
+
+lazy_static! {
+    pub static ref TERMINAL_MODE: Arc<Mutex<Option<termios>>> = Arc::new(Mutex::new(None));
+}
+
+pub fn set_termi_raw_mode() -> std::io::Result<()> {
+    let tty_fd = std::io::stdin().lock().tty_fd();
+
+    // Safe because this only set the `old_term_mode` struct to zero.
+    let mut old_term_mode: termios = unsafe { std::mem::zeroed() };
+    // Safe because this only get stdin's current mode and save it.
+    let ret = unsafe { tcgetattr(tty_fd, &mut old_term_mode as *mut _) };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    *TERMINAL_MODE.lock().unwrap() = Some(old_term_mode);
+
+    let mut new_term_mode: termios = old_term_mode;
+    // Safe because this function only change the `new_term_mode` argument.
+    unsafe { libc::cfmakeraw(&mut new_term_mode as *mut _) };
+    // Safe because this function only set the stdin to raw mode.
+    let ret = unsafe { tcsetattr(tty_fd, TCSANOW, &new_term_mode as *const _) };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(())
+}
+
+pub fn set_termi_canon_mode() -> std::io::Result<()> {
+    let tty_fd = std::io::stdin().lock().tty_fd();
+    if let Some(old_term_mode) = TERMINAL_MODE.lock().unwrap().as_ref() {
+        // Safe because this only recover the stdin's mode.
+        let ret = unsafe { tcsetattr(tty_fd, TCSANOW, old_term_mode as *const _) };
+        if ret < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    } else {
+        debug!("stdin's mode is not initialized: please check the config");
+    }
+
+    Ok(())
 }

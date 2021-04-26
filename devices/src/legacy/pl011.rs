@@ -25,6 +25,7 @@ use machine_manager::config::{BootSource, Param};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::set_termi_raw_mode;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
@@ -161,6 +162,7 @@ impl PL011 {
         region_size: u64,
         bs: &Arc<Mutex<BootSource>>,
     ) -> Result<Arc<Mutex<Self>>> {
+        set_termi_raw_mode().chain_err(|| "Failed to set terminal to raw mode")?;
         self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| "Failed to allocate system resource for PL011.")?;
 

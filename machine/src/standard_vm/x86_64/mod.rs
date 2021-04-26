@@ -43,9 +43,9 @@ use pci::{PciDevOps, PciHost};
 use sysbus::SysBus;
 use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
+use util::set_termi_canon_mode;
 use virtio::{qmp_balloon, qmp_query_balloon};
 use vmm_sys_util::eventfd::EventFd;
-use vmm_sys_util::terminal::Terminal;
 
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
@@ -699,12 +699,9 @@ impl EventLoopManager for StdMachine {
     }
 
     fn loop_cleanup(&self) -> util::errors::Result<()> {
-        if let Err(e) = std::io::stdin().lock().set_canon_mode() {
-            error!(
-                "destroy virtual machine: reset stdin to canonical mode failed, {}",
-                e
-            );
-        }
+        use util::errors::ResultExt;
+
+        set_termi_canon_mode().chain_err(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
 }
