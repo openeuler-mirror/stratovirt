@@ -918,3 +918,193 @@ impl PciDevOps for VirtioPciDevice {
         self.name.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use address_space::{AddressSpace, GuestAddress, HostMemMapping};
+    use util::num_ops::{read_u32, write_u32};
+    use vmm_sys_util::eventfd::EventFd;
+
+    use super::*;
+    use crate::Result as VirtioResult;
+
+    const VIRTIO_DEVICE_TEST_TYPE: u32 = 1;
+    const VIRTIO_DEVICE_QUEUE_NUM: usize = 2;
+    const VIRTIO_DEVICE_QUEUE_SIZE: u16 = 256;
+
+    pub struct VirtioDeviceTest {
+        pub device_features: u64,
+        pub driver_features: u64,
+        pub is_activated: bool,
+    }
+
+    impl VirtioDeviceTest {
+        pub fn new() -> Self {
+            VirtioDeviceTest {
+                device_features: 0xFFFF_FFF0,
+                driver_features: 0,
+                is_activated: false,
+            }
+        }
+    }
+
+    impl VirtioDevice for VirtioDeviceTest {
+        fn realize(&mut self) -> VirtioResult<()> {
+            Ok(())
+        }
+
+        fn device_type(&self) -> u32 {
+            VIRTIO_DEVICE_TEST_TYPE
+        }
+
+        fn queue_num(&self) -> usize {
+            VIRTIO_DEVICE_QUEUE_NUM
+        }
+
+        fn queue_size(&self) -> u16 {
+            VIRTIO_DEVICE_QUEUE_SIZE
+        }
+
+        fn get_device_features(&self, features_select: u32) -> u32 {
+            read_u32(self.device_features, features_select)
+        }
+
+        fn set_driver_features(&mut self, page: u32, value: u32) {
+            let mut v = write_u32(value, page);
+            let unrequested_features = v & !self.device_features;
+            if unrequested_features != 0 {
+                v &= !unrequested_features;
+            }
+            self.driver_features |= v;
+        }
+
+        fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {
+            Ok(())
+        }
+
+        fn write_config(&mut self, _offset: u64, _data: &[u8]) -> VirtioResult<()> {
+            Ok(())
+        }
+
+        fn activate(
+            &mut self,
+            _mem_space: Arc<AddressSpace>,
+            _interrupt_cb: Arc<VirtioInterrupt>,
+            _queues: Vec<Arc<Mutex<Queue>>>,
+            _queue_evts: Vec<EventFd>,
+        ) -> VirtioResult<()> {
+            self.is_activated = true;
+            Ok(())
+        }
+    }
+
+    macro_rules! com_cfg_read_test {
+        ($cfg: ident, $dev: ident, $reg: ident, $expect: expr) => {
+            assert_eq!($cfg.read_common_config(&$dev, $reg).unwrap(), $expect)
+        };
+    }
+    macro_rules! com_cfg_write_test {
+        ($cfg: ident, $dev: ident, $reg: ident, $val: expr) => {
+            assert!($cfg.write_common_config(&$dev, $reg, $val).is_ok())
+        };
+    }
+
+    #[test]
+    fn test_common_config_dev_feature() {
+        let dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let virtio_dev = dev.clone() as Arc<Mutex<dyn VirtioDevice>>;
+        let queue_size = virtio_dev.lock().unwrap().queue_size();
+        let queue_num = virtio_dev.lock().unwrap().queue_num();
+
+        let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
+
+        // Read virtio device features
+        cmn_cfg.features_select = 0_u32;
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_DF_REG, 0xFFFF_FFF0_u32);
+        cmn_cfg.features_select = 1_u32;
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_DF_REG, 0_u32);
+
+        // Write virtio device features
+        cmn_cfg.acked_features_select = 1_u32;
+        com_cfg_write_test!(cmn_cfg, virtio_dev, COMMON_GF_REG, 0xFF);
+        // The feature is not supported by this virtio device, and is masked
+        assert_eq!(dev.lock().unwrap().driver_features, 0_u64);
+        cmn_cfg.acked_features_select = 0_u32;
+        com_cfg_write_test!(cmn_cfg, virtio_dev, COMMON_GF_REG, 0xCF);
+        // The feature is partially supported by this virtio device, and is partially masked
+        assert_eq!(dev.lock().unwrap().driver_features, 0xC0_u64);
+
+        // Set the feature of the Queue type
+        cmn_cfg.acked_features_select = 1_u32;
+        dev.lock().unwrap().driver_features = 0_u64;
+        dev.lock().unwrap().device_features = 0xFFFF_FFFF_0000_0000_u64;
+        let driver_features = 1_u32 << (VIRTIO_F_RING_PACKED - 32);
+        com_cfg_write_test!(cmn_cfg, virtio_dev, COMMON_GF_REG, driver_features);
+        assert_eq!(cmn_cfg.queue_type, QUEUE_TYPE_PACKED_VRING);
+        assert_eq!(
+            dev.lock().unwrap().driver_features,
+            1_u64 << VIRTIO_F_RING_PACKED
+        );
+    }
+
+    #[test]
+    fn test_common_config_queue() {
+        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
+            Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let queue_size = virtio_dev.lock().unwrap().queue_size();
+        let queue_num = virtio_dev.lock().unwrap().queue_num();
+        let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
+
+        // Read Queue's Descriptor Table address
+        cmn_cfg.queue_select = VIRTIO_DEVICE_QUEUE_NUM as u16 - 1;
+        cmn_cfg.queues_config[cmn_cfg.queue_select as usize].desc_table =
+            GuestAddress(0xAABBCCDD_FFEEDDAA);
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_DESCLO_REG, 0xFFEEDDAA_u32);
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_DESCHI_REG, 0xAABBCCDD_u32);
+
+        // Read Queue's Available Ring address
+        cmn_cfg.queue_select = 0;
+        cmn_cfg.queues_config[0].avail_ring = GuestAddress(0x11223344_55667788);
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_AVAILLO_REG, 0x55667788_u32);
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_AVAILHI_REG, 0x11223344_u32);
+
+        // Read Queue's Used Ring address
+        cmn_cfg.queue_select = 0;
+        cmn_cfg.queues_config[0].used_ring = GuestAddress(0x55667788_99AABBCC);
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_USEDLO_REG, 0x99AABBCC_u32);
+        com_cfg_read_test!(cmn_cfg, virtio_dev, COMMON_Q_USEDHI_REG, 0x55667788_u32);
+    }
+
+    #[test]
+    fn test_common_config_queue_error() {
+        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
+            Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let queue_size = virtio_dev.lock().unwrap().queue_size();
+        let queue_num = virtio_dev.lock().unwrap().queue_num();
+        let mut cmn_cfg = VirtioPciCommonConfig::new(queue_size, queue_num);
+
+        // Error occurs when queue selector exceeds queue num
+        cmn_cfg.queue_select = VIRTIO_DEVICE_QUEUE_NUM as u16;
+        assert!(cmn_cfg
+            .read_common_config(&virtio_dev, COMMON_Q_SIZE_REG)
+            .is_err());
+        assert!(cmn_cfg
+            .write_common_config(&virtio_dev, COMMON_Q_SIZE_REG, 128)
+            .is_err());
+
+        // Test Queue ready register
+        cmn_cfg.device_status = CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_DRIVER;
+        cmn_cfg.queue_select = 0;
+        com_cfg_write_test!(cmn_cfg, virtio_dev, COMMON_Q_ENABLE_REG, 0x1_u32);
+        assert!(cmn_cfg.queues_config.get(0).unwrap().ready);
+
+        // Failed to set Queue relevant register if device is no ready
+        cmn_cfg.device_status = CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_DRIVER_OK;
+        cmn_cfg.queue_select = 1;
+        assert!(cmn_cfg
+            .write_common_config(&virtio_dev, COMMON_Q_MSIX_REG, 0x4_u32)
+            .is_err());
+    }
+}
