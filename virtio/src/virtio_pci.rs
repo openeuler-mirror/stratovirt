@@ -924,6 +924,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping};
+    use kvm_ioctls::Kvm;
     use util::num_ops::{read_u32, write_u32};
     use vmm_sys_util::eventfd::EventFd;
 
@@ -1106,5 +1107,157 @@ mod tests {
         assert!(cmn_cfg
             .write_common_config(&virtio_dev, COMMON_Q_MSIX_REG, 0x4_u32)
             .is_err());
+    }
+
+    #[test]
+    fn test_virtio_pci_config_access() {
+        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(fd) => Arc::new(fd),
+            Err(_) => return,
+        };
+
+        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
+            Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let parent_bus = Arc::new(Mutex::new(PciBus::new(
+            String::from("test bus"),
+            #[cfg(target_arch = "x86_64")]
+            Region::init_container_region(1 << 16),
+            sys_mem.root().clone(),
+        )));
+        let mut virtio_pci = VirtioPciDevice::new(
+            String::from("test device"),
+            0,
+            sys_mem,
+            virtio_dev,
+            Arc::downgrade(&parent_bus),
+            vm_fd,
+        );
+        virtio_pci.init_write_mask().unwrap();
+        virtio_pci.init_write_clear_mask().unwrap();
+
+        // Overflows, exceeds size of pcie config space
+        let mut data = vec![0_u8; 4];
+        virtio_pci.write_config(PCIE_CONFIG_SPACE_SIZE, data.as_slice());
+        virtio_pci.read_config(PCIE_CONFIG_SPACE_SIZE, data.as_mut_slice());
+        assert_eq!(data, vec![0_u8; 4]);
+
+        let data = vec![1_u8; 4];
+        virtio_pci.write_config(PCIE_CONFIG_SPACE_SIZE - 4, data.as_slice());
+        let mut data_ret = vec![0_u8; 4];
+        virtio_pci.read_config(PCIE_CONFIG_SPACE_SIZE - 4, data_ret.as_mut_slice());
+        assert_eq!(data_ret, data);
+    }
+
+    #[test]
+    fn test_virtio_pci_realize() {
+        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(fd) => Arc::new(fd),
+            Err(_) => return,
+        };
+
+        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
+            Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let parent_bus = Arc::new(Mutex::new(PciBus::new(
+            String::from("test bus"),
+            #[cfg(target_arch = "x86_64")]
+            Region::init_container_region(1 << 16),
+            sys_mem.root().clone(),
+        )));
+        let virtio_pci = VirtioPciDevice::new(
+            String::from("test device"),
+            0,
+            sys_mem,
+            virtio_dev,
+            Arc::downgrade(&parent_bus),
+            vm_fd.clone(),
+        );
+        assert!(virtio_pci.realize(&vm_fd).is_ok());
+    }
+
+    #[test]
+    fn test_device_activate() {
+        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
+            Ok(fd) => Arc::new(fd),
+            Err(_) => return,
+        };
+
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let mem_size: u64 = 1024 * 1024;
+        let host_mmap =
+            Arc::new(HostMemMapping::new(GuestAddress(0), mem_size, None, false, false).unwrap());
+        sys_mem
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+
+        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
+            Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let parent_bus = Arc::new(Mutex::new(PciBus::new(
+            String::from("test bus"),
+            #[cfg(target_arch = "x86_64")]
+            Region::init_container_region(1 << 16),
+            sys_mem.root().clone(),
+        )));
+        let mut virtio_pci = VirtioPciDevice::new(
+            String::from("test device"),
+            0,
+            sys_mem,
+            virtio_dev,
+            Arc::downgrade(&parent_bus),
+            vm_fd.clone(),
+        );
+
+        // Prepare msix and interrupt callback
+        virtio_pci.assign_interrupt_cb();
+        init_msix(
+            &vm_fd,
+            VIRTIO_PCI_MSIX_BAR_IDX as usize,
+            virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
+            &mut virtio_pci.config,
+            virtio_pci.dev_id,
+        )
+        .unwrap();
+        // Prepare valid queue config
+        for queue_cfg in virtio_pci
+            .common_config
+            .lock()
+            .unwrap()
+            .queues_config
+            .iter_mut()
+        {
+            queue_cfg.desc_table = GuestAddress(0);
+            queue_cfg.avail_ring = GuestAddress((VIRTIO_DEVICE_QUEUE_SIZE as u64) * 16);
+            queue_cfg.used_ring = GuestAddress(2 * 4096);
+            queue_cfg.ready = true;
+            queue_cfg.size = VIRTIO_DEVICE_QUEUE_SIZE;
+        }
+        let common_cfg_ops = virtio_pci.build_common_cfg_ops();
+
+        // Device status is not ok, failed to activate virtio device
+        let status = (CONFIG_STATUS_ACKNOWLEDGE | CONFIG_STATUS_DRIVER | CONFIG_STATUS_FEATURES_OK)
+            .as_bytes();
+        (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
+        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), false);
+        // Device status is not ok, failed to activate virtio device
+        let status = (CONFIG_STATUS_ACKNOWLEDGE
+            | CONFIG_STATUS_DRIVER
+            | CONFIG_STATUS_FAILED
+            | CONFIG_STATUS_FEATURES_OK)
+            .as_bytes();
+        (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
+        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), false);
+        // Status is ok, virtio device is activated.
+        let status = (CONFIG_STATUS_ACKNOWLEDGE
+            | CONFIG_STATUS_DRIVER
+            | CONFIG_STATUS_DRIVER_OK
+            | CONFIG_STATUS_FEATURES_OK)
+            .as_bytes();
+        (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
+        assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), true);
     }
 }
