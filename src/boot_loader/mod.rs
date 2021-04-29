@@ -10,41 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod bootparam;
-mod gdt;
-mod loader;
-mod mptable;
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
 
-use std::fs::File;
-use std::io::{Seek, SeekFrom};
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::{
+    load_kernel, X86BootLoader as BootLoader, X86BootLoaderConfig as BootLoaderConfig,
+};
 
-pub use loader::{BootLoader, BootLoaderConfig};
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
 
-use crate::memory::GuestMemory;
-use loader::linux_bootloader;
-
-fn load_image(image: &mut File, start_addr: u64, sys_mem: &GuestMemory) -> std::io::Result<()> {
-    let len = image.seek(SeekFrom::End(0))?;
-    image.seek(SeekFrom::Start(0))?;
-
-    sys_mem
-        .write(image, start_addr, len)
-        .map_err(|_| std::io::ErrorKind::InvalidData)?;
-
-    Ok(())
-}
-
-pub fn load_kernel(config: &BootLoaderConfig, sys_mem: &GuestMemory) -> BootLoader {
-    let mut kernel_image = File::open(&config.kernel).expect("Invalid guest kernel path");
-    let boot_loader = linux_bootloader(config, sys_mem);
-    load_image(&mut kernel_image, boot_loader.vmlinux_start, &sys_mem)
-        .expect("Failed to write guest kernel to guest memory");
-
-    let mut initrd_image = File::open(&config.initrd).expect("Invalid initrd path");
-    load_image(&mut initrd_image, boot_loader.initrd_start, &sys_mem)
-        .expect("Failed to write initrd to guest memory");
-
-    loader::setup_kernel_cmdline(&config, sys_mem);
-
-    boot_loader
-}
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::{
+    load_kernel, AArch64BootLoader as BootLoader, AArch64BootLoaderConfig as BootLoaderConfig,
+};

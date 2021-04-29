@@ -21,6 +21,8 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
 use super::{Error, Result};
 use crate::helper::epoll::{EpollContext, EventNotifier};
+#[cfg(target_arch = "aarch64")]
+use crate::memory::{LayoutEntryType, MEM_LAYOUT};
 
 const UART_IER_RDI: u8 = 0x01;
 const UART_IER_THRI: u8 = 0x02;
@@ -44,9 +46,19 @@ const UART_MSR_DCD: u8 = 0x80;
 
 const RECEIVER_BUFF_SIZE: usize = 1024;
 
-const MMIO_SERIAL_IRQ: u32 = 4;
-const MMIO_SERIAL_ADDR: u64 = 0x3f8;
-const MMIO_SERIAL_ADDR_SIZE: u64 = 8;
+#[cfg(target_arch = "x86_64")]
+pub const MMIO_SERIAL_IRQ: u32 = 4;
+#[cfg(target_arch = "aarch64")]
+pub const MMIO_SERIAL_IRQ: u32 = 32;
+
+#[cfg(target_arch = "x86_64")]
+pub const MMIO_SERIAL_ADDR: u64 = 0x3f8;
+#[cfg(target_arch = "x86_64")]
+pub const MMIO_SERIAL_ADDR_SIZE: u64 = 8;
+#[cfg(target_arch = "aarch64")]
+pub const MMIO_SERIAL_ADDR: u64 = MEM_LAYOUT[LayoutEntryType::Mmio as usize].0;
+#[cfg(target_arch = "aarch64")]
+pub const MMIO_SERIAL_ADDR_SIZE: u64 = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
 
 pub fn judge_serial_addr(addr: u64) -> Option<u64> {
     if (MMIO_SERIAL_ADDR..MMIO_SERIAL_ADDR + MMIO_SERIAL_ADDR_SIZE).contains(&addr) {

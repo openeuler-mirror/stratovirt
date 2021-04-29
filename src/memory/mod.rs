@@ -58,6 +58,7 @@ impl std::fmt::Display for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// The type of memory layout entry on x86_64
+#[cfg(target_arch = "x86_64")]
 #[repr(usize)]
 pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
@@ -68,10 +69,32 @@ pub enum LayoutEntryType {
 }
 
 /// Layout of x86_64
+#[cfg(target_arch = "x86_64")]
 pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0, 0xC000_0000),                // MemBelow4g
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
     (0x1_0000_0000, 0x80_0000_0000), // MemAbove4g
+];
+
+/// The type of memory layout entry on aarch64
+#[cfg(target_arch = "aarch64")]
+#[repr(usize)]
+pub enum LayoutEntryType {
+    GicDist,
+    GicIts,
+    GicRedist,
+    Mmio,
+    Mem,
+}
+
+/// Layout of aarch64
+#[cfg(target_arch = "aarch64")]
+pub const MEM_LAYOUT: &[(u64, u64)] = &[
+    (0x0800_0000, 0x0001_0000),    // GicDist
+    (0x0808_0000, 0x0002_0000),    // GicIts
+    (0x080A_0000, 0x00F6_0000),    // GicRedist (max 123 redistributors)
+    (0x0A00_0000, 0x0000_0200),    // Mmio
+    (0x4000_0000, 0x80_0000_0000), // Mem
 ];

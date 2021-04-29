@@ -14,7 +14,7 @@ use kvm_bindings::{
     kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry, kvm_regs, kvm_segment, kvm_sregs, Msrs,
     KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE, KVM_MP_STATE_UNINITIALIZED,
 };
-use kvm_ioctls::{Kvm, VcpuFd};
+use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 
 use crate::helper::cpuid::host_cpuid;
 
@@ -40,7 +40,7 @@ const MSR_LIST: &[u32] = &[
 
 #[derive(Default)]
 /// CPU booting configure information
-pub struct CPUBootConfig {
+pub struct X86CPUBootConfig {
     /// Register %rip value
     pub boot_ip: u64,
     /// Register %rsp value
@@ -104,7 +104,12 @@ impl CPUState {
     ///
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     /// * `boot_config` - Boot message from boot_loader.
-    pub fn set_boot_config(&mut self, vcpu_fd: &VcpuFd, boot_config: &CPUBootConfig) {
+    pub fn set_boot_config(
+        &mut self,
+        _vmfd: &std::sync::Arc<VmFd>,
+        vcpu_fd: &VcpuFd,
+        boot_config: &X86CPUBootConfig,
+    ) {
         self.setup_lapic(vcpu_fd);
         self.setup_regs(&boot_config);
         self.setup_sregs(vcpu_fd, &boot_config);
@@ -116,7 +121,7 @@ impl CPUState {
     ///
     /// # Arguments
     ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.   
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn reset_vcpu(&self, vcpu_fd: &VcpuFd) {
         self.setup_cpuid(vcpu_fd);
 
@@ -164,7 +169,7 @@ impl CPUState {
         }
     }
 
-    fn setup_regs(&mut self, boot_config: &CPUBootConfig) {
+    fn setup_regs(&mut self, boot_config: &X86CPUBootConfig) {
         self.regs = kvm_regs {
             rflags: 0x0002, /* Means processor has been initialized */
             rip: boot_config.boot_ip,
@@ -175,7 +180,7 @@ impl CPUState {
         };
     }
 
-    fn setup_sregs(&mut self, vcpu_fd: &VcpuFd, boot_config: &CPUBootConfig) {
+    fn setup_sregs(&mut self, vcpu_fd: &VcpuFd, boot_config: &X86CPUBootConfig) {
         self.sregs = vcpu_fd
             .get_sregs()
             .expect("Failed to get spectial register.");

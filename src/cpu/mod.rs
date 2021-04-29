@@ -10,9 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod register;
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
 
-pub use register::CPUBootConfig;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::AArch64CPUBootConfig as CPUBootConfig;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -20,20 +26,23 @@ use std::thread;
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
 
 use crate::device::{judge_serial_addr, Serial};
-use crate::GuestMemory;
-use register::CPUState;
+use crate::memory::GuestMemory;
+#[cfg(target_arch = "aarch64")]
+use aarch64::CPUState;
+#[cfg(target_arch = "x86_64")]
+use x86_64::CPUState;
 
 pub struct CPU {
     /// ID of this virtual CPU, `0` means this cpu is primary `CPU`.
     pub id: u8,
     /// The file descriptor of this kvm_based vCPU.
-    fd: VcpuFd,
+    pub fd: VcpuFd,
     /// Registers state for kvm_based vCPU.
-    state: CPUState,
+    pub state: CPUState,
     /// System memory space.
     sys_mem: Arc<GuestMemory>,
     /// Serial device is used for debugging.
-    serial: Arc<Mutex<Serial>>,
+    serial: Option<Arc<Mutex<Serial>>>,
 }
 
 impl CPU {
@@ -42,13 +51,8 @@ impl CPU {
     /// # Arguments
     ///
     /// - `vcpu_id` - vcpu_id for `CPU`, started from `0`.
-    pub fn new(
-        vm_fd: &Arc<VmFd>,
-        sys_mem: Arc<GuestMemory>,
-        vcpu_id: u32,
-        nr_vcpus: u32,
-        serial: Arc<Mutex<Serial>>,
-    ) -> Self {
+    #[allow(unused_variables)]
+    pub fn new(vm_fd: &Arc<VmFd>, sys_mem: Arc<GuestMemory>, vcpu_id: u32, nr_vcpus: u32) -> Self {
         let vcpu_fd = vm_fd
             .create_vcpu(vcpu_id as u8)
             .expect("Failed to create vCPU");
@@ -57,15 +61,23 @@ impl CPU {
             id: vcpu_id as u8,
             fd: vcpu_fd,
             sys_mem,
-            state: CPUState::new(vcpu_id, nr_vcpus),
-            serial,
+            state: CPUState::new(
+                vcpu_id,
+                #[cfg(target_arch = "x86_64")]
+                nr_vcpus,
+            ),
+            serial: None,
         }
+    }
+
+    pub fn set_serial_dev(&mut self, serial: Arc<Mutex<Serial>>) {
+        self.serial = Some(serial);
     }
 
     /// Realize vcpu status.
     /// Get register state from kvm.
-    pub fn realize(&mut self, bootconfig: register::CPUBootConfig) {
-        self.state.set_boot_config(&self.fd, &bootconfig);
+    pub fn realize(&mut self, vm_fd: &Arc<VmFd>, bootconfig: CPUBootConfig) {
+        self.state.set_boot_config(vm_fd, &self.fd, &bootconfig);
     }
 
     /// Reset kvm_based vCPU registers state by registers state in `CPU`.
@@ -102,27 +114,53 @@ impl CPU {
         match self.fd.run().expect("Unhandled error in vcpu emulation!") {
             VcpuExit::IoIn(addr, data) => {
                 if let Some(offset) = judge_serial_addr(addr as u64) {
-                    data[0] = self.serial.lock().unwrap().read(offset);
+                    data[0] = self.serial.as_ref().unwrap().lock().unwrap().read(offset);
                 }
             }
             VcpuExit::IoOut(addr, data) => {
                 if let Some(offset) = judge_serial_addr(addr as u64) {
-                    if self.serial.lock().unwrap().write(offset, data[0]).is_err() {
+                    if self
+                        .serial
+                        .as_ref()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .write(offset, data[0])
+                        .is_err()
+                    {
                         println!("Failed to write data for serial, offset: {}", offset);
                     }
                 }
             }
             VcpuExit::MmioRead(addr, mut data) => {
-                let data_len = data.len() as u64;
-                self.sys_mem
-                    .read(&mut data, addr as u64, data_len)
-                    .expect("Invalid mmio read.");
+                if let Some(offset) = judge_serial_addr(addr as u64) {
+                    data[0] = self.serial.as_ref().unwrap().lock().unwrap().read(offset);
+                } else {
+                    let data_len = data.len() as u64;
+                    self.sys_mem
+                        .read(&mut data, addr as u64, data_len)
+                        .expect("Invalid mmio read.");
+                }
             }
             VcpuExit::MmioWrite(addr, mut data) => {
-                let data_len = data.len() as u64;
-                self.sys_mem
-                    .write(&mut data, addr as u64, data_len)
-                    .expect("Invalid mmio write.");
+                if let Some(offset) = judge_serial_addr(addr as u64) {
+                    if self
+                        .serial
+                        .as_ref()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .write(offset, data[0])
+                        .is_err()
+                    {
+                        println!("Failed to write data for serial, offset: {}", offset);
+                    }
+                } else {
+                    let data_len = data.len() as u64;
+                    self.sys_mem
+                        .write(&mut data, addr as u64, data_len)
+                        .expect("Invalid mmio write.");
+                }
             }
             VcpuExit::Hlt => {
                 println!("KVM_EXIT_HLT");

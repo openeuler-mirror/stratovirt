@@ -10,9 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(target_arch = "aarch64")]
+mod gicv3;
 mod serial;
 
-pub use serial::{judge_serial_addr, Serial};
+#[cfg(target_arch = "aarch64")]
+pub use gicv3::GICv3;
+pub use serial::{
+    judge_serial_addr, Serial, MMIO_SERIAL_ADDR, MMIO_SERIAL_ADDR_SIZE, MMIO_SERIAL_IRQ,
+};
 
 #[derive(Debug)]
 pub enum Error {

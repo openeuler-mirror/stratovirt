@@ -65,12 +65,18 @@ impl GuestMemory {
         // ranges is the vector of (start_addr, size)
         let mut ranges = Vec::<(u64, u64)>::new();
 
-        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-        ranges.push((0, std::cmp::min(gap_start, mem_size)));
-        if mem_size > gap_start {
-            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-            ranges.push((gap_end, mem_size - gap_start));
+        #[cfg(target_arch = "aarch64")]
+        ranges.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+            ranges.push((0, std::cmp::min(gap_start, mem_size)));
+            if mem_size > gap_start {
+                let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+                ranges.push((gap_end, mem_size - gap_start));
+            }
         }
 
         ranges

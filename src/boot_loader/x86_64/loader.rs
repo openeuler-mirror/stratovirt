@@ -28,7 +28,7 @@ const BOOT_LOADER_SP: u64 = 0x0000_8ff0;
 pub const VMLINUX_RAM_START: u64 = 0x0010_0000;
 
 /// Boot loader config used for x86_64.
-pub struct BootLoaderConfig {
+pub struct X86BootLoaderConfig {
     /// Path of the kernel image.
     pub kernel: PathBuf,
     /// Path of the initrd image.
@@ -48,7 +48,7 @@ pub struct BootLoaderConfig {
 }
 
 /// The start address for some boot source in guest memory for `x86_64`.
-pub struct BootLoader {
+pub struct X86BootLoader {
     pub vmlinux_start: u64,
     pub kernel_start: u64,
     pub kernel_sp: u64,
@@ -88,7 +88,7 @@ fn setup_page_table(sys_mem: &GuestMemory) -> std::io::Result<u64> {
     Ok(boot_pml4_addr)
 }
 
-pub fn linux_bootloader(boot_config: &BootLoaderConfig, sys_mem: &GuestMemory) -> BootLoader {
+pub fn linux_bootloader(boot_config: &X86BootLoaderConfig, sys_mem: &GuestMemory) -> X86BootLoader {
     let (kernel_start, vmlinux_start) = (VMLINUX_STARTUP, VMLINUX_STARTUP);
 
     let boot_pml4 = setup_page_table(sys_mem).expect("Failed to setup page table");
@@ -104,7 +104,7 @@ pub fn linux_bootloader(boot_config: &BootLoaderConfig, sys_mem: &GuestMemory) -
     let (zero_page, initrd_addr) = setup_boot_params(&boot_config, sys_mem);
     let gdt_seg = setup_gdt(sys_mem);
 
-    BootLoader {
+    X86BootLoader {
         kernel_start,
         vmlinux_start,
         kernel_sp: BOOT_LOADER_SP,
@@ -115,7 +115,7 @@ pub fn linux_bootloader(boot_config: &BootLoaderConfig, sys_mem: &GuestMemory) -
     }
 }
 
-pub fn setup_kernel_cmdline(config: &BootLoaderConfig, sys_mem: &GuestMemory) {
+pub fn setup_kernel_cmdline(config: &X86BootLoaderConfig, sys_mem: &GuestMemory) {
     let mut cmdline = config.kernel_cmdline.as_bytes();
     sys_mem
         .write(

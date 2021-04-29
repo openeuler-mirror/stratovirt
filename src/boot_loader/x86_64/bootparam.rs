@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::boot_loader::loader::BootLoaderConfig;
+use super::loader::X86BootLoaderConfig;
 use crate::helper::byte_code::ByteCode;
 use crate::GuestMemory;
 
@@ -159,7 +159,7 @@ impl BootParams {
     }
 }
 
-pub fn setup_boot_params(config: &BootLoaderConfig, sys_mem: &GuestMemory) -> (u64, u64) {
+pub fn setup_boot_params(config: &X86BootLoaderConfig, sys_mem: &GuestMemory) -> (u64, u64) {
     let (ramdisk_size, ramdisk_image, initrd_addr) = if config.initrd_size > 0 {
         let mut initrd_addr_max = INITRD_ADDR_MAX as u32;
         if initrd_addr_max as u64 > sys_mem.memory_end_address() as u64 {
