@@ -238,6 +238,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9a7ab5d64814df0fe4a4b5ead45ed6c5f181ee3ff04ba344313a6c80446c5d4"
 
 [[package]]
+name = "pci"
+version = "0.1.0"
+dependencies = [
+ "address_space",
+ "byteorder",
+ "error-chain",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "libc",
+ "log",
+ "machine_manager",
+ "sysbus",
+ "util",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"

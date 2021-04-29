@@ -25,6 +25,7 @@ members = [
     "devices",
     "machine",
     "machine_manager",
+    "pci",
     "sysbus",
     "util",
     "virtio",

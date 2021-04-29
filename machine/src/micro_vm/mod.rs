@@ -1620,7 +1620,7 @@ impl CompileFDTHelper for LightMachine {
         for dev in self.sysbus.devices.iter().rev() {
             let mut locked_dev = dev.lock().unwrap();
             let dev_type = locked_dev.get_type();
-            let sys_res = locked_dev.get_sys_resource();
+            let sys_res = locked_dev.get_sys_resource().unwrap();
             match dev_type {
                 SysBusDevType::Serial => generate_serial_device_node(fdt, sys_res)?,
                 SysBusDevType::Rtc => generate_rtc_device_node(fdt, sys_res)?,

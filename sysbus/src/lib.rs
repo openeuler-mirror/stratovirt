@@ -183,7 +183,9 @@ pub trait SysBusDevOps: Send {
         Ok(irq)
     }
 
-    fn get_sys_resource(&mut self) -> &mut SysRes;
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        None
+    }
 
     fn set_sys_resource(
         &mut self,
@@ -193,11 +195,13 @@ pub trait SysBusDevOps: Send {
         vm_fd: &VmFd,
     ) -> Result<()> {
         let irq = self.set_irq(sysbus, vm_fd)?;
-        let res = self.get_sys_resource();
-        res.region_base = region_base;
-        res.region_size = region_size;
-        res.irq = irq;
-        Ok(())
+        if let Some(res) = self.get_sys_resource() {
+            res.region_base = region_base;
+            res.region_size = region_size;
+            res.irq = irq;
+            return Ok(());
+        }
+        bail!("Failed to get sys resource.");
     }
 
     fn get_type(&self) -> SysBusDevType {

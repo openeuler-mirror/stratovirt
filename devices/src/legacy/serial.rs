@@ -346,8 +346,8 @@ impl SysBusDevOps for Serial {
         Ok(irq)
     }
 
-    fn get_sys_resource(&mut self) -> &mut SysRes {
-        &mut self.res
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        Some(&mut self.res)
     }
 
     fn get_type(&self) -> SysBusDevType {

@@ -209,8 +209,8 @@ impl SysBusDevOps for PL031 {
         self.interrupt_evt.as_ref()
     }
 
-    fn get_sys_resource(&mut self) -> &mut SysRes {
-        &mut self.res
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        Some(&mut self.res)
     }
 
     fn get_type(&self) -> SysBusDevType {
