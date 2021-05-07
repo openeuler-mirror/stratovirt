@@ -61,6 +61,8 @@ pub const COMMAND_IO_SPACE: u16 = 0x0001;
 /// Memory space enable.
 pub const COMMAND_MEMORY_SPACE: u16 = 0x0002;
 
+/// Class code of host bridge.
+pub const CLASS_CODE_HOST_BRIDGE: u16 = 0x0600;
 /// Class code of PCI-to-PCI bridge.
 pub const CLASS_CODE_PCI_BRIDGE: u16 = 0x0604;
 

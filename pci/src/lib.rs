@@ -38,13 +38,18 @@ mod host;
 mod msix;
 mod root_port;
 
+pub use bus::PciBus;
+pub use config::{
+    PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+};
+pub use host::PciHost;
+
 use std::mem::size_of;
 use std::sync::{Arc, Mutex, Weak};
 
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
 
-use bus::PciBus;
 use errors::Result;
 
 const BDF_FUNC_SHIFT: u8 = 3;
@@ -106,7 +111,7 @@ pub trait PciDevOps: Send {
     /// # Arguments
     ///
     /// * `vm_fd` - File descriptor of VM.
-    fn realize(&mut self, vm_fd: &Arc<VmFd>) -> Result<()>;
+    fn realize(self, vm_fd: &Arc<VmFd>) -> Result<()>;
 
     /// Configuration space read.
     ///

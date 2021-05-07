@@ -10,24 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-//! # Legacy
-//!
-//! This mod emulate legacy devices include RTC and Serial.
-//!
-//! ## Design
-//!
-//! This module offers support for:
-//! 1. Pl031 device, Arm PrimeCell Real Time Clock.
-//! 2. Serial device, Serial UART.
-//!
-//! ## Platform Support
-//!
-//! - `x86_64`
-//! - `aarch64`
-#[cfg(target_arch = "aarch64")]
-mod pl031;
-mod serial;
+pub mod errors {
+    error_chain! {
+        links {
+            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            Cpu(cpu::errors::Error, cpu::errors::ErrorKind);
+            PciErr(pci::errors::Error, pci::errors::ErrorKind);
+        }
+    }
+}
 
-#[cfg(target_arch = "aarch64")]
-pub use pl031::PL031;
-pub use serial::{Serial, SERIAL_ADDR};
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
+
+use std::sync::Arc;
+
+use errors::Result;
+use kvm_ioctls::VmFd;
+
+#[allow(dead_code)]
+const PCIE_MMCONFIG_REGION_SIZE: u32 = 256 << 20;
+
+trait StdMachineOps {
+    fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()>;
+}
