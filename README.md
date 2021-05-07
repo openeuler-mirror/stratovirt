@@ -1,15 +1,23 @@
 # StratoVirt
-StratoVirt is an enterprise-level virtualization platform for cloud data centers in the computing industry. It implements a set of architecture that supports three scenarios: virtual machines, containers, and serverless. StratoVirt has key technological competitive advantages in light weight and low noise, software and hardware coordination, and Rust language-level security.
+StratoVirt is an enterprise-level virtualization platform for cloud data centers
+in the computing industry. It implements a set of architecture that supports
+three scenarios: virtual machines, containers, and serverless computing. 
 
-StratoVirt reserves interface and design for importing more features, even standard virtualization.
+StratoVirt has competitive advantages in light weight and low noise, software
+and hardware coordination, and Rust language-level security.
+
+StratoVirt reserves interface and design for importing more features, even
+evaluates to standard virtualization.
 
 ## How to start
 
 ### Preparation
 Before building StratoVirt, make sure that Rust language and Cargo have already
-been installed. If not, you can find installation guidance from the following link:
+been installed. If not, you can find installation guidance via following link:
 
 https://www.rust-lang.org/tools/install
+
+And it will get smaller memory overhead if you prepare musl toolchain for rust.
 
 ### Build StratoVirt
 To build StratoVirt, clone the project and build it first:
@@ -39,18 +47,21 @@ $ ./target/release/stratovirt \
     -serial stdio
 ```
 
-The detailed guidance of making rootfs, compiling kernel and building StratoVirt can be found
-in [StratoVirt QuickStart](./docs/quickstart.md).
+The detailed guidance of making rootfs, compiling kernel and building StratoVirt
+can be found in [StratoVirt QuickStart](./docs/quickstart.md).
 
-StratoVirt supports much more features, the detailed guidance can be found in [Configuration Guidebook](docs/config_guidebook.md).
+StratoVirt supports much more features, the detailed guidance can be found in 
+[Configuration Guidebook](docs/config_guidebook.md).
 
 ## Design
 
-To get more details about StratoVirt's core architecture design, refer to [StratoVirt design](./docs/design.md).
+To get more details about StratoVirt's core architecture design, refer to 
+[StratoVirt design](./docs/design.md).
 
 ## How to contribute
-We welcome new contributors! And we are happy to provide guidance and help for new contributors.
-StratoVirt follows Rust formatting conventions, which can be found at:
+We welcome new contributors! And we are happy to provide guidance and help for 
+new contributors. StratoVirt follows Rust formatting conventions, which can be 
+found at:
 
 https://github.com/rust-dev-tools/fmt-rfcs/tree/master/guide
 https://github.com/rust-lang/rust-clippy
@@ -59,7 +70,9 @@ You can get more information about StratoVirt at:
 
 https://gitee.com/openeuler/stratovirt/wikis
 
-If you find a bug or have some ideas, please send an email to the [virt mailing list](https://mailweb.openeuler.org/postorius/lists/virt.openeuler.org/) or submit an [issue](https://gitee.com/openeuler/stratovirt/issues).
+If you find a bug or have some ideas, please send an email to the 
+[virt mailing list](https://mailweb.openeuler.org/postorius/lists/virt.openeuler.org/) 
+or submit an [issue](https://gitee.com/openeuler/stratovirt/issues).
 
 ## Licensing
 StratoVirt is licensed under the Mulan PSL v2.
