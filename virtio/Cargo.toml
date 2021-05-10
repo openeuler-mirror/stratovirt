@@ -1,6 +1,6 @@
 [package]
 name = "virtio"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2018"
 license = "Mulan PSL v2"

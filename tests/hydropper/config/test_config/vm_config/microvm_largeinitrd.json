@@ -1,0 +1,11 @@
+{
+  "boot-source": {
+    "kernel_image_path": "${VMLINUX}",
+    "initrd": "${ROOTFS}",
+    "boot_args": "console=hvc0 lastbus=0 reboot=k panic=1 tsc=reliable ipv6.disable=1 root=/dev/ram rdinit=/sbin/init"
+  },
+  "machine-config": {
+    "vcpu_count": "${VCPU}",
+    "mem_size": "${MEMSIZE}"
+  }
+}

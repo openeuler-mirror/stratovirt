@@ -1,0 +1,13 @@
+{
+    "device": "tap0",
+    "name": "eth0",
+    "linkType":"tap",
+    "IPAddresses": [
+        {
+            "address": "172.16.0.7",
+            "mask": "24"
+        }
+    ],
+    "mtu": 1500,
+    "hwAddr":"02:42:20:6f:a3:69"
+}

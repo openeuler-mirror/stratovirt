@@ -107,7 +107,7 @@ use address_space::KvmIoListener;
 use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
-    BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig, NetworkInterfaceConfig,
+    BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig, NetworkInterfaceConfig, RngConfig,
     SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
@@ -231,6 +231,16 @@ pub trait MachineOps {
     /// * `config` - Device configuration.
     /// * `vm_fd` - File descriptor of VM.
     fn add_balloon_device(&mut self, config: &BalloonConfig, vm_fd: &Arc<VmFd>) -> Result<()>;
+
+    /// Add virtio-rng device.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Device configuration.
+    /// * `vm_fd` - File descriptor of VM.
+    fn add_rng_device(&mut self, _config: &RngConfig, _vm_fd: &Arc<VmFd>) -> Result<()> {
+        Ok(())
+    }
 
     /// Add peripheral devices.
     ///
