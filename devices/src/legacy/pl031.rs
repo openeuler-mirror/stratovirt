@@ -10,25 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    error_chain! {
-        foreign_links {
-            Io(std::io::Error);
-        }
-    }
-}
-
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
-use errors::Result;
+use super::errors::{ErrorKind, Result, ResultExt};
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
@@ -98,17 +89,11 @@ impl PL031 {
         vm_fd: &VmFd,
     ) -> Result<()> {
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
-        if let Err(e) = self.set_sys_resource(sysbus, region_base, region_size, vm_fd) {
-            error!("{}", e.display_chain());
-            bail!("Failed to allocate system resource.");
-        }
+        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+            .chain_err(|| ErrorKind::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
-        if let Err(e) = sysbus.attach_device(&dev, region_base, region_size) {
-            error!("{}", e.display_chain());
-            bail!("Failed to attach to system bus.");
-        }
-
+        sysbus.attach_device(&dev, region_base, region_size)?;
         Ok(())
     }
 

@@ -21,7 +21,11 @@ pub mod errors {
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            IntCtrl(devices::IntCtrlErrs::Error, devices::IntCtrlErrs::ErrorKind) #[cfg(target_arch = "aarch64")];
+            Legacy(devices::LegacyErrs::Error, devices::LegacyErrs::ErrorKind);
             MicroVm(super::micro_vm::errors::Error, super::micro_vm::errors::ErrorKind);
+            StdVm(super::standard_vm::errors::Error, super::standard_vm::errors::ErrorKind);
+            Util(util::errors::Error, util::errors::ErrorKind);
             Virtio(virtio::errors::Error, virtio::errors::ErrorKind);
         }
 
@@ -33,18 +37,58 @@ pub mod errors {
             AddDevErr(dev: String) {
                 display("Failed to add {} device.", dev)
             }
-            CrtAddrSpaceErr(space_type: String) {
-                display("Failed to create {} address space.", space_type)
-            }
             LoadKernErr {
                 display("Failed to load kernel.")
+            }
+            CrtMemSpaceErr {
+                display("Failed to create memory address space")
+            }
+            CrtIoSpaceErr {
+                display("Failed to create I/O address space")
+            }
+            RegMemRegionErr(base: u64, size: u64) {
+                display("Failed to register region in memory space: base={},size={}", base, size)
+            }
+            InitPwrBtnErr {
+                display("Failed to init power button.")
+            }
+            RlzVirtioMmioErr {
+                display("Failed to realize virtio mmio.")
+            }
+            #[cfg(target_arch = "x86_64")]
+            CrtIrqchipErr {
+                display("Failed to create irq chip.")
+            }
+            #[cfg(target_arch = "x86_64")]
+            SetTssErr {
+                display("Failed to set tss address.")
+            }
+            #[cfg(target_arch = "x86_64")]
+            CrtPitErr {
+                display("Failed to create PIT.")
             }
             #[cfg(target_arch = "aarch64")]
             GenFdtErr {
                 display("Failed to generate FDT.")
             }
-            RegNotiferErr {
+            #[cfg(target_arch = "aarch64")]
+            WrtFdtErr(addr: u64, size: usize) {
+                display("Failed to write FDT: addr={}, size={}", addr, size)
+            }
+            RegNotifierErr {
                 display("Failed to register event notifier.")
+            }
+            StartVcpuErr(id: u8) {
+                display("Failed to run vcpu{}.", id)
+            }
+            PauseVcpuErr(id: u8) {
+                display("Failed to pause vcpu{}.", id)
+            }
+            ResumeVcpuErr(id: u8) {
+                display("Failed to resume vcpu{}.", id)
+            }
+            DestroyVcpuErr(id: u8) {
+                display("Failed to destroy vcpu{}.", id)
             }
         }
     }
@@ -127,12 +171,7 @@ pub trait MachineOps {
             sys_mem
                 .root()
                 .add_subregion(Region::init_ram_region(mmap.clone()), base)
-                .chain_err(|| {
-                    format!(
-                        "Failed to register region in memory space: base={}, size={}",
-                        base, size,
-                    )
-                })?;
+                .chain_err(|| ErrorKind::RegMemRegionErr(base, size))?;
         }
 
         Ok(())
@@ -242,7 +281,7 @@ pub trait MachineOps {
             vec![power_button_handler],
         );
 
-        EventLoop::update_event(vec![notifier], None).chain_err(|| ErrorKind::RegNotiferErr)?;
+        EventLoop::update_event(vec![notifier], None).chain_err(|| ErrorKind::RegNotifierErr)?;
         Ok(())
     }
 

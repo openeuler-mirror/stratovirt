@@ -12,12 +12,13 @@
 
 #[macro_use]
 extern crate error_chain;
-#[macro_use]
-extern crate log;
 extern crate kvm_ioctls;
 
 pub mod errors {
     error_chain! {
+        links {
+            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+        }
         foreign_links {
             KvmIoctl(kvm_ioctls::Error);
         }
@@ -27,7 +28,6 @@ pub mod errors {
 use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -94,26 +94,28 @@ impl SysBus {
         match locked_dev.get_type() {
             SysBusDevType::Serial if cfg!(target_arch = "x86_64") => {
                 #[cfg(target_arch = "x86_64")]
-                if let Err(e) = self.sys_io.root().add_subregion(region, region_base) {
-                    error!("{}", e.display_chain());
-                    bail!(
-                        "Failed to register region in I/O space: offset={},size={}",
-                        region_base,
-                        region_size
-                    );
-                }
+                self.sys_io
+                    .root()
+                    .add_subregion(region, region_base)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to register region in I/O space: offset={},size={}",
+                            region_base, region_size
+                        )
+                    })?;
             }
-            _ => {
-                if let Err(e) = self.sys_mem.root().add_subregion(region, region_base) {
-                    error!("{}", e.display_chain());
-                    bail!(
+            _ => self
+                .sys_mem
+                .root()
+                .add_subregion(region, region_base)
+                .chain_err(|| {
+                    format!(
                         "Failed to register region in memory space: offset={},size={}",
-                        region_base,
-                        region_size
-                    );
-                }
-            }
+                        region_base, region_size
+                    )
+                })?,
         }
+
         self.devices.push(dev.clone());
         Ok(())
     }

@@ -10,20 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    error_chain! {
-        foreign_links {
-            Io(std::io::Error);
-        }
-    }
-}
-
 use std::collections::VecDeque;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
 use address_space::GuestAddress;
-use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
@@ -31,7 +22,7 @@ use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
 
-use errors::Result;
+use super::errors::{ErrorKind, Result};
 
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
@@ -116,19 +107,15 @@ impl Serial {
         #[cfg(target_arch = "aarch64")] bs: &Arc<Mutex<BootSource>>,
         vm_fd: &VmFd,
     ) -> Result<Arc<Mutex<Self>>> {
+        use super::errors::ResultExt;
+
         self.output = Some(Box::new(std::io::stdout()));
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
-
-        if let Err(e) = self.set_sys_resource(sysbus, region_base, region_size, vm_fd) {
-            error!("{}", e.display_chain());
-            bail!("Failed to allocate system resource.");
-        }
+        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+            .chain_err(|| ErrorKind::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
-        if let Err(e) = sysbus.attach_device(&dev, region_base, region_size) {
-            error!("{}", e.display_chain());
-            bail!("Failed to attach to system bus.");
-        }
+        sysbus.attach_device(&dev, region_base, region_size)?;
 
         #[cfg(target_arch = "aarch64")]
         bs.lock().unwrap().kernel_cmdline.push(Param {
@@ -170,10 +157,11 @@ impl Serial {
     /// * `data` - A u8-type array.
     pub fn receive(&mut self, data: &[u8]) {
         if self.mcr & UART_MCR_LOOP == 0 {
-            if self.rbr.len() >= RECEIVER_BUFF_SIZE {
+            let len = self.rbr.len();
+            if len >= RECEIVER_BUFF_SIZE {
                 error!(
-                    "serial: receive buffer length exceeds the maximum size limit ({}).",
-                    RECEIVER_BUFF_SIZE
+                    "serial: maximum receive buffer size exceeded (len = {}).",
+                    len,
                 );
             }
 
@@ -262,7 +250,7 @@ impl Serial {
     // * fail to write serial.
     // * fail to flush serial.
     fn write_internal(&mut self, offset: u64, data: u8) -> Result<()> {
-        use errors::ResultExt;
+        use super::errors::ResultExt;
 
         match offset {
             0 => {
@@ -273,8 +261,12 @@ impl Serial {
 
                     if self.mcr & UART_MCR_LOOP != 0 {
                         // loopback mode
-                        if self.rbr.len() >= RECEIVER_BUFF_SIZE {
-                            bail!("Serial receive buffer extend the Max size.");
+                        let len = self.rbr.len();
+                        if len >= RECEIVER_BUFF_SIZE {
+                            bail!(
+                                "serial: maximum receive buffer size exceeded (len = {}).",
+                                len
+                            );
                         }
 
                         self.rbr.push_back(data);
@@ -286,8 +278,8 @@ impl Serial {
                         };
                         output
                             .write_all(&[data])
-                            .chain_err(|| "Failed to write for serial.")?;
-                        output.flush().chain_err(|| "Failed to flush for serial.")?;
+                            .chain_err(|| "serial: failed to write.")?;
+                        output.flush().chain_err(|| "serial: failed to flush.")?;
                     }
 
                     self.update_iir();
@@ -343,7 +335,7 @@ impl SysBusDevOps for Serial {
             irq = 4;
             vm_fd
                 .register_irqfd(e, irq as u32)
-                .chain_err(|| "Failed to register irqfd")?;
+                .chain_err(|| "Failed to register irqfd.")?;
         }
         Ok(irq)
     }

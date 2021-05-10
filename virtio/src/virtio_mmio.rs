@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::ChainedError;
 use kvm_ioctls::VmFd;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
@@ -351,27 +350,14 @@ impl VirtioMmioDevice {
             .lock()
             .unwrap()
             .realize()
-            .chain_err(|| "Failed to realize virtio mmio device.")?;
+            .chain_err(|| "Failed to realize virtio.")?;
 
         if region_base >= sysbus.mmio_region.1 {
             bail!("Mmio region space exhausted.");
         }
-        match self.set_sys_resource(sysbus, region_base, region_size, vm_fd) {
-            Ok(_) => (),
-            Err(e) => {
-                error!("{}", e.display_chain());
-                bail!("Failed to allocate system resource.");
-            }
-        }
-
+        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)?;
         let dev = Arc::new(Mutex::new(self));
-        match sysbus.attach_device(&dev, region_base, region_size) {
-            Ok(_) => (),
-            Err(e) => {
-                error!("{}", e);
-                bail!("Failed to attach to sysbus.");
-            }
-        }
+        sysbus.attach_device(&dev, region_base, region_size)?;
 
         #[cfg(target_arch = "x86_64")]
         bs.lock().unwrap().kernel_cmdline.push(Param {

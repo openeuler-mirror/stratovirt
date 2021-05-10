@@ -20,7 +20,7 @@ use kvm_ioctls::VmFd;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::{device_tree, errors::Result as UtilResult};
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use super::errors::{ErrorKind, Result, ResultExt};
 
 // First 32 are private to each CPU (SGIs and PPIs).
 const GIC_IRQ_INTERNAL: u32 = 32;

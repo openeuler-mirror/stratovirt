@@ -17,6 +17,11 @@ pub mod errors {
             Cpu(cpu::errors::Error, cpu::errors::ErrorKind);
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
         }
+        errors {
+            InitPCIeHostErr {
+                display("Failed to init PCIe host.")
+            }
+        }
     }
 }
 
