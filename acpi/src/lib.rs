@@ -12,7 +12,10 @@
 
 #[macro_use]
 extern crate error_chain;
+#[macro_use]
+extern crate log;
 
+mod acpi_device;
 #[allow(dead_code)]
 pub mod acpi_table;
 #[allow(dead_code)]
@@ -20,6 +23,7 @@ pub(crate) mod aml_compiler;
 #[allow(dead_code)]
 mod table_loader;
 
+pub use acpi_device::AcpiPMTimer;
 pub use acpi_table::madt_subtable::*;
 pub use acpi_table::*;
 pub use aml_compiler::*;

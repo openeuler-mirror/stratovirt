@@ -20,6 +20,7 @@ dependencies = [
 name = "acpi"
 version = "0.3.0"
 dependencies = [
+ "address_space",
  "error-chain",
  "log",
  "machine_manager",
