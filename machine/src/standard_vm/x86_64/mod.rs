@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod ich9_lpc;
 mod mch;
 mod syscall;
 
@@ -210,8 +211,11 @@ impl StdMachineOps for StdMachine {
             .add_subregion(pio_data_region, 0xcfc)
             .chain_err(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
-        let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
+        let mch = Mch::new(root_bus.clone(), mmconfig_region, mmconfig_region_ops);
         PciDevOps::realize(mch)?;
+
+        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
+        PciDevOps::realize(ich)?;
         Ok(())
     }
 
