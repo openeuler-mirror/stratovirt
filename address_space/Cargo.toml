@@ -8,10 +8,10 @@ description = "provide memory management for VM"
 
 [dependencies]
 error-chain = "0.12.4"
-libc = "0.2.71"
+libc = ">=0.2.71"
 log = "0.4.8"
-kvm-bindings = "0.3.0"
+kvm-bindings = ">=0.3.0"
 kvm-ioctls = "0.6.0"
-vmm-sys-util = "0.7.0"
+vmm-sys-util = ">=0.7.0"
 util = {path = "../util"}
 machine_manager = {path = "../machine_manager"}
