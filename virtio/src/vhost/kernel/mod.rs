@@ -66,45 +66,45 @@ pub struct VhostVringFile {
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct VhostVringState {
+struct VhostVringState {
     /// Vring index.
-    pub index: u32,
+    index: u32,
     /// Vring size.
-    pub num: u32,
+    num: u32,
 }
 
 /// Refer to vhost_vring_addr in
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct VhostVringAddr {
+struct VhostVringAddr {
     /// Vring index.
-    pub index: u32,
+    index: u32,
     /// Option flags.
-    pub flags: u32,
+    flags: u32,
     /// Base address of descriptor table.
-    pub desc_user_addr: u64,
+    desc_user_addr: u64,
     /// Base address of used vring.
-    pub used_user_addr: u64,
+    used_user_addr: u64,
     /// Base address of available vring.
-    pub avail_user_addr: u64,
+    avail_user_addr: u64,
     /// Address where to write logs.
-    pub log_guest_addr: u64,
+    log_guest_addr: u64,
 }
 
 /// Refer to vhost_memory_region in
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
-pub struct VhostMemoryRegion {
+struct VhostMemoryRegion {
     /// GPA.
-    pub guest_phys_addr: u64,
+    guest_phys_addr: u64,
     /// Size of the memory region.
-    pub memory_size: u64,
+    memory_size: u64,
     /// HVA.
-    pub userspace_addr: u64,
+    userspace_addr: u64,
     /// No flags specified for now.
-    pub flags_padding: u64,
+    flags_padding: u64,
 }
 
 impl ByteCode for VhostMemoryRegion {}
@@ -113,9 +113,9 @@ impl ByteCode for VhostMemoryRegion {}
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
-pub struct VhostMemory {
-    pub nregions: u32,
-    pub padding: u32,
+struct VhostMemory {
+    nregions: u32,
+    padding: u32,
 }
 
 impl ByteCode for VhostMemory {}
@@ -126,13 +126,13 @@ struct VhostMemInfo {
 }
 
 impl VhostMemInfo {
-    pub fn new() -> VhostMemInfo {
+    fn new() -> VhostMemInfo {
         VhostMemInfo {
             regions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    pub fn addr_to_host(&self, addr: GuestAddress) -> Option<u64> {
+    fn addr_to_host(&self, addr: GuestAddress) -> Option<u64> {
         let addr = addr.raw_value();
         for region in self.regions.lock().unwrap().iter() {
             if addr >= region.guest_phys_addr && addr < region.guest_phys_addr + region.memory_size

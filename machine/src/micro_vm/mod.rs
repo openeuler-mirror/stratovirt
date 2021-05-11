@@ -83,7 +83,7 @@ use machine_manager::machine::{
 use machine_manager::{
     config::{
         BalloonConfig, BootSource, ConfigCheck, ConsoleConfig, DriveConfig, NetworkInterfaceConfig,
-        SerialConfig, VmConfig, VsockConfig,
+        RngConfig, SerialConfig, VmConfig, VsockConfig,
     },
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
@@ -98,7 +98,7 @@ use util::device_tree::CompileFDT;
 use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, Console, Net, VhostKern,
+    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, Console, Net, Rng, VhostKern,
     VirtioDevice, VirtioMmioDevice,
 };
 use vmm_sys_util::eventfd::EventFd;
@@ -113,7 +113,7 @@ use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use syscall::syscall_whitelist;
 
 // The replaceable block device maximum count.
-const MMIO_REPLACEABLE_BLK_NR: usize = 6;
+const MMIO_REPLACEABLE_BLK_NR: usize = 4;
 // The replaceable network device maximum count.
 const MMIO_REPLACEABLE_NET_NR: usize = 2;
 
@@ -713,6 +713,28 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
+    fn add_rng_device(&mut self, config: &RngConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        let rng = Arc::new(Mutex::new(Rng::new(config.clone())));
+        let device = VirtioMmioDevice::new(&self.sys_mem, rng);
+        let region_base = self.sysbus.min_free_base;
+        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+
+        VirtioMmioDevice::realize(
+            device,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "x86_64")]
+            &self.boot_source,
+            vm_fd,
+        )
+        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
+        self.sysbus.min_free_base += region_size;
+        Ok(())
+    }
+
     fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -754,6 +776,10 @@ impl MachineOps for LightMachine {
         if let Some(balloon) = vm_config.balloon.as_ref() {
             self.add_balloon_device(balloon, vm_fd)
                 .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
+        }
+
+        if let Some(rng) = vm_config.rng.as_ref() {
+            self.add_rng_device(rng, vm_fd)?;
         }
 
         Ok(())

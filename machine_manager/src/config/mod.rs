@@ -20,6 +20,7 @@ mod fs;
 mod iothread;
 mod machine_config;
 mod network;
+mod rng;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -38,6 +39,7 @@ pub use fs::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
+pub use rng::*;
 
 pub mod errors {
     error_chain! {
@@ -113,6 +115,7 @@ pub struct VmConfig {
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
     pub balloon: Option<BalloonConfig>,
+    pub rng: Option<RngConfig>,
 }
 
 impl VmConfig {
@@ -131,6 +134,7 @@ impl VmConfig {
         let mut serial = None;
         let mut iothreads = None;
         let mut balloon = None;
+        let mut rng = None;
 
         if let serde_json::Value::Object(items) = value {
             for (name, item) in items {
@@ -144,6 +148,7 @@ impl VmConfig {
                     "serial" => serial = Some(SerialConfig::from_value(&item)?),
                     "iothread" => iothreads = Some(IothreadConfig::from_value(&item)?),
                     "balloon" => balloon = Some(BalloonConfig::from_value(&item)?),
+                    "rng" => rng = Some(RngConfig::from_value(&item)?),
                     _ => return Err(ErrorKind::InvalidJsonField(name).into()),
                 }
             }
@@ -160,6 +165,7 @@ impl VmConfig {
             serial,
             iothreads,
             balloon,
+            rng,
         })
     }
 
@@ -196,6 +202,10 @@ impl VmConfig {
 
         if self.vsock.is_some() {
             self.vsock.as_ref().unwrap().check()?;
+        }
+
+        if self.rng.is_some() {
+            self.rng.as_ref().unwrap().check()?;
         }
 
         if self.boot_source.initrd.is_none() && self.drives.is_none() {

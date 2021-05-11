@@ -1,0 +1,17 @@
+{
+  "boot-source": {
+    "kernel_image_path": "${VMLINUX}",
+    "boot_args": "console=ttyS0 lastbus=0 reboot=k panic=1 tsc=reliable ipv6.disable=1"
+  },
+  "drives": [
+    {
+      "drive_id": "rootfs",
+      "path_on_host": "${ROOTFS}",
+      "is_read_only": false
+    }
+  ],
+  "machine-config": {
+    "vcpu_count": "${VCPU}",
+    "mem_size": "${MEMSIZE}"
+  }
+}

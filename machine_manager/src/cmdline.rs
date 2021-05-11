@@ -243,6 +243,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .can_no_value(true)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("rng")
+                .long("rng")
+                .value_name("random_file=path[,byte_per_sec=]")
+                .help("add rng device")
+                .takes_value(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -293,6 +300,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     update_args_to_config!((args.value_of("initrd-file")), vm_cfg, update_initrd);
     update_args_to_config!((args.value_of("serial")), vm_cfg, update_serial);
     update_args_to_config!((args.value_of("balloon")), vm_cfg, update_balloon);
+    update_args_to_config!((args.value_of("rng")), vm_cfg, update_rng);
     update_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,

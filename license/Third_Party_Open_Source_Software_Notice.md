@@ -300,7 +300,7 @@ Copyright (c) 2017 The Error-Chain Project Developers
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: vmm-sys-util 0.6.1
+Software: vmm-sys-util 0.7.0
 Copyright notice:
 Copyright 2019 Intel Corporation. All Rights Reserved.
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.

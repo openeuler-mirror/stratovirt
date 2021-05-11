@@ -69,18 +69,7 @@ fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     id_bytes
 }
 
-/// Write data to memory at specified address.
-///
-/// # Arguments
-///
-/// * `buf` - The data buffer.
-/// * `hva` - The destination address in the memory.
-///
-/// # Safety
-///
-/// hva is non-null which is guaranteed by the caller, and the entire memory range
-/// of this slice is contained within a single allocated object.
-pub fn write_buf_mem(buf: &[u8], hva: u64) -> Result<()> {
+fn write_buf_mem(buf: &[u8], hva: u64) -> Result<()> {
     let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
     (&mut slice)
         .write(buf)
@@ -89,21 +78,16 @@ pub fn write_buf_mem(buf: &[u8], hva: u64) -> Result<()> {
     Ok(())
 }
 
-/// The unwritable header of virtio block's request.
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct RequestOutHeader {
-    /// Request type.
     request_type: u32,
-    /// The priority of request.
     io_prio: u32,
-    /// The offset sector of request.
     sector: u64,
 }
 
 impl RequestOutHeader {
-    /// Return true if the request type is valid.
-    pub fn is_valid(&self) -> bool {
+    fn is_valid(&self) -> bool {
         match self.request_type {
             VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_FLUSH | VIRTIO_BLK_T_GET_ID => true,
             _ => {
@@ -119,37 +103,19 @@ impl RequestOutHeader {
 
 impl ByteCode for RequestOutHeader {}
 
-/// The aio control block.
 #[derive(Clone)]
 pub struct AioCompleteCb {
-    /// The virtqueue to which this aiocb belongs.
-    pub queue: Arc<Mutex<Queue>>,
-    /// The address space to which this aiocb belongs.
-    pub mem_space: Arc<AddressSpace>,
-    /// Index of the descriptor.
-    pub desc_index: u16,
-    /// Total length of the descriptor chain.
-    pub rw_len: u32,
-    /// The memory address where stores the result of handling the request.
-    pub req_status_addr: GuestAddress,
-    /// Callback for triggering an interrupt.
-    pub interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    pub driver_features: u64,
+    queue: Arc<Mutex<Queue>>,
+    mem_space: Arc<AddressSpace>,
+    desc_index: u16,
+    rw_len: u32,
+    req_status_addr: GuestAddress,
+    interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
+    driver_features: u64,
 }
 
 impl AioCompleteCb {
-    /// Create an aio control block.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - Virtqueue.
-    /// * `mem_space` - Address Space to which the aio belongs.
-    /// * `desc_index` - Index of the descriptor.
-    /// * `req_status_addr` - The memory address where stores the result of handling the request.
-    /// * `interrupt_cb` - Callback for triggering an interrupt.
-    /// * `driver_features` - Bit mask of features negotiated by the backend and the frontend.
-    pub fn new(
+    fn new(
         queue: Arc<Mutex<Queue>>,
         mem_space: Arc<AddressSpace>,
         desc_index: u16,
@@ -170,28 +136,15 @@ impl AioCompleteCb {
     }
 }
 
-/// Virtio block IO request.
 struct Request {
-    /// The index of descriptor for the request.
     desc_index: u16,
-    /// The header(out_header) which is read-only.
     out_header: RequestOutHeader,
-    /// The IO vector which is both readable and writable.
     iovec: Vec<Iovec>,
-    /// The total length of data.
     data_len: u64,
-    /// The address of header(in_header) which is writable, and this header
-    /// should be written with the result of handling the request.
     in_header: GuestAddress,
 }
 
 impl Request {
-    /// Create a block IO request.
-    ///
-    /// # Arguments
-    ///
-    /// * `mem_space`: Address space to which the request belongs.
-    /// * `elem`: IO request element.
     fn new(mem_space: &Arc<AddressSpace>, elem: &Element) -> Result<Self> {
         if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() || elem.desc_num < 2 {
             bail!(
@@ -414,9 +367,7 @@ struct BlockIoHandler {
 }
 
 impl BlockIoHandler {
-    /// Build IO requests if there are elements in virtqueue needed to be finished,
-    /// and execute them. If required, an interrupt is sent to the guest.
-    pub fn process_queue(&mut self) -> Result<()> {
+    fn process_queue(&mut self) -> Result<()> {
         let mut req_queue = Vec::new();
         let mut req_index = 0;
         let mut last_aio_req_index = 0;
@@ -428,7 +379,7 @@ impl BlockIoHandler {
             // limit io operations if iops is configured
             if let Some(lb) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
-                    if lb.throttled(ctx) {
+                    if lb.throttled(ctx, 1_u64) {
                         queue.vring.push_back();
                         break;
                     }
@@ -554,7 +505,6 @@ impl BlockIoHandler {
         Ok(())
     }
 
-    /// Build an aio context.
     fn build_aio(&self) -> Result<Box<Aio<AioCompleteCb>>> {
         let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
             let status = if ret < 0 {
