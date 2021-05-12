@@ -21,7 +21,7 @@ use error_chain::ChainedError;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
-use util::{__offset_of, offset_of};
+use util::offset_of;
 
 use crate::legacy::errors::{ErrorKind, Result, ResultExt};
 

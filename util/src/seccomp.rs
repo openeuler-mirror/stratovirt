@@ -80,7 +80,7 @@
 extern crate libc;
 
 use crate::errors::Result;
-use crate::{__offset_of, offset_of};
+use crate::offset_of;
 
 // BPF Instruction classes
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/bpf_common.h#L7
