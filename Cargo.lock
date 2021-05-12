@@ -245,6 +245,7 @@ name = "migration"
 version = "0.3.0"
 dependencies = [
  "error-chain",
+ "kvm-ioctls",
  "serde",
  "util",
 ]
