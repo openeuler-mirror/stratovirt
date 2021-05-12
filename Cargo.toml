@@ -28,6 +28,7 @@ members = [
     "machine",
     "machine_manager",
     "migration",
+    "migration_derive",
     "pci",
     "sysbus",
     "util",
