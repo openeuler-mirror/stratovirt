@@ -1,0 +1,9 @@
+[package]
+name = "migration"
+version = "0.3.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2018"
+
+[dependencies]
+error-chain = "0.12.4"
+serde = { version = ">=1.0.114", features = ["derive"] }
