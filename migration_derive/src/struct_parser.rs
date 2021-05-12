@@ -12,7 +12,7 @@
 
 use quote::{format_ident, quote};
 
-use crate::field_parser::parse_fields;
+use crate::field_parser::{parse_fields, parse_fields_default};
 
 /// Parse `DeviceState` structure to `DeviceStateDesc`.
 pub fn parse_struct(
@@ -34,6 +34,18 @@ pub fn parse_struct(
             current_version: #current_version,
             compat_version: #compat_version,
             fields: vec![#(#fields), *],
+        }
+    }
+}
+
+pub(crate) fn parse_struct_default(
+    input: &syn::DataStruct,
+    ident: &syn::Ident,
+) -> proc_macro2::TokenStream {
+    let fields_default = parse_fields_default(&input.fields);
+    quote! {
+        #ident {
+            #(#fields_default),*
         }
     }
 }

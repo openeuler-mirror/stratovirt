@@ -104,3 +104,42 @@ fn parse_ty(input: syn::Type) -> (syn::TypePath, usize, bool) {
         _ => panic!("Unsupported field type {:?}", input),
     }
 }
+
+/// Parse fields default with a vector.
+/// Every element is a expression with: `Var: type::default()`.
+pub fn parse_fields_default(input: &syn::Fields) -> Vec<proc_macro2::TokenStream> {
+    let mut fields = Vec::new();
+
+    match input {
+        syn::Fields::Named(ref name_fields) => {
+            let pairs = name_fields.named.pairs();
+            for field in pairs.into_iter() {
+                fields.push(parse_field_default(field));
+            }
+        }
+        _ => panic!("Only named fields are supported!"),
+    }
+
+    fields
+}
+
+fn parse_field_default(
+    input: syn::punctuated::Pair<&syn::Field, &syn::token::Comma>,
+) -> proc_macro2::TokenStream {
+    // parse var of field
+    let var_ident = input.value().ident.as_ref().unwrap();
+
+    // parse type of field
+    let ty = input.value().ty.clone();
+    let (ty_ident, len, is_array) = parse_ty(ty);
+
+    if is_array {
+        quote! {
+            #var_ident: [#ty_ident::default(); #len]
+        }
+    } else {
+        quote! {
+            #var_ident: #ty_ident::default()
+        }
+    }
+}
