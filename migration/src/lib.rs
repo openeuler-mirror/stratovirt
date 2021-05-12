@@ -19,7 +19,7 @@ extern crate error_chain;
 
 mod device_state;
 
-pub use device_state::{DeviceStateDesc, FieldDesc};
+pub use device_state::{DeviceStateDesc, FieldDesc, StateTransfer};
 
 pub mod errors {
     error_chain! {

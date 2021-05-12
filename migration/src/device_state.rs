@@ -27,6 +27,35 @@ pub enum VersionCheck {
     Mismatch,
 }
 
+/// Trait to acquire `DeviceState` bytes slice from `Device` and recover
+/// `Device`'s state from `DeviceState` bytes slice.
+///
+/// # Notes
+/// `DeviceState` structure is to save some device state such as register data
+/// and switch flag value. `DeviceState` must implement the `ByteCode` trait.
+/// So it can be transferred to bytes slice directly.
+pub trait StateTransfer {
+    /// Get `Device`'s state to `DeviceState` structure as bytes vector.
+    fn get_state_vec(&self) -> Result<Vec<u8>>;
+
+    /// Set a `Device`'s state from bytes slice as `DeviceState` structure.
+    fn set_state(&self, _state: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Set a `Device`'s state in mutable `Device` structure from bytes slice
+    /// as `DeviceState` structure.
+    fn set_state_mut(&mut self, _state: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Upgrade some high-version information.
+    fn upgrade_version(&mut self) {}
+
+    /// Downcast some high-version information.
+    fn downcast_version(&mut self) {}
+}
+
 /// The structure to describe `DeviceState` structure with version messege.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceStateDesc {
