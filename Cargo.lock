@@ -246,6 +246,7 @@ version = "0.3.0"
 dependencies = [
  "error-chain",
  "serde",
+ "util",
 ]
 
 [[package]]

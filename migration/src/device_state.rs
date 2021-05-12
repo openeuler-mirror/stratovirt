@@ -162,3 +162,190 @@ impl DeviceStateDesc {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceStateDesc, FieldDesc, StateTransfer, VersionCheck};
+    use util::byte_code::ByteCode;
+
+    // A simple device version 1.
+    struct DeviceV1 {
+        state: DeviceV1State,
+    }
+
+    // A simple device version 2.
+    struct DeviceV2 {
+        state: DeviceV2State,
+    }
+
+    #[derive(Copy, Clone, Default)]
+    // Statement for DeviceV1.
+    struct DeviceV1State {
+        ier: u8,
+        iir: u8,
+        lcr: u8,
+    }
+
+    #[derive(Copy, Clone, Default)]
+    // Statement for DeviceV2.
+    struct DeviceV2State {
+        ier: u8,
+        iir: u8,
+        lcr: u8,
+        mcr: u8,
+    }
+
+    impl DeviceV1State {
+        fn descriptor() -> DeviceStateDesc {
+            let fields = vec![
+                FieldDesc {
+                    var_name: "ier".to_string(),
+                    type_name: "u8".to_string(),
+                    alias: "ier".to_string(),
+                    offset: 0,
+                    size: 1,
+                },
+                FieldDesc {
+                    var_name: "iir".to_string(),
+                    type_name: "u8".to_string(),
+                    alias: "iir".to_string(),
+                    offset: 1,
+                    size: 1,
+                },
+                FieldDesc {
+                    var_name: "lcr".to_string(),
+                    type_name: "u8".to_string(),
+                    alias: "lcr".to_string(),
+                    offset: 2,
+                    size: 1,
+                },
+            ];
+            DeviceStateDesc {
+                name: "Device".to_string(),
+                alias: 1,
+                size: 3,
+                current_version: 1,
+                compat_version: 1,
+                fields,
+            }
+        }
+    }
+
+    impl DeviceV2State {
+        fn descriptor() -> DeviceStateDesc {
+            let fields = vec![
+                FieldDesc {
+                    var_name: "ier".to_string(),
+                    type_name: "u8".to_string(),
+                    alias: "ier".to_string(),
+                    offset: 0,
+                    size: 1,
+                },
+                FieldDesc {
+                    var_name: "iir".to_string(),
+                    type_name: "u8".to_string(),
+                    alias: "iir".to_string(),
+                    offset: 1,
+                    size: 1,
+                },
+                FieldDesc {
+                    var_name: "lcr".to_string(),
+                    type_name: "u8".to_string(),
+                    alias: "lcr".to_string(),
+                    offset: 2,
+                    size: 1,
+                },
+                FieldDesc {
+                    var_name: "mcr".to_string(),
+                    type_name: "u8".to_string(),
+                    alias: "mcr".to_string(),
+                    offset: 3,
+                    size: 1,
+                },
+            ];
+            DeviceStateDesc {
+                name: "Device".to_string(),
+                alias: 1,
+                size: 4,
+                current_version: 2,
+                compat_version: 1,
+                fields,
+            }
+        }
+    }
+
+    impl ByteCode for DeviceV1State {}
+    impl ByteCode for DeviceV2State {}
+
+    impl StateTransfer for DeviceV1 {
+        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+            Ok(self.state.as_bytes().to_vec())
+        }
+
+        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+            self.state = *DeviceV1State::from_bytes(state).unwrap();
+            Ok(())
+        }
+    }
+
+    impl StateTransfer for DeviceV2 {
+        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+            Ok(self.state.as_bytes().to_vec())
+        }
+
+        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+            self.state = *DeviceV2State::from_bytes(state).unwrap();
+            Ok(())
+        }
+
+        fn upgrade_version(&mut self) {
+            self.state.mcr = 255_u8;
+        }
+    }
+
+    #[test]
+    fn test_desc_padding() {
+        /*
+         * This test makes two version of a device.
+         * Those devices's difference is appending a new field `mcr` in
+         * device state.
+         * Add_padding can solve this change in descriptor of device state.
+         * Test can verify this function works.
+         */
+
+        let mut device_v1 = DeviceV1 {
+            state: DeviceV1State::default(),
+        };
+
+        device_v1.state.ier = 1;
+        device_v1.state.iir = 2;
+        device_v1.state.lcr = 3;
+
+        let state_1_desc = DeviceV1State::descriptor();
+        let state_2_desc = DeviceV2State::descriptor();
+
+        assert_eq!(
+            state_2_desc.check_version(&state_1_desc),
+            VersionCheck::Compat
+        );
+
+        let mut current_slice = device_v1.get_state_vec().unwrap();
+        assert_eq!(
+            state_2_desc
+                .add_padding(&state_1_desc, &mut current_slice)
+                .is_ok(),
+            true
+        );
+
+        let mut device_v2 = DeviceV2 {
+            state: DeviceV2State::default(),
+        };
+        device_v2.set_state_mut(&current_slice).unwrap();
+        device_v2.upgrade_version();
+
+        assert_eq!(device_v2.state.ier, device_v1.state.ier);
+        assert_eq!(device_v2.state.iir, device_v1.state.iir);
+        assert_eq!(device_v2.state.lcr, device_v1.state.lcr);
+        assert_eq!(device_v2.state.mcr, 255_u8);
+    }
+}
