@@ -16,12 +16,17 @@
 
 #[macro_use]
 extern crate error_chain;
+#[macro_use]
+extern crate lazy_static;
 
 mod device_state;
 #[allow(dead_code)]
 mod header;
+#[allow(dead_code)]
+mod manager;
 
 pub use device_state::{DeviceStateDesc, FieldDesc, StateTransfer};
+pub use manager::{MigrationHook, MigrationManager};
 
 pub mod errors {
     error_chain! {

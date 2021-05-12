@@ -54,6 +54,9 @@ pub trait StateTransfer {
 
     /// Downcast some high-version information.
     fn downcast_version(&mut self) {}
+
+    /// Get `DeviceState` alias used for `InstanceId`.
+    fn get_device_alias(&self) -> u64;
 }
 
 /// The structure to describe `DeviceState` structure with version messege.
@@ -286,6 +289,10 @@ mod tests {
             self.state = *DeviceV1State::from_bytes(state).unwrap();
             Ok(())
         }
+
+        fn get_device_alias(&self) -> u64 {
+            0
+        }
     }
 
     impl StateTransfer for DeviceV2 {
@@ -300,6 +307,10 @@ mod tests {
 
         fn upgrade_version(&mut self) {
             self.state.mcr = 255_u8;
+        }
+
+        fn get_device_alias(&self) -> u64 {
+            0
         }
     }
 
