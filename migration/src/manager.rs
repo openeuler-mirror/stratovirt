@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use super::device_state::{DeviceStateDesc, StateTransfer};
 use super::errors::{Result, ResultExt};
+use super::status::MigrationStatus;
 use util::byte_code::ByteCode;
 
 lazy_static! {
@@ -24,6 +25,7 @@ lazy_static! {
     pub(crate) static ref MIGRATION_MANAGER: Arc<MigrationManager> = Arc::new(MigrationManager {
         entry: Arc::new(RwLock::new(BTreeMap::<u64, MigrationEntry>::new())),
         desc_db: Arc::new(RwLock::new(HashMap::<String, DeviceStateDesc>::new())),
+        status: Arc::new(RwLock::new(MigrationStatus::None)),
     });
 }
 
@@ -137,6 +139,8 @@ pub struct MigrationManager {
     entry: Arc<RwLock<BTreeMap<u64, MigrationEntry>>>,
     /// The map offers the device type and its device state describe structure.
     desc_db: Arc<RwLock<HashMap<String, DeviceStateDesc>>>,
+    /// The status of migration work.
+    status: Arc<RwLock<MigrationStatus>>,
 }
 
 impl MigrationManager {
@@ -238,6 +242,23 @@ impl MigrationManager {
         } else {
             None
         }
+    }
+
+    /// Set a new migration status for migration manager.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_status`: new migration status, the transform must be illegal.
+    pub fn set_status(new_status: MigrationStatus) -> Result<()> {
+        let mut status = MIGRATION_MANAGER.status.write().unwrap();
+        *status = status.transfer(new_status)?;
+
+        Ok(())
+    }
+
+    /// Get current migration status for migration manager.
+    pub fn migration_get_status() -> MigrationStatus {
+        *MIGRATION_MANAGER.status.read().unwrap()
     }
 }
 

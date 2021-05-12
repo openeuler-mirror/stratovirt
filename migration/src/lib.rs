@@ -24,11 +24,15 @@ mod device_state;
 mod header;
 #[allow(dead_code)]
 mod manager;
+mod status;
 
 pub use device_state::{DeviceStateDesc, FieldDesc, StateTransfer};
 pub use manager::{MigrationHook, MigrationManager};
+pub use status::MigrationStatus;
 
 pub mod errors {
+    use super::status::MigrationStatus;
+
     error_chain! {
         foreign_links {
             Io(std::io::Error);
@@ -39,6 +43,9 @@ pub mod errors {
             }
             HeaderItemNotFit(item: String) {
                 display("{} for snapshot file / migration stream is not fit", item)
+            }
+            InvalidStatusTransfer(status1: MigrationStatus, status2: MigrationStatus) {
+                display("Failed to transfer migration status from {} to {}.", status1, status2)
             }
         }
     }
