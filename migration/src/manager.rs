@@ -131,9 +131,112 @@ enum MigrationEntry {
 }
 
 /// This structure is to manage all resource during migration.
+/// It is also the only way to call on `MIGRATION_MANAGER`.
 pub struct MigrationManager {
     /// The map offers the deivce_id and combined migratable device entry.
     entry: Arc<RwLock<BTreeMap<u64, MigrationEntry>>>,
     /// The map offers the device type and its device state describe structure.
     desc_db: Arc<RwLock<HashMap<String, DeviceStateDesc>>>,
+}
+
+impl MigrationManager {
+    /// Register `DeviceStateDesc` to `desc_db`'s hashmap with `device_type`.
+    ///
+    /// # Argument
+    ///
+    /// * `desc` - The descriptor of `DeviceState`.
+    fn register_device_desc(desc: DeviceStateDesc) {
+        let mut desc_db = MIGRATION_MANAGER.desc_db.write().unwrap();
+        if !desc_db.contains_key(&desc.name) {
+            desc_db.insert(descriptor.name.clone(), desc);
+        }
+    }
+
+    /// Register safe device instance to entry hashmap with instance id.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_desc` - The `DeviceStateDesc` of device instance.
+    /// * `entry` - Device instance with migratable interface.
+    pub fn register_device_instance<T>(device_desc: DeviceStateDesc, device_entry: Arc<T>)
+    where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        Self::register_device_desc(device_desc);
+
+        let entry = MigrationEntry::Safe(device_entry);
+        let nr_entry = Self::entry_db_len();
+
+        MIGRATION_MANAGER
+            .entry
+            .write()
+            .unwrap()
+            .insert(nr_entry, entry);
+    }
+
+    /// Register mutex device instance to entry hashmap with instance_id.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_desc` - The `DeviceStateDesc` of device instance.
+    /// * `entry` - Device instance with migratable interface.
+    pub fn register_device_instance_mutex<T>(
+        device_desc: DeviceStateDesc,
+        device_entry: Arc<Mutex<T>>,
+    ) where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        Self::register_device_desc(device_desc);
+
+        let entry = MigrationEntry::Mutex(device_entry);
+        let nr_entry = Self::entry_db_len();
+
+        MIGRATION_MANAGER
+            .entry
+            .write()
+            .unwrap()
+            .insert(nr_entry, entry);
+    }
+
+    /// Register memory instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - Memory instance with migratable interface.
+    pub fn register_memory_instance<T>(entry: Arc<T>)
+    where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        let entry = MigrationEntry::Memory(entry);
+        let nr_entry = Self::entry_db_len();
+
+        MIGRATION_MANAGER
+            .entry
+            .write()
+            .unwrap()
+            .insert(nr_entry, entry);
+    }
+
+    /// Get entry_db's length.
+    pub fn entry_db_len() -> u64 {
+        MIGRATION_MANAGER.entry.read().unwrap().len() as u64
+    }
+
+    /// Get desc_db's length.
+    pub fn desc_db_len() -> u64 {
+        MIGRATION_MANAGER.desc_db.read().unwrap().len() as u64
+    }
+
+    /// Get `Device`'s alias from device type string.
+    ///
+    /// # Argument
+    ///
+    /// * `device_type` - The type string of device instance.
+    pub fn get_desc_alias(device_type: &str) -> Option<u64> {
+        if let Some(desc) = MIGRATION_MANAGER.desc_db.read().unwrap().get(device_type) {
+            Some(desc.alias)
+        } else {
+            None
+        }
+    }
 }
