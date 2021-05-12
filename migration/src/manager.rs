@@ -148,7 +148,7 @@ impl MigrationManager {
     fn register_device_desc(desc: DeviceStateDesc) {
         let mut desc_db = MIGRATION_MANAGER.desc_db.write().unwrap();
         if !desc_db.contains_key(&desc.name) {
-            desc_db.insert(descriptor.name.clone(), desc);
+            desc_db.insert(desc.name.clone(), desc);
         }
     }
 
@@ -238,5 +238,33 @@ impl MigrationManager {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device_state::tests::{DeviceV1, DeviceV1State, DeviceV2, DeviceV2State};
+    use std::sync::{Arc, Mutex};
+
+    impl MigrationHook for DeviceV1 {}
+    impl MigrationHook for DeviceV2 {}
+
+    #[test]
+    fn test_register_device() {
+        let device_v1 = Arc::new(DeviceV1::default());
+        let device_v2 = Arc::new(DeviceV2::default());
+        let device_v2_mutex = Arc::new(Mutex::new(DeviceV2::default()));
+
+        MigrationManager::register_device_instance(DeviceV1State::descriptor(), device_v1);
+        MigrationManager::register_memory_instance(device_v2);
+        MigrationManager::register_device_instance_mutex(
+            DeviceV2State::descriptor(),
+            device_v2_mutex,
+        );
+
+        assert_eq!(MigrationManager::desc_db_len(), 1);
+        assert!(MigrationManager::get_desc_alias("Device").is_some());
+        assert_eq!(MigrationManager::get_desc_alias("Device").unwrap(), 1);
     }
 }

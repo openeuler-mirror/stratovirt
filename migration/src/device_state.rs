@@ -167,23 +167,25 @@ impl DeviceStateDesc {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::{DeviceStateDesc, FieldDesc, StateTransfer, VersionCheck};
     use util::byte_code::ByteCode;
 
+    #[derive(Default)]
     // A simple device version 1.
-    struct DeviceV1 {
+    pub struct DeviceV1 {
         state: DeviceV1State,
     }
 
+    #[derive(Default)]
     // A simple device version 2.
-    struct DeviceV2 {
+    pub struct DeviceV2 {
         state: DeviceV2State,
     }
 
     #[derive(Copy, Clone, Default)]
     // Statement for DeviceV1.
-    struct DeviceV1State {
+    pub struct DeviceV1State {
         ier: u8,
         iir: u8,
         lcr: u8,
@@ -191,7 +193,7 @@ mod tests {
 
     #[derive(Copy, Clone, Default)]
     // Statement for DeviceV2.
-    struct DeviceV2State {
+    pub struct DeviceV2State {
         ier: u8,
         iir: u8,
         lcr: u8,
@@ -199,7 +201,7 @@ mod tests {
     }
 
     impl DeviceV1State {
-        fn descriptor() -> DeviceStateDesc {
+        pub fn descriptor() -> DeviceStateDesc {
             let fields = vec![
                 FieldDesc {
                     var_name: "ier".to_string(),
@@ -235,7 +237,7 @@ mod tests {
     }
 
     impl DeviceV2State {
-        fn descriptor() -> DeviceStateDesc {
+        pub fn descriptor() -> DeviceStateDesc {
             let fields = vec![
                 FieldDesc {
                     var_name: "ier".to_string(),
