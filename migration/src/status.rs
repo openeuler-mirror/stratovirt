@@ -79,3 +79,117 @@ impl MigrationStatus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normal_transfer() {
+        let mut status = MigrationStatus::None;
+
+        // None to Setup.
+        assert!(status.transfer(MigrationStatus::Setup).is_ok());
+        status = status.transfer(MigrationStatus::Setup).unwrap();
+
+        // Setup to Active.
+        assert!(status.transfer(MigrationStatus::Active).is_ok());
+        status = status.transfer(MigrationStatus::Active).unwrap();
+
+        // Active to Completed.
+        assert!(status.transfer(MigrationStatus::Completed).is_ok());
+        status = status.transfer(MigrationStatus::Completed).unwrap();
+
+        // Completed to Active.
+        assert!(status.transfer(MigrationStatus::Active).is_ok());
+        status = status.transfer(MigrationStatus::Active).unwrap();
+
+        // Any to Failed.
+        assert!(status.transfer(MigrationStatus::Failed).is_ok());
+        status = status.transfer(MigrationStatus::Failed).unwrap();
+
+        // Failed to Setup.
+        assert!(status.transfer(MigrationStatus::Setup).is_ok());
+        status = status.transfer(MigrationStatus::Setup).unwrap();
+
+        assert_eq!(status, MigrationStatus::Setup);
+    }
+
+    #[test]
+    fn test_abnormal_transfer_with_error() {
+        let mut status = MigrationStatus::None;
+
+        // None to Active.
+        if let Err(e) = status.transfer(MigrationStatus::Active) {
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "Failed to transfer migration status from {} to {}.",
+                    MigrationStatus::None,
+                    MigrationStatus::Active
+                )
+            );
+        } else {
+            assert!(false)
+        }
+        status = status.transfer(MigrationStatus::Setup).unwrap();
+
+        // Setup to Complete.
+        if let Err(e) = status.transfer(MigrationStatus::Completed) {
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "Failed to transfer migration status from {} to {}.",
+                    MigrationStatus::Setup,
+                    MigrationStatus::Completed
+                )
+            );
+        } else {
+            assert!(false)
+        }
+        status = status.transfer(MigrationStatus::Active).unwrap();
+
+        // Active to Setup.
+        if let Err(e) = status.transfer(MigrationStatus::Setup) {
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "Failed to transfer migration status from {} to {}.",
+                    MigrationStatus::Active,
+                    MigrationStatus::Setup
+                )
+            );
+        } else {
+            assert!(false)
+        }
+        status = status.transfer(MigrationStatus::Completed).unwrap();
+
+        // Completed to Setup.
+        if let Err(e) = status.transfer(MigrationStatus::Setup) {
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "Failed to transfer migration status from {} to {}.",
+                    MigrationStatus::Completed,
+                    MigrationStatus::Setup
+                )
+            );
+        } else {
+            assert!(false)
+        }
+
+        // Complete to failed.
+        if let Err(e) = status.transfer(MigrationStatus::Failed) {
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "Failed to transfer migration status from {} to {}.",
+                    MigrationStatus::Completed,
+                    MigrationStatus::Failed
+                )
+            );
+        } else {
+            assert!(false)
+        }
+    }
+}
