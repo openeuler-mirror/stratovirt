@@ -10,37 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use self::errors::{ErrorKind, Result};
 use address_space::{AddressSpace, GuestAddress};
 use util::device_tree;
 
-pub mod errors {
-    use util::device_tree;
-    error_chain! {
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-        }
-        errors {
-            DTBOverflow(size: u64) {
-                display(
-                    "guest memory size {} should bigger than {}",
-                    size,
-                    device_tree::FDT_MAX_SIZE
-                )
-            }
-            InitrdOverflow(addr: u64, size: u32) {
-                display(
-                    "Failed to allocate initrd image {} to memory {}.",
-                     size,
-                     addr
-                )
-            }
-        }
-    }
-}
+use crate::errors::{ErrorKind, Result, ResultExt};
 
 const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
 
@@ -117,4 +94,52 @@ pub fn linux_bootloader(
         initrd_start: initrd_addr,
         dtb_start: dtb_addr,
     })
+}
+
+/// Load PE(vmlinux.bin) linux kernel and other boot source to Guest Memory.
+///
+/// # Steps
+///
+/// 1. Prepare for linux kernel boot env, return guest memory layout.
+/// 2. According guest memory layout, load linux kernel to guest memory.
+/// 3. According guest memory layout, load initrd image to guest memory.
+///
+/// # Arguments
+///
+/// * `config` - boot source config, contains kernel, initrd.
+/// * `sys_mem` - guest memory.
+///
+/// # Errors
+///
+/// Load kernel, initrd to guest memory failed. Boot source is broken or
+/// guest memory is abnormal.
+pub fn load_kernel(
+    config: &AArch64BootLoaderConfig,
+    sys_mem: &Arc<AddressSpace>,
+) -> Result<AArch64BootLoader> {
+    let mut kernel_image =
+        File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+    let boot_loader = linux_bootloader(config, sys_mem)?;
+    let kernel_size = kernel_image.metadata().unwrap().len();
+    sys_mem.write(
+        &mut kernel_image,
+        GuestAddress(boot_loader.vmlinux_start),
+        kernel_size,
+    )?;
+
+    match &config.initrd {
+        Some(initrd) => {
+            let mut initrd_image =
+                File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+            let initrd_len = initrd_image.metadata().unwrap().len();
+            sys_mem.write(
+                &mut initrd_image,
+                GuestAddress(boot_loader.initrd_start),
+                initrd_len,
+            )?;
+        }
+        None => {}
+    };
+
+    Ok(boot_loader)
 }

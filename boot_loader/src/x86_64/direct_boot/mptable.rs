@@ -10,8 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::Arc;
+
+use address_space::{AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 use util::checksum::obj_checksum;
+
+use crate::errors::{ErrorKind, Result};
 
 const SPEC_VERSION: u8 = 4; // version 1.4
 const APIC_VERSION: u8 = 0x14;
@@ -254,4 +259,90 @@ impl LocalInterruptEntry {
             dest_lapic_lint,
         }
     }
+}
+
+macro_rules! write_entry {
+    ( $d:expr, $t:ty, $m:expr, $o:expr, $s:expr ) => {
+        let entry = $d;
+        $m.write_object(&entry, GuestAddress($o))?;
+        $o += std::mem::size_of::<$t>() as u64;
+        $s = $s.wrapping_add(obj_checksum(&entry));
+    };
+}
+
+pub fn setup_isa_mptable(
+    sys_mem: &Arc<AddressSpace>,
+    start_addr: u64,
+    num_cpus: u8,
+    ioapic_addr: u32,
+    lapic_addr: u32,
+) -> Result<()> {
+    const BUS_ID: u8 = 0;
+    // mptable max support 255 cpus, reserve one for ioapic id
+    const MPTABLE_MAX_CPUS: u32 = 254;
+    const MPTABLE_IOAPIC_NR: u8 = 16;
+
+    if u32::from(num_cpus) > MPTABLE_MAX_CPUS {
+        return Err(ErrorKind::MaxCpus(num_cpus).into());
+    }
+
+    let ioapic_id: u8 = num_cpus + 1;
+    let header = start_addr + std::mem::size_of::<FloatingPointer>() as u64;
+    sys_mem.write_object(
+        &FloatingPointer::new(header as u32),
+        GuestAddress(start_addr),
+    )?;
+
+    let mut offset = header + std::mem::size_of::<ConfigTableHeader>() as u64;
+    let mut sum = 0u8;
+    for cpu_id in 0..num_cpus {
+        write_entry!(
+            ProcessEntry::new(cpu_id as u8, true, cpu_id == 0),
+            ProcessEntry,
+            sys_mem,
+            offset,
+            sum
+        );
+    }
+
+    write_entry!(BusEntry::new(BUS_ID), BusEntry, sys_mem, offset, sum);
+    write_entry!(
+        IOApicEntry::new(ioapic_id, true, ioapic_addr),
+        IOApicEntry,
+        sys_mem,
+        offset,
+        sum
+    );
+
+    for i in 0..MPTABLE_IOAPIC_NR {
+        write_entry!(
+            IOInterruptEntry::new(INTERRUPT_TYPE_INT, BUS_ID, i, ioapic_id, i),
+            IOInterruptEntry,
+            sys_mem,
+            offset,
+            sum
+        );
+    }
+
+    write_entry!(
+        LocalInterruptEntry::new(INTERRUPT_TYPE_EXTINT, BUS_ID, 0, ioapic_id, 0),
+        LocalInterruptEntry,
+        sys_mem,
+        offset,
+        sum
+    );
+    write_entry!(
+        LocalInterruptEntry::new(INTERRUPT_TYPE_NMI, BUS_ID, 0, DEST_ALL_LAPIC_MASK, 1),
+        LocalInterruptEntry,
+        sys_mem,
+        offset,
+        sum
+    );
+
+    sys_mem.write_object(
+        &ConfigTableHeader::new((offset - header) as u16, sum, lapic_addr),
+        GuestAddress(header),
+    )?;
+
+    Ok(())
 }
