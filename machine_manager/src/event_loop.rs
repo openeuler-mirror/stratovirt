@@ -13,7 +13,7 @@
 extern crate util;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use super::config::IothreadConfig;
@@ -99,7 +99,7 @@ impl EventLoop {
     ///
     /// * `manager` - The main part to manager the event loop specified by name.
     /// * `name` - specify which event loop to manage
-    pub fn set_manager(manager: Arc<dyn EventLoopManager>, name: Option<&String>) {
+    pub fn set_manager(manager: Arc<Mutex<dyn EventLoopManager>>, name: Option<&String>) {
         if let Some(ctx) = Self::get_ctx(name) {
             ctx.set_manager(manager)
         }

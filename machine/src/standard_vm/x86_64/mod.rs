@@ -19,7 +19,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_kernel, BootLoaderConfig};
-use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::{Serial, SERIAL_ADDR};
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::{Kvm, VmFd};
@@ -74,7 +74,7 @@ pub struct StdMachine {
     /// `vCPU` topology, support sockets, cores, threads.
     cpu_topo: CpuTopology,
     /// `vCPU` devices.
-    cpus: Arc<Mutex<Vec<Arc<CPU>>>>,
+    cpus: Vec<Arc<CPU>>,
     /// IO address space.
     sys_io: Arc<AddressSpace>,
     /// Memory address space.
@@ -115,7 +115,7 @@ impl StdMachine {
 
         Ok(StdMachine {
             cpu_topo,
-            cpus: Arc::new(Mutex::new(Vec::new())),
+            cpus: Vec::new(),
             sys_io: sys_io.clone(),
             sys_mem: sys_mem.clone(),
             sysbus,
@@ -139,7 +139,7 @@ impl StdMachine {
         let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
         for cpu_index in 0..self.cpu_topo.max_cpus {
             let cpu_thread_barrier = cpus_thread_barrier.clone();
-            let cpu = self.cpus.lock().unwrap()[cpu_index as usize].clone();
+            let cpu = self.cpus[cpu_index as usize].clone();
             CPU::start(cpu, cpu_thread_barrier, paused)
                 .chain_err(|| MachineErrorKind::StartVcpuErr(cpu_index))?;
         }
@@ -161,7 +161,7 @@ impl StdMachine {
         use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize]
+            self.cpus[cpu_index as usize]
                 .pause()
                 .chain_err(|| MachineErrorKind::PauseVcpuErr(cpu_index))?;
         }
@@ -181,7 +181,7 @@ impl StdMachine {
         use crate::errors::ResultExt;
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus.lock().unwrap()[cpu_index as usize]
+            self.cpus[cpu_index as usize]
                 .resume()
                 .chain_err(|| MachineErrorKind::ResumeVcpuErr(cpu_index))?;
         }
@@ -200,13 +200,11 @@ impl StdMachine {
         let mut vmstate = self.vm_state.deref().0.lock().unwrap();
         *vmstate = KvmVmState::Shutdown;
 
-        let mut cpus = self.cpus.lock().unwrap();
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            cpus[cpu_index as usize]
+            self.cpus[cpu_index as usize]
                 .destroy()
                 .chain_err(|| MachineErrorKind::DestroyVcpuErr(cpu_index))?;
         }
-        cpus.clear();
 
         Ok(())
     }
@@ -244,6 +242,19 @@ impl MachineOps for StdMachine {
         }
 
         ranges
+    }
+
+    fn init_interrupt_controller(
+        &mut self,
+        vm_fd: &Arc<VmFd>,
+        _vcpu_count: u64,
+    ) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        vm_fd
+            .create_irq_chip()
+            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
+        Ok(())
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
@@ -344,46 +355,37 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(mut self, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> MachineResult<Arc<Self>> {
+    fn realize(
+        vm: &Arc<Mutex<Self>>,
+        vm_config: &VmConfig,
+        fds: (Kvm, &Arc<VmFd>),
+    ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
+        let mut locked_vm = vm.lock().unwrap();
+        let kvm_fd = fds.0;
         let vm_fd = fds.1;
-        self.init_memory(
-            fds,
+        locked_vm.init_memory(
+            (kvm_fd, vm_fd),
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]
-            &self.sys_io,
-            &self.sys_mem,
+            &locked_vm.sys_io,
+            &locked_vm.sys_mem,
         )?;
 
-        vm_fd
-            .create_irq_chip()
-            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
+        locked_vm.init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nr_cpus {
             vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
         }
 
-        self.init_pci_host(&vm_fd)
+        locked_vm
+            .init_pci_host(&vm_fd)
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
-        self.add_devices(vm_config, &vm_fd)?;
+        locked_vm.add_devices(vm_config, &vm_fd)?;
 
-        let vm = Arc::new(self);
-        for vcpu_id in 0..nr_cpus {
-            let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(nr_cpus));
-            let cpu = CPU::new(
-                vcpu_fds[vcpu_id as usize].clone(),
-                vcpu_id,
-                Arc::new(Mutex::new(arch_cpu)),
-                vm.clone(),
-            );
-            let mut vcpus = vm.cpus.lock().unwrap();
-            let newcpu = Arc::new(cpu);
-            vcpus.push(newcpu.clone());
-        }
-
-        let boot_source = vm.boot_source.lock().unwrap();
+        let boot_source = locked_vm.boot_source.lock().unwrap();
         let boot_config: CPUBootConfig;
         let (initrd, initrd_size) = match &boot_source.initrd {
             Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
@@ -397,13 +399,13 @@ impl MachineOps for StdMachine {
             initrd,
             initrd_size: initrd_size as u32,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
-            cpu_count: vm.cpu_topo.nrcpus,
+            cpu_count: locked_vm.cpu_topo.nrcpus,
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
         };
 
-        let layout = load_kernel(&bootloader_config, &vm.sys_mem)
+        let layout = load_kernel(&bootloader_config, &locked_vm.sys_mem)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
         boot_config = CPUBootConfig {
             boot_ip: layout.kernel_start,
@@ -417,16 +419,17 @@ impl MachineOps for StdMachine {
             idt_size: layout.segments.idt_limit,
             pml4_start: layout.boot_pml4_addr,
         };
-        for cpu_index in 0..vm.cpu_topo.max_cpus {
-            vm.cpus.lock().unwrap()[cpu_index as usize]
-                .realize(vm_fd, &boot_config)
-                .chain_err(|| format!("Failed to realize vcpu{}.", cpu_index))?;
-        }
 
         // Needed to release lock here because generate_fdt_node() will
         // acquire it later, and the ownership of vm will be passed out
         // of the function.
         drop(boot_source);
+        locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+            vm.clone(),
+            vm_config.machine_config.nr_cpus,
+            (&vm_fd, &vcpu_fds),
+            &boot_config,
+        )?);
 
         let mut pit_config = kvm_pit_config::default();
         pit_config.flags = KVM_PIT_SPEAKER_DUMMY;
@@ -436,9 +439,10 @@ impl MachineOps for StdMachine {
         vm_fd
             .set_tss_address(0xfffb_d000 as usize)
             .chain_err(|| MachineErrorKind::SetTssErr)?;
-        vm.register_power_event(&vm.power_button)
+        locked_vm
+            .register_power_event(&locked_vm.power_button)
             .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
-        Ok(vm)
+        Ok(())
     }
 }
 
@@ -581,7 +585,7 @@ impl DeviceInterface for StdMachine {
         let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
         for cpu_index in 0..self.cpu_topo.max_cpus {
             if self.cpu_topo.get_mask(cpu_index as usize) == 1 {
-                let thread_id = self.cpus.lock().unwrap()[cpu_index as usize].tid();
+                let thread_id = self.cpus[cpu_index as usize].tid();
                 let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
                 let cpu_instance = qmp_schema::CpuInstanceProperties {
                     node_id: None,

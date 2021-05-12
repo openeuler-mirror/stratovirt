@@ -131,7 +131,7 @@ pub struct EventLoopContext {
     /// Epoll file descriptor.
     epoll: Epoll,
     /// Control epoll loop running.
-    manager: Option<Arc<dyn EventLoopManager>>,
+    manager: Option<Arc<Mutex<dyn EventLoopManager>>>,
     /// Fds registered to the `EventLoop`.
     events: Arc<RwLock<BTreeMap<RawFd, Box<EventNotifier>>>>,
     /// Events abandoned are stored in garbage collector.
@@ -158,7 +158,7 @@ impl EventLoopContext {
         }
     }
 
-    pub fn set_manager(&mut self, manager: Arc<dyn EventLoopManager>) {
+    pub fn set_manager(&mut self, manager: Arc<Mutex<dyn EventLoopManager>>) {
         self.manager = Some(manager);
     }
 
@@ -280,8 +280,8 @@ impl EventLoopContext {
     /// Executes `epoll.wait()` to wait for events, and call the responding callbacks.
     pub fn run(&mut self) -> Result<bool> {
         if let Some(manager) = &self.manager {
-            if manager.loop_should_exit() {
-                manager.loop_cleanup()?;
+            if manager.lock().unwrap().loop_should_exit() {
+                manager.lock().unwrap().loop_cleanup()?;
                 return Ok(false);
             }
         }

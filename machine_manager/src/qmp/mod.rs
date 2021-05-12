@@ -36,7 +36,7 @@ pub mod qmp_schema;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
@@ -335,7 +335,7 @@ pub fn create_timestamp() -> TimeStamp {
 /// This function will fail when json parser failed or socket file description broke.
 pub fn handle_qmp(
     stream_fd: RawFd,
-    controller: &Arc<dyn MachineExternalInterface>,
+    controller: &Arc<Mutex<dyn MachineExternalInterface>>,
     leak_bucket: &mut LeakBucket,
 ) -> Result<()> {
     let mut qmp_service = crate::socket::SocketHandler::new(stream_fd);
@@ -395,7 +395,7 @@ pub fn handle_qmp(
 /// function, and exec this qmp command.
 fn qmp_command_exec(
     qmp_command: QmpCommand,
-    controller: &Arc<dyn MachineExternalInterface>,
+    controller: &Arc<Mutex<dyn MachineExternalInterface>>,
     if_fd: Option<RawFd>,
 ) -> (String, bool) {
     let mut qmp_response = Response::create_empty_response();
@@ -403,7 +403,7 @@ fn qmp_command_exec(
 
     // Use macro create match to cover most Qmp command
     let mut id = create_command_matches!(
-        qmp_command.clone(); controller; qmp_response;
+        qmp_command.clone(); controller.lock().unwrap(); qmp_response;
         (stop, pause),
         (cont, resume),
         (query_status, query_status),
@@ -421,12 +421,12 @@ fn qmp_command_exec(
     if id.is_none() {
         id = match qmp_command {
             QmpCommand::quit { id, .. } => {
-                controller.destroy();
+                controller.lock().unwrap().destroy();
                 shutdown_flag = true;
                 id
             }
             QmpCommand::getfd { arguments, id } => {
-                qmp_response = controller.getfd(arguments.fd_name, if_fd);
+                qmp_response = controller.lock().unwrap().getfd(arguments.fd_name, if_fd);
                 id
             }
             _ => None,
