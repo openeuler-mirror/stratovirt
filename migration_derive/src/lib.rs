@@ -24,9 +24,11 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::DeriveInput;
 
+mod attr_parser;
 mod field_parser;
 mod struct_parser;
 
+use attr_parser::{parse_struct_attributes, validate_version};
 use struct_parser::parse_struct;
 
 /// Define a macro derive `Desc`.
@@ -35,8 +37,14 @@ pub fn derive_desc(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let ident = input.ident.clone();
 
+    // Get attr info
+    let (mut current_version, mut compat_version) = parse_struct_attributes(&input.attrs);
+    validate_version(&mut current_version, &mut compat_version);
+
     let desc = match &input.data {
-        syn::Data::Struct(data_struct) => parse_struct(data_struct, &ident),
+        syn::Data::Struct(data_struct) => {
+            parse_struct(data_struct, &ident, current_version, compat_version)
+        }
         _ => panic!("Only support struct."),
     };
 
