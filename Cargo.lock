@@ -307,9 +307,11 @@ dependencies = [
 name = "migration_derive"
 version = "0.3.0"
 dependencies = [
+ "migration",
  "proc-macro2",
  "quote",
  "syn",
+ "util",
 ]
 
 [[package]]

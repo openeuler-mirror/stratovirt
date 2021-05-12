@@ -12,6 +12,8 @@
 
 use quote::{format_ident, quote};
 
+use super::attr_parser::parse_field_attributes;
+
 /// Parse fields in `DeviceState` structure to `TokenStream`.
 pub fn parse_fields(input: &syn::Fields, ident: &syn::Ident) -> Vec<proc_macro2::TokenStream> {
     let mut fields = Vec::new();
@@ -39,7 +41,11 @@ fn parse_field(
     // parse var of field
     let var_ident = input.value().ident.as_ref().unwrap();
     let var_name = var_ident.to_string();
-    let alias_name = var_name.clone();
+    let alias_name = if let Some(alias) = parse_field_attributes(&input.value().attrs) {
+        alias
+    } else {
+        var_name.clone()
+    };
 
     // parse type of field
     let ty = input.value().ty.clone();

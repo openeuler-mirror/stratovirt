@@ -14,7 +14,36 @@
 //!
 //! Exports a derive for migration flow:
 //! The `Desc` derive pro macro to generate the DeviceStateDesc structure for
-//! DeviceState struct.
+//! DeviceState struct.It also offers two attributes: one to describe version
+//! and compat version for structure, the other to give struct field an `alias`
+//! name.
+//!
+//! ```no_run
+//! #[macro_use]
+//! extern crate migration_derive;
+//! extern crate migration;
+//! extern crate util;
+//!
+//! use migration::{DeviceStateDesc, FieldDesc, MigrationManager};
+//!
+//! #[derive(Desc)]
+//! #[desc_version(compat_version = "0.1.0")]
+//! struct DeviceState {
+//!     #[alias(activated)]
+//!     device_activated: bool,
+//!     #[alias(select)]
+//!     features_select: u32,
+//!     #[alias(acked_select)]
+//!     acked_features_select: u32,
+//!     #[alias(status)]
+//!     device_status: u32,
+//! }
+//!
+//! fn main() {
+//!     println!("Description of DeviceState is {:?}", DeviceState::descriptor());
+//! }
+//!
+//! ```
 
 #[macro_use]
 extern crate syn;

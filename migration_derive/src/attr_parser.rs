@@ -23,6 +23,12 @@ const ATTRIBUTE_NAME: &str = "desc_version";
 const CURRENT_VERSION: &str = "current_version";
 const COMPAT_VERSION: &str = "compat_version";
 
+/// Attribute `alias` is used above `field` declaration.
+/// It can set a field name with a alias. If alias is not set, the default
+/// value of alias will be set by field name. The alias is the unique
+/// identification of field in a structure.
+const FIELD_ATTRIBUTE_NAME: &str = "alias";
+
 /// Parse attribute above a struct.
 /// Version attribute with `current_version` or `compat_version` will be parsed to
 /// two `u32` number.
@@ -41,6 +47,21 @@ pub fn parse_struct_attributes(attributes: &[syn::Attribute]) -> (u32, u32) {
     }
 
     (current_version, compat_version)
+}
+
+/// Parse attribute above fields.
+/// Alias attribute with `alias` will be parse to a alias string.
+pub fn parse_field_attributes(attributes: &[syn::Attribute]) -> Option<String> {
+    let mut field_alias = None;
+
+    for attribute in attributes {
+        if attribute.path.is_ident(FIELD_ATTRIBUTE_NAME) {
+            let content: proc_macro2::TokenStream = attribute.parse_args().unwrap();
+            field_alias = Some(content.to_string());
+        }
+    }
+
+    field_alias
 }
 
 fn get_attr_version(meta_list: MetaList, current_version: &mut u32, compat_version: &mut u32) {
