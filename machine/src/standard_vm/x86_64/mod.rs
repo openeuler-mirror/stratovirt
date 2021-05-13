@@ -407,7 +407,6 @@ impl MachineOps for StdMachine {
         locked_vm.init_memory(
             (kvm_fd, vm_fd),
             &vm_config.machine_config.mem_config,
-            #[cfg(target_arch = "x86_64")]
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
         )?;
@@ -594,36 +593,18 @@ impl DeviceInterface for StdMachine {
                     core_id: Some(coreid as isize),
                     thread_id: Some(threadid as isize),
                 };
-                #[cfg(target_arch = "x86_64")]
-                {
-                    let cpu_info = qmp_schema::CpuInfo::x86 {
-                        current: true,
-                        qom_path: String::from("/machine/unattached/device[")
-                            + &cpu_index.to_string()
-                            + &"]".to_string(),
-                        halted: false,
-                        props: Some(cpu_instance),
-                        CPU: cpu_index as isize,
-                        thread_id: thread_id as isize,
-                        x86: qmp_schema::CpuInfoX86 {},
-                    };
-                    cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
-                }
-                #[cfg(target_arch = "aarch64")]
-                {
-                    let cpu_info = qmp_schema::CpuInfo::Arm {
-                        current: true,
-                        qom_path: String::from("/machine/unattached/device[")
-                            + &cpu_index.to_string()
-                            + &"]".to_string(),
-                        halted: false,
-                        props: Some(cpu_instance),
-                        CPU: cpu_index as isize,
-                        thread_id: thread_id as isize,
-                        arm: qmp_schema::CpuInfoArm {},
-                    };
-                    cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
-                }
+                let cpu_info = qmp_schema::CpuInfo::x86 {
+                    current: true,
+                    qom_path: String::from("/machine/unattached/device[")
+                        + &cpu_index.to_string()
+                        + &"]".to_string(),
+                    halted: false,
+                    props: Some(cpu_instance),
+                    CPU: cpu_index as isize,
+                    thread_id: thread_id as isize,
+                    x86: qmp_schema::CpuInfoX86 {},
+                };
+                cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
             }
         }
         Response::create_response(cpu_vec.into(), None)
