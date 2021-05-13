@@ -574,6 +574,74 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
+    #[cfg(target_arch = "x86_64")]
+    fn load_boot_source(&self) -> MachineResult<CPUBootConfig> {
+        use crate::errors::ResultExt;
+
+        let boot_source = self.boot_source.lock().unwrap();
+        let (initrd, initrd_size) = match &boot_source.initrd {
+            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
+            None => (None, 0),
+        };
+
+        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        let bootloader_config = BootLoaderConfig {
+            kernel: boot_source.kernel_file.clone(),
+            initrd,
+            initrd_size: initrd_size as u32,
+            kernel_cmdline: boot_source.kernel_cmdline.to_string(),
+            cpu_count: self.cpu_topo.nrcpus,
+            gap_range: (gap_start, gap_end - gap_start),
+            ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
+            lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+        };
+        let layout = load_kernel(&bootloader_config, &self.sys_mem)
+            .chain_err(|| MachineErrorKind::LoadKernErr)?;
+
+        Ok(CPUBootConfig {
+            boot_ip: layout.kernel_start,
+            boot_sp: layout.kernel_sp,
+            zero_page: layout.zero_page_addr,
+            code_segment: layout.segments.code_segment,
+            data_segment: layout.segments.data_segment,
+            gdt_base: layout.segments.gdt_base,
+            gdt_size: layout.segments.gdt_limit,
+            idt_base: layout.segments.idt_base,
+            idt_size: layout.segments.idt_limit,
+            pml4_start: layout.boot_pml4_addr,
+        })
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn load_boot_source(&self) -> MachineResult<CPUBootConfig> {
+        use crate::errors::ResultExt;
+
+        let boot_source = self.boot_source.lock().unwrap();
+        let (initrd, initrd_size) = match &boot_source.initrd {
+            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
+            None => (None, 0),
+        };
+
+        let bootloader_config = BootLoaderConfig {
+            kernel: boot_source.kernel_file.clone(),
+            initrd,
+            initrd_size: initrd_size as u32,
+            mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+        };
+        let layout = load_kernel(&bootloader_config, &self.sys_mem)
+            .chain_err(|| MachineErrorKind::LoadKernErr)?;
+        if let Some(rd) = &boot_source.initrd {
+            *rd.initrd_addr.lock().unwrap() = layout.initrd_start;
+        }
+
+        Ok(CPUBootConfig {
+            fdt_addr: layout.dtb_start,
+            kernel_addr: layout.kernel_start,
+        })
+    }
+
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
         use crate::errors::ResultExt;
@@ -852,7 +920,7 @@ impl MachineOps for LightMachine {
             vcpu_fds.push(Arc::new(vm_fd.create_vcpu(vcpu_id)?));
         }
         #[cfg(target_arch = "aarch64")]
-        locked_vm.init_interrupt_controller(vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm.init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
 
         // Add mmio devices
         locked_vm
@@ -860,67 +928,7 @@ impl MachineOps for LightMachine {
             .chain_err(|| "Failed to create replaceable device.")?;
         locked_vm.add_devices(vm_config, &vm_fd)?;
 
-        let boot_source = locked_vm.boot_source.lock().unwrap();
-        let boot_config: CPUBootConfig;
-        let (initrd, initrd_size) = match &boot_source.initrd {
-            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
-            None => (None, 0),
-        };
-        #[cfg(target_arch = "aarch64")]
-        {
-            let bootloader_config = BootLoaderConfig {
-                kernel: boot_source.kernel_file.clone(),
-                initrd,
-                initrd_size: initrd_size as u32,
-                mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-            };
-            let layout = load_kernel(&bootloader_config, &locked_vm.sys_mem)
-                .chain_err(|| MachineErrorKind::LoadKernErr)?;
-            if let Some(rd) = &boot_source.initrd {
-                *rd.initrd_addr.lock().unwrap() = layout.initrd_start;
-            }
-
-            boot_config = CPUBootConfig {
-                fdt_addr: layout.dtb_start,
-                kernel_addr: layout.kernel_start,
-            };
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-            let bootloader_config = BootLoaderConfig {
-                kernel: boot_source.kernel_file.clone(),
-                initrd,
-                initrd_size: initrd_size as u32,
-                kernel_cmdline: boot_source.kernel_cmdline.to_string(),
-                cpu_count: locked_vm.cpu_topo.nrcpus,
-                gap_range: (gap_start, gap_end - gap_start),
-                ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
-                lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
-            };
-
-            let layout = load_kernel(&bootloader_config, &locked_vm.sys_mem)
-                .chain_err(|| MachineErrorKind::LoadKernErr)?;
-            boot_config = CPUBootConfig {
-                boot_ip: layout.kernel_start,
-                boot_sp: layout.kernel_sp,
-                zero_page: layout.zero_page_addr,
-                code_segment: layout.segments.code_segment,
-                data_segment: layout.segments.data_segment,
-                gdt_base: layout.segments.gdt_base,
-                gdt_size: layout.segments.gdt_limit,
-                idt_base: layout.segments.idt_base,
-                idt_size: layout.segments.idt_limit,
-                pml4_start: layout.boot_pml4_addr,
-            };
-        }
-
-        // Needed to release lock here because generate_fdt_node() will
-        // acquire it later, and the ownership of vm will be passed out
-        // of the function.
-        drop(boot_source);
+        let boot_config = locked_vm.load_boot_source()?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
