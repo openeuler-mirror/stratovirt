@@ -16,6 +16,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "acpi"
+version = "0.3.0"
+dependencies = [
+ "log",
+ "machine_manager",
+ "util",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -197,6 +206,7 @@ dependencies = [
 name = "machine"
 version = "0.3.0"
 dependencies = [
+ "acpi",
  "address_space",
  "boot_loader",
  "cpu",

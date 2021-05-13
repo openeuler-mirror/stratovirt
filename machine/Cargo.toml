@@ -23,6 +23,7 @@ devices = { path = "../devices" }
 pci = { path = "../pci" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
+acpi = { path = "../acpi" }
 virtio = { path = "../virtio" }
 
 [features]
