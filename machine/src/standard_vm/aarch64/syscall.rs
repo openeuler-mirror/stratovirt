@@ -43,13 +43,16 @@ const KVM_RUN: u32 = 0xae80;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
+const KVM_SET_USER_MEMORY_REGION: u32 = 0x4020_ae46;
+const KVM_IOEVENTFD: u32 = 0x4040_ae79;
+const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
 
 /// Create a syscall allowlist for seccomp.
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * aarch64-unknown-gnu: 38 syscalls
-/// * aarch64-unknown-musl: 38 syscalls
+/// * aarch64-unknown-gnu: 41 syscalls
+/// * aarch64-unknown-musl: 41 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -117,6 +120,9 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FIONBIO)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_RUN)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_DEVICE_ATTR)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_USER_MEMORY_REGION)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IOEVENTFD)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SIGNAL_MSI)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_GUEST_CID() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_RUNNING() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_VRING_CALL() as u32)
