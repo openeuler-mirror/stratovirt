@@ -10,11 +10,39 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[macro_use]
+extern crate error_chain;
+
 #[allow(dead_code)]
 pub mod acpi_table;
 #[allow(dead_code)]
 pub(crate) mod aml_compiler;
+#[allow(dead_code)]
+mod table_loader;
 
 pub use acpi_table::madt_subtable::*;
 pub use acpi_table::*;
 pub use aml_compiler::*;
+pub use table_loader::TableLoader;
+
+pub mod errors {
+    error_chain! {
+        errors {
+            FileEntryExist(name: String) {
+                display("Failed to add AllocateEntry in TableLoader, file_blob {} already exists.", name)
+            }
+            NoMatchedFile(name: String) {
+                display("Failed to find matched file_blob in TableLoader, file name: {}.", name)
+            }
+            Alignment(align: u32) {
+                display("Invalid alignment {}. Alignment is in bytes, and must be a power of 2.", align)
+            }
+            AddrOverflow(offset: u32, size: u32, blob_size: usize) {
+                display("Address overflows, offset {}, size {}, max size {}.", offset, size, blob_size)
+            }
+            AddPointerLength(size: u8) {
+                display("Failed to add pointer command: pointer length {}, which is expected to be 1/2/4/8.", size)
+            }
+        }
+    }
+}

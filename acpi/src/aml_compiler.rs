@@ -589,11 +589,11 @@ pub struct AmlFieldUnit {
     /// The name of this Field unit. `None` value indicate that this field is reserved.
     name: Option<String>,
     /// The Byte length of this Field unit.
-    length: u8,
+    length: u32,
 }
 
 impl AmlFieldUnit {
-    pub fn new(name: Option<&str>, length: u8) -> AmlFieldUnit {
+    pub fn new(name: Option<&str>, length: u32) -> AmlFieldUnit {
         AmlFieldUnit {
             name: name.map(|s| s.to_string()),
             length,
@@ -791,34 +791,127 @@ impl AmlBuilder for AmlReturn {
     }
 }
 
-/// Call a method.
-pub struct AmlCall {
-    /// Name of the method that will be called.
-    name: String,
-    /// The arguments that will be passed to the method. Note that
-    /// the arguments provided must match to the arguments' count of the method.
-    buf: Vec<u8>,
+// Macro that helps to define `MethodCallWithArgsx`.
+macro_rules! method_call_define {
+    ($name: ident) => {
+        #[derive(Clone)]
+        /// Call a method.
+        pub struct $name {
+            /// Name of the method that will be called.
+            name: String,
+            /// The arguments that will be passed to the method. Note that
+            /// the arguments provided must match to the arguments' count of the method.
+            buf: Vec<u8>,
+        }
+
+        impl AmlBuilder for $name {
+            fn aml_bytes(&self) -> Vec<u8> {
+                let mut bytes = Vec::new();
+                bytes.extend(build_name_string(&self.name));
+                bytes.extend(self.buf.clone());
+
+                bytes
+            }
+        }
+    };
 }
 
-impl AmlCall {
-    pub fn new<T: AmlBuilder>(name: &str, args: Vec<T>) -> AmlCall {
-        let mut bytes = Vec::new();
-        args.iter().for_each(|arg| bytes.extend(arg.aml_bytes()));
+// AmlCallWithArgs1 represents calling method with 1 argument.
+method_call_define!(AmlCallWithArgs1);
+// AmlCallWithArgs2 represents calling method with 2 arguments.
+method_call_define!(AmlCallWithArgs2);
+// AmlCallWithArgs3 represents calling method with 3 arguments.
+method_call_define!(AmlCallWithArgs3);
+// AmlCallWithArgs4 represents calling method with 4 arguments.
+method_call_define!(AmlCallWithArgs4);
+// AmlCallWithArgs5 represents calling method with 5 arguments.
+method_call_define!(AmlCallWithArgs5);
 
-        AmlCall {
+impl AmlCallWithArgs1 {
+    pub fn new<A: AmlBuilder>(name: &str, arg0: A) -> AmlCallWithArgs1 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+
+        AmlCallWithArgs1 {
             name: name.to_string(),
             buf: bytes,
         }
     }
 }
 
-impl AmlBuilder for AmlCall {
-    fn aml_bytes(&self) -> Vec<u8> {
+impl AmlCallWithArgs2 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder>(name: &str, arg0: A, arg1: B) -> AmlCallWithArgs2 {
         let mut bytes = Vec::new();
-        bytes.extend(build_name_string(&self.name));
-        bytes.extend(self.buf.clone());
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
 
-        bytes
+        AmlCallWithArgs2 {
+            name: name.to_string(),
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlCallWithArgs3 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder, C: AmlBuilder>(
+        name: &str,
+        arg0: A,
+        arg1: B,
+        arg2: C,
+    ) -> AmlCallWithArgs3 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
+        bytes.extend(arg2.aml_bytes());
+
+        AmlCallWithArgs3 {
+            name: name.to_string(),
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlCallWithArgs4 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder, C: AmlBuilder, D: AmlBuilder>(
+        name: &str,
+        arg0: A,
+        arg1: B,
+        arg2: C,
+        arg3: D,
+    ) -> AmlCallWithArgs4 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
+        bytes.extend(arg2.aml_bytes());
+        bytes.extend(arg3.aml_bytes());
+
+        AmlCallWithArgs4 {
+            name: name.to_string(),
+            buf: bytes,
+        }
+    }
+}
+
+impl AmlCallWithArgs5 {
+    pub fn new<A: AmlBuilder, B: AmlBuilder, C: AmlBuilder, D: AmlBuilder, E: AmlBuilder>(
+        name: &str,
+        arg0: A,
+        arg1: B,
+        arg2: C,
+        arg3: D,
+        arg4: E,
+    ) -> AmlCallWithArgs5 {
+        let mut bytes = Vec::new();
+        bytes.extend(arg0.aml_bytes());
+        bytes.extend(arg1.aml_bytes());
+        bytes.extend(arg2.aml_bytes());
+        bytes.extend(arg3.aml_bytes());
+        bytes.extend(arg4.aml_bytes());
+
+        AmlCallWithArgs5 {
+            name: name.to_string(),
+            buf: bytes,
+        }
     }
 }
 
@@ -1613,6 +1706,133 @@ space_desc_define!(AmlQWordDesc, 0x8A, 0x2B, u64);
 // Define `AmlQWordDesc::new_memory()` function to construct QWordMemory-type resource.
 struct_new_memory_define!(AmlQWordDesc, u64);
 
+/// Active-high, edge-triggered IRQ resource descriptor.
+pub struct AmlIrqNoFlags {
+    /// Irq number.
+    irq: u8,
+}
+
+impl AmlIrqNoFlags {
+    pub fn new(irq: u8) -> AmlIrqNoFlags {
+        if irq > 15 {
+            panic!("acpi: Irq exceeds range 0~15.");
+        }
+        AmlIrqNoFlags { irq }
+    }
+}
+
+impl AmlBuilder for AmlIrqNoFlags {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x22);
+        let irq_mask = 1 << (self.irq as u16);
+        bytes.push((irq_mask & 0xFF) as u8);
+        bytes.push((irq_mask >> 8) as u8);
+
+        bytes
+    }
+}
+
+/// Flags that indicates whether device consume or produce the interrupt resource.
+#[derive(Copy, Clone)]
+pub enum AmlResourceUsage {
+    /// Device will produce the interrupt for use by child device.
+    Producer = 0,
+    /// Device will consume the interrupt.
+    Consumer = 1,
+}
+
+/// Flags that indicates how the interrupt been triggered.
+#[derive(Copy, Clone)]
+pub enum AmlEdgeLevel {
+    /// Level triggered.
+    Level = 0,
+    /// Edge triggered.
+    Edge = 1,
+}
+
+/// Flags that indicates the interrupt is actively high or low.
+#[derive(Copy, Clone)]
+pub enum AmlActiveLevel {
+    /// Active-high.
+    High = 0,
+    /// Active-low.
+    Low = 1,
+}
+
+/// Flags that indicates whether the interrupt can be shared with other device.
+#[derive(Copy, Clone)]
+pub enum AmlIntShare {
+    /// Cannot be shared. Not Wake Capable.
+    Exclusive = 0,
+    /// Can share with other device. Not Wake Capable.
+    Share = 1,
+    /// Cannot be shared. Wake Capable.
+    ExclusiveWake = 2,
+    /// Can share with other device. Wake Capable.
+    ShareWake = 3,
+}
+
+/// Extended interrupt descriptor.
+pub struct AmlExtendedInterrupt {
+    /// Produce or consume the interrupt.
+    usage: AmlResourceUsage,
+    /// Trigger mode.
+    int_mode: AmlEdgeLevel,
+    /// Active level.
+    int_polar: AmlActiveLevel,
+    /// Can be share or not.
+    share: AmlIntShare,
+    /// interrupt list.
+    irq_list: Vec<u32>,
+}
+
+impl AmlExtendedInterrupt {
+    pub fn new(
+        usage: AmlResourceUsage,
+        mode: AmlEdgeLevel,
+        polar: AmlActiveLevel,
+        share: AmlIntShare,
+        irq_list: Vec<u32>,
+    ) -> AmlExtendedInterrupt {
+        if irq_list.is_empty() {
+            panic!("the list of irqs must not be empty.");
+        }
+        AmlExtendedInterrupt {
+            usage,
+            int_mode: mode,
+            int_polar: polar,
+            share,
+            irq_list,
+        }
+    }
+}
+
+impl AmlBuilder for AmlExtendedInterrupt {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x89);
+
+        let header_len = 2_u16;
+        let total_len = header_len + (self.irq_list.len() * std::mem::size_of::<u32>()) as u16;
+        // the length is at least 6, for only one element in irq-list
+        bytes.extend(total_len.as_bytes());
+
+        let flags = self.usage as u8
+            | (self.int_mode as u8) << 1
+            | (self.int_polar as u8) << 2
+            | (self.share as u8) << 3;
+        bytes.push(flags);
+
+        bytes.push(self.irq_list.len() as u8);
+        self.irq_list
+            .iter()
+            .for_each(|irq| bytes.extend(irq.as_bytes()));
+
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -2143,6 +2363,135 @@ mod test {
             0x11, 0x24, 0x0A, 0x21, 0x47, 0x01, 0x62, 0x00, 0x62, 0x00, 0x00, 0x01, 0x47, 0x00,
             0x66, 0x00, 0x66, 0x00, 0x00, 0x01, 0x2A, 0x08, 0x05, 0x86, 0x09, 0x00, 0x00, 0x00,
             0x00, 0xD0, 0xFE, 0x00, 0x04, 0x00, 0x00, 0x79, 0x00,
+        ];
+        assert_eq!(resource.aml_bytes(), target);
+    }
+
+    #[test]
+    fn test_interrupt() {
+        // ResourceTemplate ()
+        // {
+        //     Interrupt(ResourceConsumer, Level, ActiveHigh, Exclusive) {41}
+        //     Interrupt(ResourceConsumer, Edge, ActiveHigh, Shared) {42}
+        //     Interrupt(ResourceProducer, Level, ActiveHigh, ExclusiveAndWake) {43}
+        //     IRQNoFlags(INT4) {7}
+        // }
+        let mut resource = AmlResTemplate::new();
+        let int1 = AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Level,
+            AmlActiveLevel::High,
+            AmlIntShare::Exclusive,
+            vec![41],
+        );
+        let int2 = AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Edge,
+            AmlActiveLevel::High,
+            AmlIntShare::Share,
+            vec![42],
+        );
+        let int3 = AmlExtendedInterrupt::new(
+            AmlResourceUsage::Producer,
+            AmlEdgeLevel::Level,
+            AmlActiveLevel::High,
+            AmlIntShare::ExclusiveWake,
+            vec![43],
+        );
+        let int4 = AmlIrqNoFlags::new(7);
+
+        resource.append_child(int1);
+        resource.append_child(int2);
+        resource.append_child(int3);
+        resource.append_child(int4);
+
+        let res_bytes = vec![
+            0x11, 0x23, 0x0A, 0x20, 0x89, 0x06, 0x00, 0x01, 0x01, 0x29, 0x00, 0x00, 0x00, 0x89,
+            0x06, 0x00, 0x0B, 0x01, 0x2A, 0x00, 0x00, 0x00, 0x89, 0x06, 0x00, 0x10, 0x01, 0x2B,
+            0x00, 0x00, 0x00, 0x22, 0x80, 0x00, 0x79, 0x00,
+        ];
+        assert_eq!(resource.aml_bytes(), res_bytes);
+    }
+
+    #[test]
+    fn test_res_template_64() {
+        // ResourceTemplate(){
+        //     QWordMemory(ResourceConsumer, SubDecode, MinFixed, MaxFixed,
+        //                 WriteCombining, ReadOnly, 0x0, 0x0, 0x7FFFFFFFFF, 0x0, 0x8000000000)
+        //     DWordMemory(ResourceProducer, PosDecode, MinFixed, MaxFixed,
+        //                 Prefetchable, ReadWrite, 0x0, 0x0, 0xFFFFFFFE, 0x0, 0xFFFFFFFF)
+        //     WordBusNumber(ResourceProducer, MinFixed, MaxFixed, PosDecode,
+        //                   0x0, 0x0, 0xFFFC, 0xAAAA, 0xFFFD)
+        //     DWordIO(ResourceConsumer, MinFixed, MaxFixed, SubDecode,
+        //             EntireRange, 0x0, 0x0, 0xFFFF, 0x3eff0000, 0x00010000)
+        //     WordIO(ResourceProducer, MinFixed, MaxFixed, PosDecode,
+        //            EntireRange, 0x0, 0x0, 0x0CF7, 0x0, 0x0CF8)
+        // }
+        let q_mem = AmlQWordDesc::new_memory(
+            AmlAddressSpaceDecode::Subtract,
+            AmlCacheable::WriteCombining,
+            AmlReadAndWrite::ReadOnly,
+            0x0,
+            0x0,
+            0x7FFFFFFFFF,
+            0x0,
+            0x8000000000,
+        );
+        let d_mem = AmlDWordDesc::new_memory(
+            AmlAddressSpaceDecode::Positive,
+            AmlCacheable::Prefetchable,
+            AmlReadAndWrite::ReadWrite,
+            0x0,
+            0x0,
+            0xFFFFFFFE,
+            0x0,
+            0xFFFFFFFF,
+        );
+        let bus_num = AmlWordDesc::new_bus_number(
+            AmlAddressSpaceDecode::Positive,
+            0x0,
+            0x0,
+            0xFFFC,
+            0xAAAA,
+            0xFFFD,
+        );
+        let d_io = AmlDWordDesc::new_io(
+            AmlAddressSpaceDecode::Subtract,
+            AmlISARanges::EntireRange,
+            0x0,
+            0x0,
+            0xFFFF,
+            0x3eff0000,
+            0x00010000,
+        );
+        let w_io = AmlWordDesc::new_io(
+            AmlAddressSpaceDecode::Positive,
+            AmlISARanges::EntireRange,
+            0x0,
+            0x0,
+            0x0CF7,
+            0x0,
+            0x0CF8,
+        );
+
+        let mut resource = AmlResTemplate::new();
+        resource.append_child(q_mem);
+        resource.append_child(d_mem);
+        resource.append_child(bus_num);
+        resource.append_child(d_io);
+        resource.append_child(w_io);
+
+        let target = vec![
+            0x11, 0x48, 0x08, 0x0A, 0x84, 0x8A, 0x2B, 0x00, 0x00, 0x0E, 0x04, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x87, 0x17, 0x00, 0x00, 0x0C,
+            0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0x00,
+            0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x88, 0x0D, 0x00, 0x02, 0x0C, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0xFC, 0xFF, 0xAA, 0xAA, 0xFD, 0xFF, 0x87, 0x17, 0x00, 0x01, 0x0E,
+            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0xFF, 0x3E, 0x00, 0x00, 0x01, 0x00, 0x88, 0x0D, 0x00, 0x01, 0x0C, 0x03, 0x00,
+            0x00, 0x00, 0x00, 0xF7, 0x0C, 0x00, 0x00, 0xF8, 0x0C, 0x79, 0x00,
         ];
         assert_eq!(resource.aml_bytes(), target);
     }
