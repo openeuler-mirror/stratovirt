@@ -45,7 +45,7 @@ pub use config::{
 pub use host::PciHost;
 
 use std::mem::size_of;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::Arc;
 
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
@@ -143,9 +143,6 @@ pub trait PciDevOps: Send {
         let bus_shift: u16 = 8;
         ((bus_num as u16) << bus_shift) | (devfn as u16)
     }
-
-    /// Get parent bus which the device is attached to.
-    fn parent_bus(&self) -> Weak<Mutex<PciBus>>;
 
     /// Get device name.
     fn name(&self) -> String;

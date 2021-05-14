@@ -170,10 +170,6 @@ impl PciDevOps for Mch {
         }
     }
 
-    fn parent_bus(&self) -> Weak<Mutex<PciBus>> {
-        self.parent_bus.clone()
-    }
-
     fn name(&self) -> String {
         "Memory Controller Hub".to_string()
     }
