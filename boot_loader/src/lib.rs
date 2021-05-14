@@ -36,7 +36,7 @@
 //! # extern crate boot_loader;
 //!
 //! use address_space::{AddressSpace, Region};
-//! use boot_loader::{BootLoaderConfig, load_kernel};
+//! use boot_loader::{BootLoaderConfig, load_linux};
 //!
 //! #[cfg(target_arch="x86_64")]
 //! fn main() {
@@ -45,15 +45,15 @@
 //!     let bootloader_config = BootLoaderConfig {
 //!         kernel: kernel_file,
 //!         initrd: None,
-//!         initrd_size: 0,
 //!         kernel_cmdline: String::new(),
 //!         cpu_count: 0,
 //!         gap_range: (0xC000_0000, 0x4000_0000),
 //!         ioapic_addr: 0xFEC0_0000,
 //!         lapic_addr: 0xFEE0_0000,
+//!         prot64_mode: true,
 //!     };
 //!
-//!     let layout = load_kernel(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
 //!     // Now PE linux kernel and kernel cmdline are loaded to guest memory...
 //! }
 //!
@@ -64,11 +64,10 @@
 //!     let bootloader_config = BootLoaderConfig {
 //!         kernel: kernel_file,
 //!         initrd: None,
-//!         initrd_size: 0,
 //!         mem_start: 0x4000_0000,
 //!     };
 //!
-//!     let layout = load_kernel(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
 //!     // Now PE linux kernel is loaded to guest memory...
 //! }
 //! ```
@@ -84,14 +83,14 @@ mod aarch64;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::load_kernel;
+pub use aarch64::load_linux;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoader as BootLoader;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoaderConfig as BootLoaderConfig;
 
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::load_kernel;
+pub use x86_64::load_linux;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86BootLoader as BootLoader;
 #[cfg(target_arch = "x86_64")]
@@ -113,7 +112,7 @@ pub mod errors {
                     util::device_tree::FDT_MAX_SIZE
                 )
             }
-            InitrdOverflow(addr: u64, size: u32) {
+            InitrdOverflow(addr: u64, size: u64) {
                 display(
                     "Failed to load initrd image {} to memory {}.",
                      size,

@@ -45,10 +45,13 @@ const MSR_IA32_MISC_ENABLE_FAST_STRING: u64 = 0x1;
 #[derive(Default)]
 /// X86 CPU booting configure information
 pub struct X86CPUBootConfig {
+    pub prot64_mode: bool,
     /// Register %rip value
     pub boot_ip: u64,
     /// Register %rsp value
     pub boot_sp: u64,
+    /// Boot selector
+    pub boot_selector: u16,
     /// zero page address, as the second parameter of __startup_64
     /// arch/x86/kernel/head_64.S:86
     pub zero_page: u64,
@@ -65,6 +68,8 @@ pub struct X86CPUBootConfig {
 pub struct X86CPU {
     id: u32,
     nr_vcpus: u32,
+    prot64_mode: bool,
+    boot_selector: u16,
     boot_ip: u64,
     boot_sp: u64,
     zero_page: u64,
@@ -92,6 +97,8 @@ impl X86CPU {
         vcpu_fd: &Arc<VcpuFd>,
         boot_config: &X86CPUBootConfig,
     ) -> Result<()> {
+        self.prot64_mode = boot_config.prot64_mode;
+        self.boot_selector = boot_config.boot_selector;
         self.boot_ip = boot_config.boot_ip;
         self.boot_sp = boot_config.boot_sp;
         self.zero_page = boot_config.zero_page;
@@ -207,7 +214,7 @@ impl X86CPU {
         Ok(())
     }
 
-    fn setup_sregs(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+    fn set_prot64_sregs(&self, sregs: &mut kvm_sregs) {
         // X86_CR0_PE: Protection Enable
         // EFER_LME: Long mode enable
         // EFER_LMA: Long mode active
@@ -222,10 +229,6 @@ impl X86CPU {
         const X86_CR0_PG: u64 = 0x8000_0000;
         const X86_CR4_PAE: u64 = 0x20;
 
-        let mut sregs: kvm_sregs = vcpu_fd
-            .get_sregs()
-            .chain_err(|| format!("Failed to get sregs for CPU {}/KVM", self.id))?;
-
         // Init gdt table, gdt table has loaded to Guest Memory Space
         sregs.cs = self.code_segment;
         sregs.ds = self.data_segment;
@@ -234,6 +237,7 @@ impl X86CPU {
         sregs.gs = self.data_segment;
         sregs.ss = self.data_segment;
 
+        // Init gdt table, gdt table has loaded to Guest Memory Space
         sregs.gdt.base = self.gdt_base;
         sregs.gdt.limit = self.gdt_size;
 
@@ -250,6 +254,29 @@ impl X86CPU {
         sregs.cr3 = self.pml4_start;
         sregs.cr4 |= X86_CR4_PAE;
         sregs.cr0 |= X86_CR0_PG;
+    }
+
+    fn setup_sregs(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+        let mut sregs: kvm_sregs = vcpu_fd
+            .get_sregs()
+            .chain_err(|| format!("Failed to get sregs for CPU {}/KVM", self.id))?;
+
+        sregs.cs.base = (self.boot_selector as u64) << 4;
+        sregs.cs.selector = self.boot_selector;
+        sregs.ds.base = (self.boot_selector as u64) << 4;
+        sregs.ds.selector = self.boot_selector;
+        sregs.es.base = (self.boot_selector as u64) << 4;
+        sregs.es.selector = self.boot_selector;
+        sregs.fs.base = (self.boot_selector as u64) << 4;
+        sregs.fs.selector = self.boot_selector;
+        sregs.gs.base = (self.boot_selector as u64) << 4;
+        sregs.gs.selector = self.boot_selector;
+        sregs.ss.base = (self.boot_selector as u64) << 4;
+        sregs.ss.selector = self.boot_selector;
+
+        if self.prot64_mode {
+            self.set_prot64_sregs(&mut sregs);
+        }
 
         vcpu_fd.set_sregs(&sregs)?;
 
@@ -429,8 +456,10 @@ mod test {
             padding: 0,
         };
         let cpu_config = X86CPUBootConfig {
+            prot64_mode: true,
             boot_ip: 0,
             boot_sp: 0,
+            boot_selector: 0,
             zero_page: 0x0000_7000,
             code_segment: code_seg,
             data_segment: data_seg,

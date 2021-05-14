@@ -65,7 +65,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::vec::Vec;
 
 use address_space::{AddressSpace, GuestAddress, Region};
-use boot_loader::{load_kernel, BootLoaderConfig};
+use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::Serial;
 #[cfg(target_arch = "x86_64")]
@@ -579,10 +579,7 @@ impl MachineOps for LightMachine {
         use crate::errors::ResultExt;
 
         let boot_source = self.boot_source.lock().unwrap();
-        let (initrd, initrd_size) = match &boot_source.initrd {
-            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
-            None => (None, 0),
-        };
+        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
@@ -590,19 +587,21 @@ impl MachineOps for LightMachine {
         let bootloader_config = BootLoaderConfig {
             kernel: boot_source.kernel_file.clone(),
             initrd,
-            initrd_size: initrd_size as u32,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
             cpu_count: self.cpu_topo.nrcpus,
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+            prot64_mode: true,
         };
-        let layout = load_kernel(&bootloader_config, &self.sys_mem)
+        let layout = load_linux(&bootloader_config, &self.sys_mem)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
 
         Ok(CPUBootConfig {
-            boot_ip: layout.kernel_start,
-            boot_sp: layout.kernel_sp,
+            prot64_mode: true,
+            boot_ip: layout.boot_ip,
+            boot_sp: layout.boot_sp,
+            boot_selector: layout.boot_selector,
             zero_page: layout.zero_page_addr,
             code_segment: layout.segments.code_segment,
             data_segment: layout.segments.data_segment,
@@ -618,22 +617,19 @@ impl MachineOps for LightMachine {
     fn load_boot_source(&self) -> MachineResult<CPUBootConfig> {
         use crate::errors::ResultExt;
 
-        let boot_source = self.boot_source.lock().unwrap();
-        let (initrd, initrd_size) = match &boot_source.initrd {
-            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
-            None => (None, 0),
-        };
+        let mut boot_source = self.boot_source.lock().unwrap();
+        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
         let bootloader_config = BootLoaderConfig {
             kernel: boot_source.kernel_file.clone(),
             initrd,
-            initrd_size: initrd_size as u32,
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
-        let layout = load_kernel(&bootloader_config, &self.sys_mem)
+        let layout = load_linux(&bootloader_config, &self.sys_mem)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
-        if let Some(rd) = &boot_source.initrd {
-            *rd.initrd_addr.lock().unwrap() = layout.initrd_start;
+        if let Some(rd) = &mut boot_source.initrd {
+            rd.initrd_addr = layout.initrd_start;
+            rd.initrd_size = layout.initrd_size;
         }
 
         Ok(CPUBootConfig {
@@ -1688,17 +1684,12 @@ impl CompileFDTHelper for LightMachine {
 
         match &boot_source.initrd {
             Some(initrd) => {
-                device_tree::set_property_u64(
-                    fdt,
-                    node,
-                    "linux,initrd-start",
-                    *initrd.initrd_addr.lock().unwrap(),
-                )?;
+                device_tree::set_property_u64(fdt, node, "linux,initrd-start", initrd.initrd_addr)?;
                 device_tree::set_property_u64(
                     fdt,
                     node,
                     "linux,initrd-end",
-                    *initrd.initrd_addr.lock().unwrap() + initrd.initrd_size,
+                    initrd.initrd_addr + initrd.initrd_size,
                 )?;
             }
             None => {}

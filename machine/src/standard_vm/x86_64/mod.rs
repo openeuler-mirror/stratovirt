@@ -18,7 +18,7 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, Region};
-use boot_loader::{load_kernel, BootLoaderConfig};
+use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::{Serial, SERIAL_ADDR};
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
@@ -261,10 +261,7 @@ impl MachineOps for StdMachine {
         use crate::errors::ResultExt;
 
         let boot_source = self.boot_source.lock().unwrap();
-        let (initrd, initrd_size) = match &boot_source.initrd {
-            Some(rd) => (Some(rd.initrd_file.clone()), rd.initrd_size),
-            None => (None, 0),
-        };
+        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
@@ -272,19 +269,21 @@ impl MachineOps for StdMachine {
         let bootloader_config = BootLoaderConfig {
             kernel: boot_source.kernel_file.clone(),
             initrd,
-            initrd_size: initrd_size as u32,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
             cpu_count: self.cpu_topo.nrcpus,
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+            prot64_mode: false,
         };
-        let layout = load_kernel(&bootloader_config, &self.sys_mem)
+        let layout = load_linux(&bootloader_config, &self.sys_mem)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
 
         Ok(CPUBootConfig {
-            boot_ip: layout.kernel_start,
-            boot_sp: layout.kernel_sp,
+            prot64_mode: false,
+            boot_ip: layout.boot_ip,
+            boot_sp: layout.boot_sp,
+            boot_selector: layout.boot_selector,
             zero_page: layout.zero_page_addr,
             code_segment: layout.segments.code_segment,
             data_segment: layout.segments.data_segment,

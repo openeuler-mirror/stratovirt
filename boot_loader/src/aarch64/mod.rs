@@ -28,8 +28,6 @@ pub struct AArch64BootLoaderConfig {
     pub kernel: PathBuf,
     /// Path of initrd image.
     pub initrd: Option<PathBuf>,
-    /// Initrd file size, 0 means no initrd file.
-    pub initrd_size: u32,
     /// Start address of guest memory.
     pub mem_start: u64,
 }
@@ -42,58 +40,10 @@ pub struct AArch64BootLoader {
     pub vmlinux_start: u64,
     /// Start address for `initrd image` in guest memory.
     pub initrd_start: u64,
+    /// Initrd file size, 0 means no initrd file.
+    pub initrd_size: u64,
     /// Start address for `dtb` in guest memory.
     pub dtb_start: u64,
-}
-
-pub fn linux_bootloader(
-    config: &AArch64BootLoaderConfig,
-    sys_mem: &Arc<AddressSpace>,
-) -> Result<AArch64BootLoader> {
-    let dtb_addr =
-        if sys_mem.memory_end_address().raw_value() > u64::from(device_tree::FDT_MAX_SIZE) {
-            if let Some(addr) = sys_mem
-                .memory_end_address()
-                .raw_value()
-                .checked_sub(u64::from(device_tree::FDT_MAX_SIZE))
-            {
-                if sys_mem.address_in_memory(GuestAddress(addr), 0) {
-                    addr
-                } else {
-                    config.mem_start
-                }
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-
-    if dtb_addr == 0 {
-        return Err(ErrorKind::DTBOverflow(sys_mem.memory_end_address().raw_value()).into());
-    }
-
-    let mut initrd_addr = 0;
-    if config.initrd_size > 0 {
-        initrd_addr = if let Some(addr) = dtb_addr.checked_sub(u64::from(config.initrd_size)) {
-            addr
-        } else {
-            return Err(ErrorKind::InitrdOverflow(dtb_addr, config.initrd_size).into());
-        };
-
-        if !sys_mem.address_in_memory(GuestAddress(initrd_addr), 0) {
-            initrd_addr = config.mem_start + u64::from(device_tree::FDT_MAX_SIZE);
-        }
-    } else {
-        info!("No initrd image file.");
-    }
-
-    Ok(AArch64BootLoader {
-        kernel_start: config.mem_start + AARCH64_KERNEL_OFFSET,
-        vmlinux_start: config.mem_start + AARCH64_KERNEL_OFFSET,
-        initrd_start: initrd_addr,
-        dtb_start: dtb_addr,
-    })
 }
 
 /// Load PE(vmlinux.bin) linux kernel and other boot source to Guest Memory.
@@ -113,33 +63,55 @@ pub fn linux_bootloader(
 ///
 /// Load kernel, initrd to guest memory failed. Boot source is broken or
 /// guest memory is abnormal.
-pub fn load_kernel(
+pub fn load_linux(
     config: &AArch64BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
 ) -> Result<AArch64BootLoader> {
+    let kernel_start = config.mem_start + AARCH64_KERNEL_OFFSET;
+
     let mut kernel_image =
         File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
-    let boot_loader = linux_bootloader(config, sys_mem)?;
     let kernel_size = kernel_image.metadata().unwrap().len();
-    sys_mem.write(
-        &mut kernel_image,
-        GuestAddress(boot_loader.vmlinux_start),
-        kernel_size,
-    )?;
+    let kernel_end = kernel_start + kernel_size;
+    sys_mem.write(&mut kernel_image, GuestAddress(kernel_start), kernel_size)?;
 
-    match &config.initrd {
-        Some(initrd) => {
-            let mut initrd_image =
-                File::open(initrd).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
-            let initrd_len = initrd_image.metadata().unwrap().len();
-            sys_mem.write(
-                &mut initrd_image,
-                GuestAddress(boot_loader.initrd_start),
-                initrd_len,
-            )?;
-        }
-        None => {}
+    let dtb_addr = if let Some(addr) = sys_mem
+        .memory_end_address()
+        .raw_value()
+        .checked_sub(u64::from(device_tree::FDT_MAX_SIZE))
+        .filter(|addr| addr > &kernel_end)
+    {
+        addr
+    } else {
+        return Err(ErrorKind::DTBOverflow(sys_mem.memory_end_address().raw_value()).into());
     };
 
-    Ok(boot_loader)
+    let mut initrd_start = 0_u64;
+    let mut initrd_size = 0_u64;
+    if config.initrd.is_some() {
+        let mut initrd_image = File::open(config.initrd.as_ref().unwrap())
+            .chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+        initrd_size = initrd_image.metadata().unwrap().len();
+
+        initrd_start = if let Some(addr) = dtb_addr
+            .checked_sub(initrd_size)
+            .filter(|addr| addr > &kernel_end)
+        {
+            addr
+        } else {
+            return Err(ErrorKind::InitrdOverflow(dtb_addr, initrd_size).into());
+        };
+
+        sys_mem.write(&mut initrd_image, GuestAddress(initrd_start), initrd_size)?;
+    } else {
+        info!("No initrd image file.");
+    }
+
+    Ok(AArch64BootLoader {
+        kernel_start,
+        vmlinux_start: kernel_start,
+        initrd_start,
+        initrd_size,
+        dtb_start: dtb_addr,
+    })
 }
