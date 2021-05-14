@@ -61,7 +61,7 @@ impl RootPort {
         port_num: u8,
         parent_bus: Weak<Mutex<PciBus>>,
         vm_fd: Arc<VmFd>,
-    ) -> Arc<Mutex<Self>> {
+    ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = Region::init_container_region(1 << 16);
         let mem_region = Region::init_container_region(u64::max_value());
@@ -71,7 +71,8 @@ impl RootPort {
             io_region.clone(),
             mem_region.clone(),
         )));
-        let root_port = RootPort {
+
+        Self {
             name,
             devfn,
             port_num,
@@ -83,16 +84,7 @@ impl RootPort {
             mem_region,
             dev_id: 0,
             vm_fd,
-        };
-        let root_port = Arc::new(Mutex::new(root_port));
-        root_port
-            .lock()
-            .unwrap()
-            .sec_bus
-            .lock()
-            .unwrap()
-            .parent_bridge = Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn PciDevOps>>);
-        root_port
+        }
     }
 }
 
@@ -111,16 +103,13 @@ impl PciDevOps for RootPort {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
-        le_write_u16(&mut self.config.config, VENDOR_ID as usize, VENDOR_ID_RP)?;
-        le_write_u16(&mut self.config.config, DEVICE_ID as usize, DEVICE_ID_RP)?;
-        le_write_u16(
-            &mut self.config.config,
-            SUB_CLASS_CODE as usize,
-            CLASS_CODE_PCI_BRIDGE,
-        )?;
-        self.config.config[HEADER_TYPE as usize] = HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC;
-        self.config.config[PREF_MEMORY_BASE as usize] = PREF_MEM_RANGE_64BIT;
-        self.config.config[PREF_MEMORY_LIMIT as usize] = PREF_MEM_RANGE_64BIT;
+        let config_space = &mut self.config.config;
+        le_write_u16(config_space, VENDOR_ID as usize, VENDOR_ID_RP)?;
+        le_write_u16(config_space, DEVICE_ID as usize, DEVICE_ID_RP)?;
+        le_write_u16(config_space, SUB_CLASS_CODE as usize, CLASS_CODE_PCI_BRIDGE)?;
+        config_space[HEADER_TYPE as usize] = HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC;
+        config_space[PREF_MEMORY_BASE as usize] = PREF_MEM_RANGE_64BIT;
+        config_space[PREF_MEMORY_LIMIT as usize] = PREF_MEM_RANGE_64BIT;
         self.config
             .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
         #[cfg(target_arch = "aarch64")]
@@ -142,10 +131,17 @@ impl PciDevOps for RootPort {
             .mem_region
             .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
             .chain_err(|| "Failed to register subregion in memory space.")?;
-        locked_parent_bus.child_buses.push(self.sec_bus.clone());
+
+        let root_port = Arc::new(Mutex::new(self));
+        let mut locked_root_port = root_port.lock().unwrap();
+        locked_root_port.sec_bus.lock().unwrap().parent_bridge =
+            Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn PciDevOps>>);
+        locked_parent_bus
+            .child_buses
+            .push(locked_root_port.sec_bus.clone());
         locked_parent_bus
             .devices
-            .insert(self.devfn, Arc::new(Mutex::new(self)));
+            .insert(locked_root_port.devfn, root_port.clone());
 
         Ok(())
     }
