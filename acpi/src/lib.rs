@@ -11,6 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 #[allow(dead_code)]
+pub mod acpi_table;
+#[allow(dead_code)]
 pub(crate) mod aml_compiler;
 
+pub use acpi_table::madt_subtable::*;
+pub use acpi_table::*;
 pub use aml_compiler::*;

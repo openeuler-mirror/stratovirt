@@ -1613,7 +1613,6 @@ space_desc_define!(AmlQWordDesc, 0x8A, 0x2B, u64);
 // Define `AmlQWordDesc::new_memory()` function to construct QWordMemory-type resource.
 struct_new_memory_define!(AmlQWordDesc, u64);
 
-
 #[cfg(test)]
 mod test {
     use super::*;
