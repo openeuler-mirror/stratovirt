@@ -65,7 +65,7 @@ Rootfs image is a file system image.  An EXT4-format image with `/sbin/init` can
 
    ```shell
    $ arch=`uname -m`
-   $ wget http://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/$arch/alpine-minirootfs-3.13.0-$arch.tar.gz -O alpine-minirootfs.tar.gz
+   $ wget http://dl-cdn.alpinelinux.org/alpine/v3.13/releases/$arch/alpine-minirootfs-3.13.0-$arch.tar.gz -O alpine-minirootfs.tar.gz
    $ tar -zxvf alpine-minirootfs.tar.gz
    $ rm alpine-minirootfs.tar.gz
    ```
