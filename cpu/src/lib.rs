@@ -208,7 +208,6 @@ pub trait CPUInterface {
     fn kvm_vcpu_exec(&self) -> Result<bool>;
 }
 
-#[allow(dead_code)]
 /// `CPU` is a wrapper around creating and using a kvm-based VCPU.
 #[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
@@ -839,10 +838,7 @@ mod tests {
                     .unwrap(),
             ),
             0,
-            #[cfg(target_arch = "aarch64")]
-            Arc::new(Mutex::new(ArchCPU::new(0))),
-            #[cfg(target_arch = "x86_64")]
-            Arc::new(Mutex::new(ArchCPU::new(0, 1))),
+            Arc::new(Mutex::new(ArchCPU::default())),
             vm.clone(),
         );
         let (cpu_state, _) = &*cpu.state;

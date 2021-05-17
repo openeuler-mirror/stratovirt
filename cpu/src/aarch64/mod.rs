@@ -10,20 +10,28 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[allow(dead_code)]
-mod caps;
-#[allow(dead_code)]
+pub mod caps;
 mod core_regs;
 
 use std::sync::Arc;
 
 use hypervisor::KVM_FDS;
-use kvm_bindings::{kvm_regs, kvm_vcpu_init};
+use kvm_bindings::{
+    kvm_mp_state, kvm_reg_list, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, KVM_MP_STATE_RUNNABLE,
+    KVM_MP_STATE_STOPPED,
+};
 use kvm_ioctls::VcpuFd;
+use vmm_sys_util::fam::FamStructWrapper;
 
 use crate::errors::{Result, ResultExt};
+use crate::CPU;
 pub use caps::ArmCPUCaps;
-use core_regs::Arm64CoreRegs;
+use caps::CpregListEntry;
+use core_regs::{get_core_regs, set_core_regs};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use util::byte_code::ByteCode;
+
+type CpregList = FamStructWrapper<kvm_reg_list>;
 
 // PSR (Processor State Register) bits.
 // See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/ptrace.h#L34
@@ -33,14 +41,13 @@ const PSR_F_BIT: u64 = 0x0000_0040;
 const PSR_I_BIT: u64 = 0x0000_0080;
 const PSR_A_BIT: u64 = 0x0000_0100;
 const PSR_D_BIT: u64 = 0x0000_0200;
-
-// MPIDR - Multiprocessor Affinity Register.
-// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/asm/sysreg.h#L130
-pub const SYS_MPIDR_EL1: u64 = 0x6030_0000_0013_c005;
-
 // MPIDR is Multiprocessor Affinity Register
 // [40:63] bit reserved on AArch64 Architecture,
 const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
+// MPIDR - Multiprocessor Affinity Register.
+// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/asm/sysreg.h#L130
+const SYS_MPIDR_EL1: u64 = 0x6030_0000_0013_c005;
+const KVM_MAX_CPREG_ENTRIES: usize = 1024;
 
 /// AArch64 CPU booting configure information
 ///
@@ -56,7 +63,9 @@ pub struct ArmCPUBootConfig {
 }
 
 /// AArch64 CPU architect information
-#[derive(Default, Copy, Clone)]
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct ArmCPUState {
     /// The vcpu id, `0` means primary CPU.
     apic_id: u32,
@@ -68,6 +77,14 @@ pub struct ArmCPUState {
     kvi: kvm_vcpu_init,
     /// Vcpu core registers.
     core_regs: kvm_regs,
+    /// Vcpu cpu events register.
+    cpu_events: kvm_vcpu_events,
+    /// Vcpu mpstate register.
+    mp_state: kvm_mp_state,
+    /// The length of Cpreg.
+    cpreg_len: usize,
+    /// The list of Cpreg.
+    cpreg_list: [CpregListEntry; 512],
 }
 
 impl ArmCPUState {
@@ -77,9 +94,18 @@ impl ArmCPUState {
     ///
     /// * `vcpu_id` - ID of this `CPU`.
     pub fn new(vcpu_id: u32) -> Self {
+        let mp_state = kvm_mp_state {
+            mp_state: if vcpu_id == 0 {
+                KVM_MP_STATE_RUNNABLE
+            } else {
+                KVM_MP_STATE_STOPPED
+            },
+        };
+
         ArmCPUState {
             apic_id: vcpu_id,
             mpidr: UNINIT_MPIDR,
+            mp_state,
             ..Default::default()
         }
     }
@@ -111,17 +137,7 @@ impl ArmCPUState {
             self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
         }
 
-        // Set core regs.
-        self.core_regs.regs.pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
-        self.core_regs.regs.regs[1] = 0;
-        self.core_regs.regs.regs[2] = 0;
-        self.core_regs.regs.regs[3] = 0;
-
-        // Configure boot ip and device tree address, prepare for kernel setup
-        if self.apic_id == 0 {
-            self.core_regs.regs.regs[0] = boot_config.fdt_addr;
-            self.core_regs.regs.pc = boot_config.kernel_addr;
-        }
+        self.set_core_reg(boot_config);
 
         vcpu_fd
             .vcpu_init(&self.kvi)
@@ -133,68 +149,99 @@ impl ArmCPUState {
         Ok(())
     }
 
+    /// Reset register value in `Kvm` with `ArmCPUState`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.   
+    pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+        set_core_regs(vcpu_fd, self.core_regs)
+            .chain_err(|| format!("Failed to set core register for CPU {}", self.apic_id))?;
+        vcpu_fd
+            .set_mp_state(self.mp_state)
+            .chain_err(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
+        for cpreg in self.cpreg_list[0..self.cpreg_len].iter() {
+            cpreg
+                .set_cpreg(&vcpu_fd.clone())
+                .chain_err(|| format!("Failed to set cpreg for CPU {}", self.apic_id))?;
+        }
+        vcpu_fd
+            .set_vcpu_events(&self.cpu_events)
+            .chain_err(|| format!("Failed to set vcpu event for CPU {}", self.apic_id))?;
+
+        Ok(())
+    }
+
     /// Get mpidr value.
     pub fn mpidr(&self) -> u64 {
         self.mpidr
     }
 
-    /// Reset register value with `ArmCPUState`.
-    ///
-    /// # Arguments
-    ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
-        vcpu_fd
-            .set_one_reg(
-                Arm64CoreRegs::UserPTRegPState.into(),
-                self.core_regs.regs.pstate,
-            )
-            .chain_err(|| {
-                format!(
-                    "Failed to set core reg pstate register for CPU {}/KVM",
-                    self.apic_id
-                )
-            })?;
+    fn set_core_reg(&mut self, boot_config: &ArmCPUBootConfig) {
+        // Set core regs.
+        self.core_regs.regs.pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
+        self.core_regs.regs.regs[1] = 0;
+        self.core_regs.regs.regs[2] = 0;
+        self.core_regs.regs.regs[3] = 0;
 
-        vcpu_fd
-            .set_one_reg(
-                Arm64CoreRegs::UserPTRegRegs(1).into(),
-                self.core_regs.regs.regs[1],
-            )
-            .chain_err(|| format!("Failed to init x1 to zero for CPU {}/KVM", self.apic_id))?;
-
-        vcpu_fd
-            .set_one_reg(
-                Arm64CoreRegs::UserPTRegRegs(2).into(),
-                self.core_regs.regs.regs[2],
-            )
-            .chain_err(|| format!("Failed to init x2 to zero for CPU {}/KVM", self.apic_id))?;
-
-        vcpu_fd
-            .set_one_reg(
-                Arm64CoreRegs::UserPTRegRegs(3).into(),
-                self.core_regs.regs.regs[3],
-            )
-            .chain_err(|| format!("Failed to init x3 to zero for CPU {}/KVM", self.apic_id))?;
-
+        // Configure boot ip and device tree address, prepare for kernel setup
         if self.apic_id == 0 {
-            vcpu_fd
-                .set_one_reg(
-                    Arm64CoreRegs::UserPTRegRegs(0).into(),
-                    self.core_regs.regs.regs[0],
-                )
-                .chain_err(|| {
-                    format!(
-                        "Failed to set device tree address for CPU {}/KVM",
-                        self.apic_id
-                    )
-                })?;
-
-            vcpu_fd
-                .set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), self.core_regs.regs.pc)
-                .chain_err(|| format!("Failed to set boot ip for CPU {}/KVM", self.apic_id))?;
+            self.core_regs.regs.regs[0] = boot_config.fdt_addr;
+            self.core_regs.regs.pc = boot_config.kernel_addr;
         }
+    }
+}
+
+impl StateTransfer for CPU {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
+
+        cpu_state_locked.core_regs = get_core_regs(&self.fd)?;
+        if self.caps.mp_state {
+            let mut mp_state = self.fd.get_mp_state()?;
+            if mp_state.mp_state != KVM_MP_STATE_STOPPED {
+                mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
+            }
+            cpu_state_locked.mp_state = mp_state;
+        }
+
+        let mut cpreg_list = CpregList::new(KVM_MAX_CPREG_ENTRIES);
+        self.fd.get_reg_list(&mut cpreg_list)?;
+        for (index, cpreg) in cpreg_list.as_slice().iter().enumerate() {
+            let mut cpreg_entry = CpregListEntry {
+                index: *cpreg,
+                value: 0,
+            };
+            if cpreg_entry.validate() {
+                cpreg_entry.get_cpreg(&self.fd.clone())?;
+                cpu_state_locked.cpreg_list[index] = cpreg_entry;
+                cpu_state_locked.cpreg_len += 1;
+            }
+        }
+        cpu_state_locked.cpu_events = self.fd.get_vcpu_events()?;
+
+        Ok(cpu_state_locked.as_bytes().to_vec())
+    }
+
+    fn set_state(&self, state: &[u8]) -> migration::errors::Result<()> {
+        let cpu_state = *ArmCPUState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("CPU"))?;
+
+        let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
+        *cpu_state_locked = cpu_state;
+
+        self.fd.vcpu_init(&cpu_state.kvi)?;
 
         Ok(())
     }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&ArmCPUState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
 }
+
+impl MigrationHook for CPU {}

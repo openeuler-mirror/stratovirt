@@ -38,7 +38,6 @@ ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
 /// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/kvm.h#L50
 /// User structures for general purpose, floating point and debug registers.
 /// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/ptrace.h#L75
-#[allow(dead_code)]
 pub enum Arm64CoreRegs {
     KvmSpEl1,
     KvmElrEl1,
