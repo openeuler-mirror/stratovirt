@@ -114,8 +114,12 @@ impl X86CPUState {
     /// # Arguments
     ///
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    /// * `boot_config` - Boot message from boot_loader.  
-    pub fn realize(&mut self, vcpu_fd: &Arc<VcpuFd>, boot_config: &X86CPUBootConfig) -> Result<()> {
+    /// * `boot_config` - Boot message from boot_loader.
+    pub fn set_boot_config(
+        &mut self,
+        vcpu_fd: &Arc<VcpuFd>,
+        boot_config: &X86CPUBootConfig,
+    ) -> Result<()> {
         self.setup_lapic(vcpu_fd)?;
         self.setup_regs(&boot_config);
         self.setup_sregs(vcpu_fd, &boot_config)?;
@@ -462,8 +466,8 @@ mod test {
         vm_fd.create_irq_chip().unwrap();
         let vcpu = Arc::new(vm_fd.create_vcpu(0).unwrap());
         let mut x86_cpu = X86CPUState::new(0, 1);
-        //test realize function
-        assert!(x86_cpu.realize(&vcpu, &cpu_config).is_ok());
+        //test `set_boot_config` function
+        assert!(x86_cpu.set_boot_config(&vcpu, &cpu_config).is_ok());
 
         //test setup special registers
         assert!(x86_cpu.reset_vcpu(&vcpu).is_ok());

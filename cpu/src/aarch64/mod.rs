@@ -15,8 +15,8 @@ mod core_regs;
 use std::sync::Arc;
 
 use hypervisor::KVM_FDS;
+use kvm_bindings::{kvm_regs, kvm_vcpu_init};
 use kvm_ioctls::VcpuFd;
-use kvm_ioctls::{VcpuFd, VmFd};
 
 use crate::errors::{Result, ResultExt};
 use core_regs::Arm64CoreRegs;
@@ -46,119 +46,149 @@ const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
 ///
 /// See: https://elixir.bootlin.com/linux/v5.6/source/Documentation/arm64/booting.rst
 #[derive(Default, Copy, Clone)]
-pub struct AArch64CPUBootConfig {
+pub struct ArmCPUBootConfig {
     pub fdt_addr: u64,
     pub kernel_addr: u64,
 }
 
 /// AArch64 CPU architect information
 #[derive(Default, Copy, Clone)]
-pub struct CPUAArch64 {
+pub struct ArmCPUState {
     /// The vcpu id, `0` means primary CPU.
-    vcpu_id: u32,
+    apic_id: u32,
     /// MPIDR register value of this vcpu,
     /// The MPIDR provides an additional processor identification mechanism
     /// for scheduling purposes.
     mpidr: u64,
-    /// The guest physical address of kernel start point.
-    boot_ip: u64,
-    /// The guest physical address of device tree blob (dtb).
-    fdt_addr: u64,
+    /// Used to pass vcpu target and supported features to kvm.
+    kvi: kvm_vcpu_init,
+    /// Vcpu core registers.
+    core_regs: kvm_regs,
 }
 
-impl CPUAArch64 {
+impl ArmCPUState {
+    /// Allocates a new `ArmCPUState`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_id` - ID of this `CPU`.
     pub fn new(vcpu_id: u32) -> Self {
-        CPUAArch64 {
-            vcpu_id,
+        ArmCPUState {
+            apic_id: vcpu_id,
             mpidr: UNINIT_MPIDR,
-            boot_ip: 0,
-            fdt_addr: 0,
+            ..Default::default()
         }
     }
 
-    pub fn realize(
+    /// Set register value in `ArmCPUState` according to `boot_config`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
+    /// * `boot_config` - Boot message from boot_loader.
+    pub fn set_boot_config(
         &mut self,
         vcpu_fd: &Arc<VcpuFd>,
-        boot_config: &AArch64CPUBootConfig,
+        boot_config: &ArmCPUBootConfig,
     ) -> Result<()> {
-        self.boot_ip = boot_config.kernel_addr;
-        self.fdt_addr = boot_config.fdt_addr;
-
-        let mut kvi = kvm_bindings::kvm_vcpu_init::default();
         KVM_FDS
             .load()
             .vm_fd
             .as_ref()
             .unwrap()
-            .get_preferred_target(&mut kvi)
+            .get_preferred_target(&mut self.kvi)
             .chain_err(|| "Failed to get kvm vcpu preferred target")?;
 
         // support PSCI 0.2
         // We already checked that the capability is supported.
-        kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
+        self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
         // Non-boot cpus are powered off initially.
-        if self.vcpu_id != 0 {
-            kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
+        if self.apic_id != 0 {
+            self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
+        }
+
+        // Set core regs.
+        self.core_regs.regs.pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
+        self.core_regs.regs.regs[1] = 0;
+        self.core_regs.regs.regs[2] = 0;
+        self.core_regs.regs.regs[3] = 0;
+
+        // Configure boot ip and device tree address, prepare for kernel setup
+        if self.apic_id == 0 {
+            self.core_regs.regs.regs[0] = boot_config.fdt_addr;
+            self.core_regs.regs.pc = boot_config.kernel_addr;
         }
 
         vcpu_fd
-            .vcpu_init(&kvi)
+            .vcpu_init(&self.kvi)
             .chain_err(|| "Failed to init kvm vcpu")?;
-        self.get_mpidr(vcpu_fd);
+        self.mpidr = vcpu_fd
+            .get_one_reg(SYS_MPIDR_EL1)
+            .chain_err(|| "Failed to get mpidr")?;
 
         Ok(())
     }
 
-    pub fn get_mpidr(&mut self, vcpu_fd: &Arc<VcpuFd>) -> u64 {
-        if self.mpidr == UNINIT_MPIDR {
-            self.mpidr = match vcpu_fd.get_one_reg(SYS_MPIDR_EL1) {
-                Ok(mpidr) => mpidr as u64,
-                Err(e) => panic!("update vcpu mpidr failed {:?}", e),
-            };
-        }
-        debug!("self.mpidr is {}", self.mpidr);
+    /// Get mpidr value.
+    pub fn mpidr(&self) -> u64 {
         self.mpidr
     }
 
+    /// Reset register value with `ArmCPUState`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
-        // Configure PSTATE(Processor State), mask all interrupts.
-        let data: u64 = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
         vcpu_fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegPState.into(), data)
+            .set_one_reg(
+                Arm64CoreRegs::UserPTRegPState.into(),
+                self.core_regs.regs.pstate,
+            )
             .chain_err(|| {
                 format!(
                     "Failed to set core reg pstate register for CPU {}/KVM",
-                    self.vcpu_id
+                    self.apic_id
                 )
             })?;
 
-        // Reset x1, x2, x3 register to zero.
         vcpu_fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegRegs(1).into(), 0)
-            .chain_err(|| format!("Failed to init x1 to zero for CPU {}/KVM", self.vcpu_id))?;
+            .set_one_reg(
+                Arm64CoreRegs::UserPTRegRegs(1).into(),
+                self.core_regs.regs.regs[1],
+            )
+            .chain_err(|| format!("Failed to init x1 to zero for CPU {}/KVM", self.apic_id))?;
 
         vcpu_fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegRegs(2).into(), 0)
-            .chain_err(|| format!("Failed to init x2 to zero for CPU {}/KVM", self.vcpu_id))?;
+            .set_one_reg(
+                Arm64CoreRegs::UserPTRegRegs(2).into(),
+                self.core_regs.regs.regs[2],
+            )
+            .chain_err(|| format!("Failed to init x2 to zero for CPU {}/KVM", self.apic_id))?;
 
         vcpu_fd
-            .set_one_reg(Arm64CoreRegs::UserPTRegRegs(3).into(), 0)
-            .chain_err(|| format!("Failed to init x3 to zero for CPU {}/KVM", self.vcpu_id))?;
+            .set_one_reg(
+                Arm64CoreRegs::UserPTRegRegs(3).into(),
+                self.core_regs.regs.regs[3],
+            )
+            .chain_err(|| format!("Failed to init x3 to zero for CPU {}/KVM", self.apic_id))?;
 
-        // Configure boot ip and device tree address, prepare for kernel setup
-        if self.vcpu_id == 0 {
+        if self.apic_id == 0 {
             vcpu_fd
-                .set_one_reg(Arm64CoreRegs::UserPTRegRegs(0).into(), self.fdt_addr)
+                .set_one_reg(
+                    Arm64CoreRegs::UserPTRegRegs(0).into(),
+                    self.core_regs.regs.regs[0],
+                )
                 .chain_err(|| {
                     format!(
                         "Failed to set device tree address for CPU {}/KVM",
-                        self.vcpu_id
+                        self.apic_id
                     )
                 })?;
 
             vcpu_fd
-                .set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), self.boot_ip)
-                .chain_err(|| format!("Failed to set boot ip for CPU {}/KVM", self.vcpu_id))?;
+                .set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), self.core_regs.regs.pc)
+                .chain_err(|| format!("Failed to set boot ip for CPU {}/KVM", self.apic_id))?;
         }
 
         Ok(())

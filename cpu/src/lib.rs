@@ -91,9 +91,9 @@ pub mod errors {
 }
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::AArch64CPUBootConfig as CPUBootConfig;
+pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::CPUAArch64 as ArchCPU;
+pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
@@ -294,7 +294,7 @@ impl CPUInterface for CPU {
         self.arch_cpu
             .lock()
             .unwrap()
-            .realize(&self.fd, boot)
+            .set_boot_config(&self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
 
         Ok(())
