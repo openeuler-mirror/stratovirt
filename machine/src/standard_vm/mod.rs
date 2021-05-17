@@ -33,9 +33,6 @@ use std::sync::Arc;
 use errors::Result;
 use kvm_ioctls::VmFd;
 
-#[allow(dead_code)]
-const PCIE_MMCONFIG_REGION_SIZE: u32 = 256 << 20;
-
 trait StdMachineOps {
     fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()>;
 }
