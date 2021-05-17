@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[allow(dead_code)]
 mod caps;
 #[allow(dead_code)]
 mod core_regs;

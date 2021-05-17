@@ -26,7 +26,7 @@ use vmm_sys_util::{
 
 use util::byte_code::ByteCode;
 
-type Result<T> = std::result::Result<T, errno::Error>;
+pub type Result<T> = std::result::Result<T, errno::Error>;
 
 const KVM_REG_MAX_SIZE: u64 = 256;
 const KVM_NR_REGS: u64 = 31;
