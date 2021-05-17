@@ -97,7 +97,7 @@ pub use aarch64::CPUAArch64 as ArchCPU;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::X86CPU as ArchCPU;
+pub use x86_64::X86CPUState as ArchCPU;
 
 use std::cell::RefCell;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
@@ -826,7 +826,10 @@ mod tests {
                     .unwrap(),
             ),
             0,
-            Arc::new(Mutex::new(ArchCPU::default())),
+            #[cfg(target_arch = "aarch64")]
+            Arc::new(Mutex::new(ArchCPU::new(0))),
+            #[cfg(target_arch = "x86_64")]
+            Arc::new(Mutex::new(ArchCPU::new(0, 1))),
             vm.clone(),
         );
         let (cpu_state, _) = &*cpu.state;
