@@ -38,6 +38,7 @@ extern crate machine_manager;
 extern crate util;
 #[macro_use]
 extern crate migration_derive;
+#[cfg(target_arch = "aarch64")]
 #[macro_use]
 extern crate vmm_sys_util;
 
