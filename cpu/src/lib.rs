@@ -38,6 +38,8 @@ extern crate machine_manager;
 extern crate util;
 #[macro_use]
 extern crate migration_derive;
+#[macro_use]
+extern crate vmm_sys_util;
 
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]

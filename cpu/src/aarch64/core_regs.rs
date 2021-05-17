@@ -13,9 +13,22 @@
 use std::mem::size_of;
 
 use kvm_bindings::{
-    kvm_regs, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64, KVM_REG_ARM_CORE,
-    KVM_REG_SIZE_U128, KVM_REG_SIZE_U32, KVM_REG_SIZE_U64,
+    kvm_one_reg, kvm_regs, user_fpsimd_state, user_pt_regs, KVMIO, KVM_NR_SPSR, KVM_REG_ARM64,
+    KVM_REG_ARM_CORE, KVM_REG_SIZE_MASK, KVM_REG_SIZE_SHIFT, KVM_REG_SIZE_U128, KVM_REG_SIZE_U32,
+    KVM_REG_SIZE_U64,
 };
+use kvm_ioctls::VcpuFd;
+use vmm_sys_util::{
+    errno,
+    ioctl::{ioctl_with_mut_ref, ioctl_with_ref},
+    ioctl_iow_nr,
+};
+
+type Result<T> = std::result::Result<T, errno::Error>;
+
+const KVM_REG_MAX_SIZE: u64 = 256;
+ioctl_iow_nr!(KVM_GET_ONE_REG, KVMIO, 0xab, kvm_one_reg);
+ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
 
 /// AArch64 cpu core register.
 /// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/kvm.h#L50
@@ -88,4 +101,69 @@ impl From<Arm64CoreRegs> for u64 {
             | u64::from(KVM_REG_ARM_CORE)
             | (regid / size_of::<u32>()) as u64
     }
+}
+
+/// Returns the 128 bits value of the specified vCPU register.
+///
+/// The id of the register is encoded as specified in the kernel documentation
+/// for `KVM_GET_ONE_REG`.
+///
+/// Max register size is 256 Bytes.
+///
+/// # Arguments
+///
+/// * `vcpu_fd` - The file descriptor of kvm_based vcpu.
+/// * `reg_id` - ID of register.
+pub fn get_one_reg_vec(vcpu_fd: &VcpuFd, reg_id: u64) -> Result<Vec<u8>> {
+    let reg_size = 1_u64 << ((reg_id & KVM_REG_SIZE_MASK) >> KVM_REG_SIZE_SHIFT);
+    if reg_size > KVM_REG_MAX_SIZE {
+        return Err(errno::Error::new(libc::EINVAL));
+    }
+    let mut reg_value: Vec<u8> = vec![0; reg_size as usize];
+    reg_value.resize(reg_size as usize, 0);
+    let mut onereg = kvm_one_reg {
+        id: reg_id,
+        addr: reg_value.as_mut_ptr() as *mut u8 as u64,
+    };
+
+    // This is safe because we allocated the struct and we know the kernel will read
+    // exactly the size of the struct.
+    let ret = unsafe { ioctl_with_mut_ref(vcpu_fd, KVM_GET_ONE_REG(), &mut onereg) };
+    if ret < 0 {
+        return Err(errno::Error::last());
+    }
+
+    Ok(reg_value)
+}
+
+/// Sets the value of one register for this vCPU.
+///
+/// The id of the register is encoded as specified in the kernel documentation
+/// for `KVM_SET_ONE_REG`.
+///
+/// Max register size is 256 Bytes.
+///
+/// # Arguments
+///
+/// * `reg_id` - ID of the register for which we are setting the value.
+/// * `data` - value for the specified register.
+pub fn set_one_reg_vec(vcpu_fd: &VcpuFd, reg_id: u64, data: &[u8]) -> Result<()> {
+    let reg_size = 1u64 << ((reg_id & KVM_REG_SIZE_MASK) >> KVM_REG_SIZE_SHIFT);
+    if reg_size > KVM_REG_MAX_SIZE || reg_size as usize > data.len() {
+        return Err(errno::Error::new(libc::EINVAL));
+    };
+    let data_ref = data.as_ptr() as *const u8;
+    let onereg = kvm_one_reg {
+        id: reg_id,
+        addr: data_ref as u64,
+    };
+
+    // This is safe because we allocated the struct and we know the kernel will read
+    // exactly the size of the struct.
+    let ret = unsafe { ioctl_with_ref(vcpu_fd, KVM_SET_ONE_REG(), &onereg) };
+    if ret < 0 {
+        return Err(errno::Error::last());
+    }
+
+    Ok(())
 }

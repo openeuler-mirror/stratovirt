@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 mod caps;
+#[allow(dead_code)]
 mod core_regs;
 
 use std::sync::Arc;
