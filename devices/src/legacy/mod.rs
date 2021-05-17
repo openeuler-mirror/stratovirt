@@ -29,6 +29,7 @@ pub mod errors {
     error_chain! {
         links {
             SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);
+            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
         }
 
         foreign_links {
@@ -43,10 +44,20 @@ pub mod errors {
     }
 }
 
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+mod pl011;
 #[cfg(target_arch = "aarch64")]
 mod pl031;
+#[allow(dead_code)]
+#[cfg(target_arch = "x86_64")]
+mod rtc;
 mod serial;
 
+#[cfg(target_arch = "x86_64")]
+pub use self::rtc::{RTC, RTC_IRQ, RTC_PORT_INDEX};
+#[cfg(target_arch = "aarch64")]
+pub use pl011::PL011;
 #[cfg(target_arch = "aarch64")]
 pub use pl031::PL031;
 pub use serial::{Serial, SERIAL_ADDR};
