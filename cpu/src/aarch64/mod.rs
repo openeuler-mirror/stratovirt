@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod caps;
 mod core_regs;
 
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use kvm_bindings::{kvm_regs, kvm_vcpu_init};
 use kvm_ioctls::VcpuFd;
 
 use crate::errors::{Result, ResultExt};
+pub use caps::ArmCPUCaps;
 use core_regs::Arm64CoreRegs;
 
 // PSR (Processor State Register) bits.

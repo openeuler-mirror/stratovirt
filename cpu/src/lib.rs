@@ -95,6 +95,8 @@ pub mod errors {
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::ArmCPUCaps as CPUCaps;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "x86_64")]
 use x86_64::caps::X86CPUCaps as CPUCaps;
@@ -224,7 +226,6 @@ pub struct CPU {
     /// The VM combined by this VCPU.
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
     /// The capability of VCPU.
-    #[cfg(target_arch = "x86_64")]
     caps: CPUCaps,
 }
 
@@ -252,7 +253,6 @@ impl CPU {
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
-            #[cfg(target_arch = "x86_64")]
             caps: CPUCaps::init_capabilities(),
         }
     }
