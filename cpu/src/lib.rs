@@ -95,6 +95,8 @@ pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "x86_64")]
+use x86_64::caps::X86CPUCaps as CPUCaps;
+#[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUState as ArchCPU;
@@ -199,6 +201,7 @@ pub trait CPUInterface {
     fn kvm_vcpu_exec(&self) -> Result<bool>;
 }
 
+#[allow(dead_code)]
 /// `CPU` is a wrapper around creating and using a kvm-based VCPU.
 #[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
@@ -218,6 +221,9 @@ pub struct CPU {
     tid: Arc<Mutex<Option<u64>>>,
     /// The VM combined by this VCPU.
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
+    /// The capability of VCPU.
+    #[cfg(target_arch = "x86_64")]
+    caps: CPUCaps,
 }
 
 impl CPU {
@@ -244,6 +250,8 @@ impl CPU {
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
+            #[cfg(target_arch = "x86_64")]
+            caps: CPUCaps::init_capabilities(),
         }
     }
 
