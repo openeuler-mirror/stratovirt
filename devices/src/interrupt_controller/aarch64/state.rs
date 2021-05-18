@@ -17,6 +17,8 @@ use libc::c_uint;
 use super::gicv3::{GICv3, GICv3Access};
 use super::GIC_IRQ_INTERNAL;
 use crate::interrupt_controller::errors::Result;
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use util::byte_code::ByteCode;
 
 /// Register data length can be get by `get_device_attr/set_device_attr` in kvm once.
 const REGISTER_SIZE: u64 = size_of::<c_uint>() as u64;
@@ -539,3 +541,107 @@ impl GICv3 {
         Ok(())
     }
 }
+
+/// The status of GICv3 interrupt controller.
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct GICv3State {
+    redist_typer_l: u32,
+    redist_typer_h: u32,
+    gicd_ctlr: u32,
+    gicd_statusr: u32,
+    redist_len: usize,
+    // vcpu redistributor length is less than max vcpu number 255
+    vcpu_redist: [GICv3RedistState; 255],
+    dist_len: usize,
+    // irq dist is less than 8(255/32)
+    irq_dist: [GICv3DistState; 8],
+    iccr_len: usize,
+    // vcpu iccr length is less than max vcpu number 255
+    vcpu_iccr: [GICv3CPUState; 255],
+}
+
+impl StateTransfer for GICv3 {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        use migration::errors::ErrorKind;
+
+        let mut state = GICv3State::default();
+
+        self.access_gic_redistributor(GICR_TYPER, 0, &mut state.redist_typer_l, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("redist_typer_l", e.to_string()))?;
+        self.access_gic_redistributor(GICR_TYPER + 4, 0, &mut state.redist_typer_h, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("redist_typer_h", e.to_string()))?;
+        self.access_gic_distributor(GICD_CTLR, &mut state.gicd_ctlr, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("gicd_ctlr", e.to_string()))?;
+        self.access_gic_distributor(GICD_STATUSR, &mut state.gicd_statusr, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("gicd_statusr", e.to_string()))?;
+
+        for irq in (GIC_IRQ_INTERNAL..self.nr_irqs).step_by(32) {
+            state.irq_dist[state.dist_len] = self
+                .get_dist(irq as u64)
+                .map_err(|e| ErrorKind::GetGicRegsError("dist", e.to_string()))?;
+            state.dist_len += 1;
+        }
+
+        let plpis = (state.redist_typer_l & 1) != 0;
+        for cpu in 0..self.vcpu_count {
+            state.vcpu_redist[state.redist_len] = self
+                .get_redist(cpu as usize, plpis)
+                .map_err(|e| ErrorKind::GetGicRegsError("redist", e.to_string()))?;
+            state.redist_len += 1;
+            state.vcpu_iccr[state.iccr_len] = self
+                .get_cpu(cpu as usize)
+                .map_err(|e| ErrorKind::GetGicRegsError("cpu", e.to_string()))?;
+            state.iccr_len += 1;
+        }
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state(&self, state: &[u8]) -> migration::errors::Result<()> {
+        use migration::errors::ErrorKind;
+
+        let state = GICv3State::from_bytes(state).unwrap();
+
+        let mut regu32 = 0_u32;
+        self.access_gic_redistributor(GICR_TYPER, 0, &mut regu32, false)
+            .map_err(|e| ErrorKind::SetGicRegsError("gicr_typer", e.to_string()))?;
+        let plpis: bool = regu32 & 1 != 0;
+
+        regu32 = state.gicd_ctlr;
+        self.access_gic_distributor(GICD_CTLR, &mut regu32, true)
+            .map_err(|e| ErrorKind::SetGicRegsError("gicd_ctlr", e.to_string()))?;
+
+        for gicv3_redist in state.vcpu_redist[0..state.redist_len].iter() {
+            self.set_redist(*gicv3_redist, plpis)
+                .map_err(|e| ErrorKind::SetGicRegsError("redist", e.to_string()))?;
+        }
+
+        for gicv3_iccr in state.vcpu_iccr[0..state.iccr_len].iter() {
+            self.set_cpu(*gicv3_iccr)
+                .map_err(|e| ErrorKind::SetGicRegsError("cpu", e.to_string()))?;
+        }
+
+        regu32 = state.gicd_statusr;
+        self.access_gic_distributor(GICD_STATUSR, &mut regu32, true)
+            .map_err(|e| ErrorKind::SetGicRegsError("gicd_statusr", e.to_string()))?;
+
+        for gicv3_dist in state.irq_dist[0..state.dist_len].iter() {
+            self.set_dist(*gicv3_dist)
+                .map_err(|e| ErrorKind::SetGicRegsError("dist", e.to_string()))?
+        }
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&GICv3State::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for GICv3 {}

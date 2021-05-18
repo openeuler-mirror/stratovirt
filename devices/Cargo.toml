@@ -15,6 +15,7 @@ vmm-sys-util = ">=0.7.0"
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
+migration = { path = "../migration" }
 migration_derive = { path = "../migration_derive" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }

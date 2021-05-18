@@ -107,7 +107,7 @@ pub struct GICv3 {
     /// The fd for the GICv3 device.
     fd: DeviceFd,
     /// Number of vCPUs, determines the number of redistributor and CPU interface.
-    vcpu_count: u64,
+    pub(crate) vcpu_count: u64,
     /// GICv3 ITS device.
     its_dev: Option<GICv3Its>,
     /// Maximum irq number.

@@ -54,6 +54,12 @@ pub mod errors {
             FromBytesError(name: &'static str) {
                 display("Can't restore structure from raw slice: {}", name)
             }
+            GetGicRegsError(reg: &'static str, ret: String) {
+                display("Failed to get GIC {} register: {}", reg, ret)
+            }
+            SetGicRegsError(reg: &'static str, ret: String) {
+                display("Failed to set GIC {} register: {}", reg, ret)
+            }
         }
     }
 }
