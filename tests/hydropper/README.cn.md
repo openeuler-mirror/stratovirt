@@ -3,9 +3,10 @@ hydropper是一个基于pytest的轻量级测试框架，在其基础上封装�
 
 ## 如何开始
 
-
 ### 环境准备
-requirements.txt里面包含了python3依赖包。
+1. 请确保你的openEuler系统已经安装python3。
+
+2. requirements.txt里面包含了hydropper的依赖包。
 
 - pytest>5.0.0
 - aexpect>1.5.0
@@ -13,14 +14,25 @@ requirements.txt里面包含了python3依赖包。
 
 你可以通过下面的命令来安装这些包：
 ```sh
-$ pip install -r config/requirements.txt
+$ pip3 install -r requirements.txt
 ```
 
-网络依赖包：
+3. 请在你的openEuler系统上安装下列网络依赖包，以支持用例执行：
+
 ```sh
 $ yum install nmap
 $ yum install iperf3
 ```
+
+4. 网络配置（可参考以下模板）：
+
+```sh
+brctl addbr strato_br0
+ifconfig strato_br0 up
+ifconfig strato_br0 1.1.1.1
+```
+
+5. 构建测试镜像请参考 docs/IMAGE_BUILD.md。
 
 ### 参数配置
 请在config目录下的config.ini里配置参数和对应路径，通常的用例都需要配置好kernel和rootfs：
@@ -39,16 +51,17 @@ STRATOVIRT_ROOTFS = /path/to/rootfs
 
 请在config.ini中配置好IP_PREFIX和IP_3RD，这两项表示虚拟机IPv4地址的前24位，
 最后8位会由hydropper来自动配置。请注意虚拟机需要和主机在同一网段。
+
 ```ini
 [network.params]
 # such as 'IP_PREFIX.xxx.xxx'
-IP_PREFIX = xxx.xxx
+IP_PREFIX = 1.1
 # such as 'xxx.xxx.IP_3RD.xxx'
-IP_3RD = xxx
+IP_3RD = 1
 ```
 
 ### 运行测试用例
-你可以hydropper目录下通过以下的命令来执行用例：
+你可以在hydropper目录下通过以下的命令来执行用例：
 ```sh
 # 执行所有用例
 $ pytest
@@ -96,3 +109,8 @@ def test_microvm_xxx(microvm):
     test_vm.basic_config(vcpu_count=4, mem_size='4G')
     test_vm.launch()
 ```
+
+### 日志
+
+- pytest默认日志路径：/var/log/pytest.log
+- stratovirt默认日志路径：/var/log/stratovirt
