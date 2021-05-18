@@ -276,7 +276,7 @@ impl Request {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::PREADV;
                 if direct {
-                    (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
                         "Failed to process block request for reading asynchronously"
                     })?;
                 } else {
@@ -288,7 +288,7 @@ impl Request {
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::PWRITEV;
                 if direct {
-                    (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
                         "Failed to process block request for writing asynchronously"
                     })?;
                 } else {
