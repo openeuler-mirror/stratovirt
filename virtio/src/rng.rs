@@ -14,7 +14,6 @@ use std::fs::File;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -31,7 +30,8 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    ElemIovec, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_RNG,
+    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_RNG,
 };
 
 const QUEUE_NUM_RNG: usize = 1;
@@ -52,8 +52,7 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
 struct RngHandler {
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    interrupt_evt: EventFd,
-    interrupt_status: Arc<AtomicU32>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
     random_file: File,
@@ -120,11 +119,8 @@ impl RngHandler {
         }
 
         if need_interrupt {
-            self.interrupt_status
-                .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-            self.interrupt_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock))
+                .chain_err(|| ErrorKind::InterruptTrigger("rng", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -297,18 +293,14 @@ impl VirtioDevice for Rng {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         mut queues: Vec<Arc<Mutex<Queue>>>,
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let handler = RngHandler {
             queue: queues.remove(0),
             queue_evt: queue_evts.remove(0),
-            interrupt_evt: interrupt_evt
-                .try_clone()
-                .chain_err(|| "Failed to clone interrupt eventfd for virtio rng")?,
-            interrupt_status,
+            interrupt_cb,
             driver_features: self.driver_features,
             mem_space,
             random_file: self
@@ -334,14 +326,13 @@ mod tests {
     use super::super::*;
     use super::*;
 
+    use std::io::Write;
     use std::mem::size_of;
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::RngConfig;
-
-    use std::io::Write;
     use vmm_sys_util::tempfile::TempFile;
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
@@ -476,6 +467,19 @@ mod tests {
     #[test]
     fn test_rng_process_queue_01() {
         let mem_space = address_space_init();
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let interrupt_cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
+                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+            },
+        ) as VirtioInterrupt);
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
         queue_config.desc_table = GuestAddress(0);
@@ -488,8 +492,7 @@ mod tests {
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_status: Arc::new(AtomicU32::new(0)),
+            interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
             random_file: file.into_file(),
@@ -533,12 +536,25 @@ mod tests {
             .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
             .unwrap();
         assert_eq!(idx, 1);
-        assert_eq!(rng_handler.interrupt_evt.read().unwrap(), 1);
+        assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);
     }
 
     #[test]
     fn test_rng_process_queue_02() {
         let mem_space = address_space_init();
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let interrupt_cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
+                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+            },
+        ) as VirtioInterrupt);
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
         queue_config.desc_table = GuestAddress(0);
@@ -551,8 +567,7 @@ mod tests {
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_status: Arc::new(AtomicU32::new(0)),
+            interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
             random_file: file.into_file(),
@@ -624,6 +639,6 @@ mod tests {
             .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
             .unwrap();
         assert_eq!(idx, 1);
-        assert_eq!(rng_handler.interrupt_evt.read().unwrap(), 1);
+        assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);
     }
 }

@@ -66,6 +66,8 @@ pub struct QueueConfig {
     pub size: u16,
     /// Virtual queue ready bit.
     pub ready: bool,
+    /// Interrupt vector index of the queue for msix
+    pub vector: u16,
 }
 
 impl QueueConfig {
@@ -83,6 +85,7 @@ impl QueueConfig {
             max_size,
             size: 0,
             ready: false,
+            vector: 0,
         }
     }
 }
@@ -430,6 +433,9 @@ pub struct SplitVring {
     /// The queue size set by frontend.
     pub size: u16,
 
+    /// Interrupt vector index of the queue for msix
+    pub vector: u16,
+
     /// The next index which can be popped in the available vring.
     next_avail: Wrapping<u16>,
 
@@ -454,6 +460,7 @@ impl SplitVring {
             ready: queue_config.ready,
             max_size: queue_config.max_size,
             size: queue_config.size,
+            vector: queue_config.vector,
             next_avail: Wrapping(0),
             next_used: Wrapping(0),
             last_signal_used: Wrapping(0),
@@ -821,6 +828,7 @@ impl VringOps for SplitVring {
             ready: self.ready,
             max_size: self.max_size,
             size: self.size,
+            vector: self.vector,
         }
     }
 }

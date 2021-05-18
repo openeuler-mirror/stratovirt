@@ -22,8 +22,10 @@ use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{
-    virtio_has_feature, Queue, QueueConfig, VirtioDevice, NOTIFY_REG_OFFSET,
-    QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED,
+    virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
+    CONFIG_STATUS_FEATURES_OK, NOTIFY_REG_OFFSET, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
+    VIRTIO_F_RING_PACKED, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
 };
 use crate::errors::{ErrorKind, Result, ResultExt};
 
@@ -76,12 +78,6 @@ const CONFIG_GENERATION_REG: u64 = 0xfc;
 const VENDOR_ID: u32 = 0;
 const MMIO_MAGIC_VALUE: u32 = 0x7472_6976;
 const MMIO_VERSION: u32 = 2;
-
-const CONFIG_STATUS_ACKNOWLEDGE: u32 = 0x01;
-const CONFIG_STATUS_DRIVER: u32 = 0x02;
-const CONFIG_STATUS_DRIVER_OK: u32 = 0x04;
-const CONFIG_STATUS_FEATURES_OK: u32 = 0x08;
-const CONFIG_STATUS_FAILED: u32 = 0x80;
 
 /// HostNotifyInfo includes the info needed for notifying backend from guest.
 pub struct HostNotifyInfo {
@@ -396,13 +392,28 @@ impl VirtioMmioDevice {
             };
             queue_evts.push(evt_fd_clone);
         }
-        self.device.lock().unwrap().activate(
-            self.mem_space.clone(),
-            self.interrupt_evt.try_clone().unwrap(),
-            self.common_config.interrupt_status.clone(),
-            queues,
-            queue_evts,
-        )?;
+
+        let interrupt_status = self.common_config.interrupt_status.clone();
+        let interrupt_evt = self.interrupt_evt.try_clone().unwrap();
+        let cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
+                interrupt_evt
+                    .write(1)
+                    .chain_err(|| ErrorKind::EventFdWrite)?;
+
+                Ok(())
+            },
+        ) as VirtioInterrupt);
+
+        self.device
+            .lock()
+            .unwrap()
+            .activate(self.mem_space.clone(), cb, queues, queue_evts)?;
 
         Ok(())
     }
@@ -689,8 +700,7 @@ mod tests {
         fn activate(
             &mut self,
             _mem_space: Arc<AddressSpace>,
-            _interrupt_evt: EventFd,
-            _interrupt_status: Arc<AtomicU32>,
+            _interrupt_cb: Arc<VirtioInterrupt>,
             mut _queues: Vec<Arc<Mutex<Queue>>>,
             mut _queue_evts: Vec<EventFd>,
         ) -> Result<()> {

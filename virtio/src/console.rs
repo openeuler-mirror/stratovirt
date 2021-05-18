@@ -14,7 +14,6 @@ use std::cmp;
 use std::io::{Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -28,8 +27,8 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Queue, VirtioDevice, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_VRING,
-    VIRTIO_TYPE_CONSOLE,
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_CONSOLE_F_SIZE,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 
 /// Number of virtqueues.
@@ -61,8 +60,7 @@ struct ConsoleHandler {
     output_queue: Arc<Mutex<Queue>>,
     output_queue_evt: EventFd,
     mem_space: Arc<AddressSpace>,
-    interrupt_evt: EventFd,
-    interrupt_status: Arc<AtomicU32>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     listener: UnixListener,
     client: Option<UnixStream>,
@@ -127,11 +125,8 @@ impl ConsoleHandler {
             }
         }
 
-        self.interrupt_status
-            .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-        self.interrupt_evt
-            .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)?;
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock))
+            .chain_err(|| ErrorKind::InterruptTrigger("console", VirtioInterruptType::Vring))?;
         Ok(())
     }
 
@@ -379,8 +374,7 @@ impl VirtioDevice for Console {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         mut queues: Vec<Arc<Mutex<Queue>>>,
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
@@ -395,8 +389,7 @@ impl VirtioDevice for Console {
             output_queue: queues.remove(0),
             output_queue_evt: queue_evts.remove(0),
             mem_space,
-            interrupt_evt: interrupt_evt.try_clone()?,
-            interrupt_status,
+            interrupt_cb,
             driver_features: self.driver_features,
             listener: self.listener.as_ref().unwrap().try_clone()?,
             client: None,

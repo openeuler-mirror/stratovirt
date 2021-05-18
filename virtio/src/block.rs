@@ -17,11 +17,11 @@ use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress};
+use error_chain::ChainedError;
 use machine_manager::{
     config::{ConfigCheck, DriveConfig},
     event_loop::EventLoop,
@@ -37,11 +37,10 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Element, Queue, VirtioDevice, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH,
-    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
-    VIRTIO_TYPE_BLOCK,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_BLK_F_FLUSH,
+    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_ID_BYTES,
+    VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
 /// Number of virtqueues.
@@ -58,7 +57,6 @@ const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 const DUMMY_IMG_SIZE: u64 = 0;
 
 type SenderConfig = (Option<File>, u64, Option<String>, bool);
-type VirtioBlockInterrupt = Box<dyn Fn(u32) -> Result<()> + Send + Sync>;
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -110,7 +108,7 @@ pub struct AioCompleteCb {
     desc_index: u16,
     rw_len: u32,
     req_status_addr: GuestAddress,
-    interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
     driver_features: u64,
 }
 
@@ -121,7 +119,7 @@ impl AioCompleteCb {
         desc_index: u16,
         rw_len: u32,
         req_status_addr: GuestAddress,
-        interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
+        interrupt_cb: Option<Arc<VirtioInterrupt>>,
         driver_features: u64,
     ) -> Self {
         AioCompleteCb {
@@ -359,7 +357,7 @@ struct BlockIoHandler {
     /// Eventfd for config space update.
     update_evt: RawFd,
     /// Callback to trigger an interrupt.
-    interrupt_cb: Arc<VirtioBlockInterrupt>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     /// thread name of io handler
     iothread: Option<String>,
     /// Using the leak bucket to implement IO limits
@@ -498,8 +496,11 @@ impl BlockIoHandler {
         }
 
         if !req_queue.is_empty() || need_interrupt {
-            (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING)
-                .chain_err(|| "Failed to send an interrupt for block")?;
+            (self.interrupt_cb)(
+                &VirtioInterruptType::Vring,
+                Some(&self.queue.lock().unwrap()),
+            )
+            .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -540,13 +541,19 @@ impl BlockIoHandler {
                 return;
             }
 
-            let trigger_interrupt_status = queue_lock
+            if queue_lock
                 .vring
-                .should_notify(&complete_cb.mem_space, complete_cb.driver_features);
-            if trigger_interrupt_status
-                && (*complete_cb.interrupt_cb.as_ref().unwrap())(VIRTIO_MMIO_INT_VRING).is_err()
+                .should_notify(&complete_cb.mem_space, complete_cb.driver_features)
             {
-                error!("Failed to trigger interrupt(aio completion)");
+                if let Err(e) = (*complete_cb.interrupt_cb.as_ref().unwrap())(
+                    &VirtioInterruptType::Vring,
+                    Some(&queue_lock),
+                ) {
+                    error!(
+                        "Failed to trigger interrupt(aio completion) for block device, error is {}",
+                        e.display_chain()
+                    );
+                }
             }
         }) as AioCompleteFunc<AioCompleteCb>);
 
@@ -676,7 +683,7 @@ pub struct Block {
     /// Config space of the block device.
     config_space: [u8; CONFIG_SPACE_SIZE],
     /// Callback to trigger interrupt.
-    interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// The sending half of Rust's channel to send the image file.
     sender: Option<Sender<SenderConfig>>,
     /// Eventfd for config space update.
@@ -854,19 +861,11 @@ impl VirtioDevice for Block {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         mut queues: Vec<Arc<Mutex<Queue>>>,
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
-        let interrupt_evt = interrupt_evt.try_clone()?;
-        let interrupt_status = interrupt_status;
-        let cb = Arc::new(Box::new(move |status: u32| {
-            interrupt_status.fetch_or(status, Ordering::SeqCst);
-            interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
-        }) as VirtioBlockInterrupt);
-
-        self.interrupt_cb = Some(cb.clone());
+        self.interrupt_cb = Some(interrupt_cb.clone());
         let (sender, receiver) = channel();
         self.sender = Some(sender);
 
@@ -882,7 +881,7 @@ impl VirtioDevice for Block {
             driver_features: self.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
-            interrupt_cb: cb,
+            interrupt_cb,
             iothread: self.blk_cfg.iothread.clone(),
             leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
         };
@@ -922,7 +921,8 @@ impl VirtioDevice for Block {
         }
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(VIRTIO_MMIO_INT_CONFIG).chain_err(|| ErrorKind::EventFdWrite)?;
+            interrupt_cb(&VirtioInterruptType::Config, None)
+                .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Config))?;
         }
 
         Ok(())
@@ -935,6 +935,7 @@ mod tests {
     use super::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::IothreadConfig;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::{thread, time::Duration};
     use vmm_sys_util::tempfile::TempFile;
 
@@ -1102,6 +1103,20 @@ mod tests {
         let mem_space = address_space_init();
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
+        let interrupt_cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
+                interrupt_evt
+                    .write(1)
+                    .chain_err(|| ErrorKind::EventFdWrite)?;
+
+                Ok(())
+            },
+        ) as VirtioInterrupt);
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
         queue_config.desc_table = GuestAddress(0);
@@ -1112,15 +1127,13 @@ mod tests {
 
         let queues: Vec<Arc<Mutex<Queue>>> =
             vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
-
         let event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
 
         // activate block device
         block
             .activate(
                 mem_space.clone(),
-                interrupt_evt,
-                interrupt_status,
+                interrupt_cb,
                 queues,
                 vec![event.try_clone().unwrap()],
             )

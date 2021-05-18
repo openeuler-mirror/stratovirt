@@ -12,7 +12,6 @@
 
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{cmp, mem};
@@ -32,7 +31,7 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Queue, VirtioDevice, VirtioNetHdr, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_VRING,
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VIRTIO_F_VERSION_1,
     VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_TYPE_NET,
 };
@@ -112,8 +111,7 @@ struct NetIoHandler {
     tap: Option<Tap>,
     tap_fd: RawFd,
     mem_space: Arc<AddressSpace>,
-    interrupt_evt: EventFd,
-    interrupt_status: Arc<AtomicU32>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     receiver: Receiver<SenderConfig>,
     update_evt: RawFd,
@@ -190,11 +188,11 @@ impl NetIoHandler {
             self.handle_rx()?;
         } else if self.rx.need_irqs {
             self.rx.need_irqs = false;
-            self.interrupt_status
-                .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-            self.interrupt_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+            (self.interrupt_cb)(
+                &VirtioInterruptType::Vring,
+                Some(&self.rx.queue.lock().unwrap()),
+            )
+            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -227,11 +225,11 @@ impl NetIoHandler {
 
         if self.rx.need_irqs {
             self.rx.need_irqs = false;
-            self.interrupt_status
-                .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-            self.interrupt_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+            (self.interrupt_cb)(
+                &VirtioInterruptType::Vring,
+                Some(&self.rx.queue.lock().unwrap()),
+            )
+            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -272,11 +270,11 @@ impl NetIoHandler {
         }
 
         if need_irq {
-            self.interrupt_status
-                .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-            self.interrupt_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+            (self.interrupt_cb)(
+                &VirtioInterruptType::Vring,
+                Some(&self.rx.queue.lock().unwrap()),
+            )
+            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -648,8 +646,7 @@ impl VirtioDevice for Net {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         mut queues: Vec<Arc<Mutex<Queue>>>,
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
@@ -673,8 +670,7 @@ impl VirtioDevice for Net {
             tap: self.tap.take(),
             tap_fd,
             mem_space,
-            interrupt_evt: interrupt_evt.try_clone()?,
-            interrupt_status,
+            interrupt_cb,
             driver_features: self.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),

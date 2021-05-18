@@ -14,7 +14,6 @@ use std::cmp;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -29,8 +28,8 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::super::{
     net::{build_device_config_space, create_tap, VirtioNetConfig},
-    Queue, VirtioDevice, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1, VIRTIO_NET_F_CSUM,
-    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_TYPE_NET,
 };
 use super::super::{VhostNotify, VhostOps};
@@ -215,8 +214,7 @@ impl VirtioDevice for Net {
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         queues: Vec<Arc<Mutex<Queue>>>,
         queue_evts: Vec<EventFd>,
     ) -> Result<()> {
@@ -299,8 +297,7 @@ impl VirtioDevice for Net {
         }
 
         let handler = VhostIoHandler {
-            interrupt_evt: interrupt_evt.try_clone()?,
-            interrupt_status,
+            interrupt_cb,
             host_notifies,
         };
 
