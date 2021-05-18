@@ -107,6 +107,107 @@ pub fn write_u32(value: u32, page: u32) -> u64 {
     }
 }
 
+///  Extract from the 32 bit input @value the bit field specified by the
+///  @start and @length parameters, and return it. The bit field must
+///  lie entirely within the 32 bit word. It is valid to request that
+///  all 32 bits are returned (ie @length 32 and @start 0).
+///
+/// # Arguments
+///
+/// * `value` - The value to extract the bit field from
+/// * `start` - The lowest bit in the bit field (numbered from 0)
+/// * `length` - The length of the bit field
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::extract_u32;
+///
+/// let value = extract_u32(0xfffa, 0, 8).unwrap();
+/// assert!(value == 0xfa);
+/// ```
+pub fn extract_u32(value: u32, start: u32, length: u32) -> Option<u32> {
+    if length > 32 - start {
+        error!(
+            "extract_u32: ( start {} length {} ) is out of range",
+            start, length
+        );
+        return None;
+    }
+
+    Some((value >> start) & (!0_u32 >> (32 - length)))
+}
+
+///  Extract from the 64 bit input @value the bit field specified by the
+///  @start and @length parameters, and return it. The bit field must
+///  lie entirely within the 64 bit word. It is valid to request that
+///  all 64 bits are returned (ie @length 64 and @start 0).
+///
+/// # Arguments
+///
+/// * `value` - The value to extract the bit field from
+/// * `start` - The lowest bit in the bit field (numbered from 0)
+/// * `length` - The length of the bit field
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::extract_u64;
+///
+/// let value = extract_u64(0xfbfba0a0ffff5a5a, 16, 16).unwrap();
+/// assert!(value == 0xffff);
+/// ```
+pub fn extract_u64(value: u64, start: u32, length: u32) -> Option<u64> {
+    if length > 64 - start {
+        error!(
+            "extract_u64: ( start {} length {} ) is out of range",
+            start, length
+        );
+        return None;
+    }
+
+    Some((value >> start as u64) & (!(0_u64) >> (64 - length) as u64))
+}
+
+///  Deposit @fieldval into the 32 bit @value at the bit field specified
+///  by the @start and @length parameters, and return the modified
+///  @value. Bits of @value outside the bit field are not modified.
+///  Bits of @fieldval above the least significant @length bits are
+///  ignored. The bit field must lie entirely within the 32 bit word.
+///  It is valid to request that all 32 bits are modified (ie @length
+///  32 and @start 0).
+///
+/// # Arguments
+///
+/// * `value` - The value to extract the bit field from
+/// * `start` - The lowest bit in the bit field (numbered from 0)
+/// * `length` - The length of the bit field
+/// * `fieldval` - The value to insert into the bit field
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::deposit_u32;
+///
+/// let value = deposit_u32(0xffff, 0, 8, 0xbaba).unwrap();
+/// assert!(value == 0xffba);
+/// ```
+pub fn deposit_u32(value: u32, start: u32, length: u32, fieldval: u32) -> Option<u32> {
+    if length > 32 - start {
+        error!(
+            "deposit_u32: ( start {} length {} ) is out of range",
+            start, length
+        );
+        return None;
+    }
+
+    let mask: u32 = (!0_u32 >> (32 - length)) << start;
+    Some((value & !mask) | ((fieldval << start) & mask))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

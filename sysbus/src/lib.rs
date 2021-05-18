@@ -143,6 +143,8 @@ pub enum SysBusDevType {
     VirtioMmio,
     #[cfg(target_arch = "aarch64")]
     PL011,
+    FwCfg,
+    Flash,
     Others,
 }
 
