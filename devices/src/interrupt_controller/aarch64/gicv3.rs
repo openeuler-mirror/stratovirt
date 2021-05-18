@@ -111,7 +111,7 @@ pub struct GICv3 {
     /// GICv3 ITS device.
     its_dev: Option<GICv3Its>,
     /// Maximum irq number.
-    nr_irqs: u32,
+    pub(crate) nr_irqs: u32,
     /// GICv3 redistributor info, support multiple redistributor regions.
     redist_regions: Vec<GicRedistRegion>,
     /// Base address in the guest physical address space of the GICv3 distributor
@@ -323,6 +323,7 @@ impl GICv3Access for GICv3 {
             gicd_value as *mut u32 as u64,
             write,
         )
+        .chain_err(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
     }
 
     fn access_gic_redistributor(
