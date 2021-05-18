@@ -362,6 +362,7 @@ impl GICv3Access for GICv3 {
             gicc_value as *mut u64 as u64,
             write,
         )
+        .chain_err(|| format!("Failed to access gic cpu for offset 0x{:x}", offset))
     }
 
     fn access_gic_line_level(&self, offset: u64, gicll_value: &mut u32, write: bool) -> Result<()> {

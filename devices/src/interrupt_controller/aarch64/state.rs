@@ -53,6 +53,26 @@ const GICR_IPRIORITYR: u64 = 0x1_0400;
 const GICR_ICFGR1: u64 = 0x1_0C04;
 const NR_GICR_IPRIORITYR: usize = 8;
 
+/// GIC CPU interface registers
+const ICC_PMR_EL1: u64 = 0xc230;
+const ICC_BPR0_EL1: u64 = 0xc643;
+const ICC_AP0R_EL1_N0: u64 = 0xc644;
+const ICC_AP0R_EL1_N1: u64 = 0xc645;
+const ICC_AP0R_EL1_N2: u64 = 0xc646;
+const ICC_AP0R_EL1_N3: u64 = 0xc647;
+const ICC_AP1R_EL1_N0: u64 = 0xc648;
+const ICC_AP1R_EL1_N1: u64 = 0xc649;
+const ICC_AP1R_EL1_N2: u64 = 0xc64a;
+const ICC_AP1R_EL1_N3: u64 = 0xc64b;
+const ICC_BPR1_EL1: u64 = 0xc663;
+const ICC_CTLR_EL1: u64 = 0xc664;
+const ICC_SRE_EL1: u64 = 0xc665;
+const ICC_IGRPEN0_EL1: u64 = 0xc666;
+const ICC_IGRPEN1_EL1: u64 = 0xc667;
+/// GICv3 CPU interface control regiter pribits[8:10]
+const ICC_CTLR_EL1_PRIBITS_MASK: u64 = 0x700;
+const ICC_CTLR_EL1_PRIBITS_SHIFT: u64 = 0x8;
+
 /// The status of GICv3 redistributor.
 #[repr(C)]
 #[derive(Copy, Clone, ByteCode)]
@@ -87,6 +107,22 @@ struct GICv3DistState {
     gicd_irouter_l: [u32; 32],
     gicd_irouter_h: [u32; 32],
     line_level: u32,
+}
+
+/// The status of GICv3 CPU.
+#[repr(C)]
+#[derive(Copy, Clone, ByteCode)]
+struct GICv3CPUState {
+    vcpu: usize,
+    icc_pmr_el1: u64,
+    icc_bpr0_el1: u64,
+    icc_ap0r_el1: [u64; 4],
+    icc_ap1r_el1: [u64; 4],
+    icc_bpr1_el1: u64,
+    icc_sre_el1: u64,
+    icc_ctlr_el1: u64,
+    icc_igrpen0_el1: u64,
+    icc_igrpen1_el1: u64,
 }
 
 impl GICv3 {
@@ -326,6 +362,179 @@ impl GICv3 {
         self.access_gic_distributor(GICD_ISPENDR + offset, &mut dist.gicd_ispendr, true)?;
         self.access_gic_distributor(GICD_ISACTIVER + offset, &mut dist.gicd_isactiver, true)?;
         self.access_gic_line_level(dist.irq_base, &mut dist.line_level, true)?;
+
+        Ok(())
+    }
+
+    fn get_cpu(&self, cpu: usize) -> Result<GICv3CPUState> {
+        let mut gic_cpu = GICv3CPUState {
+            vcpu: cpu,
+            ..Default::default()
+        };
+
+        self.access_gic_cpu(ICC_PMR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_pmr_el1, false)?;
+        self.access_gic_cpu(ICC_BPR0_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr0_el1, false)?;
+        self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, false)?;
+        self.access_gic_cpu(ICC_SRE_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_sre_el1, false)?;
+        self.access_gic_cpu(ICC_CTLR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_ctlr_el1, false)?;
+        self.access_gic_cpu(
+            ICC_IGRPEN0_EL1,
+            gic_cpu.vcpu,
+            &mut gic_cpu.icc_igrpen0_el1,
+            false,
+        )?;
+        self.access_gic_cpu(
+            ICC_IGRPEN1_EL1,
+            gic_cpu.vcpu,
+            &mut gic_cpu.icc_igrpen1_el1,
+            false,
+        )?;
+
+        // ICC_CTLR_EL1.PRIbits is [10:8] in ICC_CTLR_EL1
+        // PRIBits indicate the number of priority bits implemented, independently for each target PE.
+        let icc_ctlr_el1_pri =
+            ((gic_cpu.icc_ctlr_el1 & ICC_CTLR_EL1_PRIBITS_MASK) >> ICC_CTLR_EL1_PRIBITS_SHIFT) + 1;
+        // Save APnR registers based on ICC_CTLR_EL1.PRIBITS
+        match icc_ctlr_el1_pri {
+            0b111 => {
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N3,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[3],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N2,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[2],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N3,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[3],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N2,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[2],
+                    false,
+                )?;
+            }
+            0b110 => {
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[1],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[1],
+                    false,
+                )?;
+            }
+            _ => {
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[0],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[0],
+                    false,
+                )?;
+            }
+        }
+
+        Ok(gic_cpu)
+    }
+
+    fn set_cpu(&self, mut gic_cpu: GICv3CPUState) -> Result<()> {
+        self.access_gic_cpu(ICC_PMR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_pmr_el1, true)?;
+        self.access_gic_cpu(ICC_BPR0_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr0_el1, true)?;
+        self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, true)?;
+        self.access_gic_cpu(ICC_SRE_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_sre_el1, true)?;
+        self.access_gic_cpu(ICC_CTLR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_ctlr_el1, true)?;
+        self.access_gic_cpu(
+            ICC_IGRPEN0_EL1,
+            gic_cpu.vcpu,
+            &mut gic_cpu.icc_igrpen0_el1,
+            true,
+        )?;
+        self.access_gic_cpu(
+            ICC_IGRPEN1_EL1,
+            gic_cpu.vcpu,
+            &mut gic_cpu.icc_igrpen1_el1,
+            true,
+        )?;
+
+        // ICC_CTLR_EL1.PRIbits is [10:8] in ICC_CTLR_EL1
+        // PRIBits indicate the number of priority bits implemented, independently for each target PE.
+        let icc_ctlr_el1_pri =
+            ((gic_cpu.icc_ctlr_el1 & ICC_CTLR_EL1_PRIBITS_MASK) >> ICC_CTLR_EL1_PRIBITS_SHIFT) + 1;
+        // Restore APnR registers based on ICC_CTLR_EL1.PRIBITS
+        match icc_ctlr_el1_pri {
+            0b111 => {
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N3,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[3],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N2,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[2],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N3,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[3],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N2,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[2],
+                    true,
+                )?;
+            }
+            0b110 => {
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[1],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[1],
+                    true,
+                )?;
+            }
+            _ => {
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[0],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[0],
+                    true,
+                )?;
+            }
+        }
 
         Ok(())
     }
