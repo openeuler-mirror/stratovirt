@@ -39,6 +39,7 @@ pub mod errors {
     error_chain! {
         foreign_links {
             Io(std::io::Error);
+            Ioctl(kvm_ioctls::Error);
         }
         errors {
             VersionNotFit(compat_version: u32, current_version: u32) {
@@ -49,6 +50,9 @@ pub mod errors {
             }
             InvalidStatusTransfer(status1: MigrationStatus, status2: MigrationStatus) {
                 display("Failed to transfer migration status from {} to {}.", status1, status2)
+            }
+            FromBytesError(name: &'static str) {
+                display("Can't restore structure from raw slice: {}", name)
             }
         }
     }

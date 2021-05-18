@@ -17,13 +17,17 @@ mod cpuid;
 use std::sync::Arc;
 
 use kvm_bindings::{
-    kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry, kvm_regs, kvm_segment, kvm_sregs, Msrs,
-    KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE, KVM_MP_STATE_UNINITIALIZED,
+    kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry, kvm_regs, kvm_segment,
+    kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, Msrs, KVM_MAX_CPUID_ENTRIES,
+    KVM_MP_STATE_RUNNABLE, KVM_MP_STATE_UNINITIALIZED,
 };
 use kvm_ioctls::{Kvm, VcpuFd};
 
 use crate::errors::{Result, ResultExt};
+use crate::CPU;
 use cpuid::host_cpuid;
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use util::byte_code::ByteCode;
 
 const ECX_EPB_SHIFT: u32 = 3;
 const X86_FEATURE_HYPERVISOR: u32 = 31;
@@ -70,7 +74,9 @@ pub struct X86CPUBootConfig {
 
 /// The state of vCPU's register.
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Copy, Clone)]
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct X86CPUState {
     nr_vcpus: u32,
     apic_id: u32,
@@ -81,6 +87,10 @@ pub struct X86CPUState {
     lapic: kvm_lapic_state,
     msr_len: usize,
     msr_list: [kvm_msr_entry; 256],
+    cpu_events: kvm_vcpu_events,
+    xsave: kvm_xsave,
+    xcrs: kvm_xcrs,
+    debugregs: kvm_debugregs,
 }
 
 impl X86CPUState {
@@ -101,13 +111,8 @@ impl X86CPUState {
         X86CPUState {
             apic_id: vcpu_id,
             nr_vcpus,
-            regs: kvm_regs::default(),
-            sregs: kvm_sregs::default(),
-            fpu: kvm_fpu::default(),
             mp_state,
-            lapic: kvm_lapic_state::default(),
-            msr_len: 0,
-            msr_list: [kvm_msr_entry::default(); 256],
+            ..Default::default()
         }
     }
 
@@ -153,11 +158,23 @@ impl X86CPUState {
             .set_regs(&self.regs)
             .chain_err(|| format!("Failed to set regs for CPU {}", self.apic_id))?;
         vcpu_fd
+            .set_xsave(&self.xsave)
+            .chain_err(|| format!("Failed to set xsave for CPU {}", self.apic_id))?;
+        vcpu_fd
             .set_fpu(&self.fpu)
             .chain_err(|| format!("Failed to set fpu for CPU {}", self.apic_id))?;
         vcpu_fd
+            .set_xcrs(&self.xcrs)
+            .chain_err(|| format!("Failed to set xcrs for CPU {}", self.apic_id))?;
+        vcpu_fd
+            .set_debug_regs(&self.debugregs)
+            .chain_err(|| format!("Failed to set debug register for CPU {}", self.apic_id))?;
+        vcpu_fd
             .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len]))
             .chain_err(|| format!("Failed to set msrs for CPU {}", self.apic_id))?;
+        vcpu_fd
+            .set_vcpu_events(&self.cpu_events)
+            .chain_err(|| format!("Failed to set vcpu events for CPU {}", self.apic_id))?;
 
         Ok(())
     }
@@ -398,6 +415,54 @@ impl X86CPUState {
         Ok(())
     }
 }
+
+impl StateTransfer for CPU {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let mut msr_entries = self.caps.create_msr_entries();
+        let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
+
+        cpu_state_locked.mp_state = self.fd.get_mp_state()?;
+        cpu_state_locked.regs = self.fd.get_regs()?;
+        cpu_state_locked.sregs = self.fd.get_sregs()?;
+        if self.caps.has_xsave {
+            cpu_state_locked.xsave = self.fd.get_xsave()?;
+        } else {
+            cpu_state_locked.fpu = self.fd.get_fpu()?;
+        }
+        if self.caps.has_xcrs {
+            cpu_state_locked.xcrs = self.fd.get_xcrs()?;
+        }
+        cpu_state_locked.debugregs = self.fd.get_debug_regs()?;
+        cpu_state_locked.lapic = self.fd.get_lapic()?;
+        cpu_state_locked.msr_len = self.fd.get_msrs(&mut msr_entries)?;
+        for (i, entry) in msr_entries.as_slice().iter().enumerate() {
+            cpu_state_locked.msr_list[i] = *entry;
+        }
+        cpu_state_locked.cpu_events = self.fd.get_vcpu_events()?;
+
+        Ok(cpu_state_locked.as_bytes().to_vec())
+    }
+
+    fn set_state(&self, state: &[u8]) -> migration::errors::Result<()> {
+        let cpu_state = *X86CPUState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("CPU"))?;
+
+        let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
+        *cpu_state_locked = cpu_state;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&X86CPUState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for CPU {}
 
 #[cfg(test)]
 mod test {
