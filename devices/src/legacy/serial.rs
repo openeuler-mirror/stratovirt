@@ -54,13 +54,11 @@ const UART_MSR_DCD: u8 = 0x80;
 
 const RECEIVER_BUFF_SIZE: usize = 1024;
 
-/// Contain registers and operation methods of serial.
-pub struct Serial {
-    /// Receiver buffer register.
-    rbr: VecDeque<u8>,
+/// Contain register status of serial device.
+pub struct SerialState {
     /// Interrupt enable register.
     ier: u8,
-    /// interrupt identification register.
+    /// Interrupt identification register.
     iir: u8,
     /// Line control register.
     lcr: u8,
@@ -72,10 +70,34 @@ pub struct Serial {
     msr: u8,
     /// Scratch register.
     scr: u8,
-    /// Used to set baud rate.
+    /// Used to set band rate.
     div: u16,
     /// Transmitter holding register.
     thr_pending: u32,
+}
+
+impl SerialState {
+    fn new() -> Self {
+        Self {
+            ier: 0,
+            iir: UART_IIR_NO_INT,
+            lcr: 0x03,
+            mcr: UART_MCR_OUT2,
+            lsr: UART_LSR_TEMT | UART_LSR_THRE,
+            msr: UART_MSR_DCD | UART_MSR_DSR | UART_MSR_CTS,
+            scr: 0,
+            div: 0x0c,
+            thr_pending: 0,
+        }
+    }
+}
+
+/// Contain registers status and operation methods of serial.
+pub struct Serial {
+    /// Receiver buffer register.
+    rbr: VecDeque<u8>,
+    /// State of Device Serial.
+    state: SerialState,
     /// Interrupt event file descriptor.
     interrupt_evt: Option<EventFd>,
     /// Operation methods.
@@ -88,15 +110,7 @@ impl Default for Serial {
     fn default() -> Self {
         Self {
             rbr: VecDeque::new(),
-            ier: 0,
-            iir: UART_IIR_NO_INT,
-            lcr: 0x03, // 8 bits
-            mcr: UART_MCR_OUT2,
-            lsr: UART_LSR_TEMT | UART_LSR_THRE,
-            msr: UART_MSR_DCD | UART_MSR_DSR | UART_MSR_CTS,
-            scr: 0,
-            div: 0x0c,
-            thr_pending: 0,
+            state: SerialState::new(),
             interrupt_evt: None,
             output: None,
             res: SysRes::default(),
@@ -136,15 +150,15 @@ impl Serial {
     fn update_iir(&mut self) {
         let mut iir = UART_IIR_NO_INT;
 
-        if self.ier & UART_IER_RDI != 0 && self.lsr & UART_LSR_DR != 0 {
+        if self.state.ier & UART_IER_RDI != 0 && self.state.lsr & UART_LSR_DR != 0 {
             iir &= !UART_IIR_NO_INT;
             iir |= UART_IIR_RDI;
-        } else if self.ier & UART_IER_THRI != 0 && self.thr_pending > 0 {
+        } else if self.state.ier & UART_IER_THRI != 0 && self.state.thr_pending > 0 {
             iir &= !UART_IIR_NO_INT;
             iir |= UART_IIR_THRI;
         }
 
-        self.iir = iir;
+        self.state.iir = iir;
         if iir != UART_IIR_NO_INT {
             if let Some(evt) = self.interrupt_evt() {
                 if let Err(e) = evt.write(1) {
@@ -162,7 +176,7 @@ impl Serial {
     ///
     /// * `data` - A u8-type array.
     pub fn receive(&mut self, data: &[u8]) {
-        if self.mcr & UART_MCR_LOOP == 0 {
+        if self.state.mcr & UART_MCR_LOOP == 0 {
             let len = self.rbr.len();
             if len >= RECEIVER_BUFF_SIZE {
                 error!(
@@ -172,7 +186,7 @@ impl Serial {
             }
 
             self.rbr.extend(data);
-            self.lsr |= UART_LSR_DR;
+            self.state.lsr |= UART_LSR_DR;
             self.update_iir();
         }
     }
@@ -191,50 +205,50 @@ impl Serial {
 
         match offset {
             0 => {
-                if self.lcr & UART_LCR_DLAB != 0 {
-                    ret = self.div as u8;
+                if self.state.lcr & UART_LCR_DLAB != 0 {
+                    ret = self.state.div as u8;
                 } else {
                     if !self.rbr.is_empty() {
                         ret = self.rbr.pop_front().unwrap_or_default();
                     }
                     if self.rbr.is_empty() {
-                        self.lsr &= !UART_LSR_DR;
+                        self.state.lsr &= !UART_LSR_DR;
                     }
                     self.update_iir();
                 }
             }
             1 => {
-                if self.lcr & UART_LCR_DLAB != 0 {
-                    ret = (self.div >> 8) as u8;
+                if self.state.lcr & UART_LCR_DLAB != 0 {
+                    ret = (self.state.div >> 8) as u8;
                 } else {
-                    ret = self.ier
+                    ret = self.state.ier
                 }
             }
             2 => {
-                ret = self.iir | 0xc0;
-                self.thr_pending = 0;
-                self.iir = UART_IIR_NO_INT
+                ret = self.state.iir | 0xc0;
+                self.state.thr_pending = 0;
+                self.state.iir = UART_IIR_NO_INT
             }
             3 => {
-                ret = self.lcr;
+                ret = self.state.lcr;
             }
             4 => {
-                ret = self.mcr;
+                ret = self.state.mcr;
             }
             5 => {
-                ret = self.lsr;
+                ret = self.state.lsr;
             }
             6 => {
-                if self.mcr & UART_MCR_LOOP != 0 {
-                    ret = (self.mcr & 0x0c) << 4;
-                    ret |= (self.mcr & 0x02) << 3;
-                    ret |= (self.mcr & 0x01) << 5;
+                if self.state.mcr & UART_MCR_LOOP != 0 {
+                    ret = (self.state.mcr & 0x0c) << 4;
+                    ret |= (self.state.mcr & 0x02) << 3;
+                    ret |= (self.state.mcr & 0x01) << 5;
                 } else {
-                    ret = self.msr;
+                    ret = self.state.msr;
                 }
             }
             7 => {
-                ret = self.scr;
+                ret = self.state.scr;
             }
             _ => {}
         }
@@ -260,12 +274,12 @@ impl Serial {
 
         match offset {
             0 => {
-                if self.lcr & UART_LCR_DLAB != 0 {
-                    self.div = (self.div & 0xff00) | u16::from(data);
+                if self.state.lcr & UART_LCR_DLAB != 0 {
+                    self.state.div = (self.state.div & 0xff00) | u16::from(data);
                 } else {
-                    self.thr_pending = 1;
+                    self.state.thr_pending = 1;
 
-                    if self.mcr & UART_MCR_LOOP != 0 {
+                    if self.state.mcr & UART_MCR_LOOP != 0 {
                         // loopback mode
                         let len = self.rbr.len();
                         if len >= RECEIVER_BUFF_SIZE {
@@ -276,7 +290,7 @@ impl Serial {
                         }
 
                         self.rbr.push_back(data);
-                        self.lsr |= UART_LSR_DR;
+                        self.state.lsr |= UART_LSR_DR;
                     } else {
                         let output = match &mut self.output {
                             Some(o) => o,
@@ -292,11 +306,11 @@ impl Serial {
                 }
             }
             1 => {
-                if self.lcr & UART_LCR_DLAB != 0 {
-                    self.div = (self.div & 0x00ff) | (u16::from(data) << 8);
+                if self.state.lcr & UART_LCR_DLAB != 0 {
+                    self.state.div = (self.state.div & 0x00ff) | (u16::from(data) << 8);
                 } else {
-                    let changed = (self.ier ^ data) & 0x0f;
-                    self.ier = data & 0x0f;
+                    let changed = (self.state.ier ^ data) & 0x0f;
+                    self.state.ier = data & 0x0f;
 
                     if changed != 0 {
                         self.update_iir();
@@ -304,13 +318,13 @@ impl Serial {
                 }
             }
             3 => {
-                self.lcr = data;
+                self.state.lcr = data;
             }
             4 => {
-                self.mcr = data;
+                self.state.mcr = data;
             }
             7 => {
-                self.scr = data;
+                self.state.scr = data;
             }
             _ => {}
         }
@@ -429,15 +443,15 @@ mod test {
     fn test_methods_of_serial() {
         // test new method
         let mut usart = Serial::default();
-        assert_eq!(usart.ier, 0);
-        assert_eq!(usart.iir, 1);
-        assert_eq!(usart.lcr, 3);
-        assert_eq!(usart.mcr, 8);
-        assert_eq!(usart.lsr, 0x60);
-        assert_eq!(usart.msr, 0xb0);
-        assert_eq!(usart.scr, 0);
-        assert_eq!(usart.div, 0x0c);
-        assert_eq!(usart.thr_pending, 0);
+        assert_eq!(usart.state.ier, 0);
+        assert_eq!(usart.state.iir, 1);
+        assert_eq!(usart.state.lcr, 3);
+        assert_eq!(usart.state.mcr, 8);
+        assert_eq!(usart.state.lsr, 0x60);
+        assert_eq!(usart.state.msr, 0xb0);
+        assert_eq!(usart.state.scr, 0);
+        assert_eq!(usart.state.div, 0x0c);
+        assert_eq!(usart.state.thr_pending, 0);
 
         // test receive method
         let data = [0x01, 0x02];
@@ -445,12 +459,12 @@ mod test {
         assert_eq!(usart.rbr.is_empty(), false);
         assert_eq!(usart.rbr.len(), 2);
         assert_eq!(usart.rbr.front(), Some(&0x01));
-        assert_eq!((usart.lsr & 0x01), 1);
+        assert_eq!((usart.state.lsr & 0x01), 1);
 
         // test write_and_read_internal method
         assert_eq!(usart.read_internal(0), 0x01);
         assert_eq!(usart.read_internal(0), 0x02);
-        assert_eq!((usart.lsr & 0x01), 0);
+        assert_eq!((usart.state.lsr & 0x01), 0);
 
         // for write_internal with first argument to work,
         // you need to set output at first
