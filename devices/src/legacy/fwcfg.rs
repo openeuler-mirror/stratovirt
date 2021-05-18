@@ -815,6 +815,13 @@ impl FwCfgMem {
 }
 
 #[cfg(target_arch = "aarch64")]
+impl FwCfgOps for FwCfgMem {
+    fn fw_cfg_common(&mut self) -> &mut FwCfgCommon {
+        &mut self.fwcfg
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let value = match offset {
@@ -936,6 +943,13 @@ impl FwCfgIO {
 }
 
 #[cfg(target_arch = "x86_64")]
+impl FwCfgOps for FwCfgIO {
+    fn fw_cfg_common(&mut self) -> &mut FwCfgCommon {
+        &mut self.fwcfg
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
 impl SysBusDevOps for FwCfgIO {
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         let value: u64 = match offset {
@@ -1043,5 +1057,65 @@ impl SysBusDevOps for FwCfgIO {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::FwCfg
+    }
+}
+
+pub trait FwCfgOps {
+    fn fw_cfg_common(&mut self) -> &mut FwCfgCommon;
+
+    /// Add an entry to FwCfg device, with Vector content.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - FwCfgEntryType
+    /// * `data` - Raw data bytes of the entry to be added
+    fn add_data_entry(&mut self, key: FwCfgEntryType, data: Vec<u8>) -> Result<()> {
+        self.fw_cfg_common().add_entry(key, None, None, data, false)
+    }
+
+    /// Add an entry to FwCfg device, with String content.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - FwCfgEntryType
+    /// * `value` - string data entry to be added
+    fn add_string_entry(&mut self, key: FwCfgEntryType, value: &str) -> Result<()> {
+        let mut bytes = value.as_bytes().to_vec();
+        bytes.push(0_u8);
+        self.fw_cfg_common()
+            .add_entry(key, None, None, bytes, false)
+    }
+
+    /// Add a file entry to FwCfg device, with select callback function and
+    /// write callback function.
+    ///
+    /// # Arguments
+    ///
+    /// * `filename`    - Name of the file
+    /// * `data`        - Raw data bytes of the file to be added
+    /// * `select_cb`   - Select callback
+    /// * `write_cb`    - Write callback
+    /// * `allow_write` - Does the file allow write
+    fn add_file_callback_entry(
+        &mut self,
+        filename: &str,
+        data: Vec<u8>,
+        select_cb: Option<FwCfgCallbackType>,
+        write_cb: Option<FwCfgWriteCallbackType>,
+        allow_write: bool,
+    ) -> Result<()> {
+        self.fw_cfg_common()
+            .add_file_callback(filename, data, select_cb, write_cb, allow_write)
+    }
+
+    /// Add a file entry to FwCfg device, without callbacks, write-allow.
+    ///
+    /// # Arguments
+    ///
+    /// * `filename` - Name of the file
+    /// * `data` - Raw data bytes of the file to be added
+    fn add_file_entry(&mut self, filename: &str, data: Vec<u8>) -> Result<()> {
+        self.fw_cfg_common()
+            .add_file_callback(filename, data, None, None, true)
     }
 }
