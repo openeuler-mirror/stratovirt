@@ -41,17 +41,35 @@ const RTC_ICR: u64 = 0x1c;
 /// Peripheral ID registers, default value.
 const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1];
 
-/// Pl031 structure.
 #[allow(clippy::upper_case_acronyms)]
-pub struct PL031 {
+/// Status of `PL031` device.
+pub struct PL031State {
     /// Match register value.
     mr: u32,
     /// Load register value.
     lr: u32,
-    /// Interrupt Mask Set or Clear register value.
+    /// Interrupt mask set or clear register value.
     imsr: u32,
-    /// Raw Interrupt Status register value.
+    /// Raw interrupt status register value.
     risr: u32,
+}
+
+impl Default for PL031State {
+    fn default() -> Self {
+        PL031State {
+            mr: 0,
+            lr: 0,
+            imsr: 0,
+            risr: 0,
+        }
+    }
+}
+
+#[allow(clippy::upper_case_acronyms)]
+/// PL031 structure.
+pub struct PL031 {
+    /// State of device PL031.
+    state: PL031State,
     /// The duplicate of Load register value.
     tick_offset: u32,
     /// Record the real time.
@@ -65,10 +83,7 @@ pub struct PL031 {
 impl Default for PL031 {
     fn default() -> Self {
         Self {
-            mr: 0,
-            lr: 0,
-            imsr: 0,
-            risr: 0,
+            state: PL031State::default(),
             // since 1970-01-01 00:00:00,it never cause overflow.
             tick_offset: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -129,27 +144,13 @@ impl SysBusDevOps for PL031 {
 
         let mut value: u32 = 0;
         match offset {
-            RTC_DR => {
-                value = self.get_current_value();
-            }
-            RTC_MR => {
-                value = self.mr;
-            }
-            RTC_LR => {
-                value = self.lr;
-            }
-            RTC_CR => {
-                value = 1;
-            }
-            RTC_IMSC => {
-                value = self.imsr;
-            }
-            RTC_RIS => {
-                value = self.risr;
-            }
-            RTC_MIS => {
-                value = self.risr & self.imsr;
-            }
+            RTC_DR => value = self.get_current_value(),
+            RTC_MR => value = self.state.mr,
+            RTC_LR => value = self.state.lr,
+            RTC_CR => value = 1,
+            RTC_IMSC => value = self.state.imsr,
+            RTC_RIS => value = self.state.risr,
+            RTC_MIS => value = self.state.risr & self.state.imsr,
             _ => {}
         }
 
@@ -168,20 +169,18 @@ impl SysBusDevOps for PL031 {
         let value = LittleEndian::read_u32(data);
 
         match offset {
-            RTC_MR => {
-                self.mr = value;
-            }
+            RTC_MR => self.state.mr = value,
             RTC_LR => {
-                self.lr = value;
+                self.state.lr = value;
                 self.tick_offset = value;
                 self.base_time = Instant::now();
             }
             RTC_IMSC => {
-                self.imsr = value & 1;
+                self.state.imsr = value & 1;
                 self.inject_interrupt();
             }
             RTC_ICR => {
-                self.risr = 0;
+                self.state.risr = 0;
                 self.inject_interrupt();
             }
             _ => {}
