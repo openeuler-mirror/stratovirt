@@ -508,4 +508,116 @@ impl FwCfgCommon {
         );
         Ok(())
     }
+
+    // Fetch FwCfgDma request from guest and handle it
+    fn handle_dma_request(&mut self) -> Result<()> {
+        let dma_addr = self.dma_addr;
+        let mem_space = self.mem_space.clone();
+        let cur_entry = self.cur_entry;
+
+        // Reset dma_addr address before next dma access
+        self.dma_addr = GuestAddress(0);
+
+        // Read DMA request from guest
+        let mut dma_deafult = FwCfgDmaAccess::default();
+        let dma_request = dma_deafult.as_mut_bytes();
+        let size = std::mem::size_of::<FwCfgDmaAccess>() as u64;
+        if let Err(_e) = read_dma_memory(&self.mem_space, dma_addr, dma_request, size) {
+            write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)?;
+            return Err(ErrorKind::ReadDMARequest(dma_addr.0, size).into());
+        }
+
+        // Build `FwCfgDmaAccess` object from dma_request here
+        let mut dma = FwCfgDmaAccess {
+            control: BigEndian::read_u32(&dma_request[0..4]),
+            length: BigEndian::read_u32(&dma_request[4..8]),
+            address: BigEndian::read_u64(&dma_request[8..]),
+        };
+        if dma.control & FW_CFG_DMA_CTL_SELECT > 0 {
+            self.select_entry((dma.control >> 16) as u16);
+        }
+
+        let mut offset = self.cur_offset;
+
+        let mut is_read = false;
+        let mut is_write = false;
+        if dma.control & FW_CFG_DMA_CTL_READ != 0 {
+            is_read = true;
+        }
+        if dma.control & FW_CFG_DMA_CTL_WRITE != 0 {
+            is_write = true;
+        }
+        if dma.control & FW_CFG_DMA_CTL_SKIP != 0 {
+            dma.length = 0;
+        }
+
+        // clear dma.control here
+        dma.control = 0;
+
+        let entry = self.get_entry_mut()?;
+
+        let mut len: u32;
+        while dma.length > 0 && (dma.control & FW_CFG_DMA_CTL_ERROR) == 0 {
+            if cur_entry == FW_CFG_INVALID
+                || entry.data.is_empty()
+                || offset >= entry.data.len() as u32
+            {
+                len = dma.length;
+
+                if is_read
+                    && set_dma_memory(&mem_space, GuestAddress(dma.address), 0, len as u64).is_err()
+                {
+                    dma.control |= FW_CFG_DMA_CTL_ERROR;
+                }
+
+                if is_write {
+                    dma.control |= FW_CFG_DMA_CTL_ERROR;
+                }
+            } else {
+                if dma.length <= entry.data.len() as u32 - offset {
+                    len = dma.length;
+                } else {
+                    len = entry.data.len() as u32 - offset;
+                }
+
+                // If it is a DMA read request
+                if is_read
+                    && write_dma_memory(
+                        &mem_space,
+                        GuestAddress(dma.address),
+                        &entry.data[offset as usize..],
+                        len as u64,
+                    )
+                    .is_err()
+                {
+                    dma.control |= FW_CFG_DMA_CTL_ERROR;
+                }
+
+                if is_write {
+                    let mut dma_read_error = false;
+                    let data = &mut entry.data[offset as usize..];
+                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data, len as u64)
+                        .is_err()
+                    {
+                        dma_read_error = true;
+                    }
+
+                    if dma_read_error || !entry.allow_write || len != dma.length {
+                        dma.control |= FW_CFG_DMA_CTL_ERROR;
+                    } else if true {
+                        if let Some(cb) = &entry.write_cb {
+                            cb.write_callback(offset as u64, len as usize);
+                        }
+                    }
+                }
+                offset += len;
+            }
+            dma.length -= len;
+            dma.address += len as u64
+        }
+
+        self.cur_offset = offset;
+        write_dma_result(&self.mem_space, dma_addr, dma.control)?;
+        Ok(())
+    }
 }
