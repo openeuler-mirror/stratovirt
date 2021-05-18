@@ -299,6 +299,7 @@ dependencies = [
  "error-chain",
  "kvm-ioctls",
  "lazy_static",
+ "migration_derive",
  "serde",
  "util",
 ]

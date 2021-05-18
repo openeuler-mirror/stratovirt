@@ -18,6 +18,9 @@
 extern crate error_chain;
 #[macro_use]
 extern crate lazy_static;
+#[cfg(test)]
+#[macro_use]
+extern crate migration_derive;
 
 mod device_state;
 #[allow(dead_code)]

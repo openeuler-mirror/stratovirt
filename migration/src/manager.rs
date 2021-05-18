@@ -284,8 +284,16 @@ mod tests {
             device_v2_mutex,
         );
 
-        assert_eq!(MigrationManager::desc_db_len(), 1);
-        assert!(MigrationManager::get_desc_alias("Device").is_some());
-        assert_eq!(MigrationManager::get_desc_alias("Device").unwrap(), 1);
+        assert_eq!(MigrationManager::desc_db_len(), 2);
+        assert!(MigrationManager::get_desc_alias("DeviceV1State").is_some());
+        assert_eq!(
+            MigrationManager::get_desc_alias("DeviceV1State").unwrap(),
+            0
+        );
+        assert!(MigrationManager::get_desc_alias("DeviceV2State").is_some());
+        assert_eq!(
+            MigrationManager::get_desc_alias("DeviceV2State").unwrap(),
+            0
+        );
     }
 }
