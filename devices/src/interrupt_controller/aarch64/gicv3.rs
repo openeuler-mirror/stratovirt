@@ -67,7 +67,8 @@ impl KvmDevice {
     }
 }
 
-trait GICv3Access {
+/// Access wrapper for GICv3.
+pub trait GICv3Access {
     /// Returns `gicr_attr` of `vCPU`.
     fn vcpu_gicr_attr(&self, cpu: usize) -> u64;
 
@@ -338,6 +339,12 @@ impl GICv3Access for GICv3 {
             gicr_value as *mut u32 as u64,
             write,
         )
+        .chain_err(|| {
+            format!(
+                "Failed to access gic redistributor for offset 0x{:x}",
+                offset
+            )
+        })
     }
 
     fn access_gic_cpu(

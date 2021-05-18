@@ -11,6 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 mod gicv3;
+#[allow(dead_code)]
+mod state;
 
 pub use gicv3::GICv3;
 

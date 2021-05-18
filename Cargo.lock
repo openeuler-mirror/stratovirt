@@ -157,6 +157,7 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
+ "migration_derive",
  "serde",
  "serial_test",
  "sysbus",
