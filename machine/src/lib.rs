@@ -98,21 +98,24 @@ mod micro_vm;
 mod standard_vm;
 
 pub use micro_vm::LightMachine;
+pub use standard_vm::StdMachine;
 
 use std::os::unix::io::AsRawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
 use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
+#[cfg(target_arch = "aarch64")]
+use devices::InterruptController;
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 use machine_manager::config::{
     BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig, NetworkInterfaceConfig, RngConfig,
     SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::MachineInterface;
+use machine_manager::machine::{KvmVmState, MachineInterface};
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use virtio::balloon_allow_list;
@@ -194,7 +197,10 @@ pub trait MachineOps {
         nr_cpus: u8,
         fds: (&Arc<VmFd>, &[Arc<VcpuFd>]),
         boot_cfg: &CPUBootConfig,
-    ) -> Result<Vec<Arc<CPU>>> {
+    ) -> Result<Vec<Arc<CPU>>>
+    where
+        Self: Sized,
+    {
         let mut cpus = Vec::<Arc<CPU>>::new();
 
         for vcpu_id in 0..nr_cpus {
@@ -359,5 +365,167 @@ pub trait MachineOps {
     /// * `vm` - The machine structure.
     /// * `vm_config` - VM configuration.
     /// * `fds` - File descriptors obtained by opening KVM module and creating a new VM.
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> Result<()>;
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, fds: (Kvm, &Arc<VmFd>)) -> Result<()>
+    where
+        Self: Sized;
+
+    /// Run `LightMachine` with `paused` flag.
+    ///
+    /// # Arguments
+    ///
+    /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
+    fn run(&self, paused: bool) -> Result<()>;
+
+    /// Start machine as `Running` or `Paused` state.
+    ///
+    /// # Arguments
+    ///
+    /// * `paused` - After started, paused all vcpu or not.
+    /// * `cpus` - Cpus vector restore cpu structure.
+    /// * `vm_state` - Vm kvm vm state.
+    fn vm_start(paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
+    where
+        Self: Sized,
+    {
+        let nr_vcpus = cpus.len();
+        let cpus_thread_barrier = Arc::new(Barrier::new((nr_vcpus + 1) as usize));
+        for cpu_index in 0..nr_vcpus {
+            let cpu_thread_barrier = cpus_thread_barrier.clone();
+            let cpu = cpus[cpu_index as usize].clone();
+            CPU::start(cpu, cpu_thread_barrier, paused)
+                .chain_err(|| format!("Failed to run vcpu{}", cpu_index))?;
+        }
+
+        if paused {
+            *vm_state = KvmVmState::Paused;
+        } else {
+            *vm_state = KvmVmState::Running;
+        }
+        cpus_thread_barrier.wait();
+
+        Ok(())
+    }
+
+    /// Pause VM as `Paused` state, sleepy all vcpu thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `cpus` - Cpus vector restore cpu structure.
+    /// * `vm_state` - Vm kvm vm state.
+    fn vm_pause(
+        cpus: &[Arc<CPU>],
+        #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
+        vm_state: &mut KvmVmState,
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
+        for (cpu_index, cpu) in cpus.iter().enumerate() {
+            cpu.pause()
+                .chain_err(|| format!("Failed to pause vcpu{}", cpu_index))?;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        irq_chip.as_ref().unwrap().stop();
+
+        *vm_state = KvmVmState::Paused;
+
+        Ok(())
+    }
+
+    /// Resume VM as `Running` state, awaken all vcpu thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `cpus` - Cpus vector restore cpu structure.
+    /// * `vm_state` - Vm kvm vm state.
+    fn vm_resume(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
+    where
+        Self: Sized,
+    {
+        for (cpu_index, cpu) in cpus.iter().enumerate() {
+            cpu.resume()
+                .chain_err(|| format!("Failed to resume vcpu{}", cpu_index))?;
+        }
+
+        *vm_state = KvmVmState::Running;
+
+        Ok(())
+    }
+
+    /// Destroy VM as `Shutdown` state, destroy vcpu thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `cpus` - Cpus vector restore cpu structure.
+    /// * `vm_state` - Vm kvm vm state.
+    fn vm_destroy(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
+    where
+        Self: Sized,
+    {
+        for (cpu_index, cpu) in cpus.iter().enumerate() {
+            cpu.destroy()
+                .chain_err(|| format!("Failed to destroy vcpu{}", cpu_index))?;
+        }
+
+        *vm_state = KvmVmState::Shutdown;
+
+        Ok(())
+    }
+
+    /// Transfer VM state from `old` to `new`.
+    ///
+    /// # Arguments
+    ///
+    /// * `cpus` - Cpus vector restore cpu structure.
+    /// * `vm_state` - Vm kvm vm state.
+    /// * `old_state` - Old vm state want to leave.
+    /// * `new_state` - New vm state want to transfer to.
+    fn vm_state_transfer(
+        cpus: &[Arc<CPU>],
+        #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
+        vm_state: &mut KvmVmState,
+        old_state: KvmVmState,
+        new_state: KvmVmState,
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
+        use KvmVmState::*;
+
+        if *vm_state != old_state {
+            bail!("Vm lifecycle error: state check failed.");
+        }
+
+        match (old_state, new_state) {
+            (Created, Running) => <Self as MachineOps>::vm_start(false, cpus, vm_state)
+                .chain_err(|| "Failed to start vm.")?,
+            (Running, Paused) => <Self as MachineOps>::vm_pause(
+                cpus,
+                #[cfg(target_arch = "aarch64")]
+                irq_chip,
+                vm_state,
+            )
+            .chain_err(|| "Failed to pause vm.")?,
+            (Paused, Running) => <Self as MachineOps>::vm_resume(cpus, vm_state)
+                .chain_err(|| "Failed to resume vm.")?,
+            (_, Shutdown) => {
+                <Self as MachineOps>::vm_destroy(cpus, vm_state)
+                    .chain_err(|| "Failed to destroy vm.")?;
+            }
+            (_, _) => {
+                bail!("Vm lifecycle error: this transform is illegal.");
+            }
+        }
+
+        if *vm_state != new_state {
+            bail!(
+                "Vm lifecycle error: state '{:?} -> {:?}' transform failed.",
+                old_state,
+                new_state
+            );
+        }
+
+        Ok(())
+    }
 }

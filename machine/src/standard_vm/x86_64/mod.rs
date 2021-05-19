@@ -15,12 +15,12 @@ mod syscall;
 
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Barrier, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
-use devices::{Serial, SERIAL_ADDR};
+use cpu::{CPUBootConfig, CpuTopology, CPU};
+use devices::legacy::{Serial, SERIAL_ADDR};
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
@@ -51,9 +51,9 @@ use syscall::syscall_whitelist;
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
 /// The type of memory layout entry on x86_64
-#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 #[repr(usize)]
+#[allow(dead_code)]
 pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
     PcieMmio,
@@ -99,7 +99,6 @@ pub struct StdMachine {
 }
 
 impl StdMachine {
-    #[allow(dead_code)]
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
         use crate::errors::ResultExt;
 
@@ -132,88 +131,6 @@ impl StdMachine {
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| MachineErrorKind::InitPwrBtnErr)?,
         })
-    }
-
-    /// Start VM, changed `StdMachine`'s `vmstate` to `Paused` or
-    /// `Running`.
-    ///
-    /// # Arguments
-    ///
-    /// * `paused` - After started, paused all vcpu or not.
-    pub fn vm_start(&self, paused: bool) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let cpus_thread_barrier = Arc::new(Barrier::new((self.cpu_topo.max_cpus + 1) as usize));
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            let cpu_thread_barrier = cpus_thread_barrier.clone();
-            let cpu = self.cpus[cpu_index as usize].clone();
-            CPU::start(cpu, cpu_thread_barrier, paused)
-                .chain_err(|| MachineErrorKind::StartVcpuErr(cpu_index))?;
-        }
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        if paused {
-            *vmstate = KvmVmState::Paused;
-        } else {
-            *vmstate = KvmVmState::Running;
-        }
-        cpus_thread_barrier.wait();
-
-        Ok(())
-    }
-
-    /// Pause VM, sleepy all vcpu thread. Changed `StdMachine`'s `vmstate`
-    /// from `Running` to `Paused`.
-    fn vm_pause(&self) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus[cpu_index as usize]
-                .pause()
-                .chain_err(|| MachineErrorKind::PauseVcpuErr(cpu_index))?;
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        self.irq_chip.as_ref().unwrap().stop();
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Paused;
-
-        Ok(())
-    }
-
-    /// Resume VM, awaken all vcpu thread. Changed `StdMachine`'s `vmstate`
-    /// from `Paused` to `Running`.
-    fn vm_resume(&self) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus[cpu_index as usize]
-                .resume()
-                .chain_err(|| MachineErrorKind::ResumeVcpuErr(cpu_index))?;
-        }
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Running;
-
-        Ok(())
-    }
-
-    /// Destroy VM, kill all vcpu thread. Changed `StdMachine`'s `vmstate`
-    /// to `KVM_VMSTATE_DESTROY`.
-    fn vm_destroy(&self) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let mut vmstate = self.vm_state.deref().0.lock().unwrap();
-        *vmstate = KvmVmState::Shutdown;
-
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            self.cpus[cpu_index as usize]
-                .destroy()
-                .chain_err(|| MachineErrorKind::DestroyVcpuErr(cpu_index))?;
-        }
-
-        Ok(())
     }
 }
 
@@ -473,6 +390,10 @@ impl MachineOps for StdMachine {
             .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
         Ok(())
     }
+
+    fn run(&self, paused: bool) -> MachineResult<()> {
+        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+    }
 }
 
 impl MachineLifecycle for StdMachine {
@@ -503,53 +424,19 @@ impl MachineLifecycle for StdMachine {
         if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
             return false;
         }
+
+        self.power_button.write(1).unwrap();
         true
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        use KvmVmState::*;
-
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
-        if *vmstate != old {
-            error!("Vm lifecycle error: state check failed.");
-            return false;
-        }
-        drop(vmstate);
-
-        match (old, new) {
-            (Created, Running) => {
-                if let Err(e) = self.vm_start(false) {
-                    error!("Vm lifecycle error:{}", e);
-                };
-            }
-            (Running, Paused) => {
-                if let Err(e) = self.vm_pause() {
-                    error!("Vm lifecycle error:{}", e);
-                };
-            }
-            (Paused, Running) => {
-                if let Err(e) = self.vm_resume() {
-                    error!("Vm lifecycle error:{}", e);
-                };
-            }
-            (_, Shutdown) => {
-                if let Err(e) = self.vm_destroy() {
-                    error!("Vm lifecycle error:{}", e);
-                };
-                self.power_button.write(1).unwrap();
-            }
-            (_, _) => {
-                error!("Vm lifecycle error: this transform is illegal.");
-                return false;
-            }
-        }
-
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
-        if *vmstate != new {
-            error!("Vm lifecycle error: state transform failed.");
-            return false;
-        }
-        true
+        <Self as MachineOps>::vm_state_transfer(
+            &self.cpus,
+            &mut self.vm_state.0.lock().unwrap(),
+            old,
+            new,
+        )
+        .is_ok()
     }
 }
 

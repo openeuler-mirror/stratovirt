@@ -10,12 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
+
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::StdMachine;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::StdMachine;
+
 pub mod errors {
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
             Cpu(cpu::errors::Error, cpu::errors::ErrorKind);
+            Legacy(devices::LegacyErrs::Error, devices::LegacyErrs::ErrorKind);
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
+        }
+        foreign_links{
+            Io(std::io::Error);
         }
         errors {
             InitPCIeHostErr {
@@ -25,14 +40,21 @@ pub mod errors {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-mod x86_64;
+use std::sync::{Arc, Mutex};
 
-use std::sync::Arc;
-
+use devices::legacy::FwCfgOps;
 use errors::Result;
 use kvm_ioctls::VmFd;
+use machine_manager::config::PFlashConfig;
 
 trait StdMachineOps {
     fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()>;
+
+    fn add_fwcfg_device(&mut self, _vm_fd: &VmFd) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
+        bail!("Not implemented");
+    }
+
+    fn add_pflash_device(&mut self, _config: &PFlashConfig, _vm_fd: &VmFd) -> Result<()> {
+        Ok(())
+    }
 }

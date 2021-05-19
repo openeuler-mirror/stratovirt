@@ -18,7 +18,7 @@ use crate::qmp::qmp_schema::{CacheOptions, FileOptions};
 use crate::qmp::Response;
 
 /// State for KVM VM.
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum KvmVmState {
     Created = 1,
     Running = 2,

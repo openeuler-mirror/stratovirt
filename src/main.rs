@@ -21,9 +21,10 @@ use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
 use kvm_ioctls::{Kvm, VmFd};
-use machine::{LightMachine, MachineOps};
+use machine::{LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
+    config::MachineType,
     config::VmConfig,
     event_loop::EventLoop,
     qmp::QmpChannel,
@@ -40,6 +41,7 @@ error_chain! {
     links {
        Manager(machine_manager::errors::Error, machine_manager::errors::ErrorKind);
        Util(util::errors::Error, util::errors::ErrorKind);
+       Machine(machine::errors::Error, machine::errors::ErrorKind);
     }
     foreign_links {
         Io(std::io::Error);
@@ -162,25 +164,35 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     register_kill_signal();
 
     let (kvm_fd, vm_fd) = get_vm_fds()?;
-    let vm = Arc::new(Mutex::new(
-        LightMachine::new(&vm_config).chain_err(|| "Failed to init micro VM.")?,
-    ));
-    MachineOps::realize(&vm, &vm_config, (kvm_fd, &vm_fd))
-        .chain_err(|| "Failed to realize micro VM.")?;
+    let (api_path, _) = check_api_channel(&cmd_args)?;
+    let listener = UnixListener::bind(&api_path)
+        .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
+    // add file to temporary pool, so it could be clean when vm exit.
+    TempCleaner::add_path(api_path.clone());
+    limit_permission(&api_path)
+        .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
 
-    EventLoop::set_manager(vm.clone(), None);
-    let api_socket = {
-        let (api_path, _) = check_api_channel(&cmd_args)?;
-        let listener = UnixListener::bind(&api_path)
-            .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
+    let (vm, api_socket): (Arc<Mutex<dyn MachineOps + Send + Sync>>, Socket) =
+        if let MachineType::MicroVm = vm_config.machine_config.mach_type {
+            let vm = Arc::new(Mutex::new(
+                LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
+            ));
+            MachineOps::realize(&vm, &vm_config, (kvm_fd, &vm_fd))
+                .chain_err(|| "Failed to realize micro VM.")?;
+            EventLoop::set_manager(vm.clone(), None);
 
-        // add file to temporary pool, so it could be clean when vm exit.
-        TempCleaner::add_path(api_path.clone());
+            (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+        } else {
+            let vm = Arc::new(Mutex::new(
+                StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
+            ));
+            MachineOps::realize(&vm, &vm_config, (kvm_fd, &vm_fd))
+                .chain_err(|| "Failed to realize standard VM.")?;
+            EventLoop::set_manager(vm.clone(), None);
 
-        limit_permission(&api_path)
-            .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
-        Socket::from_unix_listener(listener, Some(vm.clone()))
-    };
+            (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+        };
+
     EventLoop::update_event(
         EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(api_socket))),
         None,
@@ -189,8 +201,9 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
 
     vm.lock()
         .unwrap()
-        .vm_start(cmd_args.is_present("freeze_cpu"))
+        .run(cmd_args.is_present("freeze_cpu"))
         .chain_err(|| "Failed to start VM.")?;
+
     if !cmd_args.is_present("disable-seccomp") {
         vm.lock()
             .unwrap()
