@@ -68,6 +68,12 @@ pub struct QueueConfig {
     pub ready: bool,
     /// Interrupt vector index of the queue for msix
     pub vector: u16,
+    /// The next index which can be poped in the available vring.
+    next_avail: u16,
+    /// The next index which can be pushed in the used vring.
+    next_used: u16,
+    /// The index of last descriptor used which has triggered interrupt.
+    last_signal_used: u16,
 }
 
 impl QueueConfig {
@@ -86,6 +92,9 @@ impl QueueConfig {
             size: max_size,
             ready: false,
             vector: 0,
+            next_avail: 0,
+            next_used: 0,
+            last_signal_used: 0,
         }
     }
 }
@@ -461,9 +470,9 @@ impl SplitVring {
             max_size: queue_config.max_size,
             size: queue_config.size,
             vector: queue_config.vector,
-            next_avail: Wrapping(0),
-            next_used: Wrapping(0),
-            last_signal_used: Wrapping(0),
+            next_avail: Wrapping(queue_config.next_avail),
+            next_used: Wrapping(queue_config.next_used),
+            last_signal_used: Wrapping(queue_config.last_signal_used),
         }
     }
 
@@ -829,6 +838,9 @@ impl VringOps for SplitVring {
             max_size: self.max_size,
             size: self.size,
             vector: self.vector,
+            next_avail: self.next_avail.0,
+            next_used: self.next_used.0,
+            last_signal_used: self.last_signal_used.0,
         }
     }
 }
