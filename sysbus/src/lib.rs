@@ -12,7 +12,6 @@
 
 #[macro_use]
 extern crate error_chain;
-extern crate kvm_ioctls;
 
 pub mod errors {
     error_chain! {
@@ -27,6 +26,7 @@ pub mod errors {
 
 use std::sync::{Arc, Mutex};
 
+use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use kvm_ioctls::VmFd;
 use vmm_sys_util::eventfd::EventFd;
@@ -121,6 +121,7 @@ impl SysBus {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct SysRes {
     pub region_base: u64,
     pub region_size: u64,
@@ -137,6 +138,7 @@ impl Default for SysRes {
     }
 }
 
+#[derive(Eq, PartialEq)]
 pub enum SysBusDevType {
     Serial,
     Rtc,
@@ -149,7 +151,7 @@ pub enum SysBusDevType {
 }
 
 /// Operations for sysbus devices.
-pub trait SysBusDevOps: Send {
+pub trait SysBusDevOps: Send + AmlBuilder {
     /// Read function of device.
     ///
     /// # Arguments
@@ -211,5 +213,16 @@ pub trait SysBusDevOps: Send {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Others
+    }
+}
+
+impl AmlBuilder for SysBus {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut scope = AmlScope::new("_SB");
+        self.devices.iter().for_each(|dev| {
+            scope.append(&dev.lock().unwrap().aml_bytes());
+        });
+
+        scope.aml_bytes()
     }
 }

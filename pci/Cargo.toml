@@ -18,3 +18,4 @@ address_space = { path = "../address_space" }
 machine_manager = { path = "../machine_manager" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
+acpi = { path = "../acpi" }

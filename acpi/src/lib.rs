@@ -25,6 +25,13 @@ pub use acpi_table::*;
 pub use aml_compiler::*;
 pub use table_loader::TableLoader;
 
+// The name of corresponding file-entry in FwCfg device that represents acpi table data.
+pub const ACPI_TABLE_FILE: &str = "etc/acpi/tables";
+// The name of corresponding file-entry in FwCfg device that represents acpi table loader.
+pub const ACPI_TABLE_LOADER_FILE: &str = "etc/table-loader";
+// The name of corresponding file-entry in FwCfg device that represents acpi rsdp struct.
+pub const ACPI_RSDP_FILE: &str = "etc/acpi/rsdp";
+
 pub mod errors {
     error_chain! {
         errors {

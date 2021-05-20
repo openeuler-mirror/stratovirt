@@ -13,14 +13,20 @@
 mod mch;
 mod syscall;
 
+use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Condvar, Mutex};
 
+use acpi::{
+    AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
+    AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
+    TABLE_CHECKSUM_OFFSET,
+};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
-use devices::legacy::{Serial, SERIAL_ADDR};
+use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, Serial, SERIAL_ADDR};
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
@@ -42,11 +48,12 @@ use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
 use super::errors::{ErrorKind, Result};
-use super::StdMachineOps;
+use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
 use mch::Mch;
 use syscall::syscall_whitelist;
+use util::byte_code::ByteCode;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
@@ -125,7 +132,12 @@ impl StdMachine {
             sys_io: sys_io.clone(),
             sys_mem: sys_mem.clone(),
             sysbus,
-            pci_host: Arc::new(Mutex::new(PciHost::new(&sys_io, &sys_mem))),
+            pci_host: Arc::new(Mutex::new(PciHost::new(
+                &sys_io,
+                &sys_mem,
+                MEM_LAYOUT[LayoutEntryType::PcieEcam as usize],
+                MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
+            ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             power_button: EventFd::new(libc::EFD_NONBLOCK)
@@ -173,6 +185,24 @@ impl StdMachineOps for StdMachine {
         );
         PciDevOps::realize(mch, &vm_fd)?;
         Ok(())
+    }
+
+    fn add_fwcfg_device(
+        &mut self,
+        vm_fd: &VmFd,
+    ) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
+        use super::errors::ResultExt;
+
+        let mut fwcfg = FwCfgIO::new(self.sys_mem.clone());
+        let ncpus = self.cpus.len();
+        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
+
+        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus, vm_fd)
+            .chain_err(|| "Failed to realize fwcfg device")?;
+
+        Ok(fwcfg_dev)
     }
 }
 
@@ -368,6 +398,7 @@ impl MachineOps for StdMachine {
             .init_pci_host(&vm_fd)
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
         locked_vm.add_devices(vm_config, &vm_fd)?;
+        let _fw_cfg = locked_vm.add_fwcfg_device(&vm_fd)?;
 
         let boot_config = locked_vm.load_boot_source()?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
@@ -393,6 +424,100 @@ impl MachineOps for StdMachine {
 
     fn run(&self, paused: bool) -> MachineResult<()> {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+    }
+}
+
+impl AcpiBuilder for StdMachine {
+    fn build_dsdt_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
+
+        // 1. CPU info.
+        let cpus_count = self.cpus.len() as u64;
+        let mut sb_scope = AmlScope::new("\\_SB");
+        for cpu_id in 0..cpus_count {
+            let mut dev = AmlDevice::new(format!("C{:03}", cpu_id).as_str());
+            dev.append_child(AmlNameDecl::new("_HID", AmlString("ACPI0007".to_string())));
+            dev.append_child(AmlNameDecl::new("_UID", AmlInteger(cpu_id)));
+            sb_scope.append_child(dev);
+        }
+
+        // 2. Create pci host bridge node.
+        sb_scope.append_child(self.pci_host.lock().unwrap().clone());
+        dsdt.append_child(sb_scope.aml_bytes().as_slice());
+
+        // 3. Info of devices attached to system bus.
+        dsdt.append_child(self.sysbus.aml_bytes().as_slice());
+
+        let mut locked_acpi_data = acpi_data.lock().unwrap();
+        let dsdt_begin = locked_acpi_data.len() as u32;
+        locked_acpi_data.extend(dsdt.aml_bytes());
+        let dsdt_end = locked_acpi_data.len() as u32;
+        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
+        // TableLoader, because TableLoader also needs to acquire this lock.
+        drop(locked_acpi_data);
+
+        loader.add_cksum_entry(
+            ACPI_TABLE_FILE,
+            dsdt_begin + TABLE_CHECKSUM_OFFSET,
+            dsdt_begin,
+            dsdt_end - dsdt_begin,
+        )?;
+
+        Ok(dsdt_begin as u64)
+    }
+
+    fn build_madt_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
+
+        madt.append_child(LAPIC_BASE_ADDR.as_bytes());
+        // Flags: PC-AT-compatible dual-8259 setup
+        madt.append_child(1_u32.as_bytes());
+
+        let ioapic = AcpiIoApic {
+            type_id: 1_u8,
+            length: size_of::<AcpiIoApic>() as u8,
+            io_apic_id: 0,
+            reserved: 0,
+            io_apic_addr: IOAPIC_BASE_ADDR,
+            gsi_base: 0,
+        };
+        madt.append_child(ioapic.aml_bytes().as_ref());
+
+        self.cpus.iter().for_each(|cpu| {
+            let lapic = AcpiLocalApic {
+                type_id: 0,
+                length: size_of::<AcpiLocalApic>() as u8,
+                processor_uid: cpu.id(),
+                apic_id: cpu.id(),
+                flags: 1, // Flags: enabled.
+            };
+            madt.append_child(&lapic.aml_bytes());
+        });
+
+        let mut locked_acpi_data = acpi_data.lock().unwrap();
+        let madt_begin = locked_acpi_data.len() as u32;
+        locked_acpi_data.extend(madt.aml_bytes());
+        let madt_end = locked_acpi_data.len() as u32;
+        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
+        // TableLoader, because TableLoader also needs to acquire this lock.
+        drop(locked_acpi_data);
+
+        loader.add_cksum_entry(
+            ACPI_TABLE_FILE,
+            madt_begin + TABLE_CHECKSUM_OFFSET,
+            madt_begin,
+            madt_end - madt_begin,
+        )?;
+
+        Ok(madt_begin as u64)
     }
 }
 

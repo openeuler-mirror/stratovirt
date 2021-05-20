@@ -42,7 +42,7 @@ use virtio::{qmp_balloon, qmp_query_balloon};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
 
-use super::StdMachineOps;
+use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind, Result};
 use crate::MachineOps;
 use syscall::syscall_whitelist;
@@ -133,7 +133,11 @@ impl StdMachine {
             irq_chip: None,
             sys_mem: sys_mem.clone(),
             sysbus,
-            pci_host: Arc::new(Mutex::new(PciHost::new(&sys_mem))),
+            pci_host: Arc::new(Mutex::new(PciHost::new(
+                &sys_mem,
+                MEM_LAYOUT[LayoutEntryType::PcieEcam as usize],
+                MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
+            ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
             power_button: EventFd::new(libc::EFD_NONBLOCK)
@@ -433,6 +437,8 @@ impl MachineOps for StdMachine {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
+
+impl AcpiBuilder for StdMachine {}
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {

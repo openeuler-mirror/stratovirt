@@ -138,6 +138,7 @@ dependencies = [
 name = "devices"
 version = "0.3.0"
 dependencies = [
+ "acpi",
  "address_space",
  "boot_loader",
  "byteorder",
@@ -267,6 +268,7 @@ checksum = "1a5b3dd1c072ee7963717671d1ca129f1048fda25edea6b752bfc71ac8854170"
 name = "pci"
 version = "0.3.0"
 dependencies = [
+ "acpi",
  "address_space",
  "byteorder",
  "error-chain",
@@ -356,6 +358,7 @@ dependencies = [
 name = "sysbus"
 version = "0.3.0"
 dependencies = [
+ "acpi",
  "address_space",
  "error-chain",
  "kvm-ioctls",
@@ -390,6 +393,7 @@ checksum = "5fecdca9a5291cc2b8dcf7dc02453fee791a280f3743cb0905f8822ae463b3fe"
 name = "virtio"
 version = "0.3.0"
 dependencies = [
+ "acpi",
  "address_space",
  "byteorder",
  "error-chain",

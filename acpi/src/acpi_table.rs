@@ -14,6 +14,9 @@ use util::byte_code::ByteCode;
 
 use super::aml_compiler::AmlBuilder;
 
+/// Offset of checksum field in ACPI table.
+pub const TABLE_CHECKSUM_OFFSET: u32 = 9;
+
 /// The common ACPI table header.
 #[repr(C, packed)]
 #[derive(Default, Copy, Clone)]

@@ -12,6 +12,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
 #[cfg(target_arch = "x86_64")]
 use byteorder::LittleEndian;
@@ -1117,5 +1118,19 @@ pub trait FwCfgOps {
     fn add_file_entry(&mut self, filename: &str, data: Vec<u8>) -> Result<()> {
         self.fw_cfg_common()
             .add_file_callback(filename, data, None, None, true)
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl AmlBuilder for FwCfgMem {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl AmlBuilder for FwCfgIO {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::new()
     }
 }

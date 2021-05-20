@@ -14,6 +14,11 @@ use std::io;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
+use acpi::{
+    AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlExtendedInterrupt, AmlIntShare,
+    AmlInteger, AmlMemory32Fixed, AmlNameDecl, AmlReadAndWrite, AmlResTemplate, AmlResourceUsage,
+    AmlScopeBuilder, AmlString,
+};
 use address_space::{errors::ResultExt, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
@@ -347,6 +352,33 @@ impl SysBusDevOps for PL011 {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::PL011
+    }
+}
+
+impl AmlBuilder for PL011 {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut acpi_dev = AmlDevice::new("COM0");
+        acpi_dev.append_child(AmlNameDecl::new("_HID", AmlString("ARMH0001".to_string())));
+        acpi_dev.append_child(AmlNameDecl::new("_UID", AmlInteger(0)));
+
+        let mut res = AmlResTemplate::new();
+        res.append_child(AmlMemory32Fixed::new(
+            AmlReadAndWrite::ReadWrite,
+            self.res.region_base as u32,
+            self.res.region_size as u32,
+        ));
+        // SPI start at interrupt number 32 on aarch64 platform.
+        let irq_base = 32_u32;
+        res.append_child(AmlExtendedInterrupt::new(
+            AmlResourceUsage::Consumer,
+            AmlEdgeLevel::Level,
+            AmlActiveLevel::High,
+            AmlIntShare::Exclusive,
+            vec![self.res.irq as u32 + irq_base],
+        ));
+        acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
+
+        acpi_dev.aml_bytes()
     }
 }
 

@@ -13,6 +13,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_ioctls::VmFd;
@@ -200,5 +201,11 @@ impl SysBusDevOps for PL031 {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Rtc
+    }
+}
+
+impl AmlBuilder for PL031 {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::new()
     }
 }
