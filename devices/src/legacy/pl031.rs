@@ -16,7 +16,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::{ErrorKind, Result, ResultExt};
@@ -43,6 +45,9 @@ const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0x
 
 #[allow(clippy::upper_case_acronyms)]
 /// Status of `PL031` device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct PL031State {
     /// Match register value.
     mr: u32,
@@ -52,17 +57,6 @@ pub struct PL031State {
     imsr: u32,
     /// Raw interrupt status register value.
     risr: u32,
-}
-
-impl Default for PL031State {
-    fn default() -> Self {
-        PL031State {
-            mr: 0,
-            lr: 0,
-            imsr: 0,
-            risr: 0,
-        }
-    }
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -109,6 +103,9 @@ impl PL031 {
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
+
+        MigrationManager::register_device_instance_mutex(PL031State::descriptor(), dev);
+
         Ok(())
     }
 
@@ -207,3 +204,28 @@ impl AmlBuilder for PL031 {
         Vec::new()
     }
 }
+
+impl StateTransfer for PL031 {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let state = self.state;
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *PL031State::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("PL031"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&PL031State::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for PL031 {}
