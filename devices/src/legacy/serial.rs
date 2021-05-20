@@ -23,7 +23,9 @@ use address_space::GuestAddress;
 use hypervisor::KVM_FDS;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use util::byte_code::ByteCode;
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::set_termi_raw_mode;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
@@ -55,7 +57,14 @@ const UART_MSR_DCD: u8 = 0x80;
 const RECEIVER_BUFF_SIZE: usize = 1024;
 
 /// Contain register status of serial device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct SerialState {
+    /// Receiver buffer state.
+    rbr_value: [u8; 1024],
+    /// Length of rbr.
+    rbr_len: usize,
     /// Interrupt enable register.
     ier: u8,
     /// Interrupt identification register.
@@ -79,6 +88,8 @@ pub struct SerialState {
 impl SerialState {
     fn new() -> Self {
         Self {
+            rbr_value: [0u8; 1024],
+            rbr_len: 0,
             ier: 0,
             iir: UART_IIR_NO_INT,
             lcr: 0x03,
@@ -137,6 +148,7 @@ impl Serial {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
 
+        MigrationManager::register_device_instance_mutex(SerialState::descriptor(), dev.clone());
         #[cfg(target_arch = "aarch64")]
         bs.lock().unwrap().kernel_cmdline.push(Param {
             param_type: "earlycon".to_string(),
@@ -435,6 +447,40 @@ impl AmlBuilder for Serial {
     }
 }
 
+impl StateTransfer for Serial {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let mut state = self.state;
+        let (rbr_state, _) = self.rbr.as_slices();
+        state.rbr_len = rbr_state.len();
+        state.rbr_value[..state.rbr_len].copy_from_slice(rbr_state);
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        let serial_state = *SerialState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("SERIAL"))?;
+        let mut rbr = VecDeque::<u8>::default();
+        for i in 0..serial_state.rbr_len {
+            rbr.push_back(serial_state.rbr_value[i]);
+        }
+        self.rbr = rbr;
+        self.state = serial_state;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&SerialState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Serial {}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -484,5 +530,52 @@ mod test {
         assert_eq!(usart.read_internal(2), 0xc1);
         assert_eq!(usart.read_internal(5), 0x60);
         assert_eq!(usart.read_internal(6), 0xf0);
+    }
+
+    #[test]
+    fn test_serial_migration_interface() {
+        let mut usart = Serial::default();
+
+        // Get state vector for usart
+        let serial_state_result = usart.get_state_vec();
+        assert!(serial_state_result.is_ok());
+        let serial_state_vec = serial_state_result.unwrap();
+
+        let serial_state_option = SerialState::from_bytes(&serial_state_vec);
+        assert!(serial_state_option.is_some());
+        let mut serial_state = *serial_state_option.unwrap();
+
+        assert_eq!(serial_state.ier, 0);
+        assert_eq!(serial_state.iir, 1);
+        assert_eq!(serial_state.lcr, 3);
+        assert_eq!(serial_state.mcr, 8);
+        assert_eq!(serial_state.lsr, 0x60);
+        assert_eq!(serial_state.msr, 0xb0);
+        assert_eq!(serial_state.scr, 0);
+        assert_eq!(serial_state.div, 0x0c);
+        assert_eq!(serial_state.thr_pending, 0);
+
+        // Change some value in serial_state.
+        serial_state.ier = 3;
+        serial_state.iir = 10;
+        serial_state.lcr = 8;
+        serial_state.mcr = 0;
+        serial_state.lsr = 0x90;
+        serial_state.msr = 0xbb;
+        serial_state.scr = 2;
+        serial_state.div = 0x02;
+        serial_state.thr_pending = 1;
+
+        // Check state value recovered.
+        assert!(usart.set_state_mut(serial_state.as_bytes()).is_ok());
+        assert_eq!(usart.state.ier, 3);
+        assert_eq!(usart.state.iir, 10);
+        assert_eq!(usart.state.lcr, 8);
+        assert_eq!(usart.state.mcr, 0);
+        assert_eq!(usart.state.lsr, 0x90);
+        assert_eq!(usart.state.msr, 0xbb);
+        assert_eq!(usart.state.scr, 2);
+        assert_eq!(usart.state.div, 0x02);
+        assert_eq!(usart.state.thr_pending, 1);
     }
 }
