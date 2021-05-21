@@ -898,3 +898,195 @@ impl AmlBuilder for PFlash {
         Vec::new()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use address_space::AddressSpace;
+    use std::fs;
+    pub use std::fs::File;
+
+    fn sysbus_init() -> SysBus {
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
+        #[cfg(target_arch = "x86_64")]
+        let free_irqs: (i32, i32) = (5, 15);
+        #[cfg(target_arch = "aarch64")]
+        let free_irqs: (i32, i32) = (32, 191);
+        let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
+        SysBus::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            free_irqs,
+            mmio_region,
+        )
+    }
+
+    fn pflash_dev_init(file_name: &str) -> Arc<Mutex<PFlash>> {
+        let sector_len: u32 = 0x40_000;
+        let flash_size: u64 = 0x400_0000;
+        let read_only: bool = false;
+        let flash_base: u64 = 0;
+
+        let fd = File::create(file_name).unwrap();
+        fd.set_len(flash_size).unwrap();
+        drop(fd);
+        let fd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file_name)
+            .unwrap();
+
+        let pflash = PFlash::new(flash_size, fd, sector_len, 4, 2, read_only).unwrap();
+        let sysbus = sysbus_init();
+        let dev = Arc::new(Mutex::new(pflash));
+        let region_ops = sysbus.build_region_ops(&dev);
+        let mem_mapping =
+            HostMemMapping::new(GuestAddress(flash_base), flash_size, None, false, false).unwrap();
+
+        let mem_mapping = Arc::new(mem_mapping);
+        let rom_region = Region::init_rom_device_region(mem_mapping, region_ops);
+
+        dev.lock()
+            .unwrap()
+            .set_rom_mem(Arc::new(rom_region))
+            .unwrap();
+
+        dev
+    }
+
+    #[test]
+    fn test_cfi_query() {
+        let file_name = "flash_vars_for_read_1.fd";
+        let dev = pflash_dev_init(file_name);
+
+        let base = GuestAddress(0x0000);
+        let mut read_data = vec![0, 0, 0, 0];
+        let offset = 0x40;
+        dev.lock().unwrap().cmd = 0x98;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        let cfi_data = vec![0x51, 0x00, 0x51, 0x00];
+        assert_eq!(cfi_data, read_data);
+
+        let mut read_data = vec![0, 0, 0, 0];
+        let offset = 0x44;
+        dev.lock().unwrap().cmd = 0x98;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        let cfi_data = vec![0x52, 0x00, 0x52, 0x00];
+        assert_eq!(cfi_data, read_data);
+
+        let mut read_data = vec![0, 0, 0, 0];
+        let offset = 0x48;
+        dev.lock().unwrap().cmd = 0x98;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        let cfi_data = vec![0x59, 0x00, 0x59, 0x00];
+        assert_eq!(cfi_data, read_data);
+
+        fs::remove_file(file_name).unwrap();
+    }
+
+    #[test]
+    fn test_id_query() {
+        let file_name = "flash_vars_for_read_2.fd";
+        let dev = pflash_dev_init(file_name);
+
+        let base = GuestAddress(0x0000);
+        let mut read_data = vec![0, 0, 0, 0];
+        let offset = 0x00;
+        dev.lock().unwrap().cmd = 0x90;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        let id_data = vec![0x89, 0x00, 0x89, 0x00];
+        assert_eq!(read_data, id_data);
+
+        let mut read_data = vec![0, 0, 0, 0];
+        let offset = 0x04;
+        dev.lock().unwrap().cmd = 0x90;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        let id_data = vec![0x18, 0x00, 0x18, 0x00];
+        assert_eq!(read_data, id_data);
+
+        let mut read_data = vec![0xff, 0xff, 0xff, 0xff];
+        let offset = 0x08;
+        dev.lock().unwrap().cmd = 0x90;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        let id_data = vec![0x00, 0x00, 0x00, 0x00];
+        assert_eq!(read_data, id_data);
+
+        fs::remove_file(file_name).unwrap();
+    }
+
+    #[test]
+    fn test_block_erase() {
+        let file_name = "flash_vars_for_write_1.fd";
+        let dev = pflash_dev_init(file_name);
+
+        let base = GuestAddress(0x0000);
+        let offset = 0_u64;
+
+        let data = vec![0x20, 0, 0, 0];
+        dev.lock().unwrap().write_cycle = 0;
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+
+        let mut read_data = vec![0, 0, 0, 0];
+        let erase_data = vec![0xFF_u8, 0xFF, 0xFF, 0xFF];
+        dev.lock().unwrap().cmd = 0x00;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert_eq!(erase_data, read_data);
+
+        fs::remove_file(file_name).unwrap();
+    }
+
+    #[test]
+    fn test_write_single_byte() {
+        let file_name = "flash_vars_for_write_2.fd";
+        let dev = pflash_dev_init(file_name);
+
+        let base = GuestAddress(0x0000);
+        let offset = 0_u64;
+        let data = vec![0x10, 0, 0, 0];
+        dev.lock().unwrap().write_cycle = 0;
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        let data = vec![0x70, 0, 0x70, 0];
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+
+        let mut read_data = vec![0, 0, 0, 0];
+        dev.lock().unwrap().cmd = 0x00;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert_eq!(data, read_data);
+
+        let mut file_buf = vec![0_u8, 0, 0, 0];
+        let mut fd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file_name)
+            .unwrap();
+        fd.read_exact(&mut file_buf).unwrap();
+        assert_eq!(data, file_buf);
+
+        fs::remove_file(file_name).unwrap();
+    }
+
+    #[test]
+    fn test_write_to_buffer() {
+        let file_name = "flash_vars_for_write_3.fd";
+        let dev = pflash_dev_init(file_name);
+
+        let base = GuestAddress(0x0000);
+        let offset = 0_u64;
+        let data = vec![0xe8, 0, 0, 0];
+        dev.lock().unwrap().write_cycle = 0;
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        let data = vec![0x12, 0x34, 0x56, 0x78];
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+
+        let mut read_data = vec![0, 0, 0, 0];
+        dev.lock().unwrap().cmd = 0x00;
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert_eq!(data, read_data);
+
+        fs::remove_file(file_name).unwrap();
+    }
+}
