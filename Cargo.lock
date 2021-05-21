@@ -545,6 +545,8 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
+ "migration",
+ "migration_derive",
  "pci",
  "serde_json",
  "sysbus",

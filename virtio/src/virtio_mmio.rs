@@ -17,7 +17,9 @@ use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{
@@ -99,6 +101,9 @@ impl HostNotifyInfo {
 }
 
 /// The state of virtio-mmio device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct VirtioMmioState {
     /// Identify if this device is activated by frontend driver.
     activated: bool,
@@ -107,7 +112,7 @@ pub struct VirtioMmioState {
 }
 
 /// The configuration of virtio-mmio device, the fields refer to Virtio Spec.
-#[derive(Default)]
+#[derive(Copy, Clone, Default)]
 pub struct VirtioMmioCommonConfig {
     /// Bitmask of the features supported by the device (host)(32 bits per set).
     features_select: u32,
@@ -606,6 +611,90 @@ impl SysBusDevOps for VirtioMmioDevice {
 impl acpi::AmlBuilder for VirtioMmioDevice {
     fn aml_bytes(&self) -> Vec<u8> {
         Vec::new()
+    }
+}
+
+impl StateTransfer for VirtioMmioDevice {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let mut state = self.state;
+
+        for (index, queue) in self.queues.iter().enumerate() {
+            state.config_space.queues_config[index] =
+                queue.lock().unwrap().vring.get_queue_config();
+        }
+        state.config_space.interrupt_status = self.interrupt_status.load(Ordering::Relaxed);
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *VirtioMmioState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("MMIO_DEVICE"))?;
+        self.queues = self.state.config_space.queues_config[0..self.state.config_space.queue_num]
+            .iter()
+            .map(|queue_state| {
+                Arc::new(Mutex::new(
+                    Queue::new(*queue_state, self.state.config_space.queue_type).unwrap(),
+                ))
+            })
+            .collect();
+        self.interrupt_status = Arc::new(AtomicU32::new(self.state.config_space.interrupt_status));
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&VirtioMmioState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for VirtioMmioDevice {
+    fn resume(&mut self) -> migration::errors::Result<()> {
+        if self.state.activated {
+            let mut queue_evts = Vec::<EventFd>::new();
+            for fd in self.host_notify_info.events.iter() {
+                let evt_fd_clone = match fd.try_clone() {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        error!("Failed to clone IoEventFd, {}", e);
+                        continue;
+                    }
+                };
+                queue_evts.push(evt_fd_clone);
+            }
+
+            let interrupt_status = self.interrupt_status.clone();
+            let interrupt_evt = self.interrupt_evt.try_clone().unwrap();
+            let cb = Arc::new(Box::new(
+                move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                    let status = match int_type {
+                        VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                        VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                    };
+                    interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
+                    interrupt_evt
+                        .write(1)
+                        .chain_err(|| ErrorKind::EventFdWrite)?;
+
+                    Ok(())
+                },
+            ) as VirtioInterrupt);
+
+            if let Err(e) = self.device.lock().unwrap().activate(
+                self.mem_space.clone(),
+                cb,
+                self.queues.clone(),
+                queue_evts,
+            ) {
+                bail!("Failed to resume virtio mmio device: {}", e);
+            }
+        }
+
+        Ok(())
     }
 }
 
