@@ -12,6 +12,7 @@ kvm-ioctls = "0.6.0"
 libc = ">=0.2.71"
 log = "0.4.8"
 vmm-sys-util = ">=0.7.0"
+hypervisor = { path = "hypervisor" }
 machine = { path = "machine" }
 machine_manager = { path = "machine_manager" }
 util = { path = "util" }
@@ -23,6 +24,7 @@ members = [
     "boot_loader",
     "cpu",
     "devices",
+    "hypervisor",
     "machine",
     "machine_manager",
     "pci",

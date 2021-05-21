@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{Region, RegionOps};
 use error_chain::ChainedError;
-use kvm_ioctls::VmFd;
 use pci::{
     errors::Result as PciResult, le_read_u64, le_write_u16, ranges_overlap, PciBus, PciConfig,
     PciDevOps, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
@@ -39,14 +38,12 @@ const PCIEXBAR_64MB_ADDR_MASK: u64 = 1 << 25;
 pub struct Mch {
     config: PciConfig,
     parent_bus: Weak<Mutex<PciBus>>,
-    vm_fd: Arc<VmFd>,
     mmconfig_region: Option<Region>,
     mmconfig_ops: RegionOps,
 }
 
 impl Mch {
     pub fn new(
-        vm_fd: Arc<VmFd>,
         parent_bus: Weak<Mutex<PciBus>>,
         mmconfig_region: Region,
         mmconfig_ops: RegionOps,
@@ -54,7 +51,6 @@ impl Mch {
         Self {
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
             parent_bus,
-            vm_fd,
             mmconfig_region: Some(mmconfig_region),
             mmconfig_ops,
         }
@@ -112,7 +108,7 @@ impl PciDevOps for Mch {
         self.config.init_common_write_clear_mask()
     }
 
-    fn realize(mut self, _vm_fd: &Arc<VmFd>) -> PciResult<()> {
+    fn realize(mut self) -> PciResult<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -162,7 +158,7 @@ impl PciDevOps for Mch {
             return;
         }
 
-        self.config.write(offset, data, &self.vm_fd, 0);
+        self.config.write(offset, data, 0);
         if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8) {
             if let Err(e) = self.update_pciexbar_mapping() {
                 error!("{}", e.display_chain());

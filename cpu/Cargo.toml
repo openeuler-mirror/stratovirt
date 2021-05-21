@@ -13,5 +13,9 @@ kvm-ioctls = "0.6.0"
 log = "0.4.8"
 libc = ">=0.2.71"
 vmm-sys-util = ">=0.7.0"
+hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
+
+[dev-dependencies]
+serial_test = "0.5.1"

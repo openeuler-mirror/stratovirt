@@ -16,7 +16,6 @@ pub use gicv3::GICv3;
 
 use std::sync::Arc;
 
-use kvm_ioctls::VmFd;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::{device_tree, errors::Result as UtilResult};
 
@@ -74,7 +73,6 @@ pub trait GICDevice: MachineLifecycle {
     /// * `vm` - File descriptor for vmfd.
     /// * `gic_conf` - Configuration for `GIC`.
     fn create_device(
-        vm: &Arc<VmFd>,
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>>
     where
@@ -101,11 +99,10 @@ impl InterruptController {
     ///
     /// # Arguments
     ///
-    /// * `vm` - File descriptor for vmfd.
     /// * `gic_conf` - Configuration for `GIC`.
-    pub fn new(vm: Arc<VmFd>, gic_conf: &GICConfig) -> Result<InterruptController> {
+    pub fn new(gic_conf: &GICConfig) -> Result<InterruptController> {
         Ok(InterruptController {
-            gic: GICv3::create_device(&vm, gic_conf).chain_err(|| "Failed to realize GIC")?,
+            gic: GICv3::create_device(gic_conf).chain_err(|| "Failed to realize GIC")?,
         })
     }
 

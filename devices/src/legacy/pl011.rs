@@ -21,7 +21,6 @@ use acpi::{
 };
 use address_space::{errors::ResultExt, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
-use kvm_ioctls::VmFd;
 use machine_manager::config::{BootSource, Param};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
@@ -161,9 +160,8 @@ impl PL011 {
         region_base: u64,
         region_size: u64,
         bs: &Arc<Mutex<BootSource>>,
-        vm_fd: &VmFd,
     ) -> Result<Arc<Mutex<Self>>> {
-        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+        self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| "Failed to allocate system resource for PL011.")?;
 
         let dev = Arc::new(Mutex::new(self));

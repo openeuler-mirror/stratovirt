@@ -20,7 +20,6 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
-use kvm_ioctls::{Kvm, VmFd};
 use machine::{LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
@@ -123,17 +122,6 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn get_vm_fds() -> Result<(Kvm, Arc<VmFd>)> {
-    let kvm_fd = Kvm::new().chain_err(|| "Failed to open /dev/kvm.")?;
-    let vm_fd = Arc::new(
-        kvm_fd
-            .create_vm()
-            .chain_err(|| "KVM: failed to create VM fd failed")?,
-    );
-
-    Ok((kvm_fd, vm_fd))
-}
-
 fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<()> {
     let balloon_switch_on = vm_config.balloon.is_some();
 
@@ -163,7 +151,6 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
 
-    let (kvm_fd, vm_fd) = get_vm_fds()?;
     let (api_path, _) = check_api_channel(&cmd_args)?;
     let listener = UnixListener::bind(&api_path)
         .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
@@ -177,8 +164,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             let vm = Arc::new(Mutex::new(
                 LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
             ));
-            MachineOps::realize(&vm, &vm_config, (kvm_fd, &vm_fd))
-                .chain_err(|| "Failed to realize micro VM.")?;
+            MachineOps::realize(&vm, &vm_config).chain_err(|| "Failed to realize micro VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
@@ -186,8 +172,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             let vm = Arc::new(Mutex::new(
                 StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
             ));
-            MachineOps::realize(&vm, &vm_config, (kvm_fd, &vm_fd))
-                .chain_err(|| "Failed to realize standard VM.")?;
+            MachineOps::realize(&vm, &vm_config).chain_err(|| "Failed to realize standard VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))

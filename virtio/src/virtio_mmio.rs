@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
-use kvm_ioctls::VmFd;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
@@ -340,7 +339,6 @@ impl VirtioMmioDevice {
         region_base: u64,
         region_size: u64,
         #[cfg(target_arch = "x86_64")] bs: &Arc<Mutex<BootSource>>,
-        vm_fd: &VmFd,
     ) -> Result<Arc<Mutex<Self>>> {
         self.device
             .lock()
@@ -351,7 +349,7 @@ impl VirtioMmioDevice {
         if region_base >= sysbus.mmio_region.1 {
             bail!("Mmio region space exhausted.");
         }
-        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)?;
+        self.set_sys_resource(sysbus, region_base, region_size)?;
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
 

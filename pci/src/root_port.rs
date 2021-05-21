@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
 use error_chain::ChainedError;
-use kvm_ioctls::VmFd;
 
 use super::config::{
     PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
@@ -41,7 +40,6 @@ pub struct RootPort {
     io_region: Region,
     mem_region: Region,
     dev_id: u16,
-    vm_fd: Arc<VmFd>,
 }
 
 impl RootPort {
@@ -53,15 +51,8 @@ impl RootPort {
     /// * `devfn` - Device number << 3 | Function number.
     /// * `port_num` - Root port number.
     /// * `parent_bus` - Weak reference to the parent bus.
-    /// * `vm_fd` - The file descriptor of VM.
     #[allow(dead_code)]
-    pub fn new(
-        name: String,
-        devfn: u8,
-        port_num: u8,
-        parent_bus: Weak<Mutex<PciBus>>,
-        vm_fd: Arc<VmFd>,
-    ) -> Self {
+    pub fn new(name: String, devfn: u8, port_num: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = Region::init_container_region(1 << 16);
         let mem_region = Region::init_container_region(u64::max_value());
@@ -83,7 +74,6 @@ impl RootPort {
             io_region,
             mem_region,
             dev_id: 0,
-            vm_fd,
         }
     }
 }
@@ -99,7 +89,7 @@ impl PciDevOps for RootPort {
         self.config.init_bridge_write_clear_mask()
     }
 
-    fn realize(mut self, vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn realize(mut self) -> Result<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -115,10 +105,10 @@ impl PciDevOps for RootPort {
         #[cfg(target_arch = "aarch64")]
         {
             self.dev_id = self.set_dev_id(0, self.devfn);
-            init_msix(vm_fd, 0, 1, &mut self.config, self.dev_id)?;
+            init_msix(0, 1, &mut self.config, self.dev_id)?;
         }
         #[cfg(target_arch = "x86_64")]
-        init_msix(vm_fd, 0, 1, &mut self.config, 0)?;
+        init_msix(0, 1, &mut self.config, 0)?;
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();
@@ -170,7 +160,7 @@ impl PciDevOps for RootPort {
             return;
         }
 
-        self.config.write(offset, data, &self.vm_fd, self.dev_id);
+        self.config.write(offset, data, self.dev_id);
         if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
             || ranges_overlap(offset, end, BAR_0 as usize, BAR_0 as usize + REG_SIZE * 2)
         {

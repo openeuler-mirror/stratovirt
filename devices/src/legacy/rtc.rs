@@ -17,7 +17,6 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
-use kvm_ioctls::VmFd;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
@@ -218,14 +217,8 @@ impl RTC {
         true
     }
 
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        base: u64,
-        size: u64,
-        vm_fd: &VmFd,
-    ) -> Result<()> {
-        self.set_sys_resource(sysbus, base, size, vm_fd)?;
+    pub fn realize(mut self, sysbus: &mut SysBus, base: u64, size: u64) -> Result<()> {
+        self.set_sys_resource(sysbus, base, size)?;
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, base, size)?;
         Ok(())

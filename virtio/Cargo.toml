@@ -15,6 +15,7 @@ log = "0.4.8"
 serde_json = "1.0.55"
 vmm-sys-util = ">=0.7.0"
 address_space = { path = "../address_space" }
+hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }

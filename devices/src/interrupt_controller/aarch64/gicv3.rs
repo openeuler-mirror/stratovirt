@@ -12,7 +12,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use kvm_ioctls::{DeviceFd, VmFd};
+use hypervisor::KVM_FDS;
+use kvm_ioctls::DeviceFd;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::device_tree;
 
@@ -122,7 +123,7 @@ pub struct GICv3 {
 }
 
 impl GICv3 {
-    fn new(vm: &Arc<VmFd>, config: &GICConfig) -> Result<Self> {
+    fn new(config: &GICConfig) -> Result<Self> {
         config.check_sanity()?;
 
         let mut gic_device = kvm_bindings::kvm_create_device {
@@ -131,7 +132,13 @@ impl GICv3 {
             flags: 0,
         };
 
-        let gic_fd = match vm.create_device(&mut gic_device) {
+        let gic_fd = match KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
+            .create_device(&mut gic_device)
+        {
             Ok(fd) => fd,
             Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
         };
@@ -171,8 +178,7 @@ impl GICv3 {
         };
 
         if let Some(its_range) = config.its_range {
-            gicv3.its_dev =
-                Some(GICv3Its::new(&vm, &its_range).chain_err(|| "Failed to create ITS")?);
+            gicv3.its_dev = Some(GICv3Its::new(&its_range).chain_err(|| "Failed to create ITS")?);
         }
 
         Ok(gicv3)
@@ -363,10 +369,9 @@ impl GICv3Access for GICv3 {
 
 impl GICDevice for GICv3 {
     fn create_device(
-        vm: &Arc<VmFd>,
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
-        Ok(Arc::new(GICv3::new(vm, gic_conf)?))
+        Ok(Arc::new(GICv3::new(gic_conf)?))
     }
 
     fn realize(&self) -> Result<()> {
@@ -434,14 +439,20 @@ struct GICv3Its {
 }
 
 impl GICv3Its {
-    fn new(vm: &Arc<VmFd>, its_range: &(u64, u64)) -> Result<Self> {
+    fn new(its_range: &(u64, u64)) -> Result<Self> {
         let mut its_device = kvm_bindings::kvm_create_device {
             type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_ITS,
             fd: 0,
             flags: 0,
         };
 
-        let its_fd = match vm.create_device(&mut its_device) {
+        let its_fd = match KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
+            .create_device(&mut its_device)
+        {
             Ok(fd) => fd,
             Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
         };
@@ -486,17 +497,20 @@ impl GICv3Its {
 
 #[cfg(test)]
 mod tests {
+    use hypervisor::KVMFds;
+    use serial_test::serial;
+
     use super::super::GICConfig;
     use super::*;
-    use kvm_ioctls::Kvm;
 
     #[test]
+    #[serial]
     fn test_create_gicv3() {
-        let vm = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
             return;
-        };
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_conf = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
@@ -507,17 +521,17 @@ mod tests {
             redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
             its_range: None,
         };
-
-        assert!(GICv3::new(&vm, &gic_conf).is_ok());
+        assert!(GICv3::new(&gic_conf).is_ok());
     }
 
     #[test]
+    #[serial]
     fn test_create_gic_device() {
-        let vm_fd = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
             return;
-        };
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_config = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
@@ -528,19 +542,19 @@ mod tests {
             redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
             its_range: None,
         };
-
-        let gic = GICv3::new(&vm_fd, &gic_config).unwrap();
+        let gic = GICv3::new(&gic_config).unwrap();
         assert!(gic.its_dev.is_none());
-        assert!(GICv3::new(&vm_fd, &gic_config).is_err());
+        assert!(GICv3::new(&gic_config).is_err());
     }
 
     #[test]
+    #[serial]
     fn test_gic_redist_regions() {
-        let vm_fd = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
             return;
-        };
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_config = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
@@ -551,8 +565,8 @@ mod tests {
             redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000), (256 << 30, 0x200_0000)],
             its_range: Some((0x0808_0000, 0x0002_0000)),
         };
+        let gic = GICv3::new(&gic_config).unwrap();
 
-        let gic = GICv3::new(&vm_fd, &gic_config).unwrap();
         assert!(gic.its_dev.is_some());
         assert_eq!(gic.redist_regions.len(), 2);
     }

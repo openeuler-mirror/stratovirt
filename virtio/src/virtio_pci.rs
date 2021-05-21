@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
-use kvm_ioctls::VmFd;
 use pci::config::{
     RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
     ROM_ADDRESS, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
@@ -443,7 +442,6 @@ pub struct VirtioPciDevice {
     notify_eventfds: NotifyEventFds,
     /// The function for interrupt triggerring
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    vm_fd: Arc<VmFd>,
 }
 
 impl VirtioPciDevice {
@@ -453,7 +451,6 @@ impl VirtioPciDevice {
         sys_mem: Arc<AddressSpace>,
         device: Arc<Mutex<dyn VirtioDevice>>,
         parent_bus: Weak<Mutex<PciBus>>,
-        vm_fd: Arc<VmFd>,
     ) -> Self {
         let queue_num = device.lock().unwrap().queue_num();
         let queue_size = device.lock().unwrap().queue_size();
@@ -472,13 +469,11 @@ impl VirtioPciDevice {
             parent_bus,
             notify_eventfds: NotifyEventFds::new(queue_num),
             interrupt_cb: None,
-            vm_fd,
         }
     }
 
     fn assign_interrupt_cb(&mut self) {
         let cloned_common_cfg = self.common_config.clone();
-        let cloned_vm_fd = self.vm_fd.clone();
         let cloned_msix = self.config.msix.clone();
         let dev_id = self.dev_id;
         let cb = Arc::new(Box::new(
@@ -495,7 +490,7 @@ impl VirtioPciDevice {
                 };
 
                 if let Some(msix) = &cloned_msix {
-                    msix.lock().unwrap().notify(&cloned_vm_fd, vector, dev_id);
+                    msix.lock().unwrap().notify(vector, dev_id);
                 } else {
                     bail!("Failed to send interrupt, msix does not exist");
                 }
@@ -752,7 +747,7 @@ impl PciDevOps for VirtioPciDevice {
         self.config.init_common_write_clear_mask()
     }
 
-    fn realize(mut self, vm_fd: &Arc<VmFd>) -> PciResult<()> {
+    fn realize(mut self) -> PciResult<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -824,7 +819,6 @@ impl PciDevOps for VirtioPciDevice {
             self.dev_id = self.set_dev_id(0, self.devfn);
         }
         init_msix(
-            vm_fd,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             nvectors as u32,
             &mut self.config,
@@ -892,8 +886,7 @@ impl PciDevOps for VirtioPciDevice {
             return;
         }
 
-        self.config.write(offset, data, &self.vm_fd, self.dev_id);
-
+        self.config.write(offset, data, self.dev_id);
         if ranges_overlap(
             offset,
             end,
@@ -924,7 +917,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping};
-    use kvm_ioctls::Kvm;
     use util::num_ops::{read_u32, write_u32};
     use vmm_sys_util::eventfd::EventFd;
 
@@ -1111,11 +1103,6 @@ mod tests {
 
     #[test]
     fn test_virtio_pci_config_access() {
-        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(fd) => Arc::new(fd),
-            Err(_) => return,
-        };
-
         let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
             Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
@@ -1131,7 +1118,6 @@ mod tests {
             sys_mem,
             virtio_dev,
             Arc::downgrade(&parent_bus),
-            vm_fd,
         );
         virtio_pci.init_write_mask().unwrap();
         virtio_pci.init_write_clear_mask().unwrap();
@@ -1151,11 +1137,6 @@ mod tests {
 
     #[test]
     fn test_virtio_pci_realize() {
-        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(fd) => Arc::new(fd),
-            Err(_) => return,
-        };
-
         let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
             Arc::new(Mutex::new(VirtioDeviceTest::new()));
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
@@ -1171,18 +1152,12 @@ mod tests {
             sys_mem,
             virtio_dev,
             Arc::downgrade(&parent_bus),
-            vm_fd.clone(),
         );
-        assert!(virtio_pci.realize(&vm_fd).is_ok());
+        assert!(virtio_pci.realize().is_ok());
     }
 
     #[test]
     fn test_device_activate() {
-        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(fd) => Arc::new(fd),
-            Err(_) => return,
-        };
-
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
         let mem_size: u64 = 1024 * 1024;
         let host_mmap =
@@ -1209,13 +1184,11 @@ mod tests {
             sys_mem,
             virtio_dev,
             Arc::downgrade(&parent_bus),
-            vm_fd.clone(),
         );
 
         // Prepare msix and interrupt callback
         virtio_pci.assign_interrupt_cb();
         init_msix(
-            &vm_fd,
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
             &mut virtio_pci.config,

@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 
 use address_space::{GuestAddress, Region, RegionOps};
-use kvm_ioctls::VmFd;
+use hypervisor::KVM_FDS;
 use util::num_ops::round_up;
 
 use crate::config::{CapId, PciConfig, RegionType};
@@ -114,12 +114,7 @@ impl Msix {
         le_write_u64(&mut self.pba, offset, old_val & pending_bit).unwrap();
     }
 
-    fn register_memory_region(
-        msix: Arc<Mutex<Self>>,
-        region: &Region,
-        vm_fd: Arc<VmFd>,
-        dev_id: u16,
-    ) -> Result<()> {
+    fn register_memory_region(msix: Arc<Mutex<Self>>, region: &Region, dev_id: u16) -> Result<()> {
         let locked_msix = msix.lock().unwrap();
         let table_size = locked_msix.table.len() as u64;
         let pba_size = locked_msix.pba.len() as u64;
@@ -141,7 +136,7 @@ impl Msix {
             let is_masked: bool = locked_msix.is_vector_masked(vector);
             if was_masked && !is_masked {
                 locked_msix.clear_pending_vector(vector);
-                locked_msix.notify(&vm_fd, vector, dev_id);
+                locked_msix.notify(vector, dev_id);
             }
 
             true
@@ -190,7 +185,7 @@ impl Msix {
         }
     }
 
-    pub fn notify(&mut self, vm_fd: &VmFd, vector: u16, dev_id: u16) {
+    pub fn notify(&mut self, vector: u16, dev_id: u16) {
         if vector >= self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
             error!("Invaild msix vector {}.", vector);
             return;
@@ -201,10 +196,10 @@ impl Msix {
             return;
         }
 
-        send_msix(vm_fd, self.get_message(vector), dev_id);
+        send_msix(self.get_message(vector), dev_id);
     }
 
-    pub fn write_config(&mut self, config: &[u8], vm_fd: &VmFd, dev_id: u16) {
+    pub fn write_config(&mut self, config: &[u8], dev_id: u16) {
         let func_masked: bool = is_msix_func_masked(self.msix_cap_offset as usize, config);
         let enabled: bool = is_msix_enabled(self.msix_cap_offset as usize, config);
 
@@ -213,7 +208,7 @@ impl Msix {
             for v in 0..max_vectors_nr {
                 if !self.is_vector_masked(v) && self.is_vector_pending(v) {
                     self.clear_pending_vector(v);
-                    send_msix(vm_fd, self.get_message(v), dev_id);
+                    send_msix(self.get_message(v), dev_id);
                 }
             }
         }
@@ -240,7 +235,7 @@ fn is_msix_func_masked(msix_cap_offset: usize, config: &[u8]) -> bool {
     false
 }
 
-fn send_msix(vm_fd: &VmFd, msg: Message, dev_id: u16) {
+fn send_msix(msg: Message, dev_id: u16) {
     #[cfg(target_arch = "aarch64")]
     let flags: u32 = kvm_bindings::KVM_MSI_VALID_DEVID;
     #[cfg(target_arch = "x86_64")]
@@ -254,19 +249,13 @@ fn send_msix(vm_fd: &VmFd, msg: Message, dev_id: u16) {
         devid: dev_id as u32,
         pad: [0; 12],
     };
-    if let Err(e) = vm_fd.signal_msi(kvm_msi) {
+    if let Err(e) = KVM_FDS.load().vm_fd.as_ref().unwrap().signal_msi(kvm_msi) {
         error!("Send msix error: {}", e);
     };
 }
 
 /// MSI-X initialization.
-pub fn init_msix(
-    vm_fd: &Arc<VmFd>,
-    bar_id: usize,
-    vector_nr: u32,
-    config: &mut PciConfig,
-    dev_id: u16,
-) -> Result<()> {
+pub fn init_msix(bar_id: usize, vector_nr: u32, config: &mut PciConfig, dev_id: u16) -> Result<()> {
     if vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
         bail!("Too many msix vectors.");
     }
@@ -293,7 +282,7 @@ pub fn init_msix(
     )));
     let bar_size = ((table_size + pba_size) as u64).next_power_of_two();
     let region = Region::init_container_region(bar_size);
-    Msix::register_memory_region(msix.clone(), &region, vm_fd.clone(), dev_id)?;
+    Msix::register_memory_region(msix.clone(), &region, dev_id)?;
     config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);
     config.msix = Some(msix);
 

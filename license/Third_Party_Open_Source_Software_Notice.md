@@ -10,6 +10,8 @@ Copyright notice:
 Copyright (c) 2014-2020 The Rust Project Developers
 License: MIT or Apache License Version 2.0
 
+----------------------------------------------------------------
+
 Copyright (C) <year> <copyright holders>
 
 Permission is hereby granted, free of charge, to any
@@ -361,4 +363,16 @@ Software: arc-swap 0.4.8
 Copyright notice:
 Copyright (c) 2017 arc-swap developers
 License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: lazy_static 1.4.0
+Copyright notice:
+Copyright (c) 2010 The Rust Project Developers
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: serial_test 0.5.1
+Copyright notice:
+Copyright (c) 2018 Tom Parker-Shemilt
+License: MIT
 Please see above.

@@ -18,7 +18,6 @@ use address_space::{AddressSpace, GuestAddress};
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
 use error_chain::ChainedError;
-use kvm_ioctls::VmFd;
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
@@ -801,10 +800,9 @@ impl FwCfgMem {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        vm_fd: &VmFd,
     ) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
-        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+        self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| "Failed to allocate system resource for FwCfg.")?;
 
         let dev = Arc::new(Mutex::new(self));
@@ -928,11 +926,11 @@ impl FwCfgIO {
         }
     }
 
-    pub fn realize(mut self, sysbus: &mut SysBus, vm_fd: &VmFd) -> Result<Arc<Mutex<Self>>> {
+    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
         let region_base = self.res.region_base;
         let region_size = self.res.region_size;
-        self.set_sys_resource(sysbus, region_base, region_size, vm_fd)
+        self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| "Failed to allocate system resource for FwCfg.")?;
 
         let dev = Arc::new(Mutex::new(self));
@@ -1047,7 +1045,6 @@ impl SysBusDevOps for FwCfgIO {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        _vm_fd: &VmFd,
     ) -> sysbus::errors::Result<()> {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;

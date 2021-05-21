@@ -17,7 +17,7 @@ use std::sync::Arc;
 use kvm_bindings::{
     kvm_fpu, kvm_msr_entry, kvm_regs, kvm_segment, kvm_sregs, Msrs, KVM_MAX_CPUID_ENTRIES,
 };
-use kvm_ioctls::{Kvm, VcpuFd, VmFd};
+use kvm_ioctls::{Kvm, VcpuFd};
 
 use crate::errors::{Result, ResultExt};
 use cpuid::host_cpuid;
@@ -91,12 +91,7 @@ impl X86CPU {
         }
     }
 
-    pub fn realize(
-        &mut self,
-        _vm_fd: &Arc<VmFd>,
-        vcpu_fd: &Arc<VcpuFd>,
-        boot_config: &X86CPUBootConfig,
-    ) -> Result<()> {
+    pub fn realize(&mut self, vcpu_fd: &Arc<VcpuFd>, boot_config: &X86CPUBootConfig) -> Result<()> {
         self.prot64_mode = boot_config.prot64_mode;
         self.boot_selector = boot_config.boot_selector;
         self.boot_ip = boot_config.boot_ip;
@@ -420,11 +415,20 @@ impl X86CPU {
 #[cfg(test)]
 mod test {
     use super::*;
+    use hypervisor::{KVMFds, KVM_FDS};
     use kvm_bindings::kvm_segment;
+    use serial_test::serial;
     use std::sync::Arc;
 
     #[test]
+    #[serial]
     fn test_x86_64_cpu() {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
+
         let code_seg = kvm_segment {
             base: 0,
             limit: 1048575,
@@ -470,19 +474,15 @@ mod test {
             pml4_start: 0x0000_9000,
         };
 
-        let vm = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
-            return;
-        };
-
         // For `get_lapic` in realize function to work,
         // you need to create a irq_chip for VM before creating the VCPU.
-        vm.create_irq_chip().unwrap();
-        let vcpu = Arc::new(vm.create_vcpu(0).unwrap());
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
+        vm_fd.create_irq_chip().unwrap();
+        let vcpu = Arc::new(vm_fd.create_vcpu(0).unwrap());
         let mut x86_cpu = X86CPU::new(0, 1);
         //test realize function
-        assert!(x86_cpu.realize(&vm, &vcpu, &cpu_config).is_ok());
+        assert!(x86_cpu.realize(&vcpu, &cpu_config).is_ok());
 
         //test setup special registers
         assert!(x86_cpu.setup_sregs(&vcpu).is_ok());

@@ -27,8 +27,8 @@ use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, Serial, SERIAL_ADDR};
+use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use kvm_ioctls::{Kvm, VmFd};
 use machine_manager::config::{
     BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig,
     VmConfig, VsockConfig,
@@ -147,7 +147,7 @@ impl StdMachine {
 }
 
 impl StdMachineOps for StdMachine {
-    fn init_pci_host(&self, vm_fd: &Arc<VmFd>) -> Result<()> {
+    fn init_pci_host(&self) -> Result<()> {
         use super::errors::ResultExt;
 
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
@@ -177,20 +177,12 @@ impl StdMachineOps for StdMachine {
             .add_subregion(pio_data_region, 0xcfc)
             .chain_err(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
-        let mch = Mch::new(
-            vm_fd.clone(),
-            root_bus,
-            mmconfig_region,
-            mmconfig_region_ops,
-        );
-        PciDevOps::realize(mch, &vm_fd)?;
+        let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
+        PciDevOps::realize(mch)?;
         Ok(())
     }
 
-    fn add_fwcfg_device(
-        &mut self,
-        vm_fd: &VmFd,
-    ) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
+    fn add_fwcfg_device(&mut self) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
         use super::errors::ResultExt;
 
         let mut fwcfg = FwCfgIO::new(self.sys_mem.clone());
@@ -199,7 +191,7 @@ impl StdMachineOps for StdMachine {
         fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, ncpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
 
-        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus, vm_fd)
+        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
             .chain_err(|| "Failed to realize fwcfg device")?;
 
         Ok(fwcfg_dev)
@@ -221,14 +213,14 @@ impl MachineOps for StdMachine {
         ranges
     }
 
-    fn init_interrupt_controller(
-        &mut self,
-        vm_fd: &Arc<VmFd>,
-        _vcpu_count: u64,
-    ) -> MachineResult<()> {
+    fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
-        vm_fd
+        KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
             .create_irq_chip()
             .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
         Ok(())
@@ -272,7 +264,7 @@ impl MachineOps for StdMachine {
         })
     }
 
-    fn add_serial_device(&mut self, config: &SerialConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let region_base: u64 = SERIAL_ADDR;
@@ -282,7 +274,6 @@ impl MachineOps for StdMachine {
             &mut self.sysbus,
             region_base,
             region_size,
-            vm_fd,
         )?;
 
         if config.stdio {
@@ -296,70 +287,53 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_vsock_device(&mut self, _config: &VsockConfig, _vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_vsock_device(&mut self, _config: &VsockConfig) -> MachineResult<()> {
         Ok(())
     }
 
-    fn add_net_device(
-        &mut self,
-        _config: &NetworkInterfaceConfig,
-        _vm_fd: &Arc<VmFd>,
-    ) -> MachineResult<()> {
+    fn add_net_device(&mut self, _config: &NetworkInterfaceConfig) -> MachineResult<()> {
         Ok(())
     }
 
-    fn add_console_device(
-        &mut self,
-        _config: &ConsoleConfig,
-        _vm_fd: &Arc<VmFd>,
-    ) -> MachineResult<()> {
+    fn add_console_device(&mut self, _config: &ConsoleConfig) -> MachineResult<()> {
         Ok(())
     }
 
-    fn add_balloon_device(
-        &mut self,
-        _config: &BalloonConfig,
-        _vm_fd: &Arc<VmFd>,
-    ) -> MachineResult<()> {
+    fn add_balloon_device(&mut self, _config: &BalloonConfig) -> MachineResult<()> {
         Ok(())
     }
 
-    fn add_devices(&mut self, vm_config: &VmConfig, vm_fd: &Arc<VmFd>) -> MachineResult<()> {
+    fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(&serial, vm_fd)
+            self.add_serial_device(&serial)
                 .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
         }
-
         if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(&vsock, vm_fd)
+            self.add_vsock_device(&vsock)
                 .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
         }
-
         if let Some(drives) = vm_config.drives.as_ref() {
             for drive in drives {
                 self.add_block_device(&drive)
                     .chain_err(|| MachineErrorKind::AddDevErr("block".to_string()))?;
             }
         }
-
         if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
-                self.add_net_device(&net, vm_fd)
+                self.add_net_device(&net)
                     .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
             }
         }
-
         if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
-                self.add_console_device(&console, vm_fd)
+                self.add_console_device(&console)
                     .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
             }
         }
-
         if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon, vm_fd)
+            self.add_balloon_device(balloon)
                 .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
         }
 
@@ -370,24 +344,19 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(
-        vm: &Arc<Mutex<Self>>,
-        vm_config: &VmConfig,
-        fds: (Kvm, &Arc<VmFd>),
-    ) -> MachineResult<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
-        let kvm_fd = fds.0;
-        let vm_fd = fds.1;
         locked_vm.init_memory(
-            (kvm_fd, vm_fd),
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
         )?;
 
-        locked_vm.init_interrupt_controller(&vm_fd, u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nr_cpus {
@@ -395,16 +364,16 @@ impl MachineOps for StdMachine {
         }
 
         locked_vm
-            .init_pci_host(&vm_fd)
+            .init_pci_host()
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
-        locked_vm.add_devices(vm_config, &vm_fd)?;
-        let _fw_cfg = locked_vm.add_fwcfg_device(&vm_fd)?;
+        locked_vm.add_devices(vm_config)?;
+        let _fw_cfg = locked_vm.add_fwcfg_device()?;
 
         let boot_config = locked_vm.load_boot_source()?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
-            (&vm_fd, &vcpu_fds),
+            &vcpu_fds,
             &boot_config,
         )?);
 

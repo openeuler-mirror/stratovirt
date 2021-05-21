@@ -103,7 +103,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
+use kvm_ioctls::{VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
 use machine_manager::machine::MachineInterface;
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
@@ -166,7 +166,7 @@ thread_local! {
 /// Trait to handle `CPU` lifetime.
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
-    fn realize(&self, vm_fd: &Arc<VmFd>, boot: &CPUBootConfig) -> Result<()>;
+    fn realize(&self, boot: &CPUBootConfig) -> Result<()>;
 
     ///
     /// # Arguments
@@ -280,7 +280,7 @@ impl CPU {
 }
 
 impl CPUInterface for CPU {
-    fn realize(&self, vm_fd: &Arc<VmFd>, boot: &CPUBootConfig) -> Result<()> {
+    fn realize(&self, boot: &CPUBootConfig) -> Result<()> {
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
             return Err(
@@ -291,7 +291,7 @@ impl CPUInterface for CPU {
         self.arch_cpu
             .lock()
             .unwrap()
-            .realize(vm_fd, &self.fd, boot)
+            .realize(&self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
 
         Ok(())
@@ -731,11 +731,13 @@ impl CpuTopology {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use super::*;
-    use kvm_ioctls::{Kvm, VmFd};
+    use hypervisor::{KVMFds, KVM_FDS};
     use machine_manager::machine::{
         KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
     };
+    use serial_test::serial;
+
+    use super::*;
 
     struct TestVm {
         #[cfg(target_arch = "x86_64")]
@@ -798,32 +800,31 @@ mod tests {
 
     impl MachineInterface for TestVm {}
 
-    fn prepare_env() -> Result<(Arc<VmFd>, Arc<Mutex<TestVm>>, CPU)> {
-        let vm_fd = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => Arc::new(vm_fd),
-            Err(_) => return Err(ErrorKind::CreateVcpu("Failed to open kvm".to_string()).into()),
-        };
+    #[test]
+    #[serial]
+    #[allow(unused)]
+    fn test_cpu_lifecycle() {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
         let vm = Arc::new(Mutex::new(TestVm::new()));
-
         let cpu = CPU::new(
-            Arc::new(vm_fd.create_vcpu(0).unwrap()),
+            Arc::new(
+                KVM_FDS
+                    .load()
+                    .vm_fd
+                    .as_ref()
+                    .unwrap()
+                    .create_vcpu(0)
+                    .unwrap(),
+            ),
             0,
             Arc::new(Mutex::new(ArchCPU::default())),
             vm.clone(),
         );
-
-        Ok((vm_fd, vm, cpu))
-    }
-
-    #[test]
-    #[allow(unused)]
-    fn test_cpu_lifecycle() {
-        let (vm_fd, vm, cpu) = match prepare_env() {
-            Ok((vm_fd, vm, cpu)) => (vm_fd, vm, cpu),
-            Err(_) => return,
-        };
-
         let (cpu_state, _) = &*cpu.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);
         drop(cpu_state);
@@ -834,7 +835,13 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         {
             let mut kvi = kvm_bindings::kvm_vcpu_init::default();
-            vm_fd.get_preferred_target(&mut kvi).unwrap();
+            KVM_FDS
+                .load()
+                .vm_fd
+                .as_ref()
+                .unwrap()
+                .get_preferred_target(&mut kvi)
+                .unwrap();
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
             cpu.fd.vcpu_init(&kvi).unwrap();
         }
