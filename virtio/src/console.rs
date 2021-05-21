@@ -264,14 +264,20 @@ impl EventNotifierHelper for ConsoleHandler {
     }
 }
 
-/// Virtio console device structure.
-pub struct Console {
-    /// Virtio configuration.
-    config: Arc<Mutex<VirtioConsoleConfig>>,
+/// Status of console device.
+pub struct VirtioConsoleState {
     /// Bit mask of features supported by the backend.
     device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
+    /// Virtio Console config space.
+    config_space: VirtioConsoleConfig,
+}
+
+/// Virtio console device structure.
+pub struct Console {
+    /// Status of console device.
+    state: VirtioConsoleState,
     /// UnixListener for virtio-console to communicate in host.
     listener: Option<UnixListener>,
     /// Path to console socket file.
@@ -287,9 +293,11 @@ impl Console {
     pub fn new(console_cfg: ConsoleConfig) -> Self {
         let path = console_cfg.socket_path;
         Console {
-            config: Arc::new(Mutex::new(VirtioConsoleConfig::new())),
-            device_features: 0_u64,
-            driver_features: 0_u64,
+            state: VirtioConsoleState {
+                device_features: 0_u64,
+                driver_features: 0_u64,
+                config_space: VirtioConsoleConfig::new(),
+            },
             listener: None,
             path,
         }
@@ -299,7 +307,7 @@ impl Console {
 impl VirtioDevice for Console {
     /// Realize virtio console device.
     fn realize(&mut self) -> Result<()> {
-        self.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
         let sock = UnixListener::bind(self.path.clone())
             .chain_err(|| format!("Failed to bind socket for console, path:{}", &self.path))?;
         self.listener = Some(sock);
@@ -334,24 +342,23 @@ impl VirtioDevice for Console {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.device_features, features_select)
+        read_u32(self.state.device_features, features_select)
     }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.device_features;
+        let unrequested_features = v & !self.state.device_features;
         if unrequested_features != 0 {
             warn!("Received acknowledge request with unknown feature for console.");
             v &= !unrequested_features;
         }
-        self.driver_features |= v;
+        self.state.driver_features |= v;
     }
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config = *self.config.lock().unwrap();
-        let config_slice = config.as_bytes();
+        let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
@@ -390,7 +397,7 @@ impl VirtioDevice for Console {
             output_queue_evt: queue_evts.remove(0),
             mem_space,
             interrupt_cb,
-            driver_features: self.driver_features,
+            driver_features: self.state.driver_features,
             listener: self.listener.as_ref().unwrap().try_clone()?,
             client: None,
         };
@@ -421,44 +428,52 @@ mod tests {
         assert!(console.realize().is_ok());
 
         //If the device feature is 0, all driver features are not supported.
-        console.device_features = 0;
+        console.state.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
         console.set_driver_features(page, driver_feature);
-        assert_eq!(console.driver_features, 0_u64);
+        assert_eq!(console.state.driver_features, 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         console.set_driver_features(page, driver_feature);
-        assert_eq!(console.driver_features, 0_u64);
+        assert_eq!(console.state.driver_features, 0_u64);
 
         //If both the device feature bit and the front-end driver feature bit are
         //supported at the same time,  this driver feature bit is supported.
-        console.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        console.state.device_features =
+            1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
         let page = 0_u32;
         console.set_driver_features(page, driver_feature);
-        assert_eq!(console.driver_features, (1_u64 << VIRTIO_CONSOLE_F_SIZE));
-        console.driver_features = 0;
+        assert_eq!(
+            console.state.driver_features,
+            (1_u64 << VIRTIO_CONSOLE_F_SIZE)
+        );
+        console.state.driver_features = 0;
 
-        console.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        console.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
         let page = 0_u32;
         console.set_driver_features(page, driver_feature);
-        assert_eq!(console.driver_features, 0);
-        console.driver_features = 0;
+        assert_eq!(console.state.driver_features, 0);
+        console.state.driver_features = 0;
 
-        console.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
+        console.state.device_features =
+            1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE;
         let driver_feature: u32 = (1_u64 << VIRTIO_CONSOLE_F_SIZE) as u32;
         let page = 0_u32;
         console.set_driver_features(page, driver_feature);
-        assert_eq!(console.driver_features, (1_u64 << VIRTIO_CONSOLE_F_SIZE));
+        assert_eq!(
+            console.state.driver_features,
+            (1_u64 << VIRTIO_CONSOLE_F_SIZE)
+        );
 
         let driver_feature: u32 = ((1_u64 << VIRTIO_F_VERSION_1) >> 32) as u32;
         let page = 1_u32;
         console.set_driver_features(page, driver_feature);
         assert_eq!(
-            console.driver_features,
+            console.state.driver_features,
             (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
 
