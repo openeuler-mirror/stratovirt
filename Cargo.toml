@@ -27,6 +27,7 @@ members = [
     "hypervisor",
     "machine",
     "machine_manager",
+    "migration",
     "pci",
     "sysbus",
     "util",

@@ -302,6 +302,12 @@ Copyright (c) 2017 The Error-Chain Project Developers
 License: MIT or Apache License Version 2.0
 Please see above.
 
+Software: lazy-static 1.4.0
+Copy right notice:
+Copyright (C) 2010 The Rust Project Developers
+License: MIT or Apache License Version 2.0
+Please see above.
+
 Software: vmm-sys-util 0.7.0
 Copyright notice:
 Copyright 2019 Intel Corporation. All Rights Reserved.
