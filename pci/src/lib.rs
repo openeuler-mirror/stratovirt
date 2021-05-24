@@ -58,6 +58,7 @@ use errors::Result;
 
 const BDF_FUNC_SHIFT: u8 = 3;
 
+/// Macros that write data in little endian.
 macro_rules! le_write {
     ($name: ident, $func: ident, $type: tt) => {
         pub fn $name(buf: &mut [u8], offset: usize, data: $type) -> Result<()> {
@@ -81,6 +82,7 @@ le_write!(le_write_u16, write_u16, u16);
 le_write!(le_write_u32, write_u32, u32);
 le_write!(le_write_u64, write_u64, u64);
 
+/// Macros that read data in little endian.
 macro_rules! le_read {
     ($name: ident, $func: ident, $type: tt) => {
         pub fn $name(buf: &[u8], offset: usize) -> Result<$type> {
@@ -148,6 +150,14 @@ pub trait PciDevOps: Send {
     fn name(&self) -> String;
 }
 
+/// Check whether two regions overlap with each other.
+///
+/// # Arguments
+///
+/// * `start` - Start address of the first region.
+/// * `end` - End address of the first region.
+/// * `region_start` - Start address of the second region.
+/// * `region_end` - End address of the second region.
 pub fn ranges_overlap(start: usize, end: usize, range_start: usize, range_end: usize) -> bool {
     if start > range_end || range_start > end {
         return false;

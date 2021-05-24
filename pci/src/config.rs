@@ -201,6 +201,7 @@ const PCIE_CAP_LINK_SLSV_16GT: u32 = 0x10;
 // Target Link Speed.
 const PCIE_CAP_LINK_TLS_16GT: u16 = 0x0004;
 
+/// Type of bar region.
 #[derive(PartialEq, Debug)]
 pub enum RegionType {
     Io,
@@ -208,6 +209,7 @@ pub enum RegionType {
     Mem64Bit,
 }
 
+/// Registered bar.
 pub struct Bar {
     region_type: RegionType,
     address: u64,
@@ -215,6 +217,7 @@ pub struct Bar {
     pub region: Option<Region>,
 }
 
+/// Capbility ID defined by PCIe/PCI spec.
 pub enum CapId {
     Pcie = 0x10,
     Msix,
