@@ -823,15 +823,24 @@ impl SysBusDevOps for FwCfgMem {
                 error!("Read from FwCfg control register is not supported.");
                 0
             }
-            16..=23 => match self.fwcfg.dma_mem_read(offset - 0x10, data.len() as u32) {
-                Ok(val) => val,
-                Err(e) => {
-                    error!("Failed to handle FWCFg DMA-read, error is {}", e);
-                    return false;
+            16..=23 => {
+                if (offset + data.len() as u64) > 0x18 {
+                    error!(
+                        "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
+                        offset - 0x10,
+                        data.len()
+                    );
                 }
-            },
+                match self.fwcfg.dma_mem_read(offset - 0x10, data.len() as u32) {
+                    Ok(val) => val,
+                    Err(e) => {
+                        error!("Failed to handle FwCfg DMA-read, error is {}", e);
+                        return false;
+                    }
+                }
+            }
             _ => {
-                error!("Failed to read FWCFg, offset 0x{:x} is invalid", offset);
+                error!("Failed to read FwCfg, offset 0x{:x} is invalid", offset);
                 return false;
             }
         };
@@ -874,7 +883,7 @@ impl SysBusDevOps for FwCfgMem {
                 }
             }
             _ => {
-                error!("Failed to write FWCFg, offset 0x{:x} is invalid", offset);
+                error!("Failed to write FwCfg, offset 0x{:x} is invalid", offset);
                 return false;
             }
         }
@@ -960,13 +969,22 @@ impl SysBusDevOps for FwCfgIO {
                 }
                 Ok(val) => val,
             },
-            4..=11 => match self.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
-                Err(e) => {
-                    error!("Failed to handle FwCfg DMA-read, error is {}", e);
-                    return false;
+            4..=11 => {
+                if (offset + data.len() as u64) > 0x14 {
+                    error!(
+                        "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
+                        offset - 0x10,
+                        data.len()
+                    );
                 }
-                Ok(val) => val,
-            },
+                match self.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
+                    Err(e) => {
+                        error!("Failed to handle FwCfg DMA-read, error is {}", e);
+                        return false;
+                    }
+                    Ok(val) => val,
+                }
+            }
             _ => {
                 // This should never happen
                 error!(
@@ -1016,7 +1034,7 @@ impl SysBusDevOps for FwCfgIO {
                 };
                 if let Err(e) = self.fwcfg.dma_mem_write(offset - 4, value, size) {
                     error!(
-                        "Failed to handle FWCFg DMA-write, error is {}",
+                        "Failed to handle FwCfg DMA-write, error is {}",
                         e.display_chain()
                     );
                     return false;
