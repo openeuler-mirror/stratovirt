@@ -51,9 +51,10 @@
 //!         ioapic_addr: 0xFEC0_0000,
 //!         lapic_addr: 0xFEE0_0000,
 //!         prot64_mode: true,
+//!         ident_tss_range: None,
 //!     };
 //!
-//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem, None).unwrap();
 //!     // Now PE linux kernel and kernel cmdline are loaded to guest memory...
 //! }
 //!
@@ -67,7 +68,7 @@
 //!         mem_start: 0x4000_0000,
 //!     };
 //!
-//!     let layout = load_linux(&bootloader_config, &guest_mem).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem, None).unwrap();
 //!     // Now PE linux kernel is loaded to guest memory...
 //! }
 //! ```
@@ -103,6 +104,7 @@ pub mod errors {
         }
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            FwCfg(devices::legacy::errors::Error, devices::legacy::errors::ErrorKind);
         }
         errors {
             #[cfg(target_arch = "aarch64")] DTBOverflow(size: u64) {
@@ -130,6 +132,12 @@ pub mod errors {
             }
             #[cfg(target_arch = "x86_64")] InvalidBzImage {
                 display("Invalid bzImage kernel file")
+            }
+            #[cfg(target_arch = "x86_64")] OldVersionKernel {
+                display("Kernel version is too old.")
+            }
+            #[cfg(target_arch = "x86_64")] ElfKernel {
+                display("ELF-format kernel is not supported")
             }
         }
     }

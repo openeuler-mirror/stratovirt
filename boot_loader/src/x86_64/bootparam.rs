@@ -19,6 +19,7 @@ use super::{
     X86BootLoaderConfig, EBDA_START, MB_BIOS_BEGIN, REAL_MODE_IVT_BEGIN, VGA_RAM_BEGIN,
     VMLINUX_RAM_START,
 };
+use crate::errors::{ErrorKind, Result};
 
 pub const E820_RAM: u32 = 1;
 pub const E820_RESERVED: u32 = 2;
@@ -46,7 +47,7 @@ pub struct RealModeKernelHeader {
     realmode_swtch: u32,
     start_sys_seg: u16,
     kernel_version: u16,
-    type_of_loader: u8,
+    pub type_of_loader: u8,
     pub loadflags: u8,
     setup_move_size: u16,
     pub code32_start: u32,
@@ -86,6 +87,19 @@ impl RealModeKernelHeader {
         }
     }
 
+    pub fn check_valid_kernel(&self) -> Result<()> {
+        if self.header != HDRS {
+            return Err(ErrorKind::ElfKernel.into());
+        }
+        if (self.version < BOOT_VERSION) || ((self.loadflags & 0x1) == 0x0) {
+            return Err(ErrorKind::InvalidBzImage.into());
+        }
+        if self.version < 0x202 {
+            return Err(ErrorKind::OldVersionKernel.into());
+        }
+        Ok(())
+    }
+
     pub fn set_cmdline(&mut self, cmdline_addr: u32, cmdline_size: u32) {
         self.cmdline_ptr = cmdline_addr;
         self.cmdline_size = cmdline_size;
@@ -104,6 +118,14 @@ pub struct E820Entry {
     size: u64,
     type_: u32,
 }
+
+impl E820Entry {
+    pub(crate) fn new(addr: u64, size: u64, type_: u32) -> E820Entry {
+        E820Entry { addr, size, type_ }
+    }
+}
+
+impl ByteCode for E820Entry {}
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -159,7 +181,7 @@ impl BootParams {
     }
 
     pub fn add_e820_entry(&mut self, addr: u64, size: u64, type_: u32) {
-        self.e820_table[self.e820_entries as usize] = E820Entry { addr, size, type_ };
+        self.e820_table[self.e820_entries as usize] = E820Entry::new(addr, size, type_);
         self.e820_entries += 1;
     }
 
@@ -226,6 +248,7 @@ mod test {
             ioapic_addr: 0xFEC0_0000,
             lapic_addr: 0xFEE0_0000,
             prot64_mode: false,
+            ident_tss_range: None,
         };
 
         let boot_hdr = RealModeKernelHeader::default();

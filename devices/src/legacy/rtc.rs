@@ -109,7 +109,11 @@ impl RTC {
             cmos_data: [0_u8; 128],
             cur_index: 0_u8,
             interrupt_evt: EventFd::new(libc::EFD_NONBLOCK)?,
-            res: SysRes::default(),
+            res: SysRes {
+                region_base: RTC_PORT_INDEX,
+                region_size: 8,
+                irq: RTC_IRQ as i32,
+            },
         };
 
         // Set VRT bit in Register-D, indicates that RAM and time are valid.
@@ -217,10 +221,13 @@ impl RTC {
         true
     }
 
-    pub fn realize(mut self, sysbus: &mut SysBus, base: u64, size: u64) -> Result<()> {
-        self.set_sys_resource(sysbus, base, size)?;
+    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<()> {
+        let region_base = self.res.region_base;
+        let region_size = self.res.region_size;
+        self.set_sys_resource(sysbus, region_base, region_size)?;
+
         let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, base, size)?;
+        sysbus.attach_device(&dev, region_base, region_size)?;
         Ok(())
     }
 }

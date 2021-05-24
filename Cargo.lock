@@ -96,6 +96,7 @@ name = "boot_loader"
 version = "0.3.0"
 dependencies = [
  "address_space",
+ "devices",
  "error-chain",
  "kvm-bindings",
  "kvm-ioctls",
@@ -145,7 +146,6 @@ version = "0.3.0"
 dependencies = [
  "acpi",
  "address_space",
- "boot_loader",
  "byteorder",
  "error-chain",
  "hypervisor",

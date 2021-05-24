@@ -13,6 +13,7 @@
 mod mch;
 mod syscall;
 
+use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
@@ -23,15 +24,15 @@ use acpi::{
     AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
     TABLE_CHECKSUM_OFFSET,
 };
-use address_space::{AddressSpace, GuestAddress, Region};
+use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
-use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, Serial, SERIAL_ADDR};
+use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, SerialConfig,
-    VmConfig, VsockConfig,
+    BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
+    SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -58,28 +59,28 @@ use util::byte_code::ByteCode;
 const VENDOR_ID_INTEL: u16 = 0x8086;
 
 /// The type of memory layout entry on x86_64
-#[cfg(target_arch = "x86_64")]
 #[repr(usize)]
 #[allow(dead_code)]
 pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
-    PcieMmio,
     PcieEcam,
+    PcieMmio,
     Mmio,
     IoApic,
     LocalApic,
+    IdentTss,
     MemAbove4g,
 }
 
 /// Layout of x86_64
-#[cfg(target_arch = "x86_64")]
 pub const MEM_LAYOUT: &[(u64, u64)] = &[
-    (0, 0xC000_0000),                // MemBelow4g
+    (0, 0x8000_0000),                // MemBelow4g
     (0xB000_0000, 0x1000_0000),      // PcieEcam
     (0xC000_0000, 0x3000_0000),      // PcieMmio
     (0xF010_0000, 0x200),            // Mmio
     (0xFEC0_0000, 0x10_0000),        // IoApic
     (0xFEE0_0000, 0x10_0000),        // LocalApic
+    (0xFEF0_C000, 0x4000),           // Identity map address and TSS
     (0x1_0000_0000, 0x80_0000_0000), // MemAbove4g
 ];
 
@@ -144,6 +145,38 @@ impl StdMachine {
                 .chain_err(|| MachineErrorKind::InitPwrBtnErr)?,
         })
     }
+
+    fn arch_init() -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
+        let identity_addr: u64 = MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0;
+
+        ioctl_iow_nr!(
+            KVM_SET_IDENTITY_MAP_ADDR,
+            kvm_bindings::KVMIO,
+            0x48,
+            std::os::raw::c_ulong
+        );
+        // Safe because the following ioctl only sets identity map address to KVM.
+        unsafe {
+            vmm_sys_util::ioctl::ioctl_with_ref(vm_fd, KVM_SET_IDENTITY_MAP_ADDR(), &identity_addr);
+        }
+        // Page table takes 1 page, TSS takes the following 3 pages.
+        vm_fd
+            .set_tss_address((identity_addr + 0x1000) as usize)
+            .chain_err(|| MachineErrorKind::SetTssErr)?;
+
+        let pit_config = kvm_pit_config {
+            flags: KVM_PIT_SPEAKER_DUMMY,
+            pad: Default::default(),
+        };
+        vm_fd
+            .create_pit2(pit_config)
+            .chain_err(|| MachineErrorKind::CrtPitErr)?;
+        Ok(())
+    }
 }
 
 impl StdMachineOps for StdMachine {
@@ -196,6 +229,60 @@ impl StdMachineOps for StdMachine {
 
         Ok(fwcfg_dev)
     }
+
+    fn add_pflash_device(&mut self, config: &PFlashConfig) -> super::errors::Result<()> {
+        use super::errors::ResultExt;
+
+        // The two PFlash devices locates below 4GB, this variable represents the end address
+        // of current PFlash device.
+        static mut FLASH_END: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        // Safe because the PFlash devices is added in succession and `FLASH_END` variable
+        // will only be initialized and modified by the main thread.
+        let flash_end: u64 = unsafe { FLASH_END };
+
+        let mut fd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(config.path_on_host.clone())?;
+        let pfl_size = fd.metadata().unwrap().len();
+
+        if config.unit == 0 {
+            let rom_base = 0xe0000;
+            let rom_size = 0x20000;
+            fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
+
+            let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
+                GuestAddress(rom_base),
+                rom_size,
+                None,
+                false,
+                false,
+            )?));
+            rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
+            rom_region.set_priority(10);
+            self.sys_mem.root().add_subregion(rom_region, rom_base)?;
+
+            fd.seek(SeekFrom::Start(0))?;
+        }
+
+        let sector_len: u32 = 1024 * 4;
+        let pflash = PFlash::new(
+            pfl_size,
+            fd,
+            sector_len,
+            4_u32,
+            1_u32,
+            config.read_only as i32,
+        )
+        .chain_err(|| "Failed to create pflash device")?;
+        PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
+            .chain_err(|| "Failed to realize pflash device")?;
+
+        unsafe {
+            FLASH_END -= pfl_size;
+        }
+        Ok(())
+    }
 }
 
 impl MachineOps for StdMachine {
@@ -226,7 +313,10 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn load_boot_source(&self) -> MachineResult<CPUBootConfig> {
+    fn load_boot_source(
+        &self,
+        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+    ) -> MachineResult<CPUBootConfig> {
         use crate::errors::ResultExt;
 
         let boot_source = self.boot_source.lock().unwrap();
@@ -243,9 +333,10 @@ impl MachineOps for StdMachine {
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+            ident_tss_range: Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]),
             prot64_mode: false,
         };
-        let layout = load_linux(&bootloader_config, &self.sys_mem)
+        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
 
         Ok(CPUBootConfig {
@@ -253,15 +344,22 @@ impl MachineOps for StdMachine {
             boot_ip: layout.boot_ip,
             boot_sp: layout.boot_sp,
             boot_selector: layout.boot_selector,
-            zero_page: layout.zero_page_addr,
-            code_segment: layout.segments.code_segment,
-            data_segment: layout.segments.data_segment,
-            gdt_base: layout.segments.gdt_base,
-            gdt_size: layout.segments.gdt_limit,
-            idt_base: layout.segments.idt_base,
-            idt_size: layout.segments.idt_limit,
-            pml4_start: layout.boot_pml4_addr,
+            ..Default::default()
         })
+    }
+
+    fn add_rtc_device(&mut self, mem_size: u64) -> MachineResult<()> {
+        use crate::errors::ResultExt;
+
+        let mut rtc = RTC::new().chain_err(|| "Failed to create RTC device")?;
+        rtc.set_memory(
+            mem_size,
+            MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
+        );
+        RTC::realize(rtc, &mut self.sysbus).chain_err(|| "Failed to realize RTC device")?;
+
+        Ok(())
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
@@ -306,9 +404,18 @@ impl MachineOps for StdMachine {
     fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
+        self.add_rtc_device(vm_config.machine_config.mem_config.mem_size)
+            .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
+
         if let Some(serial) = vm_config.serial.as_ref() {
             self.add_serial_device(&serial)
                 .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
+        }
+        if let Some(pflashs) = vm_config.pflashs.as_ref() {
+            for pflash in pflashs {
+                self.add_pflash_device(pflash)
+                    .chain_err(|| MachineErrorKind::AddDevErr("pflash".to_string()))?;
+            }
         }
         if let Some(vsock) = vm_config.vsock.as_ref() {
             self.add_vsock_device(&vsock)
@@ -367,27 +474,21 @@ impl MachineOps for StdMachine {
             .init_pci_host()
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
         locked_vm.add_devices(vm_config)?;
-        let _fw_cfg = locked_vm.add_fwcfg_device()?;
+        let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let boot_config = locked_vm.load_boot_source()?;
+        let boot_config = locked_vm.load_boot_source(Some(&fwcfg))?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
             &vcpu_fds,
             &boot_config,
         )?);
-
-        let mut pit_config = kvm_pit_config::default();
-        pit_config.flags = KVM_PIT_SPEAKER_DUMMY;
-        vm_fd
-            .create_pit2(pit_config)
-            .chain_err(|| MachineErrorKind::CrtPitErr)?;
-        vm_fd
-            .set_tss_address(0xfffb_d000 as usize)
-            .chain_err(|| MachineErrorKind::SetTssErr)?;
         locked_vm
-            .register_power_event(&locked_vm.power_button)
-            .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
+            .build_acpi_tables(&fwcfg)
+            .chain_err(|| "Failed to create ACPI tables")?;
+
+        StdMachine::arch_init()?;
+        locked_vm.register_power_event(&locked_vm.power_button)?;
         Ok(())
     }
 

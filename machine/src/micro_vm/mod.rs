@@ -67,11 +67,11 @@ use std::vec::Vec;
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
-use devices::legacy::Serial;
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
 use devices::legacy::SERIAL_ADDR;
+use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
 use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
@@ -493,7 +493,10 @@ impl MachineOps for LightMachine {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn load_boot_source(&self) -> MachineResult<CPUBootConfig> {
+    fn load_boot_source(
+        &self,
+        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+    ) -> MachineResult<CPUBootConfig> {
         use crate::errors::ResultExt;
 
         let boot_source = self.boot_source.lock().unwrap();
@@ -510,9 +513,10 @@ impl MachineOps for LightMachine {
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
+            ident_tss_range: None,
             prot64_mode: true,
         };
-        let layout = load_linux(&bootloader_config, &self.sys_mem)
+        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
 
         Ok(CPUBootConfig {
@@ -532,7 +536,10 @@ impl MachineOps for LightMachine {
     }
 
     #[cfg(target_arch = "aarch64")]
-    fn load_boot_source(&self) -> MachineResult<CPUBootConfig> {
+    fn load_boot_source(
+        &self,
+        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+    ) -> MachineResult<CPUBootConfig> {
         use crate::errors::ResultExt;
 
         let mut boot_source = self.boot_source.lock().unwrap();
@@ -543,7 +550,7 @@ impl MachineOps for LightMachine {
             initrd,
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
-        let layout = load_linux(&bootloader_config, &self.sys_mem)
+        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
             .chain_err(|| MachineErrorKind::LoadKernErr)?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
@@ -567,6 +574,11 @@ impl MachineOps for LightMachine {
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )
         .chain_err(|| "Failed to realize pl031.")?;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn add_rtc_device(&mut self, _mem_size: u64) -> MachineResult<()> {
         Ok(())
     }
 
@@ -822,7 +834,7 @@ impl MachineOps for LightMachine {
             .chain_err(|| "Failed to create replaceable devices.")?;
         locked_vm.add_devices(vm_config)?;
 
-        let boot_config = locked_vm.load_boot_source()?;
+        let boot_config = locked_vm.load_boot_source(None)?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,

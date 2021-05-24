@@ -240,7 +240,7 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn load_boot_source(&self) -> Result<CPUBootConfig> {
+    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
         use crate::errors::ResultExt;
 
         let mut boot_source = self.boot_source.lock().unwrap();
@@ -251,8 +251,8 @@ impl MachineOps for StdMachine {
             initrd,
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
-        let layout =
-            load_linux(&bootloader_config, &self.sys_mem).chain_err(|| ErrorKind::LoadKernErr)?;
+        let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
+            .chain_err(|| ErrorKind::LoadKernErr)?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
             rd.initrd_size = layout.initrd_size;
@@ -393,7 +393,7 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
 
-        let boot_config = locked_vm.load_boot_source()?;
+        let boot_config = locked_vm.load_boot_source(None)?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,

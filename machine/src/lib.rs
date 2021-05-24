@@ -16,6 +16,9 @@ extern crate error_chain;
 extern crate log;
 #[macro_use]
 extern crate machine_manager;
+#[cfg(target_arch = "x86_64")]
+#[macro_use]
+extern crate vmm_sys_util;
 
 pub mod errors {
     error_chain! {
@@ -107,6 +110,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use address_space::KvmIoListener;
 use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
+use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use hypervisor::KVM_FDS;
@@ -138,7 +142,7 @@ pub trait MachineOps {
     /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
 
-    fn load_boot_source(&self) -> Result<CPUBootConfig>;
+    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
 
     /// Init I/O & memory address space and mmap guest memory.
     ///
@@ -234,8 +238,7 @@ pub trait MachineOps {
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()>;
 
     /// Add RTC device.
-    #[cfg(target_arch = "aarch64")]
-    fn add_rtc_device(&mut self) -> Result<()>;
+    fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] mem_size: u64) -> Result<()>;
 
     /// Add serial device.
     ///
