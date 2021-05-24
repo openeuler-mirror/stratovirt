@@ -156,7 +156,7 @@ pub trait PciDevOps: Send {
 /// * `region_start` - Start address of the second region.
 /// * `region_end` - End address of the second region.
 pub fn ranges_overlap(start: usize, end: usize, range_start: usize, range_end: usize) -> bool {
-    if start > range_end || range_start > end {
+    if start >= range_end || range_start >= end {
         return false;
     }
     true
