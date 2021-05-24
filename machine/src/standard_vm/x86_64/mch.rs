@@ -15,8 +15,12 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{Region, RegionOps};
 use error_chain::ChainedError;
 use pci::{
-    errors::Result as PciResult, le_read_u64, le_write_u16, ranges_overlap, PciBus, PciConfig,
-    PciDevOps, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    config::{
+        PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
+        VENDOR_ID,
+    },
+    errors::Result as PciResult,
+    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevOps,
 };
 
 use super::VENDOR_ID_INTEL;

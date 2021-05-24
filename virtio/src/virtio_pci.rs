@@ -22,7 +22,7 @@ use pci::config::{
     ROM_ADDRESS, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
-use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciConfig, PciDevOps};
+use pci::{config::PciConfig, init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
