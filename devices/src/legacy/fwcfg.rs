@@ -247,28 +247,6 @@ struct FwCfgDmaAccess {
 
 impl ByteCode for FwCfgDmaAccess {}
 
-/// set DMA memory zone with char
-fn set_dma_memory(
-    addr_space: &Arc<AddressSpace>,
-    addr: GuestAddress,
-    char: u8,
-    len: u64,
-) -> Result<()> {
-    const FILLBUF_SIZE: usize = 512;
-    let fill_buf: &[u8; FILLBUF_SIZE] = &[char; FILLBUF_SIZE];
-
-    addr_space
-        .write(&mut fill_buf.as_ref(), addr, len)
-        .chain_err(|| {
-            format!(
-                "Failed to set dma memory for fwcfg at gpa=0x{:x} len=0x{:x}",
-                addr.0, len
-            )
-        })?;
-
-    Ok(())
-}
-
 /// write data to DMA memory zone
 fn write_dma_memory(
     addr_space: &Arc<AddressSpace>,
@@ -576,12 +554,19 @@ impl FwCfgCommon {
             {
                 len = dma.length;
 
-                if is_read
-                    && set_dma_memory(&mem_space, GuestAddress(dma.address), 0, len as u64).is_err()
-                {
-                    dma.control |= FW_CFG_DMA_CTL_ERROR;
+                if is_read {
+                    let data = vec![0_u8; len as usize];
+                    if write_dma_memory(
+                        &mem_space,
+                        GuestAddress(dma.address),
+                        data.as_slice(),
+                        len as u64,
+                    )
+                    .is_err()
+                    {
+                        dma.control |= FW_CFG_DMA_CTL_ERROR;
+                    }
                 }
-
                 if is_write {
                     dma.control |= FW_CFG_DMA_CTL_ERROR;
                 }
