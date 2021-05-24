@@ -509,8 +509,8 @@ impl FwCfgCommon {
         self.dma_addr = GuestAddress(0);
 
         // Read DMA request from guest
-        let mut dma_default = FwCfgDmaAccess::default();
-        let dma_request = dma_default.as_mut_bytes();
+        let mut dma_req = FwCfgDmaAccess::default();
+        let dma_request = dma_req.as_mut_bytes();
         let size = std::mem::size_of::<FwCfgDmaAccess>() as u64;
         if let Err(_e) = read_dma_memory(&self.mem_space, dma_addr, dma_request, size) {
             write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)?;
@@ -1126,5 +1126,295 @@ impl AmlBuilder for FwCfgMem {
 impl AmlBuilder for FwCfgIO {
     fn aml_bytes(&self) -> Vec<u8> {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use address_space::{AddressSpace, HostMemMapping, Region};
+
+    fn sysbus_init() -> SysBus {
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
+        #[cfg(target_arch = "x86_64")]
+        let free_irqs: (i32, i32) = (5, 15);
+        #[cfg(target_arch = "aarch64")]
+        let free_irqs: (i32, i32) = (32, 191);
+        let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
+        SysBus::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            free_irqs,
+            mmio_region,
+        )
+    }
+
+    fn address_space_init() -> Arc<AddressSpace> {
+        let root = Region::init_container_region(1 << 36);
+        let sys_space = AddressSpace::new(root).unwrap();
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), 0x0010_0000, None, false, false).unwrap(),
+        );
+        sys_space
+            .root()
+            .add_subregion(
+                Region::init_ram_region(host_mmap.clone()),
+                host_mmap.start_address().raw_value(),
+            )
+            .unwrap();
+        sys_space
+    }
+
+    #[test]
+    fn test_entry_functions() {
+        let sys_mem = address_space_init();
+        let mut fwcfg_common = FwCfgCommon::new(sys_mem);
+
+        let ncpus: usize = 1;
+        fwcfg_common
+            .add_entry(
+                FwCfgEntryType::NbCpus,
+                None,
+                None,
+                ncpus.as_bytes().to_vec(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            fwcfg_common.entries[FwCfgEntryType::NbCpus as usize].data,
+            ncpus.as_bytes().to_vec()
+        );
+
+        let cmdline =
+            "console=ttyAMA0 reboot=t panic=1 tsc=reliable ipv6.disable=1 root=/dev/vda rw"
+                .to_string();
+        fwcfg_common
+            .add_entry(
+                FwCfgEntryType::CmdlineSize,
+                None,
+                None,
+                (cmdline.len() + 1).as_bytes().to_vec(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            fwcfg_common.entries[FwCfgEntryType::CmdlineSize as usize].data,
+            (cmdline.len() + 1).as_bytes().to_vec()
+        );
+
+        fwcfg_common
+            .add_entry(
+                FwCfgEntryType::CmdlineData,
+                None,
+                None,
+                cmdline.as_bytes().to_vec(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            fwcfg_common.entries[FwCfgEntryType::CmdlineData as usize].data,
+            cmdline.as_bytes().to_vec()
+        );
+
+        let boot_order = Vec::<u8>::new();
+        fwcfg_common
+            .add_entry(FwCfgEntryType::FileDir, None, None, boot_order, false)
+            .unwrap();
+        assert_eq!(
+            fwcfg_common.entries[FwCfgEntryType::FileDir as usize].data,
+            Vec::<u8>::new()
+        );
+    }
+
+    #[test]
+    fn test_file_entry() {
+        let sys_mem = address_space_init();
+        let mut fwcfg_common = FwCfgCommon::new(sys_mem);
+        assert_eq!(fwcfg_common.common_realize().is_ok(), true);
+
+        let file_data = vec![0xcc; 200];
+        assert_eq!(
+            fwcfg_common
+                .add_file_callback("xyz", file_data.clone(), None, None, false)
+                .is_ok(),
+            true
+        );
+        let id = fwcfg_common.files.last().unwrap().select;
+        fwcfg_common.select_entry(id);
+        let entry = fwcfg_common.get_entry_mut().unwrap();
+        assert_eq!(entry.data, file_data);
+
+        let file_data = vec![0x8b; 200];
+        assert_eq!(
+            fwcfg_common
+                .add_file_callback("def", file_data.clone(), None, None, false)
+                .is_ok(),
+            true
+        );
+        let id = fwcfg_common.files[0].select;
+        fwcfg_common.select_entry(id);
+        let entry = fwcfg_common.get_entry_mut().unwrap();
+        assert_eq!(entry.data, file_data);
+
+        let file_data = vec![0x33; 500];
+        assert_eq!(
+            fwcfg_common
+                .add_file_callback("abc", file_data.clone(), None, None, false)
+                .is_ok(),
+            true
+        );
+        let id = fwcfg_common.files[0].select;
+        fwcfg_common.select_entry(id);
+        let entry = fwcfg_common.get_entry_mut().unwrap();
+        assert_eq!(entry.data, file_data);
+    }
+
+    #[test]
+    fn test_dma_functions() {
+        let sys_mem = address_space_init();
+        let mut fwcfg_common = FwCfgCommon::new(sys_mem);
+        assert_eq!(fwcfg_common.common_realize().is_ok(), true);
+
+        // [1]write dma request.
+        let mut dma_req = FwCfgDmaAccess::default();
+        dma_req.length = *u32::from_bytes(&4_u32.to_be_bytes()).unwrap();
+        dma_req.address = *u64::from_bytes(&0xffff_u64.to_be_bytes()).unwrap();
+        dma_req.control = *u32::from_bytes(&FW_CFG_DMA_CTL_READ.to_be_bytes()).unwrap();
+        let dma_request = dma_req.as_mut_bytes();
+        let addr = GuestAddress(0x0000);
+        fwcfg_common
+            .mem_space
+            .write(&mut dma_request.as_ref(), addr, dma_request.len() as u64)
+            .unwrap();
+
+        // [2]set dma addr.
+        fwcfg_common.dma_addr = addr;
+
+        // [3]handle dma request.
+        assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
+
+        // [4]check dma response.
+        assert_eq!(fwcfg_common.mem_space.read_object::<u32>(addr).unwrap(), 0);
+
+        // [5]check dma write result.
+        let mut read_dma_buf = Vec::new();
+        let sig_entry_data = [b'Q', b'E', b'M', b'U'];
+        let len = sig_entry_data.len();
+        fwcfg_common
+            .mem_space
+            .read(&mut read_dma_buf, GuestAddress(0xffff), len as u64)
+            .unwrap();
+        assert_eq!(read_dma_buf, sig_entry_data);
+
+        // Read uninitialized entry.
+        let mut dma_req = FwCfgDmaAccess::default();
+        dma_req.length = *u32::from_bytes(&8_u32.to_be_bytes()).unwrap();
+        dma_req.address = *u64::from_bytes(&0xffff_u64.to_be_bytes()).unwrap();
+        dma_req.control = *u32::from_bytes(&FW_CFG_DMA_CTL_READ.to_be_bytes()).unwrap();
+        let dma_request = dma_req.as_mut_bytes();
+        let addr = GuestAddress(0x0000);
+        fwcfg_common
+            .mem_space
+            .write(&mut dma_request.as_ref(), addr, dma_request.len() as u64)
+            .unwrap();
+
+        fwcfg_common.dma_addr = addr;
+
+        assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
+
+        // Result should be all zero.
+        assert_eq!(fwcfg_common.mem_space.read_object::<u32>(addr).unwrap(), 0);
+
+        let mut read_dma_buf = Vec::new();
+        let all_zero = vec![0x0_u8; 4];
+        let len = all_zero.len();
+        fwcfg_common
+            .mem_space
+            .read(&mut read_dma_buf, GuestAddress(0xffff), len as u64)
+            .unwrap();
+        assert_eq!(read_dma_buf, all_zero);
+    }
+
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn test_read_write_aarch64() {
+        let mut sys_bus = sysbus_init();
+        let sys_mem = address_space_init();
+        let fwcfg = FwCfgMem::new(sys_mem);
+
+        let fwcfg_dev = FwCfgMem::realize(fwcfg, &mut sys_bus, 0x0902_0000, 0x0000_0018).unwrap();
+        // Read FW_CFG_DMA_SIGNATURE entry.
+        let base = GuestAddress(0x0000);
+        let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];
+        let offset = 0x10;
+        let target_data = vec![0x51_u8, 0x45, 0x4d, 0x55];
+        fwcfg_dev.lock().unwrap().read(&mut read_data, base, offset);
+        assert_eq!(read_data, target_data);
+
+        // Select entry and read it.
+        let write_data = vec![0x0_u8];
+        let offset = 0x8;
+        let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);
+        assert_eq!(f_back, true);
+        let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];
+        let offset = 0x4;
+        let sig_entry_data = [b'Q', b'E', b'M', b'U'];
+        fwcfg_dev.lock().unwrap().read(&mut read_data, base, offset);
+        assert_eq!(read_data, sig_entry_data);
+
+        // Failed to write beacuse of offset overflow.
+        let write_data = vec![0x0_u8];
+        let offset = 0x18;
+        let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);
+        assert_eq!(f_back, false);
+
+        // Illegal write_data length.
+        let write_data = vec![0x0_u8];
+        let offset = 0x10;
+        let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);
+        assert_eq!(f_back, false);
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn test_read_write_x86_64() {
+        let mut sys_bus = sysbus_init();
+        let sys_mem = address_space_init();
+        let fwcfg = FwCfgIO::new(sys_mem);
+
+        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut sys_bus).unwrap();
+        // Read FW_CFG_DMA_SIGNATURE entry.
+        let base = GuestAddress(0x0000);
+        let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];
+        let offset = 0x4;
+        let target_data = vec![0x51_u8, 0x45, 0x4d, 0x55];
+        fwcfg_dev.lock().unwrap().read(&mut read_data, base, offset);
+        assert_eq!(read_data, target_data);
+
+        // Select entry and read it.
+        let write_data = vec![0x0_u8, 0x0];
+        let offset = 0x0;
+        let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);
+        assert_eq!(f_back, true);
+        let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];
+        let offset = 0x0;
+        let sig_entry_data = [b'Q', b'E', b'M', b'U'];
+        fwcfg_dev.lock().unwrap().read(&mut read_data, base, offset);
+        assert_eq!(read_data, sig_entry_data);
+
+        // Failed to write beacuse of offset overflow.
+        let write_data = vec![0x0_u8];
+        let offset = 0x0c;
+        let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);
+        assert_eq!(f_back, false);
+
+        // Illegal write_data length.
+        let write_data = vec![0x0_u8];
+        let offset = 0x0;
+        let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);
+        assert_eq!(f_back, false);
     }
 }
