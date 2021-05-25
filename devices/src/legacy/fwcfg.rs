@@ -885,6 +885,18 @@ impl SysBusDevOps for FwCfgMem {
         Some(&mut self.res)
     }
 
+    fn set_sys_resource(
+        &mut self,
+        _sysbus: &mut SysBus,
+        region_base: u64,
+        region_size: u64,
+    ) -> sysbus::errors::Result<()> {
+        let mut res = self.get_sys_resource().unwrap();
+        res.region_base = region_base;
+        res.region_size = region_size;
+        Ok(())
+    }
+
     /// Get device type.
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::FwCfg
@@ -907,7 +919,7 @@ impl FwCfgIO {
             res: SysRes {
                 region_base: FW_CFG_IO_BASE,
                 region_size: FW_CFG_IO_SIZE,
-                irq: 0,
+                irq: -1,
             },
         }
     }
@@ -1035,7 +1047,6 @@ impl SysBusDevOps for FwCfgIO {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
-        res.irq = 0;
         Ok(())
     }
 
