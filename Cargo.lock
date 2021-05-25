@@ -299,7 +299,19 @@ dependencies = [
  "error-chain",
  "kvm-ioctls",
  "lazy_static",
+ "migration_derive",
  "serde",
+ "util",
+]
+
+[[package]]
+name = "migration_derive"
+version = "0.3.0"
+dependencies = [
+ "migration",
+ "proc-macro2",
+ "quote",
+ "syn",
  "util",
 ]
 

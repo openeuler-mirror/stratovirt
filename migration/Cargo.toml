@@ -10,3 +10,6 @@ error-chain = "0.12.4"
 kvm-ioctls = "0.6.0"
 lazy_static = "1.4.0"
 serde = { version = ">=1.0.114", features = ["derive"] }
+
+[dev-dependencies]
+migration_derive = { path = "../migration_derive" }

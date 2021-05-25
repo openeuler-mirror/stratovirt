@@ -382,3 +382,22 @@ Copyright notice:
 Copyright (c) 2018 Tom Parker-Shemilt
 License: MIT
 Please see above.
+
+Software: syn 1.0.72
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: quote 1.0.7
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: proc-macro2 1.0
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+Copyright (c) Alex Crichton <alex@alexcrichton.com>
+License: MIT or Apache License Version 2.0
+Please see above.

@@ -171,6 +171,13 @@ pub mod tests {
     use super::{DeviceStateDesc, FieldDesc, StateTransfer, VersionCheck};
     use util::byte_code::ByteCode;
 
+    struct MigrationManager {}
+    impl MigrationManager {
+        fn desc_db_len() -> u64 {
+            0
+        }
+    }
+
     #[derive(Default)]
     // A simple device version 1.
     pub struct DeviceV1 {
@@ -183,7 +190,8 @@ pub mod tests {
         state: DeviceV2State,
     }
 
-    #[derive(Copy, Clone, Default)]
+    #[derive(Copy, Clone, Desc, ByteCode)]
+    #[desc_version(current_version = "1.0.0", compat_version = "0.1.0")]
     // Statement for DeviceV1.
     pub struct DeviceV1State {
         ier: u8,
@@ -191,7 +199,8 @@ pub mod tests {
         lcr: u8,
     }
 
-    #[derive(Copy, Clone, Default)]
+    #[derive(Copy, Clone, Desc, ByteCode)]
+    #[desc_version(current_version = "2.0.0", compat_version = "0.1.0")]
     // Statement for DeviceV2.
     pub struct DeviceV2State {
         ier: u8,
@@ -199,88 +208,6 @@ pub mod tests {
         lcr: u8,
         mcr: u8,
     }
-
-    impl DeviceV1State {
-        pub fn descriptor() -> DeviceStateDesc {
-            let fields = vec![
-                FieldDesc {
-                    var_name: "ier".to_string(),
-                    type_name: "u8".to_string(),
-                    alias: "ier".to_string(),
-                    offset: 0,
-                    size: 1,
-                },
-                FieldDesc {
-                    var_name: "iir".to_string(),
-                    type_name: "u8".to_string(),
-                    alias: "iir".to_string(),
-                    offset: 1,
-                    size: 1,
-                },
-                FieldDesc {
-                    var_name: "lcr".to_string(),
-                    type_name: "u8".to_string(),
-                    alias: "lcr".to_string(),
-                    offset: 2,
-                    size: 1,
-                },
-            ];
-            DeviceStateDesc {
-                name: "Device".to_string(),
-                alias: 1,
-                size: 3,
-                current_version: 1,
-                compat_version: 1,
-                fields,
-            }
-        }
-    }
-
-    impl DeviceV2State {
-        pub fn descriptor() -> DeviceStateDesc {
-            let fields = vec![
-                FieldDesc {
-                    var_name: "ier".to_string(),
-                    type_name: "u8".to_string(),
-                    alias: "ier".to_string(),
-                    offset: 0,
-                    size: 1,
-                },
-                FieldDesc {
-                    var_name: "iir".to_string(),
-                    type_name: "u8".to_string(),
-                    alias: "iir".to_string(),
-                    offset: 1,
-                    size: 1,
-                },
-                FieldDesc {
-                    var_name: "lcr".to_string(),
-                    type_name: "u8".to_string(),
-                    alias: "lcr".to_string(),
-                    offset: 2,
-                    size: 1,
-                },
-                FieldDesc {
-                    var_name: "mcr".to_string(),
-                    type_name: "u8".to_string(),
-                    alias: "mcr".to_string(),
-                    offset: 3,
-                    size: 1,
-                },
-            ];
-            DeviceStateDesc {
-                name: "Device".to_string(),
-                alias: 1,
-                size: 4,
-                current_version: 2,
-                compat_version: 1,
-                fields,
-            }
-        }
-    }
-
-    impl ByteCode for DeviceV1State {}
-    impl ByteCode for DeviceV2State {}
 
     impl StateTransfer for DeviceV1 {
         fn get_state_vec(&self) -> super::Result<Vec<u8>> {
@@ -354,6 +281,7 @@ pub mod tests {
             state: DeviceV2State::default(),
         };
         device_v2.set_state_mut(&current_slice).unwrap();
+        assert!(state_2_desc.current_version > state_1_desc.current_version);
         device_v2.upgrade_version();
 
         assert_eq!(device_v2.state.ier, device_v1.state.ier);
