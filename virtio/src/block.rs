@@ -258,7 +258,7 @@ impl Request {
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
-            opcode: IoCmd::NOOP,
+            opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: (self.out_header.sector << SECTOR_SHIFT) as usize,
             process: true,
@@ -276,7 +276,7 @@ impl Request {
 
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN => {
-                aiocb.opcode = IoCmd::PREADV;
+                aiocb.opcode = IoCmd::Preadv;
                 if direct {
                     (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
                         "Failed to process block request for reading asynchronously"
@@ -288,7 +288,7 @@ impl Request {
                 }
             }
             VIRTIO_BLK_T_OUT => {
-                aiocb.opcode = IoCmd::PWRITEV;
+                aiocb.opcode = IoCmd::Pwritev;
                 if direct {
                     (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
                         "Failed to process block request for writing asynchronously"
@@ -300,7 +300,7 @@ impl Request {
                 }
             }
             VIRTIO_BLK_T_FLUSH => {
-                aiocb.opcode = IoCmd::FDSYNC;
+                aiocb.opcode = IoCmd::Fdsync;
                 (*aio)
                     .as_mut()
                     .rw_sync(aiocb)
@@ -843,8 +843,7 @@ impl VirtioDevice for Block {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
         }
 
-        self.config_space[(offset as usize)..(offset as usize + data_len)]
-            .copy_from_slice(&data[..]);
+        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
 
         Ok(())
     }

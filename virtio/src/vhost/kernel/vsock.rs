@@ -162,8 +162,7 @@ impl VirtioDevice for Vsock {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
         }
 
-        self.config_space[(offset as usize)..(offset as usize + data_len)]
-            .copy_from_slice(&data[..]);
+        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
 
         Ok(())
     }

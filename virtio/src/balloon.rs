@@ -511,7 +511,7 @@ impl BalloonIoHandler {
         let msg = BalloonInfo {
             actual: ram_size - balloon_size,
         };
-        event!(BALLOON_CHANGED; msg);
+        event!(BalloonChanged; msg);
     }
 
     /// Get the memory size of balloon.
@@ -687,7 +687,7 @@ impl Balloon {
         let msg = BalloonInfo {
             actual: self.get_guest_memory_size(),
         };
-        event!(BALLOON_CHANGED; msg);
+        event!(BalloonChanged; msg);
         Ok(())
     }
 
