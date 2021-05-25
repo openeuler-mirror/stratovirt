@@ -18,15 +18,14 @@ use error_chain::ChainedError;
 use super::config::{
     PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
     COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, HEADER_TYPE_MULTIFUNC,
-    IO_BASE, MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
-    PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    IO_BASE, MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
+    PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::errors::{Result, ResultExt};
 use crate::msix::init_msix;
 use crate::{le_read_u16, le_write_u16, ranges_overlap, PciDevOps};
 
-const VENDOR_ID_RP: u16 = 0x1b36;
 const DEVICE_ID_RP: u16 = 0x000c;
 
 pub struct RootPort {
@@ -94,7 +93,7 @@ impl PciDevOps for RootPort {
         self.init_write_clear_mask()?;
 
         let config_space = &mut self.config.config;
-        le_write_u16(config_space, VENDOR_ID as usize, VENDOR_ID_RP)?;
+        le_write_u16(config_space, VENDOR_ID as usize, PCI_VENDOR_ID_REDHAT)?;
         le_write_u16(config_space, DEVICE_ID as usize, DEVICE_ID_RP)?;
         le_write_u16(config_space, SUB_CLASS_CODE as usize, CLASS_CODE_PCI_BRIDGE)?;
         config_space[HEADER_TYPE as usize] = HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC;

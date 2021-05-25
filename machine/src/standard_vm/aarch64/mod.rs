@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod pci_host_root;
 mod syscall;
 
 use std::ops::Deref;
@@ -34,7 +35,7 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
-use pci::PciHost;
+use pci::{PciDevOps, PciHost};
 use sysbus::{SysBus, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT};
@@ -47,6 +48,7 @@ use vmm_sys_util::eventfd::EventFd;
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind, Result};
 use crate::MachineOps;
+use pci_host_root::PciHostRoot;
 use syscall::syscall_whitelist;
 
 /// The type of memory layout entry on aarch64
@@ -174,6 +176,11 @@ impl StdMachineOps for StdMachine {
                 MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0,
             )
             .chain_err(|| "Failed to register ECAM in memory space.")?;
+
+        let pcihost_root = PciHostRoot::new(root_bus);
+        pcihost_root
+            .realize()
+            .chain_err(|| "Faile to realize pcihost root device.")?;
 
         Ok(())
     }

@@ -77,6 +77,9 @@ pub const HEADER_TYPE_BRIDGE: u8 = 0x01;
 /// Multi-function device.
 pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
 
+/// The vendor ID for PCI devices other than virtio.
+pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
+
 const PCI_CONFIG_HEAD_END: u8 = 64;
 const NEXT_CAP_OFFSET: u8 = 0x01;
 const STATUS_CAP_LIST: u16 = 0x0010;
