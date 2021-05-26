@@ -26,6 +26,7 @@ use machine_manager::{
     config::{ConfigCheck, DriveConfig},
     event_loop::EventLoop,
 };
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
@@ -47,8 +48,6 @@ use super::{
 const QUEUE_NUM_BLK: usize = 1;
 /// Size of each virtqueue.
 const QUEUE_SIZE_BLK: u16 = 256;
-/// Size of configuration space of the virtio block device.
-const CONFIG_SPACE_SIZE: usize = 16;
 /// Used to compute the number of sectors.
 const SECTOR_SHIFT: u8 = 9;
 /// Size of a sector of the block device.
@@ -725,13 +724,16 @@ impl EventNotifierHelper for BlockIoHandler {
 }
 
 /// State of block device.
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct BlockState {
     /// Bitmask of features supported by the backend.
     device_features: u64,
     /// Bit mask of features negotiated byu the backend and the frontend.
     driver_features: u64,
     /// Config space of the block device.
-    config_space: [u8; CONFIG_SPACE_SIZE],
+    config_space: [u8; 16],
 }
 
 /// Block device structure.
@@ -760,11 +762,7 @@ impl Default for Block {
             blk_cfg: Default::default(),
             disk_image: None,
             disk_sectors: 0,
-            state: BlockState {
-                device_features: 0,
-                driver_features: 0,
-                config_space: [0u8; CONFIG_SPACE_SIZE],
-            },
+            state: BlockState::default(),
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -779,11 +777,7 @@ impl Block {
             blk_cfg,
             disk_image: None,
             disk_sectors: 0,
-            state: BlockState {
-                device_features: 0,
-                driver_features: 0,
-                config_space: [0u8; CONFIG_SPACE_SIZE],
-            },
+            state: BlockState::default(),
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -1015,6 +1009,29 @@ impl VirtioDevice for Block {
     }
 }
 
+impl StateTransfer for Block {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *BlockState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("BLOCK"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&BlockState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Block {}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -1025,6 +1042,7 @@ mod tests {
     use std::{thread, time::Duration};
     use vmm_sys_util::tempfile::TempFile;
 
+    const CONFIG_SPACE_SIZE: usize = 16;
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;

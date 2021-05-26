@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use machine_manager::{config::ConsoleConfig, event_loop::EventLoop, temp_cleaner::TempCleaner};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::num_ops::{read_u32, write_u32};
@@ -265,6 +266,9 @@ impl EventNotifierHelper for ConsoleHandler {
 }
 
 /// Status of console device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct VirtioConsoleState {
     /// Bit mask of features supported by the backend.
     device_features: u64,
@@ -410,6 +414,31 @@ impl VirtioDevice for Console {
         Ok(())
     }
 }
+
+impl StateTransfer for Console {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *VirtioConsoleState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("CONSOLE"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) =
+            MigrationManager::get_desc_alias(&VirtioConsoleState::descriptor().name)
+        {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Console {}
 
 #[cfg(test)]
 mod tests {

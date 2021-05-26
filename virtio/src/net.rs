@@ -21,6 +21,7 @@ use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
     event_loop::EventLoop,
 };
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -439,7 +440,9 @@ impl EventNotifierHelper for NetIoHandler {
 }
 
 /// Status of net device.
-#[derive(Default)]
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct VirtioNetState {
     /// Bit mask of features supported by the backend.
     device_features: u64,
@@ -717,6 +720,29 @@ impl VirtioDevice for Net {
         Ok(())
     }
 }
+
+impl StateTransfer for Net {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *VirtioNetState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("NET"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&VirtioNetState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Net {}
 
 #[cfg(test)]
 mod tests {
