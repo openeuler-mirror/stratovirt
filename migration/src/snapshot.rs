@@ -10,14 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::mem::size_of;
 
+use crate::device_state::{DeviceStateDesc, VersionCheck};
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::header::{FileFormat, MigrationHeader};
-use crate::manager::{MigrationEntry, MigrationManager, MIGRATION_MANAGER};
+use crate::manager::{InstanceId, MigrationEntry, MigrationManager, MIGRATION_MANAGER};
 use util::byte_code::ByteCode;
+use util::reader::BufferReader;
 use util::unix::host_page_size;
 
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
@@ -89,6 +92,73 @@ impl MigrationManager {
             if let MigrationEntry::Memory(i) = entry {
                 i.pre_load(&state_bytes, Some(file))
                     .chain_err(|| "Failed to load vm memory")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Save device state to `Write` trait object.
+    ///
+    /// # Arguments
+    ///
+    /// * `writer` - The `Write` trait object.
+    fn save_device_state(writer: &mut dyn Write) -> Result<()> {
+        for (device_id, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
+            match entry {
+                MigrationEntry::Safe(i) => i.pre_save(*device_id, writer)?,
+                MigrationEntry::Mutex(i) => i.lock().unwrap().pre_save(*device_id, writer)?,
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Restore vm state from `Read` trait object.
+    ///
+    /// # Arguments
+    ///
+    /// * `snap_desc_db` - The snapshot descriptor hashmap read from snapshot file.
+    /// * `reader` - The `Read` trait object.
+    fn load_vmstate(
+        snap_desc_db: HashMap<u64, DeviceStateDesc>,
+        reader: &mut dyn Read,
+    ) -> Result<()> {
+        let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
+        let device_entry = MIGRATION_MANAGER.entry.read().unwrap();
+
+        let mut migration_file = BufferReader::new(reader);
+        migration_file.read_buffer()?;
+
+        while let Some(data) = &migration_file.read_vectored(size_of::<InstanceId>()) {
+            let instance_id = InstanceId::from_bytes(data.as_slice()).unwrap();
+            let snap_desc = snap_desc_db.get(&instance_id.object_type).unwrap();
+            let current_desc = desc_db.get(&snap_desc.name).unwrap();
+
+            let mut state_data = migration_file
+                .read_vectored(snap_desc.size as usize)
+                .unwrap();
+            match current_desc.check_version(snap_desc) {
+                VersionCheck::Same => {}
+                VersionCheck::Compat => {
+                    current_desc
+                        .add_padding(snap_desc, &mut state_data)
+                        .chain_err(|| "Failed to transform snapshot data version.")?;
+                }
+                VersionCheck::Mismatch => {
+                    return Err(ErrorKind::VersionNotFit(
+                        current_desc.compat_version,
+                        snap_desc.current_version,
+                    )
+                    .into())
+                }
+            }
+
+            match device_entry.get(&instance_id.object_id).unwrap() {
+                MigrationEntry::Safe(i) => i.pre_load(&state_data, None)?,
+                MigrationEntry::Mutex(i) => i.lock().unwrap().pre_load_mut(&state_data, None)?,
+                _ => {}
             }
         }
 

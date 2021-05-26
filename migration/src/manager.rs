@@ -115,9 +115,9 @@ pub trait MigrationHook: StateTransfer {
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Copy, Clone, Debug, Default)]
 pub struct InstanceId {
     /// The type of object.
-    object_type: u64,
+    pub object_type: u64,
     /// The unique id of object.
-    object_id: u64,
+    pub object_id: u64,
 }
 
 impl ByteCode for InstanceId {}
@@ -138,7 +138,7 @@ pub struct MigrationManager {
     /// The map offers the deivce_id and combined migratable device entry.
     pub(crate) entry: Arc<RwLock<BTreeMap<u64, MigrationEntry>>>,
     /// The map offers the device type and its device state describe structure.
-    desc_db: Arc<RwLock<HashMap<String, DeviceStateDesc>>>,
+    pub(crate) desc_db: Arc<RwLock<HashMap<String, DeviceStateDesc>>>,
     /// The status of migration work.
     status: Arc<RwLock<MigrationStatus>>,
 }
