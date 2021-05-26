@@ -113,7 +113,7 @@ pub trait MigrationHook: StateTransfer {
 /// The object id should reflect the unique device or ram_region instance in
 /// a VM. Is will be set delying on device create order.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Copy, Clone, Debug, Default)]
-struct InstanceId {
+pub struct InstanceId {
     /// The type of object.
     object_type: u64,
     /// The unique id of object.
@@ -123,7 +123,7 @@ struct InstanceId {
 impl ByteCode for InstanceId {}
 
 /// A entry to every migratable device to call on migration interface.
-enum MigrationEntry {
+pub enum MigrationEntry {
     /// Safe device instance with migration interface.
     Safe(Arc<dyn MigrationHook + Send + Sync>),
     /// Mutex device instance with migration interface.

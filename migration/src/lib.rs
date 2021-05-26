@@ -27,6 +27,8 @@ mod device_state;
 mod header;
 #[allow(dead_code)]
 mod manager;
+#[allow(dead_code)]
+mod snapshot;
 mod status;
 
 pub use device_state::{DeviceStateDesc, FieldDesc, StateTransfer};
