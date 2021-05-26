@@ -157,9 +157,3 @@ pub struct RegionOps {
     /// * `offset` - Offset from base address.
     pub write: std::sync::Arc<dyn Fn(&[u8], GuestAddress, u64) -> bool + Send + Sync>,
 }
-
-/// Gets the page size of system.
-#[inline]
-pub fn host_page_size() -> u64 {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
-}

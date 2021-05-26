@@ -19,8 +19,7 @@ use std::{
 };
 
 use address_space::{
-    host_page_size, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType,
-    RegionIoEventFd, RegionType,
+    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use error_chain::ChainedError;
 use machine_manager::{
@@ -34,6 +33,7 @@ use util::{
     },
     num_ops::{read_u32, round_down, write_u32},
     seccomp::BpfRule,
+    unix::host_page_size,
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
