@@ -278,6 +278,7 @@ dependencies = [
  "log",
  "machine_manager",
  "migration",
+ "migration_derive",
  "pci",
  "serde",
  "serde_json",
