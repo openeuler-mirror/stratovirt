@@ -16,13 +16,17 @@ use std::{os::unix::io::RawFd, usize};
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
 use machine_manager::{config::VsockConfig, event_loop::EventLoop};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
-use super::super::super::{Queue, VirtioDevice, VirtioInterrupt, VIRTIO_TYPE_VSOCK};
+use super::super::super::{
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_VSOCK,
+};
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 
@@ -30,10 +34,10 @@ use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK
 const QUEUE_NUM_VSOCK: usize = 3;
 /// Size of each virtqueue.
 const QUEUE_SIZE_VSOCK: u16 = 256;
-/// Size of virtio config space
-const VSOCK_CONFIG_SIZE: usize = 8;
 /// Backend vhost-vsock device path.
 const VHOST_PATH: &str = "/dev/vhost-vsock";
+/// Event transport reset
+const VIRTIO_VSOCK_EVENT_TRANSPORT_RESET: u32 = 0;
 
 trait VhostVsockBackend {
     /// Each guest should have an unique CID which is used to route data to the guest.
@@ -61,6 +65,9 @@ impl VhostVsockBackend for VhostBackend {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct VsockState {
     /// Bit mask of features supported by the backend.
     device_features: u64,
@@ -93,16 +100,44 @@ impl Vsock {
         Vsock {
             vsock_cfg: cfg.clone(),
             backend: None,
-            state: VsockState {
-                device_features: 0_u64,
-                driver_features: 0_u64,
-                config_space: [0; VSOCK_CONFIG_SIZE],
-                last_avail_idx: [0u16; 2],
-            },
+            state: VsockState::default(),
             mem_space: mem_space.clone(),
             event_queue: None,
             interrupt_cb: None,
         }
+    }
+
+    /// The `VIRTIO_VSOCK_EVENT_TRANSPORT_RESET` event indicates that communication has
+    /// been interrupted. The driver shuts down established connections and the guest_cid
+    /// configuration field is fetched again.
+    fn transport_reset(&mut self) -> Result<()> {
+        let mut event_queue_locked = self.event_queue.as_ref().unwrap().lock().unwrap();
+        let element = event_queue_locked
+            .vring
+            .pop_avail(&self.mem_space, self.state.driver_features)
+            .chain_err(|| "Failed to get avail ring element.")?;
+
+        self.mem_space
+            .write_object(
+                &VIRTIO_VSOCK_EVENT_TRANSPORT_RESET,
+                element.in_iovec[0].addr,
+            )
+            .chain_err(|| "Failed to write buf for virtio vsock event")?;
+        event_queue_locked
+            .vring
+            .add_used(
+                &self.mem_space,
+                element.index,
+                VIRTIO_VSOCK_EVENT_TRANSPORT_RESET.as_bytes().len() as u32,
+            )
+            .chain_err(|| format!("Failed to add used ring {}", element.index))?;
+
+        if let Some(interrupt_cb) = &self.interrupt_cb {
+            interrupt_cb(&VirtioInterruptType::Vring, None)
+                .chain_err(|| ErrorKind::EventFdWrite)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -265,6 +300,49 @@ impl VirtioDevice for Vsock {
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
         )?;
+
+        Ok(())
+    }
+}
+
+impl StateTransfer for Vsock {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let mut state = self.state;
+        migration::errors::ResultExt::chain_err(
+            self.backend.as_ref().unwrap().set_running(false),
+            || "Failed to set vsock backend stopping",
+        )?;
+        state.last_avail_idx[0] = self.backend.as_ref().unwrap().get_vring_base(0).unwrap();
+        state.last_avail_idx[1] = self.backend.as_ref().unwrap().get_vring_base(1).unwrap();
+        migration::errors::ResultExt::chain_err(
+            self.backend.as_ref().unwrap().set_running(true),
+            || "Failed to set vsock backend running",
+        )?;
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *VsockState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("VSOCK"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&VsockState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Vsock {
+    fn resume(&mut self) -> migration::errors::Result<()> {
+        if let Err(e) = self.transport_reset() {
+            error!("Failed to resume virtio vsock device: {}", e);
+        }
 
         Ok(())
     }

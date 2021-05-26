@@ -14,7 +14,7 @@ mod net;
 mod vsock;
 
 pub use net::Net;
-pub use vsock::Vsock;
+pub use vsock::{Vsock, VsockState};
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
