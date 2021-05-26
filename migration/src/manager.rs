@@ -136,7 +136,7 @@ pub enum MigrationEntry {
 /// It is also the only way to call on `MIGRATION_MANAGER`.
 pub struct MigrationManager {
     /// The map offers the deivce_id and combined migratable device entry.
-    entry: Arc<RwLock<BTreeMap<u64, MigrationEntry>>>,
+    pub(crate) entry: Arc<RwLock<BTreeMap<u64, MigrationEntry>>>,
     /// The map offers the device type and its device state describe structure.
     desc_db: Arc<RwLock<HashMap<String, DeviceStateDesc>>>,
     /// The status of migration work.

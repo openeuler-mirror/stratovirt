@@ -10,13 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fs::File;
 use std::io::{Read, Write};
 use std::mem::size_of;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::header::{FileFormat, MigrationHeader};
-use crate::manager::MigrationManager;
+use crate::manager::{MigrationEntry, MigrationManager, MIGRATION_MANAGER};
 use util::byte_code::ByteCode;
+use util::unix::host_page_size;
 
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
 const HEADER_LENGTH: usize = 4096;
@@ -57,5 +59,39 @@ impl MigrationManager {
 
         Ok(*MigrationHeader::from_bytes(&header_bytes)
             .ok_or(ErrorKind::FromBytesError("HEADER"))?)
+    }
+
+    /// Save memory state and data to `Write` trait object.
+    ///
+    /// # Arguments
+    ///
+    /// * `writer` - The `Write` trait object.
+    fn save_memory(writer: &mut dyn Write) -> Result<()> {
+        for (id, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
+            if let MigrationEntry::Memory(i) = entry {
+                i.pre_save(*id, writer)
+                    .chain_err(|| "Failed to save vm memory")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Load and restore memory from snapshot memory file.
+    ///
+    /// # Arguments
+    ///
+    /// * `file` - snapshot memory file.
+    fn load_memory(file: &mut File) -> Result<()> {
+        let mut state_bytes = [0_u8].repeat((host_page_size() as usize) * 2 - HEADER_LENGTH);
+        file.read_exact(&mut state_bytes)?;
+        for (_, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
+            if let MigrationEntry::Memory(i) = entry {
+                i.pre_load(&state_bytes, Some(file))
+                    .chain_err(|| "Failed to load vm memory")?;
+            }
+        }
+
+        Ok(())
     }
 }
