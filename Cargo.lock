@@ -310,6 +310,7 @@ dependencies = [
  "lazy_static",
  "migration_derive",
  "serde",
+ "serde_json",
  "util",
 ]
 

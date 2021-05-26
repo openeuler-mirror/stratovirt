@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::device_state::{DeviceStateDesc, StateTransfer};
@@ -243,6 +243,61 @@ impl MigrationManager {
             .unwrap()
             .get(device_type)
             .map(|desc| desc.alias)
+    }
+
+    /// Return `desc_db` value len(0 restored as `serde_json`)
+    pub fn get_desc_db_len() -> Result<usize> {
+        let mut db_data_len = 0;
+        let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
+        for (_, desc) in desc_db.iter() {
+            let desc_str = serde_json::to_string(desc)?;
+            db_data_len += desc_str.as_bytes().len();
+        }
+
+        Ok(db_data_len)
+    }
+
+    /// Write all `DeviceStateDesc` in `desc_db` hashmap to `Write` trait object.
+    pub fn save_descriptor_db(writer: &mut dyn Write) -> Result<()> {
+        let desc_length = Self::get_desc_db_len()?;
+        let mut desc_buffer = Vec::new();
+        desc_buffer.resize(desc_length, 0);
+        let mut start = 0;
+
+        let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
+        for (_, desc) in desc_db.iter() {
+            let desc_str = serde_json::to_string(desc)?;
+            let desc_bytes = desc_str.as_bytes();
+            desc_buffer[start..start + desc_bytes.len()].copy_from_slice(desc_bytes);
+            start += desc_bytes.len();
+        }
+        writer
+            .write_all(&desc_buffer)
+            .chain_err(|| "Failed to write descriptor message.")?;
+
+        Ok(())
+    }
+
+    /// Load and parse device state descriptor from `Read` trait object. Save as a Hashmap.
+    pub fn load_descriptor_db(
+        reader: &mut dyn Read,
+        desc_length: usize,
+    ) -> Result<HashMap<u64, DeviceStateDesc>> {
+        let mut desc_buffer = Vec::new();
+        desc_buffer.resize(desc_length, 0);
+        reader.read_exact(&mut desc_buffer)?;
+        let mut snapshot_desc_db = HashMap::<u64, DeviceStateDesc>::new();
+
+        let deserializer = serde_json::Deserializer::from_slice(&desc_buffer);
+        for desc in deserializer.into_iter::<DeviceStateDesc>() {
+            let device_desc: DeviceStateDesc = match desc {
+                Ok(desc) => desc,
+                Err(_) => break,
+            };
+            snapshot_desc_db.insert(device_desc.alias, device_desc);
+        }
+
+        Ok(snapshot_desc_db)
     }
 
     /// Set a new migration status for migration manager.

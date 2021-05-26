@@ -42,6 +42,7 @@ pub mod errors {
         foreign_links {
             Io(std::io::Error);
             Ioctl(kvm_ioctls::Error);
+            Json(serde_json::Error);
         }
         errors {
             VersionNotFit(compat_version: u32, current_version: u32) {
