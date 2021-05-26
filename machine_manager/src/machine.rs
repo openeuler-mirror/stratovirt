@@ -173,7 +173,14 @@ pub trait DeviceInterface {
 /// Some external api for migration.
 pub trait MigrateInterface {
     /// Migrates the current running guest to another VM or file.
-    fn migrate(&self, uri: String) -> Response;
+    fn migrate(&self, _uri: String) -> Response {
+        Response::create_empty_response()
+    }
+
+    /// Returns information about current migration.
+    fn query_migrate(&self) -> Response {
+        Response::create_empty_response()
+    }
 }
 
 /// Machine interface which is exposed to inner hypervisor.

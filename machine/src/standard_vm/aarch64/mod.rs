@@ -643,13 +643,8 @@ impl DeviceInterface for StdMachine {
     }
 }
 
-impl MigrateInterface for StdMachine {
-    fn migrate(&self, _uri: String) -> Response {
-        Response::create_empty_response()
-    }
-}
-
 impl MachineInterface for StdMachine {}
+impl MigrateInterface for StdMachine {}
 impl MachineExternalInterface for StdMachine {}
 
 impl EventLoopManager for StdMachine {

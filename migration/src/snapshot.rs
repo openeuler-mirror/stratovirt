@@ -24,6 +24,7 @@ use crate::device_state::{DeviceStateDesc, VersionCheck};
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::header::{FileFormat, MigrationHeader};
 use crate::manager::{InstanceId, MigrationEntry, MigrationManager, MIGRATION_MANAGER};
+use crate::status::MigrationStatus;
 
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
 const HEADER_LENGTH: usize = 4096;
@@ -41,6 +42,9 @@ impl MigrationManager {
     ///
     /// * `path` - snapshot dir path. If path dir not exists, will create it.
     pub fn save_snapshot(path: &str) -> Result<()> {
+        // Set status to `Active`
+        MigrationManager::set_status(MigrationStatus::Active)?;
+
         // Create snapshot dir.
         if let Err(e) = create_dir(path) {
             if e.kind() != std::io::ErrorKind::AlreadyExists {
@@ -75,6 +79,9 @@ impl MigrationManager {
             }
         }
 
+        // Set status to `Completed`
+        MigrationManager::set_status(MigrationStatus::Completed)?;
+
         Ok(())
     }
 
@@ -89,6 +96,9 @@ impl MigrationManager {
     ///
     /// * `path` - snapshot dir path.
     pub fn restore_snapshot(path: &str) -> Result<()> {
+        // Set status to `Active`
+        MigrationManager::set_status(MigrationStatus::Active)?;
+
         let snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
             return Err(ErrorKind::InvalidSnapshotPath.into());
@@ -115,6 +125,10 @@ impl MigrationManager {
         }
 
         Self::resume()?;
+
+        // Set status to `Completed`
+        MigrationManager::set_status(MigrationStatus::Completed)?;
+
         Ok(())
     }
 

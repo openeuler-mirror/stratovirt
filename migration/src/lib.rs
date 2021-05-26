@@ -23,11 +23,8 @@ extern crate lazy_static;
 extern crate migration_derive;
 
 mod device_state;
-#[allow(dead_code)]
 mod header;
-#[allow(dead_code)]
 mod manager;
-#[allow(dead_code)]
 mod snapshot;
 mod status;
 

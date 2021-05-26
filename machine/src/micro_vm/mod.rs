@@ -92,7 +92,7 @@ use machine_manager::{
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
 };
-use migration::MigrationManager;
+use migration::{MigrationManager, MigrationStatus};
 use sysbus::SysBus;
 #[cfg(target_arch = "aarch64")]
 use sysbus::{SysBusDevType, SysRes};
@@ -223,6 +223,10 @@ impl LightMachine {
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
         let power_button =
             EventFd::new(libc::EFD_NONBLOCK).chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
+
+        if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
+            error!("{}", e);
+        }
 
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(vm_config.machine_config.nr_cpus),
@@ -1345,6 +1349,13 @@ impl MigrateInterface for LightMachine {
         match parse_uri(&uri) {
             Ok((UnixPath::File, path)) => {
                 if let Err(e) = MigrationManager::save_snapshot(&path) {
+                    error!(
+                        "Failed to migrate to path \'{:?}\': {}",
+                        path,
+                        e.display_chain()
+                    );
+                    let _ = MigrationManager::set_status(MigrationStatus::Failed)
+                        .map_err(|e| error!("{}", e));
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
@@ -1360,6 +1371,15 @@ impl MigrateInterface for LightMachine {
         }
 
         Response::create_empty_response()
+    }
+
+    fn query_migrate(&self) -> Response {
+        let status_str = MigrationManager::migration_get_status().to_string();
+        let migration_info = qmp_schema::MigrationInfo {
+            status: Some(status_str),
+        };
+
+        Response::create_response(serde_json::to_value(migration_info).unwrap(), None)
     }
 }
 

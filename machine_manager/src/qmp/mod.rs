@@ -404,6 +404,7 @@ fn qmp_command_exec(
         (stop, pause),
         (cont, resume),
         (query_status, query_status),
+        (query_migrate, query_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);

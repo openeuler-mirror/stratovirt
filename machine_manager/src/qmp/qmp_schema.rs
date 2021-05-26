@@ -157,6 +157,13 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<u32>,
     },
+    #[serde(rename = "query-migrate")]
+    query_migrate {
+        #[serde(default)]
+        arguments: query_migrate,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
+    },
 }
 
 /// qmp_capabilities
@@ -770,6 +777,27 @@ impl Command for migrate {
     fn back(self) -> Empty {
         Default::default()
     }
+}
+
+/// query-migrate:
+///
+/// Returns information about current migration.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_migrate {}
+
+impl Command for query_migrate {
+    const NAME: &'static str = "query-migrate";
+    type Res = MigrationInfo;
+
+    fn back(self) -> MigrationInfo {
+        Default::default()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MigrationInfo {
+    #[serde(rename = "status", default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// getfd
