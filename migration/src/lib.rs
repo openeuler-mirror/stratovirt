@@ -60,6 +60,12 @@ pub mod errors {
             SetGicRegsError(reg: &'static str, ret: String) {
                 display("Failed to set GIC {} register: {}", reg, ret)
             }
+            SaveVmMemoryErr(e: String) {
+                display("Failed to save vm memory: {}", e)
+            }
+            RestoreVmMemoryErr(e: String) {
+                display("Failed to restore vm memory: {}", e)
+            }
         }
     }
 }

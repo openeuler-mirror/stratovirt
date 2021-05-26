@@ -48,6 +48,8 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
+ "migration",
+ "migration_derive",
  "serial_test",
  "util",
  "vmm-sys-util",

@@ -181,6 +181,8 @@ pub trait MachineOps {
                 .chain_err(|| ErrorKind::RegMemRegionErr(base, size))?;
         }
 
+        MigrationManager::register_memory_instance(sys_mem.clone());
+
         Ok(())
     }
 

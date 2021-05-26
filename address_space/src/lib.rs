@@ -73,12 +73,15 @@
 extern crate error_chain;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate migration_derive;
 
 mod address;
 mod address_space;
 mod host_mmap;
 mod listener;
 mod region;
+mod state;
 
 pub use crate::address_space::AddressSpace;
 pub use address::{AddressRange, GuestAddress};

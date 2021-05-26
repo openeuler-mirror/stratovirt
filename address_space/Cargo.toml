@@ -16,6 +16,8 @@ vmm-sys-util = ">=0.7.0"
 arc-swap = "0.4.8"
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
+migration = { path = "../migration" }
+migration_derive = { path = "../migration_derive" }
 util = { path = "../util" }
 
 [dev-dependencies]
