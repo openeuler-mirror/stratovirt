@@ -160,6 +160,7 @@ pub trait MachineOps {
         mem_config: &MachineMemConfig,
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
+        is_migrate: bool,
     ) -> Result<()> {
         sys_mem
             .register_listener(Box::new(KvmMemoryListener::new(
@@ -173,16 +174,18 @@ pub trait MachineOps {
 
         // Init guest-memory
         // Define ram-region ranges according to architectures
-        let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
-        let mem_mappings = create_host_mmaps(&ram_ranges, &mem_config)
-            .chain_err(|| "Failed to mmap guest ram.")?;
-        for mmap in mem_mappings.iter() {
-            let base = mmap.start_address().raw_value();
-            let size = mmap.size();
-            sys_mem
-                .root()
-                .add_subregion(Region::init_ram_region(mmap.clone()), base)
-                .chain_err(|| ErrorKind::RegMemRegionErr(base, size))?;
+        if !is_migrate {
+            let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
+            let mem_mappings = create_host_mmaps(&ram_ranges, &mem_config)
+                .chain_err(|| "Failed to mmap guest ram.")?;
+            for mmap in mem_mappings.iter() {
+                let base = mmap.start_address().raw_value();
+                let size = mmap.size();
+                sys_mem
+                    .root()
+                    .add_subregion(Region::init_ram_region(mmap.clone()), base)
+                    .chain_err(|| ErrorKind::RegMemRegionErr(base, size))?;
+            }
         }
 
         MigrationManager::register_memory_instance(sys_mem.clone());
@@ -202,7 +205,7 @@ pub trait MachineOps {
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
         nr_cpus: u8,
         fds: &[Arc<VcpuFd>],
-        boot_cfg: &CPUBootConfig,
+        boot_cfg: &Option<CPUBootConfig>,
     ) -> Result<Vec<Arc<CPU>>>
     where
         Self: Sized,
@@ -226,13 +229,17 @@ pub trait MachineOps {
             MigrationManager::register_device_instance(cpu::ArchCPU::descriptor(), cpu);
         }
 
-        for cpu_index in 0..nr_cpus as usize {
-            cpus[cpu_index as usize].realize(boot_cfg).chain_err(|| {
-                format!(
-                    "Failed to realize arch cpu register in CPU {}/KVM",
-                    cpu_index
-                )
-            })?;
+        if let Some(boot_config) = boot_cfg {
+            for cpu_index in 0..nr_cpus as usize {
+                cpus[cpu_index as usize]
+                    .realize(&boot_config)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to realize arch cpu register for CPU {}/KVM",
+                            cpu_index
+                        )
+                    })?;
+            }
         }
 
         Ok(cpus)
@@ -358,7 +365,7 @@ pub trait MachineOps {
     ///
     /// * `vm` - The machine structure.
     /// * `vm_config` - VM configuration.
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig) -> Result<()>
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> Result<()>
     where
         Self: Sized;
 

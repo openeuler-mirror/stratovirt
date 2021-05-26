@@ -411,7 +411,8 @@ fn qmp_command_exec(
         (device_del, device_del, id),
         (blockdev_add, blockdev_add, node_name, file, cache, read_only),
         (netdev_add, netdev_add, id, if_name, fds),
-        (balloon, balloon, value)
+        (balloon, balloon, value),
+        (migrate, migrate, uri)
     );
 
     // Handle the Qmp command which macro can't cover

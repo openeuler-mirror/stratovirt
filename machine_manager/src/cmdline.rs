@@ -226,6 +226,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .required(false),
         )
         .arg(
+            Arg::with_name("incoming")
+                .long("incoming")
+                .help("wait for the URI to be specified via migrate_incoming")
+                .value_name("incoming")
+                .takes_value(true),
+        )
+        .arg(
             Arg::with_name("iothread")
                 .multiple(true)
                 .long("iothread")

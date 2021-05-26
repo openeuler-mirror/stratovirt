@@ -166,8 +166,18 @@ pub trait DeviceInterface {
     fn balloon(&self, size: u64) -> Response;
 }
 
+/// Migrate external api
+///
+/// # Notes
+///
+/// Some external api for migration.
+pub trait MigrateInterface {
+    /// Migrates the current running guest to another VM or file.
+    fn migrate(&self, uri: String) -> Response;
+}
+
 /// Machine interface which is exposed to inner hypervisor.
 pub trait MachineInterface: MachineLifecycle + MachineAddressInterface {}
 
 /// Machine interface which is exposed to outer hypervisor.
-pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface {}
+pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface + MigrateInterface {}

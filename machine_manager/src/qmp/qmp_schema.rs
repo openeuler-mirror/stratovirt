@@ -151,6 +151,12 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<u32>,
     },
+    #[serde(rename = "migrate")]
+    migrate {
+        arguments: migrate,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
+    },
 }
 
 /// qmp_capabilities
@@ -740,6 +746,29 @@ pub enum RunState {
 impl Default for RunState {
     fn default() -> Self {
         RunState::debug
+    }
+}
+
+/// migrate
+///
+/// Migrates the current running guest to another VM or file.
+///
+/// # Arguments
+///
+/// * `uri` - the Uniform Resource Identifier of the destination VM or file.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct migrate {
+    #[serde(rename = "uri")]
+    pub uri: String,
+}
+
+impl Command for migrate {
+    const NAME: &'static str = "migrate";
+
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
     }
 }
 

@@ -82,7 +82,7 @@ use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-    MachineInterface, MachineLifecycle,
+    MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::{
     config::{
@@ -823,7 +823,7 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig) -> MachineResult<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
@@ -839,6 +839,7 @@ impl MachineOps for LightMachine {
             #[cfg(target_arch = "x86_64")]
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
+            is_migrate,
         )?;
 
         #[cfg(target_arch = "x86_64")]
@@ -866,7 +867,11 @@ impl MachineOps for LightMachine {
             .chain_err(|| "Failed to create replaceable devices.")?;
         locked_vm.add_devices(vm_config)?;
 
-        let boot_config = locked_vm.load_boot_source(None)?;
+        let boot_config = if !is_migrate {
+            Some(locked_vm.load_boot_source(None)?)
+        } else {
+            None
+        };
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
@@ -875,7 +880,7 @@ impl MachineOps for LightMachine {
         )?);
 
         #[cfg(target_arch = "aarch64")]
-        {
+        if let Some(boot_cfg) = boot_config {
             let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
             locked_vm
                 .generate_fdt_node(&mut fdt)
@@ -884,10 +889,10 @@ impl MachineOps for LightMachine {
                 .sys_mem
                 .write(
                     &mut fdt.as_slice(),
-                    GuestAddress(boot_config.fdt_addr as u64),
+                    GuestAddress(boot_cfg.fdt_addr as u64),
                     fdt.len() as u64,
                 )
-                .chain_err(|| MachineErrorKind::WrtFdtErr(boot_config.fdt_addr, fdt.len()))?;
+                .chain_err(|| MachineErrorKind::WrtFdtErr(boot_cfg.fdt_addr, fdt.len()))?;
         }
         locked_vm
             .register_power_event(&locked_vm.power_button)
@@ -1330,6 +1335,31 @@ impl DeviceInterface for LightMachine {
                 qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
             Response::create_error_response(err_resp, None)
         }
+    }
+}
+
+impl MigrateInterface for LightMachine {
+    fn migrate(&self, uri: String) -> Response {
+        use util::unix::{parse_uri, UnixPath};
+
+        match parse_uri(&uri) {
+            Ok((UnixPath::File, path)) => {
+                if let Err(e) = MigrationManager::save_snapshot(&path) {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
+                    None,
+                );
+            }
+        }
+
+        Response::create_empty_response()
     }
 }
 

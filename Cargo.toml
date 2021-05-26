@@ -15,6 +15,7 @@ vmm-sys-util = ">=0.7.0"
 hypervisor = { path = "hypervisor" }
 machine = { path = "machine" }
 machine_manager = { path = "machine_manager" }
+migration = { path = "migration" }
 util = { path = "util" }
 virtio = { path = "virtio" }
 
