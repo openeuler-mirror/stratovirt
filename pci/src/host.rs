@@ -90,7 +90,7 @@ impl PciHost {
         }
     }
 
-    fn find_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+    pub fn find_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn PciDevOps>>> {
         let locked_root_bus = self.root_bus.lock().unwrap();
         if bus_num == 0 {
             return locked_root_bus.get_device(0, devfn);
@@ -354,7 +354,7 @@ impl AmlBuilder for PciHost {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::sync::Weak;
 
     use address_space::Region;
@@ -420,7 +420,7 @@ mod tests {
         }
     }
 
-    fn create_pci_host() -> Arc<Mutex<PciHost>> {
+    pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();

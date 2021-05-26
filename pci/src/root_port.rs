@@ -219,3 +219,47 @@ impl PciDevOps for RootPort {
         self.name.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::tests::create_pci_host;
+
+    #[test]
+    fn test_read_config() {
+        let pci_host = create_pci_host();
+        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus);
+        root_port.realize().unwrap();
+
+        let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
+        let mut buf = [1_u8; 4];
+        root_port
+            .lock()
+            .unwrap()
+            .read_config(PCIE_CONFIG_SPACE_SIZE - 1, &mut buf);
+        assert_eq!(buf, [1_u8; 4]);
+    }
+
+    #[test]
+    fn test_write_config() {
+        let pci_host = create_pci_host();
+        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus);
+        root_port.realize().unwrap();
+        let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
+
+        // Invalid write.
+        let data = [1_u8; 4];
+        root_port
+            .lock()
+            .unwrap()
+            .write_config(PCIE_CONFIG_SPACE_SIZE - 1, &data);
+        let mut buf = [0_u8];
+        root_port
+            .lock()
+            .unwrap()
+            .read_config(PCIE_CONFIG_SPACE_SIZE - 1, &mut buf);
+        assert_eq!(buf, [0_u8]);
+    }
+}
