@@ -61,32 +61,47 @@ impl VhostVsockBackend for VhostBackend {
     }
 }
 
+pub struct VsockState {
+    /// Bit mask of features supported by the backend.
+    device_features: u64,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+    /// Configuration of virtio vsock.
+    config_space: [u8; 8],
+    /// Last avail idx in vsock backend queue.
+    last_avail_idx: [u16; 2],
+}
+
 /// Vsock device structure.
 pub struct Vsock {
     /// Configuration of the vsock device.
     vsock_cfg: VsockConfig,
     /// Related vhost-vsock kernel device.
     backend: Option<VhostBackend>,
-    /// Bit mask of features supported by the backend.
-    device_features: u64,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
-    /// Configuration of virtio vsock.
-    config_space: Vec<u8>,
+    /// The status of vsock.
+    state: VsockState,
     /// System address space.
     mem_space: Arc<AddressSpace>,
+    /// Event queue for vsock.
+    event_queue: Option<Arc<Mutex<Queue>>>,
+    /// Callback to trigger interrupt.
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
 }
 
 impl Vsock {
     pub fn new(cfg: &VsockConfig, mem_space: &Arc<AddressSpace>) -> Self {
-        let config: Vec<u8> = [0; VSOCK_CONFIG_SIZE].to_vec();
         Vsock {
             vsock_cfg: cfg.clone(),
             backend: None,
-            device_features: 0_u64,
-            driver_features: 0_u64,
-            config_space: config,
+            state: VsockState {
+                device_features: 0_u64,
+                driver_features: 0_u64,
+                config_space: [0; VSOCK_CONFIG_SIZE],
+                last_avail_idx: [0u16; 2],
+            },
             mem_space: mem_space.clone(),
+            event_queue: None,
+            interrupt_cb: None,
         }
     }
 }
@@ -98,7 +113,7 @@ impl VirtioDevice for Vsock {
         let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
             .chain_err(|| "Failed to create backend for vsock")?;
 
-        self.device_features = backend
+        self.state.device_features = backend
             .get_features()
             .chain_err(|| "Failed to get features for vsock")?;
         self.backend = Some(backend);
@@ -123,18 +138,18 @@ impl VirtioDevice for Vsock {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.device_features, features_select)
+        read_u32(self.state.device_features, features_select)
     }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         let mut features = write_u32(value, page);
-        let unsupported_features = features & !self.device_features;
+        let unsupported_features = features & !self.state.device_features;
         if unsupported_features != 0 {
             warn!("Unsupported feature ack (Vsock): {:x}", features);
             features &= !unsupported_features;
         }
-        self.driver_features |= features;
+        self.state.driver_features |= features;
     }
 
     /// Read data of config from guest.
@@ -156,13 +171,13 @@ impl VirtioDevice for Vsock {
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
-        let config_len = self.config_space.len();
+        let config_len = self.state.config_space.len();
         if offset as usize + data_len > config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
         }
 
-        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
-
+        self.state.config_space[(offset as usize)..(offset as usize + data_len)]
+            .copy_from_slice(data);
         Ok(())
     }
 
@@ -177,9 +192,11 @@ impl VirtioDevice for Vsock {
     ) -> Result<()> {
         let cid = self.vsock_cfg.guest_cid;
         let mut host_notifies = Vec::new();
-        // The third queue is an event-only queue that is not handled by the vhost
-        // subsystem (but still needs to exist).  Split it off here.
+        // The receive queue and transmit queue will be handled in vhost.
         let vhost_queues = queues[..2].to_vec();
+        // This event queue will be handled.
+        self.event_queue = Some(queues[2].clone());
+        self.interrupt_cb = Some(interrupt_cb.clone());
 
         // Preliminary setup for vhost net.
         let backend = match &self.backend {
@@ -190,7 +207,7 @@ impl VirtioDevice for Vsock {
             .set_owner()
             .chain_err(|| "Failed to set owner for vsock")?;
         backend
-            .set_features(self.driver_features)
+            .set_features(self.state.driver_features)
             .chain_err(|| "Failed to set features for vsock")?;
         backend
             .set_mem_table()
@@ -211,9 +228,11 @@ impl VirtioDevice for Vsock {
                 .chain_err(|| {
                     format!("Failed to set vring addr for vsock, index: {}", queue_index)
                 })?;
-            backend.set_vring_base(queue_index, 0).chain_err(|| {
-                format!("Failed to set vring base for vsock, index: {}", queue_index)
-            })?;
+            backend
+                .set_vring_base(queue_index, self.state.last_avail_idx[queue_index])
+                .chain_err(|| {
+                    format!("Failed to set vring base for vsock, index: {}", queue_index)
+                })?;
             backend
                 .set_vring_kick(queue_index, &queue_evts[queue_index])
                 .chain_err(|| {
@@ -282,8 +301,8 @@ mod tests {
         // test vsock new method
         let mut vsock = vsock_create_instance();
 
-        assert_eq!(vsock.device_features, 0);
-        assert_eq!(vsock.driver_features, 0);
+        assert_eq!(vsock.state.device_features, 0);
+        assert_eq!(vsock.state.driver_features, 0);
         assert!(vsock.backend.is_none());
 
         assert_eq!(vsock.device_type(), VIRTIO_TYPE_VSOCK);
@@ -291,7 +310,7 @@ mod tests {
         assert_eq!(vsock.queue_size(), QUEUE_SIZE_VSOCK);
 
         // test vsock get_device_features
-        vsock.device_features = 0x0123_4567_89ab_cdef;
+        vsock.state.device_features = 0x0123_4567_89ab_cdef;
         let features = vsock.get_device_features(0);
         assert_eq!(features, 0x89ab_cdef);
         let features = vsock.get_device_features(1);
@@ -300,22 +319,13 @@ mod tests {
         assert_eq!(features, 0);
 
         // test vsock set_driver_features
-        vsock.device_features = 0x0123_4567_89ab_cdef;
+        vsock.state.device_features = 0x0123_4567_89ab_cdef;
         // check for unsupported feature
         vsock.set_driver_features(0, 0x7000_0000);
-        assert_eq!(vsock.device_features, 0x0123_4567_89ab_cdef);
+        assert_eq!(vsock.state.device_features, 0x0123_4567_89ab_cdef);
         // check for supported feature
         vsock.set_driver_features(0, 0x8000_0000);
-        assert_eq!(vsock.device_features, 0x0123_4567_89ab_cdef);
-
-        // test vsock write_config
-        let offset = 0;
-        let data: [u8; 4] = [0x01, 0x02, 0x03, 0x04];
-        vsock.config_space.resize(512, 0);
-        assert_eq!(vsock.write_config(offset, &data).is_ok(), true);
-        assert_eq!(&vsock.config_space[0..4], data);
-        let offset = 512;
-        assert_eq!(vsock.write_config(offset, &data).is_ok(), false);
+        assert_eq!(vsock.state.device_features, 0x0123_4567_89ab_cdef);
 
         // test vsock read_config
         let mut buf: [u8; 8] = [0; 8];

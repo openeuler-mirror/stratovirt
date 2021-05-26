@@ -45,6 +45,7 @@ ioctl_iow_nr!(VHOST_SET_MEM_TABLE, VHOST, 0x03, VhostMemory);
 ioctl_iow_nr!(VHOST_SET_VRING_NUM, VHOST, 0x10, VhostVringState);
 ioctl_iow_nr!(VHOST_SET_VRING_ADDR, VHOST, 0x11, VhostVringAddr);
 ioctl_iow_nr!(VHOST_SET_VRING_BASE, VHOST, 0x12, VhostVringState);
+ioctl_iowr_nr!(VHOST_GET_VRING_BASE, VHOST, 0x12, VhostVringState);
 ioctl_iow_nr!(VHOST_SET_VRING_KICK, VHOST, 0x20, VhostVringFile);
 ioctl_iow_nr!(VHOST_SET_VRING_CALL, VHOST, 0x21, VhostVringFile);
 ioctl_iow_nr!(VHOST_NET_SET_BACKEND, VHOST, 0x30, VhostVringFile);
@@ -366,6 +367,19 @@ impl VhostOps for VhostBackend {
             return Err(ErrorKind::VhostIoctl("VHOST_SET_VRING_BASE".to_string()).into());
         }
         Ok(())
+    }
+
+    fn get_vring_base(&self, queue_idx: usize) -> Result<u16> {
+        let vring_state = VhostVringState {
+            index: queue_idx as u32,
+            num: 0,
+        };
+
+        let ret = unsafe { ioctl_with_ref(self, VHOST_GET_VRING_BASE(), &vring_state) };
+        if ret < 0 {
+            return Err(ErrorKind::VhostIoctl("VHOST_GET_VRING_BASE".to_string()).into());
+        }
+        Ok(vring_state.num as u16)
     }
 
     fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
