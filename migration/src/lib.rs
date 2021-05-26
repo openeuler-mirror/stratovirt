@@ -69,6 +69,9 @@ pub mod errors {
             RestoreVmMemoryErr(e: String) {
                 display("Failed to restore vm memory: {}", e)
             }
+            InvalidSnapshotPath {
+                display("Invalid snapshot path for restoring snapshot")
+            }
         }
     }
 }

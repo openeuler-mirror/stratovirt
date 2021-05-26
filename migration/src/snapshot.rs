@@ -11,32 +11,127 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{create_dir, read_dir, File};
 use std::io::{Read, Write};
 use std::mem::size_of;
+use std::path::PathBuf;
+
+use util::byte_code::ByteCode;
+use util::reader::BufferReader;
+use util::unix::host_page_size;
 
 use crate::device_state::{DeviceStateDesc, VersionCheck};
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::header::{FileFormat, MigrationHeader};
 use crate::manager::{InstanceId, MigrationEntry, MigrationManager, MIGRATION_MANAGER};
-use util::byte_code::ByteCode;
-use util::reader::BufferReader;
-use util::unix::host_page_size;
 
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
 const HEADER_LENGTH: usize = 4096;
 
 impl MigrationManager {
+    /// Do snapshot for `VM`.
+    ///
+    /// # Notes
+    ///
+    /// Offers a interface for snapshot functions. This function will make a snapshot dir
+    /// for input path. It will create two file in snapshot dir - device state file `state`
+    /// and memory file `memory`.
+    ///
+    /// # Argument
+    ///
+    /// * `path` - snapshot dir path. If path dir not exists, will create it.
+    pub fn save_snapshot(path: &str) -> Result<()> {
+        // Create snapshot dir.
+        if let Err(e) = create_dir(path) {
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                bail!("Failed to create snapshot dir: {}", e);
+            }
+        }
+
+        // Save device state
+        let mut vm_state_path = PathBuf::from(path);
+        vm_state_path.push("state");
+        match File::create(vm_state_path) {
+            Ok(mut state_file) => {
+                Self::save_header(FileFormat::Device, &mut state_file)?;
+                Self::save_descriptor_db(&mut state_file)?;
+                Self::save_device_state(&mut state_file)?;
+            }
+            Err(e) => {
+                bail!("Failed to create snapshot state file: {}", e);
+            }
+        }
+
+        // Save memory data
+        let mut vm_memory_path = PathBuf::from(path);
+        vm_memory_path.push("memory");
+        match File::create(vm_memory_path) {
+            Ok(mut memory_file) => {
+                Self::save_header(FileFormat::MemoryFull, &mut memory_file)?;
+                Self::save_memory(&mut memory_file)?;
+            }
+            Err(e) => {
+                bail!("Failed to create snapshot memory file: {}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Restore snapshot for `VM`.
+    ///
+    /// # Notes
+    ///
+    /// Offers a interface for restore snapshot functions. This function will make VM
+    /// back to the state restored in snapshot file incluing both device and memory.
+    ///
+    /// # Argument
+    ///
+    /// * `path` - snapshot dir path.
+    pub fn restore_snapshot(path: &str) -> Result<()> {
+        let snapshot_path = PathBuf::from(path);
+        if !snapshot_path.is_dir() {
+            return Err(ErrorKind::InvalidSnapshotPath.into());
+        }
+
+        let paths = read_dir(snapshot_path).chain_err(|| "Failed to open snapshot dir")?;
+        for path in paths {
+            if let Ok(file_path) = path {
+                let mut file =
+                    File::open(file_path.path()).chain_err(|| "Failed to open snapshot file")?;
+
+                let header = Self::load_header(&mut file)?;
+                header
+                    .check_header()
+                    .chain_err(|| "Failed to check snapshot file header")?;
+
+                if header.format == FileFormat::Device {
+                    let snapshot_desc_db = Self::load_descriptor_db(&mut file, header.desc_len)?;
+                    Self::load_vmstate(snapshot_desc_db, &mut file)?;
+                } else if header.format == FileFormat::MemoryFull {
+                    Self::load_memory(&mut file)?;
+                }
+            }
+        }
+
+        Self::resume()?;
+        Ok(())
+    }
+
     /// Write `MigrationHeader` to `Write` trait object as bytes.
     /// `MigrationHeader` will occupy the first 4096 bytes in snapshot file.
     ///
     /// # Arguments
     ///
-    /// * `file_format` - confirm snapshot file / migration stream file format.
-    /// * `writer` - The `Write` trait object to write to receive header message.
+    /// * `file_format` - confirm snapshot file format.
+    /// * `writer` - The `Write` trait object to write header message.
     fn save_header(file_format: FileFormat, writer: &mut dyn Write) -> Result<()> {
         let mut header = MigrationHeader::default();
         header.format = file_format;
+        header.desc_len = match file_format {
+            FileFormat::Device => Self::get_desc_db_len()?,
+            FileFormat::MemoryFull => (host_page_size() as usize) * 2 - HEADER_LENGTH,
+        };
         let header_bytes = header.as_bytes();
         let mut input_slice = [0u8; HEADER_LENGTH];
 
@@ -136,9 +231,12 @@ impl MigrationManager {
             let snap_desc = snap_desc_db.get(&instance_id.object_type).unwrap();
             let current_desc = desc_db.get(&snap_desc.name).unwrap();
 
-            let mut state_data = migration_file
-                .read_vectored(snap_desc.size as usize)
-                .unwrap();
+            let mut state_data =
+                if let Some(data) = migration_file.read_vectored(snap_desc.size as usize) {
+                    data
+                } else {
+                    bail!("Invalid snapshot device state data");
+                };
             match current_desc.check_version(snap_desc) {
                 VersionCheck::Same => {}
                 VersionCheck::Compat => {
@@ -162,6 +260,17 @@ impl MigrationManager {
             }
         }
 
+        Ok(())
+    }
+
+    /// Resume recovered device.
+    /// This function will be called after restore device state.
+    fn resume() -> Result<()> {
+        for (_, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
+            if let MigrationEntry::Mutex(i) = entry {
+                i.lock().unwrap().resume()?
+            }
+        }
         Ok(())
     }
 }
