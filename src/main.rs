@@ -33,8 +33,7 @@ use machine_manager::{
 };
 use util::loop_context::EventNotifierHelper;
 use util::unix::limit_permission;
-use util::{arg_parser, daemonize::daemonize, logger};
-use vmm_sys_util::terminal::Terminal;
+use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
 error_chain! {
     links {
@@ -71,10 +70,7 @@ fn run() -> Result<()> {
     }
 
     std::panic::set_hook(Box::new(|panic_msg| {
-        std::io::stdin()
-            .lock()
-            .set_canon_mode()
-            .expect("Failed to set terminal to canon mode.");
+        set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
 
         let panic_file = panic_msg.location().map_or("", |loc| loc.file());
         let panic_line = panic_msg.location().map_or(0, |loc| loc.line());
@@ -99,10 +95,7 @@ fn run() -> Result<()> {
             TempCleaner::clean();
         }
         Err(ref e) => {
-            std::io::stdin()
-                .lock()
-                .set_canon_mode()
-                .chain_err(|| "Failed to set terminal to canon mode.")?;
+            set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
             if cmd_args.is_present("display log") {
                 error!("{}", error_chain::ChainedError::display_chain(e));
             } else {
@@ -137,14 +130,8 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             }
             Err(e) => bail!("Daemonize start failed: {}", e),
         }
-    } else {
-        if cmd_args.value_of("pidfile").is_some() {
-            bail!("-pidfile must be used with -daemonize together.");
-        }
-        std::io::stdin()
-            .lock()
-            .set_raw_mode()
-            .chain_err(|| "Failed to set terminal to raw mode.")?;
+    } else if cmd_args.value_of("pidfile").is_some() {
+        bail!("-pidfile must be used with -daemonize together.");
     }
 
     QmpChannel::object_init();

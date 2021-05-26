@@ -845,10 +845,6 @@ impl VirtioDevice for Balloon {
         Ok(())
     }
 
-    fn reset(&mut self) -> Option<()> {
-        None
-    }
-
     fn update_config(
         &mut self,
         _dev_config: Option<Arc<dyn machine_manager::config::ConfigCheck>>,
@@ -974,7 +970,7 @@ mod tests {
         let ram_size = bln.mem_info.get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
 
-        assert!(bln.reset().is_none());
+        assert!(bln.reset().is_err());
         assert!(bln.update_config(None).is_err());
     }
 

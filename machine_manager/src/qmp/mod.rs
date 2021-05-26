@@ -42,7 +42,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vmm_sys_util::terminal::Terminal;
+use util::leak_bucket::LeakBucket;
+use util::set_termi_canon_mode;
 
 use crate::event_loop::EventLoop;
 use crate::machine::MachineExternalInterface;
@@ -53,7 +54,6 @@ use crate::{
 };
 use qmp_schema as schema;
 use schema::QmpCommand;
-use util::leak_bucket::LeakBucket;
 
 static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 
@@ -370,11 +370,8 @@ pub fn handle_qmp(
                 };
                 event!(SHUTDOWN; shutdown_msg);
                 TempCleaner::clean();
+                set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
 
-                std::io::stdin()
-                    .lock()
-                    .set_canon_mode()
-                    .expect("Failed to set terminal to canon mode.");
                 std::process::exit(0);
             }
 

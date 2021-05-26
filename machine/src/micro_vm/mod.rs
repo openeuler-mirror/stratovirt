@@ -99,12 +99,12 @@ use util::device_tree;
 use util::device_tree::CompileFDT;
 use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
+use util::set_termi_canon_mode;
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, Console, Net, Rng, VhostKern,
     VirtioDevice, VirtioMmioDevice,
 };
 use vmm_sys_util::eventfd::EventFd;
-use vmm_sys_util::terminal::Terminal;
 
 use super::{
     errors::{ErrorKind as MachineErrorKind, Result as MachineResult},
@@ -263,7 +263,7 @@ impl LightMachine {
 
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for _ in 0..MMIO_REPLACEABLE_BLK_NR {
-            let block = Arc::new(Mutex::new(Block::new()));
+            let block = Arc::new(Mutex::new(Block::default()));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block);
             rpl_devs.push(virtio_mmio);
         }
@@ -1311,12 +1311,9 @@ impl EventLoopManager for LightMachine {
     }
 
     fn loop_cleanup(&self) -> util::errors::Result<()> {
-        if let Err(e) = std::io::stdin().lock().set_canon_mode() {
-            error!(
-                "destroy virtual machine: reset stdin to canonical mode failed, {}",
-                e
-            );
-        }
+        use util::errors::ResultExt;
+
+        set_termi_canon_mode().chain_err(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
 }

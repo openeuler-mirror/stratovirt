@@ -123,7 +123,18 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    pub fn rw_aio(&mut self, cb: AioCb<T>) -> Result<()> {
+    pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64) -> Result<()> {
+        let mut misaligned = false;
+        for iov in cb.iovec.iter() {
+            if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
+                misaligned = true;
+                break;
+            }
+        }
+        if misaligned {
+            return self.handle_misaligned_aio(cb);
+        }
+
         let last_aio = cb.last_aio;
         let opcode = cb.opcode;
         let file_fd = cb.file_fd;
@@ -175,6 +186,68 @@ impl<T: Clone + 'static> Aio<T> {
             }
             IoCmd::FDSYNC => raw_datasync(cb.file_fd)?,
             _ => -1,
+        };
+        (self.complete_func)(&cb, ret);
+
+        Ok(())
+    }
+
+    fn handle_misaligned_aio(&mut self, cb: AioCb<T>) -> Result<()> {
+        // Safe because we only get the host page size.
+        let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+        let mut ret = 0_i64;
+
+        match cb.opcode {
+            IoCmd::PREADV => {
+                let mut off = cb.offset;
+                for iov in cb.iovec.iter() {
+                    // Safe because we allocate aligned memory and free it later.
+                    // Alignment is set to host page size to decrease the count of allocated pages.
+                    let aligned_buffer =
+                        unsafe { libc::memalign(host_page_size as usize, iov.iov_len as usize) };
+                    ret = raw_read(cb.file_fd, aligned_buffer as u64, iov.iov_len as usize, off)?;
+                    off += iov.iov_len as usize;
+
+                    let dst = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            iov.iov_base as *mut u8,
+                            iov.iov_len as usize,
+                        )
+                    };
+                    let src = unsafe {
+                        std::slice::from_raw_parts(
+                            aligned_buffer as *const u8,
+                            iov.iov_len as usize,
+                        )
+                    };
+                    dst.copy_from_slice(src);
+                    // Safe because the memory is allocated by us and will not be used anymore.
+                    unsafe { libc::free(aligned_buffer) };
+                }
+            }
+            IoCmd::PWRITEV => {
+                let mut off = cb.offset;
+                for iov in cb.iovec.iter() {
+                    let aligned_buffer =
+                        unsafe { libc::memalign(host_page_size as usize, iov.iov_len as usize) };
+                    let dst = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            aligned_buffer as *mut u8,
+                            iov.iov_len as usize,
+                        )
+                    };
+                    let src = unsafe {
+                        std::slice::from_raw_parts(iov.iov_base as *const u8, iov.iov_len as usize)
+                    };
+                    dst.copy_from_slice(src);
+
+                    ret = raw_write(cb.file_fd, aligned_buffer as u64, iov.iov_len as usize, off)?;
+                    off += iov.iov_len as usize;
+                    unsafe { libc::free(aligned_buffer) };
+                }
+            }
+            IoCmd::FDSYNC => ret = raw_datasync(cb.file_fd)?,
+            _ => {}
         };
         (self.complete_func)(&cb, ret);
 
