@@ -12,13 +12,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use hypervisor::KVM_FDS;
 use kvm_ioctls::DeviceFd;
-use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use util::device_tree;
 
-use super::{GICConfig, GICDevice, UtilResult};
+use super::{state::GICv3State, GICConfig, GICDevice, UtilResult};
 use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
+use hypervisor::KVM_FDS;
+use machine_manager::machine::{KvmVmState, MachineLifecycle};
+use migration::MigrationManager;
+use util::device_tree;
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
@@ -380,7 +381,10 @@ impl GICDevice for GICv3 {
     fn create_device(
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
-        Ok(Arc::new(GICv3::new(gic_conf)?))
+        let gicv3 = Arc::new(GICv3::new(gic_conf)?);
+        MigrationManager::register_device_instance(GICv3State::descriptor(), gicv3.clone());
+
+        Ok(gicv3)
     }
 
     fn realize(&self) -> Result<()> {

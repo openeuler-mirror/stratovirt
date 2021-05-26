@@ -22,6 +22,7 @@ cpu = { path = "../cpu" }
 devices = { path = "../devices" }
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
+migration = { path = "../migration" }
 pci = { path = "../pci" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }

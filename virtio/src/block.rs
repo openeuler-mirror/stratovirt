@@ -1009,6 +1009,11 @@ impl VirtioDevice for Block {
     }
 }
 
+// Send and Sync is not auto-implemented for `Sender` type.
+// Implementing them is safe because `Sender` field of Block won't change in migration
+// workflow.
+unsafe impl Sync for Block {}
+
 impl StateTransfer for Block {
     fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
