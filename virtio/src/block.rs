@@ -587,28 +587,29 @@ impl BlockIoHandler {
     }
 
     fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::Delete,
-            self.update_evt,
-            None,
-            EventSet::IN,
-            Vec::new(),
-        ));
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::Delete,
-            self.reset_evt,
-            None,
-            EventSet::IN,
-            Vec::new(),
-        ));
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::Delete,
-            self.queue_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            Vec::new(),
-        ));
+        let mut notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.update_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
         if let Some(lb) = self.leak_bucket.as_ref() {
             notifiers.push(EventNotifier::new(
                 NotifierOperation::Delete,

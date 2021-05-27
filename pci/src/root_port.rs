@@ -123,6 +123,7 @@ impl PciDevOps for RootPort {
             .chain_err(|| "Failed to register subregion in memory space.")?;
 
         let root_port = Arc::new(Mutex::new(self));
+        #[allow(unused_mut)]
         let mut locked_root_port = root_port.lock().unwrap();
         locked_root_port.sec_bus.lock().unwrap().parent_bridge =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn PciDevOps>>);

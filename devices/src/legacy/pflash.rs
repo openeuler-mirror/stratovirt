@@ -251,7 +251,7 @@ impl PFlash {
             .as_ref()
             .unwrap()
             .get_host_address()
-            .ok_or_else(|| "Failed to get host address")?;
+            .ok_or("Failed to get host address")?;
         // Safe because host_addr of the region is allocated and flash_size is limited
         let mut dst =
             unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, flash_size as usize) };
@@ -321,7 +321,7 @@ impl PFlash {
             let mut i: u32 = self.device_width;
             while i < self.bank_width {
                 resp = deposit_u32(resp, 8 * i, 8 * self.device_width, resp)
-                    .ok_or_else(|| "Failed to deposit bits to u32")?;
+                    .ok_or("Failed to deposit bits to u32")?;
                 i += self.device_width;
             }
         }
@@ -351,7 +351,7 @@ impl PFlash {
             // CFI query data is repeated for wide devices used in x8 mode
             for i in 1..self.max_device_width {
                 resp = deposit_u32(resp, 8 * i as u32, 8, self.cfi_table[boff as usize] as u32)
-                    .ok_or_else(|| "Failed to deposit bits to u32")?;
+                    .ok_or("Failed to deposit bits to u32")?;
             }
         }
         // Replicate responses for each device in bank.
@@ -359,7 +359,7 @@ impl PFlash {
             let mut i: u32 = self.device_width;
             while i < self.bank_width {
                 resp = deposit_u32(resp, 8 * i, 8 * self.device_width, resp)
-                    .ok_or_else(|| "Failed to deposit bits to u32")?;
+                    .ok_or("Failed to deposit bits to u32")?;
                 i += self.device_width;
             }
         }
@@ -378,7 +378,7 @@ impl PFlash {
             .as_ref()
             .unwrap()
             .get_host_address()
-            .ok_or_else(|| "Failed to get host address.")?;
+            .ok_or("Failed to get host address.")?;
         // Safe because host_addr of the region is allocated and sanity has been checked
         let src = unsafe {
             std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, size as usize)

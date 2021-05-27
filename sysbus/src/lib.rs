@@ -162,6 +162,7 @@ impl Default for SysRes {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Eq, PartialEq)]
 pub enum SysBusDevType {
     Serial,

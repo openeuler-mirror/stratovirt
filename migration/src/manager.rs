@@ -237,11 +237,12 @@ impl MigrationManager {
     ///
     /// * `device_type` - The type string of device instance.
     pub fn get_desc_alias(device_type: &str) -> Option<u64> {
-        if let Some(desc) = MIGRATION_MANAGER.desc_db.read().unwrap().get(device_type) {
-            Some(desc.alias)
-        } else {
-            None
-        }
+        MIGRATION_MANAGER
+            .desc_db
+            .read()
+            .unwrap()
+            .get(device_type)
+            .map(|desc| desc.alias)
     }
 
     /// Set a new migration status for migration manager.

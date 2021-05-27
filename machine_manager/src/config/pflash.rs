@@ -63,7 +63,7 @@ impl ConfigCheck for PFlashConfig {
         }
 
         if self.unit >= MAX_UNIT_ID {
-            return Err(ErrorKind::UnitIDError(self.unit, MAX_UNIT_ID).into());
+            return Err(ErrorKind::UnitIdError(self.unit, MAX_UNIT_ID).into());
         }
         Ok(())
     }

@@ -514,7 +514,7 @@ impl FwCfgCommon {
         let size = std::mem::size_of::<FwCfgDmaAccess>() as u64;
         if let Err(_e) = read_dma_memory(&self.mem_space, dma_addr, dma_request, size) {
             write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)?;
-            return Err(ErrorKind::ReadDMARequest(dma_addr.0, size).into());
+            return Err(ErrorKind::ReadDmaRequest(dma_addr.0, size).into());
         }
 
         // Build `FwCfgDmaAccess` object from dma_request here
@@ -891,6 +891,7 @@ impl SysBusDevOps for FwCfgMem {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "x86_64")]
 pub struct FwCfgIO {
     fwcfg: FwCfgCommon,

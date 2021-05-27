@@ -90,6 +90,7 @@ fn bin_to_bcd(src: u8) -> u8 {
     ((src / 10) << 4) + (src % 10)
 }
 
+#[allow(clippy::upper_case_acronyms)]
 /// RTC device.
 pub struct RTC {
     /// Static CMOS RAM.
