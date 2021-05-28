@@ -270,16 +270,19 @@ impl LightMachine {
     /// On x86_64, there is a gap ranged from (4G - 768M) to 4G, which will be skipped.
     fn arch_ram_ranges(mem_size: u64) -> Vec<(u64, u64)> {
         // ranges is the vector of (start_addr, size)
-        let mut ranges = Vec::<(u64, u64)>::new();
+        #[allow(unused_mut)]
+        let mut ranges;
 
         #[cfg(target_arch = "aarch64")]
-        ranges.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
-
+        {
+            let mem_start = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+            ranges = vec![(mem_start, mem_size)];
+        }
         #[cfg(target_arch = "x86_64")]
         {
             let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-            ranges.push((0, std::cmp::min(gap_start, mem_size)));
+            ranges = vec![(0, std::cmp::min(gap_start, mem_size))];
             if mem_size > gap_start {
                 let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
                 ranges.push((gap_end, mem_size - gap_start));
@@ -976,7 +979,7 @@ impl LightMachine {
 impl MachineLifecycle for LightMachine {
     fn pause(&self) -> bool {
         if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
-            event!(STOP);
+            event!(Stop);
 
             true
         } else {
@@ -989,7 +992,7 @@ impl MachineLifecycle for LightMachine {
             return false;
         }
 
-        event!(RESUME);
+        event!(Resume);
 
         true
     }
@@ -1268,11 +1271,11 @@ impl DeviceInterface for LightMachine {
     fn device_del(&self, device_id: String) -> Response {
         match self.del_replaceable_device(&device_id) {
             Ok(path) => {
-                let block_del_event = qmp_schema::DEVICE_DELETED {
+                let block_del_event = qmp_schema::DeviceDeleted {
                     device: Some(device_id),
                     path,
                 };
-                event!(DEVICE_DELETED; block_del_event);
+                event!(DeviceDeleted; block_del_event);
 
                 Response::create_empty_response()
             }
@@ -1548,6 +1551,7 @@ fn generate_virtio_devices_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors
 }
 
 /// Trait that helps to generate all nodes in device-tree.
+#[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 trait CompileFDTHelper {
     /// Function that helps to generate cpu nodes.
@@ -1578,7 +1582,7 @@ impl CompileFDTHelper for LightMachine {
                 let clster = format!("/cpus/cpu-map/cluster{}", cluster);
                 device_tree::add_sub_node(fdt, &clster)?;
 
-                for i in 0..2 as u32 {
+                for i in 0..2_u32 {
                     let sub_cluster = format!("{}/cluster{}", clster, i);
                     device_tree::add_sub_node(fdt, &sub_cluster)?;
 

@@ -209,6 +209,7 @@ pub fn dump_dtb(fdt: &[u8], file_path: &str) {
 }
 
 /// Trait for devices to be added to the Flattened Device Tree.
+#[allow(clippy::upper_case_acronyms)]
 pub trait CompileFDT {
     /// function to generate fdt node
     ///

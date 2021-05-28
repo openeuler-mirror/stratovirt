@@ -638,7 +638,7 @@ impl VirtioDevice for Net {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
         }
 
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(&data[..]);
+        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
 
         Ok(())
     }
