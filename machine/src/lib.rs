@@ -19,7 +19,6 @@ extern crate machine_manager;
 #[cfg(target_arch = "x86_64")]
 #[macro_use]
 extern crate migration_derive;
-#[cfg(target_arch = "x86_64")]
 #[macro_use]
 extern crate vmm_sys_util;
 
