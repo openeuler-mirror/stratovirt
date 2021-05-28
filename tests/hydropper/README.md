@@ -5,7 +5,9 @@ Hydropper is a lightweight test framework based on pytest. It encapsulates virtu
 
 
 ### Preparation
-The requirements.txt file contains the Python3 dependency package.
+1. Ensure that python3 has been installed on your openEuler system.
+
+2. The requirements.txt file contains the Python3 dependency package.
 
 - pytest>5.0.0
 - aexpect>1.5.0
@@ -13,14 +15,24 @@ The requirements.txt file contains the Python3 dependency package.
 
 You can install these packages by running the following commands:
 ```sh
-$ pip install -r config/requirements.txt
+$ pip3 install -r requirements.txt
 ```
 
-Network dependency package:
+3. Network dependency package:
 ```sh
 $ yum install nmap
 $ yum install iperf3
 ```
+
+4. Network configuration（template）
+
+```sh
+brctl addbr strato_br0
+ifconfig strato_br0 up
+ifconfig strato_br0 1.1.1.1
+```
+
+5. For details about how to build a test image, see docs/IMAGE_BUILD.md.
 
 ### Parameter configuration
 Set parameters and corresponding paths in the config/config.ini. Generally, the kernel and rootfs must be configured for test cases.
@@ -41,12 +53,13 @@ Configure IP_PREFIX and IP_3RD in the "config.ini" file,
 which indicate the first 24 bits of the VM IPv4 address,
 The last 8 bits are automatically configured by the hydropper.
 Note that the VM and the host must be in the same network segment.
+
 ```ini
 [network.params]
 # such as 'IP_PREFIX.xxx.xxx'
-IP_PREFIX = xxx.xxx
+IP_PREFIX = 1.1
 # such as 'xxx.xxx.IP_3RD.xxx'
-IP_3RD = xxx
+IP_3RD = 1
 ```
 
 ### Run testcases
@@ -98,3 +111,8 @@ def test_microvm_xxx(microvm):
     test_vm.basic_config(vcpu_count=4, mem_size='4G')
     test_vm.launch()
 ```
+
+### Log
+
+- pytest default log path: /var/log/pytest.log
+- stratovirt default log path: /var/log/stratovirt
