@@ -66,14 +66,14 @@ def test_microvm_virtio_blk_at_dt(test_session_root_path, microvm, testtimes):
     """
     Test virtio-blk hotplug and unplug:
 
-    1) Generate 5 temp disks and add them to test_vm.
+    1) Generate 3 temp disks and add them to test_vm.
     2) Assert disks' name and size as expect.
     3) Delete temp disks from test_vm.
     4) Assert temp disks are deleted.
     """
     test_vm = microvm
     test_vm.launch()
-    disknum = 5
+    disknum = 3
     disklist = []
     for index in range(disknum):
         temp_disk = os.path.join(test_session_root_path, "test_image%d" % (index + 1))
@@ -90,7 +90,7 @@ def test_microvm_virtio_blk_at_dt(test_session_root_path, microvm, testtimes):
         blkinfo = test_vm.get_lsblk_info()
         logging.debug("blkinfo is %s", blkinfo)
 
-        for devid in ["vdb", "vdc", "vdd", "vde", "vdf"]:
+        for devid in ["vdb", "vdc", "vdd"]:
             assert devid in blkinfo
             assert blkinfo[devid]["size"] == "16M"
 
@@ -100,7 +100,7 @@ def test_microvm_virtio_blk_at_dt(test_session_root_path, microvm, testtimes):
             index += 1
 
         blkinfo = test_vm.get_lsblk_info()
-        for devid in ["vdb", "vdc", "vdd", "vde", "vdf"]:
+        for devid in ["vdb", "vdc", "vdd"]:
             assert devid not in blkinfo
 
 @pytest.mark.acceptance

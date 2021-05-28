@@ -37,6 +37,7 @@ extern crate machine_manager;
 #[macro_use]
 extern crate util;
 
+#[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 #[cfg(target_arch = "x86_64")]
@@ -164,6 +165,7 @@ thread_local! {
 }
 
 /// Trait to handle `CPU` lifetime.
+#[allow(clippy::upper_case_acronyms)]
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
     fn realize(&self, boot: &CPUBootConfig) -> Result<()>;
@@ -198,6 +200,7 @@ pub trait CPUInterface {
 }
 
 /// `CPU` is a wrapper around creating and using a kvm-based VCPU.
+#[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
     /// ID of this virtual CPU, `0` means this cpu is primary `CPU`.
     id: u8,
@@ -417,11 +420,11 @@ impl CPUInterface for CPU {
         }
 
         if QmpChannel::is_connected() {
-            let shutdown_msg = schema::SHUTDOWN {
+            let shutdown_msg = schema::Shutdown {
                 guest: true,
                 reason: "guest-shutdown".to_string(),
             };
-            event!(SHUTDOWN; shutdown_msg);
+            event!(Shutdown; shutdown_msg);
         }
 
         Ok(())
@@ -513,6 +516,7 @@ impl CPUInterface for CPU {
 }
 
 /// The struct to handle events in cpu thread.
+#[allow(clippy::upper_case_acronyms)]
 struct CPUThreadWorker {
     thread_cpu: Arc<CPU>,
 }

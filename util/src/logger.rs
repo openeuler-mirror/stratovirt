@@ -89,11 +89,7 @@ pub fn init_vm_logger(
     level: Option<Level>,
     logfile: Option<Box<dyn Write + Send>>,
 ) -> Result<(), log::SetLoggerError> {
-    let buffer = match logfile {
-        Some(x) => Some(Mutex::new(x)),
-        None => None,
-    };
-
+    let buffer = logfile.map(Mutex::new);
     let logger = VmLogger {
         level: level.unwrap_or(Level::Info),
         handler: buffer,

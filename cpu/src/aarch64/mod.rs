@@ -63,62 +63,62 @@ pub enum Arm64CoreRegs {
     USER_FPSIMD_STATE_RES(usize),
 }
 
-#[allow(clippy::zero_ptr)]
-impl Into<u64> for Arm64CoreRegs {
-    fn into(self) -> u64 {
+impl From<Arm64CoreRegs> for u64 {
+    fn from(elem: Arm64CoreRegs) -> u64 {
         let register_size;
-        let regid = match self {
+        let regid;
+        match elem {
             Arm64CoreRegs::KVM_USER_PT_REGS => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, regs)
+                regid = offset_of!(kvm_regs, regs)
             }
             Arm64CoreRegs::KVM_SP_EL1 => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, sp_el1)
+                regid = offset_of!(kvm_regs, sp_el1)
             }
             Arm64CoreRegs::KVM_ELR_EL1 => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, elr_el1)
+                regid = offset_of!(kvm_regs, elr_el1)
             }
             Arm64CoreRegs::KVM_SPSR(idx) if idx < KVM_NR_SPSR as usize => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, spsr) + idx * 8
+                regid = offset_of!(kvm_regs, spsr) + idx * 8
             }
             Arm64CoreRegs::KVM_USER_FPSIMD_STATE => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, fp_regs)
+                regid = offset_of!(kvm_regs, fp_regs)
             }
             Arm64CoreRegs::USER_PT_REG_REGS(idx) if idx < 31 => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, regs, user_pt_regs, regs) + idx * 8
+                regid = offset_of!(kvm_regs, regs, user_pt_regs, regs) + idx * 8
             }
             Arm64CoreRegs::USER_PT_REG_SP => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, regs, user_pt_regs, sp)
+                regid = offset_of!(kvm_regs, regs, user_pt_regs, sp)
             }
             Arm64CoreRegs::USER_PT_REG_PC => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, regs, user_pt_regs, pc)
+                regid = offset_of!(kvm_regs, regs, user_pt_regs, pc)
             }
             Arm64CoreRegs::USER_PT_REG_PSTATE => {
                 register_size = KVM_REG_SIZE_U64;
-                offset_of!(kvm_regs, regs, user_pt_regs, pstate)
+                regid = offset_of!(kvm_regs, regs, user_pt_regs, pstate)
             }
             Arm64CoreRegs::USER_FPSIMD_STATE_VREGS(idx) if idx < 32 => {
                 register_size = KVM_REG_SIZE_U128;
-                offset_of!(kvm_regs, fp_regs, user_fpsimd_state, vregs) + idx * 16
+                regid = offset_of!(kvm_regs, fp_regs, user_fpsimd_state, vregs) + idx * 16
             }
             Arm64CoreRegs::USER_FPSIMD_STATE_FPSR => {
                 register_size = KVM_REG_SIZE_U32;
-                offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpsr)
+                regid = offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpsr)
             }
             Arm64CoreRegs::USER_FPSIMD_STATE_FPCR => {
                 register_size = KVM_REG_SIZE_U32;
-                offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpcr)
+                regid = offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpcr)
             }
             Arm64CoreRegs::USER_FPSIMD_STATE_RES(idx) if idx < 2 => {
                 register_size = 128;
-                offset_of!(kvm_regs, fp_regs, user_fpsimd_state, __reserved) + idx * 8
+                regid = offset_of!(kvm_regs, fp_regs, user_fpsimd_state, __reserved) + idx * 8
             }
             _ => panic!("No such Register"),
         };

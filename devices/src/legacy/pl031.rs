@@ -42,6 +42,7 @@ const RTC_ICR: u64 = 0x1c;
 const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1];
 
 /// Pl031 structure.
+#[allow(clippy::upper_case_acronyms)]
 pub struct PL031 {
     /// Match register value.
     mr: u32,
@@ -115,7 +116,7 @@ impl PL031 {
 impl SysBusDevOps for PL031 {
     /// Read data from registers by guest.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
-        if offset >= 0xFE0 && offset < 0x1000 {
+        if (0xFE0..0x1000).contains(&offset) {
             let value = u32::from(RTC_PERIPHERAL_ID[((offset - 0xFE0) >> 2) as usize]);
             match data.len() {
                 1 => data[0] = value as u8,

@@ -43,13 +43,13 @@ pub struct IoCb {
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 pub enum IoCmd {
-    PREAD = 0,
-    PWRITE = 1,
-    FSYNC = 2,
-    FDSYNC = 3,
-    NOOP = 6,
-    PREADV = 7,
-    PWRITEV = 8,
+    Pread = 0,
+    Pwrite = 1,
+    Fsync = 2,
+    Fdsync = 3,
+    Noop = 6,
+    Preadv = 7,
+    Pwritev = 8,
 }
 
 #[repr(C)]

@@ -42,6 +42,7 @@ const MSR_LIST: &[u32] = &[
 const MSR_IA32_MISC_ENABLE: u32 = 0x01a0;
 const MSR_IA32_MISC_ENABLE_FAST_STRING: u64 = 0x1;
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Default)]
 /// X86 CPU booting configure information
 pub struct X86CPUBootConfig {
@@ -64,6 +65,7 @@ pub struct X86CPUBootConfig {
     pub pml4_start: u64,
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Default, Copy, Clone)]
 pub struct X86CPU {
     id: u32,

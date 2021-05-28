@@ -18,6 +18,7 @@ use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, AddressSpace, FileBackend, GuestAddress, HostMemMapping, RegionOps};
 
 /// Types of Region.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum RegionType {
     /// Ram type.
