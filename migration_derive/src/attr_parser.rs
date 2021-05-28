@@ -66,14 +66,12 @@ pub fn parse_field_attributes(attributes: &[syn::Attribute]) -> Option<String> {
 
 fn get_attr_version(meta_list: MetaList, current_version: &mut u32, compat_version: &mut u32) {
     for meta in meta_list.nested.iter() {
-        if let syn::NestedMeta::Meta(nested_meta) = meta {
-            if let syn::Meta::NameValue(attr_name_value) = nested_meta {
-                if let Some(version) = meta_name_parse(attr_name_value, CURRENT_VERSION) {
-                    *current_version = version;
-                }
-                if let Some(version) = meta_name_parse(attr_name_value, COMPAT_VERSION) {
-                    *compat_version = version;
-                }
+        if let syn::NestedMeta::Meta(syn::Meta::NameValue(attr_name_value)) = meta {
+            if let Some(version) = meta_name_parse(attr_name_value, CURRENT_VERSION) {
+                *current_version = version;
+            }
+            if let Some(version) = meta_name_parse(attr_name_value, COMPAT_VERSION) {
+                *compat_version = version;
             }
         }
     }

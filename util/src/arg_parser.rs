@@ -34,11 +34,11 @@ type ArgsMap = BTreeMap<String, Vec<String>>;
 #[derive(PartialEq, Debug)]
 pub enum HelpType {
     /// Argument as a Flag.
-    FLAGS,
+    Flags,
     /// Argument as a Option.
-    OPTION,
+    Optional,
     /// Argument will not output in help message.
-    HIDDEN,
+    Hidden,
 }
 
 /// Structure to store `ArgParser` information, which contains a command line
@@ -222,13 +222,13 @@ impl<'a> ArgParser<'a> {
         for arg in self.args.values() {
             let (help_str, help_type) = (*arg).help_message();
             match help_type {
-                HelpType::FLAGS => {
+                HelpType::Flags => {
                     output_flags.push(help_str);
                 }
-                HelpType::OPTION => {
+                HelpType::Optional => {
                     output_options.push(help_str);
                 }
-                HelpType::HIDDEN => {}
+                HelpType::Hidden => {}
             }
         }
 
@@ -452,7 +452,7 @@ impl<'a> Arg<'a> {
     /// Produce help message for argument.
     fn help_message(&self) -> (String, HelpType) {
         if self.hiddable {
-            (String::new(), HelpType::HIDDEN)
+            (String::new(), HelpType::Hidden)
         } else if self.short.is_some() {
             let font_str = format!(
                 "{}{}{}, {}{}",
@@ -465,7 +465,7 @@ impl<'a> Arg<'a> {
             let mut help_str = format!("{}{}", TWENTY_FOUT_BLANK, self.help.unwrap_or(""));
             let font_offset = font_str.len();
             help_str.replace_range(..font_offset, &font_str);
-            (help_str, HelpType::FLAGS)
+            (help_str, HelpType::Flags)
         } else {
             let font_str = if self.values.is_some() {
                 format!(
@@ -497,7 +497,7 @@ impl<'a> Arg<'a> {
             } else {
                 help_str.replace_range(..font_offset, &font_str);
             }
-            (help_str, HelpType::OPTION)
+            (help_str, HelpType::Optional)
         }
     }
 
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(arg.value.as_ref().unwrap(), "vm1");
 
         let (help_msg, help_type) = arg.help_message();
-        assert_eq!(help_type, HelpType::FLAGS);
+        assert_eq!(help_type, HelpType::Flags);
         assert_eq!(
             help_msg,
             format!(

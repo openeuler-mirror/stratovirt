@@ -66,8 +66,7 @@ macro_rules! aml_bytes_type_define {
 
         impl AmlBuilder for $name {
             fn aml_bytes(&self) -> Vec<u8> {
-                let mut bytes = Vec::new();
-                bytes.push($op);
+                let mut bytes = vec![$op];
                 bytes.extend(self.0.as_bytes());
                 bytes
             }
@@ -101,8 +100,7 @@ pub struct AmlString(pub String);
 
 impl AmlBuilder for AmlString {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x0D);
+        let mut bytes = vec![0x0D];
         bytes.extend(self.0.as_bytes().to_vec());
         bytes.push(0x0);
         bytes
@@ -190,8 +188,7 @@ impl AmlNameDecl {
 
 impl AmlBuilder for AmlNameDecl {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x08);
+        let mut bytes = vec![0x08];
         bytes.extend(build_name_string(self.name.as_ref()));
         bytes.extend(self.obj.clone());
         bytes
@@ -361,8 +358,7 @@ pub struct AmlBuffer(pub Vec<u8>);
 
 impl AmlBuilder for AmlBuffer {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x11);
+        let mut bytes = vec![0x11];
         let len_bytes = AmlInteger(self.0.len() as u64).aml_bytes();
         bytes.extend(build_pkg_length(len_bytes.len() + self.0.len(), true));
         bytes.extend(len_bytes);
@@ -389,8 +385,7 @@ impl AmlPackage {
 
 impl AmlBuilder for AmlPackage {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x12);
+        let mut bytes = vec![0x12];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
         bytes
@@ -420,8 +415,7 @@ impl AmlVarPackage {
 
 impl AmlBuilder for AmlVarPackage {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x13);
+        let mut bytes = vec![0x13];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
         bytes
@@ -435,6 +429,7 @@ impl AmlScopeBuilder for AmlVarPackage {
 }
 
 /// Operation region address space type.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Copy, Clone)]
 pub enum AmlAddressSpaceType {
     /// System memory
@@ -492,9 +487,7 @@ impl AmlOpRegion {
 
 impl AmlBuilder for AmlOpRegion {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x5B);
-        bytes.push(0x80);
+        let mut bytes = vec![0x5B, 0x80];
         bytes.extend(build_name_string(self.name.as_ref()));
         bytes.push(self.space_type as u8);
 
@@ -569,9 +562,7 @@ impl AmlField {
 
 impl AmlBuilder for AmlField {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x5B);
-        bytes.push(0x81);
+        let mut bytes = vec![0x5B, 0x81];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
         bytes
@@ -636,8 +627,7 @@ impl AmlScope {
 
 impl AmlBuilder for AmlScope {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x10);
+        let mut bytes = vec![0x10];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
 
@@ -668,9 +658,7 @@ impl AmlDevice {
 
 impl AmlBuilder for AmlDevice {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x5B);
-        bytes.push(0x82);
+        let mut bytes = vec![0x5B, 0x82];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
         bytes
@@ -725,8 +713,7 @@ impl AmlMethod {
 
 impl AmlBuilder for AmlMethod {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x14);
+        let mut bytes = vec![0x14];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
         bytes
@@ -787,8 +774,7 @@ impl AmlReturn {
 
 impl AmlBuilder for AmlReturn {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0xA4);
+        let mut bytes = vec![0xA4];
         bytes.extend(self.value.clone());
 
         bytes
@@ -941,8 +927,7 @@ macro_rules! ops_2args_dst_define {
 
         impl AmlBuilder for $name {
             fn aml_bytes(&self) -> Vec<u8> {
-                let mut bytes = Vec::new();
-                bytes.push($op);
+                let mut bytes = vec![$op];
                 bytes.extend(self.arg1.clone());
                 bytes.extend(self.arg2.clone());
                 bytes.extend(self.dst.clone());
@@ -984,8 +969,7 @@ macro_rules! ops_1arg_define {
 
         impl AmlBuilder for $name {
             fn aml_bytes(&self) -> Vec<u8> {
-                let mut bytes = Vec::new();
-                bytes.push($op);
+                let mut bytes = vec![$op];
                 bytes.extend(self.arg.clone());
 
                 bytes
@@ -1033,8 +1017,7 @@ macro_rules! ops_2arg_define {
 
         impl AmlBuilder for $name {
             fn aml_bytes(&self) -> Vec<u8> {
-                let mut bytes = Vec::new();
-                bytes.push($op);
+                let mut bytes = vec![$op];
                 bytes.extend(self.arg1.clone());
                 bytes.extend(self.arg2.clone());
 
@@ -1074,8 +1057,7 @@ impl AmlIf {
 
 impl AmlBuilder for AmlIf {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0xA0);
+        let mut bytes = vec![0xA0];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
 
@@ -1104,8 +1086,7 @@ impl AmlElse {
 
 impl AmlBuilder for AmlElse {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0xA1);
+        let mut bytes = vec![0xA1];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
 
@@ -1135,8 +1116,7 @@ impl AmlWhile {
 
 impl AmlBuilder for AmlWhile {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0xA2);
+        let mut bytes = vec![0xA2];
         bytes.extend(build_pkg_length(self.buf.len(), true));
         bytes.extend(self.buf.clone());
 
@@ -1175,9 +1155,7 @@ impl AmlMutex {
 
 impl AmlBuilder for AmlMutex {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x5B);
-        bytes.push(0x01);
+        let mut bytes = vec![0x5B, 0x01];
         bytes.extend(build_name_string(self.name.as_ref()));
         bytes.push(self.sync_level);
         bytes
@@ -1205,9 +1183,7 @@ impl AmlAcquire {
 
 impl AmlBuilder for AmlAcquire {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x5B);
-        bytes.push(0x23);
+        let mut bytes = vec![0x5B, 0x23];
         bytes.extend(self.mutex.clone());
         bytes.extend(self.time_out.as_bytes());
         bytes
@@ -1230,9 +1206,7 @@ impl AmlRelease {
 
 impl AmlBuilder for AmlRelease {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x5B);
-        bytes.push(0x27);
+        let mut bytes = vec![0x5B, 0x27];
         bytes.extend(self.mutex.clone());
         bytes
     }
@@ -1271,9 +1245,7 @@ impl AmlCreateField {
 
 impl AmlBuilder for AmlCreateField {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x5B);
-        bytes.push(0x13);
+        let mut bytes = vec![0x5B, 0x13];
         bytes.extend(self.src.clone());
         bytes.extend(self.bit_index.clone());
         bytes.extend(self.bit_count.clone());
@@ -1304,8 +1276,7 @@ macro_rules! create_word_field_define {
 
         impl AmlBuilder for $name {
             fn aml_bytes(&self) -> Vec<u8> {
-                let mut bytes = Vec::new();
-                bytes.push($op);
+                let mut bytes = vec![$op];
                 bytes.extend(self.src.clone());
                 bytes.extend(self.bit_index.clone());
                 bytes.extend(build_name_string(self.name.as_ref()));
@@ -1418,9 +1389,7 @@ impl AmlDmaResource {
 
 impl AmlBuilder for AmlDmaResource {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x2A);
-        bytes.push(1 << self.channel);
+        let mut bytes = vec![0x2A, 1 << self.channel];
 
         let mut flags = (self.trans_sz as u8) | (self.dma_type as u8) << 5;
         if self.is_master {
@@ -1476,17 +1445,16 @@ impl AmlIoResource {
 
 impl AmlBuilder for AmlIoResource {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x47);
-        bytes.push(self.decode as u8);
-        bytes.push((self.min_addr & 0xFF) as u8);
-        bytes.push((self.min_addr >> 8) as u8);
-        bytes.push((self.max_addr & 0xFF) as u8);
-        bytes.push((self.max_addr >> 8) as u8);
-        bytes.push(self.align);
-        bytes.push(self.length);
-
-        bytes
+        vec![
+            0x47,
+            self.decode as u8,
+            (self.min_addr & 0xFF) as u8,
+            (self.min_addr >> 8) as u8,
+            (self.max_addr & 0xFF) as u8,
+            (self.max_addr >> 8) as u8,
+            self.align,
+            self.length,
+        ]
     }
 }
 
@@ -1521,11 +1489,7 @@ impl AmlMemory32Fixed {
 
 impl AmlBuilder for AmlMemory32Fixed {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x86);
-        bytes.push(0x09);
-        bytes.push(0x00);
-        bytes.push(self.rw_access as u8);
+        let mut bytes = vec![0x86, 0x09, 0x00, self.rw_access as u8];
         bytes.extend(self.addr.as_bytes());
         bytes.extend(self.length.as_bytes());
 
@@ -1543,6 +1507,7 @@ pub enum AmlCacheable {
 }
 
 /// This enum determines how the IO resource are limited.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Copy, Clone)]
 pub enum AmlISARanges {
     /// Limited to valid ISA I/O ranges.
@@ -1554,6 +1519,7 @@ pub enum AmlISARanges {
 }
 
 /// The type of resource.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Copy, Clone)]
 pub enum AmlResourceType {
     Memory = 0,
@@ -1586,17 +1552,10 @@ macro_rules! space_desc_define {
 
         impl AmlBuilder for $name {
             fn aml_bytes(&self) -> Vec<u8> {
-                let mut bytes = Vec::new();
-                bytes.push($op);
-                bytes.push($ml);
-                bytes.push(0x00);
-                bytes.push(self.res_type as u8);
-
                 // min_addr and max_addr are fixed
                 let flags = (self.decode as u8) << 1 | 1 << 2 | 1 << 3;
-                bytes.push(flags);
-                bytes.push(self.type_flags);
 
+                let mut bytes = vec![$op, $ml, 0x00, self.res_type as u8, flags, self.type_flags];
                 bytes.extend(self.granularity.as_bytes());
                 bytes.extend(self.addr_min.as_bytes());
                 bytes.extend(self.addr_max.as_bytes());
@@ -1727,13 +1686,8 @@ impl AmlIrqNoFlags {
 
 impl AmlBuilder for AmlIrqNoFlags {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x22);
         let irq_mask = 1 << (self.irq as u16);
-        bytes.push((irq_mask & 0xFF) as u8);
-        bytes.push((irq_mask >> 8) as u8);
-
-        bytes
+        vec![0x22, (irq_mask & 0xFF) as u8, (irq_mask >> 8) as u8]
     }
 }
 
@@ -1814,8 +1768,7 @@ impl AmlExtendedInterrupt {
 
 impl AmlBuilder for AmlExtendedInterrupt {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(0x89);
+        let mut bytes = vec![0x89];
 
         let header_len = 2_u16;
         let total_len = header_len + (self.irq_list.len() * std::mem::size_of::<u32>()) as u16;

@@ -46,7 +46,7 @@ impl<T: Clone> AioCb<T> {
         AioCb {
             last_aio: true,
             file_fd: 0,
-            opcode: IoCmd::NOOP,
+            opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: 0,
             process: false,
@@ -166,7 +166,7 @@ impl<T: Clone + 'static> Aio<T> {
 
     pub fn rw_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let ret = match cb.opcode {
-            IoCmd::PREADV => {
+            IoCmd::Preadv => {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
@@ -175,7 +175,7 @@ impl<T: Clone + 'static> Aio<T> {
                 }
                 r
             }
-            IoCmd::PWRITEV => {
+            IoCmd::Pwritev => {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
@@ -184,7 +184,7 @@ impl<T: Clone + 'static> Aio<T> {
                 }
                 r
             }
-            IoCmd::FDSYNC => raw_datasync(cb.file_fd)?,
+            IoCmd::Fdsync => raw_datasync(cb.file_fd)?,
             _ => -1,
         };
         (self.complete_func)(&cb, ret);
@@ -198,7 +198,7 @@ impl<T: Clone + 'static> Aio<T> {
         let mut ret = 0_i64;
 
         match cb.opcode {
-            IoCmd::PREADV => {
+            IoCmd::Preadv => {
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
                     // Safe because we allocate aligned memory and free it later.
@@ -225,7 +225,7 @@ impl<T: Clone + 'static> Aio<T> {
                     unsafe { libc::free(aligned_buffer) };
                 }
             }
-            IoCmd::PWRITEV => {
+            IoCmd::Pwritev => {
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
                     let aligned_buffer =
@@ -246,7 +246,7 @@ impl<T: Clone + 'static> Aio<T> {
                     unsafe { libc::free(aligned_buffer) };
                 }
             }
-            IoCmd::FDSYNC => ret = raw_datasync(cb.file_fd)?,
+            IoCmd::Fdsync => ret = raw_datasync(cb.file_fd)?,
             _ => {}
         };
         (self.complete_func)(&cb, ret);

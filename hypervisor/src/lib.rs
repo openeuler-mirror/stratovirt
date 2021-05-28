@@ -19,6 +19,7 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 
+#[allow(clippy::upper_case_acronyms)]
 pub mod errors {
     error_chain! {
         foreign_links {

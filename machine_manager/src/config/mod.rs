@@ -98,7 +98,7 @@ pub mod errors {
             Unaligned(param: String, value: u64, align: u64) {
                 display("Input value {} is unaligned with {} for {}.", value, align, param)
             }
-            UnitIDError(id: usize, max: usize){
+            UnitIdError(id: usize, max: usize){
                 description("Check unit id of pflash device.")
                 display("PFlash unit id given {} should not be more than {}", id, max)
             }

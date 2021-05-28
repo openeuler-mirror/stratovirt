@@ -26,7 +26,7 @@ $ sudo yum install stratovirt
 
 Now you can find StratoVirt binary with path: `/usr/bin/stratovirt`.
 
-If you'd like to build StratoVirt yourself, you should check out the [build_guide](../build_guide.md).
+If you'd like to build StratoVirt yourself, you should check out the [build_guide](./build_guide.md).
 
 ## 3. Running StratoVirt
 

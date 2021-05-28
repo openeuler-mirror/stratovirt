@@ -78,6 +78,7 @@ extern crate log;
 #[macro_use]
 extern crate error_chain;
 
+#[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 #[cfg(target_arch = "x86_64")]
@@ -107,6 +108,7 @@ pub mod errors {
             FwCfg(devices::legacy::errors::Error, devices::legacy::errors::ErrorKind);
         }
         errors {
+            #[allow(clippy::upper_case_acronyms)]
             #[cfg(target_arch = "aarch64")] DTBOverflow(size: u64) {
                 display(
                     "guest memory size {} should bigger than {}",

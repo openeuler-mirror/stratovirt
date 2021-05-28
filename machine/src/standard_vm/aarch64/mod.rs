@@ -214,11 +214,7 @@ impl StdMachineOps for StdMachine {
 
 impl MachineOps for StdMachine {
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)> {
-        // ranges is the vector of (start_addr, size)
-        let mut ranges = Vec::<(u64, u64)>::new();
-        ranges.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
-
-        ranges
+        vec![(MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size)]
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
@@ -428,7 +424,7 @@ impl AcpiBuilder for StdMachine {}
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
         if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
-            event!(STOP);
+            event!(Stop);
             true
         } else {
             false
@@ -439,8 +435,7 @@ impl MachineLifecycle for StdMachine {
         if !self.notify_lifecycle(KvmVmState::Paused, KvmVmState::Running) {
             return false;
         }
-
-        event!(RESUME);
+        event!(Resume);
         true
     }
 
@@ -753,6 +748,7 @@ fn generate_rtc_device_node(fdt: &mut Vec<u8>, res: &SysRes) -> util::errors::Re
 }
 
 /// Trait that helps to generate all nodes in device-tree.
+#[allow(clippy::upper_case_acronyms)]
 trait CompileFDTHelper {
     /// Function that helps to generate cpu nodes.
     fn generate_cpu_nodes(&self, fdt: &mut Vec<u8>) -> util::errors::Result<()>;
@@ -781,7 +777,7 @@ impl CompileFDTHelper for StdMachine {
                 let clster = format!("/cpus/cpu-map/cluster{}", cluster);
                 device_tree::add_sub_node(fdt, &clster)?;
 
-                for i in 0..2 as u32 {
+                for i in 0..2_u32 {
                     let sub_cluster = format!("{}/cluster{}", clster, i);
                     device_tree::add_sub_node(fdt, &sub_cluster)?;
 

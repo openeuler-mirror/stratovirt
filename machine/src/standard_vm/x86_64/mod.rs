@@ -287,16 +287,14 @@ impl StdMachineOps for StdMachine {
 
 impl MachineOps for StdMachine {
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)> {
-        // ranges is the vector of (start_addr, size)
-        let mut ranges = Vec::<(u64, u64)>::new();
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-        ranges.push((0, std::cmp::min(gap_start, mem_size)));
+
+        let mut ranges = vec![(0, std::cmp::min(gap_start, mem_size))];
         if mem_size > gap_start {
             let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
             ranges.push((gap_end, mem_size - gap_start));
         }
-
         ranges
     }
 
@@ -594,7 +592,7 @@ impl AcpiBuilder for StdMachine {
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
         if self.notify_lifecycle(KvmVmState::Running, KvmVmState::Paused) {
-            event!(STOP);
+            event!(Stop);
             true
         } else {
             false
@@ -605,8 +603,7 @@ impl MachineLifecycle for StdMachine {
         if !self.notify_lifecycle(KvmVmState::Paused, KvmVmState::Running) {
             return false;
         }
-
-        event!(RESUME);
+        event!(Resume);
         true
     }
 

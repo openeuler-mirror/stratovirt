@@ -139,7 +139,7 @@ impl Msix {
             let vector: u16 = offset as u16 / MSIX_TABLE_ENTRY_SIZE;
             let was_masked: bool = locked_msix.is_vector_masked(vector);
             let offset = offset as usize;
-            locked_msix.table[offset..(offset + 4)].copy_from_slice(&data[..]);
+            locked_msix.table[offset..(offset + 4)].copy_from_slice(data);
 
             let is_masked: bool = locked_msix.is_vector_masked(vector);
             if was_masked && !is_masked {

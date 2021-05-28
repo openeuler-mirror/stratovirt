@@ -50,6 +50,7 @@ const INT_MS: u32 = 1 | 1 << 1 | 1 << 2 | 1 << 3;
 
 const PL011_FIFO_SIZE: usize = 16;
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct PL011 {
     /// Read FIFO.
     rfifo: Vec<u32>,

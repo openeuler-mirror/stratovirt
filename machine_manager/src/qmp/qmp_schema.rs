@@ -19,6 +19,7 @@ pub use serde_json::Value as Any;
 use crate::qmp::{Command, Empty, Event, TimeStamp};
 
 /// A error enum for qmp
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QmpErrorClass {
     #[serde(rename = "GenericError")]
@@ -538,6 +539,7 @@ impl Command for query_hotpluggable_cpus {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct HotpluggableCPU {
     #[serde(rename = "type")]
@@ -772,7 +774,7 @@ impl Command for getfd {
     }
 }
 
-/// SHUTDOWN
+/// Shutdown
 ///
 /// Emitted when the virtual machine has shut down, indicating that StratoVirt is
 /// about to exit.
@@ -783,7 +785,7 @@ impl Command for getfd {
 /// will not exit, and a STOP event will eventually follow the SHUTDOWN event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SHUTDOWN {
+pub struct Shutdown {
     /// If true, the shutdown was triggered by a guest request (such as
     /// a guest-initiated ACPI shutdown request or other hardware-specific
     /// action) rather than a host request (such as sending StratoVirt a SIGINT).
@@ -792,16 +794,16 @@ pub struct SHUTDOWN {
     pub reason: String,
 }
 
-impl Event for SHUTDOWN {
+impl Event for Shutdown {
     const NAME: &'static str = "SHUTDOWN";
 }
 
-/// RESET
+/// Reset
 ///
 /// Emitted when the virtual machine is reset
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RESET {
+pub struct Reset {
     /// If true, the reset was triggered by a guest request (such as
     /// a guest-initiated ACPI reboot request or other hardware-specific action
     /// ) rather than a host request (such as the QMP command system_reset).
@@ -809,33 +811,33 @@ pub struct RESET {
     pub guest: bool,
 }
 
-impl Event for RESET {
+impl Event for Reset {
     const NAME: &'static str = "RESET";
 }
 
-/// STOP
+/// Stop
 ///
 /// Emitted when the virtual machine is stopped
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct STOP {}
+pub struct Stop {}
 
-impl Event for STOP {
+impl Event for Stop {
     const NAME: &'static str = "STOP";
 }
 
-/// RESUME
+/// Resume
 ///
 /// Emitted when the virtual machine resumes execution
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct RESUME {}
+pub struct Resume {}
 
-impl Event for RESUME {
+impl Event for Resume {
     const NAME: &'static str = "RESUME";
 }
 
-/// DEVICE_DELETED
+/// DeviceDeleted
 ///
 /// Emitted whenever the device removal completion is acknowledged by the guest.
 /// At this point, it's safe to reuse the specified device ID. Device removal can
@@ -851,7 +853,7 @@ impl Event for RESUME {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DEVICE_DELETED {
+pub struct DeviceDeleted {
     /// Device name.
     #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
@@ -860,7 +862,7 @@ pub struct DEVICE_DELETED {
     pub path: String,
 }
 
-impl Event for DEVICE_DELETED {
+impl Event for DeviceDeleted {
     const NAME: &'static str = "DEVICE_DELETED";
 }
 
@@ -868,31 +870,31 @@ impl Event for DEVICE_DELETED {
 #[serde(tag = "event")]
 pub enum QmpEvent {
     #[serde(rename = "SHUTDOWN")]
-    SHUTDOWN {
-        data: SHUTDOWN,
+    Shutdown {
+        data: Shutdown,
         timestamp: TimeStamp,
     },
     #[serde(rename = "RESET")]
-    RESET { data: RESET, timestamp: TimeStamp },
+    Reset { data: Reset, timestamp: TimeStamp },
     #[serde(rename = "STOP")]
-    STOP {
+    Stop {
         #[serde(default)]
-        data: STOP,
+        data: Stop,
         timestamp: TimeStamp,
     },
     #[serde(rename = "RESUME")]
-    RESUME {
+    Resume {
         #[serde(default)]
-        data: RESUME,
+        data: Resume,
         timestamp: TimeStamp,
     },
     #[serde(rename = "DEVICE_DELETED")]
-    DEVICE_DELETED {
-        data: DEVICE_DELETED,
+    DeviceDeleted {
+        data: DeviceDeleted,
         timestamp: TimeStamp,
     },
     #[serde(rename = "BALLOON_CHANGED")]
-    BALLOON_CHANGED {
+    BalloonChanged {
         data: BalloonInfo,
         timestamp: TimeStamp,
     },

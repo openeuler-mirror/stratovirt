@@ -21,6 +21,7 @@ pub use aarch64::StdMachine;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
+#[allow(clippy::upper_case_acronyms)]
 pub mod errors {
     error_chain! {
         links {

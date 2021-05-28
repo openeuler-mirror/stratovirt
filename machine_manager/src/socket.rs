@@ -330,6 +330,7 @@ impl SocketStream {
 ///     Ok(())
 /// }
 /// ```
+#[allow(clippy::upper_case_acronyms)]
 pub struct SocketRWHandler {
     /// Socket fd to read and write message
     socket_fd: RawFd,

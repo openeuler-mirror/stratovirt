@@ -256,7 +256,7 @@ impl Request {
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
-            opcode: IoCmd::NOOP,
+            opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: (self.out_header.sector << SECTOR_SHIFT) as usize,
             process: true,
@@ -274,7 +274,7 @@ impl Request {
 
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN => {
-                aiocb.opcode = IoCmd::PREADV;
+                aiocb.opcode = IoCmd::Preadv;
                 if direct {
                     (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
                         "Failed to process block request for reading asynchronously"
@@ -286,7 +286,7 @@ impl Request {
                 }
             }
             VIRTIO_BLK_T_OUT => {
-                aiocb.opcode = IoCmd::PWRITEV;
+                aiocb.opcode = IoCmd::Pwritev;
                 if direct {
                     (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
                         "Failed to process block request for writing asynchronously"
@@ -298,7 +298,7 @@ impl Request {
                 }
             }
             VIRTIO_BLK_T_FLUSH => {
-                aiocb.opcode = IoCmd::FDSYNC;
+                aiocb.opcode = IoCmd::Fdsync;
                 (*aio)
                     .as_mut()
                     .rw_sync(aiocb)
@@ -587,28 +587,29 @@ impl BlockIoHandler {
     }
 
     fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::Delete,
-            self.update_evt,
-            None,
-            EventSet::IN,
-            Vec::new(),
-        ));
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::Delete,
-            self.reset_evt,
-            None,
-            EventSet::IN,
-            Vec::new(),
-        ));
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::Delete,
-            self.queue_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            Vec::new(),
-        ));
+        let mut notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.update_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
         if let Some(lb) = self.leak_bucket.as_ref() {
             notifiers.push(EventNotifier::new(
                 NotifierOperation::Delete,
@@ -918,8 +919,7 @@ impl VirtioDevice for Block {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
         }
 
-        self.config_space[(offset as usize)..(offset as usize + data_len)]
-            .copy_from_slice(&data[..]);
+        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
 
         Ok(())
     }

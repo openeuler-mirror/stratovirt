@@ -15,6 +15,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use kvm_ioctls::{Kvm, VmFd};
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct KVMFds {
     pub fd: Option<Kvm>,
     pub vm_fd: Option<VmFd>,

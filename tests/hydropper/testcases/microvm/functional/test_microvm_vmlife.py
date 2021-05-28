@@ -30,7 +30,7 @@ def test_microvm_start(microvm, vcpu_count, memsize, vnetnums):
     logging.debug("current vmhwinfo is %s", vmhwinfo)
     assert vmhwinfo["cpu"]["vcpu_count"] == vcpu_count
     assert vmhwinfo["mem"]["memsize"] > (memsize * 1024 * 90 / 100)
-    assert len(vmhwinfo["virtio"]["virtio_blk"]) == 6
+    assert len(vmhwinfo["virtio"]["virtio_blk"]) == 4
     assert len(vmhwinfo["virtio"]["virtio_net"]) == 2
     assert len(vmhwinfo["virtio"]["virtio_console"]) == 1
     test_vm.shutdown()

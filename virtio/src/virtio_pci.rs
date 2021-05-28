@@ -334,6 +334,7 @@ impl VirtioPciCommonConfig {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[repr(u8)]
 enum VirtioPciCapType {
     Common = 1,

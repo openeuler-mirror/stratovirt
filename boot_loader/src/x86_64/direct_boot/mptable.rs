@@ -168,6 +168,7 @@ impl BusEntry {
 }
 
 #[repr(C)]
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct IOApicEntry {
     type_: u8,
@@ -194,6 +195,7 @@ impl IOApicEntry {
 }
 
 #[repr(C)]
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct IOInterruptEntry {
     type_: u8,

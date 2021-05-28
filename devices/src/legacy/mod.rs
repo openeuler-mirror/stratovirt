@@ -50,14 +50,11 @@ pub mod errors {
             FileSlotsNotAvailable(key: String) {
                 display("No available FwCfg file-slot for this file entry with filename {}", key)
             }
-            ReadDMARequest(addr: u64, size: u64) {
+            ReadDmaRequest(addr: u64, size: u64) {
                 display("Failed to read DMA request, dma_addr=0x{:x} size=0x{:x}", addr, size)
             }
             InvalidFwCfgEntry(key: u16) {
                 display("Invalid FwCfg entry key {}", key)
-            }
-            DMASizeOverflow {
-                display("The size of DMA request overflows.")
             }
             FlashWriteOverflow {
                 display("The size of write request overflows.")

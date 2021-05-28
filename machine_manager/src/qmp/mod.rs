@@ -70,9 +70,9 @@ static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 /// #[macro_use]
 /// use machine_manager::qmp::*;
 ///
-/// event!(SHUTDOWN; shutdown_msg);
-/// event!(STOP);
-/// event!(RESUME);
+/// event!(Shutdown; shutdown_msg);
+/// event!(Stop);
+/// event!(Resume);
 /// ```
 #[macro_export]
 macro_rules! event {
@@ -364,11 +364,11 @@ pub fn handle_qmp(
 
             // handle shutdown command
             if shutdown_flag {
-                let shutdown_msg = schema::SHUTDOWN {
+                let shutdown_msg = schema::Shutdown {
                     guest: false,
                     reason: "host-qmp-quit".to_string(),
                 };
-                event!(SHUTDOWN; shutdown_msg);
+                event!(Shutdown; shutdown_msg);
                 TempCleaner::clean();
                 set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
 
@@ -494,10 +494,7 @@ impl QmpChannel {
     ///
     /// * `name` - Name of file descriptor.
     pub fn get_fd(name: &str) -> Option<RawFd> {
-        match Self::inner().fds.read().unwrap().get(name) {
-            Some(fd) => Some(*fd),
-            None => None,
-        }
+        Self::inner().fds.read().unwrap().get(name).copied()
     }
 
     /// Send a `QmpEvent` to client.
@@ -600,7 +597,7 @@ mod tests {
             r#"{"event":"STOP","data":{},"timestamp":{"seconds":1575531524,"microseconds":91519}}"#;
         let qmp_event: schema::QmpEvent = serde_json::from_str(&event_json).unwrap();
         match qmp_event {
-            schema::QmpEvent::STOP {
+            schema::QmpEvent::Stop {
                 data: _,
                 timestamp: _,
             } => {
@@ -643,12 +640,12 @@ mod tests {
         QmpChannel::bind_writer(SocketRWHandler::new(socket.get_stream_fd()));
 
         // 1.send no-content event
-        event!(STOP);
+        event!(Stop);
         let length = client.read(&mut buffer).unwrap();
         let qmp_event: schema::QmpEvent =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         match qmp_event {
-            schema::QmpEvent::STOP {
+            schema::QmpEvent::Stop {
                 data: _,
                 timestamp: _,
             } => {
@@ -658,16 +655,16 @@ mod tests {
         }
 
         // 2.send with-content event
-        let shutdown_event = schema::SHUTDOWN {
+        let shutdown_event = schema::Shutdown {
             guest: true,
             reason: "guest-shutdown".to_string(),
         };
-        event!(SHUTDOWN; shutdown_event);
+        event!(Shutdown; shutdown_event);
         let length = client.read(&mut buffer).unwrap();
         let qmp_event: schema::QmpEvent =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         match qmp_event {
-            schema::QmpEvent::SHUTDOWN { data, timestamp: _ } => {
+            schema::QmpEvent::Shutdown { data, timestamp: _ } => {
                 assert_eq!(data.guest, true);
                 assert_eq!(data.reason, "guest-shutdown".to_string());
             }
