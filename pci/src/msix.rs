@@ -91,8 +91,12 @@ impl Msix {
     }
 
     fn is_vector_masked(&self, vector: u16) -> bool {
+        if !self.enabled || self.func_masked {
+            return true;
+        }
+
         let offset = (vector * MSIX_TABLE_ENTRY_SIZE + MSIX_TABLE_VEC_CTL) as usize;
-        if !self.enabled || self.func_masked || (self.table[offset] & MSIX_TABLE_MASK_BIT == 0) {
+        if self.table[offset] & MSIX_TABLE_MASK_BIT == 0 {
             return false;
         }
         true
