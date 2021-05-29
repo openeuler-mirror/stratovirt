@@ -235,6 +235,9 @@ And `modprobe vhost_vsock` in the host.
 ```shell
 # virtio mmio device.
 -device vhost-vsock-device,id=vsock_id,guest-cid=3
+
+# virtio pci device.
+-device vhost-vsock-pci,id=vsock_id,guest-cid=3,bus=pcie.0,addr=0x1.0x0
 ```
 
 *You can only set one virtio vsock device for one VM.*
@@ -293,6 +296,20 @@ it should satisfy `64<=bytes_per_sec<1000000000`
 ```shell
 # cmdline
 -rng random_file=/path/to/random_file[,bytes_per_sec=1000000]
+```
+
+### 2.9 PCIe root port
+A PCI Express Port on a Root Complex that maps a portion of a Hierarchy through an associated virtual PCI-PCI
+Bridge.
+
+Four parameters are supported for pcie root port.
+* port: port number of root port.
+* bus: bus number of root port.
+* addr: including slot number and function number.
+* id: the name of secondary bus.
+
+```shell
+-device pcie-root-port,port=0x1,addr=0x1.0x2,bus=pcie.0,id=pcie.1
 ```
 
 ## 3. StratoVirt Management

@@ -10,10 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
-use super::errors::{Result, ResultExt};
+use super::errors::{ErrorKind, Result, ResultExt};
 use super::CmdParser;
 
 /// Basic information of pci devices such as bus number,
@@ -57,7 +54,11 @@ impl Default for RootPortConfig {
     }
 }
 
-pub fn get_pci_bdf(cmd_parser: CmdParser) -> Result<PciBdf> {
+pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
+    let mut cmd_parser = CmdParser::new("bdf");
+    cmd_parser.push("").push("bus").push("addr");
+    cmd_parser.get_parameters(pci_cfg)?;
+
     let mut pci_bdf = PciBdf::default();
     if let Some(bus) = cmd_parser.get_value::<String>("bus")? {
         pci_bdf.bus = bus;
@@ -97,56 +98,81 @@ pub fn get_pci_bdf(cmd_parser: CmdParser) -> Result<PciBdf> {
     Ok(pci_bdf)
 }
 
+pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
+    let mut cmd_parser = CmdParser::new("pcie-root-port");
+    cmd_parser
+        .push("")
+        .push("bus")
+        .push("addr")
+        .push("port")
+        .push("id");
+    cmd_parser.parse(rootport_cfg)?;
+
+    let mut root_port = RootPortConfig::default();
+    if let Some(port) = cmd_parser.get_value::<String>("port")? {
+        let without_prefix = port.trim_start_matches("0x");
+        root_port.port = u8::from_str_radix(without_prefix, 16).unwrap();
+    } else {
+        return Err(ErrorKind::FieldIsMissing("port", "rootport").into());
+    }
+
+    if let Some(id) = cmd_parser.get_value::<String>("id")? {
+        root_port.id = id;
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "rootport").into());
+    }
+
+    Ok(root_port)
+}
+
+pub fn pci_args_check(cmd_parser: &CmdParser) -> Result<()> {
+    let device_type = cmd_parser.get_value::<String>("")?;
+    let dev_type = device_type.unwrap();
+    // Safe, because this function only be called when certain
+    // devices type are added.
+    if dev_type.ends_with("-device") {
+        if cmd_parser.get_value::<String>("bus")?.is_some() {
+            bail!("virtio mmio device does not support bus arguments");
+        }
+        if cmd_parser.get_value::<String>("addr")?.is_some() {
+            bail!("virtio mmio device does not support addr arguments");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_get_pci_bdf_01() {
-        let mut cmd_parser = CmdParser::new("pci");
-
-        cmd_parser.push("").push("bus").push("addr");
-        assert!(cmd_parser.parse("bus=pcie.0,addr=0x1.0x2").is_ok());
-        let bdf = get_pci_bdf(cmd_parser).unwrap();
+        let pci_bdf = get_pci_bdf("virtio-blk-device,bus=pcie.0,addr=0x1.0x2");
+        assert!(pci_bdf.is_ok());
+        let bdf = pci_bdf.unwrap();
         assert_eq!(bdf.bus, "pcie.0".to_string());
         assert_eq!(bdf.addr, (1, 2));
+
+        let pci_bdf = get_pci_bdf("virtio-balloon-device,bus=pcie.0,addr=0x1");
+        assert!(pci_bdf.is_ok());
+        let bdf = pci_bdf.unwrap();
+        assert_eq!(bdf.bus, "pcie.0".to_string());
+        assert_eq!(bdf.addr, (1, 0));
     }
 
     #[test]
     fn test_get_pci_bdf_02() {
-        let mut cmd_parser = CmdParser::new("pci");
-
-        cmd_parser.push("").push("bus").push("addr");
-        assert!(cmd_parser.parse("bus=pcie.0,addr=0x1").is_ok());
-        let bdf = get_pci_bdf(cmd_parser).unwrap();
-        assert_eq!(bdf.bus, "pcie.0".to_string());
-        assert_eq!(bdf.addr, (1, 0));
-    }
-    #[test]
-    fn test_get_pci_bdf_03() {
-        let mut cmd_parser = CmdParser::new("pci");
-
-        cmd_parser.push("").push("bus").push("addr");
-        assert!(cmd_parser.parse("bus=pcie.0,addr=0x1.0x2.0x3").is_ok());
+        let pci_bdf = get_pci_bdf("virtio-balloon-device,bus=pcie.0,addr=0x1.0x2.0x3");
+        assert!(pci_bdf.is_err());
         // Error, because too many args in option "addr".
-        assert!(get_pci_bdf(cmd_parser).is_err());
 
-        let mut cmd_parser = CmdParser::new("pci");
+        let pci_bdf = get_pci_bdf("virtio-balloon-device,bus=pcie.0,addr=abcd.dcba");
+        assert!(pci_bdf.is_err());
 
-        cmd_parser.push("").push("bus").push("addr");
-        assert!(cmd_parser.parse("bus=pcie.0,addr=abcd.dcba").is_ok());
-        assert!(get_pci_bdf(cmd_parser).is_err());
+        let pci_bdf = get_pci_bdf("virtio-balloon-device,bus=pcie.0");
+        assert!(pci_bdf.is_err());
 
-        let mut cmd_parser = CmdParser::new("pci");
-
-        cmd_parser.push("").push("bus").push("addr");
-        assert!(cmd_parser.parse("bus=pcie.0").is_ok());
-        assert!(get_pci_bdf(cmd_parser).is_err());
-
-        let mut cmd_parser = CmdParser::new("pci");
-
-        cmd_parser.push("").push("bus").push("addr");
-        assert!(cmd_parser.parse("addr=0x1.0x2").is_ok());
-        assert!(get_pci_bdf(cmd_parser).is_err());
+        let pci_bdf = get_pci_bdf("virtio-balloon-device,addr=0x1.0x2");
+        assert!(pci_bdf.is_err());
     }
 }

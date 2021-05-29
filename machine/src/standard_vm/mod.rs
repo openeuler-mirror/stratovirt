@@ -30,6 +30,7 @@ pub mod errors {
             Legacy(devices::LegacyErrs::Error, devices::LegacyErrs::ErrorKind);
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
             Acpi(acpi::errors::Error, acpi::errors::ErrorKind);
+            MachineManager(machine_manager::config::errors::Error, machine_manager::config::errors::ErrorKind);
         }
         foreign_links{
             Io(std::io::Error);

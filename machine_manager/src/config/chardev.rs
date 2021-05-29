@@ -15,7 +15,10 @@ extern crate serde_json;
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::{
+    errors::{ErrorKind, Result},
+    pci_args_check,
+};
 use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
@@ -166,9 +169,12 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     cmd_parser
         .push("")
         .push("id")
+        .push("bus")
+        .push("addr")
         .push("guest-cid")
         .push("vhostfd");
     cmd_parser.parse(vsock_config)?;
+    pci_args_check(&cmd_parser)?;
     let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
         vsock_id
     } else {
@@ -180,7 +186,18 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     } else {
         return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
     };
-
+    let device_type = cmd_parser.get_value::<String>("")?;
+    // Safe, because "parse_vsock" function only be called when certain
+    // devices type are added.
+    let dev_type = device_type.unwrap();
+    if dev_type == *"vhost-vsock-device" {
+        if cmd_parser.get_value::<String>("bus")?.is_some() {
+            bail!("virtio mmio device does not support bus property");
+        }
+        if cmd_parser.get_value::<String>("addr")?.is_some() {
+            bail!("virtio mmio device does not support addr property");
+        }
+    }
     let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
     let vsock = VsockConfig {
         id,

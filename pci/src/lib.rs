@@ -46,6 +46,7 @@ mod root_port;
 pub use bus::PciBus;
 pub use host::PciHost;
 pub use msix::init_msix;
+pub use root_port::RootPort;
 
 use std::mem::size_of;
 

@@ -105,11 +105,12 @@ mod micro_vm;
 mod standard_vm;
 
 pub use micro_vm::LightMachine;
+use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
-pub use virtio::{VhostKern, VirtioMmioState};
+use virtio::{VhostKern, VirtioMmioState};
 
 use std::os::unix::io::AsRawFd;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, Mutex, Weak};
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
@@ -121,15 +122,15 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    parse_vsock, BalloonConfig, ConsoleConfig, MachineMemConfig, PFlashConfig, RngConfig,
-    SerialConfig, VmConfig,
+    get_pci_bdf, parse_root_port, parse_vsock, BalloonConfig, ConsoleConfig, MachineMemConfig,
+    PFlashConfig, RngConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use virtio::{balloon_allow_list, VirtioMmioDevice};
+use virtio::{balloon_allow_list, VirtioMmioDevice, VirtioPciDevice};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -281,19 +282,26 @@ pub trait MachineOps {
     /// * `cfg_args` - Device configuration.
     fn add_virtio_vsock(&mut self, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_vsock(cfg_args)?;
-        let sys_mem = self.get_sys_mem();
+        let sys_mem = self.get_sys_mem().clone();
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
-        let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
-
-        MigrationManager::register_device_instance_mutex(
-            VirtioMmioState::descriptor(),
-            self.realize_virtio_mmio_device(device)
-                .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
-        );
-        MigrationManager::register_device_instance_mutex(
-            VhostKern::VsockState::descriptor(),
-            vsock,
-        );
+        if cfg_args.contains("vhost-vsock-device") {
+            let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
+            MigrationManager::register_device_instance_mutex(
+                VirtioMmioState::descriptor(),
+                self.realize_virtio_mmio_device(device)
+                    .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+            );
+            MigrationManager::register_device_instance_mutex(
+                VhostKern::VsockState::descriptor(),
+                vsock,
+            );
+        } else {
+            let (devfn, parent_bus) = self.get_pci_bdf(cfg_args)?;
+            let vitpcidev = VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, vsock, parent_bus);
+            vitpcidev
+                .realize()
+                .chain_err(|| "Failed to add virtio pci vsock device")?;
+        }
 
         Ok(())
     }
@@ -340,6 +348,33 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
+        bail!("No pci host found");
+    }
+
+    fn get_pci_bdf(&mut self, cfg_args: &str) -> Result<(u8, Weak<Mutex<PciBus>>)> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let pci_host = self.get_pci_host()?;
+        let bus = pci_host.lock().unwrap().root_bus.clone();
+        let pci_bus = PciBus::find_bus_by_name(&bus, &bdf.bus);
+        if pci_bus.is_none() {
+            bail!("Parent bus :{} not found", &bdf.bus);
+        }
+        let parent_bus = Arc::downgrade(&pci_bus.unwrap());
+        let devfn = (bdf.addr.0 << 3) + bdf.addr.1;
+        Ok((devfn, parent_bus))
+    }
+
+    fn add_pci_root_port(&mut self, cfg_args: &str) -> Result<()> {
+        let (devfn, parent_bus) = self.get_pci_bdf(cfg_args)?;
+        let device_cfg = parse_root_port(cfg_args)?;
+        let rootport = RootPort::new(device_cfg.id, devfn, device_cfg.port, parent_bus);
+        rootport
+            .realize()
+            .chain_err(|| "Failed to add pci root port")?;
+        Ok(())
+    }
+
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -383,14 +418,17 @@ pub trait MachineOps {
         for dev in &vm_config.devices {
             let cfg_args = dev.1.as_str();
             match dev.0.as_str() {
-                "vhost-vsock-device" => {
-                    self.add_virtio_vsock(cfg_args)?;
-                }
                 "virtio-blk-device" => {
                     self.add_virtio_mmio_block(&vm_config, cfg_args)?;
                 }
                 "virtio-net-device" => {
                     self.add_virtio_mmio_net(&vm_config, cfg_args)?;
+                }
+                "pcie-root-port" => {
+                    self.add_pci_root_port(cfg_args)?;
+                }
+                "vhost-vsock-pci" | "vhost-vsock-device" => {
+                    self.add_virtio_vsock(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

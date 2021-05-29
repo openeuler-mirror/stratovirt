@@ -436,6 +436,10 @@ impl MachineOps for StdMachine {
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
         &self.sys_mem
     }
+
+    fn get_pci_host(&mut self) -> MachineResult<&Arc<Mutex<PciHost>>> {
+        Ok(&self.pci_host)
+    }
 }
 
 impl AcpiBuilder for StdMachine {
