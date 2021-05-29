@@ -122,7 +122,7 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    get_pci_bdf, parse_blk, parse_net, parse_root_port, parse_vsock, BalloonConfig, ConsoleConfig,
+    get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_root_port, parse_vsock, ConsoleConfig,
     MachineMemConfig, PFlashConfig, RngConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
@@ -130,7 +130,7 @@ use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use virtio::{balloon_allow_list, Block, VirtioMmioDevice, VirtioPciDevice};
+use virtio::{balloon_allow_list, Balloon, Block, VirtioMmioDevice, VirtioPciDevice};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -325,19 +325,33 @@ pub trait MachineOps {
         bail!("Virtio mmio device Not supported!");
     }
 
+    fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_balloon(vm_config, cfg_args)?;
+        let sys_mem = self.get_sys_mem();
+        let balloon = Arc::new(Mutex::new(Balloon::new(&device_cfg, sys_mem.clone())));
+        Balloon::object_init(balloon.clone());
+        if cfg_args.contains("virtio-balloon-device") {
+            let device = VirtioMmioDevice::new(sys_mem, balloon);
+            self.realize_virtio_mmio_device(device)?;
+        } else {
+            let name = device_cfg.id;
+            let (devfn, parent_bus) = self.get_pci_bdf(cfg_args)?;
+            let sys_mem = self.get_sys_mem().clone();
+            let vitpcidev = VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus);
+            vitpcidev
+                .realize()
+                .chain_err(|| "Failed to add virtio pci balloon device")?;
+        }
+
+        Ok(())
+    }
+
     /// Add console device.
     ///
     /// # Arguments
     ///
     /// * `config` - Device configuration.
     fn add_console_device(&mut self, config: &ConsoleConfig) -> Result<()>;
-
-    /// Add memory balloon device.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Device configuration.
-    fn add_balloon_device(&mut self, config: &BalloonConfig) -> Result<()>;
 
     /// Add virtio-rng device.
     ///
@@ -406,52 +420,48 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `vm_config` - VM Configuration.
-    fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
+    fn add_devices(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         self.add_rtc_device(
             #[cfg(target_arch = "x86_64")]
             vm_config.machine_config.mem_config.mem_size,
         )
         .chain_err(|| ErrorKind::AddDevErr("RTC".to_string()))?;
 
-        if let Some(serial) = vm_config.serial.as_ref() {
+        let cloned_vm_config = vm_config.clone();
+        if let Some(serial) = cloned_vm_config.serial.as_ref() {
             self.add_serial_device(serial)
                 .chain_err(|| ErrorKind::AddDevErr("serial".to_string()))?;
         }
 
-        if let Some(pflashs) = vm_config.pflashs.as_ref() {
+        if let Some(pflashs) = cloned_vm_config.pflashs.as_ref() {
             for pflash in pflashs {
                 self.add_pflash_device(pflash)
                     .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
             }
         }
 
-        if let Some(consoles) = vm_config.consoles.as_ref() {
+        if let Some(consoles) = cloned_vm_config.consoles.as_ref() {
             for console in consoles {
                 self.add_console_device(console)
                     .chain_err(|| ErrorKind::AddDevErr("console".to_string()))?;
             }
         }
 
-        if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon)
-                .chain_err(|| ErrorKind::AddDevErr("balloon".to_string()))?;
-        }
-
-        if let Some(rng) = vm_config.rng.as_ref() {
+        if let Some(rng) = cloned_vm_config.rng.as_ref() {
             self.add_rng_device(rng)?;
         }
 
-        for dev in &vm_config.devices {
+        for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
             match dev.0.as_str() {
                 "virtio-blk-device" => {
-                    self.add_virtio_mmio_block(&vm_config, cfg_args)?;
+                    self.add_virtio_mmio_block(&cloned_vm_config, cfg_args)?;
                 }
                 "virtio-blk-pci" => {
                     self.add_virtio_pci_blk(&vm_config, cfg_args)?;
                 }
                 "virtio-net-device" => {
-                    self.add_virtio_mmio_net(&vm_config, cfg_args)?;
+                    self.add_virtio_mmio_net(&cloned_vm_config, cfg_args)?;
                 }
                 "virtio-net-pci" => {
                     self.add_virtio_pci_net(&vm_config, cfg_args)?;
@@ -461,6 +471,9 @@ pub trait MachineOps {
                 }
                 "vhost-vsock-pci" | "vhost-vsock-device" => {
                     self.add_virtio_vsock(cfg_args)?;
+                }
+                "virtio-balloon-device" | "virtio-balloon-pci" => {
+                    self.add_virtio_balloon(vm_config, cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
@@ -527,7 +540,7 @@ pub trait MachineOps {
     ///
     /// * `vm` - The machine structure.
     /// * `vm_config` - VM configuration.
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> Result<()>
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig, is_migrate: bool) -> Result<()>
     where
         Self: Sized;
 

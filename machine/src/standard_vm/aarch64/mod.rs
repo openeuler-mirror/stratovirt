@@ -25,9 +25,7 @@ use devices::legacy::{
 };
 use devices::{InterruptController, InterruptControllerConfig};
 use hypervisor::KVM_FDS;
-use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, PFlashConfig, SerialConfig, VmConfig,
-};
+use machine_manager::config::{BootSource, ConsoleConfig, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
@@ -315,15 +313,11 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_balloon_device(&mut self, _config: &BalloonConfig) -> Result<()> {
-        Ok(())
-    }
-
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> Result<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig, is_migrate: bool) -> Result<()> {
         use super::errors::ErrorKind as StdErrorKind;
         use crate::errors::ResultExt;
 

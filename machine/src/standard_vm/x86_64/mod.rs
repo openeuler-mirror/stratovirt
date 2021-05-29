@@ -31,9 +31,7 @@ use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, PFlashConfig, SerialConfig, VmConfig,
-};
+use machine_manager::config::{BootSource, ConsoleConfig, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
@@ -332,15 +330,15 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_balloon_device(&mut self, _config: &BalloonConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> MachineResult<()> {
+    fn realize(
+        vm: &Arc<Mutex<Self>>,
+        vm_config: &mut VmConfig,
+        is_migrate: bool,
+    ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();

@@ -287,8 +287,10 @@ Only one property is supported for virtio-balloon.
 This feature can prevent OOM occur in guest.
 
 ```shell
-# cmdline
--balloon deflate-on-oom=true
+# virtio mmio balloon device
+-device virtio-balloon-device,deflate-on-oom=true
+# virtio pci balloon device
+-device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true
 ```
 
 ### 2.8 Virtio-rng

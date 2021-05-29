@@ -89,8 +89,8 @@ use machine_manager::machine::{
 };
 use machine_manager::{
     config::{
-        BalloonConfig, BootSource, ConfigCheck, ConsoleConfig, NetworkInterfaceConfig, RngConfig,
-        SerialConfig, VmConfig,
+        BootSource, ConfigCheck, ConsoleConfig, NetworkInterfaceConfig, RngConfig, SerialConfig,
+        VmConfig,
     },
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
@@ -107,8 +107,8 @@ use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, BlockState, Console, Net, Rng,
-    VhostKern, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Console, Net, Rng, VhostKern,
+    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 use vmm_sys_util::eventfd::EventFd;
 
@@ -682,28 +682,6 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_balloon_device(&mut self, config: &BalloonConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let balloon = Arc::new(Mutex::new(Balloon::new(config, self.sys_mem.clone())));
-        Balloon::object_init(balloon.clone());
-        let device = VirtioMmioDevice::new(&self.sys_mem, balloon);
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        VirtioMmioDevice::realize(
-            device,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
-        )
-        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
-        self.sysbus.min_free_base += region_size;
-        Ok(())
-    }
-
     fn add_rng_device(&mut self, config: &RngConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -763,7 +741,11 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> MachineResult<()> {
+    fn realize(
+        vm: &Arc<Mutex<Self>>,
+        vm_config: &mut VmConfig,
+        is_migrate: bool,
+    ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();

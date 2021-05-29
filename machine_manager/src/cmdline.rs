@@ -285,7 +285,6 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
-    add_args_to_config!((args.value_of("balloon")), vm_cfg, add_balloon);
     add_args_to_config!((args.value_of("rng")), vm_cfg, add_rng);
     add_args_to_config!(
         (args.values_of("kernel-cmdline")),

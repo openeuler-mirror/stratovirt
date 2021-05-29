@@ -122,9 +122,9 @@ pub struct VmConfig {
     pub devices: Vec<(String, String)>,
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
-    pub balloon: Option<BalloonConfig>,
     pub rng: Option<RngConfig>,
     pub pflashs: Option<Vec<PFlashConfig>>,
+    pub dev_name: HashMap<String, u8>,
 }
 
 impl VmConfig {
