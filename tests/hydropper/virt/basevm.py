@@ -49,7 +49,7 @@ class BaseVM:
 
     def __init__(self, root_path, name, uuid, bin_path,
                  wrapper=None, args=None, mon_sock=None,
-                 vnetnums=1, vrngnums=0, vsocknums=0, balloon=False,
+                 vnetnums=1, rng=False, bytes_per_sec=0, vsocknums=0, balloon=False,
                  vmtype=CONFIG.vmtype, machine=None, freeze=False,
                  daemon=False, config=None, ipalloc="static", incoming=False,
                  error_test=False, dump_guest_core=True, mem_share=True):
@@ -106,7 +106,8 @@ class BaseVM:
         self.vmid = uuid
         self.vmtype = vmtype
         self.vnetnums = vnetnums
-        self.vrngnums = vrngnums
+        self.rng = rng
+        self.bytes_per_sec = bytes_per_sec
         self.vsock_cid = list()
         self.vsocknums = vsocknums
         self.with_json = False
@@ -483,10 +484,12 @@ class BaseVM:
                     _tempargs += ",mac=%s" % tapinfo["mac"]
                 args.extend(['-netdev', _tempargs])
 
-        # rng is not supported yet.
-        if self.vrngnums > 0:
-            args.extend(['-object', 'rng-random,id=rng0,filename=/dev/urandom',
-                         '-device', 'virtio-rng,rng=rng0,romfile='])
+        if self.rng:
+            if self.bytes_per_sec == 0:
+                rngcfg = 'random_file=/dev/urandom'
+            else:
+                rngcfg = 'random_file=/dev/random,bytes_per_sec=%s' % self.bytes_per_sec
+            args.extend(['-rng', rngcfg])
 
         if self.vsocknums > 0:
             if VSOCKS.init_vsock():
