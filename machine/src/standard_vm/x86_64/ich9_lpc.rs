@@ -15,10 +15,9 @@ use std::sync::{Arc, Mutex, Weak};
 use acpi::AcpiPMTimer;
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use error_chain::ChainedError;
-use pci::{
-    errors::Result as PciResult, le_write_u16, le_write_u32, ranges_overlap, PciBus, PciConfig,
-    PciDevOps, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
-};
+use pci::config::{PciConfig, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID};
+use pci::errors::Result as PciResult;
+use pci::{le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps};
 use util::byte_code::ByteCode;
 
 use super::VENDOR_ID_INTEL;
