@@ -146,8 +146,9 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
 
 ```shell
-# cmdline
--drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off[,iothread=iothread1,iops=200]
+# virtio mmio block device.
+-drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
+-device virtio-blk-device,drive=drive_id[,iothread=iothread1,iops=200]
 ```
 
 ### 2.3 Virtio-net

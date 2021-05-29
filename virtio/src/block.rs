@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use address_space::{AddressSpace, GuestAddress};
 use error_chain::ChainedError;
 use machine_manager::{
-    config::{ConfigCheck, DriveConfig},
+    config::{BlkDevConfig, ConfigCheck},
     event_loop::EventLoop,
 };
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -739,7 +739,7 @@ pub struct BlockState {
 /// Block device structure.
 pub struct Block {
     /// Configuration of the block device.
-    blk_cfg: DriveConfig,
+    blk_cfg: BlkDevConfig,
     /// Image file opened.
     disk_image: Option<Arc<File>>,
     /// Number of sectors of the image file.
@@ -772,8 +772,8 @@ impl Default for Block {
 }
 
 impl Block {
-    pub fn new(blk_cfg: DriveConfig) -> Block {
-        Block {
+    pub fn new(blk_cfg: BlkDevConfig) -> Block {
+        Self {
             blk_cfg,
             disk_image: None,
             disk_sectors: 0,
@@ -978,7 +978,11 @@ impl VirtioDevice for Block {
 
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         if let Some(conf) = dev_config {
-            self.blk_cfg = conf.as_any().downcast_ref::<DriveConfig>().unwrap().clone();
+            self.blk_cfg = conf
+                .as_any()
+                .downcast_ref::<BlkDevConfig>()
+                .unwrap()
+                .clone();
         } else {
             self.blk_cfg = Default::default();
         }

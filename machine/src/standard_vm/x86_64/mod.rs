@@ -32,8 +32,8 @@ use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SE
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
-    SerialConfig, VmConfig,
+    BalloonConfig, BootSource, ConsoleConfig, NetworkInterfaceConfig, PFlashConfig, SerialConfig,
+    VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -326,10 +326,6 @@ impl MachineOps for StdMachine {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
                 .chain_err(|| MachineErrorKind::RegNotifierErr)?;
         }
-        Ok(())
-    }
-
-    fn add_block_device(&mut self, _config: &DriveConfig) -> MachineResult<()> {
         Ok(())
     }
 

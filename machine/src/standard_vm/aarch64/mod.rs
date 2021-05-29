@@ -26,8 +26,8 @@ use devices::legacy::{
 use devices::{InterruptController, InterruptControllerConfig};
 use hypervisor::KVM_FDS;
 use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
-    SerialConfig, VmConfig,
+    BalloonConfig, BootSource, ConsoleConfig, NetworkInterfaceConfig, PFlashConfig, SerialConfig,
+    VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -309,10 +309,6 @@ impl MachineOps for StdMachine {
         if config.stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
         }
-        Ok(())
-    }
-
-    fn add_block_device(&mut self, _config: &DriveConfig) -> Result<()> {
         Ok(())
     }
 

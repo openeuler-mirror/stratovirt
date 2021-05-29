@@ -80,14 +80,16 @@ use error_chain::ChainedError;
 use hypervisor::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use machine_manager::config::parse_blk;
+use machine_manager::config::BlkDevConfig;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::{
     config::{
-        BalloonConfig, BootSource, ConfigCheck, ConsoleConfig, DriveConfig, NetworkInterfaceConfig,
-        RngConfig, SerialConfig, VmConfig,
+        BalloonConfig, BootSource, ConfigCheck, ConsoleConfig, NetworkInterfaceConfig, RngConfig,
+        SerialConfig, VmConfig,
     },
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
@@ -654,20 +656,6 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_block_device(&mut self, config: &DriveConfig) -> MachineResult<()> {
-        if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
-            bail!(
-                "A maximum of {} replaceable block devices are supported.",
-                MMIO_REPLACEABLE_BLK_NR
-            );
-        }
-
-        let index = self.replaceable_info.block_count;
-        self.fill_replaceable_device(&config.id, Arc::new(config.clone()), index)?;
-        self.replaceable_info.block_count += 1;
-        Ok(())
-    }
-
     fn add_net_device(&mut self, config: &NetworkInterfaceConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -767,6 +755,20 @@ impl MachineOps for LightMachine {
         )
         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
+        Ok(())
+    }
+
+    fn add_virtio_mmio_block(&mut self, vm_config: &VmConfig, cfg_args: &str) -> MachineResult<()> {
+        let device_cfg = parse_blk(vm_config, cfg_args)?;
+        if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
+            bail!(
+                "A maximum of {} block replaceble devices are supported.",
+                MMIO_REPLACEABLE_BLK_NR
+            );
+        }
+        let index = self.replaceable_info.block_count;
+        self.fill_replaceable_device(&device_cfg.id, Arc::new(device_cfg.clone()), index)?;
+        self.replaceable_info.block_count += 1;
         Ok(())
     }
 
@@ -1192,7 +1194,7 @@ impl DeviceInterface for LightMachine {
             );
         }
 
-        let config = DriveConfig {
+        let config = BlkDevConfig {
             id: node_name.clone(),
             path_on_host: file.filename,
             read_only,

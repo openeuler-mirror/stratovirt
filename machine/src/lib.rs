@@ -121,8 +121,8 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    parse_vsock, BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig,
-    NetworkInterfaceConfig, PFlashConfig, RngConfig, SerialConfig, VmConfig,
+    parse_vsock, BalloonConfig, ConsoleConfig, MachineMemConfig, NetworkInterfaceConfig,
+    PFlashConfig, RngConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -268,8 +268,11 @@ pub trait MachineOps {
     ///
     /// # Arguments
     ///
-    /// * `config` - Device configuration.
-    fn add_block_device(&mut self, config: &DriveConfig) -> Result<()>;
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    fn add_virtio_mmio_block(&mut self, _vm_config: &VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("Virtio mmio devices Not supported!");
+    }
 
     /// Add virtio mmio vsock device.
     ///
@@ -358,13 +361,6 @@ pub trait MachineOps {
             }
         }
 
-        if let Some(drives) = vm_config.drives.as_ref() {
-            for drive in drives {
-                self.add_block_device(drive)
-                    .chain_err(|| ErrorKind::AddDevErr("block".to_string()))?;
-            }
-        }
-
         if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
                 self.add_net_device(net)
@@ -393,6 +389,9 @@ pub trait MachineOps {
             match dev.0.as_str() {
                 "vhost-vsock-device" => {
                     self.add_virtio_vsock(cfg_args)?;
+                }
+                "virtio-blk-device" => {
+                    self.add_virtio_mmio_block(&vm_config, cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
