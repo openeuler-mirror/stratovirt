@@ -33,7 +33,7 @@ use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
     BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
-    RngConfig, SerialConfig, VmConfig, VsockConfig,
+    SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -333,10 +333,6 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_vsock_device(&mut self, _config: &VsockConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
     fn add_net_device(&mut self, _config: &NetworkInterfaceConfig) -> MachineResult<()> {
         Ok(())
     }
@@ -346,60 +342,6 @@ impl MachineOps for StdMachine {
     }
 
     fn add_balloon_device(&mut self, _config: &BalloonConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
-    fn add_rng_device(&mut self, _config: &RngConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
-    fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        self.add_rtc_device(vm_config.machine_config.mem_config.mem_size)
-            .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
-
-        if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(&serial)
-                .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
-        }
-        if let Some(pflashs) = vm_config.pflashs.as_ref() {
-            for pflash in pflashs {
-                self.add_pflash_device(pflash)
-                    .chain_err(|| MachineErrorKind::AddDevErr("pflash".to_string()))?;
-            }
-        }
-        if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(&vsock)
-                .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
-        }
-        if let Some(drives) = vm_config.drives.as_ref() {
-            for drive in drives {
-                self.add_block_device(&drive)
-                    .chain_err(|| MachineErrorKind::AddDevErr("block".to_string()))?;
-            }
-        }
-        if let Some(nets) = vm_config.nets.as_ref() {
-            for net in nets {
-                self.add_net_device(&net)
-                    .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
-            }
-        }
-        if let Some(consoles) = vm_config.consoles.as_ref() {
-            for console in consoles {
-                self.add_console_device(&console)
-                    .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
-            }
-        }
-        if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon)
-                .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
-        }
-        if let Some(rng) = vm_config.rng.as_ref() {
-            self.add_rng_device(rng)
-                .chain_err(|| MachineErrorKind::AddDevErr("rng".to_string()))?;
-        }
-
         Ok(())
     }
 
@@ -498,6 +440,10 @@ impl MachineOps for StdMachine {
 
     fn run(&self, paused: bool) -> MachineResult<()> {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+    }
+
+    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
+        &self.sys_mem
     }
 }
 

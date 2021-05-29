@@ -161,48 +161,33 @@ impl ConfigCheck for VsockConfig {
     }
 }
 
-impl VmConfig {
-    pub fn add_vsock(&mut self, vsock_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("device");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("guest-cid")
-            .push("vhostfd");
+pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
+    let mut cmd_parser = CmdParser::new("vhost-vsock");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("guest-cid")
+        .push("vhostfd");
+    cmd_parser.parse(vsock_config)?;
+    let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
+        vsock_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
+    };
 
-        cmd_parser.parse(vsock_config)?;
+    let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
+        cid
+    } else {
+        return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
+    };
 
-        if let Some(device_type) = cmd_parser.get_value::<String>("")? {
-            if device_type == "vsock" {
-                if self.vsock.is_some() {
-                    bail!("Device vsock can only be set one for one StratoVirt VM.");
-                }
-
-                let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
-                    vsock_id
-                } else {
-                    return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
-                };
-
-                let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
-                    cid
-                } else {
-                    return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
-                };
-
-                let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
-                self.vsock = Some(VsockConfig {
-                    id,
-                    guest_cid,
-                    vhost_fd,
-                });
-            } else {
-                return Err(ErrorKind::UnknownDeviceType(device_type).into());
-            }
-        }
-
-        Ok(())
-    }
+    let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
+    let vsock = VsockConfig {
+        id,
+        guest_cid,
+        vhost_fd,
+    };
+    Ok(vsock)
 }
 
 #[cfg(test)]
@@ -224,41 +209,22 @@ mod tests {
 
     #[test]
     fn test_vsock_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_vsock("vsock,id=test_vsock,guest-cid=3")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 3);
-            assert_eq!(vsock_config.vhost_fd, None);
-            assert!(vsock_config.check().is_ok())
-        } else {
-            assert!(false)
-        }
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_vsock("vsock,id=test_vsock,guest-cid=3,vhostfd=4")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 3);
-            assert_eq!(vsock_config.vhost_fd, Some(4));
-            assert!(vsock_config.check().is_ok())
-        } else {
-            assert!(false)
-        }
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_vsock("vsock,id=test_vsock,guest-cid=1")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 1);
-            assert_eq!(vsock_config.vhost_fd, None);
-            assert!(vsock_config.check().is_err())
-        } else {
-            assert!(false)
-        }
+        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3");
+        assert!(vsock_cfg_op.is_ok());
+
+        let vsock_config = vsock_cfg_op.unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, None);
+        assert!(vsock_config.check().is_ok());
+
+        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3,vhostfd=4");
+        assert!(vsock_cfg_op.is_ok());
+
+        let vsock_config = vsock_cfg_op.unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, Some(4));
+        assert!(vsock_config.check().is_ok());
     }
 }

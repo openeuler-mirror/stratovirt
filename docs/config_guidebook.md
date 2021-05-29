@@ -230,8 +230,8 @@ And `modprobe vhost_vsock` in the host.
 * guest_cid: a unique Context-ID in host to each guest, it should satisfy `3<=guest_cid<u32:MAX`
 
 ```shell
-# cmdline
--device vsock,id=vsock_id,guest-cid=3
+# virtio mmio device.
+-device vhost-vsock-device,id=vsock_id,guest-cid=3
 ```
 
 *You can only set one virtio vsock device for one VM.*

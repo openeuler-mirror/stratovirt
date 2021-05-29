@@ -32,6 +32,7 @@ pub mod errors {
             StdVm(super::standard_vm::errors::Error, super::standard_vm::errors::ErrorKind);
             Util(util::errors::Error, util::errors::ErrorKind);
             Virtio(virtio::errors::Error, virtio::errors::ErrorKind);
+            MachineManager(machine_manager::config::errors::Error, machine_manager::config::errors::ErrorKind);
         }
 
         foreign_links {
@@ -105,6 +106,7 @@ mod standard_vm;
 
 pub use micro_vm::LightMachine;
 pub use standard_vm::StdMachine;
+pub use virtio::{VhostKern, VirtioMmioState};
 
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Barrier, Mutex};
@@ -119,15 +121,15 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig, NetworkInterfaceConfig,
-    PFlashConfig, RngConfig, SerialConfig, VmConfig, VsockConfig,
+    parse_vsock, BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig,
+    NetworkInterfaceConfig, PFlashConfig, RngConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use virtio::balloon_allow_list;
+use virtio::{balloon_allow_list, VirtioMmioDevice};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -269,12 +271,38 @@ pub trait MachineOps {
     /// * `config` - Device configuration.
     fn add_block_device(&mut self, config: &DriveConfig) -> Result<()>;
 
-    /// Add vsock device.
+    /// Add virtio mmio vsock device.
     ///
     /// # Arguments
     ///
-    /// * `config` - Device configuration.
-    fn add_vsock_device(&mut self, config: &VsockConfig) -> Result<()>;
+    /// * `cfg_args` - Device configuration.
+    fn add_virtio_vsock(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_vsock(cfg_args)?;
+        let sys_mem = self.get_sys_mem();
+        let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
+        let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
+
+        MigrationManager::register_device_instance_mutex(
+            VirtioMmioState::descriptor(),
+            self.realize_virtio_mmio_device(device)
+                .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+        );
+        MigrationManager::register_device_instance_mutex(
+            VhostKern::VsockState::descriptor(),
+            vsock,
+        );
+
+        Ok(())
+    }
+
+    fn realize_virtio_mmio_device(
+        &mut self,
+        _dev: VirtioMmioDevice,
+    ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
+        bail!("Virtio mmio devices not supported");
+    }
+
+    fn get_sys_mem(&mut self) -> &Arc<AddressSpace>;
 
     /// Add net device.
     ///
@@ -302,15 +330,78 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `config` - Device configuration.
-    /// * `vm_fd` - File descriptor of VM.
-    fn add_rng_device(&mut self, _config: &RngConfig) -> Result<()>;
+    fn add_rng_device(&mut self, _config: &RngConfig) -> Result<()> {
+        Ok(())
+    }
 
     /// Add peripheral devices.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM Configuration.
-    fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()>;
+    fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
+        self.add_rtc_device(
+            #[cfg(target_arch = "x86_64")]
+            vm_config.machine_config.mem_config.mem_size,
+        )
+        .chain_err(|| ErrorKind::AddDevErr("RTC".to_string()))?;
+
+        if let Some(serial) = vm_config.serial.as_ref() {
+            self.add_serial_device(serial)
+                .chain_err(|| ErrorKind::AddDevErr("serial".to_string()))?;
+        }
+
+        if let Some(pflashs) = vm_config.pflashs.as_ref() {
+            for pflash in pflashs {
+                self.add_pflash_device(pflash)
+                    .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
+            }
+        }
+
+        if let Some(drives) = vm_config.drives.as_ref() {
+            for drive in drives {
+                self.add_block_device(drive)
+                    .chain_err(|| ErrorKind::AddDevErr("block".to_string()))?;
+            }
+        }
+
+        if let Some(nets) = vm_config.nets.as_ref() {
+            for net in nets {
+                self.add_net_device(net)
+                    .chain_err(|| ErrorKind::AddDevErr("net".to_string()))?;
+            }
+        }
+
+        if let Some(consoles) = vm_config.consoles.as_ref() {
+            for console in consoles {
+                self.add_console_device(console)
+                    .chain_err(|| ErrorKind::AddDevErr("console".to_string()))?;
+            }
+        }
+
+        if let Some(balloon) = vm_config.balloon.as_ref() {
+            self.add_balloon_device(balloon)
+                .chain_err(|| ErrorKind::AddDevErr("balloon".to_string()))?;
+        }
+
+        if let Some(rng) = vm_config.rng.as_ref() {
+            self.add_rng_device(rng)?;
+        }
+
+        for dev in &vm_config.devices {
+            let cfg_args = dev.1.as_str();
+            match dev.0.as_str() {
+                "vhost-vsock-device" => {
+                    self.add_virtio_vsock(cfg_args)?;
+                }
+                _ => {
+                    bail!("Unsupported device: {:?}", dev.0.as_str());
+                }
+            }
+        }
+
+        Ok(())
+    }
 
     /// Add pflash device.
     fn add_pflash_device(&mut self, _config: &PFlashConfig) -> Result<()> {

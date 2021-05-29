@@ -87,7 +87,7 @@ use machine_manager::machine::{
 use machine_manager::{
     config::{
         BalloonConfig, BootSource, ConfigCheck, ConsoleConfig, DriveConfig, NetworkInterfaceConfig,
-        RngConfig, SerialConfig, VmConfig, VsockConfig,
+        RngConfig, SerialConfig, VmConfig,
     },
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
@@ -581,6 +581,31 @@ impl MachineOps for LightMachine {
         })
     }
 
+    fn realize_virtio_mmio_device(
+        &mut self,
+        dev: VirtioMmioDevice,
+    ) -> MachineResult<Arc<Mutex<VirtioMmioDevice>>> {
+        use errors::ResultExt;
+
+        let region_base = self.sysbus.min_free_base;
+        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+        let realized_virtio_mmio_device = VirtioMmioDevice::realize(
+            dev,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "x86_64")]
+            &self.boot_source,
+        )
+        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
+        self.sysbus.min_free_base += region_size;
+        Ok(realized_virtio_mmio_device)
+    }
+
+    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
+        &self.sys_mem
+    }
+
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self) -> MachineResult<()> {
         use crate::errors::ResultExt;
@@ -640,34 +665,6 @@ impl MachineOps for LightMachine {
         let index = self.replaceable_info.block_count;
         self.fill_replaceable_device(&config.id, Arc::new(config.clone()), index)?;
         self.replaceable_info.block_count += 1;
-        Ok(())
-    }
-
-    fn add_vsock_device(&mut self, config: &VsockConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(config, &self.sys_mem)));
-        let device = VirtioMmioDevice::new(&self.sys_mem, vsock.clone());
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        MigrationManager::register_device_instance_mutex(
-            VirtioMmioState::descriptor(),
-            VirtioMmioDevice::realize(
-                device,
-                &mut self.sysbus,
-                region_base,
-                region_size,
-                #[cfg(target_arch = "x86_64")]
-                &self.boot_source,
-            )
-            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
-        );
-        MigrationManager::register_device_instance_mutex(
-            VhostKern::VsockState::descriptor(),
-            vsock,
-        );
-        self.sysbus.min_free_base += region_size;
         Ok(())
     }
 
@@ -770,56 +767,6 @@ impl MachineOps for LightMachine {
         )
         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
-        Ok(())
-    }
-
-    fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        #[cfg(target_arch = "aarch64")]
-        self.add_rtc_device()
-            .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
-
-        if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(serial)
-                .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
-        }
-
-        if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(vsock)
-                .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
-        }
-
-        if let Some(drives) = vm_config.drives.as_ref() {
-            for drive in drives {
-                self.add_block_device(drive)
-                    .chain_err(|| MachineErrorKind::AddDevErr("block".to_string()))?;
-            }
-        }
-
-        if let Some(nets) = vm_config.nets.as_ref() {
-            for net in nets {
-                self.add_net_device(net)
-                    .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
-            }
-        }
-
-        if let Some(consoles) = vm_config.consoles.as_ref() {
-            for console in consoles {
-                self.add_console_device(console)
-                    .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
-            }
-        }
-
-        if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon)
-                .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
-        }
-
-        if let Some(rng) = vm_config.rng.as_ref() {
-            self.add_rng_device(rng)?;
-        }
-
         Ok(())
     }
 
