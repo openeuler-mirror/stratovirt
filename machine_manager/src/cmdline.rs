@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fs::File;
-use std::io::Read;
-
 use error_chain::bail;
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
@@ -110,13 +107,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .long("mem-path")
                 .value_name("filebackend file path")
                 .help("configure file path that backs guest memory.")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("config-file")
-                .long("config")
-                .value_name("json file path")
-                .help("Sets a config file for vmm.")
                 .takes_value(true),
         )
         .arg(
@@ -278,25 +268,6 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     // VmConfig can be transformed by json file which described VmConfig
     // directly.
     let mut vm_cfg = VmConfig::default();
-    if let Some(config_file) = args.value_of("config-file") {
-        let config_value = match File::open(&config_file) {
-            Ok(mut f) => {
-                let mut data = String::new();
-                f.read_to_string(&mut data)
-                    .chain_err(|| format!("Failed to read from file:{}", &config_file))?;
-                if config_file.contains("json") {
-                    serde_json::from_str(&data)?
-                } else {
-                    bail!("Only support \'json\' format config-file");
-                }
-            }
-            Err(e) => {
-                bail!("Failed to open config file by: {}", e);
-            }
-        };
-        vm_cfg = VmConfig::create_from_value(config_value)
-            .chain_err(|| "Failed to parse config file to VmConfig")?;
-    }
 
     // Parse cmdline args which need to set in VmConfig
     update_args_to_config!((args.value_of("name")), vm_cfg, update_name);

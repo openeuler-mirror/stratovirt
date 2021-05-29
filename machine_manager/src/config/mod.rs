@@ -126,59 +126,6 @@ pub struct VmConfig {
 }
 
 impl VmConfig {
-    /// Create the `VmConfig` from `Value`.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn create_from_value(value: serde_json::Value) -> Result<VmConfig> {
-        let mut machine_config = MachineConfig::default();
-        let mut boot_source = BootSource::default();
-        let mut drives = None;
-        let mut nets = None;
-        let mut consoles = None;
-        let mut vsock = None;
-        let mut serial = None;
-        let mut iothreads = None;
-        let mut balloon = None;
-        let mut rng = None;
-        let mut pflashs = None;
-
-        if let serde_json::Value::Object(items) = value {
-            for (name, item) in items {
-                match name.as_str() {
-                    "machine-config" => machine_config = MachineConfig::from_value(&item)?,
-                    "boot-source" => boot_source = BootSource::from_value(&item)?,
-                    "drive" => drives = Some(DriveConfig::from_value(&item)?),
-                    "net" => nets = Some(NetworkInterfaceConfig::from_value(&item)?),
-                    "console" => consoles = Some(ConsoleConfig::from_value(&item)?),
-                    "vsock" => vsock = Some(VsockConfig::from_value(&item)?),
-                    "serial" => serial = Some(SerialConfig::from_value(&item)?),
-                    "iothread" => iothreads = Some(IothreadConfig::from_value(&item)?),
-                    "balloon" => balloon = Some(BalloonConfig::from_value(&item)?),
-                    "rng" => rng = Some(RngConfig::from_value(&item)?),
-                    "pflash" => pflashs = Some(PFlashConfig::from_value(&item)?),
-                    _ => return Err(ErrorKind::InvalidJsonField(name).into()),
-                }
-            }
-        }
-
-        Ok(VmConfig {
-            guest_name: "StratoVirt".to_string(),
-            machine_config,
-            boot_source,
-            drives,
-            nets,
-            consoles,
-            vsock,
-            serial,
-            iothreads,
-            balloon,
-            rng,
-            pflashs,
-        })
-    }
-
     /// Healthy check for `VmConfig`
     pub fn check_vmconfig(&self, is_daemonize: bool) -> Result<()> {
         self.boot_source.check()?;
@@ -491,43 +438,5 @@ mod tests {
         assert!(cmd_parser.get_value::<ExBool>("test7").is_err());
         assert!(cmd_parser.get_value::<String>("random").unwrap().is_none());
         assert!(cmd_parser.parse("random=false").is_err());
-    }
-
-    #[test]
-    fn test_vmcfg_json_parser() {
-        let kernel_path = String::from("test_vmlinux.bin");
-        let kernel_file = std::fs::File::create(&kernel_path).unwrap();
-        kernel_file.set_len(100_u64).unwrap();
-        let basic_json = r#"
-        {
-            "boot-source": {
-              "kernel_image_path": "test_vmlinux.bin",
-              "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/vda"
-            },
-            "machine-config": {
-              "vcpu_count": 1,
-              "mem_size": 268435456
-            },
-            "drive": [
-              {
-                "drive_id": "rootfs",
-                "path_on_host": "/path/to/rootfs/image",
-                "direct": false,
-                "read_only": false
-              }
-            ],
-            "serial": {
-              "stdio": true
-            }
-        }
-        "#;
-        let value = serde_json::from_str(basic_json).unwrap();
-        let vm_config_rst = VmConfig::create_from_value(value);
-        assert!(vm_config_rst.is_ok());
-        let vm_config = vm_config_rst.unwrap();
-        assert_eq!(vm_config.guest_name, "StratoVirt");
-        assert!(vm_config.check_vmconfig(false).is_ok());
-        assert!(vm_config.check_vmconfig(true).is_err());
-        std::fs::remove_file(&kernel_path).unwrap();
     }
 }
