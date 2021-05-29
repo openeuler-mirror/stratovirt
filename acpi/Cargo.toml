@@ -10,5 +10,6 @@ description = "acpi module"
 error-chain = "0.12.4"
 log = "0.4.8"
 
+address_space = { path = "../address_space" }
 util = {path = "../util"}
 machine_manager = {path = "../machine_manager"}

@@ -45,6 +45,8 @@ pub mod errors {
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_arch = "x86_64")]
+use acpi::AcpiGenericAddress;
 use acpi::{
     AcpiRsdp, AcpiTable, AmlBuilder, TableLoader, ACPI_RSDP_FILE, ACPI_TABLE_FILE,
     ACPI_TABLE_LOADER_FILE, TABLE_CHECKSUM_OFFSET,
@@ -212,13 +214,20 @@ trait AcpiBuilder {
         Self: Sized,
     {
         let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFSCP", 1);
-        // FADT table size is fixed.
-        fadt.set_table_len(276_usize);
 
+        fadt.set_table_len(208_usize);
+        // PM_TMR_BLK bit, offset is 76.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(76, 0x608);
         // FADT flag: HW_REDUCED_ACPI bit.
         fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
         // FADT minor revision
         fadt.set_field(131, 3);
+        // X_PM_TMR_BLK bit, offset is 208.
+        #[cfg(target_arch = "x86_64")]
+        fadt.append_child(&AcpiGenericAddress::new_io_address(0x608_u32).aml_bytes());
+        // FADT table size is fixed.
+        fadt.set_table_len(276_usize);
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let fadt_begin = locked_acpi_data.len() as u32;

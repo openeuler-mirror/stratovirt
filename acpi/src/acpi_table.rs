@@ -17,6 +17,36 @@ use super::aml_compiler::AmlBuilder;
 /// Offset of checksum field in ACPI table.
 pub const TABLE_CHECKSUM_OFFSET: u32 = 9;
 
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct AcpiGenericAddress {
+    space_id: u8,
+    bit_width: u8,
+    bit_offset: u8,
+    access_size: u8,
+    address: u64,
+}
+
+impl AcpiGenericAddress {
+    pub fn new_io_address<T: Into<u64>>(addr: T) -> AcpiGenericAddress {
+        AcpiGenericAddress {
+            space_id: 1,
+            bit_width: 8 * std::mem::size_of::<T>() as u8,
+            bit_offset: 0,
+            access_size: std::mem::size_of::<T>() as u8,
+            address: addr.into(),
+        }
+    }
+}
+
+impl ByteCode for AcpiGenericAddress {}
+
+impl AmlBuilder for AcpiGenericAddress {
+    fn aml_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+}
+
 /// The common ACPI table header.
 #[repr(C, packed)]
 #[derive(Default, Copy, Clone)]

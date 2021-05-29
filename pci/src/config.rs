@@ -67,6 +67,8 @@ pub const COMMAND_MEMORY_SPACE: u16 = 0x0002;
 
 /// Class code of host bridge.
 pub const CLASS_CODE_HOST_BRIDGE: u16 = 0x0600;
+/// Class code of ISA bridge.
+pub const CLASS_CODE_ISA_BRIDGE: u16 = 0x0601;
 /// Class code of PCI-to-PCI bridge.
 pub const CLASS_CODE_PCI_BRIDGE: u16 = 0x0604;
 

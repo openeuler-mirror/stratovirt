@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod ich9_lpc;
 mod mch;
 mod syscall;
 
@@ -210,8 +211,11 @@ impl StdMachineOps for StdMachine {
             .add_subregion(pio_data_region, 0xcfc)
             .chain_err(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
-        let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
+        let mch = Mch::new(root_bus.clone(), mmconfig_region, mmconfig_region_ops);
         PciDevOps::realize(mch)?;
+
+        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
+        PciDevOps::realize(ich)?;
         Ok(())
     }
 
@@ -634,13 +638,21 @@ impl MachineLifecycle for StdMachine {
 
 impl MachineAddressInterface for StdMachine {
     fn pio_in(&self, addr: u64, mut data: &mut [u8]) -> bool {
-        // The function pit_calibrate_tsc() in kernel gets stuck if data read from
-        // io-port 0x61 is not 0x20.
-        // This problem only happens before Linux version 4.18 (fixed by 368a540e0)
-        if addr == 0x61 {
-            data[0] = 0x20;
-            return true;
+        if (0x60..=0x64).contains(&addr) {
+            // The function pit_calibrate_tsc() in kernel gets stuck if data read from
+            // io-port 0x61 is not 0x20.
+            // This problem only happens before Linux version 4.18 (fixed by 368a540e0)
+            if addr == 0x61 {
+                data[0] = 0x20;
+                return true;
+            }
+            if addr == 0x64 {
+                // UEFI will read PS2 Keyboard's Status register 0x64 to detect if
+                // this device is present.
+                data[0] = 0xFF;
+            }
         }
+
         let length = data.len() as u64;
         self.sys_io
             .read(&mut data, GuestAddress(addr), length)
