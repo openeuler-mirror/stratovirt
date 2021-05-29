@@ -294,7 +294,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
         vec
     );
     add_args_to_config_multi!((args.values_of("drive")), vm_cfg, add_drive);
-    add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_net);
+    add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_netdev);
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_consoles);
     add_args_to_config_multi!((args.values_of("iothread")), vm_cfg, add_iothread);
     add_args_to_config_multi!((args.values_of("pflash")), vm_cfg, add_pflash);

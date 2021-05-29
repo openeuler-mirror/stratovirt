@@ -121,8 +121,8 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    parse_vsock, BalloonConfig, ConsoleConfig, MachineMemConfig, NetworkInterfaceConfig,
-    PFlashConfig, RngConfig, SerialConfig, VmConfig,
+    parse_vsock, BalloonConfig, ConsoleConfig, MachineMemConfig, PFlashConfig, RngConfig,
+    SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -311,8 +311,11 @@ pub trait MachineOps {
     ///
     /// # Arguments
     ///
-    /// * `config` - Device configuration.
-    fn add_net_device(&mut self, config: &NetworkInterfaceConfig) -> Result<()>;
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    fn add_virtio_mmio_net(&mut self, _vm_config: &VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("Virtio mmio device Not supported!");
+    }
 
     /// Add console device.
     ///
@@ -361,13 +364,6 @@ pub trait MachineOps {
             }
         }
 
-        if let Some(nets) = vm_config.nets.as_ref() {
-            for net in nets {
-                self.add_net_device(net)
-                    .chain_err(|| ErrorKind::AddDevErr("net".to_string()))?;
-            }
-        }
-
         if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
                 self.add_console_device(console)
@@ -392,6 +388,9 @@ pub trait MachineOps {
                 }
                 "virtio-blk-device" => {
                     self.add_virtio_mmio_block(&vm_config, cfg_args)?;
+                }
+                "virtio-net-device" => {
+                    self.add_virtio_mmio_net(&vm_config, cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

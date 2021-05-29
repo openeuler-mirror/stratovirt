@@ -81,6 +81,7 @@ use hypervisor::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::parse_blk;
+use machine_manager::config::parse_net;
 use machine_manager::config::BlkDevConfig;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
@@ -656,40 +657,6 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_net_device(&mut self, config: &NetworkInterfaceConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        if config.vhost_type.is_some() {
-            let net = Arc::new(Mutex::new(VhostKern::Net::new(config, &self.sys_mem)));
-            let device = VirtioMmioDevice::new(&self.sys_mem, net);
-            let region_base = self.sysbus.min_free_base;
-            let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-            VirtioMmioDevice::realize(
-                device,
-                &mut self.sysbus,
-                region_base,
-                region_size,
-                #[cfg(target_arch = "x86_64")]
-                &self.boot_source,
-            )
-            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
-            self.sysbus.min_free_base += region_size;
-        } else {
-            let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
-            if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
-                bail!(
-                    "A maximum of {} net replaceable devices are supported.",
-                    MMIO_REPLACEABLE_NET_NR
-                );
-            }
-
-            self.fill_replaceable_device(&config.id, Arc::new(config.clone()), index)?;
-            self.replaceable_info.net_count += 1;
-        }
-        Ok(())
-    }
-
     fn add_console_device(&mut self, config: &ConsoleConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -755,6 +722,26 @@ impl MachineOps for LightMachine {
         )
         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
         self.sysbus.min_free_base += region_size;
+        Ok(())
+    }
+
+    fn add_virtio_mmio_net(&mut self, vm_config: &VmConfig, cfg_args: &str) -> MachineResult<()> {
+        let device_cfg = parse_net(vm_config, cfg_args)?;
+        if device_cfg.vhost_type.is_some() {
+            let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
+            let device = VirtioMmioDevice::new(&self.sys_mem, net);
+            self.realize_virtio_mmio_device(device)?;
+        } else {
+            let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
+            if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
+                bail!(
+                    "A maximum of {} net replaceble devices are supported.",
+                    MMIO_REPLACEABLE_NET_NR
+                );
+            }
+            self.fill_replaceable_device(&device_cfg.id, Arc::new(device_cfg.clone()), index)?;
+            self.replaceable_info.net_count += 1;
+        }
         Ok(())
     }
 

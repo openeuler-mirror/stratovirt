@@ -157,15 +157,16 @@ Virtio-net is a virtual Ethernet card in VM. It can enable the network capabilit
 
 Four properties are supported for virtio net device.
 
-* iface_id: unique device-id in StratoVirt
+* netid: unique device-id in StratoVirt
 * host_dev_name: name of tap device in host
 * mac: set mac address in VM (optional)
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. 
 It only affects on virito-net, not vhost-net.
 
 ```shell
-# cmdline
--netdev id=iface_id,netdev=host_dev_name[,mac=12:34:56:78:9A:BC][,iothread=iothread1]
+# virtio mmio net device
+-netdev id=host_dev_name[,mac=12:34:56:78:9A:BC]
+-device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network.
@@ -173,8 +174,9 @@ StratoVirt also supports vhost-net to get a higher performance in network.
 It can be set by given `vhost` property.
 
 ```shell
-# cmdline
--netdev id=iface_id,netdev=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
+# virtio mmio net device
+-netdev id=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
+-device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
 ```
 
 *How to set a tap device?*

@@ -26,8 +26,7 @@ use devices::legacy::{
 use devices::{InterruptController, InterruptControllerConfig};
 use hypervisor::KVM_FDS;
 use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, NetworkInterfaceConfig, PFlashConfig, SerialConfig,
-    VmConfig,
+    BalloonConfig, BootSource, ConsoleConfig, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -309,10 +308,6 @@ impl MachineOps for StdMachine {
         if config.stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
         }
-        Ok(())
-    }
-
-    fn add_net_device(&mut self, _config: &NetworkInterfaceConfig) -> Result<()> {
         Ok(())
     }
 
