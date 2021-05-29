@@ -264,14 +264,11 @@ mod tests {
     }
 
     fn vsock_create_instance() -> Vsock {
-        let json = r#"
-        {
-            "vsock_id": "test_vsock_1",
-            "guest_cid": 3
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let vsock_conf = VsockConfig::from_value(&value).unwrap();
+        let vsock_conf = VsockConfig {
+            vsock_id: "test_vsock_1".to_string(),
+            guest_cid: 3,
+            vhost_fd: None,
+        };
         let sys_mem = vsock_address_space_init();
         let vsock = Vsock::new(&vsock_conf, &sys_mem);
         vsock
