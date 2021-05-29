@@ -143,8 +143,8 @@ impl VmConfig {
         Ok(())
     }
 
-    /// Update '-m' memory config to `VmConfig`.
-    pub fn update_memory(&mut self, mem_config: &str) -> Result<()> {
+    /// Add '-m' memory config to `VmConfig`.
+    pub fn add_memory(&mut self, mem_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("m");
         cmd_parser.push("").push("size");
 
@@ -163,8 +163,8 @@ impl VmConfig {
         Ok(())
     }
 
-    /// Update '-smp' cpu config to `VmConfig`.
-    pub fn update_cpu(&mut self, cpu_config: &str) -> Result<()> {
+    /// Add '-smp' cpu config to `VmConfig`.
+    pub fn add_cpu(&mut self, cpu_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("smp");
         cmd_parser.push("").push("cpus");
 
@@ -196,7 +196,7 @@ impl VmConfig {
         Ok(())
     }
 
-    pub fn update_mem_path(&mut self, mem_path: &str) -> Result<()> {
+    pub fn add_mem_path(&mut self, mem_path: &str) -> Result<()> {
         self.machine_config.mem_config.mem_path = Some(mem_path.replace("\"", ""));
         Ok(())
     }

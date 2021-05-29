@@ -187,12 +187,12 @@ impl VmConfig {
         Ok(())
     }
 
-    /// Update argument `name` to `VmConfig`.
+    /// Add argument `name` to `VmConfig`.
     ///
     /// # Arguments
     ///
     /// * `name` - The name `String` updated to `VmConfig`.
-    pub fn update_name(&mut self, name: &str) -> Result<()> {
+    pub fn add_name(&mut self, name: &str) -> Result<()> {
         self.guest_name = name.to_string();
         Ok(())
     }

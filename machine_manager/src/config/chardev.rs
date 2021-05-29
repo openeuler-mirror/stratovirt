@@ -105,7 +105,7 @@ pub struct SerialConfig {
 }
 
 impl VmConfig {
-    pub fn update_serial(&mut self, serial_config: &str) -> Result<()> {
+    pub fn add_serial(&mut self, serial_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("serial");
         cmd_parser.push("");
 
@@ -156,7 +156,7 @@ impl ConfigCheck for VsockConfig {
 }
 
 impl VmConfig {
-    pub fn update_vsock(&mut self, vsock_config: &str) -> Result<()> {
+    pub fn add_vsock(&mut self, vsock_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("device");
         cmd_parser
             .push("")
@@ -220,7 +220,7 @@ mod tests {
     fn test_vsock_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_vsock("vsock,id=test_vsock,guest-cid=3")
+            .add_vsock("vsock,id=test_vsock,guest-cid=3")
             .is_ok());
         if let Some(vsock_config) = vm_config.vsock {
             assert_eq!(vsock_config.vsock_id, "test_vsock");
@@ -232,7 +232,7 @@ mod tests {
         }
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_vsock("vsock,id=test_vsock,guest-cid=3,vhostfd=4")
+            .add_vsock("vsock,id=test_vsock,guest-cid=3,vhostfd=4")
             .is_ok());
         if let Some(vsock_config) = vm_config.vsock {
             assert_eq!(vsock_config.vsock_id, "test_vsock");
@@ -244,7 +244,7 @@ mod tests {
         }
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_vsock("vsock,id=test_vsock,guest-cid=1")
+            .add_vsock("vsock,id=test_vsock,guest-cid=1")
             .is_ok());
         if let Some(vsock_config) = vm_config.vsock {
             assert_eq!(vsock_config.vsock_id, "test_vsock");
