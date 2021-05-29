@@ -149,6 +149,10 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 # virtio mmio block device.
 -drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
 -device virtio-blk-device,drive=drive_id[,iothread=iothread1,iops=200]
+# virtio pci block device.
+-drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1,iops=200]
+
 ```
 
 ### 2.3 Virtio-net
@@ -167,6 +171,9 @@ It only affects on virito-net, not vhost-net.
 # virtio mmio net device
 -netdev id=host_dev_name[,mac=12:34:56:78:9A:BC]
 -device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
+# virtio pci net device
+-netdev id=host_dev_name[,mac=12:34:56:78:9A:BC]
+-device virtio-net-pci,netdev=host_dev_name,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network.
@@ -177,6 +184,9 @@ It can be set by given `vhost` property.
 # virtio mmio net device
 -netdev id=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
 -device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
+# virtio pci net device
+-netdev id=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
+-device virtio-net-pci,netdev=host_dev_name,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
 ```
 
 *How to set a tap device?*

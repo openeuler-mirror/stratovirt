@@ -17,7 +17,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::{
+    errors::{ErrorKind, Result},
+    pci_args_check,
+};
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
@@ -151,14 +154,19 @@ pub fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
 }
 
 pub fn parse_blk(vm_config: &VmConfig, drive_config: &str) -> Result<BlkDevConfig> {
-    let mut cmd_parser = CmdParser::new("virtio-blk-device");
+    let mut cmd_parser = CmdParser::new("virtio-blk");
     cmd_parser
         .push("")
+        .push("id")
+        .push("bus")
+        .push("addr")
         .push("drive")
         .push("iothread")
         .push("iops");
 
     cmd_parser.parse(drive_config)?;
+
+    pci_args_check(&cmd_parser)?;
 
     let mut blkdevcfg = BlkDevConfig::default();
     let blkdrive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
@@ -221,6 +229,8 @@ impl VmConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::get_pci_bdf;
+
     use super::*;
 
     #[test]
@@ -250,5 +260,28 @@ mod tests {
             "virtio-blk-device,drive=rootfs1,iothread=iothread1,iops=200",
         );
         assert!(blk_cfg_res.is_err()); // Can not find drive named "rootfs1".
+    }
+
+    #[test]
+    fn test_pci_block_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .is_ok());
+        let blk_cfg = "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs";
+        let blk_cfg_res = parse_blk(&vm_config, blk_cfg);
+        assert!(blk_cfg_res.is_ok());
+        let drive_configs = blk_cfg_res.unwrap();
+        assert_eq!(drive_configs.id, "rootfs");
+        assert_eq!(drive_configs.path_on_host, "/path/to/rootfs");
+        assert_eq!(drive_configs.direct, true);
+        assert_eq!(drive_configs.read_only, false);
+        assert_eq!(drive_configs.serial_num, Some(String::from("111111")));
+
+        let pci_bdf = get_pci_bdf(blk_cfg);
+        assert!(pci_bdf.is_ok());
+        let pci = pci_bdf.unwrap();
+        assert_eq!(pci.bus, "pcie.0".to_string());
+        assert_eq!(pci.addr, (1, 2));
     }
 }

@@ -17,7 +17,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::{
+    errors::{ErrorKind, Result},
+    pci_args_check,
+};
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
@@ -133,19 +136,17 @@ pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
 }
 
 pub fn parse_net(vm_config: &VmConfig, net_config: &str) -> Result<NetworkInterfaceConfig> {
-    let mut cmd_parser = CmdParser::new("virtio-net-device");
+    let mut cmd_parser = CmdParser::new("virtio-net");
     cmd_parser
         .push("")
         .push("id")
         .push("netdev")
-        .push("mac")
-        .push("fds")
-        .push("vhost")
-        .push("vhostfds")
+        .push("bus")
+        .push("addr")
         .push("iothread");
 
     cmd_parser.parse(net_config)?;
-
+    pci_args_check(&cmd_parser)?;
     let mut netdevinterfacecfg = NetworkInterfaceConfig::default();
 
     let netdev = if let Some(devname) = cmd_parser.get_value::<String>("netdev")? {
@@ -175,6 +176,7 @@ pub fn parse_net(vm_config: &VmConfig, net_config: &str) -> Result<NetworkInterf
     } else {
         bail!("Netdev: {:?} not found for net device", &netdev);
     }
+
     netdevinterfacecfg.check()?;
     Ok(netdevinterfacecfg)
 }
@@ -237,6 +239,8 @@ fn check_mac_address(mac: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::get_pci_bdf;
+
     use super::*;
 
     #[test]
@@ -280,5 +284,32 @@ mod tests {
             .is_ok());
         let net_cfg_res = parse_net(&vm_config, "virtio-net-device,id=net1,netdev=eth2");
         assert!(net_cfg_res.is_err());
+    }
+
+    #[test]
+    fn test_pci_network_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+
+        assert!(vm_config
+            .add_netdev("id=eth1,mac=12:34:56:78:9A:BC,vhost=on,vhostfds=4")
+            .is_ok());
+        let net_cfg = "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2";
+        let net_cfg_res = parse_net(&vm_config, net_cfg);
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.id, "net1");
+        assert_eq!(network_configs.host_dev_name, "eth1");
+        assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
+        assert!(network_configs.tap_fd.is_none());
+        assert_eq!(
+            network_configs.vhost_type,
+            Some(String::from("vhost-kernel"))
+        );
+        assert_eq!(network_configs.vhost_fd, Some(4));
+        let pci_bdf = get_pci_bdf(net_cfg);
+        assert!(pci_bdf.is_ok());
+        let pci = pci_bdf.unwrap();
+        assert_eq!(pci.bus, "pcie.0".to_string());
+        assert_eq!(pci.addr, (1, 2));
     }
 }

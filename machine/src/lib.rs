@@ -122,15 +122,15 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    get_pci_bdf, parse_root_port, parse_vsock, BalloonConfig, ConsoleConfig, MachineMemConfig,
-    PFlashConfig, RngConfig, SerialConfig, VmConfig,
+    get_pci_bdf, parse_blk, parse_net, parse_root_port, parse_vsock, BalloonConfig, ConsoleConfig,
+    MachineMemConfig, PFlashConfig, RngConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use virtio::{balloon_allow_list, VirtioMmioDevice, VirtioPciDevice};
+use virtio::{balloon_allow_list, Block, VirtioMmioDevice, VirtioPciDevice};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -352,6 +352,32 @@ pub trait MachineOps {
         bail!("No pci host found");
     }
 
+    fn add_virtio_pci_blk(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
+        let (devfn, parent_bus) = self.get_pci_bdf(cfg_args)?;
+        let sys_mem = self.get_sys_mem();
+        let device_cfg = parse_blk(vm_config, cfg_args)?;
+        let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
+        let vitpcidev =
+            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus);
+        vitpcidev
+            .realize()
+            .chain_err(|| "Failed to add virtio pci blk device")?;
+        Ok(())
+    }
+
+    fn add_virtio_pci_net(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
+        let (devfn, parent_bus) = self.get_pci_bdf(cfg_args)?;
+        let sys_mem = self.get_sys_mem();
+        let device_cfg = parse_net(vm_config, cfg_args)?;
+        let device = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &sys_mem)));
+        let vitpcidev =
+            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus);
+        vitpcidev
+            .realize()
+            .chain_err(|| "Failed to add virtio pci net device")?;
+        Ok(())
+    }
+
     fn get_pci_bdf(&mut self, cfg_args: &str) -> Result<(u8, Weak<Mutex<PciBus>>)> {
         let bdf = get_pci_bdf(cfg_args)?;
         let pci_host = self.get_pci_host()?;
@@ -421,8 +447,14 @@ pub trait MachineOps {
                 "virtio-blk-device" => {
                     self.add_virtio_mmio_block(&vm_config, cfg_args)?;
                 }
+                "virtio-blk-pci" => {
+                    self.add_virtio_pci_blk(&vm_config, cfg_args)?;
+                }
                 "virtio-net-device" => {
                     self.add_virtio_mmio_net(&vm_config, cfg_args)?;
+                }
+                "virtio-net-pci" => {
+                    self.add_virtio_pci_net(&vm_config, cfg_args)?;
                 }
                 "pcie-root-port" => {
                     self.add_pci_root_port(cfg_args)?;
