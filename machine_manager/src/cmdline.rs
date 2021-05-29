@@ -271,7 +271,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
 
     // Parse cmdline args which need to set in VmConfig
     update_args_to_config!((args.value_of("name")), vm_cfg, update_name);
-    update_args_to_config!((args.value_of("machine")), vm_cfg, update_machine);
+    update_args_to_config!((args.value_of("machine")), vm_cfg, add_machine);
     update_args_to_config!((args.value_of("memory")), vm_cfg, update_memory);
     update_args_to_config!((args.value_of("mem-path")), vm_cfg, update_mem_path);
     update_args_to_config!((args.value_of("smp")), vm_cfg, update_cpu);
@@ -279,7 +279,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     update_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     update_args_to_config!((args.value_of("serial")), vm_cfg, update_serial);
     update_args_to_config!((args.value_of("balloon")), vm_cfg, add_balloon);
-    update_args_to_config!((args.value_of("rng")), vm_cfg, update_rng);
+    update_args_to_config!((args.value_of("rng")), vm_cfg, add_rng);
     update_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,
@@ -288,10 +288,10 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     );
     update_args_to_config_multi!((args.values_of("drive")), vm_cfg, add_drive);
     update_args_to_config_multi!((args.values_of("device")), vm_cfg, update_vsock);
-    update_args_to_config_multi!((args.values_of("netdev")), vm_cfg, update_net);
+    update_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_net);
     update_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_consoles);
-    update_args_to_config_multi!((args.values_of("iothread")), vm_cfg, update_iothread);
-    update_args_to_config_multi!((args.values_of("pflash")), vm_cfg, update_pflash);
+    update_args_to_config_multi!((args.values_of("iothread")), vm_cfg, add_iothread);
+    update_args_to_config_multi!((args.values_of("pflash")), vm_cfg, add_pflash);
 
     // Check the mini-set for Vm to start is ok
     vm_cfg

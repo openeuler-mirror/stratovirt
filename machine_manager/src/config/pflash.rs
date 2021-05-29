@@ -29,18 +29,6 @@ pub struct PFlashConfig {
     pub if_pflash: String,
 }
 
-impl PFlashConfig {
-    /// Create `PFlashConfig` from `Value` structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
-}
-
 impl Default for PFlashConfig {
     fn default() -> Self {
         PFlashConfig {
@@ -87,8 +75,8 @@ impl VmConfig {
         Ok(())
     }
 
-    /// Update '-pflash ...' pflash config to `VmConfig`.
-    pub fn update_pflash(&mut self, pflash_config: &str) -> Result<()> {
+    /// Add '-pflash ...' pflash config to `VmConfig`.
+    pub fn add_pflash(&mut self, pflash_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("drive");
         cmd_parser
             .push("file")

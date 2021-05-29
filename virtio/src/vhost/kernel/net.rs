@@ -336,18 +336,17 @@ mod tests {
 
     #[test]
     fn test_vhost_net_realize() {
-        let json = r#"
-        [{
-            "iface_id": "eth1",
-            "host_dev_name": "tap1",
-            "mac": "1F:2C:3E:4A:5B:6D",
-            "vhost_type": "vhost-kernel",
-            "tap_fd": 4,
-            "vhost_fd": 5
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let confs = NetworkInterfaceConfig::from_value(&value);
+        let net1 = NetworkInterfaceConfig {
+            iface_id: "eth1".to_string(),
+            host_dev_name: "tap1".to_string(),
+            mac: Some("1F:2C:3E:4A:5B:6D".to_string()),
+            vhost_type: Some("vhost-kernel".to_string()),
+            tap_fd: Some(4),
+            vhost_fd: Some(5),
+            iothread: None,
+        };
+        let conf = vec![net1];
+        let confs = Some(conf);
         let vhost_net_confs = confs.unwrap();
         let vhost_net_conf = vhost_net_confs[0].clone();
         let vhost_net_space = vhost_address_space_init();
@@ -355,16 +354,17 @@ mod tests {
         // the tap_fd and vhost_fd attribute of vhost-net can't be assigned.
         assert_eq!(vhost_net.realize().is_ok(), false);
 
-        let json = r#"
-        [{
-            "iface_id": "eth0",
-            "host_dev_name": "tap0",
-            "mac": "1A:2B:3C:4D:5E:6F",
-            "vhost_type": "vhost-kernel"
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let confs = NetworkInterfaceConfig::from_value(&value);
+        let net1 = NetworkInterfaceConfig {
+            iface_id: "eth0".to_string(),
+            host_dev_name: "tap0".to_string(),
+            mac: Some("1A:2B:3C:4D:5E:6F".to_string()),
+            vhost_type: Some("vhost-kernel".to_string()),
+            tap_fd: None,
+            vhost_fd: None,
+            iothread: None,
+        };
+        let conf = vec![net1];
+        let confs = Some(conf);
         let vhost_net_confs = confs.unwrap();
         let vhost_net_conf = vhost_net_confs[0].clone();
         let mut vhost_net = Net::new(&vhost_net_conf, &vhost_net_space);
