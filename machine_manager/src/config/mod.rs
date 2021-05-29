@@ -21,14 +21,13 @@ mod fs;
 mod iothread;
 mod machine_config;
 mod network;
+mod pci;
 mod pflash;
 mod rng;
 
 use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "aarch64")]
 use util::device_tree;
@@ -42,6 +41,7 @@ pub use fs::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
+pub use pci::*;
 pub use pflash::*;
 pub use rng::*;
 
@@ -111,7 +111,7 @@ pub mod errors {
 pub const MAX_STRING_LENGTH: usize = 255;
 
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct VmConfig {
     pub guest_name: String,
     pub machine_config: MachineConfig,
