@@ -416,6 +416,7 @@ mod tests {
         let file = TempFile::new().unwrap();
         let random_file = file.as_path().to_str().unwrap().to_string();
         let rng_config = RngConfig {
+            id: "".to_string(),
             random_file: random_file.clone(),
             bytes_per_sec: Some(64),
         };
@@ -440,6 +441,7 @@ mod tests {
             .unwrap()
             .to_string();
         let rng_config = RngConfig {
+            id: "".to_string(),
             random_file,
             bytes_per_sec: Some(64),
         };

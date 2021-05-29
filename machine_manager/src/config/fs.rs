@@ -28,7 +28,7 @@ const MAX_IOPS: u64 = 1_000_000;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DriveConfig {
-    pub drive_id: String,
+    pub id: String,
     pub path_on_host: String,
     pub read_only: bool,
     pub direct: bool,
@@ -40,7 +40,7 @@ pub struct DriveConfig {
 impl Default for DriveConfig {
     fn default() -> Self {
         DriveConfig {
-            drive_id: "".to_string(),
+            id: "".to_string(),
             path_on_host: "".to_string(),
             read_only: false,
             direct: true,
@@ -53,7 +53,7 @@ impl Default for DriveConfig {
 
 impl ConfigCheck for DriveConfig {
     fn check(&self) -> Result<()> {
-        if self.drive_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(ErrorKind::StringLengthTooLong(
                 "drive device id".to_string(),
                 MAX_STRING_LENGTH,
@@ -122,7 +122,7 @@ impl VmConfig {
             return Err(ErrorKind::FieldIsMissing("file", "drive").into());
         }
         if let Some(drive_id) = cmd_parser.get_value::<String>("id")? {
-            drive.drive_id = drive_id;
+            drive.id = drive_id;
         } else {
             return Err(ErrorKind::FieldIsMissing("id", "drive").into());
         }
@@ -138,9 +138,9 @@ impl VmConfig {
 
         if self.drives.is_some() {
             for d in self.drives.as_ref().unwrap() {
-                if d.drive_id == drive.drive_id {
+                if d.id == drive.id {
                     return Err(
-                        ErrorKind::IdRepeat("drive".to_string(), d.drive_id.to_string()).into(),
+                        ErrorKind::IdRepeat("drive".to_string(), d.id.to_string()).into(),
                     );
                 }
             }
@@ -166,7 +166,7 @@ mod tests {
         let configs = vm_config.drives.clone();
         assert!(configs.is_some());
         let mut drive_configs = configs.unwrap();
-        assert_eq!(drive_configs[0].drive_id, "rootfs");
+        assert_eq!(drive_configs[0].id, "rootfs");
         assert_eq!(drive_configs[0].path_on_host, "/path/to/rootfs");
         assert_eq!(drive_configs[0].direct, true);
         assert_eq!(drive_configs[0].read_only, false);

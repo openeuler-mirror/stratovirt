@@ -26,13 +26,13 @@ const MIN_GUEST_CID: u64 = 3;
 /// Config structure for virtio-console.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConsoleConfig {
-    pub console_id: String,
+    pub id: String,
     pub socket_path: String,
 }
 
 impl ConfigCheck for ConsoleConfig {
     fn check(&self) -> Result<()> {
-        if self.console_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(ErrorKind::StringLengthTooLong(
                 "console id".to_string(),
                 MAX_STRING_LENGTH,
@@ -60,7 +60,7 @@ impl VmConfig {
 
         let mut console = ConsoleConfig::default();
         if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
-            console.console_id = console_id;
+            console.id = console_id;
         } else {
             return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
         };
@@ -72,10 +72,10 @@ impl VmConfig {
 
         if self.consoles.is_some() {
             for c in self.consoles.as_ref().unwrap() {
-                if c.console_id == console.console_id {
+                if c.id == console.id {
                     return Err(ErrorKind::IdRepeat(
                         "virtio-console".to_string(),
-                        c.console_id.to_string(),
+                        c.id.to_string(),
                     )
                     .into());
                 }
@@ -101,6 +101,7 @@ impl VmConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SerialConfig {
+    pub id: String,
     pub stdio: bool,
 }
 
@@ -118,7 +119,15 @@ impl VmConfig {
                 _ => return Err(ErrorKind::InvalidParam(serial_type).into()),
             }
         };
-        self.serial = Some(SerialConfig { stdio });
+        let id = if let Some(serial_id) = cmd_parser.get_value::<String>("id")? {
+            serial_id
+        } else {
+            "".to_string()
+        };
+        self.serial = Some(SerialConfig { 
+            id,
+            stdio,
+        });
 
         Ok(())
     }
@@ -127,14 +136,14 @@ impl VmConfig {
 /// Config structure for virtio-vsock.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VsockConfig {
-    pub vsock_id: String,
+    pub id: String,
     pub guest_cid: u64,
     pub vhost_fd: Option<i32>,
 }
 
 impl ConfigCheck for VsockConfig {
     fn check(&self) -> Result<()> {
-        if self.vsock_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(
                 ErrorKind::StringLengthTooLong("vsock id".to_string(), MAX_STRING_LENGTH).into(),
             );
@@ -172,7 +181,7 @@ impl VmConfig {
                     bail!("Device vsock can only be set one for one StratoVirt VM.");
                 }
 
-                let vsock_id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
+                let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
                     vsock_id
                 } else {
                     return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
@@ -186,7 +195,7 @@ impl VmConfig {
 
                 let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
                 self.vsock = Some(VsockConfig {
-                    vsock_id,
+                    id,
                     guest_cid,
                     vhost_fd,
                 });
@@ -211,7 +220,7 @@ mod tests {
             .is_ok());
         let console_configs = vm_config.get_virtio_console();
         assert_eq!(console_configs.len(), 1);
-        assert_eq!(console_configs[0].console_id, "test_console");
+        assert_eq!(console_configs[0].id, "test_console");
         assert_eq!(console_configs[0].socket_path, "/path/to/socket");
         assert!(console_configs[0].check().is_ok());
     }
@@ -223,7 +232,7 @@ mod tests {
             .add_vsock("vsock,id=test_vsock,guest-cid=3")
             .is_ok());
         if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
+            assert_eq!(vsock_config.id, "test_vsock");
             assert_eq!(vsock_config.guest_cid, 3);
             assert_eq!(vsock_config.vhost_fd, None);
             assert!(vsock_config.check().is_ok())
@@ -235,7 +244,7 @@ mod tests {
             .add_vsock("vsock,id=test_vsock,guest-cid=3,vhostfd=4")
             .is_ok());
         if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
+            assert_eq!(vsock_config.id, "test_vsock");
             assert_eq!(vsock_config.guest_cid, 3);
             assert_eq!(vsock_config.vhost_fd, Some(4));
             assert!(vsock_config.check().is_ok())
@@ -247,7 +256,7 @@ mod tests {
             .add_vsock("vsock,id=test_vsock,guest-cid=1")
             .is_ok());
         if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
+            assert_eq!(vsock_config.id, "test_vsock");
             assert_eq!(vsock_config.guest_cid, 1);
             assert_eq!(vsock_config.vhost_fd, None);
             assert!(vsock_config.check().is_err())

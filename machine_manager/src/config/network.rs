@@ -26,7 +26,7 @@ const MAC_ADDRESS_LENGTH: usize = 17;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkInterfaceConfig {
-    pub iface_id: String,
+    pub id: String,
     pub host_dev_name: String,
     pub mac: Option<String>,
     pub tap_fd: Option<i32>,
@@ -44,7 +44,7 @@ impl NetworkInterfaceConfig {
 impl Default for NetworkInterfaceConfig {
     fn default() -> Self {
         NetworkInterfaceConfig {
-            iface_id: "".to_string(),
+            id: "".to_string(),
             host_dev_name: "".to_string(),
             mac: None,
             tap_fd: None,
@@ -57,7 +57,7 @@ impl Default for NetworkInterfaceConfig {
 
 impl ConfigCheck for NetworkInterfaceConfig {
     fn check(&self) -> Result<()> {
-        if self.iface_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(
                 ErrorKind::StringLengthTooLong("iface id".to_string(), MAX_STRING_LENGTH).into(),
             );
@@ -98,10 +98,8 @@ impl VmConfig {
     fn add_netdev(&mut self, net: NetworkInterfaceConfig) -> Result<()> {
         if self.nets.is_some() {
             for n in self.nets.as_ref().unwrap() {
-                if n.iface_id == net.iface_id {
-                    return Err(
-                        ErrorKind::IdRepeat("netdev".to_string(), n.iface_id.to_string()).into(),
-                    );
+                if n.id == net.id {
+                    return Err(ErrorKind::IdRepeat("netdev".to_string(), n.id.to_string()).into());
                 }
             }
             self.nets.as_mut().unwrap().push(net);
@@ -129,7 +127,7 @@ impl VmConfig {
 
         let mut net = NetworkInterfaceConfig::default();
         if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
-            net.iface_id = net_id;
+            net.id = net_id;
         } else {
             return Err(ErrorKind::FieldIsMissing("id", "netdev").into());
         }
@@ -192,7 +190,7 @@ mod tests {
         let configs = vm_config.nets.clone();
         assert!(configs.is_some());
         let network_configs = configs.unwrap();
-        assert_eq!(network_configs[0].iface_id, "eth0");
+        assert_eq!(network_configs[0].id, "eth0");
         assert_eq!(network_configs[0].host_dev_name, "tap0");
         assert!(network_configs[0].mac.is_none());
         assert!(network_configs[0].tap_fd.is_none());
@@ -204,7 +202,7 @@ mod tests {
         let configs = vm_config.nets.clone();
         assert!(configs.is_some());
         let network_configs = configs.unwrap();
-        assert_eq!(network_configs[1].iface_id, "eth1");
+        assert_eq!(network_configs[1].id, "eth1");
         assert_eq!(network_configs[1].host_dev_name, "tap1");
         assert_eq!(
             network_configs[1].mac,

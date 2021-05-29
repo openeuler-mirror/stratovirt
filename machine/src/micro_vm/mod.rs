@@ -638,7 +638,7 @@ impl MachineOps for LightMachine {
         }
 
         let index = self.replaceable_info.block_count;
-        self.fill_replaceable_device(&config.drive_id, Arc::new(config.clone()), index)?;
+        self.fill_replaceable_device(&config.id, Arc::new(config.clone()), index)?;
         self.replaceable_info.block_count += 1;
         Ok(())
     }
@@ -699,7 +699,7 @@ impl MachineOps for LightMachine {
                 );
             }
 
-            self.fill_replaceable_device(&config.iface_id, Arc::new(config.clone()), index)?;
+            self.fill_replaceable_device(&config.id, Arc::new(config.clone()), index)?;
             self.replaceable_info.net_count += 1;
         }
         Ok(())
@@ -1246,7 +1246,7 @@ impl DeviceInterface for LightMachine {
         }
 
         let config = DriveConfig {
-            drive_id: node_name.clone(),
+            id: node_name.clone(),
             path_on_host: file.filename,
             read_only,
             direct,
@@ -1268,7 +1268,7 @@ impl DeviceInterface for LightMachine {
 
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response {
         let mut config = NetworkInterfaceConfig {
-            iface_id: id.clone(),
+            id: id.clone(),
             host_dev_name: "".to_string(),
             mac: None,
             tap_fd: None,

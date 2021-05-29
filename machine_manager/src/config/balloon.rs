@@ -17,19 +17,23 @@ use crate::config::{CmdParser, ExBool, VmConfig};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BalloonConfig {
+    pub id: String,
     pub deflate_on_oom: bool,
 }
 
 impl VmConfig {
     pub fn add_balloon(&mut self, balloon_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("balloon");
-        cmd_parser.push("").push("deflate-on-oom");
+        cmd_parser.push("").push("id").push("deflate-on-oom");
 
         cmd_parser.parse(balloon_config)?;
 
         let mut balloon: BalloonConfig = Default::default();
         if let Some(default) = cmd_parser.get_value::<ExBool>("deflate-on-oom")? {
             balloon.deflate_on_oom = default.into();
+        }
+        if let Some(balloon_id) = cmd_parser.get_value("id")? {
+            balloon.id = balloon_id;
         }
         if let Some(should_empty) = cmd_parser.get_value::<String>("")? {
             if !should_empty.is_empty() {

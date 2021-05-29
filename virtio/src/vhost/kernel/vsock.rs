@@ -381,7 +381,7 @@ mod tests {
 
     fn vsock_create_instance() -> Vsock {
         let vsock_conf = VsockConfig {
-            vsock_id: "test_vsock_1".to_string(),
+            id: "test_vsock_1".to_string(),
             guest_cid: 3,
             vhost_fd: None,
         };
