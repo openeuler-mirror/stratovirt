@@ -135,7 +135,7 @@ pub mod errors {
     }
 }
 
-use libc::{tcgetattr, tcsetattr, termios, TCSANOW};
+use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
 use std::sync::{Arc, Mutex};
 use vmm_sys_util::terminal::Terminal;
 
@@ -158,6 +158,7 @@ pub fn set_termi_raw_mode() -> std::io::Result<()> {
     let mut new_term_mode: termios = old_term_mode;
     // Safe because this function only change the `new_term_mode` argument.
     unsafe { libc::cfmakeraw(&mut new_term_mode as *mut _) };
+    new_term_mode.c_oflag |= OPOST;
     // Safe because this function only set the stdin to raw mode.
     let ret = unsafe { tcsetattr(tty_fd, TCSANOW, &new_term_mode as *const _) };
     if ret < 0 {
