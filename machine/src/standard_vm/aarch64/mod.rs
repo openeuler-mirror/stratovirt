@@ -941,6 +941,10 @@ impl CompileFDTHelper for StdMachine {
         let cmdline = &boot_source.kernel_cmdline.to_string();
         device_tree::set_property_string(fdt, node, "bootargs", cmdline.as_str())?;
 
+        let pl011_property_string =
+            format!("/pl011@{:x}", MEM_LAYOUT[LayoutEntryType::Uart as usize].0);
+        device_tree::set_property_string(fdt, node, "stdout-path", &pl011_property_string)?;
+
         match &boot_source.initrd {
             Some(initrd) => {
                 device_tree::set_property_u64(fdt, node, "linux,initrd-start", initrd.initrd_addr)?;
