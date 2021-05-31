@@ -1476,11 +1476,7 @@ impl CompileFDTHelper for LightMachine {
         }
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
-            let mpidr = self.cpus[cpu_index as usize]
-                .arch()
-                .lock()
-                .unwrap()
-                .get_mpidr(self.cpus[cpu_index as usize].fd());
+            let mpidr = self.cpus[cpu_index as usize].arch().lock().unwrap().mpidr();
 
             let node = format!("/cpus/cpu@{:x}", mpidr);
             device_tree::add_sub_node(fdt, &node)?;

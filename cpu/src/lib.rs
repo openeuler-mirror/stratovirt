@@ -36,6 +36,11 @@ extern crate machine_manager;
 #[cfg(target_arch = "aarch64")]
 #[macro_use]
 extern crate util;
+#[macro_use]
+extern crate migration_derive;
+#[cfg(target_arch = "aarch64")]
+#[macro_use]
+extern crate vmm_sys_util;
 
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
@@ -91,13 +96,17 @@ pub mod errors {
 }
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::AArch64CPUBootConfig as CPUBootConfig;
+pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::CPUAArch64 as ArchCPU;
+pub use aarch64::ArmCPUCaps as CPUCaps;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::ArmCPUState as ArchCPU;
+#[cfg(target_arch = "x86_64")]
+use x86_64::caps::X86CPUCaps as CPUCaps;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::X86CPU as ArchCPU;
+pub use x86_64::X86CPUState as ArchCPU;
 
 use std::cell::RefCell;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
@@ -218,6 +227,8 @@ pub struct CPU {
     tid: Arc<Mutex<Option<u64>>>,
     /// The VM combined by this VCPU.
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
+    /// The capability of VCPU.
+    caps: CPUCaps,
 }
 
 impl CPU {
@@ -244,6 +255,7 @@ impl CPU {
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
+            caps: CPUCaps::init_capabilities(),
         }
     }
 
@@ -294,7 +306,7 @@ impl CPUInterface for CPU {
         self.arch_cpu
             .lock()
             .unwrap()
-            .realize(&self.fd, boot)
+            .set_boot_config(&self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
 
         Ok(())
