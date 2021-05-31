@@ -116,6 +116,13 @@ pub mod errors {
                     util::device_tree::FDT_MAX_SIZE
                 )
             }
+            KernelOverflow(addr: u64, size: u64) {
+                display(
+                    "Failed to load kernel image {} to memory {}.",
+                     size,
+                     addr
+                )
+            }
             InitrdOverflow(addr: u64, size: u64) {
                 display(
                     "Failed to load initrd image {} to memory {}.",

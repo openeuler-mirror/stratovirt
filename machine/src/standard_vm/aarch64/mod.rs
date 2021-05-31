@@ -256,7 +256,7 @@ impl MachineOps for StdMachine {
 
         Ok(CPUBootConfig {
             fdt_addr: layout.dtb_start,
-            kernel_addr: layout.kernel_start,
+            kernel_addr: layout.boot_pc,
         })
     }
 
