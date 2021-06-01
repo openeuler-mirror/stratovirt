@@ -21,6 +21,31 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logging.basicConfig(filename='/var/log/pytest.log',
                     level=logging.DEBUG, format=LOG_FORMAT)
 
+class CpuVendor(Enum):
+    """CPU vendors enum."""
+
+    AMD = auto()
+    INTEL = auto()
+
+
+def _get_cpu_vendor():
+    cif = open('/proc/cpuinfo', 'r')
+    host_vendor_id = None
+    while True:
+        line = cif.readline()
+        if line == '':
+            break
+        matchoutput = re.search("^vendor_id\\s+:\\s+(.+)$", line)
+        if matchoutput:
+            host_vendor_id = matchoutput.group(1)
+    cif.close()
+    assert host_vendor_id is not None
+
+    if host_vendor_id == "AuthenticAMD":
+        return CpuVendor.AMD
+    return CpuVendor.INTEL
+
+
 def _check_guest_cmd_output(microvm, guest_cmd, expected_header,
                             expected_separator,
                             expected_key_value_store):
@@ -108,4 +133,55 @@ def test_128vcpu_topo(microvm):
         _check_cpu_topology(test_vm, 128, 1, 128, "0-127")
     else:
         _check_cpu_topology(test_vm, 128, 2, 2, "0-127")
+
+
+@pytest.mark.skipif("platform.machine().startswith('aarch64')")
+@pytest.mark.acceptance
+def test_brand_string(microvm):
+    """Ensure good formatting for the guest band string.
+
+    * For Intel CPUs, the guest brand string should be:
+        Intel(R) Xeon(R) Processor @ {host frequency}
+    where {host frequency} is the frequency reported by the host CPUID
+    (e.g. 4.01GHz)
+    * For AMD CPUs, the guest brand string should be:
+        AMD EPYC
+    * For other CPUs, the guest brand string should be:
+        ""
+    """
+    cif = open('/proc/cpuinfo', 'r')
+    host_brand_string = None
+    while True:
+        line = cif.readline()
+        if line == '':
+            break
+        matchoutput = re.search("^model name\\s+:\\s+(.+)$", line)
+        if matchoutput:
+            host_brand_string = matchoutput.group(1)
+    cif.close()
+    assert host_brand_string is not None
+
+    test_vm = microvm
+
+    test_vm.basic_config(vcpu_count=1)
+    test_vm.launch()
+
+    guest_cmd = "cat /proc/cpuinfo | grep 'model name' | head -1"
+    status, output = test_vm.serial_cmd(guest_cmd)
+    assert status == 0
+
+    line = output.splitlines()[0].rstrip()
+    matchoutput = re.search("^model name\\s+:\\s+(.+)$", line)
+    assert matchoutput
+    guest_brand_string = matchoutput.group(1)
+    assert guest_brand_string
+
+    cpu_vendor = _get_cpu_vendor()
+    expected_guest_brand_string = ""
+    if cpu_vendor == CpuVendor.AMD:
+        expected_guest_brand_string += "AMD EPYC"
+    elif cpu_vendor == CpuVendor.INTEL:
+        expected_guest_brand_string = host_brand_string
+
+    assert guest_brand_string == expected_guest_brand_string
 
