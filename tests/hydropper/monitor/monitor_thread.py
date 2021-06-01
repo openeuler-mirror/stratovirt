@@ -74,7 +74,7 @@ class MonitorThread(threading.Thread):
             LOG.debug("stop monitor thread [%s] failed within %d seconds" % \
                      (monitoritem.monitor_type, timeout))
             return False
-        LOG.debug("stop monitor thread [%s] sucessfully" % monitoritem.monitor_type)
+        LOG.debug("stop monitor thread [%s] successfully" % monitoritem.monitor_type)
         return True
 
     def run(self):

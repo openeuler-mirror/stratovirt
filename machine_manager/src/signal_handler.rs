@@ -50,7 +50,7 @@ extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) 
     exit_with_code(VM_EXIT_GENE_ERR);
 }
 
-/// Register kill signal handler. Signals suported now are SIGTERM and SIGSYS.
+/// Register kill signal handler. Signals supported now are SIGTERM and SIGSYS.
 pub fn register_kill_signal() {
     register_signal_handler(libc::SIGTERM, handle_signal_term)
         .expect("Register signal handler for SIGTERM failed!");

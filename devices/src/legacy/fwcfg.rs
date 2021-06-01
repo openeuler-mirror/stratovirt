@@ -509,8 +509,8 @@ impl FwCfgCommon {
         self.dma_addr = GuestAddress(0);
 
         // Read DMA request from guest
-        let mut dma_deafult = FwCfgDmaAccess::default();
-        let dma_request = dma_deafult.as_mut_bytes();
+        let mut dma_default = FwCfgDmaAccess::default();
+        let dma_request = dma_default.as_mut_bytes();
         let size = std::mem::size_of::<FwCfgDmaAccess>() as u64;
         if let Err(_e) = read_dma_memory(&self.mem_space, dma_addr, dma_request, size) {
             write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)?;
