@@ -30,7 +30,7 @@ const MIN_MEMSIZE: u64 = 268_435_456;
 const M: u64 = 1024 * 1024;
 const G: u64 = 1024 * 1024 * 1024;
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MachineType {
     MicroVm,
     StandardVm,

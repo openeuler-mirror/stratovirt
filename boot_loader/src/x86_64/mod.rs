@@ -96,7 +96,7 @@ const REAL_MODE_IVT_BEGIN: u64 = 0x0000_0000;
 /// Boot loader config used for x86_64.
 pub struct X86BootLoaderConfig {
     /// Path of the kernel image.
-    pub kernel: std::path::PathBuf,
+    pub kernel: Option<std::path::PathBuf>,
     /// Path of the initrd image.
     pub initrd: Option<PathBuf>,
     /// Kernel cmdline parameters.
@@ -147,6 +147,14 @@ pub fn load_linux(
         if fwcfg.is_none() {
             bail!("Failed to load linux: No FwCfg provided");
         }
-        bail!("Failed to load linux: Booting from real mode is not implemented");
+        let mut locked_fwcfg = fwcfg.unwrap().lock().unwrap();
+        standard_boot::load_linux(config, sys_mem, &mut *locked_fwcfg)?;
+
+        Ok(X86BootLoader {
+            boot_ip: 0xFFF0,
+            boot_sp: 0x8000,
+            boot_selector: 0xF000,
+            ..Default::default()
+        })
     }
 }

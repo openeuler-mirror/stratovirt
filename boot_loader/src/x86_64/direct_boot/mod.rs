@@ -95,12 +95,11 @@ fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) ->
 }
 
 fn load_kernel_image(
-    config: &X86BootLoaderConfig,
+    kernel_path: &std::path::Path,
     sys_mem: &Arc<AddressSpace>,
     boot_layout: &mut X86BootLoader,
 ) -> Result<RealModeKernelHeader> {
-    let mut kernel_image =
-        File::open(&config.kernel).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+    let mut kernel_image = File::open(kernel_path).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
 
     let (boot_hdr, kernel_start, vmlinux_start) = if let Ok(hdr) = load_bzimage(&mut kernel_image) {
         (
@@ -235,12 +234,20 @@ pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
 ) -> Result<X86BootLoader> {
+    if config.kernel.is_none() {
+        bail!("Kernel is required for direct-boot mode.");
+    }
+
     let mut boot_loader_layout = X86BootLoader {
         boot_sp: BOOT_LOADER_SP,
         zero_page_addr: ZERO_PAGE_START,
         ..Default::default()
     };
-    let mut boot_header = load_kernel_image(config, sys_mem, &mut boot_loader_layout)?;
+    let mut boot_header = load_kernel_image(
+        &config.kernel.as_ref().unwrap(),
+        sys_mem,
+        &mut boot_loader_layout,
+    )?;
 
     load_initrd(config, sys_mem, &mut boot_header)
         .chain_err(|| "Failed to load initrd to vm memory")?;
@@ -306,7 +313,7 @@ mod test {
         }
 
         let config = X86BootLoaderConfig {
-            kernel: PathBuf::new(),
+            kernel: Some(PathBuf::new()),
             initrd: Some(PathBuf::new()),
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,

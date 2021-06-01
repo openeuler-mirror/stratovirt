@@ -29,7 +29,7 @@ const MAX_PATH_LENGTH: usize = 4096;
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct BootSource {
     /// Path of the kernel image.
-    pub kernel_file: PathBuf,
+    pub kernel_file: Option<PathBuf>,
     /// Kernel boot arguments.
     pub kernel_cmdline: KernelParams,
     /// Config of initrd.
@@ -48,7 +48,7 @@ impl BootSource {
             for (name, item) in items {
                 let item_str = item.to_string().replace("\"", "");
                 match name.as_str() {
-                    "kernel_image_path" => boot_source.kernel_file = PathBuf::from(&item_str),
+                    "kernel_image_path" => boot_source.kernel_file = Some(PathBuf::from(&item_str)),
                     "boot_args" => boot_source.kernel_cmdline = KernelParams::from_str(item_str),
                     "initrd_fs_path" => boot_source.initrd = Some(InitrdConfig::new(&item_str)),
                     _ => return Err(ErrorKind::InvalidJsonField(name.to_string()).into()),
@@ -67,16 +67,17 @@ impl BootSource {
 
 impl ConfigCheck for BootSource {
     fn check(&self) -> Result<()> {
-        if self.kernel_file.to_str().unwrap().len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
-                "kernel_file path".to_string(),
-                MAX_PATH_LENGTH,
-            )
-            .into());
-        }
-
-        if !self.kernel_file.is_file() {
-            return Err(ErrorKind::UnRegularFile("Input kernel_file".to_string()).into());
+        if let Some(kernel_file) = &self.kernel_file {
+            if kernel_file.to_str().unwrap().len() > MAX_PATH_LENGTH {
+                return Err(ErrorKind::StringLengthTooLong(
+                    "kernel_file path".to_string(),
+                    MAX_PATH_LENGTH,
+                )
+                .into());
+            }
+            if !kernel_file.is_file() {
+                return Err(ErrorKind::UnRegularFile("Input kernel_file".to_string()).into());
+            }
         }
 
         self.kernel_cmdline.check()?;
@@ -254,7 +255,7 @@ impl fmt::Display for Param {
 impl VmConfig {
     /// Update `-kernel kernel_file` config to `VmConfig`
     pub fn update_kernel(&mut self, kernel_image: &str) -> Result<()> {
-        self.boot_source.kernel_file = PathBuf::from(kernel_image);
+        self.boot_source.kernel_file = Some(PathBuf::from(kernel_image));
         Ok(())
     }
 
@@ -303,7 +304,10 @@ mod tests {
         "#;
         let value = serde_json::from_str(json).unwrap();
         let boot_source = BootSource::from_value(&value).unwrap();
-        assert_eq!(boot_source.kernel_file, PathBuf::from("/path/to/vmlinux"));
+        assert_eq!(
+            boot_source.kernel_file,
+            Some(PathBuf::from("/path/to/vmlinux"))
+        );
         assert_eq!(
             boot_source.kernel_cmdline.to_string(),
             "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
@@ -330,7 +334,7 @@ mod tests {
             String::from("ipv6.disable=1"),
         ]);
         let boot_source = vm_config.clone().boot_source;
-        assert_eq!(boot_source.kernel_file, PathBuf::from(&kernel_path));
+        assert_eq!(boot_source.kernel_file, Some(PathBuf::from(&kernel_path)));
         assert_eq!(
             boot_source.kernel_cmdline.to_string(),
             "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
