@@ -399,7 +399,8 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
 
-        let boot_config = locked_vm.load_boot_source(None)?;
+        let fw_cfg = locked_vm.add_fwcfg_device()?;
+        let boot_config = locked_vm.load_boot_source(Some(&fw_cfg))?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
