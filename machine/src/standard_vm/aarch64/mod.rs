@@ -19,7 +19,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
-use devices::legacy::{FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031};
+use devices::legacy::{
+    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
+};
 use devices::{InterruptController, InterruptControllerConfig};
 use hypervisor::KVM_FDS;
 use machine_manager::config::{
@@ -165,16 +167,30 @@ impl StdMachineOps for StdMachine {
 
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
         let ncpus = self.cpus.len();
-        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg
+            .add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())
+            .chain_err(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
 
         let cmdline = self.boot_source.lock().unwrap().kernel_cmdline.to_string();
-        fwcfg.add_string_entry(FwCfgEntryType::CmdlineSize, cmdline.as_str())?;
+        fwcfg
+            .add_data_entry(
+                FwCfgEntryType::CmdlineSize,
+                (cmdline.len() + 1).as_bytes().to_vec(),
+            )
+            .chain_err(|| DevErrorKind::AddEntryErr("CmdlineSize".to_string()))?;
+        fwcfg
+            .add_string_entry(FwCfgEntryType::CmdlineData, cmdline.as_str())
+            .chain_err(|| DevErrorKind::AddEntryErr("CmdlineData".to_string()))?;
 
         let boot_order = Vec::<u8>::new();
-        fwcfg.add_file_entry("bootorder", boot_order)?;
+        fwcfg
+            .add_file_entry("bootorder", boot_order)
+            .chain_err(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
         let bios_geometry = Vec::<u8>::new();
-        fwcfg.add_file_entry("bios-geometry", bios_geometry)?;
+        fwcfg
+            .add_file_entry("bios-geometry", bios_geometry)
+            .chain_err(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
 
         let fwcfg_dev = FwCfgMem::realize(
             fwcfg,
