@@ -421,24 +421,22 @@ impl PciConfig {
                 return BAR_SPACE_UNMAPPED;
             }
             let bar_val = le_read_u32(&self.config, offset).unwrap();
-            let address: u64 = (bar_val & IO_BASE_ADDR_MASK) as u64;
-            address
-        } else {
-            if command & COMMAND_MEMORY_SPACE == 0 {
-                return BAR_SPACE_UNMAPPED;
+            return (bar_val & IO_BASE_ADDR_MASK) as u64;
+        }
+
+        if command & COMMAND_MEMORY_SPACE == 0 {
+            return BAR_SPACE_UNMAPPED;
+        }
+        match self.bars[id].region_type {
+            RegionType::Io => BAR_SPACE_UNMAPPED,
+            RegionType::Mem32Bit => {
+                let bar_val = le_read_u32(&self.config, offset).unwrap();
+                (bar_val & MEM_BASE_ADDR_MASK) as u64
             }
-            let address: u64;
-            match self.bars[id].region_type {
-                RegionType::Io | RegionType::Mem32Bit => {
-                    let bar_val = le_read_u32(&self.config, offset).unwrap();
-                    address = (bar_val & MEM_BASE_ADDR_MASK) as u64;
-                }
-                RegionType::Mem64Bit => {
-                    let bar_val = le_read_u64(&self.config, offset).unwrap();
-                    address = bar_val & MEM_BASE_ADDR_MASK as u64;
-                }
+            RegionType::Mem64Bit => {
+                let bar_val = le_read_u64(&self.config, offset).unwrap();
+                bar_val & MEM_BASE_ADDR_MASK as u64
             }
-            address
         }
     }
 
