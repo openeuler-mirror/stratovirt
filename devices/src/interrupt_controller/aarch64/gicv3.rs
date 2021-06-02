@@ -67,7 +67,8 @@ impl KvmDevice {
     }
 }
 
-trait GICv3Access {
+/// Access wrapper for GICv3.
+pub trait GICv3Access {
     /// Returns `gicr_attr` of `vCPU`.
     fn vcpu_gicr_attr(&self, cpu: usize) -> u64;
 
@@ -106,11 +107,11 @@ pub struct GICv3 {
     /// The fd for the GICv3 device.
     fd: DeviceFd,
     /// Number of vCPUs, determines the number of redistributor and CPU interface.
-    vcpu_count: u64,
+    pub(crate) vcpu_count: u64,
     /// GICv3 ITS device.
     its_dev: Option<GICv3Its>,
     /// Maximum irq number.
-    nr_irqs: u32,
+    pub(crate) nr_irqs: u32,
     /// GICv3 redistributor info, support multiple redistributor regions.
     redist_regions: Vec<GicRedistRegion>,
     /// Base address in the guest physical address space of the GICv3 distributor
@@ -322,6 +323,7 @@ impl GICv3Access for GICv3 {
             gicd_value as *mut u32 as u64,
             write,
         )
+        .chain_err(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
     }
 
     fn access_gic_redistributor(
@@ -338,6 +340,12 @@ impl GICv3Access for GICv3 {
             gicr_value as *mut u32 as u64,
             write,
         )
+        .chain_err(|| {
+            format!(
+                "Failed to access gic redistributor for offset 0x{:x}",
+                offset
+            )
+        })
     }
 
     fn access_gic_cpu(
@@ -354,6 +362,7 @@ impl GICv3Access for GICv3 {
             gicc_value as *mut u64 as u64,
             write,
         )
+        .chain_err(|| format!("Failed to access gic cpu for offset 0x{:x}", offset))
     }
 
     fn access_gic_line_level(&self, offset: u64, gicll_value: &mut u32, write: bool) -> Result<()> {

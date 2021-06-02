@@ -11,6 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 mod gicv3;
+#[allow(dead_code)]
+mod state;
 
 pub use gicv3::GICv3;
 
@@ -22,7 +24,7 @@ use util::{device_tree, errors::Result as UtilResult};
 use super::errors::{ErrorKind, Result, ResultExt};
 
 // First 32 are private to each CPU (SGIs and PPIs).
-const GIC_IRQ_INTERNAL: u32 = 32;
+pub(crate) const GIC_IRQ_INTERNAL: u32 = 32;
 
 /// Configure a Interrupt controller.
 pub struct GICConfig {
