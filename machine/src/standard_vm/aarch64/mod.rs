@@ -925,12 +925,10 @@ impl CompileFDTHelper for StdMachine {
                 SysBusDevType::FwCfg => {
                     generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
                 }
-                SysBusDevType::Flash => {
-                    generate_flash_device_node(fdt)?;
-                }
                 _ => (),
             }
         }
+        generate_flash_device_node(fdt)?;
         Ok(())
     }
 
