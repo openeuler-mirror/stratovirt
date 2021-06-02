@@ -16,7 +16,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::{ErrorKind, Result, ResultExt};
@@ -41,17 +43,27 @@ const RTC_ICR: u64 = 0x1c;
 /// Peripheral ID registers, default value.
 const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1];
 
-/// Pl031 structure.
 #[allow(clippy::upper_case_acronyms)]
-pub struct PL031 {
+/// Status of `PL031` device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct PL031State {
     /// Match register value.
     mr: u32,
     /// Load register value.
     lr: u32,
-    /// Interrupt Mask Set or Clear register value.
+    /// Interrupt mask set or clear register value.
     imsr: u32,
-    /// Raw Interrupt Status register value.
+    /// Raw interrupt status register value.
     risr: u32,
+}
+
+#[allow(clippy::upper_case_acronyms)]
+/// PL031 structure.
+pub struct PL031 {
+    /// State of device PL031.
+    state: PL031State,
     /// The duplicate of Load register value.
     tick_offset: u32,
     /// Record the real time.
@@ -65,10 +77,7 @@ pub struct PL031 {
 impl Default for PL031 {
     fn default() -> Self {
         Self {
-            mr: 0,
-            lr: 0,
-            imsr: 0,
-            risr: 0,
+            state: PL031State::default(),
             // since 1970-01-01 00:00:00,it never cause overflow.
             tick_offset: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -94,6 +103,9 @@ impl PL031 {
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
+
+        MigrationManager::register_device_instance_mutex(PL031State::descriptor(), dev);
+
         Ok(())
     }
 
@@ -129,27 +141,13 @@ impl SysBusDevOps for PL031 {
 
         let mut value: u32 = 0;
         match offset {
-            RTC_DR => {
-                value = self.get_current_value();
-            }
-            RTC_MR => {
-                value = self.mr;
-            }
-            RTC_LR => {
-                value = self.lr;
-            }
-            RTC_CR => {
-                value = 1;
-            }
-            RTC_IMSC => {
-                value = self.imsr;
-            }
-            RTC_RIS => {
-                value = self.risr;
-            }
-            RTC_MIS => {
-                value = self.risr & self.imsr;
-            }
+            RTC_DR => value = self.get_current_value(),
+            RTC_MR => value = self.state.mr,
+            RTC_LR => value = self.state.lr,
+            RTC_CR => value = 1,
+            RTC_IMSC => value = self.state.imsr,
+            RTC_RIS => value = self.state.risr,
+            RTC_MIS => value = self.state.risr & self.state.imsr,
             _ => {}
         }
 
@@ -168,20 +166,18 @@ impl SysBusDevOps for PL031 {
         let value = LittleEndian::read_u32(data);
 
         match offset {
-            RTC_MR => {
-                self.mr = value;
-            }
+            RTC_MR => self.state.mr = value,
             RTC_LR => {
-                self.lr = value;
+                self.state.lr = value;
                 self.tick_offset = value;
                 self.base_time = Instant::now();
             }
             RTC_IMSC => {
-                self.imsr = value & 1;
+                self.state.imsr = value & 1;
                 self.inject_interrupt();
             }
             RTC_ICR => {
-                self.risr = 0;
+                self.state.risr = 0;
                 self.inject_interrupt();
             }
             _ => {}
@@ -208,3 +204,28 @@ impl AmlBuilder for PL031 {
         Vec::new()
     }
 }
+
+impl StateTransfer for PL031 {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let state = self.state;
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *PL031State::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("PL031"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&PL031State::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for PL031 {}

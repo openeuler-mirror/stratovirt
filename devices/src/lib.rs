@@ -20,7 +20,6 @@
 extern crate log;
 #[macro_use]
 extern crate error_chain;
-#[cfg(target_arch = "aarch64")]
 #[macro_use]
 extern crate migration_derive;
 
