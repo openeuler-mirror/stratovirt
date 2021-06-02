@@ -319,6 +319,16 @@ impl MachineOps for StdMachine {
     fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
         use crate::errors::ResultExt;
 
+        self.add_rtc_device()
+            .chain_err(|| ErrorKind::AddDevErr("rtc".to_string()))?;
+
+        if let Some(pflashs) = vm_config.pflashs.as_ref() {
+            for pflash in pflashs {
+                self.add_pflash_device(&pflash)
+                    .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
+            }
+        }
+
         if let Some(serial) = vm_config.serial.as_ref() {
             self.add_serial_device(&serial)
                 .chain_err(|| ErrorKind::AddDevErr("serial".to_string()))?;
