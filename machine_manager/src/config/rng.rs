@@ -29,15 +29,6 @@ pub struct RngConfig {
     pub bytes_per_sec: Option<u64>,
 }
 
-impl RngConfig {
-    /// Create `RngConfig` from `Value` structure.
-    /// `Value` structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
-}
-
 impl ConfigCheck for RngConfig {
     fn check(&self) -> Result<()> {
         if self.random_file.len() > MAX_PATH_LENGTH {
@@ -66,7 +57,7 @@ impl ConfigCheck for RngConfig {
 }
 
 impl VmConfig {
-    pub fn update_rng(&mut self, rng_config: &str) -> Result<()> {
+    pub fn add_rng(&mut self, rng_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("rng");
         cmd_parser.push("random_file").push("bytes_per_sec");
 
@@ -95,37 +86,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rng_config_json_parser() {
-        let json = r#"
-        {
-            "random_file": "/dev/random"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let config = RngConfig::from_value(&value);
-        assert!(config.is_ok());
-        let rng_config = config.unwrap();
-        assert_eq!(rng_config.random_file, "/dev/random");
-        assert_eq!(rng_config.bytes_per_sec, None);
-
-        let json = r#"
-        {
-            "random_file": "/dev/urandom",
-            "bytes_per_sec": 1000
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let config = RngConfig::from_value(&value);
-        assert!(config.is_ok());
-        let rng_config = config.unwrap();
-        assert_eq!(rng_config.random_file, "/dev/urandom");
-        assert_eq!(rng_config.bytes_per_sec, Some(1000));
-    }
-
-    #[test]
     fn test_rng_config_cmdline_parser_01() {
         let mut vm_config = VmConfig::default();
-        assert!(vm_config.update_rng("random_file=/dev/random").is_ok());
+        assert!(vm_config.add_rng("random_file=/dev/random").is_ok());
         if let Some(rng_config) = vm_config.rng {
             assert_eq!(rng_config.random_file, "/dev/random");
             assert_eq!(rng_config.bytes_per_sec, None);
@@ -136,7 +99,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_rng("random_file=/dev/random,bytes_per_sec=1000")
+            .add_rng("random_file=/dev/random,bytes_per_sec=1000")
             .is_ok());
         if let Some(rng_config) = vm_config.rng {
             assert_eq!(rng_config.random_file, "/dev/random");
@@ -151,7 +114,7 @@ mod tests {
     fn test_rng_config_cmdline_parser_02() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_rng("random_file=/dev/random,bytes_per_sec=63")
+            .add_rng("random_file=/dev/random,bytes_per_sec=63")
             .is_ok());
         if let Some(rng_config) = vm_config.rng {
             assert_eq!(rng_config.random_file, "/dev/random");
@@ -163,7 +126,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_rng("random_file=/dev/random,bytes_per_sec=64")
+            .add_rng("random_file=/dev/random,bytes_per_sec=64")
             .is_ok());
         if let Some(rng_config) = vm_config.rng {
             assert_eq!(rng_config.random_file, "/dev/random");
@@ -175,7 +138,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_rng("random_file=/dev/random,bytes_per_sec=1000000000")
+            .add_rng("random_file=/dev/random,bytes_per_sec=1000000000")
             .is_ok());
         if let Some(rng_config) = vm_config.rng {
             assert_eq!(rng_config.random_file, "/dev/random");
@@ -187,7 +150,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_rng("random_file=/dev/random,bytes_per_sec=1000000001")
+            .add_rng("random_file=/dev/random,bytes_per_sec=1000000001")
             .is_ok());
         if let Some(rng_config) = vm_config.rng {
             assert_eq!(rng_config.random_file, "/dev/random");

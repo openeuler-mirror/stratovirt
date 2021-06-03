@@ -26,15 +26,6 @@ pub struct IothreadConfig {
     pub id: String,
 }
 
-impl IothreadConfig {
-    /// Create `IothreadConfig` from `Value` structure.
-    /// `Value` structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
-}
-
 impl ConfigCheck for IothreadConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
@@ -51,7 +42,16 @@ impl ConfigCheck for IothreadConfig {
 
 impl VmConfig {
     /// Add new iothread device to `VmConfig`.
-    fn add_iothread(&mut self, iothread: IothreadConfig) -> Result<()> {
+    pub fn add_iothread(&mut self, iothread_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("iothread");
+        cmd_parser.push("id");
+        cmd_parser.parse(iothread_config)?;
+
+        let mut iothread = IothreadConfig::default();
+        if let Some(id) = cmd_parser.get_value::<String>("id")? {
+            iothread.id = id;
+        }
+
         if self.iothreads.is_some() {
             if self.iothreads.as_ref().unwrap().len() >= MAX_IOTHREAD_NUM {
                 return Err(ErrorKind::IllegalValue(
@@ -78,19 +78,5 @@ impl VmConfig {
         }
 
         Ok(())
-    }
-
-    pub fn update_iothread(&mut self, iothread_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("iothread");
-        cmd_parser.push("id");
-
-        cmd_parser.parse(iothread_config)?;
-
-        let mut iothread = IothreadConfig::default();
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            iothread.id = id;
-        }
-
-        self.add_iothread(iothread)
     }
 }

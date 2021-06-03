@@ -37,28 +37,6 @@ pub struct BootSource {
 }
 
 impl BootSource {
-    /// Create `BootSource` from `Value` structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
-        let mut boot_source = BootSource::default();
-        if let serde_json::Value::Object(items) = value {
-            for (name, item) in items {
-                let item_str = item.to_string().replace("\"", "");
-                match name.as_str() {
-                    "kernel_image_path" => boot_source.kernel_file = Some(PathBuf::from(&item_str)),
-                    "boot_args" => boot_source.kernel_cmdline = KernelParams::from_str(item_str),
-                    "initrd_fs_path" => boot_source.initrd = Some(InitrdConfig::new(&item_str)),
-                    _ => return Err(ErrorKind::InvalidJsonField(name.to_string()).into()),
-                }
-            }
-        }
-
-        Ok(boot_source)
-    }
-
     /// Move all the elements of `other` into `Self.kernel_cmdline`.
     pub fn append_kernel_cmdline(&mut self, other: &mut Vec<Param>) {
         self.kernel_cmdline.append(other);
@@ -253,20 +231,20 @@ impl fmt::Display for Param {
 }
 
 impl VmConfig {
-    /// Update `-kernel kernel_file` config to `VmConfig`
-    pub fn update_kernel(&mut self, kernel_image: &str) -> Result<()> {
+    /// Add `-kernel kernel_file` config to `VmConfig`
+    pub fn add_kernel(&mut self, kernel_image: &str) -> Result<()> {
         self.boot_source.kernel_file = Some(PathBuf::from(kernel_image));
         Ok(())
     }
 
-    /// Update  `-append kernel_cmdline` config to `VmConfig`
-    pub fn update_kernel_cmdline(&mut self, cmdline: &[String]) {
+    /// Add  `-append kernel_cmdline` config to `VmConfig`
+    pub fn add_kernel_cmdline(&mut self, cmdline: &[String]) {
         let cmdline: String = cmdline.join(" ");
         self.boot_source.kernel_cmdline = KernelParams::from_str(cmdline);
     }
 
-    /// Update `-initrd initrd_path` config to `VmConfig`
-    pub fn update_initrd(&mut self, initrd: &str) -> Result<()> {
+    /// Add `-initrd initrd_path` config to `VmConfig`
+    pub fn add_initrd(&mut self, initrd: &str) -> Result<()> {
         self.boot_source.initrd = Some(InitrdConfig::new(initrd));
         Ok(())
     }
@@ -295,27 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bootsource_json_parser() {
-        let json = r#"
-        {
-            "kernel_image_path": "/path/to/vmlinux",
-            "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let boot_source = BootSource::from_value(&value).unwrap();
-        assert_eq!(
-            boot_source.kernel_file,
-            Some(PathBuf::from("/path/to/vmlinux"))
-        );
-        assert_eq!(
-            boot_source.kernel_cmdline.to_string(),
-            "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
-        );
-        assert!(boot_source.initrd.is_none());
-    }
-
-    #[test]
     fn test_bootsource_cmdline_parser() {
         let kernel_path = String::from("vmlinux.bin");
         let initrd_path = String::from("initrd.img");
@@ -324,8 +281,8 @@ mod tests {
         let initrd_file = File::create(&initrd_path).unwrap();
         initrd_file.set_len(100_u64).unwrap();
         let mut vm_config = VmConfig::default();
-        assert!(vm_config.update_kernel(&kernel_path).is_ok());
-        vm_config.update_kernel_cmdline(&vec![
+        assert!(vm_config.add_kernel(&kernel_path).is_ok());
+        vm_config.add_kernel_cmdline(&vec![
             String::from("console=ttyS0"),
             String::from("reboot=k"),
             String::from("panic=1"),
@@ -341,7 +298,7 @@ mod tests {
         );
         assert!(boot_source.initrd.is_none());
         assert!(boot_source.check().is_ok());
-        assert!(vm_config.update_initrd(&initrd_path).is_ok());
+        assert!(vm_config.add_initrd(&initrd_path).is_ok());
         let boot_source = vm_config.clone().boot_source;
         assert!(boot_source.initrd.is_some());
         assert!(boot_source.check().is_ok());

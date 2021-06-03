@@ -2,9 +2,7 @@
 
 ## 1. General Setting
 
-StratoVirt supports json configuration file and cmdline arguments. If you set the same item in both
- json configuration file and cmdline arguments, cmdline arguments will override settings in json
- configuration file.
+StratoVirt can only be launched via cmdline arguments.
 
 ### 1.1 Machine Config
 
@@ -18,17 +16,6 @@ This feature is closed by default. There are two ways to open it:
 ```shell
 # cmdline
 -machine [type=]name[,dump-guest-core=on|off][,mem-share=on|off]
-
-# json
-{
-    "machine-config": {
-        "type": "MicroVm",
-        "dump_guest_core": false,
-        "mem-share": false,
-        ...
-    },
-    ...
-}
 ```
 
 ### 1.2 Cpu Number
@@ -42,15 +29,6 @@ By default, after booted, VM will online all CPUs you set.
 ```shell
 # cmdline
 -smp [cpus=]n
-
-# json
-{
-    "machine-config": {
-        "vcpu_count": 1,
-        ...
-    },
-    ...
-}
 ```
 
 ### 1.3 Memory Size
@@ -68,15 +46,6 @@ Default VM memory size is 256M. The supported VM memory size is among [256M, 512
 -m 805306368
 -m 256M
 -m 1G
-
-# json
-{
-    "machine-config": {
-        "mem_size": 805306368,
-        ...
-    },
-    ...
-}
 ```
 
 ### 1.4 Backend file of memory
@@ -90,15 +59,6 @@ The path has to be absolute path.
 # cmdline
 -mem-path /path/to/file
 -mem-path /path/to/dir
-
-# json
-{
-    "machine-config": {
-        "mem_path": "/path/to/file",
-        ...
-    },
-    ...
-}
 ```
 
 ### 1.4.1 hugepages
@@ -133,16 +93,6 @@ And the given kernel parameters will be actually analyzed by boot loader.
 # cmdline
 -kernel /path/to/kernel \
 -append console=ttyS0 rebook=k panic=1 pci=off tsc=reliable ipv6.disable=1
-
-# json
-{
-    "boot-source": {
-        "kernel_image_path": "/path/to/kernel",
-        "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1",
-        ...
-    },
-    ...
-}
 ```
 
 ### 1.6 Initrd Configuration
@@ -156,15 +106,6 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 ```shell
 # cmdline
 -initrd /path/to/initrd
-
-# json
-{
-    "boot-source": {
-        "initrd_fs_path": "/path/to/initrd",
-        ...
-    },
-    ...
-}
 ```
 
 ## 2. Device Configuration
@@ -207,23 +148,6 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 ```shell
 # cmdline
 -drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off[,iothread=iothread1,iops=200]
-
-# json
-{
-    ...
-    "drive": [
-        {
-            "drive_id": "rootfs",
-            "path_on_host": "/path/to/block",
-            "serial_num": "11111111",
-            "direct": false,
-            "read_only": false,
-            "iothread": "iothread1",
-            "iops": 200
-        }
-    ],
-    ...
-}
 ```
 
 ### 2.3 Virtio-net
@@ -241,19 +165,6 @@ It only affects on virito-net, not vhost-net.
 ```shell
 # cmdline
 -netdev id=iface_id,netdev=host_dev_name[,mac=12:34:56:78:9A:BC][,iothread=iothread1]
-
-# json
-{
-   ...
-   "net": [
-       {
-           "iface_id": "tap0",
-           "host_dev_name": "tap0",
-           "mac": "12:34:56:78:9A:BC",
-           "iothread": "iothread1"
-       }
-   ]
-}
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network.
@@ -263,19 +174,6 @@ It can be set by given `vhost` property.
 ```shell
 # cmdline
 -netdev id=iface_id,netdev=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
-
-# json
-{
-   ...
-   "net": [
-       {
-           "iface_id": "tap0",
-           "host_dev_name": "tap0",
-           "mac": "12:34:56:78:9A:BC",
-           "vhost_type": "vhost-kernel"
-       }
-   ]
-}
 ```
 
 *How to set a tap device?*
@@ -313,17 +211,6 @@ Two properties can be set for virtio console device.
 ```shell
 # shell
 -chardev id=console_id,path=socket_path
-
-# json
-{
-    "console": [
-        {
-            "console_id": "charconsole0",
-            "socket_path": "/path/to/socket/path"
-        }
-    ],
-    ...
-}
 ```
 
 ### 2.5 Virtio-vsock
@@ -345,15 +232,6 @@ And `modprobe vhost_vsock` in the host.
 ```shell
 # cmdline
 -device vsock,id=vsock_id,guest-cid=3
-
-# json
-{
-    "vsock": {
-        "vsock_id": "vsock-3462376255",
-        "guest_cid": 3
-    },
-    ...
-}
 ```
 
 *You can only set one virtio vsock device for one VM.*
@@ -383,14 +261,6 @@ There is only one argument for serial device:
 ```shell
 # cmdline
 -serial stdio
-
-# json
-{
-    "serial": {
-        "stdio": true
-    },
-    ...
-}
 ```
 
 ### 2.7 Virtio_Balloon
@@ -403,12 +273,6 @@ This feature can prevent OOM occur in guest.
 ```shell
 # cmdline
 -balloon deflate-on-oom=true
-# json
-{
-    "balloon": {
-    "deflate_on_oom": true
-    },
-}
 ```
 
 ### 2.8 Virtio-rng
@@ -426,13 +290,6 @@ it should satisfy `64<=bytes_per_sec<1000000000`
 ```shell
 # cmdline
 -rng random_file=/path/to/random_file[,bytes_per_sec=1000000]
-# json
-{
-    "rng": {
-    "random_file": "/path/to/random_file",
-    "bytes_per_sec": 1000000
-    },
-}
 ```
 
 ## 3. StratoVirt Management

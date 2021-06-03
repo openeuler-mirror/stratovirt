@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fs::File;
-use std::io::Read;
-
 use error_chain::bail;
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
@@ -31,11 +28,11 @@ const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 /// # Examples
 ///
 /// ```text
-/// update_args_to_config!(name, vm_cfg, update_name);
-/// update_args_to_config!(name, vm_cfg, update_name, vec);
-/// update_args_to_config!(name, vm_cfg, update_name, bool);
+/// add_args_to_config!(name, vm_cfg, update_name);
+/// add_args_to_config!(name, vm_cfg, update_name, vec);
+/// add_args_to_config!(name, vm_cfg, update_name, bool);
 /// ```
-macro_rules! update_args_to_config {
+macro_rules! add_args_to_config {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temp) = &$x {
             $z.$s(temp)?;
@@ -59,9 +56,9 @@ macro_rules! update_args_to_config {
 /// # Examples
 ///
 /// ```text
-/// update_args_to_config_multi!(drive, vm_cfg, update_drive);
+/// add_args_to_config_multi!(drive, vm_cfg, update_drive);
 /// ```
-macro_rules! update_args_to_config_multi {
+macro_rules! add_args_to_config_multi {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temps) = &$x {
             for temp in temps {
@@ -110,13 +107,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .long("mem-path")
                 .value_name("filebackend file path")
                 .help("configure file path that backs guest memory.")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("config-file")
-                .long("config")
-                .value_name("json file path")
-                .help("Sets a config file for vmm.")
                 .takes_value(true),
         )
         .arg(
@@ -278,49 +268,30 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     // VmConfig can be transformed by json file which described VmConfig
     // directly.
     let mut vm_cfg = VmConfig::default();
-    if let Some(config_file) = args.value_of("config-file") {
-        let config_value = match File::open(&config_file) {
-            Ok(mut f) => {
-                let mut data = String::new();
-                f.read_to_string(&mut data)
-                    .chain_err(|| format!("Failed to read from file:{}", &config_file))?;
-                if config_file.contains("json") {
-                    serde_json::from_str(&data)?
-                } else {
-                    bail!("Only support \'json\' format config-file");
-                }
-            }
-            Err(e) => {
-                bail!("Failed to open config file by: {}", e);
-            }
-        };
-        vm_cfg = VmConfig::create_from_value(config_value)
-            .chain_err(|| "Failed to parse config file to VmConfig")?;
-    }
 
     // Parse cmdline args which need to set in VmConfig
-    update_args_to_config!((args.value_of("name")), vm_cfg, update_name);
-    update_args_to_config!((args.value_of("machine")), vm_cfg, update_machine);
-    update_args_to_config!((args.value_of("memory")), vm_cfg, update_memory);
-    update_args_to_config!((args.value_of("mem-path")), vm_cfg, update_mem_path);
-    update_args_to_config!((args.value_of("smp")), vm_cfg, update_cpu);
-    update_args_to_config!((args.value_of("kernel")), vm_cfg, update_kernel);
-    update_args_to_config!((args.value_of("initrd-file")), vm_cfg, update_initrd);
-    update_args_to_config!((args.value_of("serial")), vm_cfg, update_serial);
-    update_args_to_config!((args.value_of("balloon")), vm_cfg, update_balloon);
-    update_args_to_config!((args.value_of("rng")), vm_cfg, update_rng);
-    update_args_to_config!(
+    add_args_to_config!((args.value_of("name")), vm_cfg, add_name);
+    add_args_to_config!((args.value_of("machine")), vm_cfg, add_machine);
+    add_args_to_config!((args.value_of("memory")), vm_cfg, add_memory);
+    add_args_to_config!((args.value_of("mem-path")), vm_cfg, add_mem_path);
+    add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
+    add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
+    add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
+    add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
+    add_args_to_config!((args.value_of("balloon")), vm_cfg, add_balloon);
+    add_args_to_config!((args.value_of("rng")), vm_cfg, add_rng);
+    add_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,
-        update_kernel_cmdline,
+        add_kernel_cmdline,
         vec
     );
-    update_args_to_config_multi!((args.values_of("drive")), vm_cfg, update_drive);
-    update_args_to_config_multi!((args.values_of("device")), vm_cfg, update_vsock);
-    update_args_to_config_multi!((args.values_of("netdev")), vm_cfg, update_net);
-    update_args_to_config_multi!((args.values_of("chardev")), vm_cfg, update_console);
-    update_args_to_config_multi!((args.values_of("iothread")), vm_cfg, update_iothread);
-    update_args_to_config_multi!((args.values_of("pflash")), vm_cfg, update_pflash);
+    add_args_to_config_multi!((args.values_of("drive")), vm_cfg, add_drive);
+    add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_vsock);
+    add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_net);
+    add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_consoles);
+    add_args_to_config_multi!((args.values_of("iothread")), vm_cfg, add_iothread);
+    add_args_to_config_multi!((args.values_of("pflash")), vm_cfg, add_pflash);
 
     // Check the mini-set for Vm to start is ok
     vm_cfg

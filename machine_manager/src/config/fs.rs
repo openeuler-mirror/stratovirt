@@ -37,18 +37,6 @@ pub struct DriveConfig {
     pub iops: Option<u64>,
 }
 
-impl DriveConfig {
-    /// Create `DriveConfig` from `Value` structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
-}
-
 impl Default for DriveConfig {
     fn default() -> Self {
         DriveConfig {
@@ -113,26 +101,8 @@ impl ConfigCheck for DriveConfig {
 }
 
 impl VmConfig {
-    /// Add new block device to `VmConfig`.
-    fn add_drive(&mut self, drive: DriveConfig) -> Result<()> {
-        if self.drives.is_some() {
-            for d in self.drives.as_ref().unwrap() {
-                if d.drive_id == drive.drive_id {
-                    return Err(
-                        ErrorKind::IdRepeat("drive".to_string(), d.drive_id.to_string()).into(),
-                    );
-                }
-            }
-            self.drives.as_mut().unwrap().push(drive);
-        } else {
-            self.drives = Some(vec![drive]);
-        }
-
-        Ok(())
-    }
-
-    /// Update '-drive ...' drive config to `VmConfig`.
-    pub fn update_drive(&mut self, drive_config: &str) -> Result<()> {
+    /// Add '-drive ...' drive config to `VmConfig`.
+    pub fn add_drive(&mut self, drive_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("drive");
         cmd_parser
             .push("file")
@@ -166,53 +136,32 @@ impl VmConfig {
         drive.iothread = cmd_parser.get_value::<String>("iothread")?;
         drive.iops = cmd_parser.get_value::<u64>("iops")?;
 
-        self.add_drive(drive)
+        if self.drives.is_some() {
+            for d in self.drives.as_ref().unwrap() {
+                if d.drive_id == drive.drive_id {
+                    return Err(
+                        ErrorKind::IdRepeat("drive".to_string(), d.drive_id.to_string()).into(),
+                    );
+                }
+            }
+            self.drives.as_mut().unwrap().push(drive);
+        } else {
+            self.drives = Some(vec![drive]);
+        }
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn test_drive_config_json_parser() {
-        let json = r#"
-        [{
-            "drive_id": "rootfs",
-            "path_on_host": "/path/to/block",
-            "serial_num": "1111111",
-            "direct": false,
-            "read_only": false
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let configs = DriveConfig::from_value(&value);
-        assert!(configs.is_ok());
-        let drive_configs = configs.unwrap();
-        assert_eq!(drive_configs[0].drive_id, "rootfs");
-        assert_eq!(drive_configs[0].path_on_host, "/path/to/block");
-        assert_eq!(drive_configs[0].serial_num, Some(String::from("1111111")));
-        assert_eq!(drive_configs[0].direct, false);
-        assert_eq!(drive_configs[0].read_only, false);
-        let json = r#"
-        [{
-            "drive_id": "rootfs",
-            "path_on_host": "/path/to/block",
-            "direct": false,
-            "read_only": false
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let configs = DriveConfig::from_value(&value);
-        assert!(configs.is_ok());
-        let drive_configs = configs.unwrap();
-        assert_eq!(drive_configs[0].serial_num, None);
-    }
 
     #[test]
     fn test_drive_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .update_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
             .is_ok());
         let configs = vm_config.drives.clone();
         assert!(configs.is_some());
