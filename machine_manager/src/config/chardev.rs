@@ -207,7 +207,7 @@ mod tests {
     fn test_console_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_console("id=test_console,path=/path/to/socket")
+            .add_consoles("id=test_console,path=/path/to/socket")
             .is_ok());
         let console_configs = vm_config.get_virtio_console();
         assert_eq!(console_configs.len(), 1);
