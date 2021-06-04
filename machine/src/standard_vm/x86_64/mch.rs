@@ -141,10 +141,17 @@ impl PciDevOps for Mch {
 
     fn read_config(&self, offset: usize, data: &mut [u8]) {
         let size = data.len();
-        if offset + size > PCI_CONFIG_SPACE_SIZE || size > 4 {
+        if size > 4 {
             error!(
-                "Failed to read pci config space at offset {} with data size {}",
-                offset, size
+                "Failed to read MCH config space: Invalid data size {}",
+                size
+            );
+            return;
+        }
+        if offset + size > PCI_CONFIG_SPACE_SIZE {
+            debug!(
+                "Failed to read MCH config space: offset {}, size {}, config space size {}",
+                offset, size, PCI_CONFIG_SPACE_SIZE
             );
             return;
         }
@@ -154,10 +161,17 @@ impl PciDevOps for Mch {
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let size = data.len();
         let end = offset + size;
-        if end > PCI_CONFIG_SPACE_SIZE || size > 4 {
+        if size > 4 {
             error!(
-                "Failed to write pci config space at offset {} with data size {}",
-                offset, size
+                "Failed to write MCH config space: Invalid data size {}",
+                size
+            );
+            return;
+        }
+        if offset + size > PCI_CONFIG_SPACE_SIZE {
+            debug!(
+                "Failed to write MCH config space: offset {}, size {}, config space size {}",
+                offset, size, PCI_CONFIG_SPACE_SIZE
             );
             return;
         }

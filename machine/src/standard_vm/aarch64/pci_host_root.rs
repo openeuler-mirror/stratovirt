@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use pci::{
     config::{
-        PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_VENDOR_ID_REDHAT, PCI_CONFIG_SPACE_SIZE,
+        PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
         REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
     errors::Result as PciResult,
@@ -53,7 +53,11 @@ impl PciDevOps for PciHostRoot {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
-        le_write_u16(&mut self.config.config, VENDOR_ID as usize, PCI_VENDOR_ID_REDHAT)?;
+        le_write_u16(
+            &mut self.config.config,
+            VENDOR_ID as usize,
+            PCI_VENDOR_ID_REDHAT,
+        )?;
         le_write_u16(
             &mut self.config.config,
             DEVICE_ID as usize,
@@ -77,10 +81,17 @@ impl PciDevOps for PciHostRoot {
 
     fn read_config(&self, offset: usize, data: &mut [u8]) {
         let size = data.len();
-        if offset + size >= PCI_CONFIG_SPACE_SIZE || size > 4 {
+        if size > 4 {
             error!(
-                "Failed to read PciHostRoot pci config space: offset 0x{:x}, data size 0x{:x}",
-                offset, size
+                "Failed to read PciHostRoot config space: Invalid data size {}",
+                size
+            );
+            return;
+        }
+        if offset + size > PCI_CONFIG_SPACE_SIZE {
+            debug!(
+                "Failed to read PciHostRoot config space: offset {}, size {}, config space size {}",
+                offset, size, PCI_CONFIG_SPACE_SIZE
             );
             return;
         }
@@ -89,10 +100,17 @@ impl PciDevOps for PciHostRoot {
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let size = data.len();
-        if offset + size >= PCI_CONFIG_SPACE_SIZE || size > 4 {
+        if size > 4 {
             error!(
-                "Failed to write PciHostRoot pci config space: offset 0x{:x}, data size 0x{:x}",
-                offset, size
+                "Failed to write PciHostRoot config space: Invalid data size {}",
+                size
+            );
+            return;
+        }
+        if offset + size > PCI_CONFIG_SPACE_SIZE {
+            debug!(
+                "Failed to write PciHostRoot config space: offset {}, size {}, config space size {}",
+                offset, size, PCI_CONFIG_SPACE_SIZE
             );
             return;
         }
