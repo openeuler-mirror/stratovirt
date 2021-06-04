@@ -302,9 +302,7 @@ pub trait MachineOps {
     ///
     /// * `config` - Device configuration.
     /// * `vm_fd` - File descriptor of VM.
-    fn add_rng_device(&mut self, _config: &RngConfig) -> Result<()> {
-        Ok(())
-    }
+    fn add_rng_device(&mut self, _config: &RngConfig) -> Result<()>;
 
     /// Add peripheral devices.
     ///
