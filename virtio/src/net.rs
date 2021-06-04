@@ -116,6 +116,7 @@ struct NetIoHandler {
     driver_features: u64,
     receiver: Receiver<SenderConfig>,
     update_evt: RawFd,
+    reset_evt: RawFd,
 }
 
 impl NetIoHandler {
@@ -329,6 +330,51 @@ impl NetIoHandler {
         notifiers.append(&mut EventNotifierHelper::internal_notifiers(net_io.clone()));
         notifiers
     }
+
+    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let mut notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.update_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.rx.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.tx.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+        if self.tap_fd != -1 {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                self.tap_fd,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+            self.tap_fd = -1;
+        }
+
+        notifiers
+    }
 }
 
 fn build_event_notifier(
@@ -357,6 +403,20 @@ impl EventNotifierHelper for NetIoHandler {
         let update_fd = locked_net_io.update_evt;
         notifiers.push(build_event_notifier(
             update_fd,
+            Some(handler),
+            NotifierOperation::AddShared,
+            EventSet::IN,
+        ));
+
+        // Register event notifier for reset_evt.
+        let cloned_net_io = net_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(cloned_net_io.lock().unwrap().reset_evt_handler())
+        });
+        let mut notifiers = Vec::new();
+        notifiers.push(build_event_notifier(
+            locked_net_io.reset_evt,
             Some(handler),
             NotifierOperation::AddShared,
             EventSet::IN,
@@ -464,6 +524,8 @@ pub struct Net {
     sender: Option<Sender<SenderConfig>>,
     /// Eventfd for config space update.
     update_evt: EventFd,
+    /// Eventfd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Default for Net {
@@ -474,13 +536,21 @@ impl Default for Net {
             state: VirtioNetState::default(),
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
 
 impl Net {
-    pub fn new() -> Self {
-        Net::default()
+    pub fn new(net_cfg: NetworkInterfaceConfig) -> Self {
+        Self {
+            net_cfg,
+            tap: None,
+            state: VirtioNetState::default(),
+            sender: None,
+            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+        }
     }
 }
 
@@ -677,13 +747,16 @@ impl VirtioDevice for Net {
         let handler = NetIoHandler {
             rx: RxVirtio::new(rx_queue, rx_queue_evt),
             tx: TxVirtio::new(tx_queue, tx_queue_evt),
-            tap: self.tap.take(),
+            tap: self.tap.as_ref().map(|t| Tap {
+                file: t.file.try_clone().unwrap(),
+            }),
             tap_fd,
             mem_space,
             interrupt_cb,
             driver_features: self.state.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
+            reset_evt: self.reset_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
@@ -718,6 +791,12 @@ impl VirtioDevice for Net {
         }
 
         Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.reset_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)
     }
 }
 

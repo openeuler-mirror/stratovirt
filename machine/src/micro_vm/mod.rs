@@ -277,7 +277,7 @@ impl LightMachine {
             MigrationManager::register_device_instance_mutex(BlockState::descriptor(), block);
         }
         for _ in 0..MMIO_REPLACEABLE_NET_NR {
-            let net = Arc::new(Mutex::new(Net::new()));
+            let net = Arc::new(Mutex::new(Net::default()));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, net.clone());
             rpl_devs.push(virtio_mmio);
 
