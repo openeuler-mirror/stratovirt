@@ -19,7 +19,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
-use devices::legacy::{FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031};
+use devices::legacy::{
+    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
+};
 use devices::{InterruptController, InterruptControllerConfig};
 use hypervisor::KVM_FDS;
 use machine_manager::config::{
@@ -165,16 +167,30 @@ impl StdMachineOps for StdMachine {
 
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
         let ncpus = self.cpus.len();
-        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg
+            .add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())
+            .chain_err(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
 
         let cmdline = self.boot_source.lock().unwrap().kernel_cmdline.to_string();
-        fwcfg.add_string_entry(FwCfgEntryType::CmdlineSize, cmdline.as_str())?;
+        fwcfg
+            .add_data_entry(
+                FwCfgEntryType::CmdlineSize,
+                (cmdline.len() + 1).as_bytes().to_vec(),
+            )
+            .chain_err(|| DevErrorKind::AddEntryErr("CmdlineSize".to_string()))?;
+        fwcfg
+            .add_string_entry(FwCfgEntryType::CmdlineData, cmdline.as_str())
+            .chain_err(|| DevErrorKind::AddEntryErr("CmdlineData".to_string()))?;
 
         let boot_order = Vec::<u8>::new();
-        fwcfg.add_file_entry("bootorder", boot_order)?;
+        fwcfg
+            .add_file_entry("bootorder", boot_order)
+            .chain_err(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
         let bios_geometry = Vec::<u8>::new();
-        fwcfg.add_file_entry("bios-geometry", bios_geometry)?;
+        fwcfg
+            .add_file_entry("bios-geometry", bios_geometry)
+            .chain_err(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
 
         let fwcfg_dev = FwCfgMem::realize(
             fwcfg,
@@ -256,7 +272,7 @@ impl MachineOps for StdMachine {
 
         Ok(CPUBootConfig {
             fdt_addr: layout.dtb_start,
-            kernel_addr: layout.kernel_start,
+            boot_pc: layout.boot_pc,
         })
     }
 
@@ -318,6 +334,16 @@ impl MachineOps for StdMachine {
 
     fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
         use crate::errors::ResultExt;
+
+        self.add_rtc_device()
+            .chain_err(|| ErrorKind::AddDevErr("rtc".to_string()))?;
+
+        if let Some(pflashs) = vm_config.pflashs.as_ref() {
+            for pflash in pflashs {
+                self.add_pflash_device(&pflash)
+                    .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
+            }
+        }
 
         if let Some(serial) = vm_config.serial.as_ref() {
             self.add_serial_device(&serial)
@@ -389,7 +415,8 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
 
-        let boot_config = locked_vm.load_boot_source(None)?;
+        let fw_cfg = locked_vm.add_fwcfg_device()?;
+        let boot_config = locked_vm.load_boot_source(Some(&fw_cfg))?;
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
@@ -898,12 +925,10 @@ impl CompileFDTHelper for StdMachine {
                 SysBusDevType::FwCfg => {
                     generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
                 }
-                SysBusDevType::Flash => {
-                    generate_flash_device_node(fdt)?;
-                }
                 _ => (),
             }
         }
+        generate_flash_device_node(fdt)?;
         Ok(())
     }
 
@@ -915,6 +940,10 @@ impl CompileFDTHelper for StdMachine {
         device_tree::add_sub_node(fdt, node)?;
         let cmdline = &boot_source.kernel_cmdline.to_string();
         device_tree::set_property_string(fdt, node, "bootargs", cmdline.as_str())?;
+
+        let pl011_property_string =
+            format!("/pl011@{:x}", MEM_LAYOUT[LayoutEntryType::Uart as usize].0);
+        device_tree::set_property_string(fdt, node, "stdout-path", &pl011_property_string)?;
 
         match &boot_source.initrd {
             Some(initrd) => {

@@ -208,15 +208,20 @@ pub trait SysBusDevOps: Send + AmlBuilder {
         if irq > sysbus.free_irqs.1 {
             bail!("IRQ number exhausted.");
         }
-        KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .register_irqfd(self.interrupt_evt().unwrap(), irq as u32)
-            .chain_err(|| "Failed to register irqfd")?;
-        sysbus.min_free_irq = irq + 1;
-        Ok(irq)
+        match self.interrupt_evt() {
+            None => Ok(-1_i32),
+            Some(evt) => {
+                KVM_FDS
+                    .load()
+                    .vm_fd
+                    .as_ref()
+                    .unwrap()
+                    .register_irqfd(evt, irq as u32)
+                    .chain_err(|| "Failed to register irqfd")?;
+                sysbus.min_free_irq = irq + 1;
+                Ok(irq)
+            }
+        }
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {

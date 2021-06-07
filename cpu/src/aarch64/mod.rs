@@ -59,7 +59,7 @@ const KVM_MAX_CPREG_ENTRIES: usize = 1024;
 #[derive(Default, Copy, Clone)]
 pub struct ArmCPUBootConfig {
     pub fdt_addr: u64,
-    pub kernel_addr: u64,
+    pub boot_pc: u64,
 }
 
 /// AArch64 CPU architect information
@@ -187,7 +187,7 @@ impl ArmCPUState {
         // Configure boot ip and device tree address, prepare for kernel setup
         if self.apic_id == 0 {
             self.core_regs.regs.regs[0] = boot_config.fdt_addr;
-            self.core_regs.regs.pc = boot_config.kernel_addr;
+            self.core_regs.regs.pc = boot_config.boot_pc;
         }
     }
 }

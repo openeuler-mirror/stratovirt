@@ -562,7 +562,7 @@ impl MachineOps for LightMachine {
 
         Ok(CPUBootConfig {
             fdt_addr: layout.dtb_start,
-            kernel_addr: layout.kernel_start,
+            boot_pc: layout.boot_pc,
         })
     }
 
