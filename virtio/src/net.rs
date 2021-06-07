@@ -21,6 +21,7 @@ use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
     event_loop::EventLoop,
 };
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -438,18 +439,27 @@ impl EventNotifierHelper for NetIoHandler {
     }
 }
 
+/// Status of net device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct VirtioNetState {
+    /// Bit mask of features supported by the backend.
+    device_features: u64,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+    /// Virtio net configurations.
+    config_space: VirtioNetConfig,
+}
+
 /// Network device structure.
 pub struct Net {
     /// Configuration of the network device.
     net_cfg: NetworkInterfaceConfig,
     /// Tap device opened.
     tap: Option<Tap>,
-    /// Bit mask of features supported by the backend.
-    device_features: u64,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
-    /// Virtio net configurations.
-    device_config: VirtioNetConfig,
+    /// The status of net device.
+    state: VirtioNetState,
     /// The send half of Rust's channel to send tap information.
     sender: Option<Sender<SenderConfig>>,
     /// Eventfd for config space update.
@@ -461,9 +471,7 @@ impl Default for Net {
         Self {
             net_cfg: Default::default(),
             tap: None,
-            device_features: 0_u64,
-            driver_features: 0_u64,
-            device_config: VirtioNetConfig::default(),
+            state: VirtioNetState::default(),
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
@@ -545,7 +553,7 @@ impl VirtioDevice for Net {
             );
         }
 
-        self.device_features = 1 << VIRTIO_F_VERSION_1
+        self.state.device_features = 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_NET_F_CSUM
             | 1 << VIRTIO_NET_F_GUEST_CSUM
             | 1 << VIRTIO_NET_F_GUEST_TSO4
@@ -554,7 +562,8 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_UFO;
 
         if let Some(mac) = &self.net_cfg.mac {
-            self.device_features |= build_device_config_space(&mut self.device_config, mac);
+            self.state.device_features |=
+                build_device_config_space(&mut self.state.config_space, mac);
         }
 
         if !self.net_cfg.host_dev_name.is_empty() {
@@ -577,7 +586,8 @@ impl VirtioDevice for Net {
         }
 
         if let Some(mac) = &self.net_cfg.mac {
-            self.device_features |= build_device_config_space(&mut self.device_config, mac);
+            self.state.device_features |=
+                build_device_config_space(&mut self.state.config_space, mac);
         }
 
         Ok(())
@@ -600,23 +610,23 @@ impl VirtioDevice for Net {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.device_features, features_select)
+        read_u32(self.state.device_features, features_select)
     }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.device_features;
+        let unrequested_features = v & !self.state.device_features;
         if unrequested_features != 0 {
             warn!("Received acknowledge request with unknown feature: {:x}", v);
             v &= !unrequested_features;
         }
-        self.driver_features |= v;
+        self.state.driver_features |= v;
     }
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.device_config.as_bytes();
+        let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
@@ -630,7 +640,7 @@ impl VirtioDevice for Net {
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
-        let config_slice = self.device_config.as_mut_bytes();
+        let config_slice = self.state.config_space.as_mut_bytes();
         let config_len = config_slice.len();
         if offset as usize + data_len > config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
@@ -671,7 +681,7 @@ impl VirtioDevice for Net {
             tap_fd,
             mem_space,
             interrupt_cb,
-            driver_features: self.driver_features,
+            driver_features: self.state.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
         };
@@ -711,6 +721,29 @@ impl VirtioDevice for Net {
     }
 }
 
+impl StateTransfer for Net {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *VirtioNetState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("NET"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&VirtioNetState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Net {}
+
 #[cfg(test)]
 mod tests {
     pub use super::super::*;
@@ -720,8 +753,8 @@ mod tests {
     fn test_net_init() {
         // test net new method
         let mut net = Net::new();
-        assert_eq!(net.device_features, 0);
-        assert_eq!(net.driver_features, 0);
+        assert_eq!(net.state.device_features, 0);
+        assert_eq!(net.state.driver_features, 0);
 
         assert_eq!(net.tap.is_none(), true);
         assert_eq!(net.sender.is_none(), true);
@@ -749,7 +782,7 @@ mod tests {
         net.write_config(0x00, &origin_data).unwrap();
 
         // test boundary condition of offset and data parameters
-        let device_config = net.device_config.as_bytes();
+        let device_config = net.state.config_space.as_bytes();
         let len = device_config.len() as u64;
 
         let mut data: Vec<u8> = vec![0; 10];

@@ -66,6 +66,12 @@ pub trait VhostOps {
     /// * `last_avail_idx` - Index of the available descriptor.
     fn set_vring_base(&self, queue_idx: usize, last_avail_idx: u16) -> Result<()>;
 
+    /// Get address for the vring.
+    ///
+    /// # Arguments
+    /// * `queue_idx` - Index of the queue to get.
+    fn get_vring_base(&self, queue_idx: usize) -> Result<u16>;
+
     /// Set eventfd to signal when buffers have been used.
     ///
     /// # Arguments

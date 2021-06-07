@@ -26,6 +26,7 @@ use machine_manager::{
     config::{ConfigCheck, DriveConfig},
     event_loop::EventLoop,
 };
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
@@ -47,8 +48,6 @@ use super::{
 const QUEUE_NUM_BLK: usize = 1;
 /// Size of each virtqueue.
 const QUEUE_SIZE_BLK: u16 = 256;
-/// Size of configuration space of the virtio block device.
-const CONFIG_SPACE_SIZE: usize = 16;
 /// Used to compute the number of sectors.
 const SECTOR_SHIFT: u8 = 9;
 /// Size of a sector of the block device.
@@ -724,6 +723,19 @@ impl EventNotifierHelper for BlockIoHandler {
     }
 }
 
+/// State of block device.
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct BlockState {
+    /// Bitmask of features supported by the backend.
+    device_features: u64,
+    /// Bit mask of features negotiated byu the backend and the frontend.
+    driver_features: u64,
+    /// Config space of the block device.
+    config_space: [u8; 16],
+}
+
 /// Block device structure.
 pub struct Block {
     /// Configuration of the block device.
@@ -732,12 +744,8 @@ pub struct Block {
     disk_image: Option<Arc<File>>,
     /// Number of sectors of the image file.
     disk_sectors: u64,
-    /// Bit mask of features supported by the backend.
-    device_features: u64,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
-    /// Config space of the block device.
-    config_space: [u8; CONFIG_SPACE_SIZE],
+    /// Status of block device.
+    state: BlockState,
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// The sending half of Rust's channel to send the image file.
@@ -754,9 +762,7 @@ impl Default for Block {
             blk_cfg: Default::default(),
             disk_image: None,
             disk_sectors: 0,
-            device_features: 0,
-            driver_features: 0,
-            config_space: [0u8; CONFIG_SPACE_SIZE],
+            state: BlockState::default(),
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -767,13 +773,11 @@ impl Default for Block {
 
 impl Block {
     pub fn new(blk_cfg: DriveConfig) -> Block {
-        Self {
+        Block {
             blk_cfg,
             disk_image: None,
             disk_sectors: 0,
-            device_features: 0,
-            driver_features: 0,
-            config_space: [0u8; CONFIG_SPACE_SIZE],
+            state: BlockState::default(),
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -785,12 +789,12 @@ impl Block {
         // capacity: 64bits
         let num_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
         for i in 0..8 {
-            self.config_space[i] = (num_sectors >> (8 * i)) as u8;
+            self.state.config_space[i] = (num_sectors >> (8 * i)) as u8;
         }
 
         // seg_max=128-2: 32bits
         for i in 0..4 {
-            self.config_space[12 + i] = (126 >> (8 * i)) as u8;
+            self.state.config_space[12 + i] = (126 >> (8 * i)) as u8;
         }
     }
 }
@@ -808,14 +812,14 @@ impl VirtioDevice for Block {
             );
         }
 
-        self.device_features = (1_u64 << VIRTIO_F_VERSION_1) | (1_u64 << VIRTIO_BLK_F_FLUSH);
+        self.state.device_features = (1_u64 << VIRTIO_F_VERSION_1) | (1_u64 << VIRTIO_BLK_F_FLUSH);
         if self.blk_cfg.read_only {
-            self.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
+            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
-        self.device_features |= 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        self.device_features |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
-        self.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
-        self.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
+        self.state.device_features |= 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
+        self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
+        self.state.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
 
         self.build_device_config_space();
 
@@ -860,7 +864,7 @@ impl VirtioDevice for Block {
 
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
         for i in 0..8 {
-            self.config_space[i] = (self.disk_sectors >> (8 * i)) as u8;
+            self.state.config_space[i] = (self.disk_sectors >> (8 * i)) as u8;
         }
 
         Ok(())
@@ -883,28 +887,28 @@ impl VirtioDevice for Block {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.device_features, features_select)
+        read_u32(self.state.device_features, features_select)
     }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.device_features;
+        let unrequested_features = v & !self.state.device_features;
         if unrequested_features != 0 {
             v &= !unrequested_features;
         }
-        self.driver_features |= v;
+        self.state.driver_features |= v;
     }
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_len = self.config_space.len() as u64;
+        let config_len = self.state.config_space.len() as u64;
         if offset >= config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
         }
         if let Some(end) = offset.checked_add(data.len() as u64) {
             data.write_all(
-                &self.config_space[offset as usize..cmp::min(end, config_len) as usize],
+                &self.state.config_space[offset as usize..cmp::min(end, config_len) as usize],
             )?;
         }
 
@@ -914,12 +918,13 @@ impl VirtioDevice for Block {
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
-        let config_len = self.config_space.len();
+        let config_len = self.state.config_space.len();
         if offset as usize + data_len > config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
         }
 
-        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        self.state.config_space[(offset as usize)..(offset as usize + data_len)]
+            .copy_from_slice(data);
 
         Ok(())
     }
@@ -946,7 +951,7 @@ impl VirtioDevice for Block {
             direct: self.blk_cfg.direct,
             serial_num: self.blk_cfg.serial_num.clone(),
             aio: None,
-            driver_features: self.driver_features,
+            driver_features: self.state.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
             reset_evt: self.reset_evt.as_raw_fd(),
@@ -1004,6 +1009,29 @@ impl VirtioDevice for Block {
     }
 }
 
+impl StateTransfer for Block {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *BlockState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("BLOCK"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&BlockState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Block {}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -1014,6 +1042,7 @@ mod tests {
     use std::{thread, time::Duration};
     use vmm_sys_util::tempfile::TempFile;
 
+    const CONFIG_SPACE_SIZE: usize = 16;
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
@@ -1041,9 +1070,9 @@ mod tests {
         // New block device
         let mut block = Block::default();
         assert_eq!(block.disk_sectors, 0);
-        assert_eq!(block.device_features, 0);
-        assert_eq!(block.driver_features, 0);
-        assert_eq!(block.config_space.len(), 16);
+        assert_eq!(block.state.device_features, 0);
+        assert_eq!(block.state.driver_features, 0);
+        assert_eq!(block.state.config_space.len(), 16);
         assert!(block.disk_image.is_none());
         assert!(block.interrupt_cb.is_none());
         assert!(block.sender.is_none());
@@ -1095,42 +1124,43 @@ mod tests {
         let mut block = Block::default();
 
         // If the device feature is 0, all driver features are not supported.
-        block.device_features = 0;
+        block.state.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
-        assert_eq!(block.driver_features, 0_u64);
+        assert_eq!(block.state.driver_features, 0_u64);
         assert_eq!(block.get_device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         block.set_driver_features(page, driver_feature);
-        assert_eq!(block.driver_features, 0_u64);
+        assert_eq!(block.state.driver_features, 0_u64);
         assert_eq!(block.get_device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time,  this driver feature bit is supported.
-        block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        block.state.device_features =
+            1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
         let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(
-            block.driver_features,
+            block.state.driver_features,
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
         );
         assert_eq!(
             block.get_device_features(page),
             (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
         );
-        block.driver_features = 0;
+        block.state.driver_features = 0;
 
-        block.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        block.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
-        assert_eq!(block.driver_features, 0);
+        assert_eq!(block.state.driver_features, 0);
         assert_eq!(block.get_device_features(page), 0_u32);
-        block.driver_features = 0;
+        block.state.driver_features = 0;
     }
 
     // Test `get_serial_num_config`. The function will output the shorter length between 20

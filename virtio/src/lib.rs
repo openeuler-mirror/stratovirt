@@ -33,6 +33,8 @@ extern crate log;
 extern crate machine_manager;
 #[macro_use]
 extern crate vmm_sys_util;
+#[macro_use]
+extern crate migration_derive;
 
 pub mod errors {
     error_chain! {
