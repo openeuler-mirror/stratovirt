@@ -259,6 +259,16 @@ impl Region {
         self.offset.lock().unwrap().0 = offset.raw_value();
     }
 
+    /// Returns the minimum address managed by the region.
+    /// If this region is not `Ram` type, this function will return `None`.
+    pub fn start_addr(&self) -> Option<GuestAddress> {
+        if self.region_type != RegionType::Ram {
+            return None;
+        }
+
+        self.mem_mapping.as_ref().map(|r| r.start_address())
+    }
+
     /// Change mode of RomDevice-type region,
     ///
     /// # Arguments

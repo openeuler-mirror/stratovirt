@@ -111,14 +111,14 @@ mod virtio_mmio;
 mod virtio_pci;
 
 pub use balloon::*;
-pub use block::Block;
-pub use console::Console;
+pub use block::{Block, BlockState};
+pub use console::{Console, VirtioConsoleState};
 pub use errors::*;
 pub use net::*;
 pub use queue::*;
 pub use rng::Rng;
 pub use vhost::kernel as VhostKern;
-pub use virtio_mmio::VirtioMmioDevice;
+pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use virtio_pci::VirtioPciDevice;
 
 use std::sync::{Arc, Mutex};

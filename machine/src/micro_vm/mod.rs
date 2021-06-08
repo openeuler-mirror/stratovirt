@@ -53,6 +53,8 @@ pub mod errors {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+mod kvm_state;
 mod mem_layout;
 mod syscall;
 
@@ -90,6 +92,7 @@ use machine_manager::{
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
 };
+use migration::MigrationManager;
 use sysbus::SysBus;
 #[cfg(target_arch = "aarch64")]
 use sysbus::{SysBusDevType, SysRes};
@@ -101,8 +104,8 @@ use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, Console, Net, Rng, VhostKern,
-    VirtioDevice, VirtioMmioDevice,
+    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, BlockState, Console, Net, Rng,
+    VhostKern, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 use vmm_sys_util::eventfd::EventFd;
 
@@ -264,13 +267,17 @@ impl LightMachine {
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for _ in 0..MMIO_REPLACEABLE_BLK_NR {
             let block = Arc::new(Mutex::new(Block::default()));
-            let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block);
+            let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block.clone());
             rpl_devs.push(virtio_mmio);
+
+            MigrationManager::register_device_instance_mutex(BlockState::descriptor(), block);
         }
         for _ in 0..MMIO_REPLACEABLE_NET_NR {
             let net = Arc::new(Mutex::new(Net::new()));
-            let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, net);
+            let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, net.clone());
             rpl_devs.push(virtio_mmio);
+
+            MigrationManager::register_device_instance_mutex(VirtioNetState::descriptor(), net);
         }
 
         let mut region_base = self.sysbus.min_free_base;
@@ -285,15 +292,19 @@ impl LightMachine {
                     id: "".to_string(),
                     used: false,
                 });
-            VirtioMmioDevice::realize(
-                dev,
-                &mut self.sysbus,
-                region_base,
-                MEM_LAYOUT[LayoutEntryType::Mmio as usize].1,
-                #[cfg(target_arch = "x86_64")]
-                &self.boot_source,
-            )
-            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
+
+            MigrationManager::register_device_instance_mutex(
+                VirtioMmioState::descriptor(),
+                VirtioMmioDevice::realize(
+                    dev,
+                    &mut self.sysbus,
+                    region_base,
+                    MEM_LAYOUT[LayoutEntryType::Mmio as usize].1,
+                    #[cfg(target_arch = "x86_64")]
+                    &self.boot_source,
+                )
+                .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+            );
             region_base += region_size;
         }
         self.sysbus.min_free_base = region_base;
@@ -632,19 +643,26 @@ impl MachineOps for LightMachine {
         use crate::errors::ResultExt;
 
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(config, &self.sys_mem)));
-        let device = VirtioMmioDevice::new(&self.sys_mem, vsock);
+        let device = VirtioMmioDevice::new(&self.sys_mem, vsock.clone());
         let region_base = self.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
 
-        VirtioMmioDevice::realize(
-            device,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
-        )
-        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
+        MigrationManager::register_device_instance_mutex(
+            VirtioMmioState::descriptor(),
+            VirtioMmioDevice::realize(
+                device,
+                &mut self.sysbus,
+                region_base,
+                region_size,
+                #[cfg(target_arch = "x86_64")]
+                &self.boot_source,
+            )
+            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+        );
+        MigrationManager::register_device_instance_mutex(
+            VhostKern::VsockState::descriptor(),
+            vsock,
+        );
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
@@ -687,19 +705,23 @@ impl MachineOps for LightMachine {
         use crate::errors::ResultExt;
 
         let console = Arc::new(Mutex::new(Console::new(config.clone())));
-        let device = VirtioMmioDevice::new(&self.sys_mem, console);
+        let device = VirtioMmioDevice::new(&self.sys_mem, console.clone());
         let region_base = self.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
 
-        VirtioMmioDevice::realize(
-            device,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
-        )
-        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
+        MigrationManager::register_device_instance_mutex(
+            VirtioMmioState::descriptor(),
+            VirtioMmioDevice::realize(
+                device,
+                &mut self.sysbus,
+                region_base,
+                region_size,
+                #[cfg(target_arch = "x86_64")]
+                &self.boot_source,
+            )
+            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+        );
+        MigrationManager::register_device_instance_mutex(VirtioConsoleState::descriptor(), console);
         self.sysbus.min_free_base += region_size;
         Ok(())
     }
@@ -805,6 +827,13 @@ impl MachineOps for LightMachine {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
+
+        #[cfg(target_arch = "x86_64")]
+        MigrationManager::register_device_instance(
+            kvm_state::KvmDeviceState::descriptor(),
+            Arc::new(kvm_state::KvmDevice {}),
+        );
+
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]

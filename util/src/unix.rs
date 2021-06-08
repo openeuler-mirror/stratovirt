@@ -31,3 +31,8 @@ pub fn limit_permission(path: &str) -> Result<()> {
         Err(ErrorKind::ChmodFailed(ret).into())
     }
 }
+
+/// Gets the page size of host.
+pub fn host_page_size() -> u64 {
+    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
+}

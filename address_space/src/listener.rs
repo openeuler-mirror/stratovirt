@@ -17,10 +17,10 @@ use error_chain::ChainedError;
 use hypervisor::KVM_FDS;
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
-use util::num_ops::round_down;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::{host_page_size, AddressRange, FlatRange, RegionIoEventFd, RegionType};
+use crate::{AddressRange, FlatRange, RegionIoEventFd, RegionType};
+use util::{num_ops::round_down, unix::host_page_size};
 
 const MEM_READ_ONLY: u32 = 1 << 1;
 

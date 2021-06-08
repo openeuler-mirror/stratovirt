@@ -18,6 +18,7 @@ use machine_manager::config::MachineMemConfig;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
+use util::unix::host_page_size;
 
 /// FileBackend represents backend-file of `HostMemMapping`.
 #[derive(Clone)]
@@ -150,7 +151,7 @@ pub fn create_host_mmaps(
         f_back = Some(FileBackend {
             file: Arc::new(anon_file),
             offset: 0,
-            page_size: crate::host_page_size(),
+            page_size: host_page_size(),
         });
     }
 

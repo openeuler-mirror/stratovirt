@@ -18,6 +18,9 @@ extern crate log;
 extern crate machine_manager;
 #[cfg(target_arch = "x86_64")]
 #[macro_use]
+extern crate migration_derive;
+#[cfg(target_arch = "x86_64")]
+#[macro_use]
 extern crate vmm_sys_util;
 
 pub mod errors {
@@ -121,6 +124,7 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
+use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use virtio::balloon_allow_list;
@@ -181,6 +185,8 @@ pub trait MachineOps {
                 .chain_err(|| ErrorKind::RegMemRegionErr(base, size))?;
         }
 
+        MigrationManager::register_memory_instance(sys_mem.clone());
+
         Ok(())
     }
 
@@ -209,13 +215,15 @@ pub trait MachineOps {
             #[cfg(target_arch = "x86_64")]
             let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(nr_cpus));
 
-            let cpu = CPU::new(
+            let cpu = Arc::new(CPU::new(
                 fds[vcpu_id as usize].clone(),
                 vcpu_id,
                 Arc::new(Mutex::new(arch_cpu)),
                 vm.clone(),
-            );
-            cpus.push(Arc::new(cpu));
+            ));
+            cpus.push(cpu.clone());
+
+            MigrationManager::register_device_instance(cpu::ArchCPU::descriptor(), cpu);
         }
 
         for cpu_index in 0..nr_cpus as usize {
