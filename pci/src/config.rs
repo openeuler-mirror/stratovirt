@@ -721,3 +721,181 @@ impl PciConfig {
         Ok(cap_offset)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use address_space::{AddressSpace, GuestAddress, RegionOps};
+
+    use super::*;
+
+    #[test]
+    fn test_get_bar_address() {
+        let read_ops = move |_data: &mut [u8], _addr: GuestAddress, _offset: u64| -> bool { true };
+        let write_ops = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool { true };
+        let region_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        let region = Region::init_io_region(2048, region_ops);
+        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+
+        #[cfg(target_arch = "x86_64")]
+        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
+        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
+        pci_config.register_bar(2, region, RegionType::Mem64Bit, true, 2048);
+
+        #[cfg(target_arch = "x86_64")]
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize,
+            2048_u32 | BAR_IO_SPACE as u32,
+        )
+        .unwrap();
+        le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 2048).unwrap();
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize + 2 * REG_SIZE,
+            2048_u32 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+        )
+        .unwrap();
+
+        // Neither I/O space nor memory space is enabled in command register.
+        assert_eq!(pci_config.get_bar_address(0), BAR_SPACE_UNMAPPED);
+        #[cfg(target_arch = "x86_64")]
+        {
+            // I/O space access is enabled.
+            le_write_u16(&mut pci_config.config, COMMAND as usize, COMMAND_IO_SPACE).unwrap();
+            assert_eq!(pci_config.get_bar_address(0), 2048);
+        }
+        assert_eq!(pci_config.get_bar_address(1), BAR_SPACE_UNMAPPED);
+        assert_eq!(pci_config.get_bar_address(2), BAR_SPACE_UNMAPPED);
+        // Memory space access is enabled.
+        le_write_u16(
+            &mut pci_config.config,
+            COMMAND as usize,
+            COMMAND_MEMORY_SPACE,
+        )
+        .unwrap();
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(pci_config.get_bar_address(0), BAR_SPACE_UNMAPPED);
+        assert_eq!(pci_config.get_bar_address(1), 2048);
+        assert_eq!(pci_config.get_bar_address(2), 2048);
+    }
+
+    #[test]
+    fn test_update_bar_mapping() {
+        let read_ops = move |_data: &mut [u8], _addr: GuestAddress, _offset: u64| -> bool { true };
+        let write_ops = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool { true };
+        let region_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        let region = Region::init_io_region(2048, region_ops);
+        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 6);
+
+        #[cfg(target_arch = "x86_64")]
+        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
+        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
+        pci_config.register_bar(2, region, RegionType::Mem64Bit, true, 2048);
+
+        #[cfg(target_arch = "x86_64")]
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize,
+            2048_u32 | BAR_IO_SPACE as u32,
+        )
+        .unwrap();
+        le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 2048).unwrap();
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize + 2 * REG_SIZE,
+            2048_u32 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+        )
+        .unwrap();
+        le_write_u16(
+            &mut pci_config.config,
+            COMMAND as usize,
+            COMMAND_IO_SPACE | COMMAND_MEMORY_SPACE,
+        )
+        .unwrap();
+
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        pci_config
+            .update_bar_mapping(
+                #[cfg(target_arch = "x86_64")]
+                sys_io.root(),
+                sys_mem.root(),
+            )
+            .unwrap();
+
+        // Bar addresses not changed.
+        pci_config
+            .update_bar_mapping(
+                #[cfg(target_arch = "x86_64")]
+                sys_io.root(),
+                sys_mem.root(),
+            )
+            .unwrap();
+        // Bar addresses are changed.
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize,
+            4096_u32 | BAR_IO_SPACE as u32,
+        )
+        .unwrap();
+        le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 4096).unwrap();
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize + 2 * REG_SIZE,
+            4096_u32 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+        )
+        .unwrap();
+        pci_config
+            .update_bar_mapping(
+                #[cfg(target_arch = "x86_64")]
+                sys_io.root(),
+                sys_mem.root(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_add_pci_cap() {
+        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
+
+        // Overflow.
+        assert!(pci_config
+            .add_pci_cap(
+                0x12,
+                PCI_CONFIG_SPACE_SIZE - PCI_CONFIG_HEAD_END as usize + 1
+            )
+            .is_err());
+
+        // Capbility size is not multiple of DWORD.
+        pci_config.add_pci_cap(0x12, 10).unwrap();
+        assert_eq!(pci_config.last_cap_end, PCI_CONFIG_HEAD_END as u16 + 12);
+    }
+
+    #[test]
+    fn test_add_pcie_ext_cap() {
+        let mut pci_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2);
+
+        // Overflow.
+        assert!(pci_config
+            .add_pcie_ext_cap(
+                0x12,
+                PCIE_CONFIG_SPACE_SIZE - PCI_CONFIG_SPACE_SIZE as usize + 1,
+                1
+            )
+            .is_err());
+
+        // Capbility size is not multiple of DWORD.
+        pci_config.add_pcie_ext_cap(0x12, 10, 1).unwrap();
+        assert_eq!(
+            pci_config.last_ext_cap_end,
+            PCI_CONFIG_SPACE_SIZE as u16 + 12
+        );
+    }
+}

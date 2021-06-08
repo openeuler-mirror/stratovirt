@@ -90,7 +90,7 @@ impl PciHost {
         }
     }
 
-    fn find_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+    pub fn find_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn PciDevOps>>> {
         let locked_root_bus = self.root_bus.lock().unwrap();
         if bus_num == 0 {
             return locked_root_bus.get_device(0, devfn);
@@ -350,5 +350,212 @@ impl AmlBuilder for PciHost {
         pci_host_bridge.append_child(AmlNameDecl::new("_PRT", prt_pkg));
 
         pci_host_bridge.aml_bytes()
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use std::sync::Weak;
+
+    use address_space::Region;
+    use byteorder::{ByteOrder, LittleEndian};
+
+    use super::*;
+    use crate::bus::PciBus;
+    use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
+    use crate::errors::Result;
+    use crate::root_port::RootPort;
+
+    struct PciDevice {
+        devfn: u8,
+        config: PciConfig,
+        parent_bus: Weak<Mutex<PciBus>>,
+    }
+
+    impl PciDevOps for PciDevice {
+        fn init_write_mask(&mut self) -> Result<()> {
+            let mut offset = 0_usize;
+            while offset < self.config.config.len() {
+                LittleEndian::write_u32(
+                    &mut self.config.write_mask[offset..offset + 4],
+                    0xffff_ffff,
+                );
+                offset += 4;
+            }
+            Ok(())
+        }
+
+        fn init_write_clear_mask(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn read_config(&self, offset: usize, data: &mut [u8]) {
+            self.config.read(offset, data);
+        }
+
+        fn write_config(&mut self, offset: usize, data: &[u8]) {
+            self.config.write(offset, data, 0);
+        }
+
+        fn name(&self) -> String {
+            "PCI device".to_string()
+        }
+
+        fn realize(mut self) -> Result<()> {
+            let devfn = self.devfn;
+            self.init_write_mask()?;
+            self.init_write_clear_mask()?;
+
+            let dev = Arc::new(Mutex::new(self));
+            dev.lock()
+                .unwrap()
+                .parent_bus
+                .upgrade()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .devices
+                .insert(devfn, dev.clone());
+            Ok(())
+        }
+    }
+
+    pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        Arc::new(Mutex::new(PciHost::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            (0xB000_0000, 0x1000_0000),
+            (0xC000_0000, 0x3000_0000),
+        )))
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn test_pio_ops() {
+        let pci_host = create_pci_host();
+        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let pio_addr_ops = PciHost::build_pio_addr_ops(pci_host.clone());
+        let pio_data_ops = PciHost::build_pio_data_ops(pci_host.clone());
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus);
+        root_port.realize().unwrap();
+
+        let mut data = [0_u8; 4];
+        let addr: u32 = CONFIG_ADDRESS_ENABLE_MASK | 8 << PIO_DEVFN_SHIFT | 0x28;
+        LittleEndian::write_u32(&mut data, addr);
+        (pio_addr_ops.write)(&data, GuestAddress(0), 0);
+        let mut buf = [0_u8; 4];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, data);
+        let data = [1_u8; 4];
+        (pio_data_ops.write)(&data, GuestAddress(0), 0);
+        let mut buf = [0_u8; 4];
+        (pio_data_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, data);
+
+        // Non-DWORD access on CONFIG_ADDR
+
+        let mut config = [0_u8; 4];
+        (pio_addr_ops.read)(&mut config, GuestAddress(0), 0);
+        let data = [0x12, 0x34];
+        (pio_addr_ops.write)(&data, GuestAddress(0), 0);
+        let mut buf = [0_u8; 4];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, config);
+
+        let data = [0x12, 0x34, 0x56, 0x78];
+        (pio_addr_ops.write)(&data, GuestAddress(0), 1);
+        let mut buf = [0_u8; 4];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, config);
+
+        let mut buf = [0_u8; 2];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, [0_u8; 2]);
+
+        let mut buf = [0_u8; 4];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 1);
+        assert_eq!(buf, [0_u8; 4]);
+
+        let mut buf = [0_u8; 5];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, [0_u8; 5]);
+
+        // Enable bit of CONFIG_ADDR is not set.
+        let mut data = [0_u8; 4];
+        let addr: u32 = 8 << PIO_DEVFN_SHIFT | 16 << 2;
+        LittleEndian::write_u32(&mut data, addr);
+        (pio_addr_ops.write)(&data, GuestAddress(0), 0);
+        let mut buf = [0_u8; 4];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, data);
+        let data = [1_u8; 4];
+        (pio_data_ops.write)(&data, GuestAddress(0), 0);
+        let mut buf = [0_u8; 4];
+        (pio_data_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, [0xff_u8; 4]);
+
+        // Access non-exist device.
+        let mut data = [0_u8; 4];
+        let addr: u32 = 1 << PIO_DEVFN_SHIFT | 16 << 2;
+        LittleEndian::write_u32(&mut data, addr);
+        (pio_addr_ops.write)(&data, GuestAddress(0), 0);
+        let mut buf = [0_u8; 4];
+        (pio_addr_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, data);
+        let mut buf = [0_u8; 4];
+        (pio_data_ops.read)(&mut buf, GuestAddress(0), 0);
+        assert_eq!(buf, [0xff_u8; 4]);
+    }
+
+    #[test]
+    fn test_mmio_ops() {
+        let pci_host = create_pci_host();
+        let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
+        let mmconfig_region_ops = PciHost::build_mmconfig_ops(pci_host.clone());
+
+        let mut root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone());
+        root_port.write_config(SECONDARY_BUS_NUM as usize, &[1]);
+        root_port.realize().unwrap();
+        let mut root_port = RootPort::new("pcie.2".to_string(), 16, 0, root_bus);
+        root_port.write_config(SECONDARY_BUS_NUM as usize, &[2]);
+        root_port.realize().unwrap();
+
+        let bus = PciBus::find_bus_by_name(&pci_host.lock().unwrap().root_bus, "pcie.2").unwrap();
+        let pci_dev = PciDevice {
+            devfn: 8,
+            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+            parent_bus: Arc::downgrade(&bus),
+        };
+        pci_dev.realize().unwrap();
+
+        let addr: u64 = 8_u64 << ECAM_DEVFN_SHIFT | SECONDARY_BUS_NUM as u64;
+        let data = [1_u8];
+        (mmconfig_region_ops.write)(&data, GuestAddress(0), addr);
+        let mut buf = [0_u8];
+        (mmconfig_region_ops.read)(&mut buf, GuestAddress(0), addr);
+        assert_eq!(buf, data);
+        let addr: u64 = 16_u64 << ECAM_DEVFN_SHIFT | SECONDARY_BUS_NUM as u64;
+        let data = [2_u8];
+        (mmconfig_region_ops.write)(&data, GuestAddress(0), addr);
+        let mut buf = [0_u8];
+        (mmconfig_region_ops.read)(&mut buf, GuestAddress(0), addr);
+        assert_eq!(buf, data);
+
+        // Access non-exist device.
+        let addr: u64 = 1 << ECAM_BUS_SHIFT | 16 << ECAM_DEVFN_SHIFT | 2;
+        let mut buf = [0_u8; 2];
+        (mmconfig_region_ops.read)(&mut buf, GuestAddress(0), addr);
+        assert_eq!(buf, [0xff_u8; 2]);
+
+        let addr: u64 = 2 << ECAM_BUS_SHIFT | 8 << ECAM_DEVFN_SHIFT | 2;
+        let data = [1_u8; 2];
+        (mmconfig_region_ops.write)(&data, GuestAddress(0), addr);
+        let mut buf = [0_u8; 2];
+        (mmconfig_region_ops.read)(&mut buf, GuestAddress(0), addr);
+        assert_eq!(buf, data);
     }
 }

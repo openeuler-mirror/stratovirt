@@ -300,3 +300,95 @@ pub fn init_msix(bar_id: usize, vector_nr: u32, config: &mut PciConfig, dev_id: 
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::PCI_CONFIG_SPACE_SIZE;
+
+    #[test]
+    fn test_init_msix() {
+        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
+
+        // Too many vectors.
+        assert!(init_msix(0, MSIX_TABLE_SIZE_MAX as u32 + 2, &mut pci_config, 0).is_err());
+
+        init_msix(1, 2, &mut pci_config, 0).unwrap();
+        let msix_cap_start = 64_u8;
+        assert_eq!(pci_config.last_cap_end, 64 + MSIX_CAP_SIZE as u16);
+        // Capabilities pointer
+        assert_eq!(pci_config.config[0x34], msix_cap_start);
+        assert_eq!(
+            pci_config.config[msix_cap_start as usize],
+            CapId::Msix as u8
+        );
+        // Capabilities list in Status Register.
+        assert!(pci_config.config[0x06] & 0x10 > 0);
+        // Message control register.
+        assert_eq!(
+            le_read_u16(&pci_config.config, msix_cap_start as usize + 2).unwrap(),
+            1
+        );
+        // Table BIR.
+        assert_eq!(pci_config.config[msix_cap_start as usize + 4] & 0x7, 1);
+        // PBA BIR.
+        assert_eq!(pci_config.config[msix_cap_start as usize + 8] & 0x7, 1);
+    }
+
+    #[test]
+    fn test_mask_vectors() {
+        let nr_vector = 2_u32;
+        let mut msix = Msix::new(nr_vector * MSIX_TABLE_ENTRY_SIZE as u32, 64, 64);
+
+        assert!(msix.table[MSIX_TABLE_VEC_CTL as usize] & MSIX_TABLE_MASK_BIT > 0);
+        assert!(
+            msix.table[(MSIX_TABLE_ENTRY_SIZE + MSIX_TABLE_VEC_CTL) as usize] & MSIX_TABLE_MASK_BIT
+                > 0
+        );
+        assert!(msix.is_vector_masked(0));
+        msix.func_masked = false;
+        assert!(msix.is_vector_masked(1));
+        msix.table[(MSIX_TABLE_ENTRY_SIZE + MSIX_TABLE_VEC_CTL) as usize] &= !MSIX_TABLE_MASK_BIT;
+        assert!(!msix.is_vector_masked(1));
+    }
+
+    #[test]
+    fn test_pending_vectors() {
+        let mut msix = Msix::new(MSIX_TABLE_ENTRY_SIZE as u32, 64, 64);
+
+        msix.set_pending_vector(0);
+        assert!(msix.is_vector_pending(0));
+        msix.clear_pending_vector(0);
+        assert!(!msix.is_vector_pending(0));
+    }
+
+    #[test]
+    fn test_get_message() {
+        let mut msix = Msix::new(MSIX_TABLE_ENTRY_SIZE as u32, 64, 64);
+        le_write_u32(&mut msix.table, 0, 0x1000_0000).unwrap();
+        le_write_u32(&mut msix.table, 4, 0x2000_0000).unwrap();
+        le_write_u32(&mut msix.table, 8, 0x3000_0000).unwrap();
+
+        let msg = msix.get_message(0);
+        assert_eq!(msg.address_lo, 0x1000_0000);
+        assert_eq!(msg.address_hi, 0x2000_0000);
+        assert_eq!(msg.data, 0x3000_0000);
+    }
+
+    #[test]
+    fn test_write_config() {
+        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
+        init_msix(0, 2, &mut pci_config, 0).unwrap();
+        let msix = pci_config.msix.as_ref().unwrap();
+        let mut locked_msix = msix.lock().unwrap();
+        locked_msix.enabled = false;
+        let offset = locked_msix.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
+        let val = le_read_u16(&pci_config.config, offset).unwrap();
+        le_write_u16(&mut pci_config.config, offset, val | MSIX_CAP_ENABLE).unwrap();
+        locked_msix.set_pending_vector(0);
+        locked_msix.write_config(&pci_config.config, 0);
+
+        assert!(!locked_msix.func_masked);
+        assert!(locked_msix.enabled);
+    }
+}
