@@ -55,10 +55,10 @@ fn load_kernel(
     let mut kernel_image = File::open(kernel_path).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
     let kernel_size = kernel_image.metadata().unwrap().len();
     let kernel_end = kernel_start + kernel_size;
-    let mut kernel_data = Vec::new();
-    kernel_image.read_to_end(&mut kernel_data)?;
 
     if let Some(fw_cfg) = fwcfg {
+        let mut kernel_data = Vec::new();
+        kernel_image.read_to_end(&mut kernel_data)?;
         let mut lock_dev = fw_cfg.lock().unwrap();
         lock_dev
             .add_data_entry(
@@ -79,11 +79,7 @@ fn load_kernel(
             return Err(ErrorKind::KernelOverflow(kernel_start, kernel_size).into());
         }
         sys_mem
-            .write(
-                &mut kernel_data.as_slice(),
-                GuestAddress(kernel_start),
-                kernel_size,
-            )
+            .write(&mut kernel_image, GuestAddress(kernel_start), kernel_size)
             .chain_err(|| "Fail to write kernel to guest memory")?;
     }
     Ok(kernel_end)
@@ -97,8 +93,6 @@ fn load_initrd(
 ) -> Result<(u64, u64)> {
     let mut initrd_image = File::open(initrd_path).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
     let initrd_size = initrd_image.metadata().unwrap().len();
-    let mut initrd_data = Vec::new();
-    initrd_image.read_to_end(&mut initrd_data)?;
 
     let initrd_start = if let Some(addr) = sys_mem
         .memory_end_address()
@@ -112,6 +106,8 @@ fn load_initrd(
     };
 
     if let Some(fw_cfg) = fwcfg {
+        let mut initrd_data = Vec::new();
+        initrd_image.read_to_end(&mut initrd_data)?;
         let mut lock_dev = fw_cfg.lock().unwrap();
         lock_dev
             .add_data_entry(
@@ -130,11 +126,7 @@ fn load_initrd(
             .chain_err(|| FwcfgErrorKind::AddEntryErr("InitrdData".to_string()))?;
     } else {
         sys_mem
-            .write(
-                &mut initrd_data.as_slice(),
-                GuestAddress(initrd_start),
-                initrd_size,
-            )
+            .write(&mut initrd_image, GuestAddress(initrd_start), initrd_size)
             .chain_err(|| "Fail to write initrd to guest memory")?;
     }
 
