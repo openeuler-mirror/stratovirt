@@ -356,7 +356,11 @@ impl CPUInterface for CPU {
     }
 
     fn reset(&self) -> Result<()> {
-        self.arch_cpu.lock().unwrap().reset_vcpu(&self.fd)?;
+        self.arch_cpu.lock().unwrap().reset_vcpu(
+            &self.fd,
+            #[cfg(target_arch = "x86_64")]
+            &self.caps,
+        )?;
         Ok(())
     }
 

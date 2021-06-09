@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[allow(dead_code)]
 pub mod caps;
 mod cpuid;
 
@@ -141,7 +140,8 @@ impl X86CPUState {
     /// # Arguments
     ///
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
-    pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+    /// * `caps` - Vcpu capabilities in kvm.
+    pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>, caps: &caps::X86CPUCaps) -> Result<()> {
         self.setup_cpuid(vcpu_fd)
             .chain_err(|| format!("Failed to set cpuid for CPU {}", self.apic_id))?;
 
@@ -157,15 +157,20 @@ impl X86CPUState {
         vcpu_fd
             .set_regs(&self.regs)
             .chain_err(|| format!("Failed to set regs for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_xsave(&self.xsave)
-            .chain_err(|| format!("Failed to set xsave for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_fpu(&self.fpu)
-            .chain_err(|| format!("Failed to set fpu for CPU {}", self.apic_id))?;
-        vcpu_fd
-            .set_xcrs(&self.xcrs)
-            .chain_err(|| format!("Failed to set xcrs for CPU {}", self.apic_id))?;
+        if caps.has_xsave {
+            vcpu_fd
+                .set_xsave(&self.xsave)
+                .chain_err(|| format!("Failed to set xsave for CPU {}", self.apic_id))?;
+        } else {
+            vcpu_fd
+                .set_fpu(&self.fpu)
+                .chain_err(|| format!("Failed to set fpu for CPU {}", self.apic_id))?;
+        }
+        if caps.has_xcrs {
+            vcpu_fd
+                .set_xcrs(&self.xcrs)
+                .chain_err(|| format!("Failed to set xcrs for CPU {}", self.apic_id))?;
+        }
         vcpu_fd
             .set_debug_regs(&self.debugregs)
             .chain_err(|| format!("Failed to set debug register for CPU {}", self.apic_id))?;
@@ -537,7 +542,8 @@ mod test {
         assert!(x86_cpu.set_boot_config(&vcpu, &cpu_config).is_ok());
 
         //test setup special registers
-        assert!(x86_cpu.reset_vcpu(&vcpu).is_ok());
+        let cpu_caps = caps::X86CPUCaps::init_capabilities();
+        assert!(x86_cpu.reset_vcpu(&vcpu, &cpu_caps).is_ok());
         let x86_sregs = vcpu.get_sregs().unwrap();
         assert_eq!(x86_sregs.cs, code_seg);
         assert_eq!(x86_sregs.ds, data_seg);
