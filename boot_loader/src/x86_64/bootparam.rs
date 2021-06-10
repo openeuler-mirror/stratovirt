@@ -27,6 +27,8 @@ pub const BOOT_VERSION: u16 = 0x0200;
 pub const BOOT_FLAG: u16 = 0xAA55;
 pub const HDRS: u32 = 0x5372_6448;
 pub const UNDEFINED_ID: u8 = 0xFF;
+// Loader type ID: OVMF UEFI virtualization stack.
+pub const UEFI_OVMF_ID: u8 = 0xB;
 
 // Structures below sourced from:
 // https://www.kernel.org/doc/html/latest/x86/boot.html

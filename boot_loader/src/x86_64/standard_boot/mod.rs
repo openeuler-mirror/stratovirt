@@ -25,7 +25,7 @@ use super::bootparam::RealModeKernelHeader;
 use super::X86BootLoaderConfig;
 use super::{BOOT_HDR_START, CMDLINE_START};
 use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::x86_64::bootparam::{E820Entry, E820_RAM, E820_RESERVED};
+use crate::x86_64::bootparam::{E820Entry, E820_RAM, E820_RESERVED, UEFI_OVMF_ID};
 use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
 use elf::load_elf_kernel;
 
@@ -211,6 +211,7 @@ pub fn load_linux(
     let mut boot_header = RealModeKernelHeader::default();
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
     kernel_image.read_exact(boot_header.as_mut_bytes())?;
+    boot_header.type_of_loader = UEFI_OVMF_ID;
 
     load_kernel_cmdline(config, &mut boot_header, fwcfg)?;
     setup_e820_table(config, sys_mem, fwcfg)?;
