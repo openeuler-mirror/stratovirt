@@ -29,8 +29,8 @@ pub struct PFlash {
     fd_blk: File,
     /// Number of blocks
     blk_num: u32,
-    /// Length of sector
-    sector_len: u32,
+    /// Length of block
+    block_len: u32,
     /// Indicator of byte or bit
     bank_width: u32,
     /// If 0, device width not specified
@@ -40,19 +40,13 @@ pub struct PFlash {
     /// If 0, the flash is read normally
     write_cycle: i32,
     /// Pflash is read only or not
-    read_only: i32,
+    read_only: bool,
     /// Command to control pflash
     cmd: u8,
     /// Pflash status
     status: u8,
-    /// Pflash ID0
-    ident0: u32,
-    /// Pflash ID1
-    ident1: u32,
-    /// Pflash ID2
-    ident2: u32,
-    /// Pflash ID3
-    ident3: u32,
+    /// Pflash ID
+    ident: [u32; 0x4],
     /// Hardcoded information of pflash device
     cfi_table: [u8; 0x52],
     /// Counter of write block
@@ -69,32 +63,25 @@ impl PFlash {
     pub fn new(
         size: u64,
         fd_blk: File,
-        sector_len: u32,
+        block_len: u32,
         bank_width: u32,
         device_width: u32,
-        read_only: i32,
+        read_only: bool,
     ) -> Result<Self> {
-        if sector_len == 0 {
-            bail!("attribute \"sector-length\" is zero.");
+        if block_len == 0 {
+            bail!("Flash: block-length is zero which is invalid.");
         }
-        let nb_blocs: u32 = size as u32 / sector_len;
-        if nb_blocs == 0 {
-            bail!("attribute \"num-blocks\" is zero.");
+        let blocks_per_device: u32 = size as u32 / block_len;
+        if blocks_per_device == 0 {
+            bail!("Flash: num-blocks is zero which is invalid.");
         }
 
-        let max_device_width: u32 = device_width;
-        let write_cycle: i32 = 0;
-        let cmd: u8 = 0;
-        let status: u8 = 0x80;
-        let mut cfi_table: [u8; 0x52] = [0; 0x52];
-        let counter: u32 = 0;
-        let mut write_block_size: u32;
-        let blk_size = fd_blk.metadata().unwrap().len();
-        if blk_size < size {
+        let file_size = fd_blk.metadata().unwrap().len();
+        if file_size < size {
             bail!(
-                "PFlash requires {} bytes, given file provides {} bytes",
+                "Flash requires 0x{:X} bytes, given file provides 0x{:X} bytes",
                 size,
-                blk_size
+                file_size
             );
         }
 
@@ -103,11 +90,10 @@ impl PFlash {
         } else {
             bank_width / device_width
         };
+        let block_len_per_device: u32 = block_len / num_devices;
+        let device_len: u32 = block_len_per_device * blocks_per_device;
 
-        let blocks_per_device: u32 = nb_blocs;
-        let sector_len_per_device: u32 = sector_len / num_devices;
-        let device_len: u32 = sector_len_per_device * blocks_per_device;
-
+        let mut cfi_table: [u8; 0x52] = [0; 0x52];
         // Standard "QRY" string
         cfi_table[0x10] = b'Q';
         cfi_table[0x11] = b'R';
@@ -118,20 +104,10 @@ impl PFlash {
         // Primary extended table address (none)
         cfi_table[0x15] = 0x31;
         cfi_table[0x16] = 0x00;
-        // Alternate command set (none)
-        cfi_table[0x17] = 0x00;
-        cfi_table[0x18] = 0x00;
-        // Alternate extended table (none)
-        cfi_table[0x19] = 0x00;
-        cfi_table[0x1A] = 0x00;
         // Vcc min
         cfi_table[0x1B] = 0x45;
         // Vcc max
         cfi_table[0x1C] = 0x55;
-        // Vpp min (no Vpp pin)
-        cfi_table[0x1D] = 0x00;
-        // Vpp max (no Vpp pin)
-        cfi_table[0x1E] = 0x00;
         // Reserved
         cfi_table[0x1F] = 0x07;
         // Timeout for min size buffer write
@@ -155,20 +131,20 @@ impl PFlash {
         cfi_table[0x29] = 0x00;
         // Max number of bytes in multi-bytes write
         cfi_table[0x2A] = if bank_width == 1 { 0x08 } else { 0x0B };
+        cfi_table[0x2B] = 0x00;
 
-        write_block_size = 1 << cfi_table[0x2A];
+        let mut write_blk_size: u32 = 1 << cfi_table[0x2A];
         if num_devices > 1 {
-            write_block_size *= num_devices;
+            write_blk_size *= num_devices;
         }
 
-        cfi_table[0x2B] = 0x00;
         // Number of erase block regions (uniform)
         cfi_table[0x2C] = 0x01;
         // Erase block region 1
         cfi_table[0x2D] = (blocks_per_device - 1) as u8;
         cfi_table[0x2E] = ((blocks_per_device - 1) >> 8) as u8;
-        cfi_table[0x2F] = (sector_len_per_device >> 8) as u8;
-        cfi_table[0x30] = (sector_len_per_device >> 16) as u8;
+        cfi_table[0x2F] = (block_len_per_device >> 8) as u8;
+        cfi_table[0x30] = (block_len_per_device >> 16) as u8;
 
         // Extended
         cfi_table[0x31] = b'P';
@@ -183,22 +159,20 @@ impl PFlash {
 
         Ok(PFlash {
             fd_blk,
-            sector_len,
+            block_len,
             bank_width,
-            ident0: 0x89,
-            ident1: 0x18,
-            ident2: 0x00,
-            ident3: 0x00,
-            blk_num: nb_blocs,
+            // device id for Intel flash.
+            ident: [0x89, 0x18, 0x00, 0x00],
+            blk_num: blocks_per_device,
             device_width,
-            max_device_width,
-            write_cycle,
+            max_device_width: device_width,
+            write_cycle: 0,
             read_only,
-            cmd,
-            status,
+            cmd: 0,
+            status: 0x80,
             cfi_table,
-            counter,
-            write_blk_size: write_block_size,
+            counter: 0,
+            write_blk_size,
             rom: None,
             res: SysRes::default(),
         })
@@ -209,22 +183,16 @@ impl PFlash {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> Result<Arc<Mutex<Self>>> {
+    ) -> Result<()> {
         self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| "Failed to allocate system resource for PFlash.")?;
 
         let dev = Arc::new(Mutex::new(self));
         let region_ops = sysbus.build_region_ops(&dev);
         let mem_mapping =
-            match HostMemMapping::new(GuestAddress(region_base), region_size, None, false, false) {
-                Ok(m) => m,
-                Err(e) => {
-                    bail!(
-                        "Failed to new HostMemMapping for PFlash {}.",
-                        e.display_chain()
-                    );
-                }
-            };
+            HostMemMapping::new(GuestAddress(region_base), region_size, None, false, false)
+                .chain_err(|| "Failed to create HostMemMapping for PFlash {}.")?;
+
         let mem_mapping = Arc::new(mem_mapping);
         let rom_region = Region::init_rom_device_region(mem_mapping, region_ops);
 
@@ -233,83 +201,68 @@ impl PFlash {
             .root()
             .add_subregion(rom_region.clone(), region_base)
             .chain_err(|| "Failed to attach PFlash to system bus")?;
+        dev.lock().unwrap().set_rom_mem(Arc::new(rom_region))?;
+        sysbus.devices.push(dev);
 
-        dev.lock().unwrap().set_mem(Some(Arc::new(rom_region)))?;
-        sysbus.devices.push(dev.clone());
-
-        Ok(dev)
+        Ok(())
     }
 
-    fn set_mem(&mut self, rom_region: Option<Arc<Region>>) -> Result<bool> {
-        let flash_size = self.blk_num * self.sector_len;
-        let blk_size = self.fd_blk.metadata().unwrap().len();
+    fn set_rom_mem(&mut self, rom_region: Arc<Region>) -> Result<()> {
+        let flash_size = self.blk_num * self.block_len;
+        let file_size = self.fd_blk.metadata().unwrap().len();
 
-        let mut blk_content = vec![0_u8; blk_size as usize];
+        let mut file_content = vec![0_u8; file_size as usize];
         self.fd_blk
-            .read_exact(&mut blk_content)
+            .read_exact(&mut file_content)
             .chain_err(|| "Failed to read fd_blk of Flash device")?;
 
-        let host_addr = rom_region.as_ref().unwrap().get_host_address().unwrap();
+        let host_addr = rom_region.get_host_address().unwrap();
 
         // Safe because host_addr of the region is allocated and flash_size is limited.
         let mut dst =
             unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, flash_size as usize) };
-        dst.write_all(&blk_content)
+        dst.write_all(&file_content)
             .chain_err(|| ErrorKind::WritePFlashRomErr)?;
-        self.rom = rom_region;
-        Ok(true)
+        self.rom = Some(rom_region);
+
+        Ok(())
     }
 
-    fn set_read_only_mode(&mut self) {
-        if self
-            .rom
+    fn set_read_array_mode(&mut self, is_illegal_cmd: bool) -> Result<()> {
+        self.rom
             .as_ref()
             .unwrap()
             .set_rom_device_romd(true)
-            .is_err()
-        {
-            error!("Failed to set to read only mode.");
-        }
-        self.write_cycle = 0;
-        self.cmd = 0x00;
-    }
-
-    fn set_read_only_mode_with_error(&mut self) {
-        if self
-            .rom
-            .as_ref()
-            .unwrap()
-            .set_rom_device_romd(true)
-            .is_err()
-        {
-            error!("Failed to set pflash device to read only mode.");
-        }
-
+            .chain_err(|| "Failed to set to read only mode.")?;
         self.write_cycle = 0;
         self.cmd = 0x00;
 
-        error!(
-            "Unimplemented flash cmd sequence (write cycle: 0x{:X}, cmd: 0x{:X})",
-            self.write_cycle, self.cmd
-        );
+        if is_illegal_cmd {
+            warn!(
+                "Unimplemented flash cmd sequence (write cycle: 0x{:X}, cmd: 0x{:X})",
+                self.write_cycle, self.cmd
+            );
+        }
+
+        Ok(())
     }
 
     // Query device id according to the bank width of flash device
     fn query_devid(&mut self, offset: u64) -> Result<u32> {
         let mut resp: u32;
-        let boff: u64 = offset
+        let index: u64 = offset
             >> (self.bank_width.trailing_zeros() + self.max_device_width.trailing_zeros()
                 - self.device_width.trailing_zeros());
 
         // Mask off upper bits which may be used in to query block
         // or sector lock status at other addresses.
         // Offsets 2/3 are block lock status which is not emulated.
-        match boff & 0xFF {
+        match index & 0xFF {
             0 => {
-                resp = self.ident0;
+                resp = self.ident[0];
             }
             1 => {
-                resp = self.ident1;
+                resp = self.ident[1];
             }
             _ => {
                 bail!("Device ID 2 and 3 are not supported");
@@ -331,16 +284,16 @@ impl PFlash {
     // Query CFI according to the bank width of the flash device
     fn query_cfi(&mut self, offset: u64) -> Result<u32> {
         let mut resp: u32;
-        // Adjust offset to match expected device-width addressing
-        let boff: u64 = offset
+        // Adjust index for expected device-width addressing.
+        let index: u64 = offset
             >> (self.bank_width.trailing_zeros() + self.max_device_width.trailing_zeros()
                 - self.device_width.trailing_zeros());
 
-        if boff >= self.cfi_table.len() as u64 {
-            return Err(ErrorKind::PFlashIndexOverflow(boff, self.cfi_table.len()).into());
+        if index >= self.cfi_table.len() as u64 {
+            return Err(ErrorKind::PFlashIndexOverflow(index, self.cfi_table.len()).into());
         }
 
-        resp = self.cfi_table[boff as usize].into();
+        resp = self.cfi_table[index as usize].into();
         if self.device_width != self.max_device_width {
             // The only case currently supported is x8 mode for a wider part
             if self.device_width != 1 || self.bank_width > 4 {
@@ -350,7 +303,7 @@ impl PFlash {
             }
             // CFI query data is repeated for wide devices used in x8 mode
             for i in 1..self.max_device_width {
-                resp = deposit_u32(resp, 8 * i as u32, 8, self.cfi_table[boff as usize] as u32)
+                resp = deposit_u32(resp, 8 * i as u32, 8, self.cfi_table[index as usize] as u32)
                     .ok_or("Failed to deposit bits to u32")?;
             }
         }
@@ -368,7 +321,7 @@ impl PFlash {
     }
 
     // Update content of flash device to fd_blk in the disk
-    fn content_update(&mut self, offset: u64, size: u32) -> Result<()> {
+    fn update_content(&mut self, offset: u64, size: u32) -> Result<()> {
         // After realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
         if offset + size as u64 > mr.size() as u64 {
@@ -392,7 +345,7 @@ impl PFlash {
         Ok(())
     }
 
-    fn read_data(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> Result<bool> {
+    fn read_data(&mut self, data: &mut [u8], offset: u64) -> Result<()> {
         // After realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
         if offset + data.len() as u64 > mr.size() as u64 {
@@ -407,10 +360,10 @@ impl PFlash {
             .write_all(&src)
             .chain_err(|| "Failed to read data from Flash Rom")?;
 
-        Ok(true)
+        Ok(())
     }
 
-    fn write_data(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> Result<bool> {
+    fn write_data(&mut self, data: &[u8], offset: u64) -> Result<()> {
         // After realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
         if offset + data.len() as u64 > mr.size() as u64 {
@@ -425,21 +378,312 @@ impl PFlash {
         };
         dst.write_all(&data)
             .chain_err(|| "Failed to write data to Flash Rom")?;
-        Ok(true)
+
+        Ok(())
+    }
+
+    fn handle_write_first_pass(&mut self, cmd: u8, offset: u64) -> bool {
+        match cmd {
+            // 0xf0 cmd is match for AMD flash.
+            0x00 | 0xf0 | 0xff => {
+                if let Err(e) = self.set_read_array_mode(false) {
+                    error!(
+                        "Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {}",
+                        cmd,
+                        e.display_chain()
+                    );
+                    return false;
+                }
+                return true;
+            }
+            0x10 | 0x40 => {
+                debug!("PFlash write: Single Byte Program");
+            }
+            0x20 => {
+                // Block erase
+                let offset_mask = offset & !(self.block_len as u64 - 1);
+                if !self.read_only {
+                    let all_one = vec![0xff_u8; self.block_len as usize];
+                    if let Err(e) = self.write_data(all_one.as_slice(), offset_mask) {
+                        error!("Failed to write pflash device: {}.", e.display_chain());
+                    }
+
+                    if let Err(e) = self.update_content(offset_mask, self.block_len) {
+                        error!(
+                            "Failed to update content for pflash device: {}.",
+                            e.display_chain()
+                        );
+                    }
+                } else {
+                    // Block erase error
+                    self.status |= 0x20;
+                }
+                // Ready!
+                self.status |= 0x80;
+            }
+            0x50 => {
+                // Clear status bits
+                self.status = 0x0;
+                if let Err(e) = self.set_read_array_mode(false) {
+                    error!(
+                        "Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {}",
+                        cmd,
+                        e.display_chain()
+                    );
+                    return false;
+                }
+                return true;
+            }
+            0x60 => {
+                debug!("PFlash write: Block unlock");
+            }
+            0x70 | 0x90 => {
+                // 0x70: Status Register, 0x90: Read Device ID
+                self.cmd = cmd;
+                return true;
+            }
+            0x98 => {
+                debug!("PFlash write: CFI query");
+            }
+            0xe8 => {
+                // Write to buffer
+                self.status |= 0x80;
+            }
+            _ => {
+                if let Err(e) = self.set_read_array_mode(true) {
+                    error!(
+                        "Failed to set read array mode, write cycle 0, cmd 0x{:x}, error is {}",
+                        cmd,
+                        e.display_chain()
+                    );
+                    return false;
+                }
+                return true;
+            }
+        }
+        self.write_cycle += 1;
+        self.cmd = cmd;
+        true
+    }
+
+    fn handle_write_second_pass(
+        &mut self,
+        cmd: u8,
+        offset: u64,
+        data: &[u8],
+        data_len: u8,
+        mut value: u32,
+    ) -> bool {
+        match self.cmd {
+            0x10 | 0x40 => {
+                // Write single byte program
+                if !self.read_only {
+                    if let Err(e) = self.write_data(&data, offset) {
+                        error!("Failed to write to pflash device: {}.", e.display_chain());
+                    }
+
+                    if let Err(e) = self.update_content(offset, data_len.into()) {
+                        error!(
+                            "Failed to update content for pflash device: {}.",
+                            e.display_chain()
+                        );
+                    }
+                } else {
+                    // Programming error
+                    self.status |= 0x10;
+                }
+                self.status |= 0x80;
+                self.write_cycle = 0;
+            }
+            0x20 | 0x28 => {
+                // Block erase
+                if cmd == 0xd0 {
+                    self.write_cycle = 0;
+                    self.status |= 0x80;
+                } else if cmd == 0xff {
+                    if let Err(e) = self.set_read_array_mode(false) {
+                        error!(
+                            "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                            cmd,
+                            e.display_chain()
+                        );
+                        return false;
+                    }
+                    return true;
+                } else {
+                    if let Err(e) = self.set_read_array_mode(true) {
+                        error!(
+                            "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                            self.cmd,
+                            e.display_chain()
+                        );
+                        return false;
+                    }
+                    return true;
+                }
+            }
+            0xe8 => {
+                // If device width is not specified, mask writeblock size based on bank width
+                let length: u32 = if self.device_width != 0 {
+                    self.device_width * 8
+                } else {
+                    self.bank_width * 8
+                };
+                value = if let Some(v) = extract_u32(value, 0, length) {
+                    v
+                } else {
+                    error!("Failed to extract bits from u32 value");
+                    return false;
+                };
+                self.counter = value;
+                self.write_cycle += 1;
+            }
+            0x60 => {
+                if (cmd == 0xd0) || (cmd == 0x01) {
+                    self.write_cycle = 0;
+                    self.status |= 0x80;
+                } else if cmd == 0xff {
+                    if let Err(e) = self.set_read_array_mode(false) {
+                        error!(
+                            "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                            self.cmd,
+                            e.display_chain()
+                        );
+                        return false;
+                    }
+                    return true;
+                } else {
+                    if let Err(e) = self.set_read_array_mode(true) {
+                        error!(
+                            "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                            self.cmd,
+                            e.display_chain()
+                        );
+                        return false;
+                    }
+                    return true;
+                }
+            }
+            0x98 => {
+                if cmd == 0xff {
+                    if let Err(e) = self.set_read_array_mode(false) {
+                        error!(
+                            "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                            self.cmd,
+                            e.display_chain()
+                        );
+                        return false;
+                    }
+                    return true;
+                }
+            }
+            _ => {
+                if let Err(e) = self.set_read_array_mode(true) {
+                    error!(
+                        "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                        self.cmd,
+                        e.display_chain()
+                    );
+                    return false;
+                }
+                return true;
+            }
+        }
+        true
+    }
+
+    fn handle_write_third_pass(&mut self, offset: u64, data: &[u8]) -> bool {
+        match self.cmd {
+            0xe8 => {
+                // Block write
+                if !self.read_only {
+                    if let Err(e) = self.write_data(&data, offset) {
+                        error!("Failed to write to pflash device: {}.", e.display_chain());
+                    }
+                } else {
+                    self.status |= 0x10;
+                }
+                self.status |= 0x80;
+                if self.counter == 0 {
+                    let mask: u64 = !(self.write_blk_size as u64 - 1);
+                    self.write_cycle += 1;
+                    if !self.read_only {
+                        // Flush the entire write buffer onto backing storage.
+                        if let Err(e) = self.update_content(offset & mask, self.write_blk_size) {
+                            error!(
+                                "Failed to update content for pflash device: {}.",
+                                e.display_chain()
+                            );
+                        }
+                    } else {
+                        self.status |= 0x10;
+                    }
+                } else {
+                    self.counter -= 1;
+                }
+            }
+            _ => {
+                if let Err(e) = self.set_read_array_mode(true) {
+                    error!(
+                        "Failed to set read array mode, write cycle 2, cmd 0x{:x}, error is {}",
+                        self.cmd,
+                        e.display_chain()
+                    );
+                    return false;
+                }
+                return true;
+            }
+        }
+        true
+    }
+
+    fn handle_write_fourth_pass(&mut self, cmd: u8) -> bool {
+        match self.cmd {
+            // Confirm mode
+            0xe8 => {
+                if cmd == 0xd0 {
+                    self.write_cycle = 0;
+                    self.status |= 0x80;
+                } else {
+                    if let Err(e) = self.set_read_array_mode(false) {
+                        error!(
+                            "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                            self.cmd,
+                            e.display_chain()
+                        );
+                        return false;
+                    }
+                    return true;
+                }
+            }
+            _ => {
+                if let Err(e) = self.set_read_array_mode(true) {
+                    error!(
+                        "Failed to set read array mode, write cycle 1, cmd 0x{:x}, error is {}",
+                        self.cmd,
+                        e.display_chain()
+                    );
+                    return false;
+                }
+                return true;
+            }
+        }
+        true
     }
 }
 
 impl SysBusDevOps for PFlash {
-    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
-        let mut boff: u64;
+    fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        let mut index: u64;
         let mut ret: u32 = 0;
-        let width: u32 = data.len() as u32;
+        let data_len: u32 = data.len() as u32;
 
         match self.cmd {
             0x00 => {
-                if self.read_data(data, base, offset).is_err() {
-                    error!("Faild to read data from pflash.");
+                if self.read_data(data, offset).is_err() {
+                    error!("Failed to read data from pflash.");
                 }
+                return true;
             }
             0x10 | 0x20 | 0x28 | 0x40 | 0x50 | 0x60 | 0x70 | 0xe8 => {
                 // 0x10: Single byte program
@@ -451,36 +695,36 @@ impl SysBusDevOps for PFlash {
                 // 0x70: Status Register
                 // 0xe8: Write block
                 ret = self.status as u32;
-                if self.device_width != 0 && width > self.device_width {
+                if self.device_width != 0 && data_len > self.device_width {
                     let mut shift: u32 = self.device_width * 8;
-                    while shift + self.device_width * 8 <= width * 8 {
+                    while shift + self.device_width * 8 <= data_len * 8 {
                         ret |= (self.status as u32) << shift;
                         shift += self.device_width * 8;
                     }
-                } else if self.device_width == 0 && width > 2 {
+                } else if self.device_width == 0 && data_len > 2 {
                     ret |= (self.status as u32) << 16;
                 }
             }
             0x90 => {
                 if self.device_width == 0 {
                     // Preserve old behavior if device width not specified
-                    boff = offset & 0xFF;
+                    index = offset & 0xFF;
                     if self.bank_width == 2 {
-                        boff >>= 1;
+                        index >>= 1;
                     } else if self.bank_width == 4 {
-                        boff >>= 2;
+                        index >>= 2;
                     }
 
-                    match boff {
-                        0 => ret = self.ident0 << 8 | self.ident1,
-                        1 => ret = self.ident2 << 8 | self.ident3,
+                    match index {
+                        0 => ret = self.ident[0] << 8 | self.ident[1],
+                        1 => ret = self.ident[2] << 8 | self.ident[3],
                         _ => ret = 0,
                     }
                 } else {
                     // If we have a read larger than the bank_width, combine multiple
                     // manufacturer/device ID queries into a single response.
                     let mut i: u32 = 0;
-                    while i < width {
+                    while i < data_len {
                         match self.query_devid(offset + (i * self.bank_width) as u64) {
                             Err(e) => {
                                 error!("Failed to query devid {}.", e.display_chain());
@@ -493,7 +737,7 @@ impl SysBusDevOps for PFlash {
                                     ret = v;
                                 } else {
                                     error!(
-                                        "Failed to fill result of query_cfi to return u32 value"
+                                        "Failed to fill result of query_devid to return u32 value"
                                     );
                                     break;
                                 }
@@ -507,24 +751,24 @@ impl SysBusDevOps for PFlash {
             0x98 => {
                 // Query mode
                 if self.device_width == 0 {
-                    boff = offset & 0xFF;
+                    index = offset & 0xFF;
                     if self.bank_width == 2 {
-                        boff >>= 1;
+                        index >>= 1;
                     } else if self.bank_width == 4 {
-                        boff >>= 2;
+                        index >>= 2;
                     }
 
-                    if boff < self.cfi_table.len() as u64 {
-                        ret = self.cfi_table[boff as usize].into();
+                    if index < self.cfi_table.len() as u64 {
+                        ret = self.cfi_table[index as usize].into();
                     } else {
                         ret = 0;
                     }
                 } else {
                     let mut i: u32 = 0;
-                    while i < width {
+                    while i < data_len {
                         match self.query_cfi(offset + (i * self.bank_width) as u64) {
-                            Err(_e) => {
-                                error!("Failed to query devid.");
+                            Err(e) => {
+                                error!("Failed to query devid, {}.", e);
                                 break;
                             }
                             Ok(fieldval) => {
@@ -550,7 +794,7 @@ impl SysBusDevOps for PFlash {
                 error!("PFlash read: unknown command state 0x{:X}", self.cmd);
                 self.write_cycle = 0;
                 self.cmd = 0x00;
-                if let Err(e) = self.read_data(data, base, offset) {
+                if let Err(e) = self.read_data(data, offset) {
                     error!("Failed to read data from pflash: {}.", e.display_chain());
                 }
             }
@@ -569,238 +813,50 @@ impl SysBusDevOps for PFlash {
         true
     }
 
-    fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool {
-        let mut value: u32 = LittleEndian::read_u32(data);
+    fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
+        let value: u32 = match data.len() {
+            1 => data[0] as u32,
+            2 => LittleEndian::read_u16(data).into(),
+            4 => LittleEndian::read_u32(data),
+            n => {
+                error!("Invalid data length {}", n);
+                return false;
+            }
+        };
         let cmd: u8 = data[0];
-        let width: u8 = data.len() as u8;
+        let data_len: u8 = data.len() as u8;
 
-        if self.write_cycle == 0 {
-            // Set the device in I/O access mode
-            if self
+        if self.write_cycle == 0
+            && self
                 .rom
                 .as_ref()
                 .unwrap()
                 .set_rom_device_romd(false)
                 .is_err()
-            {
-                error!("Failed flash to set device to read only mode.");
-            }
+        {
+            error!("Failed flash to set device to read only mode.");
         }
 
         match self.write_cycle {
-            0 => {
-                // read mode
-                match cmd {
-                    0x00 => {
-                        // This model reset value for READ_ARRAY (not CFI)
-                        self.set_read_only_mode();
-                        return true;
-                    }
-                    0x10 | 0x40 => {
-                        debug!("PFlash write: Single Byte Program");
-                    }
-                    0x20 => {
-                        // Block erase
-                        let offset_temp = offset & !(self.sector_len as u64 - 1);
-                        if self.read_only == 0 {
-                            let all_one = vec![0xff_u8; self.sector_len as usize];
-                            if let Err(e) = self.write_data(all_one.as_slice(), base, offset_temp) {
-                                error!("Failed to write pflash device: {}.", e.display_chain());
-                            }
-
-                            if let Err(e) = self.content_update(offset_temp, self.block_len) {
-                                error!(
-                                    "Failed to update content for pflash device: {}.",
-                                    e.display_chain()
-                                );
-                            }
-                        } else {
-                            // Block erase error
-                            self.status |= 0x20;
-                        }
-                        // Ready!
-                        self.status |= 0x80;
-                    }
-                    0x50 => {
-                        // Clear status bits
-                        self.status = 0x0;
-                        self.set_read_only_mode();
-                        return true;
-                    }
-                    0x60 => {
-                        debug!("PFlash write: Block unlock");
-                    }
-                    0x70 | 0x90 => {
-                        // 0x70: Status Register, 0x90: Read Device ID
-                        self.cmd = cmd;
-                        return true;
-                    }
-                    0x98 => {
-                        debug!("PFlash write: CFI query");
-                    }
-                    0xe8 => {
-                        // Write to buffer
-                        self.status |= 0x80;
-                    }
-                    0xf0 | 0xff => {
-                        // 0xf0 cmd is probe for AMD flash
-                        self.set_read_only_mode();
-                        return true;
-                    }
-                    _ => {
-                        self.set_read_only_mode_with_error();
-                        return true;
-                    }
-                }
-                self.write_cycle += 1;
-                self.cmd = cmd;
-            }
-            1 => {
-                match self.cmd {
-                    0x10 | 0x40 => {
-                        // Write single byte program
-                        if self.read_only == 0 {
-                            if let Err(e) = self.write_data(&data, base, offset) {
-                                error!("Failed to write to pflash device: {}.", e.display_chain());
-                            }
-
-                            if let Err(e) = self.content_update(offset, width.into()) {
-                                error!(
-                                    "Failed to update content for pflash device: {}.",
-                                    e.display_chain()
-                                );
-                            }
-                        } else {
-                            // Programming error
-                            self.status |= 0x10;
-                        }
-                        self.status |= 0x80;
-                        self.write_cycle = 0;
-                    }
-                    0x20 | 0x28 => {
-                        // Block erase
-                        if cmd == 0xd0 {
-                            self.write_cycle = 0;
-                            self.status |= 0x80;
-                        } else if cmd == 0xff {
-                            self.set_read_only_mode();
-                            return true;
-                        } else {
-                            self.set_read_only_mode_with_error();
-                            return true;
-                        }
-                    }
-                    0xe8 => {
-                        // If device width is not specified, mask writeblock size based on bank width
-                        let length: u32 = if self.device_width != 0 {
-                            self.device_width * 8
-                        } else {
-                            self.bank_width * 8
-                        };
-                        value = if let Some(v) = extract_u32(value, 0, length) {
-                            v
-                        } else {
-                            error!("Failed to extract bits from u32 value");
-                            return false;
-                        };
-                        self.counter = value;
-                        self.write_cycle += 1;
-                    }
-                    0x60 => {
-                        if (cmd == 0xd0) || (cmd == 0x01) {
-                            self.write_cycle = 0;
-                            self.status |= 0x80;
-                        } else if cmd == 0xff {
-                            self.set_read_only_mode_with_error();
-                            return true;
-                        } else {
-                            debug!("PFlash write: Unknown (un)locking command");
-                            self.set_read_only_mode();
-                            return true;
-                        }
-                    }
-                    0x98 => {
-                        if cmd == 0xff {
-                            self.set_read_only_mode();
-                            return true;
-                        }
-                    }
-                    _ => {
-                        self.set_read_only_mode_with_error();
-                        return true;
-                    }
-                }
-            }
-            2 => {
-                match self.cmd {
-                    0xe8 => {
-                        // Block write
-                        if self.read_only == 0 {
-                            if let Err(e) = self.write_data(&data, base, offset) {
-                                error!("Failed to write to pflash device: {}.", e.display_chain());
-                            }
-                        } else {
-                            self.status |= 0x10;
-                        }
-                        self.status |= 0x80;
-                        if self.counter == 0 {
-                            let mut mask: u64 = self.write_blk_size as u64 - 1;
-                            mask = !mask;
-                            self.write_cycle += 1;
-                            if self.read_only == 0 {
-                                // Flush the entire write buffer onto backing storage.
-
-                                if let Err(e) =
-                                    self.content_update(offset & mask, self.write_blk_size)
-                                {
-                                    error!(
-                                        "Failed to update content for pflash device: {}.",
-                                        e.display_chain()
-                                    );
-                                }
-                            } else {
-                                self.status |= 0x10;
-                            }
-                        }
-                        if self.counter != 0 {
-                            self.counter -= 1;
-                        }
-                    }
-                    _ => {
-                        self.set_read_only_mode_with_error();
-                        return true;
-                    }
-                }
-            }
-            3 => {
-                // Confirm mode
-                match self.cmd {
-                    0xe8 => {
-                        if cmd == 0xd0 {
-                            self.write_cycle = 0;
-                            self.status |= 0x80;
-                        } else {
-                            self.set_read_only_mode();
-                            return true;
-                        }
-                    }
-                    _ => {
-                        self.set_read_only_mode_with_error();
-                        return true;
-                    }
-                }
-            }
+            0 => self.handle_write_first_pass(cmd, offset),
+            1 => self.handle_write_second_pass(cmd, offset, data, data_len, value),
+            2 => self.handle_write_third_pass(offset, data),
+            3 => self.handle_write_fourth_pass(cmd),
             _ => {
                 // Should never happen
                 error!(
                     "PFlash write: invalid write state: write cycle {}",
                     self.write_cycle
                 );
-                self.set_read_only_mode();
-                return false;
+                if let Err(e) = self.set_read_array_mode(false) {
+                    error!(
+                        "Failed to set pflash to read array mode, error is {}",
+                        e.display_chain()
+                    );
+                }
+                false
             }
         }
-        true
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
