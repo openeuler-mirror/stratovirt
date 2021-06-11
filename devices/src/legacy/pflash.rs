@@ -245,18 +245,17 @@ impl PFlash {
         let blk_size = self.fd_blk.metadata().unwrap().len();
 
         let mut blk_content = vec![0_u8; blk_size as usize];
-        self.fd_blk.read_exact(&mut blk_content)?;
+        self.fd_blk
+            .read_exact(&mut blk_content)
+            .chain_err(|| "Failed to read fd_blk of Flash device")?;
 
-        let host_addr = rom_region
-            .as_ref()
-            .unwrap()
-            .get_host_address()
-            .ok_or("Failed to get host address")?;
-        // Safe because host_addr of the region is allocated and flash_size is limited
+        let host_addr = rom_region.as_ref().unwrap().get_host_address().unwrap();
+
+        // Safe because host_addr of the region is allocated and flash_size is limited.
         let mut dst =
             unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, flash_size as usize) };
-        dst.write_all(&blk_content)?;
-
+        dst.write_all(&blk_content)
+            .chain_err(|| ErrorKind::WritePFlashRomErr)?;
         self.rom = rom_region;
         Ok(true)
     }
@@ -313,7 +312,7 @@ impl PFlash {
                 resp = self.ident1;
             }
             _ => {
-                return Ok(0);
+                bail!("Device ID 2 and 3 are not supported");
             }
         }
         // Replicate responses for each device in bank.
@@ -338,15 +337,16 @@ impl PFlash {
                 - self.device_width.trailing_zeros());
 
         if boff >= self.cfi_table.len() as u64 {
-            return Ok(0);
+            return Err(ErrorKind::PFlashIndexOverflow(boff, self.cfi_table.len()).into());
         }
 
         resp = self.cfi_table[boff as usize].into();
         if self.device_width != self.max_device_width {
             // The only case currently supported is x8 mode for a wider part
             if self.device_width != 1 || self.bank_width > 4 {
-                error!("Unsupported device configuration");
-                return Ok(0);
+                return Err(
+                    ErrorKind::PFlashDevConfigErr(self.device_width, self.bank_width).into(),
+                );
             }
             // CFI query data is repeated for wide devices used in x8 mode
             for i in 1..self.max_device_width {
@@ -369,75 +369,62 @@ impl PFlash {
 
     // Update content of flash device to fd_blk in the disk
     fn content_update(&mut self, offset: u64, size: u32) -> Result<()> {
-        if offset + size as u64 >= (self.blk_num * self.sector_len) as u64 {
-            return Err(ErrorKind::FlashWriteOverflow.into());
+        // After realize function, rom isn't none.
+        let mr = self.rom.as_ref().unwrap();
+        if offset + size as u64 > mr.size() as u64 {
+            return Err(
+                ErrorKind::PFlashWriteOverflow(mr.size() as u64, offset, size as u64).into(),
+            );
         }
 
-        let host_addr = self
-            .rom
-            .as_ref()
-            .unwrap()
-            .get_host_address()
-            .ok_or("Failed to get host address.")?;
+        let host_addr = self.rom.as_ref().unwrap().get_host_address().unwrap();
         // Safe because host_addr of the region is allocated and sanity has been checked
         let src = unsafe {
             std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, size as usize)
         };
 
-        self.fd_blk.seek(SeekFrom::Start(offset))?;
-        self.fd_blk.write_all(src)?;
+        self.fd_blk
+            .seek(SeekFrom::Start(offset))
+            .chain_err(|| ErrorKind::PFlashFileSeekErr(offset))?;
+        self.fd_blk
+            .write_all(src)
+            .chain_err(|| "Failed to update content of Flash Rom to fd_blk")?;
         Ok(())
     }
 
     fn read_data(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> Result<bool> {
-        if offset >= data.len() as u64 {
-            return Err(ErrorKind::FlashReadOverflow.into());
+        // After realize function, rom isn't none.
+        let mr = self.rom.as_ref().unwrap();
+        if offset + data.len() as u64 > mr.size() as u64 {
+            return Err(ErrorKind::PFlashReadOverflow(mr.size(), offset, data.len() as u64).into());
         }
+        let host_addr = mr.get_host_address().unwrap();
+        // Safe because host_addr of the region is local allocated and sanity has been checked
+        let src = unsafe {
+            std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len() as usize)
+        };
+        data.as_mut()
+            .write_all(&src)
+            .chain_err(|| "Failed to read data from Flash Rom")?;
 
-        match &self.rom {
-            Some(mr) => {
-                if let Some(host_addr) = mr.get_host_address() {
-                    // Safe because host_addr of the region is local allocated and sanity has been checked
-                    let src = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            (host_addr + offset) as *mut u8,
-                            data.len() as usize,
-                        )
-                    };
-                    data.as_mut().write_all(&src)?;
-                }
-            }
-            None => {
-                error!("No memory region available for read");
-                return Ok(false);
-            }
-        }
         Ok(true)
     }
 
     fn write_data(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> Result<bool> {
-        if offset >= data.len() as u64 {
-            return Err(ErrorKind::FlashWriteOverflow.into());
+        // After realize function, rom isn't none.
+        let mr = self.rom.as_ref().unwrap();
+        if offset + data.len() as u64 > mr.size() as u64 {
+            return Err(
+                ErrorKind::PFlashWriteOverflow(mr.size(), offset, data.len() as u64).into(),
+            );
         }
-
-        match &self.rom {
-            Some(mr) => {
-                if let Some(host_addr) = mr.get_host_address() {
-                    // Safe because host_addr of the region is local allocated and sanity has been checked
-                    let mut dst = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            (host_addr + offset) as *mut u8,
-                            data.len() as usize,
-                        )
-                    };
-                    dst.write_all(&data)?;
-                }
-            }
-            None => {
-                error!("No memory region available for write");
-                return Ok(false);
-            }
-        }
+        let host_addr = mr.get_host_address().unwrap();
+        // Safe because host_addr of the region is local allocated and sanity has been checked
+        let mut dst = unsafe {
+            std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len() as usize)
+        };
+        dst.write_all(&data)
+            .chain_err(|| "Failed to write data to Flash Rom")?;
         Ok(true)
     }
 }
@@ -563,8 +550,8 @@ impl SysBusDevOps for PFlash {
                 error!("PFlash read: unknown command state 0x{:X}", self.cmd);
                 self.write_cycle = 0;
                 self.cmd = 0x00;
-                if self.read_data(data, base, offset).is_err() {
-                    error!("Faild to read data from pflash.");
+                if let Err(e) = self.read_data(data, base, offset) {
+                    error!("Failed to read data from pflash: {}.", e.display_chain());
                 }
             }
         }
@@ -617,15 +604,15 @@ impl SysBusDevOps for PFlash {
                         let offset_temp = offset & !(self.sector_len as u64 - 1);
                         if self.read_only == 0 {
                             let all_one = vec![0xff_u8; self.sector_len as usize];
-                            if self
-                                .write_data(all_one.as_slice(), base, offset_temp)
-                                .is_err()
-                            {
-                                error!("Failed to write pflash device.");
+                            if let Err(e) = self.write_data(all_one.as_slice(), base, offset_temp) {
+                                error!("Failed to write pflash device: {}.", e.display_chain());
                             }
 
-                            if self.content_update(offset_temp, self.sector_len).is_err() {
-                                error!("Failed to update content for pflash device.");
+                            if let Err(e) = self.content_update(offset_temp, self.block_len) {
+                                error!(
+                                    "Failed to update content for pflash device: {}.",
+                                    e.display_chain()
+                                );
                             }
                         } else {
                             // Block erase error
@@ -673,12 +660,15 @@ impl SysBusDevOps for PFlash {
                     0x10 | 0x40 => {
                         // Write single byte program
                         if self.read_only == 0 {
-                            if self.write_data(&data, base, offset).is_err() {
-                                error!("Failed to write to pflash device.");
+                            if let Err(e) = self.write_data(&data, base, offset) {
+                                error!("Failed to write to pflash device: {}.", e.display_chain());
                             }
 
-                            if self.content_update(offset, width.into()).is_err() {
-                                error!("Failed to update content for pflash device.");
+                            if let Err(e) = self.content_update(offset, width.into()) {
+                                error!(
+                                    "Failed to update content for pflash device: {}.",
+                                    e.display_chain()
+                                );
                             }
                         } else {
                             // Programming error
@@ -746,8 +736,8 @@ impl SysBusDevOps for PFlash {
                     0xe8 => {
                         // Block write
                         if self.read_only == 0 {
-                            if self.write_data(&data, base, offset).is_err() {
-                                error!("Failed to write to plfash device.");
+                            if let Err(e) = self.write_data(&data, base, offset) {
+                                error!("Failed to write to pflash device: {}.", e.display_chain());
                             }
                         } else {
                             self.status |= 0x10;
@@ -760,11 +750,13 @@ impl SysBusDevOps for PFlash {
                             if self.read_only == 0 {
                                 // Flush the entire write buffer onto backing storage.
 
-                                if self
-                                    .content_update(offset & mask, self.write_blk_size)
-                                    .is_err()
+                                if let Err(e) =
+                                    self.content_update(offset & mask, self.write_blk_size)
                                 {
-                                    error!("Failed to update content for pflash device.");
+                                    error!(
+                                        "Failed to update content for pflash device: {}.",
+                                        e.display_chain()
+                                    );
                                 }
                             } else {
                                 self.status |= 0x10;
