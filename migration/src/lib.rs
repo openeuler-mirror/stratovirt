@@ -23,10 +23,9 @@ extern crate lazy_static;
 extern crate migration_derive;
 
 mod device_state;
-#[allow(dead_code)]
 mod header;
-#[allow(dead_code)]
 mod manager;
+mod snapshot;
 mod status;
 
 pub use device_state::{DeviceStateDesc, FieldDesc, StateTransfer};
@@ -40,6 +39,7 @@ pub mod errors {
         foreign_links {
             Io(std::io::Error);
             Ioctl(kvm_ioctls::Error);
+            Json(serde_json::Error);
         }
         errors {
             VersionNotFit(compat_version: u32, current_version: u32) {
@@ -65,6 +65,9 @@ pub mod errors {
             }
             RestoreVmMemoryErr(e: String) {
                 display("Failed to restore vm memory: {}", e)
+            }
+            InvalidSnapshotPath {
+                display("Invalid snapshot path for restoring snapshot")
             }
         }
     }

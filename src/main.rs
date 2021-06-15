@@ -32,7 +32,7 @@ use machine_manager::{
     temp_cleaner::TempCleaner,
 };
 use util::loop_context::EventNotifierHelper;
-use util::unix::limit_permission;
+use util::unix::{limit_permission, parse_uri, UnixPath};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
 error_chain! {
@@ -151,7 +151,8 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             let vm = Arc::new(Mutex::new(
                 LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
             ));
-            MachineOps::realize(&vm, &vm_config).chain_err(|| "Failed to realize micro VM.")?;
+            MachineOps::realize(&vm, &vm_config, cmd_args.is_present("incoming"))
+                .chain_err(|| "Failed to realize micro VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
@@ -159,11 +160,21 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             let vm = Arc::new(Mutex::new(
                 StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
             ));
-            MachineOps::realize(&vm, &vm_config).chain_err(|| "Failed to realize standard VM.")?;
+            MachineOps::realize(&vm, &vm_config, cmd_args.is_present("incoming"))
+                .chain_err(|| "Failed to realize standard VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
         };
+
+    if let Some(uri) = cmd_args.value_of("incoming") {
+        if let (UnixPath::File, path) = parse_uri(&uri)? {
+            migration::MigrationManager::restore_snapshot(&path)
+                .chain_err(|| "Failed to start with incoming migration.")?;
+        } else {
+            bail!("Unsupported incoming unix path type.")
+        }
+    }
 
     EventLoop::update_event(
         EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(api_socket))),

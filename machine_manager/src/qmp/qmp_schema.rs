@@ -151,6 +151,19 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<u32>,
     },
+    #[serde(rename = "migrate")]
+    migrate {
+        arguments: migrate,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
+    },
+    #[serde(rename = "query-migrate")]
+    query_migrate {
+        #[serde(default)]
+        arguments: query_migrate,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u32>,
+    },
 }
 
 /// qmp_capabilities
@@ -741,6 +754,50 @@ impl Default for RunState {
     fn default() -> Self {
         RunState::debug
     }
+}
+
+/// migrate
+///
+/// Migrates the current running guest to another VM or file.
+///
+/// # Arguments
+///
+/// * `uri` - the Uniform Resource Identifier of the destination VM or file.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct migrate {
+    #[serde(rename = "uri")]
+    pub uri: String,
+}
+
+impl Command for migrate {
+    const NAME: &'static str = "migrate";
+
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// query-migrate:
+///
+/// Returns information about current migration.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_migrate {}
+
+impl Command for query_migrate {
+    const NAME: &'static str = "query-migrate";
+    type Res = MigrationInfo;
+
+    fn back(self) -> MigrationInfo {
+        Default::default()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MigrationInfo {
+    #[serde(rename = "status", default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// getfd

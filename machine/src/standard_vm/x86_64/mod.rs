@@ -38,7 +38,7 @@ use machine_manager::config::{
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-    MachineInterface, MachineLifecycle,
+    MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::{PciDevOps, PciHost};
@@ -453,7 +453,7 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig) -> MachineResult<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
@@ -461,6 +461,7 @@ impl MachineOps for StdMachine {
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
+            is_migrate,
         )?;
 
         locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
@@ -478,7 +479,7 @@ impl MachineOps for StdMachine {
         locked_vm.add_devices(vm_config)?;
         let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let boot_config = locked_vm.load_boot_source(Some(&fwcfg))?;
+        let boot_config = Some(locked_vm.load_boot_source(Some(&fwcfg))?);
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
@@ -799,6 +800,7 @@ impl DeviceInterface for StdMachine {
     }
 }
 
+impl MigrateInterface for StdMachine {}
 impl MachineInterface for StdMachine {}
 impl MachineExternalInterface for StdMachine {}
 

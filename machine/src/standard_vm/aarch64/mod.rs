@@ -31,7 +31,7 @@ use machine_manager::config::{
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-    MachineInterface, MachineLifecycle,
+    MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::PciHost;
@@ -388,11 +388,15 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig) -> Result<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> Result<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
-        locked_vm.init_memory(&vm_config.machine_config.mem_config, &locked_vm.sys_mem)?;
+        locked_vm.init_memory(
+            &vm_config.machine_config.mem_config,
+            &locked_vm.sys_mem,
+            is_migrate,
+        )?;
 
         let vcpu_fds = {
             let mut fds = vec![];
@@ -416,7 +420,7 @@ impl MachineOps for StdMachine {
             .chain_err(|| "Failed to add devices")?;
 
         let fw_cfg = locked_vm.add_fwcfg_device()?;
-        let boot_config = locked_vm.load_boot_source(Some(&fw_cfg))?;
+        let boot_config = Some(locked_vm.load_boot_source(Some(&fw_cfg))?);
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
@@ -424,18 +428,20 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
-        locked_vm
-            .generate_fdt_node(&mut fdt)
-            .chain_err(|| ErrorKind::GenFdtErr)?;
-        locked_vm
-            .sys_mem
-            .write(
-                &mut fdt.as_slice(),
-                GuestAddress(boot_config.fdt_addr as u64),
-                fdt.len() as u64,
-            )
-            .chain_err(|| ErrorKind::WrtFdtErr(boot_config.fdt_addr, fdt.len()))?;
+        if let Some(boot_cfg) = boot_config {
+            let mut fdt = vec![0; device_tree::FDT_MAX_SIZE as usize];
+            locked_vm
+                .generate_fdt_node(&mut fdt)
+                .chain_err(|| ErrorKind::GenFdtErr)?;
+            locked_vm
+                .sys_mem
+                .write(
+                    &mut fdt.as_slice(),
+                    GuestAddress(boot_cfg.fdt_addr as u64),
+                    fdt.len() as u64,
+                )
+                .chain_err(|| ErrorKind::WrtFdtErr(boot_cfg.fdt_addr, fdt.len()))?;
+        }
 
         locked_vm.register_power_event(&locked_vm.power_button)?;
         Ok(())
@@ -638,6 +644,7 @@ impl DeviceInterface for StdMachine {
 }
 
 impl MachineInterface for StdMachine {}
+impl MigrateInterface for StdMachine {}
 impl MachineExternalInterface for StdMachine {}
 
 impl EventLoopManager for StdMachine {

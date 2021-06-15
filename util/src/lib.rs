@@ -32,6 +32,7 @@ pub mod leak_bucket;
 mod link_list;
 pub mod loop_context;
 pub mod num_ops;
+pub mod reader;
 pub mod seccomp;
 pub mod tap;
 pub mod unix;
