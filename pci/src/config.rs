@@ -116,7 +116,7 @@ const STATUS_DETECT_PARITY_ERROR: u16 = 0x8000;
 
 const BAR_IO_SPACE: u8 = 0x01;
 const IO_BASE_ADDR_MASK: u32 = 0xffff_fffc;
-const MEM_BASE_ADDR_MASK: u32 = 0xffff_fff0;
+const MEM_BASE_ADDR_MASK: u64 = 0xffff_ffff_ffff_fff0;
 const BAR_MEM_64BIT: u8 = 0x04;
 const BAR_PREFETCH: u8 = 0x08;
 const BAR_SPACE_UNMAPPED: u64 = 0xffff_ffff_ffff_ffff;
@@ -431,11 +431,11 @@ impl PciConfig {
             RegionType::Io => BAR_SPACE_UNMAPPED,
             RegionType::Mem32Bit => {
                 let bar_val = le_read_u32(&self.config, offset).unwrap();
-                (bar_val & MEM_BASE_ADDR_MASK) as u64
+                (bar_val & MEM_BASE_ADDR_MASK as u32) as u64
             }
             RegionType::Mem64Bit => {
                 let bar_val = le_read_u64(&self.config, offset).unwrap();
-                bar_val & MEM_BASE_ADDR_MASK as u64
+                bar_val & MEM_BASE_ADDR_MASK
             }
         }
     }
@@ -740,22 +740,39 @@ mod tests {
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
 
         #[cfg(target_arch = "x86_64")]
-        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
-        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
-        pci_config.register_bar(2, region, RegionType::Mem64Bit, true, 2048);
+        pci_config.register_bar(
+            0,
+            region.clone(),
+            RegionType::Io,
+            false,
+            IO_BASE_ADDR_MASK as u64,
+        );
+        pci_config.register_bar(
+            1,
+            region.clone(),
+            RegionType::Mem32Bit,
+            false,
+            (MEM_BASE_ADDR_MASK as u32) as u64,
+        );
+        pci_config.register_bar(2, region, RegionType::Mem64Bit, true, MEM_BASE_ADDR_MASK);
 
         #[cfg(target_arch = "x86_64")]
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize,
-            2048_u32 | BAR_IO_SPACE as u32,
+            IO_BASE_ADDR_MASK | BAR_IO_SPACE as u32,
         )
         .unwrap();
-        le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 2048).unwrap();
         le_write_u32(
             &mut pci_config.config,
+            BAR_0 as usize + REG_SIZE,
+            MEM_BASE_ADDR_MASK as u32,
+        )
+        .unwrap();
+        le_write_u64(
+            &mut pci_config.config,
             BAR_0 as usize + 2 * REG_SIZE,
-            2048_u32 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+            MEM_BASE_ADDR_MASK | (BAR_MEM_64BIT | BAR_PREFETCH) as u64,
         )
         .unwrap();
 
@@ -765,7 +782,7 @@ mod tests {
         {
             // I/O space access is enabled.
             le_write_u16(&mut pci_config.config, COMMAND as usize, COMMAND_IO_SPACE).unwrap();
-            assert_eq!(pci_config.get_bar_address(0), 2048);
+            assert_eq!(pci_config.get_bar_address(0), IO_BASE_ADDR_MASK as u64);
         }
         assert_eq!(pci_config.get_bar_address(1), BAR_SPACE_UNMAPPED);
         assert_eq!(pci_config.get_bar_address(2), BAR_SPACE_UNMAPPED);
@@ -778,8 +795,11 @@ mod tests {
         .unwrap();
         #[cfg(target_arch = "x86_64")]
         assert_eq!(pci_config.get_bar_address(0), BAR_SPACE_UNMAPPED);
-        assert_eq!(pci_config.get_bar_address(1), 2048);
-        assert_eq!(pci_config.get_bar_address(2), 2048);
+        assert_eq!(
+            pci_config.get_bar_address(1),
+            (MEM_BASE_ADDR_MASK as u32) as u64
+        );
+        assert_eq!(pci_config.get_bar_address(2), MEM_BASE_ADDR_MASK);
     }
 
     #[test]
