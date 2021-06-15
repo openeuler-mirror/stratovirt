@@ -127,12 +127,21 @@ impl PciDevOps for RootPort {
         let mut locked_root_port = root_port.lock().unwrap();
         locked_root_port.sec_bus.lock().unwrap().parent_bridge =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn PciDevOps>>);
-        locked_parent_bus
-            .child_buses
-            .push(locked_root_port.sec_bus.clone());
-        locked_parent_bus
-            .devices
-            .insert(locked_root_port.devfn, root_port.clone());
+        let pci_device = locked_parent_bus.devices.get(&locked_root_port.devfn);
+        if pci_device.is_none() {
+            locked_parent_bus
+                .child_buses
+                .push(locked_root_port.sec_bus.clone());
+            locked_parent_bus
+                .devices
+                .insert(locked_root_port.devfn, root_port.clone());
+        } else {
+            bail!(
+                "Devfn {:?} has been used by {:?}",
+                locked_root_port.devfn,
+                pci_device.unwrap().lock().unwrap().name()
+            );
+        }
 
         Ok(())
     }

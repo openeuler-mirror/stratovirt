@@ -874,15 +874,18 @@ impl PciDevOps for VirtioPciDevice {
 
         let devfn = self.devfn;
         let dev = Arc::new(Mutex::new(self));
-        dev.lock()
-            .unwrap()
-            .parent_bus
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .devices
-            .insert(devfn, dev.clone());
+        let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
+        let mut locked_pci_bus = pci_bus.lock().unwrap();
+        let pci_device = locked_pci_bus.devices.get(&devfn);
+        if pci_device.is_none() {
+            locked_pci_bus.devices.insert(devfn, dev);
+        } else {
+            bail!(
+                "Devfn {:?} has been used by {:?}",
+                &devfn,
+                pci_device.unwrap().lock().unwrap().name()
+            );
+        }
 
         Ok(())
     }
