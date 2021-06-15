@@ -1062,7 +1062,7 @@ class BaseVM:
 
     def event_wait(self, name, timeout=60.0, match=None):
         """
-        Wait for an qmp event to match expection event.
+        Wait for an qmp event to match exception event.
 
         Args:
             match: qmp match event, such as

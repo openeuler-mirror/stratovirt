@@ -452,7 +452,7 @@ pub struct VirtioPciDevice {
     parent_bus: Weak<Mutex<PciBus>>,
     /// Eventfds used for notifying the guest.
     notify_eventfds: NotifyEventFds,
-    /// The function for interrupt triggerring
+    /// The function for interrupt triggering
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
 }
 

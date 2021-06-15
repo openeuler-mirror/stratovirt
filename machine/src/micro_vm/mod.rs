@@ -41,7 +41,7 @@ pub mod errors {
         }
         errors {
             RplDevLmtErr(dev: String, nr: usize) {
-                display("A maximum of {} {} replaceble devices are supported.", nr, dev)
+                display("A maximum of {} {} replaceable devices are supported.", nr, dev)
             }
             UpdCfgErr(id: String) {
                 display("{}: failed to update config.", id)
@@ -632,7 +632,7 @@ impl MachineOps for LightMachine {
     fn add_block_device(&mut self, config: &DriveConfig) -> MachineResult<()> {
         if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
             bail!(
-                "A maximum of {} replaceble block devices are supported.",
+                "A maximum of {} replaceable block devices are supported.",
                 MMIO_REPLACEABLE_BLK_NR
             );
         }
@@ -694,7 +694,7 @@ impl MachineOps for LightMachine {
             let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
             if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
                 bail!(
-                    "A maximum of {} net replaceble devices are supported.",
+                    "A maximum of {} net replaceable devices are supported.",
                     MMIO_REPLACEABLE_NET_NR
                 );
             }

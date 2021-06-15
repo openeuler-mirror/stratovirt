@@ -671,7 +671,7 @@ impl AmlScopeBuilder for AmlDevice {
     }
 }
 
-/// Method defination.
+/// Method definition.
 pub struct AmlMethod {
     /// The name of this method.
     name: String,

@@ -38,7 +38,7 @@ const MSIX_CAP_PBA: u8 = 0x08;
 pub struct Message {
     /// Lower 32bit address of MSI-X address.
     pub address_lo: u32,
-    /// Higer 32bit address of MSI-X address.
+    /// Higher 32bit address of MSI-X address.
     pub address_hi: u32,
     /// MSI-X data.
     pub data: u32,
