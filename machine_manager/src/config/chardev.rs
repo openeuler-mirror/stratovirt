@@ -124,10 +124,7 @@ impl VmConfig {
         } else {
             "".to_string()
         };
-        self.serial = Some(SerialConfig { 
-            id,
-            stdio,
-        });
+        self.serial = Some(SerialConfig { id, stdio });
 
         Ok(())
     }

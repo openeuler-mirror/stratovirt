@@ -225,29 +225,6 @@ impl StdMachineOps for StdMachine {
 
         Ok(fwcfg_dev)
     }
-
-    fn add_pflash_device(&mut self, config: &PFlashConfig) -> super::errors::Result<()> {
-        use super::errors::ResultExt;
-
-        let fd = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(config.path_on_host.clone())?;
-        let sector_len: u32 = 1024 * 256;
-        let index: usize = config.unit;
-        let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
-        let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
-        if index == 1 {
-            flash_base += flash_size;
-        }
-        let pflash = PFlash::new(flash_size, fd, sector_len, 4, 2, config.read_only)
-            .chain_err(|| "Failed to create PFlash.")?;
-
-        PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size)
-            .chain_err(|| "Failed to realize pflash device")?;
-
-        Ok(())
-    }
 }
 
 impl MachineOps for StdMachine {
@@ -473,6 +450,30 @@ impl MachineOps for StdMachine {
         }
 
         locked_vm.register_power_event(&locked_vm.power_button)?;
+        Ok(())
+    }
+
+    /// Add pflash device.
+    fn add_pflash_device(&mut self, config: &PFlashConfig) -> Result<()> {
+        use crate::errors::ResultExt;
+
+        let fd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(config.path_on_host.clone())?;
+        let sector_len: u32 = 1024 * 256;
+        let index: usize = config.unit;
+        let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
+        let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
+        if index == 1 {
+            flash_base += flash_size;
+        }
+        let pflash = PFlash::new(flash_size, fd, sector_len, 4, 2, config.read_only)
+            .chain_err(|| "Failed to create PFlash.")?;
+
+        PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size)
+            .chain_err(|| "Failed to realize pflash device")?;
+
         Ok(())
     }
 

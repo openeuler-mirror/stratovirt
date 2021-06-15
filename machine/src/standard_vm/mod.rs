@@ -53,7 +53,6 @@ use acpi::{
 };
 use devices::legacy::FwCfgOps;
 use errors::{Result, ResultExt};
-use machine_manager::config::PFlashConfig;
 use util::byte_code::ByteCode;
 
 #[cfg(target_arch = "aarch64")]
@@ -117,10 +116,6 @@ trait StdMachineOps: AcpiBuilder {
 
     fn add_fwcfg_device(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
         bail!("Not implemented");
-    }
-
-    fn add_pflash_device(&mut self, _config: &PFlashConfig) -> Result<()> {
-        Ok(())
     }
 }
 

@@ -233,53 +233,6 @@ impl StdMachineOps for StdMachine {
 
         Ok(fwcfg_dev)
     }
-
-    fn add_pflash_device(&mut self, config: &PFlashConfig) -> super::errors::Result<()> {
-        use super::errors::ResultExt;
-
-        // The two PFlash devices locates below 4GB, this variable represents the end address
-        // of current PFlash device.
-        static mut FLASH_END: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-        // Safe because the PFlash devices is added in succession and `FLASH_END` variable
-        // will only be initialized and modified by the main thread.
-        let flash_end: u64 = unsafe { FLASH_END };
-
-        let mut fd = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(config.path_on_host.clone())?;
-        let pfl_size = fd.metadata().unwrap().len();
-
-        if config.unit == 0 {
-            let rom_base = 0xe0000;
-            let rom_size = 0x20000;
-            fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
-
-            let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
-                GuestAddress(rom_base),
-                rom_size,
-                None,
-                false,
-                false,
-            )?));
-            rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
-            rom_region.set_priority(10);
-            self.sys_mem.root().add_subregion(rom_region, rom_base)?;
-
-            fd.seek(SeekFrom::Start(0))?;
-        }
-
-        let sector_len: u32 = 1024 * 4;
-        let pflash = PFlash::new(pfl_size, fd, sector_len, 4_u32, 1_u32, config.read_only)
-            .chain_err(|| "Failed to create pflash device")?;
-        PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
-            .chain_err(|| "Failed to realize pflash device")?;
-
-        unsafe {
-            FLASH_END -= pfl_size;
-        }
-        Ok(())
-    }
 }
 
 impl MachineOps for StdMachine {
@@ -493,6 +446,53 @@ impl MachineOps for StdMachine {
 
         StdMachine::arch_init()?;
         locked_vm.register_power_event(&locked_vm.power_button)?;
+        Ok(())
+    }
+
+    fn add_pflash_device(&mut self, config: &PFlashConfig) -> MachineResult<()> {
+        use super::errors::ResultExt;
+
+        // The two PFlash devices locates below 4GB, this variable represents the end address
+        // of current PFlash device.
+        static mut FLASH_END: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        // Safe because the PFlash devices is added in succession and `FLASH_END` variable
+        // will only be initialized and modified by the main thread.
+        let flash_end: u64 = unsafe { FLASH_END };
+
+        let mut fd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(config.path_on_host.clone())?;
+        let pfl_size = fd.metadata().unwrap().len();
+
+        if config.unit == 0 {
+            let rom_base = 0xe0000;
+            let rom_size = 0x20000;
+            fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
+
+            let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
+                GuestAddress(rom_base),
+                rom_size,
+                None,
+                false,
+                false,
+            )?));
+            rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
+            rom_region.set_priority(10);
+            self.sys_mem.root().add_subregion(rom_region, rom_base)?;
+
+            fd.seek(SeekFrom::Start(0))?;
+        }
+
+        let sector_len: u32 = 1024 * 4;
+        let pflash = PFlash::new(pfl_size, fd, sector_len, 4_u32, 1_u32, config.read_only)
+            .chain_err(|| "Failed to create pflash device")?;
+        PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
+            .chain_err(|| "Failed to realize pflash device")?;
+
+        unsafe {
+            FLASH_END -= pfl_size;
+        }
         Ok(())
     }
 

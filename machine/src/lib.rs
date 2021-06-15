@@ -36,6 +36,7 @@ pub mod errors {
 
         foreign_links {
             KvmIoctl(kvm_ioctls::Error);
+            Io(std::io::Error);
         }
 
         errors {
@@ -118,8 +119,8 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig, NetworkInterfaceConfig, RngConfig,
-    SerialConfig, VmConfig, VsockConfig,
+    BalloonConfig, ConsoleConfig, DriveConfig, MachineMemConfig, NetworkInterfaceConfig,
+    PFlashConfig, RngConfig, SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -310,6 +311,11 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM Configuration.
     fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()>;
+
+    /// Add pflash device.
+    fn add_pflash_device(&mut self, _config: &PFlashConfig) -> Result<()> {
+        bail!("Pflash device is not supported!");
+    }
 
     /// Return the syscall whitelist for seccomp.
     fn syscall_whitelist(&self) -> Vec<BpfRule>;

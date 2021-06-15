@@ -139,9 +139,7 @@ impl VmConfig {
         if self.drives.is_some() {
             for d in self.drives.as_ref().unwrap() {
                 if d.id == drive.id {
-                    return Err(
-                        ErrorKind::IdRepeat("drive".to_string(), d.id.to_string()).into(),
-                    );
+                    return Err(ErrorKind::IdRepeat("drive".to_string(), d.id.to_string()).into());
                 }
             }
             self.drives.as_mut().unwrap().push(drive);
