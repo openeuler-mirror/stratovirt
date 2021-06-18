@@ -52,6 +52,7 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
 struct RngHandler {
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
+    reset_evt: RawFd,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
@@ -125,6 +126,36 @@ impl RngHandler {
 
         Ok(())
     }
+
+    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+        let mut notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+        if let Some(lb) = self.leak_bucket.as_ref() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                lb.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+
+        notifiers
+    }
 }
 
 impl EventNotifierHelper for RngHandler {
@@ -148,6 +179,20 @@ impl EventNotifierHelper for RngHandler {
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             rng_handler.lock().unwrap().queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        // Register event notifier for reset_evt
+        let rng_handler_clone = rng_handler.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(rng_handler_clone.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            rng_handler.lock().unwrap().reset_evt,
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],
@@ -196,6 +241,8 @@ pub struct Rng {
     device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
+    /// Eventfd for device reset
+    reset_evt: EventFd,
 }
 
 impl Rng {
@@ -205,6 +252,7 @@ impl Rng {
             random_file: None,
             device_features: 0,
             driver_features: 0,
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -300,6 +348,7 @@ impl VirtioDevice for Rng {
         let handler = RngHandler {
             queue: queues.remove(0),
             queue_evt: queue_evts.remove(0),
+            reset_evt: self.reset_evt.as_raw_fd(),
             interrupt_cb,
             driver_features: self.driver_features,
             mem_space,
@@ -318,6 +367,12 @@ impl VirtioDevice for Rng {
         )?;
 
         Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.reset_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)
     }
 }
 
