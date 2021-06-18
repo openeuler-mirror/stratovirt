@@ -20,7 +20,7 @@ use std::sync::Arc;
 use address_space::{AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 
-use super::bootparam::{BootParams, RealModeKernelHeader};
+use super::bootparam::{BootParams, RealModeKernelHeader, UNDEFINED_ID};
 use super::{X86BootLoader, X86BootLoaderConfig};
 use super::{
     BOOT_HDR_START, BOOT_LOADER_SP, BZIMAGE_BOOT_OFFSET, CMDLINE_START, EBDA_START,
@@ -51,12 +51,13 @@ use mptable::setup_isa_mptable;
 /// * Invalid BzImage header or version.
 /// * Failed to write bzImage linux kernel to guest memory.
 pub fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
+    let mut boot_hdr = RealModeKernelHeader::new();
+
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
-    let mut boot_hdr_buf = [0_u8; std::mem::size_of::<RealModeKernelHeader>()];
     kernel_image
-        .read_exact(&mut boot_hdr_buf)
+        .read_exact(&mut boot_hdr.as_mut_bytes())
         .chain_err(|| "Failed to read boot_hdr from bzImage kernel")?;
-    let boot_hdr = RealModeKernelHeader::from_bytes(&boot_hdr_buf).unwrap();
+    boot_hdr.type_of_loader = UNDEFINED_ID;
 
     if let Err(e) = boot_hdr.check_valid_kernel() {
         kernel_image.seek(SeekFrom::Start(0))?;
@@ -68,10 +69,9 @@ pub fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
         setup_size = 4;
     }
     setup_size = (setup_size + 1) << 9;
-
     kernel_image.seek(SeekFrom::Start(setup_size as u64))?;
 
-    Ok(*boot_hdr)
+    Ok(boot_hdr)
 }
 
 /// Load linux kernel or initrd image file to Guest Memory.

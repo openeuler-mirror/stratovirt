@@ -13,6 +13,11 @@
 use std::sync::{Arc, Mutex};
 
 use acpi::AmlBuilder;
+#[cfg(target_arch = "x86_64")]
+use acpi::{
+    AmlDevice, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
+    AmlScopeBuilder, AmlString,
+};
 use address_space::{AddressSpace, GuestAddress};
 #[cfg(target_arch = "x86_64")]
 use byteorder::LittleEndian;
@@ -1143,7 +1148,21 @@ impl AmlBuilder for FwCfgMem {
 #[cfg(target_arch = "x86_64")]
 impl AmlBuilder for FwCfgIO {
     fn aml_bytes(&self) -> Vec<u8> {
-        Vec::new()
+        let mut acpi_dev = AmlDevice::new("FWCF");
+        acpi_dev.append_child(AmlNameDecl::new("_HID", AmlString("QEMU0002".to_string())));
+        acpi_dev.append_child(AmlNameDecl::new("_STA", AmlInteger(0xB)));
+
+        let mut res = AmlResTemplate::new();
+        res.append_child(AmlIoResource::new(
+            AmlIoDecode::Decode16,
+            self.res.region_base as u16,
+            self.res.region_base as u16,
+            0x01,
+            self.res.region_size as u8,
+        ));
+        acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
+
+        acpi_dev.aml_bytes()
     }
 }
 

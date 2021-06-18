@@ -541,7 +541,7 @@ mod test {
         //test `set_boot_config` function
         assert!(x86_cpu.set_boot_config(&vcpu, &cpu_config).is_ok());
 
-        //test setup special registers
+        // test setup special registers
         let cpu_caps = caps::X86CPUCaps::init_capabilities();
         assert!(x86_cpu.reset_vcpu(&vcpu, &cpu_caps).is_ok());
         let x86_sregs = vcpu.get_sregs().unwrap();
@@ -561,7 +561,7 @@ mod test {
         assert_eq!((x86_sregs.cr4 & 0x20) >> 5, 1);
         assert_eq!((x86_sregs.efer & 0x700) >> 8, 5);
 
-        //test setup_regs function
+        // test setup_regs function
         let x86_regs = vcpu.get_regs().unwrap();
         assert_eq!(x86_regs.rflags, 0x0002);
         assert_eq!(x86_regs.rip, 0);
@@ -569,8 +569,10 @@ mod test {
         assert_eq!(x86_regs.rbp, 0);
         assert_eq!(x86_regs.rsi, 0x0000_7000);
 
-        //test setup_fpu function
-        let x86_fpu = vcpu.get_fpu().unwrap();
-        assert_eq!(x86_fpu.fcw, 0x37f);
+        // test setup_fpu function
+        if !cpu_caps.has_xsave {
+            let x86_fpu = vcpu.get_fpu().unwrap();
+            assert_eq!(x86_fpu.fcw, 0x37f);
+        }
     }
 }
