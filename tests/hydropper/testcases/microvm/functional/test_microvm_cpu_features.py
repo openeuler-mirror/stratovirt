@@ -138,27 +138,17 @@ def test_128vcpu_topo(microvm):
 @pytest.mark.skipif("platform.machine().startswith('aarch64')")
 @pytest.mark.acceptance
 def test_brand_string(microvm):
-    """Ensure good formatting for the guest band string.
+    """Ensure the guest band string is correct.
+       In x86_64 platform, the guest brand string is:
 
-    * For Intel CPUs, the guest brand string should be:
-        Intel(R) Xeon(R) Processor @ {host frequency}
-    where {host frequency} is the frequency reported by the host CPUID
-    (e.g. 4.01GHz)
-    * For AMD CPUs, the guest brand string should be:
-        AMD EPYC
-    * For other CPUs, the guest brand string should be:
-        ""
+       Intel(R) Xeon(R) Processor @ {host frequency}
     """
-    cif = open('/proc/cpuinfo', 'r')
+    branch_string_format = "^model name\\s+:\\s+(.+)$"
     host_brand_string = None
-    while True:
-        line = cif.readline()
-        if line == '':
-            break
-        matchoutput = re.search("^model name\\s+:\\s+(.+)$", line)
+    for line in open('/proc/cpuinfo', 'r'):
+        matchoutput = re.search(branch_string_format, line)
         if matchoutput:
             host_brand_string = matchoutput.group(1)
-    cif.close()
     assert host_brand_string is not None
 
     test_vm = microvm
@@ -171,16 +161,14 @@ def test_brand_string(microvm):
     assert status == 0
 
     line = output.splitlines()[0].rstrip()
-    matchoutput = re.search("^model name\\s+:\\s+(.+)$", line)
+    matchoutput = re.search(branch_string_format, line)
     assert matchoutput
     guest_brand_string = matchoutput.group(1)
     assert guest_brand_string
 
     cpu_vendor = _get_cpu_vendor()
     expected_guest_brand_string = ""
-    if cpu_vendor == CpuVendor.AMD:
-        expected_guest_brand_string += "AMD EPYC"
-    elif cpu_vendor == CpuVendor.INTEL:
+    if cpu_vendor == CpuVendor.INTEL:
         expected_guest_brand_string = host_brand_string
 
     assert guest_brand_string == expected_guest_brand_string
