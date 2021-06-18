@@ -966,21 +966,21 @@ mod test {
         let mut read_data = vec![0, 0, 0, 0];
         let offset = 0x40;
         dev.lock().unwrap().cmd = 0x98;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         let cfi_data = vec![0x51, 0x00, 0x51, 0x00];
         assert_eq!(cfi_data, read_data);
 
         let mut read_data = vec![0, 0, 0, 0];
         let offset = 0x44;
         dev.lock().unwrap().cmd = 0x98;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         let cfi_data = vec![0x52, 0x00, 0x52, 0x00];
         assert_eq!(cfi_data, read_data);
 
         let mut read_data = vec![0, 0, 0, 0];
         let offset = 0x48;
         dev.lock().unwrap().cmd = 0x98;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         let cfi_data = vec![0x59, 0x00, 0x59, 0x00];
         assert_eq!(cfi_data, read_data);
 
@@ -996,21 +996,21 @@ mod test {
         let mut read_data = vec![0, 0, 0, 0];
         let offset = 0x00;
         dev.lock().unwrap().cmd = 0x90;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         let id_data = vec![0x89, 0x00, 0x89, 0x00];
         assert_eq!(read_data, id_data);
 
         let mut read_data = vec![0, 0, 0, 0];
         let offset = 0x04;
         dev.lock().unwrap().cmd = 0x90;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         let id_data = vec![0x18, 0x00, 0x18, 0x00];
         assert_eq!(read_data, id_data);
 
         let mut read_data = vec![0xff, 0xff, 0xff, 0xff];
         let offset = 0x08;
         dev.lock().unwrap().cmd = 0x90;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         let id_data = vec![0x00, 0x00, 0x00, 0x00];
         assert_eq!(read_data, id_data);
 
@@ -1027,12 +1027,12 @@ mod test {
 
         let data = vec![0x20, 0, 0, 0];
         dev.lock().unwrap().write_cycle = 0;
-        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset));
 
         let mut read_data = vec![0, 0, 0, 0];
         let erase_data = vec![0xFF_u8, 0xFF, 0xFF, 0xFF];
         dev.lock().unwrap().cmd = 0x00;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         assert_eq!(erase_data, read_data);
 
         fs::remove_file(file_name).unwrap();
@@ -1047,13 +1047,13 @@ mod test {
         let offset = 0_u64;
         let data = vec![0x10, 0, 0, 0];
         dev.lock().unwrap().write_cycle = 0;
-        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset));
         let data = vec![0x70, 0, 0x70, 0];
-        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset));
 
         let mut read_data = vec![0, 0, 0, 0];
         dev.lock().unwrap().cmd = 0x00;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         assert_eq!(data, read_data);
 
         let mut file_buf = vec![0_u8, 0, 0, 0];
@@ -1077,14 +1077,14 @@ mod test {
         let offset = 0_u64;
         let data = vec![0xe8, 0, 0, 0];
         dev.lock().unwrap().write_cycle = 0;
-        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset));
         let data = vec![0x12, 0x34, 0x56, 0x78];
-        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
-        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset), true);
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset));
+        assert!(dev.lock().unwrap().write(data.as_ref(), base, offset));
 
         let mut read_data = vec![0, 0, 0, 0];
         dev.lock().unwrap().cmd = 0x00;
-        assert!(dev.lock().unwrap().read(&mut read_data, base, offset), true);
+        assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         assert_eq!(data, read_data);
 
         fs::remove_file(file_name).unwrap();
