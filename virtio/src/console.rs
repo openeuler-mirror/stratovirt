@@ -60,6 +60,7 @@ struct ConsoleHandler {
     input_queue: Arc<Mutex<Queue>>,
     output_queue: Arc<Mutex<Queue>>,
     output_queue_evt: EventFd,
+    reset_evt: RawFd,
     mem_space: Arc<AddressSpace>,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
@@ -182,6 +183,37 @@ impl ConsoleHandler {
             }
         }
     }
+
+    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+        let (stream, _) = self.listener.accept().unwrap();
+        let listener_fd = self.listener.as_raw_fd();
+        let stream_fd = stream.as_raw_fd();
+        let notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.output_queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                stream_fd,
+                Some(listener_fd),
+                EventSet::IN | EventSet::HANG_UP,
+                Vec::new(),
+            ),
+        ];
+
+        notifiers
+    }
 }
 
 impl EventNotifierHelper for ConsoleHandler {
@@ -235,7 +267,6 @@ impl EventNotifierHelper for ConsoleHandler {
                 vec![Arc::new(Mutex::new(handler))],
             )])
         });
-
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             console_handler.lock().unwrap().listener.as_raw_fd(),
@@ -247,15 +278,25 @@ impl EventNotifierHelper for ConsoleHandler {
         let cls = console_handler.clone();
         let handler = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             cls.clone().lock().unwrap().output_handle();
-
             None as Option<Vec<EventNotifier>>
         });
-
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             console_handler.lock().unwrap().output_queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        let cloned_handler = console_handler.clone();
+        let handler = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(cloned_handler.clone().lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            console_handler.lock().unwrap().reset_evt,
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],
@@ -286,6 +327,8 @@ pub struct Console {
     listener: Option<UnixListener>,
     /// Path to console socket file.
     path: String,
+    /// EventFd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Console {
@@ -304,6 +347,7 @@ impl Console {
             },
             listener: None,
             path,
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -404,6 +448,7 @@ impl VirtioDevice for Console {
             driver_features: self.state.driver_features,
             listener: self.listener.as_ref().unwrap().try_clone()?,
             client: None,
+            reset_evt: self.reset_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
