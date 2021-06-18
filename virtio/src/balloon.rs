@@ -448,6 +448,8 @@ struct BalloonIoHandler {
     def_queue: Arc<Mutex<Queue>>,
     /// Deflate EventFd.
     def_evt: EventFd,
+    /// EventFd for device reset
+    reset_evt: RawFd,
     /// The interrupt call back function.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Balloon Memory information.
@@ -516,6 +518,41 @@ impl BalloonIoHandler {
     fn get_balloon_memory_size(&self) -> u64 {
         (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
     }
+
+    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+        let notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.inf_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.def_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.event_timer.clone().lock().unwrap().as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+
+        notifiers
+    }
 }
 
 /// Create a new EventNotifier.
@@ -538,64 +575,72 @@ impl EventNotifierHelper for BalloonIoHandler {
     /// Register event notifiers for different queue event.
     fn internal_notifiers(balloon_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        {
-            let cloned_balloon_io = balloon_io.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                if let Err(ref e) = locked_balloon_io.process_balloon_queue(BALLOON_INFLATE_EVENT) {
-                    error!(
-                        "Failed to inflate balloon: {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
-                };
-                None
-            });
-            let locked_balloon_io = balloon_io.lock().unwrap();
-            notifiers.push(build_event_notifier(
-                locked_balloon_io.inf_evt.as_raw_fd(),
-                handler,
-            ));
-        }
+        let locked_balloon_io = balloon_io.lock().unwrap();
 
-        {
-            let cloned_balloon_io = balloon_io.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                if let Err(ref e) = locked_balloon_io.process_balloon_queue(BALLOON_DEFLATE_EVENT) {
-                    error!(
-                        "Failed to deflate balloon: {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
-                };
-                None
-            });
-            let locked_balloon_io = balloon_io.lock().unwrap();
-            notifiers.push(build_event_notifier(
-                locked_balloon_io.def_evt.as_raw_fd(),
-                handler,
-            ));
-        }
-        {
-            let cloned_balloon_io = balloon_io.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-                let locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                locked_balloon_io.send_balloon_changed_event();
-                None
-            });
-            let locked_balloon_io = balloon_io.lock().unwrap();
-            notifiers.push(build_event_notifier(
-                locked_balloon_io
-                    .event_timer
-                    .clone()
-                    .lock()
-                    .unwrap()
-                    .as_raw_fd(),
-                handler,
-            ));
-        }
+        // register event notifier for inflate event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            if let Err(e) = cloned_balloon_io
+                .lock()
+                .unwrap()
+                .process_balloon_queue(BALLOON_INFLATE_EVENT)
+            {
+                error!("Failed to inflate balloon: {}", e.display_chain());
+            };
+            None
+        });
+        notifiers.push(build_event_notifier(
+            locked_balloon_io.inf_evt.as_raw_fd(),
+            handler,
+        ));
+
+        // register event notifier for deflate event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            if let Err(e) = cloned_balloon_io
+                .lock()
+                .unwrap()
+                .process_balloon_queue(BALLOON_DEFLATE_EVENT)
+            {
+                error!("Failed to deflate balloon: {}", e.display_chain());
+            };
+            None
+        });
+        notifiers.push(build_event_notifier(
+            locked_balloon_io.def_evt.as_raw_fd(),
+            handler,
+        ));
+
+        // register event notifier for reset event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(cloned_balloon_io.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(build_event_notifier(locked_balloon_io.reset_evt, handler));
+
+        // register event notifier for timer event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            cloned_balloon_io
+                .lock()
+                .unwrap()
+                .send_balloon_changed_event();
+            None
+        });
+        notifiers.push(build_event_notifier(
+            locked_balloon_io
+                .event_timer
+                .clone()
+                .lock()
+                .unwrap()
+                .as_raw_fd(),
+            handler,
+        ));
+
         notifiers
     }
 }
@@ -618,6 +663,8 @@ pub struct Balloon {
     mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
+    /// EventFd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Balloon {
@@ -641,6 +688,7 @@ impl Balloon {
             mem_info: BlnMemInfo::new(),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -830,6 +878,7 @@ impl VirtioDevice for Balloon {
             inf_evt: inf_queue_evt,
             def_queue,
             def_evt: def_queue_evt,
+            reset_evt: self.reset_evt.as_raw_fd(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
