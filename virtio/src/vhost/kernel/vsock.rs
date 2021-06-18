@@ -10,8 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
-use std::{os::unix::io::RawFd, usize};
 
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
@@ -93,6 +93,8 @@ pub struct Vsock {
     event_queue: Option<Arc<Mutex<Queue>>>,
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    /// EventFd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Vsock {
@@ -104,6 +106,7 @@ impl Vsock {
             mem_space: mem_space.clone(),
             event_queue: None,
             interrupt_cb: None,
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -294,6 +297,7 @@ impl VirtioDevice for Vsock {
         let handler = VhostIoHandler {
             interrupt_cb,
             host_notifies,
+            reset_evt: self.reset_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
@@ -301,6 +305,21 @@ impl VirtioDevice for Vsock {
             None,
         )?;
 
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        if let Some(backend) = &self.backend {
+            backend
+                .reset_owner()
+                .chain_err(|| "Failed to reset owner for vhost-vsock")?;
+
+            self.reset_evt
+                .write(1)
+                .chain_err(|| ErrorKind::EventFdWrite)?;
+        } else {
+            bail!("Failed to get backend for vhost-vsock");
+        }
         Ok(())
     }
 }

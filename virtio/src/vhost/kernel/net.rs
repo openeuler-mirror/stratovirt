@@ -88,6 +88,8 @@ pub struct Net {
     device_config: VirtioNetConfig,
     /// System address space.
     mem_space: Arc<AddressSpace>,
+    /// EventFd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Net {
@@ -101,6 +103,7 @@ impl Net {
             vhost_features: 0_u64,
             device_config: VirtioNetConfig::default(),
             mem_space: mem_space.clone(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -299,12 +302,29 @@ impl VirtioDevice for Net {
         let handler = VhostIoHandler {
             interrupt_cb,
             host_notifies,
+            reset_evt: self.reset_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
         )?;
+
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        if let Some(backend) = &self.backend {
+            backend
+                .reset_owner()
+                .chain_err(|| "Failed to reset owner for vhost-net")?;
+
+            self.reset_evt
+                .write(1)
+                .chain_err(|| ErrorKind::EventFdWrite)?;
+        } else {
+            bail!("Failed to get backend for vhost-net");
+        }
 
         Ok(())
     }
