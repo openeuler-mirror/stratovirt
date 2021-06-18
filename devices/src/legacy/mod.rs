@@ -56,11 +56,23 @@ pub mod errors {
             InvalidFwCfgEntry(key: u16) {
                 display("Invalid FwCfg entry key {}", key)
             }
-            FlashWriteOverflow {
-                display("The size of write request overflows.")
+            PFlashWriteOverflow(size:u64, offset: u64, data_len: u64) {
+                display("Flash size is 0x{:x}, offset 0x{:x} and size 0x{:x} in write request overflows", size, offset, data_len)
             }
-            FlashReadOverflow {
-                display("The size of read request overflows.")
+            PFlashReadOverflow(size:u64, offset: u64, data_len: u64) {
+                display("Flash size is 0x{:x}, offset 0x{:x} and size 0x{:x} in read request overflows", size, offset, data_len)
+            }
+            PFlashFileSeekErr(offset: u64) {
+                display("Failed to seek to offset 0x{:x} of PFlash file", offset)
+            }
+            PFlashIndexOverflow(index: u64, len: usize) {
+                display("Flash CFI table len is 0x{:x}, request 0x{:x} overflows", len, index)
+            }
+            PFlashDevConfigErr(dev_width: u32, bank_width: u32) {
+                display("Unsupported device configuration: device width {}, bank width {}", dev_width, bank_width)
+            }
+            WritePFlashRomErr {
+                display("Failed to write to Flash ROM")
             }
         }
     }

@@ -270,15 +270,8 @@ impl StdMachineOps for StdMachine {
         }
 
         let sector_len: u32 = 1024 * 4;
-        let pflash = PFlash::new(
-            pfl_size,
-            fd,
-            sector_len,
-            4_u32,
-            1_u32,
-            config.read_only as i32,
-        )
-        .chain_err(|| "Failed to create pflash device")?;
+        let pflash = PFlash::new(pfl_size, fd, sector_len, 4_u32, 1_u32, config.read_only)
+            .chain_err(|| "Failed to create pflash device")?;
         PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
             .chain_err(|| "Failed to realize pflash device")?;
 

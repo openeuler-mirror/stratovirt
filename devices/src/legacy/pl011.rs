@@ -421,3 +421,41 @@ impl EventNotifierHelper for PL011 {
         notifiers
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_receive() {
+        let mut pl011_dev = PL011::new().unwrap();
+        assert_eq!(pl011_dev.rfifo, vec![0; PL011_FIFO_SIZE]);
+        assert_eq!(pl011_dev.flags, 0x90);
+        assert_eq!(pl011_dev.lcr, 0);
+        assert_eq!(pl011_dev.rsr, 0);
+        assert_eq!(pl011_dev.cr, 0x300);
+        assert_eq!(pl011_dev.dmacr, 0);
+        assert_eq!(pl011_dev.ilpr, 0);
+        assert_eq!(pl011_dev.ibrd, 0);
+        assert_eq!(pl011_dev.fbrd, 0);
+        assert_eq!(pl011_dev.ifl, 0x12);
+        assert_eq!(
+            pl011_dev.id,
+            vec![0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1]
+        );
+        assert_eq!(pl011_dev.read_pos, 0);
+        assert_eq!(pl011_dev.read_count, 0);
+        assert_eq!(pl011_dev.read_trigger, 1);
+        assert_eq!(pl011_dev.int_level, 0);
+        assert_eq!(pl011_dev.int_enabled, 0);
+
+        let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
+        pl011_dev.receive(&data);
+        assert_eq!(pl011_dev.read_count, data.len() as i32);
+        for i in 0..data.len() {
+            assert_eq!(pl011_dev.rfifo[i], data[i] as u32);
+        }
+        assert_eq!(pl011_dev.flags, 0xC0);
+        assert_eq!(pl011_dev.int_level, INT_RX);
+    }
+}
