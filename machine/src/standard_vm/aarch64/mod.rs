@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod pci_host_root;
 mod syscall;
 
 use std::ops::Deref;
@@ -34,7 +35,7 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
-use pci::PciHost;
+use pci::{PciDevOps, PciHost};
 use sysbus::{SysBus, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT};
@@ -47,6 +48,7 @@ use vmm_sys_util::eventfd::EventFd;
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind, Result};
 use crate::MachineOps;
+use pci_host_root::PciHostRoot;
 use syscall::syscall_whitelist;
 
 /// The type of memory layout entry on aarch64
@@ -159,6 +161,27 @@ impl StdMachine {
 
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self) -> super::errors::Result<()> {
+        use super::errors::ResultExt;
+
+        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
+        let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
+        let mmconfig_region = Region::init_io_region(
+            MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1,
+            mmconfig_region_ops,
+        );
+        self.sys_mem
+            .root()
+            .add_subregion(
+                mmconfig_region,
+                MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0,
+            )
+            .chain_err(|| "Failed to register ECAM in memory space.")?;
+
+        let pcihost_root = PciHostRoot::new(root_bus);
+        pcihost_root
+            .realize()
+            .chain_err(|| "Faile to realize pcihost root device.")?;
+
         Ok(())
     }
 
@@ -388,6 +411,7 @@ impl MachineOps for StdMachine {
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> Result<()> {
+        use super::errors::ErrorKind as StdErrorKind;
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
@@ -414,6 +438,9 @@ impl MachineOps for StdMachine {
 
         // Interrupt Controller Chip init
         locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm
+            .init_pci_host()
+            .chain_err(|| StdErrorKind::InitPCIeHostErr)?;
         locked_vm
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
@@ -658,6 +685,72 @@ impl EventLoopManager for StdMachine {
         set_termi_canon_mode().chain_err(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
+}
+
+// Function that helps to generate pci node in device-tree.
+//
+// # Arguments
+//
+// * `fdt` - Flatted device-tree blob where node will be filled into.
+fn generate_pci_host_node(fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+    let pcie_ecam_base = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
+    let pcie_ecam_size = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1;
+    let pcie_buses_num = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20;
+    let node = format!("/pcie@{:x}", pcie_ecam_base);
+    device_tree::add_sub_node(fdt, &node)?;
+    device_tree::set_property_string(fdt, &node, "compatible", "pci-host-ecam-generic")?;
+    device_tree::set_property_string(fdt, &node, "device_type", "pci")?;
+    device_tree::set_property_array_u64(fdt, &node, "reg", &[pcie_ecam_base, pcie_ecam_size])?;
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "bus-range",
+        &[0, (pcie_buses_num - 1) as u32],
+    )?;
+    device_tree::set_property_u32(fdt, &node, "linux,pci-domain", 0)?;
+    device_tree::set_property_u32(fdt, &node, "#address-cells", 3)?;
+    device_tree::set_property_u32(fdt, &node, "#size-cells", 2)?;
+
+    let pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].0;
+    let pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].1;
+    let fdt_pci_mmio_type: u32 = 0x0200_0000;
+    let mmio_base_hi: u32 = (pcie_mmio_base >> 32) as u32;
+    let mmio_base_lo: u32 = (pcie_mmio_base & 0xffff_ffff) as u32;
+    let mmio_size_hi: u32 = (pcie_mmio_size >> 32) as u32;
+    let mmio_size_lo: u32 = (pcie_mmio_size & 0xffff_ffff) as u32;
+
+    let pcie_pio_base = MEM_LAYOUT[LayoutEntryType::PciePio as usize].0;
+    let pcie_pio_size = MEM_LAYOUT[LayoutEntryType::PciePio as usize].1;
+    let fdt_pci_pio_type: u32 = 0x0100_0000;
+    let pio_base_hi: u32 = (pcie_pio_base >> 32) as u32;
+    let pio_base_lo: u32 = (pcie_pio_base & 0xffff_ffff) as u32;
+    let pio_size_hi: u32 = (pcie_pio_size >> 32) as u32;
+    let pio_size_lo: u32 = (pcie_pio_size & 0xffff_ffff) as u32;
+
+    device_tree::set_property_array_u32(
+        fdt,
+        &node,
+        "ranges",
+        &[
+            fdt_pci_pio_type,
+            0,
+            0,
+            pio_base_hi,
+            pio_base_lo,
+            pio_size_hi,
+            pio_size_lo,
+            fdt_pci_mmio_type,
+            mmio_base_hi,
+            mmio_base_lo,
+            mmio_base_hi,
+            mmio_base_lo,
+            mmio_size_hi,
+            mmio_size_lo,
+        ],
+    )?;
+
+    device_tree::set_property_u32(fdt, &node, "msi-parent", device_tree::GIC_ITS_PHANDLE)?;
+    Ok(())
 }
 
 // Function that helps to generate Virtio-Mmio device's node in device-tree.
@@ -935,6 +1028,9 @@ impl CompileFDTHelper for StdMachine {
             }
         }
         generate_flash_device_node(fdt)?;
+
+        generate_pci_host_node(fdt)?;
+
         Ok(())
     }
 
