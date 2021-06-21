@@ -217,6 +217,7 @@ impl KvmMemoryListener {
 
         if flat_range.owner.region_type() != RegionType::Ram
             && flat_range.owner.region_type() != RegionType::RomDevice
+            && flat_range.owner.region_type() != RegionType::RamDevice
         {
             return Ok(());
         }
@@ -277,6 +278,7 @@ impl KvmMemoryListener {
     fn delete_region(&self, flat_range: &FlatRange) -> Result<()> {
         if flat_range.owner.region_type() != RegionType::Ram
             && flat_range.owner.region_type() != RegionType::RomDevice
+            && flat_range.owner.region_type() != RegionType::RamDevice
         {
             return Ok(());
         }
@@ -585,8 +587,9 @@ mod test {
     }
 
     fn create_ram_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
-        let mem_mapping =
-            Arc::new(HostMemMapping::new(GuestAddress(addr), size, None, false, false).unwrap());
+        let mem_mapping = Arc::new(
+            HostMemMapping::new(GuestAddress(addr), size, None, false, false, false).unwrap(),
+        );
         FlatRange {
             addr_range: AddressRange::new(
                 mem_mapping.start_address().unchecked_add(offset_in_region),

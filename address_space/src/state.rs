@@ -116,6 +116,7 @@ impl MigrationHook for AddressSpace {
                     Some(file_backend),
                     false,
                     false,
+                    false,
                 )
                 .map_err(|e| ErrorKind::RestoreVmMemoryErr(e.to_string()))?,
             );

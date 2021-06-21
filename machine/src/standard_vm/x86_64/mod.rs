@@ -407,6 +407,7 @@ impl MachineOps for StdMachine {
                 None,
                 false,
                 false,
+                false,
             )?));
             rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
             rom_region.set_priority(10);

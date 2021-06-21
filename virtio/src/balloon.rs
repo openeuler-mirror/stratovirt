@@ -957,7 +957,7 @@ mod tests {
         let root = Region::init_container_region(1 << 36);
         let sys_space = AddressSpace::new(root).unwrap();
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), MEMORY_SIZE, None, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(0), MEMORY_SIZE, None, false, false, false).unwrap(),
         );
         sys_space
             .root()
@@ -970,8 +970,9 @@ mod tests {
     }
 
     fn create_flat_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
-        let mem_mapping =
-            Arc::new(HostMemMapping::new(GuestAddress(addr), size, None, false, false).unwrap());
+        let mem_mapping = Arc::new(
+            HostMemMapping::new(GuestAddress(addr), size, None, false, false, false).unwrap(),
+        );
         FlatRange {
             addr_range: AddressRange::new(
                 mem_mapping.start_address().unchecked_add(offset_in_region),
