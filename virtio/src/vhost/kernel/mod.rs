@@ -25,7 +25,9 @@ use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use util::byte_code::ByteCode;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
@@ -41,6 +43,7 @@ const VHOST: u32 = 0xaf;
 ioctl_ior_nr!(VHOST_GET_FEATURES, VHOST, 0x00, u64);
 ioctl_iow_nr!(VHOST_SET_FEATURES, VHOST, 0x00, u64);
 ioctl_io_nr!(VHOST_SET_OWNER, VHOST, 0x01);
+ioctl_io_nr!(VHOST_RESET_OWNER, VHOST, 0x02);
 ioctl_iow_nr!(VHOST_SET_MEM_TABLE, VHOST, 0x03, VhostMemory);
 ioctl_iow_nr!(VHOST_SET_VRING_NUM, VHOST, 0x10, VhostVringState);
 ioctl_iow_nr!(VHOST_SET_VRING_ADDR, VHOST, 0x11, VhostVringAddr);
@@ -255,6 +258,14 @@ impl VhostOps for VhostBackend {
         Ok(())
     }
 
+    fn reset_owner(&self) -> Result<()> {
+        let ret = unsafe { ioctl(self, VHOST_RESET_OWNER()) };
+        if ret < 0 {
+            return Err(ErrorKind::VhostIoctl("VHOST_RESET_OWNER".to_string()).into());
+        }
+        Ok(())
+    }
+
     fn get_features(&self) -> Result<u64> {
         let mut avail_features: u64 = 0;
         let ret = unsafe { ioctl_with_mut_ref(self, VHOST_GET_FEATURES(), &mut avail_features) };
@@ -410,6 +421,24 @@ impl VhostOps for VhostBackend {
 pub struct VhostIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
+    reset_evt: RawFd,
+}
+
+impl VhostIoHandler {
+    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+        for host_notify in self.host_notifies.iter() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                host_notify.notify_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+
+        notifiers
+    }
 }
 
 impl EventNotifierHelper for VhostIoHandler {
@@ -448,6 +477,20 @@ impl EventNotifierHelper for VhostIoHandler {
                 vec![h.clone()],
             ));
         }
+
+        // Register event notifier for reset_evt.
+        let vhost = vhost_handler.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(vhost.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            vhost_handler.lock().unwrap().reset_evt,
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
 
         notifiers
     }

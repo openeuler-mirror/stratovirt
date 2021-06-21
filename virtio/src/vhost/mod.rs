@@ -32,6 +32,10 @@ pub trait VhostOps {
     /// of the vhost backend. This must be run before any other vhost commands.
     fn set_owner(&self) -> Result<()>;
 
+    /// Give up ownership, reset the device. Add calling `set_owner` function
+    /// later is permitted.
+    fn reset_owner(&self) -> Result<()>;
+
     /// Get a bitmask of supported vhost specific features.
     fn get_features(&self) -> Result<u64>;
 
