@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use pci::{
     config::{
-        PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_VENDOR_ID_REDHAT, PCI_CONFIG_SPACE_SIZE,
+        PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
         REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
     errors::Result as PciResult,
@@ -53,7 +53,11 @@ impl PciDevOps for PciHostRoot {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
-        le_write_u16(&mut self.config.config, VENDOR_ID as usize, PCI_VENDOR_ID_REDHAT)?;
+        le_write_u16(
+            &mut self.config.config,
+            VENDOR_ID as usize,
+            PCI_VENDOR_ID_REDHAT,
+        )?;
         le_write_u16(
             &mut self.config.config,
             DEVICE_ID as usize,
