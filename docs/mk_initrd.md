@@ -60,7 +60,7 @@ $ ./stratovirt \
     -kernel /path/to/kernel \
     -append console=ttyS0 reboot=k panic=1 root=/dev/ram rdinit=/bin/sh \
     -initrd /tmp/StratoVirt-initrd \
-    -api-channel unix:/path/to/socket \
+    -qmp unix:/path/to/socket \
     -serial stdio
 ```
 

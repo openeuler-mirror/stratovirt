@@ -663,10 +663,10 @@ mod tests {
                     .takes_value(true),
             )
             .arg(
-                Arg::with_name("api-channel")
-                    .long("api-channel")
+                Arg::with_name("qmp")
+                    .long("qmp")
                     .value_name("unix:PATH")
-                    .help("set api-channel's unixsocket path")
+                    .help("set qmp's unixsocket path")
                     .takes_value(true)
                     .required(true),
             )
@@ -778,17 +778,19 @@ mod tests {
 
     #[test]
     fn test_arg_matches() {
-        let arg_matches = create_test_arg_matches("stratovirt -name vm1 -api-channel unix:sv.sock -drive file=/path/to/rootfs,id=rootfs -D -S");
+        let arg_matches = create_test_arg_matches(
+            "stratovirt -name vm1 -qmp unix:sv.sock -drive file=/path/to/rootfs,id=rootfs -D -S",
+        );
 
         assert!(arg_matches.is_present("name"));
-        assert!(arg_matches.is_present("api-channel"));
+        assert!(arg_matches.is_present("qmp"));
         assert!(arg_matches.is_present("drive"));
         assert!(arg_matches.is_present("display log"));
         assert!(arg_matches.is_present("freeze_cpu"));
 
         assert_eq!(arg_matches.value_of("name").as_ref().unwrap(), "vm1");
         assert_eq!(
-            arg_matches.value_of("api-channel").as_ref().unwrap(),
+            arg_matches.value_of("qmp").as_ref().unwrap(),
             "unix:sv.sock"
         );
         assert_eq!(
