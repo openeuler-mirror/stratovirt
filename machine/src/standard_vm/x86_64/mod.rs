@@ -33,7 +33,7 @@ use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
     BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
-    SerialConfig, VmConfig, VsockConfig,
+    RngConfig, SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -396,6 +396,10 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn add_rng_device(&mut self, _config: &RngConfig) -> MachineResult<()> {
+        Ok(())
+    }
+
     fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -437,6 +441,10 @@ impl MachineOps for StdMachine {
         if let Some(balloon) = vm_config.balloon.as_ref() {
             self.add_balloon_device(balloon)
                 .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
+        }
+        if let Some(rng) = vm_config.rng.as_ref() {
+            self.add_rng_device(rng)
+                .chain_err(|| MachineErrorKind::AddDevErr("rng".to_string()))?;
         }
 
         Ok(())

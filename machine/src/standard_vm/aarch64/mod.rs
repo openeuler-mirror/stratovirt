@@ -27,7 +27,7 @@ use devices::{InterruptController, InterruptControllerConfig};
 use hypervisor::KVM_FDS;
 use machine_manager::config::{
     BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
-    SerialConfig, VmConfig, VsockConfig,
+    RngConfig, SerialConfig, VmConfig, VsockConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
@@ -354,6 +354,10 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn add_rng_device(&mut self, _config: &RngConfig) -> Result<()> {
+        Ok(())
+    }
+
     fn add_devices(&mut self, vm_config: &VmConfig) -> Result<()> {
         use crate::errors::ResultExt;
 
@@ -371,36 +375,35 @@ impl MachineOps for StdMachine {
             self.add_serial_device(&serial)
                 .chain_err(|| ErrorKind::AddDevErr("serial".to_string()))?;
         }
-
         if let Some(vsock) = vm_config.vsock.as_ref() {
             self.add_vsock_device(&vsock)
                 .chain_err(|| ErrorKind::AddDevErr("vsock".to_string()))?;
         }
-
         if let Some(drives) = vm_config.drives.as_ref() {
             for drive in drives {
                 self.add_block_device(&drive)
                     .chain_err(|| ErrorKind::AddDevErr("block".to_string()))?;
             }
         }
-
         if let Some(nets) = vm_config.nets.as_ref() {
             for net in nets {
                 self.add_net_device(&net)
                     .chain_err(|| ErrorKind::AddDevErr("net".to_string()))?;
             }
         }
-
         if let Some(consoles) = vm_config.consoles.as_ref() {
             for console in consoles {
                 self.add_console_device(&console)
                     .chain_err(|| ErrorKind::AddDevErr("console".to_string()))?;
             }
         }
-
         if let Some(balloon) = vm_config.balloon.as_ref() {
             self.add_balloon_device(balloon)
                 .chain_err(|| ErrorKind::AddDevErr("balloon".to_string()))?;
+        }
+        if let Some(rng) = vm_config.rng.as_ref() {
+            self.add_rng_device(rng)
+                .chain_err(|| ErrorKind::AddDevErr("rng".to_string()))?;
         }
 
         Ok(())
