@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn test_net_init() {
         // test net new method
-        let mut net = Net::new();
+        let mut net = Net::default();
         assert_eq!(net.state.device_features, 0);
         assert_eq!(net.state.driver_features, 0);
 
