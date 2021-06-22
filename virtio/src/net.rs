@@ -414,7 +414,6 @@ impl EventNotifierHelper for NetIoHandler {
             read_fd(fd);
             Some(cloned_net_io.lock().unwrap().reset_evt_handler())
         });
-        let mut notifiers = Vec::new();
         notifiers.push(build_event_notifier(
             locked_net_io.reset_evt,
             Some(handler),
