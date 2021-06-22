@@ -210,3 +210,72 @@ def test_microvm_with_seccomp(microvm, with_seccomp):
             test_vm.wait_pid_exit()
     finally:
         utils.utils_common.remove_existing_dir(psyscall_path)
+
+@pytest.mark.acceptance
+@pytest.mark.parametrize("mem_size", [2 * 1024 * 1024 * 1024])
+def test_lightvm_mem_hugepage(microvm, mem_size):
+    """
+    Test lightvm with hugepage configuration for guest RAM.
+    Test lightvm with hugepages by set memory backend.
+
+    1) Prepare environment: mount hugetlbfs and set count of hugepages.
+    2) Launch vm and test the count of remaining free hugepages,
+       the count must less that the origin count.
+    3) Recover the environment: umount hugetlbfs if necessary.
+    """
+    default_hp_path = "/dev/hugepages/"
+
+    def set_host_hugepages(vm_mem_size):
+        """Prepare hugepage-relevant settings on host."""
+
+        mount_dir = None
+        is_mounted = True
+
+        output = run("mount -l | grep hugetlbfs", shell=True, capture_output=True, check=False).stdout.strip()
+        out = output.decode('utf-8').split(" ")
+        if len(out) > 2:
+            mount_dir = out[2]
+
+        if not mount_dir:
+            is_mounted = False
+            mount_dir = default_hp_path
+            run("mount -t hugetlbfs hugetlbfs %s" % mount_dir, shell=True, check=False)
+
+        output = run("cat /proc/meminfo | grep Hugepagesize", shell=True,
+                     capture_output=True, check=False).stdout.strip()
+        hugepage_size = output.decode('utf-8').lstrip("Hugepagesize:").rstrip("kB").strip()
+
+        output = run("cat /proc/meminfo | grep HugePages_Total", shell=True,
+                     capture_output=True, check=False).stdout.strip()
+        _old_hugepages_count = output.decode('utf-8').lstrip("HugePages_Total:").rstrip("kB").strip()
+        output = run("cat /proc/meminfo | grep HugePages_Free", shell=True,
+                     capture_output=True, check=False).stdout.strip()
+        _old_hugepages_free = output.decode('utf-8').lstrip("HugePages_Free:").rstrip("kB").strip()
+
+        hugepages_count = int(_old_hugepages_count) + vm_mem_size / (int(hugepage_size) * 1024) + 1
+        run("sysctl vm.nr_hugepages=%s" % int(hugepages_count), shell=True, check=False)
+
+        return mount_dir, _old_hugepages_count, _old_hugepages_free, is_mounted
+
+    def recover_host_hugepages(_old_mount_dir, _old_hugepages_count, is_mounted):
+        """Recover hugepage-relevant settings on host."""
+
+        run("sysctl vm.nr_hugepages=%s" % _old_hugepages_count, shell=True, check=False)
+        if not is_mounted:
+            run("umount hugetlbfs", shell=True, check=False)
+
+    mount_dir, old_huge_cnt, old_huge_free, is_mounted = set_host_hugepages(vm_mem_size=mem_size)
+
+    test_vm = microvm
+    test_vm.basic_config(mem_size=mem_size, mem_path=mount_dir)
+    test_vm.launch()
+
+    # check remaining hugepages count on host.
+    output = run("cat /proc/meminfo | grep HugePages_Free", shell=True,
+                 capture_output=True, check=False).stdout.strip()
+    remain_free_count = output.decode('utf-8').lstrip("HugePages_Free:").rstrip("kB").strip()
+    assert int(remain_free_count) >= int(old_huge_free)
+
+    test_vm.shutdown()
+
+    recover_host_hugepages(mount_dir, old_huge_cnt, is_mounted)
