@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 #[cfg(target_arch = "aarch64")]
-use util::device_tree;
+use util::device_tree::{self, FdtBuilder};
 
 pub use self::errors::{ErrorKind, Result};
 pub use balloon::*;
@@ -186,7 +186,7 @@ impl VmConfig {
 
 #[cfg(target_arch = "aarch64")]
 impl device_tree::CompileFDT for VmConfig {
-    fn generate_fdt_node(&self, _fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+    fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> util::errors::Result<()> {
         Ok(())
     }
 }

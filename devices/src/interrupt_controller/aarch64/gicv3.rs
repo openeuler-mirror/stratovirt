@@ -19,7 +19,7 @@ use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
 use hypervisor::KVM_FDS;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use migration::MigrationManager;
-use util::fdt::{self, FdtBuilder};
+use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
@@ -411,13 +411,17 @@ impl GICDevice for GICv3 {
         fdt.set_property_string("compatible", "arm,gic-v3")?;
         fdt.set_property("interrupt-controller", &Vec::new())?;
         fdt.set_property_u32("#interrupt-cells", 0x3)?;
-        fdt.set_property_u32("phandle", fdt::GIC_PHANDLE)?;
+        fdt.set_property_u32("phandle", device_tree::GIC_PHANDLE)?;
         fdt.set_property_u32("#address-cells", 0x2)?;
         fdt.set_property_u32("#size-cells", 0x2)?;
         fdt.set_property_u32("#redistributor-regions", redist_count)?;
         fdt.set_property_array_u64("reg", &gic_reg)?;
 
-        let gic_intr = [fdt::GIC_FDT_IRQ_TYPE_PPI, 0x9, fdt::IRQ_TYPE_LEVEL_HIGH];
+        let gic_intr = [
+            device_tree::GIC_FDT_IRQ_TYPE_PPI,
+            0x9,
+            device_tree::IRQ_TYPE_LEVEL_HIGH,
+        ];
         fdt.set_property_array_u32("interrupts", &gic_intr)?;
 
         if let Some(its) = &self.its_dev {
@@ -427,7 +431,7 @@ impl GICDevice for GICv3 {
             let its_node_dep = fdt.begin_node(node)?;
             fdt.set_property_string("compatible", "arm,gic-v3-its")?;
             fdt.set_property("msi-controller", &Vec::new())?;
-            fdt.set_property_u32("phandle", fdt::GIC_ITS_PHANDLE)?;
+            fdt.set_property_u32("phandle", device_tree::GIC_ITS_PHANDLE)?;
             fdt.set_property_array_u64("reg", &its_reg)?;
             fdt.end_node(its_node_dep)?;
         }

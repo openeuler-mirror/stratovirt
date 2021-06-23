@@ -100,7 +100,7 @@ use sysbus::SysBus;
 #[cfg(target_arch = "aarch64")]
 use sysbus::{SysBusDevType, SysRes};
 #[cfg(target_arch = "aarch64")]
-use util::fdt::{self, CompileFDT, FdtBuilder};
+use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
@@ -1329,14 +1329,14 @@ fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::erro
     let serial_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "ns16550a")?;
     fdt.set_property_string("clock-names", "apb_pclk")?;
-    fdt.set_property_u32("clocks", fdt::CLK_PHANDLE)?;
+    fdt.set_property_u32("clocks", device_tree::CLK_PHANDLE)?;
     fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
     fdt.set_property_array_u32(
         "interrupts",
         &[
-            fdt::GIC_FDT_IRQ_TYPE_SPI,
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
             res.irq as u32,
-            fdt::IRQ_TYPE_EDGE_RISING,
+            device_tree::IRQ_TYPE_EDGE_RISING,
         ],
     )?;
     fdt.end_node(serial_node_dep)?;
@@ -1356,14 +1356,14 @@ fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors:
     let rtc_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "arm,pl031\0arm,primecell\0")?;
     fdt.set_property_string("clock-names", "apb_pclk")?;
-    fdt.set_property_u32("clocks", fdt::CLK_PHANDLE)?;
+    fdt.set_property_u32("clocks", device_tree::CLK_PHANDLE)?;
     fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
     fdt.set_property_array_u32(
         "interrupts",
         &[
-            fdt::GIC_FDT_IRQ_TYPE_SPI,
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
             res.irq as u32,
-            fdt::IRQ_TYPE_LEVEL_HIGH,
+            device_tree::IRQ_TYPE_LEVEL_HIGH,
         ],
     )?;
     fdt.end_node(rtc_node_dep)?;
@@ -1382,14 +1382,14 @@ fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::err
     let node = format!("virtio_mmio@{:x}", res.region_base);
     let virtio_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "virtio,mmio")?;
-    fdt.set_property_u32("interrupt-parent", fdt::GIC_PHANDLE)?;
+    fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
     fdt.set_property_array_u64("reg", &[res.region_base, res.region_size])?;
     fdt.set_property_array_u32(
         "interrupts",
         &[
-            fdt::GIC_FDT_IRQ_TYPE_SPI,
+            device_tree::GIC_FDT_IRQ_TYPE_SPI,
             res.irq as u32,
-            fdt::IRQ_TYPE_EDGE_RISING,
+            device_tree::IRQ_TYPE_EDGE_RISING,
         ],
     )?;
     fdt.end_node(virtio_node_dep)?;
@@ -1474,7 +1474,10 @@ impl CompileFDTHelper for LightMachine {
 
             let node = format!("cpu@{:x}", mpidr);
             let mpidr_node_dep = fdt.begin_node(&node)?;
-            fdt.set_property_u32("phandle", u32::from(cpu_index) + fdt::CPU_PHANDLE_START)?;
+            fdt.set_property_u32(
+                "phandle",
+                u32::from(cpu_index) + device_tree::CPU_PHANDLE_START,
+            )?;
             fdt.set_property_string("device_type", "cpu")?;
             fdt.set_property_string("compatible", "arm,arm-v8")?;
             if self.cpu_topo.max_cpus > 1 {
@@ -1506,9 +1509,9 @@ impl CompileFDTHelper for LightMachine {
         // timer
         let mut cells: Vec<u32> = Vec::new();
         for &irq in [13, 14, 11, 10].iter() {
-            cells.push(fdt::GIC_FDT_IRQ_TYPE_PPI);
+            cells.push(device_tree::GIC_FDT_IRQ_TYPE_PPI);
             cells.push(irq);
-            cells.push(fdt::IRQ_TYPE_LEVEL_HIGH);
+            cells.push(device_tree::IRQ_TYPE_LEVEL_HIGH);
         }
         let node = "timer";
         let timer_node_dep = fdt.begin_node(node)?;
@@ -1524,7 +1527,7 @@ impl CompileFDTHelper for LightMachine {
         fdt.set_property_string("clock-output-names", "clk24mhz")?;
         fdt.set_property_u32("#clock-cells", 0x0)?;
         fdt.set_property_u32("clock-frequency", 24_000_000)?;
-        fdt.set_property_u32("phandle", fdt::CLK_PHANDLE)?;
+        fdt.set_property_u32("phandle", device_tree::CLK_PHANDLE)?;
         fdt.end_node(clock_node_dep)?;
 
         // psci
@@ -1570,14 +1573,14 @@ impl CompileFDTHelper for LightMachine {
 }
 
 #[cfg(target_arch = "aarch64")]
-impl fdt::CompileFDT for LightMachine {
+impl device_tree::CompileFDT for LightMachine {
     fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
         let node_dep = fdt.begin_node("")?;
 
         fdt.set_property_string("compatible", "linux,dummy-virt")?;
         fdt.set_property_u32("#address-cells", 0x2)?;
         fdt.set_property_u32("#size-cells", 0x2)?;
-        fdt.set_property_u32("interrupt-parent", fdt::GIC_PHANDLE)?;
+        fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
 
         self.generate_cpu_nodes(fdt)?;
         self.generate_memory_node(fdt)?;

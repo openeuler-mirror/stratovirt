@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::{
+    device_tree::{self, FdtBuilder},
     errors::Result as UtilResult,
-    fdt::{self, FdtBuilder},
 };
 
 use super::errors::{ErrorKind, Result, ResultExt};
@@ -123,7 +123,7 @@ impl InterruptController {
     }
 }
 
-impl fdt::CompileFDT for InterruptController {
+impl device_tree::CompileFDT for InterruptController {
     fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
         self.gic.generate_fdt(fdt)?;
         Ok(())

@@ -28,8 +28,6 @@ pub mod checksum;
 pub mod daemonize;
 #[cfg(target_arch = "aarch64")]
 pub mod device_tree;
-#[cfg(target_arch = "aarch64")]
-pub mod fdt;
 pub mod leak_bucket;
 mod link_list;
 pub mod loop_context;
