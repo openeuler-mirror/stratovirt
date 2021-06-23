@@ -19,7 +19,10 @@ pub use gicv3::GICv3;
 use std::sync::Arc;
 
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use util::{device_tree, errors::Result as UtilResult};
+use util::{
+    errors::Result as UtilResult,
+    fdt::{self, FdtBuilder},
+};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 
@@ -88,7 +91,7 @@ pub trait GICDevice: MachineLifecycle {
     /// # Arguments
     ///
     /// * `fdt` - Device tree presented by bytes.
-    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> UtilResult<()>;
+    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()>;
 }
 
 /// A wrapper around creating and using a kvm-based interrupt controller.
@@ -120,8 +123,8 @@ impl InterruptController {
     }
 }
 
-impl device_tree::CompileFDT for InterruptController {
-    fn generate_fdt_node(&self, fdt: &mut Vec<u8>) -> UtilResult<()> {
+impl fdt::CompileFDT for InterruptController {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
         self.gic.generate_fdt(fdt)?;
         Ok(())
     }
