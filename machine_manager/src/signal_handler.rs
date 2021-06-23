@@ -36,7 +36,7 @@ pub fn exit_with_code(code: i32) {
     }
 }
 
-extern "C" fn handle_signal_term(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
+extern "C" fn handle_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
     info!("Received kill signal, signal num: {}", num);
     basic_clean();
     exit_with_code(VM_EXIT_GENE_ERR);
@@ -52,8 +52,10 @@ extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) 
 
 /// Register kill signal handler. Signals supported now are SIGTERM and SIGSYS.
 pub fn register_kill_signal() {
-    register_signal_handler(libc::SIGTERM, handle_signal_term)
+    register_signal_handler(libc::SIGTERM, handle_signal_kill)
         .expect("Register signal handler for SIGTERM failed!");
     register_signal_handler(libc::SIGSYS, handle_signal_sys)
         .expect("Register signal handler for SIGSYS failed!");
+    register_signal_handler(libc::SIGINT, handle_signal_kill)
+        .expect("Register signal handler for SIGINT failed!");
 }
