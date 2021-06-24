@@ -1105,6 +1105,7 @@ mod tests {
 
         let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let event_def = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let event_reset = EventFd::new(libc::EFD_NONBLOCK).unwrap();
 
         let mut handler = BalloonIoHandler {
             driver_features: bln.driver_features,
@@ -1113,6 +1114,7 @@ mod tests {
             inf_evt: event_inf.try_clone().unwrap(),
             def_queue: queue2,
             def_evt: event_def,
+            reset_evt: event_reset.as_raw_fd(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),

@@ -414,7 +414,6 @@ impl EventNotifierHelper for NetIoHandler {
             read_fd(fd);
             Some(cloned_net_io.lock().unwrap().reset_evt_handler())
         });
-        let mut notifiers = Vec::new();
         notifiers.push(build_event_notifier(
             locked_net_io.reset_evt,
             Some(handler),
@@ -836,7 +835,7 @@ mod tests {
     #[test]
     fn test_net_init() {
         // test net new method
-        let mut net = Net::new();
+        let mut net = Net::default();
         assert_eq!(net.state.device_features, 0);
         assert_eq!(net.state.driver_features, 0);
 

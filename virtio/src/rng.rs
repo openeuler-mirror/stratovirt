@@ -544,9 +544,11 @@ mod tests {
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
+        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: reset_event.as_raw_fd(),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
@@ -619,9 +621,11 @@ mod tests {
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
+        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: reset_event.as_raw_fd(),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
