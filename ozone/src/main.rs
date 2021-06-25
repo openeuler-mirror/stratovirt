@@ -14,8 +14,10 @@
 extern crate error_chain;
 
 use args::create_args_parser;
+use handler::OzoneHandler;
 
 mod args;
+mod handler;
 
 error_chain! {
     links {
@@ -37,7 +39,8 @@ error_chain! {
 quick_main!(run);
 
 fn run() -> Result<()> {
-    #[allow(unused_variables)]
     let args = create_args_parser().get_matches()?;
+    #[allow(unused_variables)]
+    let handler = OzoneHandler::new(&args).chain_err(|| "Failed to parse cmdline args")?;
     Ok(())
 }
