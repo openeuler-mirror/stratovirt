@@ -35,11 +35,16 @@ members = [
     "util",
     "acpi",
     "virtio",
+    "ozone",
 ]
 
 [[bin]]
 name = "stratovirt"
 path = "src/main.rs"
+
+[[bin]]
+name = "ozone"
+path = "ozone/src/main.rs"
 
 [features]
 default = []
