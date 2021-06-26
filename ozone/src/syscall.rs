@@ -191,3 +191,42 @@ pub fn chdir(new_path: &str) -> Result<()> {
     }
     .into()
 }
+
+/// Change permissions of file or directory.
+///
+/// # Arguments
+///
+/// * `file_path` - The path of file.
+/// * `mode` - The file permissions.
+pub fn chmod(file_path: &str, mode: libc::mode_t) -> Result<()> {
+    let path = into_cstring(file_path)?;
+    SyscallResult {
+        ret: unsafe { libc::chmod(path.as_ptr(), mode) },
+    }
+    .into()
+}
+
+/// Manage device number
+///
+/// # Arguments
+///
+/// * `major_id` - The major device number.
+/// * `minor_id` - The minor device number.
+pub fn makedev(major_id: u32, minor_id: u32) -> Result<libc::dev_t> {
+    Ok(unsafe { libc::makedev(major_id, minor_id) })
+}
+
+/// Create a special or ordinary file.
+///
+/// # Arguments
+///
+/// * `node_path` - The path of file node.
+/// * `mode` - The node permissions.
+/// * `dev` - The device number.
+pub fn mknod(node_path: &str, mode: libc::mode_t, dev: libc::dev_t) -> Result<()> {
+    let path = into_cstring(node_path)?;
+    SyscallResult {
+        ret: unsafe { libc::mknod(path.as_ptr(), mode, dev) },
+    }
+    .into()
+}

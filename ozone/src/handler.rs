@@ -11,9 +11,13 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{namespace, syscall, ErrorKind, Result, ResultExt};
+
+use std::process::Command;
 use std::{
     fs::{canonicalize, read_dir},
+    os::unix::prelude::CommandExt,
     path::{Path, PathBuf},
+    process::Stdio,
 };
 
 use util::arg_parser::ArgMatches;
@@ -22,6 +26,24 @@ const BASE_OZONE_PATH: &str = "/srv/ozone";
 const SELF_FD: &str = "/proc/self/fd";
 const MAX_STRING_LENGTH: usize = 255;
 const MAX_ID_NUMBER: u32 = 65535;
+const NEWROOT_FOLDERS: [&str; 3] = ["/", "/dev", "/dev/net"];
+const NEWROOT_DEVICE_NR: usize = 6;
+const NEWROOT_DEVICES: [&str; NEWROOT_DEVICE_NR] = [
+    "/dev/kvm",
+    "/dev/net/tun",
+    "/dev/vhost-net",
+    "/dev/vhost-vsock",
+    "/dev/urandom",
+    "/dev/null",
+];
+const NEWROOT_DEVICES_PERMISSION: [[u32; 3]; NEWROOT_DEVICE_NR] = [
+    [10, 232, 0o660],
+    [10, 200, 0o666],
+    [10, 238, 0o600],
+    [10, 241, 0o600],
+    [1, 9, 0o666],
+    [1, 3, 0o666],
+];
 
 /// OzoneHandler is used to handle data.
 #[derive(Default)]
@@ -161,6 +183,34 @@ impl OzoneHandler {
         }
     }
 
+    fn create_newroot_folder(&self, folder: &str) -> Result<()> {
+        std::fs::create_dir_all(folder)
+            .chain_err(|| format!("Failed to create folder: {:?}", &folder))?;
+        syscall::chmod(folder, 0o700)
+            .chain_err(|| format!("Failed to chmod to 0o700 for folder: {:?}", &folder))?;
+        syscall::chown(folder, self.uid, self.gid)
+            .chain_err(|| format!("Failed to change owner for folder: {:?}", &folder))?;
+        Ok(())
+    }
+
+    fn create_newroot_device(
+        &self,
+        dev_path: &str,
+        dev_major: u32,
+        dev_minor: u32,
+        mode: u32,
+    ) -> Result<()> {
+        let dev = syscall::makedev(dev_major, dev_minor)?;
+        syscall::mknod(dev_path, libc::S_IFCHR | libc::S_IWUSR | libc::S_IRUSR, dev)
+            .chain_err(|| format!("Failed to call mknod for device: {:?}", &dev_path))?;
+        syscall::chmod(dev_path, mode)
+            .chain_err(|| format!("Failed to change mode for device: {:?}", &dev_path))?;
+        syscall::chown(dev_path, self.uid, self.gid)
+            .chain_err(|| format!("Failed to change owner for device: {:?}", &dev_path))?;
+
+        Ok(())
+    }
+
     /// Realize OzoneHandler.
     pub fn realize(&self) -> Result<()> {
         // First, disinfect the process.
@@ -177,7 +227,33 @@ impl OzoneHandler {
             namespace::set_network_namespace(netns_path)?;
         }
         namespace::set_mount_namespace(self.chroot_dir.to_str().unwrap())?;
-        Ok(())
+
+        for folder in NEWROOT_FOLDERS.iter() {
+            self.create_newroot_folder(*folder)?;
+        }
+
+        for index in 0..NEWROOT_DEVICE_NR {
+            self.create_newroot_device(
+                NEWROOT_DEVICES[index],
+                NEWROOT_DEVICES_PERMISSION[index][0],
+                NEWROOT_DEVICES_PERMISSION[index][1],
+                NEWROOT_DEVICES_PERMISSION[index][2],
+            )?;
+        }
+
+        let mut chroot_exec_file = PathBuf::from("/");
+        chroot_exec_file.push(self.exec_file_name()?);
+        Err(ErrorKind::ExecError(
+            Command::new(chroot_exec_file)
+                .gid(self.gid)
+                .uid(self.uid)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .args(&self.extra_args)
+                .exec(),
+        )
+        .into())
     }
 
     /// Clean the environment.
