@@ -519,6 +519,7 @@ impl PciConfig {
                         .delete_subregion(self.bars[id].region.as_ref().unwrap())
                         .chain_err(|| ErrorKind::UnregMemBar(id))?,
                 }
+                self.bars[id].address = BAR_SPACE_UNMAPPED;
             }
             if new_addr != BAR_SPACE_UNMAPPED {
                 match self.bars[id].region_type {
@@ -532,6 +533,7 @@ impl PciConfig {
                         .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
                         .chain_err(|| ErrorKind::UnregMemBar(id))?,
                 }
+                self.bars[id].address = new_addr;
             }
         }
         Ok(())
