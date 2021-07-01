@@ -329,22 +329,22 @@ Four parameters are supported for pcie root port.
 StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
  in current version.
 
-### 3.1 Api-channel Creation
+### 3.1 qmp Creation
 
-When running StratoVirt, you must create api-channel in cmdline arguments as a management interface.
+When running StratoVirt, you must create qmp in cmdline arguments as a management interface.
 
-StratoVirt supports UnixSocket-type api-channel, you can set it by:
+StratoVirt supports UnixSocket-type qmp, you can set it by:
 
 ```shell
 # cmdline
--api-channel unix:/path/to/api/socket
+-qmp unix:/path/to/api/socket
 ```
 
-### 3.2 Api-channel Connection
+### 3.2 qmp Connection
 
-After StratoVirt started, you can connect to StratoVirt's api-channel and manage it by QMP.
+After StratoVirt started, you can connect to StratoVirt's qmp and manage it by QMP.
 
-Several steps to connect api-channel are showed as following:
+Several steps to connect qmp are showed as following:
 
 ```shell
 # Start with UnixSocket

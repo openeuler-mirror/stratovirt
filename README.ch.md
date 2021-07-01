@@ -29,12 +29,12 @@ $ cargo build --release
 https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
 
 ```shell
-# 如果-api-channel的socket文件已经存在，请先删除它
+# 如果-qmp的socket文件已经存在，请先删除它
 $ ./target/release/stratovirt \
     -kernel /path/to/kernel \
     -append console=ttyS0 root=/dev/vda reboot=k panic=1 \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -api-channel unix:/path/to/socket \
+    -qmp unix:/path/to/socket \
     -serial stdio
 ```
 

@@ -38,12 +38,12 @@ You can get kernel and rootfs image from the following link:
 https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
 
 ```shell
-# If the socket of api-channel exists, remove if first.
+# If the socket of qmp exists, remove if first.
 $ ./target/release/stratovirt \
     -kernel /path/to/kernel \
     -append console=ttyS0 root=/dev/vda reboot=k panic=1 \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -api-channel unix:/path/to/socket \
+    -qmp unix:/path/to/socket \
     -serial stdio
 ```
 

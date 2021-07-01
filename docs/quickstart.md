@@ -69,7 +69,7 @@ socket_path=`pwd`"/stratovirt.sock"
 kernel_path=`pwd`"/vmlinux.bin"
 rootfs_path=`pwd`"/rootfs.ext4"
 
-# Make sure api-channel can be created.
+# Make sure qmp can be created.
 rm -f ${socket_path}
 
 # Start StratoVirt guest linux machine.
@@ -79,7 +79,7 @@ rm -f ${socket_path}
     -m 1024m \
     -append console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda \
     -drive file=${rootfs_path},id=rootfs,readonly=off,direct=off \
-    -api-channel unix:${socket_path} \
+    -qmp unix:${socket_path} \
     -serial stdio
 ```
 

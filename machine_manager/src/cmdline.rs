@@ -132,10 +132,10 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("api-channel")
-                .long("api-channel")
+            Arg::with_name("qmp")
+                .long("qmp")
                 .value_name("unix:socket_path")
-                .help("set api-channel's unixsocket path")
+                .help("set qmp's unixsocket path")
                 .takes_value(true)
                 .required(true),
         )
@@ -307,7 +307,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     Ok(vm_cfg)
 }
 
-/// This function is to parse api-channel socket path and type.
+/// This function is to parse qmp socket path and type.
 ///
 /// # Arguments
 ///
@@ -315,13 +315,13 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
 ///
 /// # Errors
 ///
-/// The value of `api-channel` is illegel.
+/// The value of `qmp` is illegel.
 pub fn check_api_channel(args: &ArgMatches) -> Result<(String, UnixPath)> {
-    if let Some(api) = args.value_of("api-channel") {
+    if let Some(api) = args.value_of("qmp") {
         let (api_type, api_path) =
-            parse_uri(&api).chain_err(|| "Failed to parse api-channel socket path")?;
+            parse_uri(&api).chain_err(|| "Failed to parse qmp socket path")?;
         Ok((api_path, api_type))
     } else {
-        bail!("Please use \'-api-channel\' to give a api-channel path for Unix socket");
+        bail!("Please use \'-qmp\' to give a qmp path for Unix socket");
     }
 }
