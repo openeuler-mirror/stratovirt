@@ -26,7 +26,6 @@ pub struct PFlashConfig {
     pub path_on_host: String,
     pub read_only: bool,
     pub unit: usize,
-    pub if_pflash: String,
 }
 
 impl Default for PFlashConfig {
@@ -35,7 +34,6 @@ impl Default for PFlashConfig {
             path_on_host: String::new(),
             read_only: false,
             unit: 0_usize,
-            if_pflash: String::new(),
         }
     }
 }
@@ -78,11 +76,7 @@ impl VmConfig {
     /// Add '-pflash ...' pflash config to `VmConfig`.
     pub fn add_pflash(&mut self, pflash_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("drive");
-        cmd_parser
-            .push("file")
-            .push("readonly")
-            .push("unit")
-            .push("if");
+        cmd_parser.push("file").push("readonly").push("unit");
 
         cmd_parser.parse(pflash_config)?;
 
@@ -102,10 +96,6 @@ impl VmConfig {
             pflash.unit = unit_id as usize;
         } else {
             return Err(ErrorKind::FieldIsMissing("unit", "pflash").into());
-        }
-
-        if let Some(if_pflash) = cmd_parser.get_value::<String>("if")? {
-            pflash.if_pflash = if_pflash;
         }
 
         self.add_flashdev(pflash)
