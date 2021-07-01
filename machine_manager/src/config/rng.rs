@@ -112,3 +112,112 @@ pub fn parse_rng_dev(vm_config: &VmConfig, rng_config: &str) -> Result<RngConfig
     rng_cfg.check()?;
     Ok(rng_cfg)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::config::get_pci_bdf;
+
+    use super::*;
+
+    #[test]
+    fn test_rng_config_cmdline_parser_01() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_config = parse_rng_dev(&vm_config, "virtio-rng-device,rng=objrng0");
+        assert!(rng_config.is_ok());
+        let config = rng_config.unwrap();
+        assert_eq!(config.random_file, "/path/to/random_file");
+        assert_eq!(config.bytes_per_sec, None);
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_config = parse_rng_dev(
+            &vm_config,
+            "virtio-rng-device,rng=objrng0,max-bytes=1234,period=1000",
+        );
+        assert!(rng_config.is_ok());
+        let config = rng_config.unwrap();
+        assert_eq!(config.random_file, "/path/to/random_file");
+        assert_eq!(config.bytes_per_sec, Some(1234));
+    }
+
+    #[test]
+    fn test_rng_config_cmdline_parser_02() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_config = parse_rng_dev(
+            &vm_config,
+            "virtio-rng-device,rng=objrng0,max-bytes=63,period=1000",
+        );
+        assert!(rng_config.is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_config = parse_rng_dev(
+            &vm_config,
+            "virtio-rng-device,rng=objrng0,max-bytes=64,period=1000",
+        );
+        assert!(rng_config.is_ok());
+        let config = rng_config.unwrap();
+        assert_eq!(config.random_file, "/path/to/random_file");
+        assert_eq!(config.bytes_per_sec, Some(64));
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_config = parse_rng_dev(
+            &vm_config,
+            "virtio-rng-device,rng=objrng0,max-bytes=1000000000,period=1000",
+        );
+        assert!(rng_config.is_ok());
+        let config = rng_config.unwrap();
+        assert_eq!(config.random_file, "/path/to/random_file");
+        assert_eq!(config.bytes_per_sec, Some(1000000000));
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_config = parse_rng_dev(
+            &vm_config,
+            "virtio-rng-device,rng=objrng0,max-bytes=1000000001,period=1000",
+        );
+        assert!(rng_config.is_err());
+    }
+
+    #[test]
+    fn test_pci_rng_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_cfg = "virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x1.0x3";
+        let rng_config = parse_rng_dev(&vm_config, rng_cfg);
+        assert!(rng_config.is_ok());
+        let config = rng_config.unwrap();
+        assert_eq!(config.random_file, "/path/to/random_file");
+        assert_eq!(config.bytes_per_sec, None);
+        let pci_bdf = get_pci_bdf(rng_cfg);
+        assert!(pci_bdf.is_ok());
+        let pci = pci_bdf.unwrap();
+        assert_eq!(pci.bus, "pcie.0".to_string());
+        assert_eq!(pci.addr, (1, 3));
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_cfg = "virtio-rng-device,rng=objrng0,bus=pcie.0,addr=0x1.0x3";
+        let rng_config = parse_rng_dev(&vm_config, rng_cfg);
+        assert!(rng_config.is_err());
+    }
+}
