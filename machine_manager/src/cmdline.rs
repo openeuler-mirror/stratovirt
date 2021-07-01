@@ -225,14 +225,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("iothread")
-                .multiple(true)
-                .long("iothread")
-                .value_name("id=str")
-                .help("configure a iothread ID 'str'")
-                .takes_values(true),
-        )
-        .arg(
             Arg::with_name("balloon")
                 .long("balloon")
                 .value_name("[deflate_on_oom=bool]")

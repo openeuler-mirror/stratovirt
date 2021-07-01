@@ -10,18 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
-use serde::{Deserialize, Serialize};
-
 use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
 
 const MAX_IOTHREAD_NUM: usize = 8;
 
 /// Config structure for iothread.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct IothreadConfig {
     pub id: String,
 }
@@ -44,13 +39,14 @@ impl VmConfig {
     /// Add new iothread device to `VmConfig`.
     pub fn add_iothread(&mut self, iothread_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("iothread");
-        cmd_parser.push("id");
+        cmd_parser.push("").push("id");
         cmd_parser.parse(iothread_config)?;
 
         let mut iothread = IothreadConfig::default();
         if let Some(id) = cmd_parser.get_value::<String>("id")? {
             iothread.id = id;
         }
+        iothread.check()?;
 
         if self.iothreads.is_some() {
             if self.iothreads.as_ref().unwrap().len() >= MAX_IOTHREAD_NUM {
@@ -78,5 +74,40 @@ impl VmConfig {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iothread_config_cmdline_parser_01() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.add_object("iothread,id=iothread0").is_ok());
+        assert!(vm_config.iothreads.is_some());
+        let iothreads = vm_config.iothreads.unwrap();
+        assert!(iothreads.len().eq(&1));
+    }
+
+    #[test]
+    fn test_iothread_config_cmdline_parser_02() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.add_object("iothread,id=iothread0").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread1").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread2").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread3").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread4").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread5").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread6").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread7").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread8").is_err());
+    }
+
+    #[test]
+    fn test_iothread_config_cmdline_parser_03() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.add_object("iothread,id=iothread0").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread0").is_err());
     }
 }

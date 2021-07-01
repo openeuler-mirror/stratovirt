@@ -125,7 +125,7 @@ There is only one argument for iothread:
 
 ```shell
 # cmdline
--iothread id=iothread1 -iothread id=iothread2
+-object iothread,id=iothread1 -object iothread,id=iothread2
 ```
 
 ### 2.2 Virtio-blk

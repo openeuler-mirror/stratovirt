@@ -31,7 +31,7 @@ use std::str::FromStr;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 
-pub use self::errors::{ErrorKind, Result};
+pub use self::errors::{ErrorKind, Result, ResultExt};
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
@@ -178,12 +178,6 @@ impl VmConfig {
             bail!("Serial with stdio and daemonize can't be set together");
         }
 
-        if self.iothreads.is_some() {
-            for iothread in self.iothreads.as_ref().unwrap() {
-                iothread.check()?;
-            }
-        }
-
         Ok(())
     }
 
@@ -213,6 +207,10 @@ impl VmConfig {
         }
         let device_type = obj_type.unwrap();
         match device_type.as_str() {
+            "iothread" => {
+                self.add_iothread(&object_args)
+                    .chain_err(|| "Failed to add iothread")?;
+            }
             "rng-random" => {
                 let rng_cfg = parse_rng_obj(&object_args)?;
                 let id = rng_cfg.id.clone();
