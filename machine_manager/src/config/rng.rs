@@ -10,20 +10,22 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
-use serde::{Deserialize, Serialize};
-
 use super::errors::{ErrorKind, Result};
+use super::{pci_args_check, ObjConfig};
 use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_PATH_LENGTH: usize = 4096;
 const MIN_BYTES_PER_SEC: u64 = 64;
 const MAX_BYTES_PER_SEC: u64 = 1_000_000_000;
 
+#[derive(Debug, Clone, Default)]
+pub struct RngObjConfig {
+    pub id: String,
+    pub filename: String,
+}
+
 /// Config structure for virtio-rng.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct RngConfig {
     pub id: String,
     pub random_file: String,
@@ -57,117 +59,56 @@ impl ConfigCheck for RngConfig {
     }
 }
 
-impl VmConfig {
-    pub fn add_rng(&mut self, rng_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("rng");
-        cmd_parser
-            .push("id")
-            .push("random_file")
-            .push("bytes_per_sec");
+pub fn parse_rng_dev(vm_config: &VmConfig, rng_config: &str) -> Result<RngConfig> {
+    let mut cmd_parser = CmdParser::new("rng");
+    cmd_parser
+        .push("")
+        .push("bus")
+        .push("addr")
+        .push("max-bytes")
+        .push("period")
+        .push("rng");
 
-        cmd_parser.parse(rng_config)?;
+    cmd_parser.parse(rng_config)?;
+    pci_args_check(&cmd_parser)?;
+    let mut rng_cfg = RngConfig::default();
+    let rng = if let Some(rng_id) = cmd_parser.get_value::<String>("rng")? {
+        rng_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("rng", "rng").into());
+    };
 
-        let random_file =
-            if let Some(random_file) = cmd_parser.get_value::<String>("random_file")? {
-                random_file
+    if let Some(max) = cmd_parser.get_value::<u64>("max-bytes")? {
+        if let Some(peri) = cmd_parser.get_value::<u64>("period")? {
+            let mul = if let Some(res) = max.checked_mul(1000) {
+                res
             } else {
-                return Err(ErrorKind::FieldIsMissing("random_file", "rng").into());
+                bail!("Illegal max-bytes arguments: {:?}", max)
             };
-
-        let bytes_per_sec = cmd_parser.get_value::<u64>("bytes_per_sec")?;
-        let id = if let Some(rng_id) = cmd_parser.get_value::<String>("id")? {
-            rng_id
+            let div = if let Some(res) = mul.checked_div(peri) {
+                res
+            } else {
+                bail!("Illegal period arguments: {:?}", peri)
+            };
+            rng_cfg.bytes_per_sec = Some(div);
         } else {
-            "".to_string()
-        };
-
-        self.rng = Some(RngConfig {
-            id,
-            random_file,
-            bytes_per_sec,
-        });
-
-        Ok(())
+            bail!("Argument 'period' is missing");
+        }
+    } else if cmd_parser.get_value::<u64>("period")?.is_some() {
+        bail!("Argument 'max-bytes' is missing");
     }
-}
+    let obj_config = &vm_config.object;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_rng_config_cmdline_parser_01() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_rng("random_file=/dev/random").is_ok());
-        if let Some(rng_config) = vm_config.rng {
-            assert_eq!(rng_config.random_file, "/dev/random");
-            assert_eq!(rng_config.bytes_per_sec, None);
-            assert!(rng_config.check().is_ok());
-        } else {
-            assert!(false);
+    if let Some(object_cfg) = obj_config.get(&rng) {
+        rng_cfg.id = rng;
+        #[allow(irrefutable_let_patterns)]
+        if let ObjConfig::Rng(obj_cfg) = object_cfg {
+            rng_cfg.random_file = obj_cfg.filename.clone();
         }
-
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_rng("random_file=/dev/random,bytes_per_sec=1000")
-            .is_ok());
-        if let Some(rng_config) = vm_config.rng {
-            assert_eq!(rng_config.random_file, "/dev/random");
-            assert_eq!(rng_config.bytes_per_sec, Some(1000));
-            assert!(rng_config.check().is_ok());
-        } else {
-            assert!(false);
-        }
+    } else {
+        bail!("Object for rng-random device not found");
     }
 
-    #[test]
-    fn test_rng_config_cmdline_parser_02() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_rng("random_file=/dev/random,bytes_per_sec=63")
-            .is_ok());
-        if let Some(rng_config) = vm_config.rng {
-            assert_eq!(rng_config.random_file, "/dev/random");
-            assert_eq!(rng_config.bytes_per_sec, Some(63));
-            assert!(rng_config.check().is_err());
-        } else {
-            assert!(false);
-        }
-
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_rng("random_file=/dev/random,bytes_per_sec=64")
-            .is_ok());
-        if let Some(rng_config) = vm_config.rng {
-            assert_eq!(rng_config.random_file, "/dev/random");
-            assert_eq!(rng_config.bytes_per_sec, Some(64));
-            assert!(rng_config.check().is_ok());
-        } else {
-            assert!(false);
-        }
-
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_rng("random_file=/dev/random,bytes_per_sec=1000000000")
-            .is_ok());
-        if let Some(rng_config) = vm_config.rng {
-            assert_eq!(rng_config.random_file, "/dev/random");
-            assert_eq!(rng_config.bytes_per_sec, Some(1000000000));
-            assert!(rng_config.check().is_ok());
-        } else {
-            assert!(false);
-        }
-
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_rng("random_file=/dev/random,bytes_per_sec=1000000001")
-            .is_ok());
-        if let Some(rng_config) = vm_config.rng {
-            assert_eq!(rng_config.random_file, "/dev/random");
-            assert_eq!(rng_config.bytes_per_sec, Some(1000000001));
-            assert!(rng_config.check().is_err());
-        } else {
-            assert!(false);
-        }
-    }
+    rng_cfg.check()?;
+    Ok(rng_cfg)
 }
