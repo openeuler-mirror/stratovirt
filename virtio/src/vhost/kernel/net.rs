@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_vhost_net_realize() {
         let net1 = NetworkInterfaceConfig {
-            iface_id: "eth1".to_string(),
+            id: "eth1".to_string(),
             host_dev_name: "tap1".to_string(),
             mac: Some("1F:2C:3E:4A:5B:6D".to_string()),
             vhost_type: Some("vhost-kernel".to_string()),
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(vhost_net.realize().is_ok(), false);
 
         let net1 = NetworkInterfaceConfig {
-            iface_id: "eth0".to_string(),
+            id: "eth0".to_string(),
             host_dev_name: "tap0".to_string(),
             mac: Some("1A:2B:3C:4D:5E:6F".to_string()),
             vhost_type: Some("vhost-kernel".to_string()),

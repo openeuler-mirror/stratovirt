@@ -986,6 +986,7 @@ mod tests {
     #[test]
     fn test_balloon_init() {
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
 
@@ -1026,6 +1027,7 @@ mod tests {
     #[test]
     fn test_read_config() {
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
 
@@ -1043,6 +1045,7 @@ mod tests {
     #[test]
     fn test_write_config() {
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
 
@@ -1059,6 +1062,7 @@ mod tests {
     fn test_balloon_process() {
         let mem_space = address_space_init();
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
@@ -1213,6 +1217,7 @@ mod tests {
         let queue_evts: Vec<EventFd> = vec![event_inf.try_clone().unwrap()];
 
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());

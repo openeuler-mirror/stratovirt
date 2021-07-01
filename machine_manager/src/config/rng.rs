@@ -25,6 +25,7 @@ const MAX_BYTES_PER_SEC: u64 = 1_000_000_000;
 /// Config structure for virtio-rng.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RngConfig {
+    pub id: String,
     pub random_file: String,
     pub bytes_per_sec: Option<u64>,
 }
@@ -59,7 +60,10 @@ impl ConfigCheck for RngConfig {
 impl VmConfig {
     pub fn add_rng(&mut self, rng_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("rng");
-        cmd_parser.push("random_file").push("bytes_per_sec");
+        cmd_parser
+            .push("id")
+            .push("random_file")
+            .push("bytes_per_sec");
 
         cmd_parser.parse(rng_config)?;
 
@@ -71,8 +75,14 @@ impl VmConfig {
             };
 
         let bytes_per_sec = cmd_parser.get_value::<u64>("bytes_per_sec")?;
+        let id = if let Some(rng_id) = cmd_parser.get_value::<String>("id")? {
+            rng_id
+        } else {
+            "".to_string()
+        };
 
         self.rng = Some(RngConfig {
+            id,
             random_file,
             bytes_per_sec,
         });

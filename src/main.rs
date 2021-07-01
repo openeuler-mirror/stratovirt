@@ -85,10 +85,10 @@ fn run() -> Result<()> {
         exit_with_code(VM_EXIT_GENE_ERR);
     }));
 
-    let vm_config: VmConfig = create_vmconfig(&cmd_args)?;
+    let mut vm_config: VmConfig = create_vmconfig(&cmd_args)?;
     info!("VmConfig is {:?}", vm_config);
 
-    match real_main(&cmd_args, vm_config) {
+    match real_main(&cmd_args, &mut vm_config) {
         Ok(()) => {
             info!("MainLoop over, Vm exit");
             // clean temporary file
@@ -115,9 +115,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<()> {
-    let balloon_switch_on = vm_config.balloon.is_some();
-
+fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Result<()> {
     TempCleaner::object_init();
 
     if cmd_args.is_present("daemonize") {
@@ -151,7 +149,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             let vm = Arc::new(Mutex::new(
                 LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
             ));
-            MachineOps::realize(&vm, &vm_config, cmd_args.is_present("incoming"))
+            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
                 .chain_err(|| "Failed to realize micro VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
@@ -160,7 +158,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             let vm = Arc::new(Mutex::new(
                 StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
             ));
-            MachineOps::realize(&vm, &vm_config, cmd_args.is_present("incoming"))
+            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
                 .chain_err(|| "Failed to realize standard VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
@@ -187,6 +185,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
         .run(cmd_args.is_present("freeze_cpu"))
         .chain_err(|| "Failed to start VM.")?;
 
+    let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
     if !cmd_args.is_present("disable-seccomp") {
         vm.lock()
             .unwrap()

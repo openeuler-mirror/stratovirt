@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn test_set_driver_features() {
         let console_cfg = ConsoleConfig {
-            console_id: "console".to_string(),
+            id: "console".to_string(),
             socket_path: "test_console.sock".to_string(),
         };
         let mut console = Console::new(console_cfg);
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn test_read_config() {
         let console_cfg = ConsoleConfig {
-            console_id: "console".to_string(),
+            id: "console".to_string(),
             socket_path: "test_console1.sock".to_string(),
         };
 

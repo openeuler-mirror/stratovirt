@@ -31,10 +31,7 @@ use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::{
-    BalloonConfig, BootSource, ConsoleConfig, DriveConfig, NetworkInterfaceConfig, PFlashConfig,
-    RngConfig, SerialConfig, VmConfig, VsockConfig,
-};
+use machine_manager::config::{BootSource, ConsoleConfig, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
@@ -233,53 +230,6 @@ impl StdMachineOps for StdMachine {
 
         Ok(fwcfg_dev)
     }
-
-    fn add_pflash_device(&mut self, config: &PFlashConfig) -> super::errors::Result<()> {
-        use super::errors::ResultExt;
-
-        // The two PFlash devices locates below 4GB, this variable represents the end address
-        // of current PFlash device.
-        static mut FLASH_END: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-        // Safe because the PFlash devices is added in succession and `FLASH_END` variable
-        // will only be initialized and modified by the main thread.
-        let flash_end: u64 = unsafe { FLASH_END };
-
-        let mut fd = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(config.path_on_host.clone())?;
-        let pfl_size = fd.metadata().unwrap().len();
-
-        if config.unit == 0 {
-            let rom_base = 0xe0000;
-            let rom_size = 0x20000;
-            fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
-
-            let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
-                GuestAddress(rom_base),
-                rom_size,
-                None,
-                false,
-                false,
-            )?));
-            rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
-            rom_region.set_priority(10);
-            self.sys_mem.root().add_subregion(rom_region, rom_base)?;
-
-            fd.seek(SeekFrom::Start(0))?;
-        }
-
-        let sector_len: u32 = 1024 * 4;
-        let pflash = PFlash::new(pfl_size, fd, sector_len, 4_u32, 1_u32, config.read_only)
-            .chain_err(|| "Failed to create pflash device")?;
-        PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
-            .chain_err(|| "Failed to realize pflash device")?;
-
-        unsafe {
-            FLASH_END -= pfl_size;
-        }
-        Ok(())
-    }
 }
 
 impl MachineOps for StdMachine {
@@ -376,77 +326,7 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_block_device(&mut self, _config: &DriveConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
-    fn add_vsock_device(&mut self, _config: &VsockConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
-    fn add_net_device(&mut self, _config: &NetworkInterfaceConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
     fn add_console_device(&mut self, _config: &ConsoleConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
-    fn add_balloon_device(&mut self, _config: &BalloonConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
-    fn add_rng_device(&mut self, _config: &RngConfig) -> MachineResult<()> {
-        Ok(())
-    }
-
-    fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        self.add_rtc_device(vm_config.machine_config.mem_config.mem_size)
-            .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
-
-        if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(&serial)
-                .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
-        }
-        if let Some(pflashs) = vm_config.pflashs.as_ref() {
-            for pflash in pflashs {
-                self.add_pflash_device(pflash)
-                    .chain_err(|| MachineErrorKind::AddDevErr("pflash".to_string()))?;
-            }
-        }
-        if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(&vsock)
-                .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
-        }
-        if let Some(drives) = vm_config.drives.as_ref() {
-            for drive in drives {
-                self.add_block_device(&drive)
-                    .chain_err(|| MachineErrorKind::AddDevErr("block".to_string()))?;
-            }
-        }
-        if let Some(nets) = vm_config.nets.as_ref() {
-            for net in nets {
-                self.add_net_device(&net)
-                    .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
-            }
-        }
-        if let Some(consoles) = vm_config.consoles.as_ref() {
-            for console in consoles {
-                self.add_console_device(&console)
-                    .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
-            }
-        }
-        if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon)
-                .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
-        }
-        if let Some(rng) = vm_config.rng.as_ref() {
-            self.add_rng_device(rng)
-                .chain_err(|| MachineErrorKind::AddDevErr("rng".to_string()))?;
-        }
-
         Ok(())
     }
 
@@ -454,7 +334,11 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> MachineResult<()> {
+    fn realize(
+        vm: &Arc<Mutex<Self>>,
+        vm_config: &mut VmConfig,
+        is_migrate: bool,
+    ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
@@ -496,8 +380,63 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn add_pflash_device(&mut self, config: &PFlashConfig) -> MachineResult<()> {
+        use super::errors::ResultExt;
+
+        // The two PFlash devices locates below 4GB, this variable represents the end address
+        // of current PFlash device.
+        static mut FLASH_END: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        // Safe because the PFlash devices is added in succession and `FLASH_END` variable
+        // will only be initialized and modified by the main thread.
+        let flash_end: u64 = unsafe { FLASH_END };
+
+        let mut fd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(config.path_on_host.clone())?;
+        let pfl_size = fd.metadata().unwrap().len();
+
+        if config.unit == 0 {
+            let rom_base = 0xe0000;
+            let rom_size = 0x20000;
+            fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
+
+            let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
+                GuestAddress(rom_base),
+                rom_size,
+                None,
+                false,
+                false,
+            )?));
+            rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
+            rom_region.set_priority(10);
+            self.sys_mem.root().add_subregion(rom_region, rom_base)?;
+
+            fd.seek(SeekFrom::Start(0))?;
+        }
+
+        let sector_len: u32 = 1024 * 4;
+        let pflash = PFlash::new(pfl_size, fd, sector_len, 4_u32, 1_u32, config.read_only)
+            .chain_err(|| "Failed to create pflash device")?;
+        PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
+            .chain_err(|| "Failed to realize pflash device")?;
+
+        unsafe {
+            FLASH_END -= pfl_size;
+        }
+        Ok(())
+    }
+
     fn run(&self, paused: bool) -> MachineResult<()> {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+    }
+
+    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
+        &self.sys_mem
+    }
+
+    fn get_pci_host(&mut self) -> MachineResult<&Arc<Mutex<PciHost>>> {
+        Ok(&self.pci_host)
     }
 }
 

@@ -80,14 +80,17 @@ use error_chain::ChainedError;
 use hypervisor::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use machine_manager::config::parse_blk;
+use machine_manager::config::parse_net;
+use machine_manager::config::BlkDevConfig;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::{
     config::{
-        BalloonConfig, BootSource, ConfigCheck, ConsoleConfig, DriveConfig, NetworkInterfaceConfig,
-        RngConfig, SerialConfig, VmConfig, VsockConfig,
+        BootSource, ConfigCheck, ConsoleConfig, NetworkInterfaceConfig, RngConfig, SerialConfig,
+        VmConfig,
     },
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
@@ -104,8 +107,8 @@ use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Balloon, Block, BlockState, Console, Net, Rng,
-    VhostKern, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Console, Net, Rng, VhostKern,
+    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 use vmm_sys_util::eventfd::EventFd;
 
@@ -581,6 +584,31 @@ impl MachineOps for LightMachine {
         })
     }
 
+    fn realize_virtio_mmio_device(
+        &mut self,
+        dev: VirtioMmioDevice,
+    ) -> MachineResult<Arc<Mutex<VirtioMmioDevice>>> {
+        use errors::ResultExt;
+
+        let region_base = self.sysbus.min_free_base;
+        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
+        let realized_virtio_mmio_device = VirtioMmioDevice::realize(
+            dev,
+            &mut self.sysbus,
+            region_base,
+            region_size,
+            #[cfg(target_arch = "x86_64")]
+            &self.boot_source,
+        )
+        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
+        self.sysbus.min_free_base += region_size;
+        Ok(realized_virtio_mmio_device)
+    }
+
+    fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
+        &self.sys_mem
+    }
+
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self) -> MachineResult<()> {
         use crate::errors::ResultExt;
@@ -629,82 +657,6 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_block_device(&mut self, config: &DriveConfig) -> MachineResult<()> {
-        if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
-            bail!(
-                "A maximum of {} replaceable block devices are supported.",
-                MMIO_REPLACEABLE_BLK_NR
-            );
-        }
-
-        let index = self.replaceable_info.block_count;
-        self.fill_replaceable_device(&config.drive_id, Arc::new(config.clone()), index)?;
-        self.replaceable_info.block_count += 1;
-        Ok(())
-    }
-
-    fn add_vsock_device(&mut self, config: &VsockConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(config, &self.sys_mem)));
-        let device = VirtioMmioDevice::new(&self.sys_mem, vsock.clone());
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        MigrationManager::register_device_instance_mutex(
-            VirtioMmioState::descriptor(),
-            VirtioMmioDevice::realize(
-                device,
-                &mut self.sysbus,
-                region_base,
-                region_size,
-                #[cfg(target_arch = "x86_64")]
-                &self.boot_source,
-            )
-            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
-        );
-        MigrationManager::register_device_instance_mutex(
-            VhostKern::VsockState::descriptor(),
-            vsock,
-        );
-        self.sysbus.min_free_base += region_size;
-        Ok(())
-    }
-
-    fn add_net_device(&mut self, config: &NetworkInterfaceConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        if config.vhost_type.is_some() {
-            let net = Arc::new(Mutex::new(VhostKern::Net::new(config, &self.sys_mem)));
-            let device = VirtioMmioDevice::new(&self.sys_mem, net);
-            let region_base = self.sysbus.min_free_base;
-            let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-            VirtioMmioDevice::realize(
-                device,
-                &mut self.sysbus,
-                region_base,
-                region_size,
-                #[cfg(target_arch = "x86_64")]
-                &self.boot_source,
-            )
-            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
-            self.sysbus.min_free_base += region_size;
-        } else {
-            let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
-            if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
-                bail!(
-                    "A maximum of {} net replaceable devices are supported.",
-                    MMIO_REPLACEABLE_NET_NR
-                );
-            }
-
-            self.fill_replaceable_device(&config.iface_id, Arc::new(config.clone()), index)?;
-            self.replaceable_info.net_count += 1;
-        }
-        Ok(())
-    }
-
     fn add_console_device(&mut self, config: &ConsoleConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -730,28 +682,6 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_balloon_device(&mut self, config: &BalloonConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let balloon = Arc::new(Mutex::new(Balloon::new(config, self.sys_mem.clone())));
-        Balloon::object_init(balloon.clone());
-        let device = VirtioMmioDevice::new(&self.sys_mem, balloon);
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        VirtioMmioDevice::realize(
-            device,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "x86_64")]
-            &self.boot_source,
-        )
-        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
-        self.sysbus.min_free_base += region_size;
-        Ok(())
-    }
-
     fn add_rng_device(&mut self, config: &RngConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
@@ -773,53 +703,37 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_devices(&mut self, vm_config: &VmConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        #[cfg(target_arch = "aarch64")]
-        self.add_rtc_device()
-            .chain_err(|| MachineErrorKind::AddDevErr("RTC".to_string()))?;
-
-        if let Some(serial) = vm_config.serial.as_ref() {
-            self.add_serial_device(serial)
-                .chain_err(|| MachineErrorKind::AddDevErr("serial".to_string()))?;
-        }
-
-        if let Some(vsock) = vm_config.vsock.as_ref() {
-            self.add_vsock_device(vsock)
-                .chain_err(|| MachineErrorKind::AddDevErr("vsock".to_string()))?;
-        }
-
-        if let Some(drives) = vm_config.drives.as_ref() {
-            for drive in drives {
-                self.add_block_device(drive)
-                    .chain_err(|| MachineErrorKind::AddDevErr("block".to_string()))?;
+    fn add_virtio_mmio_net(&mut self, vm_config: &VmConfig, cfg_args: &str) -> MachineResult<()> {
+        let device_cfg = parse_net(vm_config, cfg_args)?;
+        if device_cfg.vhost_type.is_some() {
+            let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
+            let device = VirtioMmioDevice::new(&self.sys_mem, net);
+            self.realize_virtio_mmio_device(device)?;
+        } else {
+            let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
+            if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
+                bail!(
+                    "A maximum of {} net replaceble devices are supported.",
+                    MMIO_REPLACEABLE_NET_NR
+                );
             }
+            self.fill_replaceable_device(&device_cfg.id, Arc::new(device_cfg.clone()), index)?;
+            self.replaceable_info.net_count += 1;
         }
+        Ok(())
+    }
 
-        if let Some(nets) = vm_config.nets.as_ref() {
-            for net in nets {
-                self.add_net_device(net)
-                    .chain_err(|| MachineErrorKind::AddDevErr("net".to_string()))?;
-            }
+    fn add_virtio_mmio_block(&mut self, vm_config: &VmConfig, cfg_args: &str) -> MachineResult<()> {
+        let device_cfg = parse_blk(vm_config, cfg_args)?;
+        if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
+            bail!(
+                "A maximum of {} block replaceble devices are supported.",
+                MMIO_REPLACEABLE_BLK_NR
+            );
         }
-
-        if let Some(consoles) = vm_config.consoles.as_ref() {
-            for console in consoles {
-                self.add_console_device(console)
-                    .chain_err(|| MachineErrorKind::AddDevErr("console".to_string()))?;
-            }
-        }
-
-        if let Some(balloon) = vm_config.balloon.as_ref() {
-            self.add_balloon_device(balloon)
-                .chain_err(|| MachineErrorKind::AddDevErr("balloon".to_string()))?;
-        }
-
-        if let Some(rng) = vm_config.rng.as_ref() {
-            self.add_rng_device(rng)?;
-        }
-
+        let index = self.replaceable_info.block_count;
+        self.fill_replaceable_device(&device_cfg.id, Arc::new(device_cfg.clone()), index)?;
+        self.replaceable_info.block_count += 1;
         Ok(())
     }
 
@@ -827,7 +741,11 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &VmConfig, is_migrate: bool) -> MachineResult<()> {
+    fn realize(
+        vm: &Arc<Mutex<Self>>,
+        vm_config: &mut VmConfig,
+        is_migrate: bool,
+    ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
@@ -1245,8 +1163,8 @@ impl DeviceInterface for LightMachine {
             );
         }
 
-        let config = DriveConfig {
-            drive_id: node_name.clone(),
+        let config = BlkDevConfig {
+            id: node_name.clone(),
             path_on_host: file.filename,
             read_only,
             direct,
@@ -1268,7 +1186,7 @@ impl DeviceInterface for LightMachine {
 
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response {
         let mut config = NetworkInterfaceConfig {
-            iface_id: id.clone(),
+            id: id.clone(),
             host_dev_name: "".to_string(),
             mac: None,
             tap_fd: None,

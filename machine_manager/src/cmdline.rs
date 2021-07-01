@@ -285,7 +285,6 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
-    add_args_to_config!((args.value_of("balloon")), vm_cfg, add_balloon);
     add_args_to_config!((args.value_of("rng")), vm_cfg, add_rng);
     add_args_to_config!(
         (args.values_of("kernel-cmdline")),
@@ -294,11 +293,11 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
         vec
     );
     add_args_to_config_multi!((args.values_of("drive")), vm_cfg, add_drive);
-    add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_vsock);
-    add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_net);
+    add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_netdev);
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_consoles);
     add_args_to_config_multi!((args.values_of("iothread")), vm_cfg, add_iothread);
     add_args_to_config_multi!((args.values_of("pflash")), vm_cfg, add_pflash);
+    add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_devices);
 
     // Check the mini-set for Vm to start is ok
     vm_cfg

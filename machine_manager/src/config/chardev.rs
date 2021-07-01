@@ -15,7 +15,10 @@ extern crate serde_json;
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::{
+    errors::{ErrorKind, Result},
+    pci_args_check,
+};
 use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
@@ -26,13 +29,13 @@ const MIN_GUEST_CID: u64 = 3;
 /// Config structure for virtio-console.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConsoleConfig {
-    pub console_id: String,
+    pub id: String,
     pub socket_path: String,
 }
 
 impl ConfigCheck for ConsoleConfig {
     fn check(&self) -> Result<()> {
-        if self.console_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(ErrorKind::StringLengthTooLong(
                 "console id".to_string(),
                 MAX_STRING_LENGTH,
@@ -60,7 +63,7 @@ impl VmConfig {
 
         let mut console = ConsoleConfig::default();
         if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
-            console.console_id = console_id;
+            console.id = console_id;
         } else {
             return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
         };
@@ -72,10 +75,10 @@ impl VmConfig {
 
         if self.consoles.is_some() {
             for c in self.consoles.as_ref().unwrap() {
-                if c.console_id == console.console_id {
+                if c.id == console.id {
                     return Err(ErrorKind::IdRepeat(
                         "virtio-console".to_string(),
-                        c.console_id.to_string(),
+                        c.id.to_string(),
                     )
                     .into());
                 }
@@ -101,6 +104,7 @@ impl VmConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SerialConfig {
+    pub id: String,
     pub stdio: bool,
 }
 
@@ -118,7 +122,12 @@ impl VmConfig {
                 _ => return Err(ErrorKind::InvalidParam(serial_type).into()),
             }
         };
-        self.serial = Some(SerialConfig { stdio });
+        let id = if let Some(serial_id) = cmd_parser.get_value::<String>("id")? {
+            serial_id
+        } else {
+            "".to_string()
+        };
+        self.serial = Some(SerialConfig { id, stdio });
 
         Ok(())
     }
@@ -127,14 +136,14 @@ impl VmConfig {
 /// Config structure for virtio-vsock.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VsockConfig {
-    pub vsock_id: String,
+    pub id: String,
     pub guest_cid: u64,
     pub vhost_fd: Option<i32>,
 }
 
 impl ConfigCheck for VsockConfig {
     fn check(&self) -> Result<()> {
-        if self.vsock_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(
                 ErrorKind::StringLengthTooLong("vsock id".to_string(), MAX_STRING_LENGTH).into(),
             );
@@ -155,48 +164,47 @@ impl ConfigCheck for VsockConfig {
     }
 }
 
-impl VmConfig {
-    pub fn add_vsock(&mut self, vsock_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("device");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("guest-cid")
-            .push("vhostfd");
+pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
+    let mut cmd_parser = CmdParser::new("vhost-vsock");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("bus")
+        .push("addr")
+        .push("guest-cid")
+        .push("vhostfd");
+    cmd_parser.parse(vsock_config)?;
+    pci_args_check(&cmd_parser)?;
+    let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
+        vsock_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
+    };
 
-        cmd_parser.parse(vsock_config)?;
-
-        if let Some(device_type) = cmd_parser.get_value::<String>("")? {
-            if device_type == "vsock" {
-                if self.vsock.is_some() {
-                    bail!("Device vsock can only be set one for one StratoVirt VM.");
-                }
-
-                let vsock_id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
-                    vsock_id
-                } else {
-                    return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
-                };
-
-                let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
-                    cid
-                } else {
-                    return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
-                };
-
-                let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
-                self.vsock = Some(VsockConfig {
-                    vsock_id,
-                    guest_cid,
-                    vhost_fd,
-                });
-            } else {
-                return Err(ErrorKind::UnknownDeviceType(device_type).into());
-            }
+    let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
+        cid
+    } else {
+        return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
+    };
+    let device_type = cmd_parser.get_value::<String>("")?;
+    // Safe, because "parse_vsock" function only be called when certain
+    // devices type are added.
+    let dev_type = device_type.unwrap();
+    if dev_type == *"vhost-vsock-device" {
+        if cmd_parser.get_value::<String>("bus")?.is_some() {
+            bail!("virtio mmio device does not support bus property");
         }
-
-        Ok(())
+        if cmd_parser.get_value::<String>("addr")?.is_some() {
+            bail!("virtio mmio device does not support addr property");
+        }
     }
+    let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
+    let vsock = VsockConfig {
+        id,
+        guest_cid,
+        vhost_fd,
+    };
+    Ok(vsock)
 }
 
 #[cfg(test)]
@@ -211,48 +219,29 @@ mod tests {
             .is_ok());
         let console_configs = vm_config.get_virtio_console();
         assert_eq!(console_configs.len(), 1);
-        assert_eq!(console_configs[0].console_id, "test_console");
+        assert_eq!(console_configs[0].id, "test_console");
         assert_eq!(console_configs[0].socket_path, "/path/to/socket");
         assert!(console_configs[0].check().is_ok());
     }
 
     #[test]
     fn test_vsock_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_vsock("vsock,id=test_vsock,guest-cid=3")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 3);
-            assert_eq!(vsock_config.vhost_fd, None);
-            assert!(vsock_config.check().is_ok())
-        } else {
-            assert!(false)
-        }
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_vsock("vsock,id=test_vsock,guest-cid=3,vhostfd=4")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 3);
-            assert_eq!(vsock_config.vhost_fd, Some(4));
-            assert!(vsock_config.check().is_ok())
-        } else {
-            assert!(false)
-        }
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .add_vsock("vsock,id=test_vsock,guest-cid=1")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 1);
-            assert_eq!(vsock_config.vhost_fd, None);
-            assert!(vsock_config.check().is_err())
-        } else {
-            assert!(false)
-        }
+        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3");
+        assert!(vsock_cfg_op.is_ok());
+
+        let vsock_config = vsock_cfg_op.unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, None);
+        assert!(vsock_config.check().is_ok());
+
+        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3,vhostfd=4");
+        assert!(vsock_cfg_op.is_ok());
+
+        let vsock_config = vsock_cfg_op.unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, Some(4));
+        assert!(vsock_config.check().is_ok());
     }
 }

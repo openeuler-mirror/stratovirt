@@ -13,20 +13,46 @@
 extern crate serde;
 extern crate serde_json;
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::{
+    errors::{ErrorKind, Result},
+    pci_args_check,
+};
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAC_ADDRESS_LENGTH: usize = 17;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetDevcfg {
+    pub id: String,
+    pub mac: Option<String>,
+    pub tap_fd: Option<i32>,
+    pub vhost_type: Option<String>,
+    pub vhost_fd: Option<i32>,
+}
+
+impl Default for NetDevcfg {
+    fn default() -> Self {
+        NetDevcfg {
+            id: "".to_string(),
+            mac: None,
+            tap_fd: None,
+            vhost_type: None,
+            vhost_fd: None,
+        }
+    }
+}
 
 /// Config struct for network
 /// Contains network device config, such as `host_dev_name`, `mac`...
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkInterfaceConfig {
-    pub iface_id: String,
+    pub id: String,
     pub host_dev_name: String,
     pub mac: Option<String>,
     pub tap_fd: Option<i32>,
@@ -44,7 +70,7 @@ impl NetworkInterfaceConfig {
 impl Default for NetworkInterfaceConfig {
     fn default() -> Self {
         NetworkInterfaceConfig {
-            iface_id: "".to_string(),
+            id: "".to_string(),
             host_dev_name: "".to_string(),
             mac: None,
             tap_fd: None,
@@ -57,10 +83,8 @@ impl Default for NetworkInterfaceConfig {
 
 impl ConfigCheck for NetworkInterfaceConfig {
     fn check(&self) -> Result<()> {
-        if self.iface_id.len() > MAX_STRING_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("iface id".to_string(), MAX_STRING_LENGTH).into(),
-            );
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
         }
 
         if self.host_dev_name.len() > MAX_STRING_LENGTH {
@@ -93,62 +117,94 @@ impl ConfigCheck for NetworkInterfaceConfig {
     }
 }
 
-impl VmConfig {
-    /// Add new network device to `VmConfig`
-    fn add_netdev(&mut self, net: NetworkInterfaceConfig) -> Result<()> {
-        if self.nets.is_some() {
-            for n in self.nets.as_ref().unwrap() {
-                if n.iface_id == net.iface_id {
-                    return Err(
-                        ErrorKind::IdRepeat("netdev".to_string(), n.iface_id.to_string()).into(),
-                    );
-                }
-            }
-            self.nets.as_mut().unwrap().push(net);
-        } else {
-            self.nets = Some(vec![net]);
+pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
+    let mut net = NetDevcfg::default();
+    if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
+        net.id = net_id;
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "net").into());
+    }
+    if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
+        if vhost.into() {
+            net.vhost_type = Some(String::from("vhost-kernel"));
         }
+    }
+    net.mac = cmd_parser.get_value::<String>("mac")?;
+    net.tap_fd = cmd_parser.get_value::<i32>("fds")?;
+    net.vhost_fd = cmd_parser.get_value::<i32>("vhostfds")?;
+    Ok(net)
+}
 
-        Ok(())
+pub fn parse_net(vm_config: &VmConfig, net_config: &str) -> Result<NetworkInterfaceConfig> {
+    let mut cmd_parser = CmdParser::new("virtio-net");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("netdev")
+        .push("bus")
+        .push("addr")
+        .push("iothread");
+
+    cmd_parser.parse(net_config)?;
+    pci_args_check(&cmd_parser)?;
+    let mut netdevinterfacecfg = NetworkInterfaceConfig::default();
+
+    let netdev = if let Some(devname) = cmd_parser.get_value::<String>("netdev")? {
+        devname
+    } else {
+        return Err(ErrorKind::FieldIsMissing("netdev", "net").into());
+    };
+    let netid = if let Some(id) = cmd_parser.get_value::<String>("id")? {
+        id
+    } else {
+        "".to_string()
+    };
+    netdevinterfacecfg.iothread = cmd_parser.get_value::<String>("iothread")?;
+
+    let netconfig = &vm_config.netdevs;
+    if netconfig.is_none() {
+        bail!("No netdev configuration for net device found");
     }
 
-    /// Add '-netdev ...' network config to `VmConfig`
-    /// Some attr in `NetworkInterfaceConfig` would be found in `DeviceConfig`
-    pub fn add_net(&mut self, net_config: &str) -> Result<()> {
+    if let Some(netcfg) = netconfig.as_ref().unwrap().get(&netdev) {
+        netdevinterfacecfg.id = netid;
+        netdevinterfacecfg.host_dev_name = netcfg.id.clone();
+        netdevinterfacecfg.mac = netcfg.mac.clone();
+        netdevinterfacecfg.tap_fd = netcfg.tap_fd;
+        netdevinterfacecfg.vhost_fd = netcfg.vhost_fd;
+        netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
+    } else {
+        bail!("Netdev: {:?} not found for net device", &netdev);
+    }
+
+    netdevinterfacecfg.check()?;
+    Ok(netdevinterfacecfg)
+}
+
+impl VmConfig {
+    pub fn add_netdev(&mut self, netdev_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("netdev");
         cmd_parser
+            .push("")
             .push("id")
-            .push("netdev")
             .push("mac")
             .push("fds")
             .push("vhost")
-            .push("vhostfds")
-            .push("iothread");
+            .push("vhostfds");
 
-        cmd_parser.parse(net_config)?;
-
-        let mut net = NetworkInterfaceConfig::default();
-        if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
-            net.iface_id = net_id;
+        cmd_parser.parse(netdev_config)?;
+        let drive_cfg = parse_netdev(cmd_parser)?;
+        if self.netdevs.is_none() {
+            self.netdevs = Some(HashMap::new());
+        }
+        let netdev_id = drive_cfg.id.clone();
+        if self.netdevs.as_mut().unwrap().get(&netdev_id).is_none() {
+            self.netdevs.as_mut().unwrap().insert(netdev_id, drive_cfg);
         } else {
-            return Err(ErrorKind::FieldIsMissing("id", "netdev").into());
+            bail!("Netdev {:?} has been added");
         }
-        if let Some(net_hostname) = cmd_parser.get_value::<String>("netdev")? {
-            net.host_dev_name = net_hostname;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("netdev", "netdev").into());
-        }
-        if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
-            if vhost.into() {
-                net.vhost_type = Some(String::from("vhost-kernel"));
-            }
-        }
-        net.mac = cmd_parser.get_value::<String>("mac")?;
-        net.tap_fd = cmd_parser.get_value::<i32>("fds")?;
-        net.vhost_fd = cmd_parser.get_value::<i32>("vhostfds")?;
-        net.iothread = cmd_parser.get_value::<String>("iothread")?;
 
-        self.add_netdev(net)
+        Ok(())
     }
 }
 
@@ -183,38 +239,77 @@ fn check_mac_address(mac: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::get_pci_bdf;
+
     use super::*;
 
     #[test]
     fn test_network_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_net("id=eth0,netdev=tap0").is_ok());
-        let configs = vm_config.nets.clone();
-        assert!(configs.is_some());
-        let network_configs = configs.unwrap();
-        assert_eq!(network_configs[0].iface_id, "eth0");
-        assert_eq!(network_configs[0].host_dev_name, "tap0");
-        assert!(network_configs[0].mac.is_none());
-        assert!(network_configs[0].tap_fd.is_none());
-        assert!(network_configs[0].vhost_type.is_none());
-        assert!(network_configs[0].vhost_fd.is_none());
-        assert!(vm_config
-            .add_net("id=eth1,netdev=tap1,mac=12:34:56:78:9A:BC,vhost=on,vhostfds=4")
-            .is_ok());
-        let configs = vm_config.nets.clone();
-        assert!(configs.is_some());
-        let network_configs = configs.unwrap();
-        assert_eq!(network_configs[1].iface_id, "eth1");
-        assert_eq!(network_configs[1].host_dev_name, "tap1");
-        assert_eq!(
-            network_configs[1].mac,
-            Some(String::from("12:34:56:78:9A:BC"))
+        assert!(vm_config.add_netdev("id=eth0").is_ok());
+        let net_cfg_res = parse_net(
+            &vm_config,
+            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0",
         );
-        assert!(network_configs[1].tap_fd.is_none());
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.id, "net0");
+        assert_eq!(network_configs.host_dev_name, "eth0");
+        assert_eq!(network_configs.iothread, Some("iothread0".to_string()));
+        assert!(network_configs.mac.is_none());
+        assert!(network_configs.tap_fd.is_none());
+        assert!(network_configs.vhost_type.is_none());
+        assert!(network_configs.vhost_fd.is_none());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_netdev("id=eth1,mac=12:34:56:78:9A:BC,vhost=on,vhostfds=4")
+            .is_ok());
+        let net_cfg_res = parse_net(&vm_config, "virtio-net-device,id=net1,netdev=eth1");
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.id, "net1");
+        assert_eq!(network_configs.host_dev_name, "eth1");
+        assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
+        assert!(network_configs.tap_fd.is_none());
         assert_eq!(
-            network_configs[1].vhost_type,
+            network_configs.vhost_type,
             Some(String::from("vhost-kernel"))
         );
-        assert_eq!(network_configs[1].vhost_fd, Some(4));
+        assert_eq!(network_configs.vhost_fd, Some(4));
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_netdev("id=eth1,mac=12:34:56:78:9A:BC,vhost=on,vhostfds=4")
+            .is_ok());
+        let net_cfg_res = parse_net(&vm_config, "virtio-net-device,id=net1,netdev=eth2");
+        assert!(net_cfg_res.is_err());
+    }
+
+    #[test]
+    fn test_pci_network_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+
+        assert!(vm_config
+            .add_netdev("id=eth1,mac=12:34:56:78:9A:BC,vhost=on,vhostfds=4")
+            .is_ok());
+        let net_cfg = "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2";
+        let net_cfg_res = parse_net(&vm_config, net_cfg);
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.id, "net1");
+        assert_eq!(network_configs.host_dev_name, "eth1");
+        assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
+        assert!(network_configs.tap_fd.is_none());
+        assert_eq!(
+            network_configs.vhost_type,
+            Some(String::from("vhost-kernel"))
+        );
+        assert_eq!(network_configs.vhost_fd, Some(4));
+        let pci_bdf = get_pci_bdf(net_cfg);
+        assert!(pci_bdf.is_ok());
+        let pci = pci_bdf.unwrap();
+        assert_eq!(pci.bus, "pcie.0".to_string());
+        assert_eq!(pci.addr, (1, 2));
     }
 }

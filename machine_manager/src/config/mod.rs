@@ -16,18 +16,18 @@ extern crate serde_json;
 mod balloon;
 mod boot_source;
 mod chardev;
+mod devices;
 mod fs;
 mod iothread;
 mod machine_config;
 mod network;
+mod pci;
 mod pflash;
 mod rng;
 
 use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "aarch64")]
 use util::device_tree;
@@ -36,10 +36,12 @@ pub use self::errors::{ErrorKind, Result};
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
+pub use devices::*;
 pub use fs::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
+pub use pci::*;
 pub use pflash::*;
 pub use rng::*;
 
@@ -109,20 +111,20 @@ pub mod errors {
 pub const MAX_STRING_LENGTH: usize = 255;
 
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct VmConfig {
     pub guest_name: String,
     pub machine_config: MachineConfig,
     pub boot_source: BootSource,
-    pub drives: Option<Vec<DriveConfig>>,
-    pub nets: Option<Vec<NetworkInterfaceConfig>>,
+    pub drives: Option<HashMap<String, DriveConfig>>,
+    pub netdevs: Option<HashMap<String, NetDevcfg>>,
     pub consoles: Option<Vec<ConsoleConfig>>,
-    pub vsock: Option<VsockConfig>,
+    pub devices: Vec<(String, String)>,
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
-    pub balloon: Option<BalloonConfig>,
     pub rng: Option<RngConfig>,
     pub pflashs: Option<Vec<PFlashConfig>>,
+    pub dev_name: HashMap<String, u8>,
 }
 
 impl VmConfig {
@@ -144,26 +146,10 @@ impl VmConfig {
             bail!("kernel file is required for microvm machine type, which is not provided");
         }
 
-        if self.drives.is_some() {
-            for drive in self.drives.as_ref().unwrap() {
-                drive.check()?;
-            }
-        }
-
-        if self.nets.is_some() {
-            for net in self.nets.as_ref().unwrap() {
-                net.check()?;
-            }
-        }
-
         if self.consoles.is_some() {
             for console in self.consoles.as_ref().unwrap() {
                 console.check()?;
             }
-        }
-
-        if self.vsock.is_some() {
-            self.vsock.as_ref().unwrap().check()?;
         }
 
         if self.rng.is_some() {
@@ -291,6 +277,41 @@ impl CmdParser {
                 }
             } else {
                 return Err(ErrorKind::InvalidParam(param[0].to_string()).into());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse all cmdline parameters string into `params`.
+    ///
+    /// # Arguments
+    ///
+    /// * `cmd_param`: The whole cmdline parameter string.
+    fn get_parameters(&mut self, cmd_param: &str) -> Result<()> {
+        if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
+            return Err(ErrorKind::InvalidParam(cmd_param.to_string()).into());
+        }
+        let param_items = cmd_param.split(',').collect::<Vec<&str>>();
+        for param_item in param_items {
+            let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
+            let (param_key, param_value) = match param.len() {
+                1 => ("", param[0]),
+                2 => (param[0], param[1]),
+                _ => {
+                    return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+                }
+            };
+
+            if self.params.contains_key(param_key) {
+                let field_value = self.params.get_mut(param_key).unwrap();
+                if field_value.is_none() {
+                    *field_value = Some(String::from(param_value));
+                } else {
+                    return Err(
+                        ErrorKind::FieldRepeat(self.name.clone(), param_key.to_string()).into(),
+                    );
+                }
             }
         }
 

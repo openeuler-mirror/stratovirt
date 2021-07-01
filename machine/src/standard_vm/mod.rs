@@ -30,6 +30,7 @@ pub mod errors {
             Legacy(devices::LegacyErrs::Error, devices::LegacyErrs::ErrorKind);
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
             Acpi(acpi::errors::Error, acpi::errors::ErrorKind);
+            MachineManager(machine_manager::config::errors::Error, machine_manager::config::errors::ErrorKind);
         }
         foreign_links{
             Io(std::io::Error);
@@ -53,7 +54,6 @@ use acpi::{
 };
 use devices::legacy::FwCfgOps;
 use errors::{Result, ResultExt};
-use machine_manager::config::PFlashConfig;
 use util::byte_code::ByteCode;
 
 #[cfg(target_arch = "aarch64")]
@@ -117,10 +117,6 @@ trait StdMachineOps: AcpiBuilder {
 
     fn add_fwcfg_device(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
         bail!("Not implemented");
-    }
-
-    fn add_pflash_device(&mut self, _config: &PFlashConfig) -> Result<()> {
-        Ok(())
     }
 }
 

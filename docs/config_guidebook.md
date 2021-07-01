@@ -146,8 +146,13 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
 
 ```shell
-# cmdline
--drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off[,iothread=iothread1,iops=200]
+# virtio mmio block device.
+-drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
+-device virtio-blk-device,drive=drive_id[,iothread=iothread1,iops=200]
+# virtio pci block device.
+-drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1,iops=200]
+
 ```
 
 ### 2.3 Virtio-net
@@ -156,15 +161,19 @@ Virtio-net is a virtual Ethernet card in VM. It can enable the network capabilit
 
 Four properties are supported for virtio net device.
 
-* iface_id: unique device-id in StratoVirt
+* netid: unique device-id in StratoVirt
 * host_dev_name: name of tap device in host
 * mac: set mac address in VM (optional)
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. 
 It only affects on virito-net, not vhost-net.
 
 ```shell
-# cmdline
--netdev id=iface_id,netdev=host_dev_name[,mac=12:34:56:78:9A:BC][,iothread=iothread1]
+# virtio mmio net device
+-netdev id=host_dev_name[,mac=12:34:56:78:9A:BC]
+-device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
+# virtio pci net device
+-netdev id=host_dev_name[,mac=12:34:56:78:9A:BC]
+-device virtio-net-pci,netdev=host_dev_name,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network.
@@ -172,8 +181,12 @@ StratoVirt also supports vhost-net to get a higher performance in network.
 It can be set by given `vhost` property.
 
 ```shell
-# cmdline
--netdev id=iface_id,netdev=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
+# virtio mmio net device
+-netdev id=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
+-device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
+# virtio pci net device
+-netdev id=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
+-device virtio-net-pci,netdev=host_dev_name,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
 ```
 
 *How to set a tap device?*
@@ -230,8 +243,11 @@ And `modprobe vhost_vsock` in the host.
 * guest_cid: a unique Context-ID in host to each guest, it should satisfy `3<=guest_cid<u32:MAX`
 
 ```shell
-# cmdline
--device vsock,id=vsock_id,guest-cid=3
+# virtio mmio device.
+-device vhost-vsock-device,id=vsock_id,guest-cid=3
+
+# virtio pci device.
+-device vhost-vsock-pci,id=vsock_id,guest-cid=3,bus=pcie.0,addr=0x1.0x0
 ```
 
 *You can only set one virtio vsock device for one VM.*
@@ -271,8 +287,10 @@ Only one property is supported for virtio-balloon.
 This feature can prevent OOM occur in guest.
 
 ```shell
-# cmdline
--balloon deflate-on-oom=true
+# virtio mmio balloon device
+-device virtio-balloon-device,deflate-on-oom=true
+# virtio pci balloon device
+-device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true
 ```
 
 ### 2.8 Virtio-rng
@@ -290,6 +308,20 @@ it should satisfy `64<=bytes_per_sec<1000000000`
 ```shell
 # cmdline
 -rng random_file=/path/to/random_file[,bytes_per_sec=1000000]
+```
+
+### 2.9 PCIe root port
+A PCI Express Port on a Root Complex that maps a portion of a Hierarchy through an associated virtual PCI-PCI
+Bridge.
+
+Four parameters are supported for pcie root port.
+* port: port number of root port.
+* bus: bus number of root port.
+* addr: including slot number and function number.
+* id: the name of secondary bus.
+
+```shell
+-device pcie-root-port,port=0x1,addr=0x1.0x2,bus=pcie.0,id=pcie.1
 ```
 
 ## 3. StratoVirt Management
