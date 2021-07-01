@@ -519,6 +519,7 @@ impl PciConfig {
                         .delete_subregion(self.bars[id].region.as_ref().unwrap())
                         .chain_err(|| ErrorKind::UnregMemBar(id))?,
                 }
+                self.bars[id].address = BAR_SPACE_UNMAPPED;
             }
             if new_addr != BAR_SPACE_UNMAPPED {
                 match self.bars[id].region_type {
@@ -532,6 +533,7 @@ impl PciConfig {
                         .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
                         .chain_err(|| ErrorKind::UnregMemBar(id))?,
                 }
+                self.bars[id].address = new_addr;
             }
         }
         Ok(())
@@ -845,6 +847,8 @@ mod tests {
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        assert_eq!(pci_config.bars[1].address, BAR_SPACE_UNMAPPED);
+        assert_eq!(pci_config.bars[2].address, BAR_SPACE_UNMAPPED);
         pci_config
             .update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
@@ -852,6 +856,8 @@ mod tests {
                 sys_mem.root(),
             )
             .unwrap();
+        assert_eq!(pci_config.bars[1].address, 2048);
+        assert_eq!(pci_config.bars[2].address, 2048);
 
         // Bar addresses not changed.
         pci_config
@@ -861,6 +867,9 @@ mod tests {
                 sys_mem.root(),
             )
             .unwrap();
+        assert_eq!(pci_config.bars[1].address, 2048);
+        assert_eq!(pci_config.bars[2].address, 2048);
+
         // Bar addresses are changed.
         le_write_u32(
             &mut pci_config.config,
@@ -882,6 +891,8 @@ mod tests {
                 sys_mem.root(),
             )
             .unwrap();
+        assert_eq!(pci_config.bars[1].address, pci_config.get_bar_address(1));
+        assert_eq!(pci_config.bars[2].address, pci_config.get_bar_address(2));
     }
 
     #[test]
