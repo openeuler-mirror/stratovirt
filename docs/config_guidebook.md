@@ -324,6 +324,23 @@ Four parameters are supported for pcie root port.
 -device pcie-root-port,port=0x1,addr=0x1.0x2,bus=pcie.0,id=pcie.1
 ```
 
+### 2.10 PFlash
+PFlash is a virtualized flash device, it provides code storage and data storage for EDK2 during standard boot.
+
+Usually, two PFlash devices are added to the main board. The first PFlash device is used to store binary code for EDK2 firmware, so this device is usually read-only. The second device is used to store configuration information related to standard boot, so this device is usually readable and writable.
+
+Three properties can be set for PFlash device.
+
+* file: the path of PFlash device in host
+* readonly: whether PFlash device is read-only or not. Default option is false. Note that the PFlash device which stores binary code should be read-only, the PFlash device which stores boot information should be readable and writable
+* unit: unique device-id for PFlash devices. It should satisfy `0<=unit<=1`. Note that the unit of the PFlash device which stores binary code should be 0, the unit of the PFlash device which stores boot information should be 1
+
+```shell
+# cmdline
+-pflash file=/path/to/code_storage_file,unit=0[,readonly=true]
+-pflash file=/path/to/data_storage_file,unit=1
+```
+
 ## 3. StratoVirt Management
 
 StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
