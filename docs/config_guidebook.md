@@ -7,11 +7,11 @@ StratoVirt can only be launched via cmdline arguments.
 ### 1.1 Machine Config
 
 General configuration of machine, including
-* type: The machine type of machine, StratoVirt only support MicroVm yet.
+* type: The type of machine, three types of machine are avaiable: "none", "microvm" and "standard_vm".
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
 * mem-share: Guest memory is sharable with other processes or not.
 
-This feature is closed by default. There are two ways to open it:
+NB: machine type "none" is used to get the capabilities of stratovirt.
 
 ```shell
 # cmdline

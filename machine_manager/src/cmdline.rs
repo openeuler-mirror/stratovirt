@@ -13,7 +13,7 @@
 use error_chain::bail;
 
 use crate::{
-    config::VmConfig,
+    config::{MachineType, VmConfig},
     errors::{Result, ResultExt},
 };
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
@@ -300,10 +300,11 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_devices);
 
     // Check the mini-set for Vm to start is ok
-    vm_cfg
-        .check_vmconfig(args.is_present("daemonize"))
-        .chain_err(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
-
+    if vm_cfg.machine_config.mach_type != MachineType::None {
+        vm_cfg
+            .check_vmconfig(args.is_present("daemonize"))
+            .chain_err(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
+    }
     Ok(vm_cfg)
 }
 

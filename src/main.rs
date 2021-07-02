@@ -145,24 +145,34 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
 
     let (vm, api_socket): (Arc<Mutex<dyn MachineOps + Send + Sync>>, Socket) =
-        if let MachineType::MicroVm = vm_config.machine_config.mach_type {
-            let vm = Arc::new(Mutex::new(
-                LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
-            ));
-            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
-                .chain_err(|| "Failed to realize micro VM.")?;
-            EventLoop::set_manager(vm.clone(), None);
+        match vm_config.machine_config.mach_type {
+            MachineType::MicroVm => {
+                let vm = Arc::new(Mutex::new(
+                    LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
+                ));
+                MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
+                    .chain_err(|| "Failed to realize micro VM.")?;
+                EventLoop::set_manager(vm.clone(), None);
 
-            (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
-        } else {
-            let vm = Arc::new(Mutex::new(
-                StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
-            ));
-            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
-                .chain_err(|| "Failed to realize standard VM.")?;
-            EventLoop::set_manager(vm.clone(), None);
+                (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+            }
+            MachineType::StandardVm => {
+                let vm = Arc::new(Mutex::new(
+                    StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
+                ));
+                MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
+                    .chain_err(|| "Failed to realize standard VM.")?;
+                EventLoop::set_manager(vm.clone(), None);
 
-            (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+                (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+            }
+            MachineType::None => {
+                let vm = Arc::new(Mutex::new(
+                    StdMachine::new(&vm_config).chain_err(|| "Failed to init NoneVM")?,
+                ));
+                EventLoop::set_manager(vm.clone(), None);
+                (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+            }
         };
 
     if let Some(uri) = cmd_args.value_of("incoming") {
