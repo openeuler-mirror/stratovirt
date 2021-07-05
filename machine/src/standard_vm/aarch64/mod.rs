@@ -378,25 +378,34 @@ impl MachineOps for StdMachine {
     }
 
     /// Add pflash device.
-    fn add_pflash_device(&mut self, config: &PFlashConfig) -> Result<()> {
+    fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
         use crate::errors::ResultExt;
 
-        let fd = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(config.path_on_host.clone())?;
+        let mut configs_vec = configs.to_vec();
+        configs_vec.sort_by_key(|c| c.unit);
         let sector_len: u32 = 1024 * 256;
-        let index: usize = config.unit;
         let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
         let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
-        if index == 1 {
+        for i in 0..=1 {
+            let (fd, read_only) = if i < configs_vec.len() {
+                let config = &configs_vec[i];
+                let fd = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(config.path_on_host.clone())?;
+                (Some(fd), config.read_only)
+            } else {
+                (None, false)
+            };
+
+            let pflash = PFlash::new(flash_size, fd, sector_len, 4, 2, read_only)
+                .chain_err(|| "Failed to create PFlash.")?;
+
+            PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size)
+                .chain_err(|| "Failed to realize pflash device")?;
+
             flash_base += flash_size;
         }
-        let pflash = PFlash::new(flash_size, fd, sector_len, 4, 2, config.read_only)
-            .chain_err(|| "Failed to create PFlash.")?;
-
-        PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size)
-            .chain_err(|| "Failed to realize pflash device")?;
 
         Ok(())
     }
