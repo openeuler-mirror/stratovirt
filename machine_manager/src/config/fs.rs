@@ -27,6 +27,7 @@ const MAX_STRING_LENGTH: usize = 255;
 const MAX_PATH_LENGTH: usize = 4096;
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
+const MAX_UNIT_ID: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,18 +201,81 @@ pub fn parse_blk(vm_config: &VmConfig, drive_config: &str) -> Result<BlkDevConfi
     Ok(blkdevcfg)
 }
 
+/// Config struct for `pflash`.
+/// Contains pflash device's attr.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PFlashConfig {
+    pub path_on_host: String,
+    pub read_only: bool,
+    pub unit: usize,
+}
+
+impl Default for PFlashConfig {
+    fn default() -> Self {
+        PFlashConfig {
+            path_on_host: String::new(),
+            read_only: false,
+            unit: 0_usize,
+        }
+    }
+}
+
+impl ConfigCheck for PFlashConfig {
+    fn check(&self) -> Result<()> {
+        if self.path_on_host.len() > MAX_PATH_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "drive device path".to_string(),
+                MAX_PATH_LENGTH,
+            )
+            .into());
+        }
+
+        if self.unit >= MAX_UNIT_ID {
+            return Err(ErrorKind::UnitIdError(self.unit, MAX_UNIT_ID).into());
+        }
+        Ok(())
+    }
+}
+
 impl VmConfig {
     /// Add '-drive ...' drive config to `VmConfig`.
     pub fn add_drive(&mut self, drive_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("drive");
+        cmd_parser.push("if");
+
+        cmd_parser.get_parameters(drive_config)?;
+        let drive_type = if let Some(_type) = cmd_parser.get_value::<String>("if")? {
+            _type
+        } else {
+            "none".to_string()
+        };
+        match drive_type.as_str() {
+            "none" => {
+                self.add_block_drive(&drive_config)?;
+            }
+            "pflash" => {
+                self.add_pflash(&drive_config)?;
+            }
+            _ => {
+                bail!("Unknow 'if' argument: {:?}", drive_type.as_str());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn add_block_drive(&mut self, block_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("drive");
         cmd_parser
             .push("file")
             .push("id")
             .push("readonly")
             .push("direct")
+            .push("if")
             .push("serial");
 
-        cmd_parser.parse(drive_config)?;
+        cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;
         if self.drives.is_none() {
             self.drives = Some(HashMap::new());
@@ -222,8 +286,57 @@ impl VmConfig {
         } else {
             bail!("Drive {:?} has been added", drive_id);
         }
-
         Ok(())
+    }
+
+    /// Add new flash device to `VmConfig`.
+    fn add_flashdev(&mut self, pflash: PFlashConfig) -> Result<()> {
+        if self.pflashs.is_some() {
+            for pf in self.pflashs.as_ref().unwrap() {
+                if pf.unit == pflash.unit {
+                    return Err(
+                        ErrorKind::IdRepeat("pflash".to_string(), pf.unit.to_string()).into(),
+                    );
+                }
+            }
+            self.pflashs.as_mut().unwrap().push(pflash);
+        } else {
+            self.pflashs = Some(vec![pflash]);
+        }
+        Ok(())
+    }
+
+    /// Add '-pflash ...' pflash config to `VmConfig`.
+    pub fn add_pflash(&mut self, pflash_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("pflash");
+        cmd_parser
+            .push("if")
+            .push("file")
+            .push("readonly")
+            .push("unit");
+
+        cmd_parser.parse(pflash_config)?;
+
+        let mut pflash = PFlashConfig::default();
+
+        if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
+            pflash.path_on_host = drive_path;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("file", "pflash").into());
+        }
+
+        if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
+            pflash.read_only = read_only.into();
+        }
+
+        if let Some(unit_id) = cmd_parser.get_value::<u64>("unit")? {
+            pflash.unit = unit_id as usize;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("unit", "pflash").into());
+        }
+
+        pflash.check()?;
+        self.add_flashdev(pflash)
     }
 }
 
@@ -283,5 +396,54 @@ mod tests {
         let pci = pci_bdf.unwrap();
         assert_eq!(pci.bus, "pcie.0".to_string());
         assert_eq!(pci.addr, (1, 2));
+    }
+
+    #[test]
+    fn test_pflash_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("if=pflash,readonly=on,file=flash0.fd,unit=0")
+            .is_ok());
+        assert!(vm_config.pflashs.is_some());
+        let pflash = vm_config.pflashs.unwrap();
+        assert!(pflash.len() == 1);
+        let pflash_cfg = &pflash[0];
+        assert_eq!(pflash_cfg.unit, 0);
+        assert_eq!(pflash_cfg.path_on_host, "flash0.fd".to_string());
+        assert_eq!(pflash_cfg.read_only, true);
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("readonly=on,file=flash0.fd,unit=0,if=pflash")
+            .is_ok());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("readonly=on,if=pflash,file=flash0.fd,unit=0")
+            .is_ok());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("if=pflash,readonly=on,file=flash0.fd,unit=2")
+            .is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("if=pflash,readonly=on,file=flash0.fd,unit=0")
+            .is_ok());
+        assert!(vm_config
+            .add_drive("if=pflash,file=flash1.fd,unit=1")
+            .is_ok());
+        assert!(vm_config.pflashs.is_some());
+        let pflash = vm_config.pflashs.unwrap();
+        assert!(pflash.len() == 2);
+        let pflash_cfg = &pflash[0];
+        assert_eq!(pflash_cfg.unit, 0);
+        assert_eq!(pflash_cfg.path_on_host, "flash0.fd".to_string());
+        assert_eq!(pflash_cfg.read_only, true);
+        let pflash_cfg = &pflash[1];
+        assert_eq!(pflash_cfg.unit, 1);
+        assert_eq!(pflash_cfg.path_on_host, "flash1.fd".to_string());
+        assert_eq!(pflash_cfg.read_only, false);
     }
 }

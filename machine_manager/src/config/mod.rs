@@ -22,7 +22,6 @@ mod iothread;
 mod machine_config;
 mod network;
 mod pci;
-mod pflash;
 mod rng;
 
 use std::any::Any;
@@ -42,7 +41,6 @@ pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
 pub use pci::*;
-pub use pflash::*;
 pub use rng::*;
 
 pub mod errors {
