@@ -88,10 +88,7 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::{
-    config::{
-        BootSource, ConfigCheck, ConsoleConfig, NetworkInterfaceConfig, RngConfig, SerialConfig,
-        VmConfig,
-    },
+    config::{BootSource, ConfigCheck, NetworkInterfaceConfig, RngConfig, SerialConfig, VmConfig},
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
 };
@@ -107,8 +104,8 @@ use util::loop_context::{EventLoopManager, EventNotifierHelper};
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Console, Net, Rng, VhostKern,
-    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, Rng, VhostKern,
+    VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 use vmm_sys_util::eventfd::EventFd;
 
@@ -654,31 +651,6 @@ impl MachineOps for LightMachine {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
                 .chain_err(|| MachineErrorKind::RegNotifierErr)?;
         }
-        Ok(())
-    }
-
-    fn add_console_device(&mut self, config: &ConsoleConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let console = Arc::new(Mutex::new(Console::new(config.clone())));
-        let device = VirtioMmioDevice::new(&self.sys_mem, console.clone());
-        let region_base = self.sysbus.min_free_base;
-        let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-
-        MigrationManager::register_device_instance_mutex(
-            VirtioMmioState::descriptor(),
-            VirtioMmioDevice::realize(
-                device,
-                &mut self.sysbus,
-                region_base,
-                region_size,
-                #[cfg(target_arch = "x86_64")]
-                &self.boot_source,
-            )
-            .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
-        );
-        MigrationManager::register_device_instance_mutex(VirtioConsoleState::descriptor(), console);
-        self.sysbus.min_free_base += region_size;
         Ok(())
     }
 

@@ -118,7 +118,8 @@ pub struct VmConfig {
     pub boot_source: BootSource,
     pub drives: Option<HashMap<String, DriveConfig>>,
     pub netdevs: Option<HashMap<String, NetDevcfg>>,
-    pub consoles: Option<Vec<ConsoleConfig>>,
+    pub chardev: HashMap<String, ConsoleConfig>,
+    pub virtio_serial: Option<VirtioSerialInfo>,
     pub devices: Vec<(String, String)>,
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
@@ -144,12 +145,6 @@ impl VmConfig {
             && self.machine_config.mach_type == MachineType::MicroVm
         {
             bail!("kernel file is required for microvm machine type, which is not provided");
-        }
-
-        if self.consoles.is_some() {
-            for console in self.consoles.as_ref().unwrap() {
-                console.check()?;
-            }
         }
 
         if self.rng.is_some() {
