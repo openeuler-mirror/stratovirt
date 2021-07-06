@@ -269,6 +269,71 @@ pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::parse_virtio_serial;
+
+    #[test]
+    fn test_mmio_console_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
+        assert!(vm_config
+            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console,id=console1",
+        );
+        assert!(virt_console.is_ok());
+        let console_cfg = virt_console.unwrap();
+        assert_eq!(console_cfg.id, "console1");
+        assert_eq!(console_cfg.console_cfg.socket_path, "/path/to/socket");
+
+        let mut vm_config = VmConfig::default();
+        assert!(
+            parse_virtio_serial(&mut vm_config, "virtio-serial-device,bus=pcie.0,addr=0x1")
+                .is_err()
+        );
+        assert!(vm_config
+            .add_chardev("pty,id=test_console,path=/path/to/socket")
+            .is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
+        assert!(vm_config
+            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console1,id=console1",
+        );
+        // test_console1 does not exist.
+        assert!(virt_console.is_err());
+    }
+
+    #[test]
+    fn test_pci_console_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(
+            parse_virtio_serial(&mut vm_config, "virtio-serial-pci,bus=pcie.0,addr=0x1.0x2")
+                .is_ok()
+        );
+        assert!(vm_config
+            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console,id=console1",
+        );
+        assert!(virt_console.is_ok());
+        let console_cfg = virt_console.unwrap();
+
+        assert_eq!(console_cfg.id, "console1");
+        let serial_info = vm_config.virtio_serial.unwrap();
+        assert!(serial_info.pci_bdf.is_some());
+        let bdf = serial_info.pci_bdf.unwrap();
+        assert_eq!(bdf.bus, "pcie.0");
+        assert_eq!(bdf.addr, (1, 2));
+        assert_eq!(console_cfg.console_cfg.socket_path, "/path/to/socket");
+    }
 
     #[test]
     fn test_vsock_config_cmdline_parser() {
