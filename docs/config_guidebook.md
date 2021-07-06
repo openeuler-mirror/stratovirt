@@ -216,15 +216,30 @@ Virtio console is a general-purpose serial device for data transfer between the 
 Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it.
 In host, it will be presented as a UnixSocket.
 
-Two properties can be set for virtio console device.
+Six properties can be set for virtio console device.
 
-* console_id: unique device-id in StratoVirt
-* socket_path: the path of virtio console socket in the host
+* id: unique device-id.
+* socket: the type of redirect method. NB: currently only socket type is supported.
+* path: the path of virtio console socket in the host.
+* chardev: char device of virtio console device.
+* bus: bus number of virtio console.
+* addr: including slot number and function number. The first number represents slot number
+of device and the second one represents function number of it.
+
 
 ```shell
-# shell
--chardev id=console_id,path=socket_path
+# virtio mmio device
+-device virtio-serial-device
+-chardev socket,path=socket_path,id=virtioconsole1
+-device virtconsole,chardev=virtioconsole1,id=console_id
+
+# virtio pci device
+-device virtio-serial-pci,bus=pcie.0,addr=0x1
+-chardev socket,path=socket_path,id=virtioconsole1
+-device virtconsole,chardev=virtioconsole1,id=console_id
 ```
+NB:
+Currently, only one virtio console device is supported in standard machine.
 
 ### 2.5 Virtio-vsock
 
