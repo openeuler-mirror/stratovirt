@@ -395,7 +395,8 @@ impl EventNotifierHelper for PL011 {
         let mut handlers = Vec::new();
         let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
             Box::new(move |_, _| {
-                let mut out = [0_u8; 64];
+                let remain_space = PL011_FIFO_SIZE - pl011.lock().unwrap().read_count as usize;
+                let mut out = vec![0_u8; remain_space];
                 match std::io::stdin().lock().read_raw(&mut out) {
                     Ok(count) => {
                         pl011.lock().unwrap().receive(&out[..count]);
