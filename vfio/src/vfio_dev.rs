@@ -339,8 +339,8 @@ impl VfioGroup {
         }
         if status.flags != vfio::VFIO_GROUP_FLAGS_VIABLE {
             bail!(
-                "Group is not viable, ensure all devices within the IOMMU group are bound \
-            to their VFIO bus driver."
+                "Group is not viable, ensure all devices within the IOMMU group are bound to \
+                their VFIO bus driver."
             );
         }
 
@@ -385,4 +385,94 @@ pub struct VfioDevice {
     group: Arc<VfioGroup>,
     pub container: Arc<VfioContainer>,
     pub dev_info: VfioDevInfo,
+}
+
+impl VfioDevice {
+    pub fn new(container: Arc<VfioContainer>, path: &Path) -> Result<Self> {
+        if !path.exists() {
+            bail!("No provided host PCI device, use -device vfio-pci,host=DDDD:BB:DD.F");
+        }
+        let group =
+            Self::vfio_get_group(&container, &path).chain_err(|| "Fail to get iommu group")?;
+        let device =
+            Self::vfio_get_device(&group, &path).chain_err(|| "Fail to get vfio device")?;
+        let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
+
+        Ok(VfioDevice {
+            device,
+            group,
+            container,
+            dev_info,
+        })
+    }
+
+    fn vfio_get_group(container: &Arc<VfioContainer>, dev_path: &Path) -> Result<Arc<VfioGroup>> {
+        let iommu_group: PathBuf = [dev_path, Path::new(IOMMU_GROUP)]
+            .iter()
+            .collect::<PathBuf>()
+            .read_link()
+            .chain_err(|| "Invaild iommu group path")?;
+        let group_name = iommu_group
+            .file_name()
+            .chain_err(|| "Invaild iommu group name")?;
+        let mut group_id = 0;
+        if let Some(n) = group_name.to_str() {
+            group_id = n.parse::<u32>().chain_err(|| "Invaild iommu group id")?;
+        }
+
+        let mut groups = container.groups.lock().unwrap();
+        if let Some(g) = groups.get(&group_id) {
+            return Ok(g.clone());
+        }
+        let group = Arc::new(VfioGroup::new(group_id)?);
+        group
+            .connect_container(&container)
+            .chain_err(|| "Fail to connect container")?;
+        groups.insert(group_id, group.clone());
+
+        Ok(group)
+    }
+
+    fn vfio_get_device(group: &VfioGroup, name: &Path) -> Result<File> {
+        let mut dev_name: &str = "";
+        if let Some(n) = name.file_name() {
+            dev_name = n.to_str().chain_err(|| "Invaild device path")?;
+        }
+        let path: CString = CString::new(dev_name.as_bytes())
+            .chain_err(|| "Failed to convert device name to CString type of data")?;
+        let ptr = path.as_ptr();
+        // Safe as group is the owner of file and make sure ptr is valid.
+        let fd = unsafe { ioctl_with_ptr(&group.group, VFIO_GROUP_GET_DEVICE_FD(), ptr) };
+        if fd < 0 {
+            return Err(ErrorKind::VfioIoctl("VFIO_GROUP_GET_DEVICE_FD".to_string(), fd).into());
+        }
+
+        // Safe as we have verified that fd is a valid FD.
+        let device = unsafe { File::from_raw_fd(fd) };
+        Ok(device)
+    }
+
+    fn get_dev_info(device: &File) -> Result<VfioDevInfo> {
+        let mut dev_info = vfio::vfio_device_info {
+            argsz: size_of::<vfio::vfio_device_info>() as u32,
+            flags: 0,
+            num_regions: 0,
+            num_irqs: 0,
+        };
+
+        // Safe as device is the owner of file, and we will verify the result is valid.
+        let ret = unsafe { ioctl_with_mut_ref(device, VFIO_DEVICE_GET_INFO(), &mut dev_info) };
+        if ret < 0
+            || (dev_info.flags & vfio::VFIO_DEVICE_FLAGS_PCI) == 0
+            || dev_info.num_regions < vfio::VFIO_PCI_CONFIG_REGION_INDEX + 1
+            || dev_info.num_irqs < vfio::VFIO_PCI_MSIX_IRQ_INDEX + 1
+        {
+            return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_GET_INFO".to_string(), ret).into());
+        }
+
+        Ok(VfioDevInfo {
+            num_irqs: dev_info.num_irqs,
+            flags: dev_info.flags,
+        })
+    }
 }
