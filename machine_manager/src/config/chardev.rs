@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     errors::{ErrorKind, Result},
-    pci_args_check,
+    get_pci_bdf, pci_args_check, PciBdf,
 };
 use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
@@ -26,11 +26,22 @@ const MAX_PATH_LENGTH: usize = 4096;
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 
-/// Config structure for virtio-console.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ConsoleConfig {
     pub id: String,
     pub socket_path: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VirtioConsole {
+    pub id: String,
+    pub console_cfg: ConsoleConfig,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CharDevice {
+    pub id: String,
+    pub backend: String,
 }
 
 impl ConfigCheck for ConsoleConfig {
@@ -53,52 +64,73 @@ impl ConfigCheck for ConsoleConfig {
     }
 }
 
+pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ConsoleConfig> {
+    let mut chardev = ConsoleConfig::default();
+    if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
+        chardev.id = chardev_id;
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
+    };
+    if let Some(chardev_type) = cmd_parser.get_value::<String>("")? {
+        if chardev_type == *"socket" {
+            if let Some(chardev_path) = cmd_parser.get_value::<String>("path")? {
+                chardev.socket_path = chardev_path;
+            } else {
+                return Err(ErrorKind::FieldIsMissing("path", "chardev").into());
+            };
+        } else {
+            bail!("Unsupported chardev type: {:?}", &chardev_type);
+        }
+    } else {
+        return Err(ErrorKind::FieldIsMissing("backend", "chardev").into());
+    };
+
+    Ok(chardev)
+}
+
+pub fn parse_virtconsole(vm_config: &VmConfig, config_args: &str) -> Result<VirtioConsole> {
+    let mut cmd_parser = CmdParser::new("virtconsole");
+    cmd_parser.push("").push("id").push("chardev");
+    cmd_parser.parse(config_args)?;
+
+    let chardev_name = if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
+        chardev
+    } else {
+        return Err(ErrorKind::FieldIsMissing("chardev", "virtconsole").into());
+    };
+
+    let id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
+        chardev_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "virtconsole").into());
+    };
+
+    if let Some(char_dev) = vm_config.chardev.get(&chardev_name) {
+        Ok(VirtioConsole {
+            id,
+            console_cfg: char_dev.clone(),
+        })
+    } else {
+        bail!("Chardev {:?} not found", &chardev_name);
+    }
+}
+
 impl VmConfig {
     /// Add console config to `VmConfig`.
-    pub fn add_consoles(&mut self, console_config: &str) -> Result<()> {
+    pub fn add_chardev(&mut self, chardev_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("chardev");
-        cmd_parser.push("id").push("path");
+        cmd_parser.push("").push("id").push("path");
 
-        cmd_parser.parse(console_config)?;
-
-        let mut console = ConsoleConfig::default();
-        if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
-            console.id = console_id;
+        cmd_parser.parse(chardev_config)?;
+        let chardev = parse_chardev(cmd_parser)?;
+        chardev.check()?;
+        let chardev_id = chardev.id.clone();
+        if self.chardev.get(&chardev_id).is_none() {
+            self.chardev.insert(chardev_id, chardev);
         } else {
-            return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
-        };
-        if let Some(console_path) = cmd_parser.get_value::<String>("path")? {
-            console.socket_path = console_path;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("path", "chardev").into());
-        };
-
-        if self.consoles.is_some() {
-            for c in self.consoles.as_ref().unwrap() {
-                if c.id == console.id {
-                    return Err(ErrorKind::IdRepeat(
-                        "virtio-console".to_string(),
-                        c.id.to_string(),
-                    )
-                    .into());
-                }
-            }
-            self.consoles.as_mut().unwrap().push(console);
-        } else {
-            self.consoles = Some(vec![console]);
+            bail!("Chardev {:?} has been added");
         }
         Ok(())
-    }
-
-    /// Get virtio-console's config from `device` and `chardev` config.
-    pub fn get_virtio_console(&self) -> Vec<ConsoleConfig> {
-        let mut console_cfg: Vec<ConsoleConfig> = Vec::new();
-        if let Some(console_devs) = self.consoles.as_ref() {
-            for console_dev in console_devs {
-                console_cfg.push(console_dev.clone())
-            }
-        }
-        console_cfg
     }
 }
 
@@ -207,21 +239,100 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     Ok(vsock)
 }
 
+#[derive(Clone, Default, Debug)]
+pub struct VirtioSerialInfo {
+    pub pci_bdf: Option<PciBdf>,
+}
+
+pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Result<()> {
+    let mut cmd_parser = CmdParser::new("virtio-serial");
+    cmd_parser.push("").push("bus").push("addr");
+    cmd_parser.parse(serial_config)?;
+    pci_args_check(&cmd_parser)?;
+
+    if vm_config.virtio_serial.is_none() {
+        vm_config.virtio_serial = Some(if serial_config.contains("-pci") {
+            let pci_bdf = get_pci_bdf(serial_config)?;
+            VirtioSerialInfo {
+                pci_bdf: Some(pci_bdf),
+            }
+        } else {
+            VirtioSerialInfo { pci_bdf: None }
+        });
+    } else {
+        bail!("Only one virtio serial device is supported");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::parse_virtio_serial;
 
     #[test]
-    fn test_console_config_cmdline_parser() {
+    fn test_mmio_console_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
+        assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
         assert!(vm_config
-            .add_consoles("id=test_console,path=/path/to/socket")
+            .add_chardev("socket,id=test_console,path=/path/to/socket")
             .is_ok());
-        let console_configs = vm_config.get_virtio_console();
-        assert_eq!(console_configs.len(), 1);
-        assert_eq!(console_configs[0].id, "test_console");
-        assert_eq!(console_configs[0].socket_path, "/path/to/socket");
-        assert!(console_configs[0].check().is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console,id=console1",
+        );
+        assert!(virt_console.is_ok());
+        let console_cfg = virt_console.unwrap();
+        assert_eq!(console_cfg.id, "console1");
+        assert_eq!(console_cfg.console_cfg.socket_path, "/path/to/socket");
+
+        let mut vm_config = VmConfig::default();
+        assert!(
+            parse_virtio_serial(&mut vm_config, "virtio-serial-device,bus=pcie.0,addr=0x1")
+                .is_err()
+        );
+        assert!(vm_config
+            .add_chardev("pty,id=test_console,path=/path/to/socket")
+            .is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
+        assert!(vm_config
+            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console1,id=console1",
+        );
+        // test_console1 does not exist.
+        assert!(virt_console.is_err());
+    }
+
+    #[test]
+    fn test_pci_console_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(
+            parse_virtio_serial(&mut vm_config, "virtio-serial-pci,bus=pcie.0,addr=0x1.0x2")
+                .is_ok()
+        );
+        assert!(vm_config
+            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console,id=console1",
+        );
+        assert!(virt_console.is_ok());
+        let console_cfg = virt_console.unwrap();
+
+        assert_eq!(console_cfg.id, "console1");
+        let serial_info = vm_config.virtio_serial.unwrap();
+        assert!(serial_info.pci_bdf.is_some());
+        let bdf = serial_info.pci_bdf.unwrap();
+        assert_eq!(bdf.bus, "pcie.0");
+        assert_eq!(bdf.addr, (1, 2));
+        assert_eq!(console_cfg.console_cfg.socket_path, "/path/to/socket");
     }
 
     #[test]

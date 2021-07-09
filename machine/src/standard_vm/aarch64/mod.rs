@@ -25,7 +25,7 @@ use devices::legacy::{
 };
 use devices::{InterruptController, InterruptControllerConfig};
 use hypervisor::KVM_FDS;
-use machine_manager::config::{BootSource, ConsoleConfig, PFlashConfig, SerialConfig, VmConfig};
+use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
@@ -306,10 +306,6 @@ impl MachineOps for StdMachine {
         if config.stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
         }
-        Ok(())
-    }
-
-    fn add_console_device(&mut self, _config: &ConsoleConfig) -> Result<()> {
         Ok(())
     }
 
