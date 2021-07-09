@@ -314,6 +314,64 @@ struct VfioGroup {
     group_id: u32,
 }
 
+impl VfioGroup {
+    fn new(group_id: u32) -> Result<Self> {
+        let group_path = Path::new(GROUP_PATH).join(group_id.to_string());
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&group_path)
+            .chain_err(|| {
+                format!(
+                    "Failed to open {} for iommu_group.",
+                    group_path.to_str().unwrap()
+                )
+            })?;
+
+        let mut status = vfio::vfio_group_status {
+            argsz: size_of::<vfio::vfio_group_status>() as u32,
+            flags: 0,
+        };
+        // Safe as file is `iommu_group` fd, and we check the return.
+        let ret = unsafe { ioctl_with_mut_ref(&file, VFIO_GROUP_GET_STATUS(), &mut status) };
+        if ret < 0 {
+            return Err(ErrorKind::VfioIoctl("VFIO_GROUP_GET_STATUS".to_string(), ret).into());
+        }
+        if status.flags != vfio::VFIO_GROUP_FLAGS_VIABLE {
+            bail!(
+                "Group is not viable, ensure all devices within the IOMMU group are bound \
+            to their VFIO bus driver."
+            );
+        }
+
+        Ok(VfioGroup {
+            group: file,
+            group_id,
+        })
+    }
+
+    fn connect_container(&self, container: &VfioContainer) -> Result<()> {
+        let raw_fd = container.container.as_raw_fd();
+        // Safe as group is the owner of file, and we check the return.
+        let ret = unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_SET_CONTAINER(), &raw_fd) };
+        if ret < 0 {
+            return Err(ErrorKind::VfioIoctl("VFIO_GROUP_SET_CONTAINER".to_string(), ret).into());
+        }
+
+        if let Err(e) = container.set_iommu(vfio::VFIO_TYPE1v2_IOMMU) {
+            unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &raw_fd) };
+            return Err(e).chain_err(|| "Failed to set IOMMU");
+        }
+
+        if let Err(e) = container.kvm_device_add_group(&self.group.as_raw_fd()) {
+            unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &raw_fd) };
+            return Err(e).chain_err(|| "Failed to add group to kvm device");
+        }
+
+        Ok(())
+    }
+}
+
 pub struct VfioDevInfo {
     pub num_irqs: u32,
     pub flags: u32,
