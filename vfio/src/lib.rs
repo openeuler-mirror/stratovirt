@@ -9,3 +9,10 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
+
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate vmm_sys_util;
