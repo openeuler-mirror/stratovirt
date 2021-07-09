@@ -132,6 +132,30 @@ pub mod errors {
                 description("Index out of bound of array")
                 display("Index :{} out of bound :{}", index, bound)
             }
+            NodeDepthMismatch(target_dep: u32, real_dep: u32) {
+                description("Fdt structure nested node depth mismatch")
+                display("Desired node depth :{}, current node depth :{}", target_dep, real_dep)
+            }
+            NodeUnclosed(unclose: u32) {
+                description("Fdt structure block node unclose")
+                display("Still have {} node open when terminating the fdt", unclose)
+            }
+            IllegelPropertyPos {
+                description("Cann't add property outside the node")
+                display("Failed to add property because there is no open node")
+            }
+            IllegalString(s: String) {
+                description("The string for fdt should not contain null")
+                display("Failed to add string to fdt because of null character inside \"{}\"", s)
+            }
+            MemReserveOverlap {
+                description("The mem reserve entry should not overlap")
+                display("Failed to add overlapped mem reserve entries to fdt")
+            }
+            SetPropertyErr(s: String) {
+                description("Cann't set property for fdt node")
+                display("Failed to set {} property", s)
+            }
         }
     }
 }

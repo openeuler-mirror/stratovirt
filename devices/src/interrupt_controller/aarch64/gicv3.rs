@@ -19,7 +19,7 @@ use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
 use hypervisor::KVM_FDS;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use migration::MigrationManager;
-use util::device_tree;
+use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
@@ -397,7 +397,7 @@ impl GICDevice for GICv3 {
         Ok(())
     }
 
-    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> UtilResult<()> {
+    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
         let redist_count = self.redist_regions.len() as u32;
         let mut gic_reg = vec![self.dist_base, self.dist_size];
 
@@ -406,34 +406,36 @@ impl GICDevice for GICv3 {
             gic_reg.push(redist.size);
         }
 
-        let node = "/intc";
-        device_tree::add_sub_node(fdt, node)?;
-        device_tree::set_property_string(fdt, node, "compatible", "arm,gic-v3")?;
-        device_tree::set_property(fdt, node, "interrupt-controller", None)?;
-        device_tree::set_property_u32(fdt, node, "#interrupt-cells", 0x3)?;
-        device_tree::set_property_u32(fdt, node, "phandle", device_tree::GIC_PHANDLE)?;
-        device_tree::set_property_u32(fdt, node, "#address-cells", 0x2)?;
-        device_tree::set_property_u32(fdt, node, "#size-cells", 0x2)?;
-        device_tree::set_property_u32(fdt, node, "#redistributor-regions", redist_count)?;
-        device_tree::set_property_array_u64(fdt, node, "reg", &gic_reg)?;
+        let node = "intc";
+        let intc_node_dep = fdt.begin_node(node)?;
+        fdt.set_property_string("compatible", "arm,gic-v3")?;
+        fdt.set_property("interrupt-controller", &Vec::new())?;
+        fdt.set_property_u32("#interrupt-cells", 0x3)?;
+        fdt.set_property_u32("phandle", device_tree::GIC_PHANDLE)?;
+        fdt.set_property_u32("#address-cells", 0x2)?;
+        fdt.set_property_u32("#size-cells", 0x2)?;
+        fdt.set_property_u32("#redistributor-regions", redist_count)?;
+        fdt.set_property_array_u64("reg", &gic_reg)?;
 
         let gic_intr = [
             device_tree::GIC_FDT_IRQ_TYPE_PPI,
             0x9,
             device_tree::IRQ_TYPE_LEVEL_HIGH,
         ];
-        device_tree::set_property_array_u32(fdt, node, "interrupts", &gic_intr)?;
+        fdt.set_property_array_u32("interrupts", &gic_intr)?;
 
         if let Some(its) = &self.its_dev {
-            device_tree::set_property(fdt, node, "ranges", None)?;
+            fdt.set_property("ranges", &Vec::new())?;
             let its_reg = [its.msi_base, its.msi_size];
-            let node = "/intc/its";
-            device_tree::add_sub_node(fdt, node)?;
-            device_tree::set_property_string(fdt, node, "compatible", "arm,gic-v3-its")?;
-            device_tree::set_property(fdt, node, "msi-controller", None)?;
-            device_tree::set_property_u32(fdt, node, "phandle", device_tree::GIC_ITS_PHANDLE)?;
-            device_tree::set_property_array_u64(fdt, node, "reg", &its_reg)?;
+            let node = "its";
+            let its_node_dep = fdt.begin_node(node)?;
+            fdt.set_property_string("compatible", "arm,gic-v3-its")?;
+            fdt.set_property("msi-controller", &Vec::new())?;
+            fdt.set_property_u32("phandle", device_tree::GIC_ITS_PHANDLE)?;
+            fdt.set_property_array_u64("reg", &its_reg)?;
+            fdt.end_node(its_node_dep)?;
         }
+        fdt.end_node(intc_node_dep)?;
 
         Ok(())
     }
