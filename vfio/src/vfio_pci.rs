@@ -275,6 +275,275 @@ impl VfioPciDevice {
 
         Ok(())
     }
+
+    fn register_bars(&mut self) -> PciResult<()> {
+        let msix_info = self
+            .msix_info
+            .as_ref()
+            .chain_err(|| "Failed to get MSIX info")?;
+        let table_bar = msix_info.table.table_bar;
+        let table_offset = msix_info.table.table_offset;
+        let table_size = msix_info.table.table_size;
+        // Create a separate region for MSI-X table, VFIO won't allow to map the MSI-X table area.
+        let table_ops = self
+            .get_table_region_ops()
+            .chain_err(|| "Failed to get table region ops")?;
+        let bar_ops = self.get_bar_region_ops();
+
+        for i in 0..PCI_ROM_SLOT {
+            {
+                let mut bars = self.vfio_bars.lock().unwrap();
+                let bar = bars
+                    .get_mut(i as usize)
+                    .chain_err(|| "Failed to get bar info")?;
+                // Skip unimplemented bar and the upper half of 64 bit bar.
+                if bar.size == 0 {
+                    continue;
+                }
+            }
+
+            let mut vfio_bars = self.vfio_bars.lock().unwrap();
+            let vfio_bar = vfio_bars
+                .get_mut(i as usize)
+                .chain_err(|| "Failed to get vfio bar info")?;
+            let size = vfio_bar.size;
+
+            let bar_region = if i == table_bar {
+                let region = Region::init_container_region(size);
+                region.set_priority(-1);
+                region
+                    .add_subregion(
+                        Region::init_io_region(table_size as u64, table_ops.clone()),
+                        table_offset,
+                    )
+                    .chain_err(|| ErrorKind::UnregMemBar(i as usize))?;
+
+                if table_offset > 0 {
+                    region
+                        .add_subregion(Region::init_io_region(table_offset, bar_ops.clone()), 0)
+                        .chain_err(|| ErrorKind::UnregMemBar(i as usize))?;
+                }
+
+                if table_offset + table_size < size {
+                    region
+                        .add_subregion(
+                            Region::init_io_region(
+                                size - table_offset - table_size,
+                                bar_ops.clone(),
+                            ),
+                            table_offset + table_size,
+                        )
+                        .chain_err(|| ErrorKind::UnregMemBar(i as usize))?;
+                }
+                region
+            } else {
+                Region::init_io_region(size, bar_ops.clone())
+            };
+
+            self.pci_config
+                .register_bar(i as usize, bar_region, vfio_bar.region_type, false, size);
+        }
+
+        self.map_guest_memory()?;
+
+        Ok(())
+    }
+
+    /// Create region ops for MSI-X table.
+    fn get_table_region_ops(&mut self) -> PciResult<RegionOps> {
+        let msix_info = self
+            .msix_info
+            .as_ref()
+            .chain_err(|| "Failed to get MSIX info")?;
+        let table_size = msix_info.table.table_size as u32;
+        let cap_offset = self.pci_config.find_pci_cap(MSIX_CAP_ID);
+
+        let offset: usize = cap_offset + MSIX_CAP_CONTROL as usize;
+        le_write_u16(
+            &mut self.pci_config.write_mask,
+            offset,
+            MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
+        )?;
+        let msix = Arc::new(Mutex::new(Msix::new(
+            table_size,
+            table_size / 128,
+            cap_offset as u16,
+            self.dev_id,
+        )));
+        self.pci_config.msix = Some(msix.clone());
+
+        let cloned_msix = msix.clone();
+        let read = move |data: &mut [u8], _: GuestAddress, offset: u64| -> bool {
+            data.copy_from_slice(
+                &cloned_msix.lock().unwrap().table[offset as usize..(offset as usize + data.len())],
+            );
+            true
+        };
+
+        let cloned_dev = self.vfio_device.clone();
+        let cloned_gsi_routes = self.gsi_msi_routes.clone();
+        let write = move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
+            let mut locked_msix = msix.lock().unwrap();
+            locked_msix.table[offset as usize..(offset as usize + data.len())]
+                .copy_from_slice(&data);
+
+            let vector = offset / MSIX_TABLE_ENTRY_SIZE as u64;
+            if locked_msix.is_vector_masked(vector as u16) {
+                return true;
+            }
+
+            let entry = locked_msix.get_message(vector as u16);
+            let msix_vector = MsiVector {
+                msg_addr_lo: entry.address_lo,
+                msg_addr_hi: entry.address_hi,
+                msg_data: entry.data,
+                masked: false,
+                #[cfg(target_arch = "aarch64")]
+                dev_id: locked_msix.dev_id as u32,
+            };
+
+            let mut locked_gsi_routes = cloned_gsi_routes.lock().unwrap();
+            let mut gsi_route = locked_gsi_routes.get_mut(vector as usize).unwrap();
+            if gsi_route.irq_fd.is_none() {
+                let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+                gsi_route.irq_fd = Some(irq_fd);
+            }
+            if gsi_route.gsi == -1 {
+                gsi_route.gsi = match KVM_FDS
+                    .load()
+                    .irq_route_table
+                    .lock()
+                    .unwrap()
+                    .allocate_gsi()
+                {
+                    Ok(g) => g as i32,
+                    Err(e) => {
+                        error!("Failed to allocate gsi, error is {}", e);
+                        return true;
+                    }
+                };
+
+                KVM_FDS
+                    .load()
+                    .irq_route_table
+                    .lock()
+                    .unwrap()
+                    .add_msi_route(gsi_route.gsi as u32, msix_vector)
+                    .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {}", e));
+
+                KVM_FDS
+                    .load()
+                    .commit_irq_routing()
+                    .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
+
+                KVM_FDS
+                    .load()
+                    .vm_fd
+                    .as_ref()
+                    .unwrap()
+                    .register_irqfd(gsi_route.irq_fd.as_ref().unwrap(), gsi_route.gsi as u32)
+                    .unwrap_or_else(|e| error!("Failed to register irq, error is {}", e));
+            } else {
+                KVM_FDS
+                    .load()
+                    .irq_route_table
+                    .lock()
+                    .unwrap()
+                    .update_msi_route(gsi_route.gsi as u32, msix_vector)
+                    .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {}", e));
+
+                KVM_FDS
+                    .load()
+                    .commit_irq_routing()
+                    .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
+            }
+            cloned_dev
+                .disable_irqs()
+                .unwrap_or_else(|e| error!("Failed to disable irq, error is {}", e));
+
+            cloned_dev
+                .enable_irqs(get_irq_rawfds(&locked_gsi_routes))
+                .unwrap_or_else(|e| error!("Failed to enable irq, error is {}", e));
+
+            true
+        };
+
+        Ok(RegionOps {
+            read: Arc::new(read),
+            write: Arc::new(write),
+        })
+    }
+
+    /// Create region ops for BARs.
+    fn get_bar_region_ops(&self) -> RegionOps {
+        let cloned_dev = self.vfio_device.clone();
+        let cloned_bars = self.vfio_bars.clone();
+        let read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            for locked_bar in cloned_bars.lock().unwrap().iter() {
+                if locked_bar.size == 0 {
+                    continue;
+                }
+
+                let r = &locked_bar.vfio_region;
+                if r.guest_phys_addr != 0
+                    && addr.0 >= r.guest_phys_addr
+                    && addr.0 < (r.guest_phys_addr + r.size)
+                {
+                    if let Err(e) = cloned_dev.read_region(data, r.region_offset, offset) {
+                        error!(
+                            "Failed to read bar region, address is {}, offset is {}, error is {}",
+                            addr.0, offset, e,
+                        );
+                    }
+                    return true;
+                }
+            }
+            true
+        };
+
+        let cloned_dev = self.vfio_device.clone();
+        let cloned_bars = self.vfio_bars.clone();
+        let write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            for locked_bar in cloned_bars.lock().unwrap().iter() {
+                if locked_bar.size == 0 {
+                    continue;
+                }
+
+                let r = &locked_bar.vfio_region;
+                if r.guest_phys_addr != 0
+                    && addr.0 >= r.guest_phys_addr
+                    && addr.0 < (r.guest_phys_addr + r.size)
+                {
+                    if let Err(e) = cloned_dev.write_region(data, r.region_offset, offset) {
+                        error!(
+                            "Failed to write bar region, address is {}, offset is {}, error is {}",
+                            addr.0, offset, e,
+                        );
+                    }
+                    return true;
+                }
+            }
+            true
+        };
+
+        RegionOps {
+            read: Arc::new(read),
+            write: Arc::new(write),
+        }
+    }
+
+    /// Add all guest memory regions into IOMMU table.
+    fn map_guest_memory(&mut self) -> PciResult<()> {
+        let container = &self.vfio_device.container;
+        let regions = container.vfio_mem_info.regions.lock().unwrap();
+
+        for r in regions.iter() {
+            container
+                .vfio_dma_map(r.guest_phys_addr, r.memory_size, r.userspace_addr)
+                .chain_err(|| "Failed to add guest memory region map into IOMMU table")?;
+        }
+        Ok(())
+    }
 }
 
 impl PciDevOps for VfioPciDevice {
