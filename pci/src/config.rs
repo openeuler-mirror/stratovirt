@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use address_space::Region;
@@ -42,6 +43,8 @@ pub const SUBSYSTEM_ID: usize = 0x2e;
 pub const HEADER_TYPE: u8 = 0x0e;
 /// Base address register 0.
 pub const BAR_0: u8 = 0x10;
+/// Base address register 5.
+pub const BAR_5: u8 = 0x24;
 /// Secondary bus number register.
 pub const SECONDARY_BUS_NUM: u8 = 0x19;
 /// Subordinate bus number register.
@@ -109,9 +112,9 @@ const BRIDGE_CTL_VGA_16BIT_DEC: u16 = 0x0010;
 const BRIDGE_CTL_SEC_BUS_RESET: u16 = 0x0040;
 const BRIDGE_CTL_DISCARD_TIMER_STATUS: u16 = 0x0400;
 
-const COMMAND_BUS_MASTER: u16 = 0x0004;
+pub const COMMAND_BUS_MASTER: u16 = 0x0004;
 const COMMAND_SERR_ENABLE: u16 = 0x0100;
-const COMMAND_INTERRUPT_DISABLE: u16 = 0x0400;
+pub const COMMAND_INTERRUPT_DISABLE: u16 = 0x0400;
 
 const STATUS_PARITY_ERROR: u16 = 0x0100;
 const STATUS_SIG_TARGET_ABORT: u16 = 0x0800;
@@ -120,12 +123,12 @@ const STATUS_RECV_MASTER_ABORT: u16 = 0x2000;
 const STATUS_SIG_SYS_ERROR: u16 = 0x4000;
 const STATUS_DETECT_PARITY_ERROR: u16 = 0x8000;
 
-const BAR_IO_SPACE: u8 = 0x01;
-const IO_BASE_ADDR_MASK: u32 = 0xffff_fffc;
-const MEM_BASE_ADDR_MASK: u64 = 0xffff_ffff_ffff_fff0;
-const BAR_MEM_64BIT: u8 = 0x04;
+pub const BAR_IO_SPACE: u8 = 0x01;
+pub const IO_BASE_ADDR_MASK: u32 = 0xffff_fffc;
+pub const MEM_BASE_ADDR_MASK: u64 = 0xffff_ffff_ffff_fff0;
+pub const BAR_MEM_64BIT: u8 = 0x04;
 const BAR_PREFETCH: u8 = 0x08;
-const BAR_SPACE_UNMAPPED: u64 = 0xffff_ffff_ffff_ffff;
+pub const BAR_SPACE_UNMAPPED: u64 = 0xffff_ffff_ffff_ffff;
 
 // Role-Based error reporting.
 const PCIE_CAP_RBER: u32 = 0x8000;
@@ -210,7 +213,7 @@ const PCIE_CAP_LINK_SLSV_16GT: u32 = 0x10;
 const PCIE_CAP_LINK_TLS_16GT: u16 = 0x0004;
 
 /// Type of bar region.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum RegionType {
     Io,
     Mem32Bit,
@@ -221,7 +224,7 @@ pub enum RegionType {
 pub struct Bar {
     region_type: RegionType,
     address: u64,
-    size: u64,
+    pub size: u64,
     pub region: Option<Region>,
 }
 
@@ -411,6 +414,29 @@ impl PciConfig {
         }
         if let Some(msix) = &mut self.msix {
             msix.lock().unwrap().write_config(&self.config, dev_id);
+        }
+    }
+
+    /// Get base offset of the capability in PCIe/PCI configuration space.
+    ///
+    /// # Arguments
+    ///
+    /// * `cap_id` - Capability ID.
+    pub fn find_pci_cap(&self, cap_id: u8) -> usize {
+        let mut offset = self.config[CAP_LIST as usize];
+        let mut cache_offsets = HashSet::new();
+        cache_offsets.insert(offset);
+        loop {
+            let cap = self.config[offset as usize];
+            if cap == cap_id {
+                return offset as usize;
+            }
+
+            offset = self.config[offset as usize + NEXT_CAP_OFFSET as usize];
+            if offset == 0 || cache_offsets.contains(&offset) {
+                return 0xff;
+            }
+            cache_offsets.insert(offset);
         }
     }
 
@@ -735,6 +761,32 @@ mod tests {
     use address_space::{AddressSpace, GuestAddress, RegionOps};
 
     use super::*;
+
+    const MSI_CAP_ID: u8 = 0x05;
+    const MSIX_CAP_ID: u8 = 0x11;
+
+    #[test]
+    fn test_find_pci_cap() {
+        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+        let offset = pci_config.find_pci_cap(MSIX_CAP_ID);
+        assert_eq!(offset, 0xff);
+
+        let msi_cap_offset = pci_config.add_pci_cap(MSI_CAP_ID, 12).unwrap();
+        let offset = pci_config.find_pci_cap(MSI_CAP_ID);
+        assert_eq!(offset, msi_cap_offset);
+
+        let msix_cap_offset = pci_config.add_pci_cap(MSIX_CAP_ID, 12).unwrap();
+        let offset = pci_config.find_pci_cap(MSIX_CAP_ID);
+        assert_eq!(offset, msix_cap_offset);
+
+        let offset = pci_config.find_pci_cap(MSI_CAP_ID);
+        assert_eq!(offset, msi_cap_offset);
+
+        let tmp_offset = pci_config.config[CAP_LIST as usize];
+        pci_config.config[tmp_offset as usize + NEXT_CAP_OFFSET as usize] = tmp_offset;
+        let offset = pci_config.find_pci_cap(MSI_CAP_ID);
+        assert_eq!(offset, 0xff);
+    }
 
     #[test]
     fn test_get_bar_address() {

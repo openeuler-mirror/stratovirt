@@ -42,7 +42,7 @@ pub mod errors {
 mod bus;
 pub mod config;
 mod host;
-mod msix;
+pub mod msix;
 mod root_port;
 
 pub use bus::PciBus;
