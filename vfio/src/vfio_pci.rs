@@ -61,6 +61,34 @@ pub struct VfioPciDevice {
     parent_bus: Weak<Mutex<PciBus>>,
 }
 
+impl VfioPciDevice {
+    /// New a VFIO PCI device structure for the vfio device created by VMM.
+    pub fn new(
+        path: &Path,
+        container: Arc<VfioContainer>,
+        devfn: u8,
+        name: String,
+        parent_bus: Weak<Mutex<PciBus>>,
+    ) -> PciResult<Self> {
+        Ok(VfioPciDevice {
+            // Unknown PCI or PCIe type here, allocate enough space to match the two types.
+            pci_config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
+            config_size: 0,
+            config_offset: 0,
+            vfio_device: Arc::new(
+                VfioDevice::new(container, path).chain_err(|| "Failed to new vfio device")?,
+            ),
+            msix_info: None,
+            vfio_bars: Arc::new(Mutex::new(Vec::with_capacity(PCI_NUM_BARS as usize))),
+            gsi_msi_routes: Arc::new(Mutex::new(Vec::new())),
+            devfn,
+            dev_id: 0,
+            name,
+            parent_bus,
+        })
+    }
+}
+
 impl PciDevOps for VfioPciDevice {
     fn init_write_mask(&mut self) -> PciResult<()> {
         self.pci_config.init_common_write_mask()
