@@ -87,6 +87,71 @@ impl VfioPciDevice {
             parent_bus,
         })
     }
+
+    fn get_pci_config(&mut self) -> PciResult<()> {
+        let argsz: u32 = size_of::<vfio::vfio_region_info>() as u32;
+        let mut info = vfio::vfio_region_info {
+            argsz,
+            flags: 0,
+            index: vfio::VFIO_PCI_CONFIG_REGION_INDEX,
+            cap_offset: 0,
+            size: 0,
+            offset: 0,
+        };
+
+        // Safe as device is the owner of file, and we will verify the result is valid.
+        let ret = unsafe {
+            ioctl_with_mut_ref(
+                &self.vfio_device.device,
+                VFIO_DEVICE_GET_REGION_INFO(),
+                &mut info,
+            )
+        };
+        if ret < 0 {
+            return Err(ErrorKind::VfioIoctl("VFIO_GET_PCI_CONFIG_INFO".to_string(), ret).into());
+        }
+
+        self.config_size = info.size;
+        self.config_offset = info.offset;
+        let mut config_data = vec![0_u8; self.config_size as usize];
+        self.vfio_device
+            .read_region(config_data.as_mut_slice(), self.config_offset, 0)?;
+        self.pci_config.config = config_data;
+
+        Ok(())
+    }
+
+    /// Disable I/O, MMIO, bus master and INTx states, And clear host device bar size information.
+    /// Guest OS can get residual addresses from the host if not clear bar size.
+    fn pci_config_reset(&mut self) -> PciResult<()> {
+        let mut cmd = le_read_u16(&self.pci_config.config, COMMAND as usize)?;
+        cmd &= !(COMMAND_IO_SPACE
+            | COMMAND_MEMORY_SPACE
+            | COMMAND_BUS_MASTER
+            | COMMAND_INTERRUPT_DISABLE);
+        le_write_u16(&mut self.pci_config.config, COMMAND as usize, cmd)?;
+
+        let mut data = vec![0u8; 2];
+        LittleEndian::write_u16(&mut data, cmd);
+        self.vfio_device
+            .write_region(data.as_slice(), self.config_offset, COMMAND as u64)?;
+
+        for i in 0..PCI_ROM_SLOT {
+            let offset = BAR_0 as usize + REG_SIZE * i as usize;
+            let v = le_read_u32(&self.pci_config.config, offset)?;
+            if v & BAR_IO_SPACE as u32 != 0 {
+                le_write_u32(&mut self.pci_config.config, offset, v & !IO_BASE_ADDR_MASK)?;
+            } else {
+                le_write_u32(
+                    &mut self.pci_config.config,
+                    offset,
+                    v & !MEM_BASE_ADDR_MASK as u32,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl PciDevOps for VfioPciDevice {
