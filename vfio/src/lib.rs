@@ -16,3 +16,9 @@ extern crate error_chain;
 extern crate log;
 #[macro_use]
 extern crate vmm_sys_util;
+
+mod vfio_dev;
+pub mod vfio_pci;
+
+pub use vfio_dev::VfioContainer;
+pub use vfio_pci::VfioPciDevice;

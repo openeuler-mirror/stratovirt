@@ -10,6 +10,42 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
+use std::mem::size_of;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::Path;
+use std::sync::{Arc, Mutex, Weak};
+
+use byteorder::{ByteOrder, LittleEndian};
+use error_chain::ChainedError;
+use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
+use kvm_ioctls::DeviceFd;
+use vfio_bindings::bindings::vfio;
+use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::ioctl::ioctl_with_mut_ref;
+
+use address_space::{FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
+use hypervisor::{MsiVector, KVM_FDS};
+#[cfg(target_arch = "aarch64")]
+use pci::config::SECONDARY_BUS_NUM;
+use pci::config::{
+    PciConfig, RegionType, BAR_0, BAR_5, BAR_IO_SPACE, BAR_MEM_64BIT, BAR_SPACE_UNMAPPED, COMMAND,
+    COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
+    IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE, REG_SIZE,
+};
+use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
+use pci::msix::{
+    is_msix_enabled, Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK, MSIX_CAP_ID,
+    MSIX_CAP_SIZE, MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE, MSIX_TABLE_OFFSET,
+    MSIX_TABLE_SIZE_MAX,
+};
+use pci::{
+    le_read_u16, le_read_u32, le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps,
+};
+use util::unix::host_page_size;
+
+use crate::vfio_dev::*;
+
 const PCI_NUM_BARS: u8 = 6;
 const PCI_ROM_SLOT: u8 = 6;
 

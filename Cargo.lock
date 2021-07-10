@@ -13,6 +13,7 @@ dependencies = [
  "machine_manager",
  "migration",
  "util",
+ "vfio",
  "virtio",
  "vmm-sys-util",
 ]
@@ -587,6 +588,30 @@ name = "version_check"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fecdca9a5291cc2b8dcf7dc02453fee791a280f3743cb0905f8822ae463b3fe"
+
+[[package]]
+name = "vfio"
+version = "0.3.0"
+dependencies = [
+ "address_space",
+ "byteorder",
+ "error-chain",
+ "hypervisor",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "libc",
+ "log",
+ "pci",
+ "util",
+ "vfio-bindings",
+ "vmm-sys-util",
+]
+
+[[package]]
+name = "vfio-bindings"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a21f546f2bda37f5a8cfb138c87f95b8e34d2d78d6a7a92ba3785f4e08604a7"
 
 [[package]]
 name = "virtio"

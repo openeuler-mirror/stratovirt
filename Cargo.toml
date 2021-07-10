@@ -18,6 +18,7 @@ machine_manager = { path = "machine_manager" }
 migration = { path = "migration" }
 util = { path = "util" }
 virtio = { path = "virtio" }
+vfio = { path = "vfio" }
 
 [workspace]
 members = [
@@ -36,6 +37,7 @@ members = [
     "acpi",
     "virtio",
     "ozone",
+    "vfio",
 ]
 
 [[bin]]
