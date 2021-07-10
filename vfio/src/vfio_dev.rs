@@ -672,6 +672,56 @@ impl VfioDevice {
 
         Ok(())
     }
+
+    /// Bind irqs to kvm interrupts.
+    ///
+    /// # Arguments
+    ///
+    /// * `irq_fds` - Irq fds that will be registered to kvm.
+    pub fn enable_irqs(&self, irq_fds: Vec<RawFd>) -> Result<()> {
+        let mut irq_set = array_to_vec::<vfio::vfio_irq_set, u32>(irq_fds.len());
+        irq_set[0].argsz =
+            (size_of::<vfio::vfio_irq_set>() + irq_fds.len() * size_of::<RawFd>()) as u32;
+        irq_set[0].flags = vfio::VFIO_IRQ_SET_DATA_EVENTFD | vfio::VFIO_IRQ_SET_ACTION_TRIGGER;
+        irq_set[0].index = vfio::VFIO_PCI_MSIX_IRQ_INDEX;
+        irq_set[0].start = 0u32;
+        irq_set[0].count = irq_fds.len() as u32;
+        // It is safe as enough memory space to save irq_set data.
+        let mut data: &mut [u8] = unsafe {
+            irq_set[0]
+                .data
+                .as_mut_slice(irq_fds.len() * size_of::<RawFd>())
+        };
+        LittleEndian::write_i32_into(irq_fds.as_slice(), &mut data);
+        // Safe as device is the owner of file, and we will verify the result is valid.
+        let ret = unsafe { ioctl_with_ref(&self.device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
+        if ret < 0 {
+            return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_SET_IRQS".to_string(), ret).into());
+        }
+
+        Ok(())
+    }
+
+    /// Unbind irqs from kvm interrupts.
+    ///
+    /// # Arguments
+    ///
+    /// * `irq_fds` - Irq fds that will be registered to kvm.
+    pub fn disable_irqs(&self) -> Result<()> {
+        let mut irq_set = array_to_vec::<vfio::vfio_irq_set, u32>(0);
+        irq_set[0].argsz = size_of::<vfio::vfio_irq_set>() as u32;
+        irq_set[0].flags = vfio::VFIO_IRQ_SET_DATA_NONE | vfio::VFIO_IRQ_SET_ACTION_TRIGGER;
+        irq_set[0].index = vfio::VFIO_PCI_MSIX_IRQ_INDEX;
+        irq_set[0].start = 0u32;
+        irq_set[0].count = 0u32;
+        // Safe as device is the owner of file, and we will verify the result is valid.
+        let ret = unsafe { ioctl_with_ref(&self.device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
+        if ret < 0 {
+            return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_SET_IRQS".to_string(), ret).into());
+        }
+
+        Ok(())
+    }
 }
 
 /// In VFIO, there are several structures contains zero-length array, as follows:
