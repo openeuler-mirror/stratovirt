@@ -544,6 +544,97 @@ impl VfioPciDevice {
         }
         Ok(())
     }
+
+    /// Avoid VM exits when guest OS read or write device MMIO regions, it maps bar regions into
+    /// the guest OS.
+    fn setup_bars_mmap(&mut self) -> PciResult<()> {
+        for i in vfio::VFIO_PCI_BAR0_REGION_INDEX..vfio::VFIO_PCI_ROM_REGION_INDEX {
+            let gpa = self.pci_config.get_bar_address(i as usize);
+            if gpa == BAR_SPACE_UNMAPPED || gpa == 0 {
+                continue;
+            }
+
+            let mut bars = self.vfio_bars.lock().unwrap();
+            let bar = bars
+                .get_mut(i as usize)
+                .chain_err(|| "Failed to get bar info")?;
+            let region = &mut bar.vfio_region;
+            // If bar region already setups or does not support mapping, just process the nest.
+            if region.size == 0 || region.mmaps.is_empty() || region.guest_phys_addr == gpa {
+                continue;
+            } else {
+                region.guest_phys_addr = gpa;
+            }
+
+            let mut read_only = true;
+            if region.flags & vfio::VFIO_REGION_INFO_FLAG_WRITE != 0 {
+                read_only = false;
+            }
+
+            for mmap in region.mmaps.iter() {
+                let dev = self.vfio_device.device.try_clone().unwrap();
+                let fb = FileBackend {
+                    file: Arc::new(dev),
+                    offset: region.region_offset + mmap.offset,
+                    page_size: host_page_size(),
+                };
+
+                let host_mmap = HostMemMapping::new(
+                    GuestAddress(gpa + mmap.offset),
+                    mmap.size,
+                    Some(fb),
+                    true,
+                    true,
+                    read_only,
+                )
+                .chain_err(|| "Failed to create HostMemMapping")?;
+
+                let ram_device = Region::init_ram_device_region(Arc::new(host_mmap));
+                let parent_bus = self.parent_bus.upgrade().unwrap();
+                let locked_parent_bus = parent_bus.lock().unwrap();
+                locked_parent_bus
+                    .mem_region
+                    .add_subregion(ram_device, gpa + mmap.offset)
+                    .chain_err(|| "Failed add to mem region")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn vfio_enable_msix(&mut self) -> PciResult<()> {
+        let mut gsi_routes = self.gsi_msi_routes.lock().unwrap();
+        if gsi_routes.len() == 0 {
+            let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+            let gsi_route = GsiMsiRoute {
+                irq_fd: Some(irq_fd),
+                gsi: -1,
+            };
+            gsi_routes.push(gsi_route);
+
+            let entries = self.msix_info.as_ref().unwrap().enteries;
+            for _ in 1..entries {
+                let gsi_route = GsiMsiRoute {
+                    irq_fd: None,
+                    gsi: -1,
+                };
+                gsi_routes.push(gsi_route);
+            }
+        }
+        // Register a vector of irqfd to kvm interrupts. If one of the device interrupt vector is
+        // triggered, the corresponding irqfd is written, and interrupt is injected into VM finally.
+        self.vfio_device
+            .enable_irqs(get_irq_rawfds(&gsi_routes))
+            .chain_err(|| "Failed enable irqfds in kvm")?;
+
+        Ok(())
+    }
+
+    fn vfio_disable_msix(&mut self) -> PciResult<()> {
+        self.vfio_device
+            .disable_irqs()
+            .chain_err(|| "Failed disable irqfds in kvm")?;
+        Ok(())
+    }
 }
 
 impl PciDevOps for VfioPciDevice {
@@ -730,4 +821,31 @@ impl PciDevOps for VfioPciDevice {
     fn name(&self) -> String {
         self.name.clone()
     }
+}
+
+fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute]) -> Vec<RawFd> {
+    let mut rawfds: Vec<RawFd> = Vec::new();
+    for r in gsi_msi_routes.iter() {
+        if let Some(fd) = r.irq_fd.as_ref() {
+            rawfds.push(fd.as_raw_fd());
+        }
+    }
+    rawfds
+}
+
+pub fn create_vfio_device() -> PciResult<Arc<DeviceFd>> {
+    let mut vfio_device = kvm_create_device {
+        type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
+        fd: 0,
+        flags: 0,
+    };
+    let dev_fd = KVM_FDS
+        .load()
+        .vm_fd
+        .as_ref()
+        .unwrap()
+        .create_device(&mut vfio_device)
+        .chain_err(|| "Failed to create VFIO type KVM device")?;
+
+    Ok(Arc::new(dev_fd))
 }
