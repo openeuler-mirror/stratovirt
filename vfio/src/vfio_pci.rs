@@ -152,6 +152,129 @@ impl VfioPciDevice {
 
         Ok(())
     }
+
+    /// Get MSI-X table, vfio_irq and entry information from vfio device.
+    fn get_msix_info(&mut self) -> PciResult<VfioMsixInfo> {
+        let n = self.vfio_device.clone().dev_info.num_irqs;
+        let vfio_irq = self
+            .vfio_device
+            .get_irqs_info(n)
+            .chain_err(|| "Failed to get vfio irqs info")?;
+
+        let cap_offset = self.pci_config.find_pci_cap(MSIX_CAP_ID);
+        let table = le_read_u32(
+            &self.pci_config.config,
+            cap_offset + MSIX_CAP_TABLE as usize,
+        )?;
+
+        let ctrl = le_read_u16(
+            &self.pci_config.config,
+            cap_offset + MSIX_CAP_CONTROL as usize,
+        )?;
+        let enteries = (ctrl & MSIX_TABLE_SIZE_MAX) + 1;
+        // Make sure that if enteries less than 1 or greater than (0x7ff + 1) is error value.
+        if !(1..=(MSIX_TABLE_SIZE_MAX + 1)).contains(&enteries) {
+            bail!(
+                "The number of MSI-X vectors is invalid, MSI-X vectors are {}",
+                enteries,
+            );
+        }
+
+        Ok(VfioMsixInfo {
+            table: MsixTable {
+                table_bar: (table as u16 & MSIX_TABLE_BIR) as u8,
+                table_offset: (table & MSIX_TABLE_OFFSET) as u64,
+                table_size: (enteries * MSIX_TABLE_ENTRY_SIZE) as u64,
+            },
+            enteries: enteries as u16,
+            vfio_irq,
+        })
+    }
+
+    /// Get vfio bars information. Vfio device won't allow to mmap the MSI-X table area,
+    /// we need to separate MSI-X table area and region mmap area.
+    fn bar_region_info(&mut self) -> PciResult<Vec<VfioBar>> {
+        let mut vfio_bars: Vec<VfioBar> = Vec::new();
+        let mut infos = self
+            .vfio_device
+            .get_regions_info()
+            .chain_err(|| "Failed get vfio device regions info")?;
+
+        for i in 0..PCI_ROM_SLOT {
+            let mut data = vec![0_u8; 4];
+            self.vfio_device.read_region(
+                data.as_mut_slice(),
+                self.config_offset,
+                (BAR_0 + (REG_SIZE as u8) * i) as u64,
+            )?;
+            let mut region_type = RegionType::Mem32Bit;
+            let pci_bar = LittleEndian::read_u32(&data);
+            if pci_bar & BAR_IO_SPACE as u32 != 0 {
+                region_type = RegionType::Io;
+            } else if pci_bar & BAR_MEM_64BIT as u32 != 0 {
+                region_type = RegionType::Mem64Bit;
+            }
+            let vfio_region = infos.remove(0);
+            let size = vfio_region.size;
+
+            vfio_bars.push(VfioBar {
+                vfio_region,
+                region_type,
+                size,
+            });
+        }
+
+        self.fixup_msix_region(&mut vfio_bars)?;
+
+        Ok(vfio_bars)
+    }
+
+    fn fixup_msix_region(&self, vfio_bars: &mut Vec<VfioBar>) -> PciResult<()> {
+        let msix_info = self
+            .msix_info
+            .as_ref()
+            .chain_err(|| "Failed to get MSIX info")?;
+
+        let vfio_bar = vfio_bars
+            .get_mut(msix_info.table.table_bar as usize)
+            .chain_err(|| "Failed to get vfio bar info")?;
+        let region = &mut vfio_bar.vfio_region;
+        // If MSI-X area already setups or does not support mapping, we shall just return.
+        if region.mmaps.len() != 1
+            || region.mmaps[0].offset != 0
+            || region.size != region.mmaps[0].size
+        {
+            return Ok(());
+        }
+
+        // Align MSI-X table start and end to host page size.
+        let page_size = host_page_size();
+        let start: u64 = ((msix_info.table.table_offset as i64) & (0 - page_size as i64)) as u64;
+        let end: u64 = (((msix_info.table.table_offset + msix_info.table.table_size)
+            + (page_size - 1)) as i64
+            & (0 - page_size as i64)) as u64;
+
+        // The remaining area of the BAR before or after MSI-X table is remappable.
+        if start == 0 {
+            if end >= region.size {
+                region.mmaps.clear();
+            } else {
+                region.mmaps[0].offset = end;
+                region.mmaps[0].size = region.size - end;
+            }
+        } else if end >= region.size {
+            region.mmaps[0].size = start;
+        } else {
+            region.mmaps[0].offset = 0;
+            region.mmaps[0].size = start;
+            region.mmaps.push(MmapInfo {
+                offset: end,
+                size: region.size - end,
+            });
+        }
+
+        Ok(())
+    }
 }
 
 impl PciDevOps for VfioPciDevice {
