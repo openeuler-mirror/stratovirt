@@ -642,6 +642,36 @@ impl VfioDevice {
 
         Ok(irqs)
     }
+
+    /// Read region information from VFIO device.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The destination that the data would be read to.
+    /// * `region_offset` - Vfio device region offset from its device descriptor.
+    /// * `addr` - Offset in the region to read data.
+    pub fn read_region(&self, buf: &mut [u8], region_offset: u64, addr: u64) -> Result<()> {
+        self.device
+            .read_exact_at(buf, region_offset + addr)
+            .chain_err(|| "Failed to read vfio region")?;
+
+        Ok(())
+    }
+
+    /// Write region information to VFIO device.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The data that would be written to.
+    /// * `region_offset` - Vfio device region offset from its device descriptor.
+    /// * `addr` - Offset in the region to write.
+    pub fn write_region(&self, buf: &[u8], region_offset: u64, addr: u64) -> Result<()> {
+        self.device
+            .write_all_at(buf, region_offset + addr)
+            .chain_err(|| "Failed to write vfio region")?;
+
+        Ok(())
+    }
 }
 
 /// In VFIO, there are several structures contains zero-length array, as follows:
