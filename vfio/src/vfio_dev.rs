@@ -387,6 +387,39 @@ pub struct VfioDevice {
     pub dev_info: VfioDevInfo,
 }
 
+#[derive(Debug, Copy, Clone, Default)]
+pub struct MmapInfo {
+    pub size: u64,
+    pub offset: u64,
+}
+
+pub struct VfioRegion {
+    // Size of device region.
+    pub size: u64,
+    // Offset of device region.
+    pub region_offset: u64,
+    // Region flags.
+    pub flags: u32,
+    // Region size and offset that can be mapped.
+    pub mmaps: Vec<MmapInfo>,
+    // Guest physical address.
+    pub guest_phys_addr: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct VfioRegionWithCap {
+    region_info: vfio::vfio_region_info,
+    cap_info: vfio::__IncompleteArrayField<u8>,
+}
+
+#[allow(dead_code)]
+pub struct VfioIrq {
+    count: u32,
+    flags: u32,
+    index: u32,
+}
+
 impl VfioDevice {
     pub fn new(container: Arc<VfioContainer>, path: &Path) -> Result<Self> {
         if !path.exists() {
@@ -474,5 +507,176 @@ impl VfioDevice {
             num_irqs: dev_info.num_irqs,
             flags: dev_info.flags,
         })
+    }
+
+    fn region_mmap_info(&self, info: vfio::vfio_region_info) -> Result<Vec<MmapInfo>> {
+        let mut mmaps = Vec::new();
+        if info.flags & vfio::VFIO_REGION_INFO_FLAG_MMAP != 0 {
+            mmaps.push(MmapInfo {
+                size: info.size,
+                offset: 0,
+            });
+
+            let argsz = size_of::<vfio::vfio_region_info>() as u32;
+            if info.flags & vfio::VFIO_REGION_INFO_FLAG_CAPS != 0 && info.argsz > argsz {
+                let cap_size = (info.argsz - argsz) as usize;
+                let mut new_info = array_to_vec::<VfioRegionWithCap, u8>(cap_size);
+                new_info[0].region_info = info;
+                // Safe as device is the owner of file, and we will verify the result is valid.
+                let ret = unsafe {
+                    ioctl_with_mut_ref(
+                        &self.device,
+                        VFIO_DEVICE_GET_REGION_INFO(),
+                        &mut (new_info[0].region_info),
+                    )
+                };
+                if ret < 0 {
+                    return Err(ErrorKind::VfioIoctl(
+                        "VFIO_DEVICE_GET_REGION_INFO".to_string(),
+                        ret,
+                    )
+                    .into());
+                }
+
+                // Safe as we make sure there is enough memory space to convert cap info into
+                // specific structure.
+                let sparse = unsafe {
+                    new_info[0].cap_info.as_ptr() as *mut vfio::vfio_region_info_cap_sparse_mmap
+                };
+                if unsafe { (*sparse).header.id } == vfio::VFIO_REGION_INFO_CAP_SPARSE_MMAP as u16 {
+                    let nr_areas = unsafe { (*sparse).nr_areas as usize };
+                    let areas: &mut [vfio::vfio_region_sparse_mmap_area] =
+                        unsafe { (*sparse).areas.as_mut_slice(nr_areas) };
+                    mmaps = Vec::with_capacity(nr_areas);
+                    for area in areas.iter() {
+                        if area.size > 0 {
+                            mmaps.push(MmapInfo {
+                                size: area.size,
+                                offset: area.offset,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(mmaps)
+    }
+
+    fn region_info(&self, index: u32) -> Result<vfio::vfio_region_info> {
+        let argsz = size_of::<vfio::vfio_region_info>() as u32;
+        let mut info = vfio::vfio_region_info {
+            argsz,
+            flags: 0,
+            index,
+            cap_offset: 0,
+            size: 0,
+            offset: 0,
+        };
+
+        // Safe as device is the owner of file, and we will verify the result is valid.
+        let ret =
+            unsafe { ioctl_with_mut_ref(&self.device, VFIO_DEVICE_GET_REGION_INFO(), &mut info) };
+        if ret < 0 {
+            return Err(
+                ErrorKind::VfioIoctl("VFIO_DEVICE_GET_REGION_INFO".to_string(), ret).into(),
+            );
+        }
+
+        Ok(info)
+    }
+
+    pub fn get_regions_info(&self) -> Result<Vec<VfioRegion>> {
+        let mut regions: Vec<VfioRegion> = Vec::new();
+        for index in vfio::VFIO_PCI_BAR0_REGION_INDEX..vfio::VFIO_PCI_ROM_REGION_INDEX {
+            let info = self
+                .region_info(index)
+                .chain_err(|| "Fail to get region info")?;
+
+            let mut mmaps = Vec::new();
+            if info.size > 0 {
+                mmaps = self
+                    .region_mmap_info(info)
+                    .chain_err(|| "Fail to get region mmap info")?;
+            }
+
+            regions.push(VfioRegion {
+                size: info.size,
+                region_offset: info.offset,
+                flags: info.flags,
+                mmaps,
+                guest_phys_addr: 0,
+            });
+        }
+
+        Ok(regions)
+    }
+
+    pub fn get_irqs_info(&self, num_irqs: u32) -> Result<HashMap<u32, VfioIrq>> {
+        let mut irqs: HashMap<u32, VfioIrq> = HashMap::new();
+
+        for index in 0..num_irqs {
+            let mut info = vfio::vfio_irq_info {
+                argsz: size_of::<vfio::vfio_irq_info>() as u32,
+                flags: 0,
+                index,
+                count: 0,
+            };
+
+            // Safe as device is the owner of file, and we will verify the result is valid.
+            let ret =
+                unsafe { ioctl_with_mut_ref(&self.device, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
+            if ret < 0 {
+                return Err(
+                    ErrorKind::VfioIoctl("VFIO_DEVICE_GET_IRQ_INFO".to_string(), ret).into(),
+                );
+            }
+
+            let irq = VfioIrq {
+                flags: info.flags,
+                count: info.count,
+                index,
+            };
+            irqs.insert(index, irq);
+        }
+
+        Ok(irqs)
+    }
+}
+
+/// In VFIO, there are several structures contains zero-length array, as follows:
+/// ```
+/// use vfio_bindings::bindings::vfio::__IncompleteArrayField;
+/// struct Foo {
+///     info: u8,
+///     array: __IncompleteArrayField<u8>,
+/// }
+/// ```
+/// Size_of::<Foo>() is too small to keep array data. Because array is zero-length array, we are not
+/// sure how much memory is required, and the array memory must be contiguous with info data.
+/// The function is used to allocate enough memory space for info and array data.
+fn array_to_vec<T: Default, F>(len: usize) -> Vec<T> {
+    let round = (len * size_of::<F>() + 2 * size_of::<T>() - 1) / size_of::<T>();
+    let mut vec = Vec::with_capacity(round);
+    for _ in 0..round {
+        vec.push(T::default());
+    }
+    vec
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::vfio_dev::array_to_vec;
+
+    #[test]
+    fn test_array_to_vec() {
+        let vec1 = array_to_vec::<u8, u8>(1);
+        assert_eq!(vec1.len(), 2);
+
+        let vec2 = array_to_vec::<u16, u8>(2);
+        assert_eq!(vec2.len(), 2);
+
+        let vec3 = array_to_vec::<u8, u32>(2);
+        assert_eq!(vec3.len(), 9);
     }
 }
