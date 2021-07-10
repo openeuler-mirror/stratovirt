@@ -722,6 +722,18 @@ impl VfioDevice {
 
         Ok(())
     }
+
+    pub fn reset(&self) -> Result<()> {
+        // Safe as device is the owner of file, and we verify the device supports being reset.
+        if self.dev_info.flags & vfio::VFIO_DEVICE_FLAGS_RESET != 0 {
+            let ret = unsafe { ioctl(&self.device, VFIO_DEVICE_RESET()) };
+            if ret < 0 {
+                return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_RESET".to_string(), ret).into());
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// In VFIO, there are several structures contains zero-length array, as follows:
