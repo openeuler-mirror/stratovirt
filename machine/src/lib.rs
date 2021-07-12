@@ -431,10 +431,14 @@ pub trait MachineOps {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let sys_mem = self.get_sys_mem();
         let device_cfg = parse_net(vm_config, cfg_args)?;
-        let device = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &sys_mem)));
-        let vitpcidev =
-            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus);
-        vitpcidev
+        let virtio_pci_device = if device_cfg.vhost_type.is_some() {
+            let device = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &sys_mem)));
+            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus)
+        } else {
+            let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
+            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus)
+        };
+        virtio_pci_device
             .realize()
             .chain_err(|| "Failed to add virtio pci net device")?;
         Ok(())
