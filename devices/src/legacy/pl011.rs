@@ -75,9 +75,9 @@ pub struct PL011 {
     /// Identifier Register.
     id: Vec<u8>,
     /// FIFO Status.
-    read_pos: i32,
-    read_count: i32,
-    read_trigger: i32,
+    read_pos: u32,
+    read_count: u32,
+    read_trigger: u32,
     /// Raw Interrupt Status Register.
     int_level: u32,
     /// Interrupt Mask Set/Clear Register.
@@ -395,7 +395,8 @@ impl EventNotifierHelper for PL011 {
         let mut handlers = Vec::new();
         let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
             Box::new(move |_, _| {
-                let mut out = [0_u8; 64];
+                let remain_space = PL011_FIFO_SIZE - pl011.lock().unwrap().read_count as usize;
+                let mut out = vec![0_u8; remain_space];
                 match std::io::stdin().lock().read_raw(&mut out) {
                     Ok(count) => {
                         pl011.lock().unwrap().receive(&out[..count]);
@@ -451,7 +452,7 @@ mod test {
 
         let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
         pl011_dev.receive(&data);
-        assert_eq!(pl011_dev.read_count, data.len() as i32);
+        assert_eq!(pl011_dev.read_count, data.len() as u32);
         for i in 0..data.len() {
             assert_eq!(pl011_dev.rfifo[i], data[i] as u32);
         }
