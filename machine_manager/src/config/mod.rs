@@ -17,12 +17,11 @@ mod balloon;
 mod boot_source;
 mod chardev;
 mod devices;
-mod fs;
+mod drive;
 mod iothread;
 mod machine_config;
 mod network;
 mod pci;
-mod pflash;
 mod rng;
 
 use std::any::Any;
@@ -37,12 +36,11 @@ pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
 pub use devices::*;
-pub use fs::*;
+pub use drive::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
 pub use pci::*;
-pub use pflash::*;
 pub use rng::*;
 
 pub mod errors {

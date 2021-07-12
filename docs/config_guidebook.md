@@ -344,16 +344,17 @@ PFlash is a virtualized flash device, it provides code storage and data storage 
 
 Usually, two PFlash devices are added to the main board. The first PFlash device is used to store binary code for EDK2 firmware, so this device is usually read-only. The second device is used to store configuration information related to standard boot, so this device is usually readable and writable.
 
-Three properties can be set for PFlash device.
+Four properties can be set for PFlash device.
 
 * file: the path of PFlash device in host
 * readonly: whether PFlash device is read-only or not. Default option is false. Note that the PFlash device which stores binary code should be read-only, the PFlash device which stores boot information should be readable and writable
 * unit: unique device-id for PFlash devices. It should satisfy `0<=unit<=1`. Note that the unit of the PFlash device which stores binary code should be 0, the unit of the PFlash device which stores boot information should be 1
+* if: the type of drive, in this case it is 'pflash'.
 
 ```shell
 # cmdline
--pflash file=/path/to/code_storage_file,unit=0[,readonly=true]
--pflash file=/path/to/data_storage_file,unit=1
+-drive file=/path/to/code_storage_file,if=pflash,unit=0[,readonly=true]
+-drive file=/path/to/data_storage_file,if=pfalsh,unit=1,
 ```
 
 ## 3. StratoVirt Management
