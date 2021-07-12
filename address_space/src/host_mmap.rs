@@ -164,6 +164,7 @@ pub fn create_host_mmaps(
                 f_back.clone(),
                 mem_config.dump_guest_core,
                 mem_config.mem_share,
+                false,
             )
             .chain_err(|| "Failed to create HostMemMapping")?,
         ));
@@ -197,11 +198,12 @@ impl HostMemMapping {
     ///
     /// # Arguments
     ///
-    /// * `guest_addr` - The start address im memory.
+    /// * `guest_addr` - The start address in memory.
     /// * `size` - Size of memory that will be mapped.
     /// * `file_back` - Information of file and offset-in-file that backs memory.
     /// * `dump_guest_core` - Include guest memory in core file or not.
     /// * `is_share` - This mapping is sharable or not.
+    /// * `read_only` - This mapping is read only or not.
     ///
     /// # Errors
     ///
@@ -212,6 +214,7 @@ impl HostMemMapping {
         file_back: Option<FileBackend>,
         dump_guest_core: bool,
         is_share: bool,
+        read_only: bool,
     ) -> Result<HostMemMapping> {
         let mut flags = 0_i32;
         if file_back.is_none() {
@@ -223,11 +226,16 @@ impl HostMemMapping {
             flags |= libc::MAP_PRIVATE;
         }
 
+        let mut prot = libc::PROT_READ;
+        if !read_only {
+            prot |= libc::PROT_WRITE;
+        }
+
         let host_addr = unsafe {
             let hva = libc::mmap(
                 std::ptr::null_mut() as *mut libc::c_void,
                 size as libc::size_t,
-                libc::PROT_READ | libc::PROT_WRITE,
+                prot,
                 flags,
                 file_back
                     .clone()
@@ -305,6 +313,8 @@ impl Drop for HostMemMapping {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use vmm_sys_util::tempfile::TempFile;
 
     fn identify(ram: HostMemMapping, st: u64, end: u64) {
         assert_eq!(ram.start_address(), GuestAddress(st));
@@ -313,10 +323,32 @@ mod test {
 
     #[test]
     fn test_ramblock_creation() {
-        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false).unwrap();
-        let ram2 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false).unwrap();
+        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false, false).unwrap();
+        let host_addr = ram1.host_address();
+        let slice = unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, 1) };
+
+        let temp_file = TempFile::new().unwrap();
+        let mut f = temp_file.into_file();
+        f.write("This is temp file".as_bytes()).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        assert!(f.read_exact(slice).is_ok());
+
         identify(ram1, 0, 100);
-        identify(ram2, 0, 100);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_write_host_mem_read_only() {
+        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false, true).unwrap();
+        let host_addr = ram1.host_address();
+        let slice = unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, 1) };
+
+        let temp_file = TempFile::new().unwrap();
+        let mut f = temp_file.into_file();
+        f.write("This is temp file".as_bytes()).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        // It should panic because PROT_WRITE is not set to the anonymous file.
+        f.read_exact(slice).unwrap();
     }
 
     #[test]

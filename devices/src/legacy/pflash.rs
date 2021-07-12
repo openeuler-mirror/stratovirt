@@ -208,9 +208,15 @@ impl PFlash {
 
         let dev = Arc::new(Mutex::new(self));
         let region_ops = sysbus.build_region_ops(&dev);
-        let mem_mapping =
-            HostMemMapping::new(GuestAddress(region_base), region_size, None, false, false)
-                .chain_err(|| "Failed to create HostMemMapping for PFlash {}.")?;
+        let mem_mapping = HostMemMapping::new(
+            GuestAddress(region_base),
+            region_size,
+            None,
+            false,
+            false,
+            false,
+        )
+        .chain_err(|| "Failed to create HostMemMapping for PFlash {}.")?;
 
         let mem_mapping = Arc::new(mem_mapping);
         let rom_region = Region::init_rom_device_region(mem_mapping, region_ops);
@@ -943,8 +949,15 @@ mod test {
         let sysbus = sysbus_init();
         let dev = Arc::new(Mutex::new(pflash));
         let region_ops = sysbus.build_region_ops(&dev);
-        let mem_mapping =
-            HostMemMapping::new(GuestAddress(flash_base), flash_size, None, false, false).unwrap();
+        let mem_mapping = HostMemMapping::new(
+            GuestAddress(flash_base),
+            flash_size,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
 
         let mem_mapping = Arc::new(mem_mapping);
         let rom_region = Region::init_rom_device_region(mem_mapping, region_ops);

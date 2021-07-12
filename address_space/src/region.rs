@@ -29,6 +29,8 @@ pub enum RegionType {
     Container,
     /// RomDevice type.
     RomDevice,
+    /// RamDevice type.
+    RamDevice,
 }
 
 /// Represents a memory region, used by mem-mapped IO or Ram.
@@ -219,6 +221,20 @@ impl Region {
         region
     }
 
+    /// Initialize RamDevice-type region.
+    ///
+    /// # Arguments
+    ///
+    /// * `mem_mapping` - Mapped memory of this region.
+    pub fn init_ram_device_region(mem_mapping: Arc<HostMemMapping>) -> Region {
+        Region::init_region_internal(
+            mem_mapping.size(),
+            RegionType::RamDevice,
+            Some(mem_mapping),
+            None,
+        )
+    }
+
     /// Get the type of this region.
     pub fn region_type(&self) -> RegionType {
         self.region_type
@@ -309,7 +325,7 @@ impl Region {
     /// Get the host address if this region is backed by host-memory,
     /// Return `None` if it is not a Ram-type region.
     pub fn get_host_address(&self) -> Option<u64> {
-        if self.region_type != RegionType::Ram && self.region_type != RegionType::RomDevice {
+        if self.region_type == RegionType::IO || self.region_type == RegionType::Container {
             return None;
         }
         self.mem_mapping.as_ref().map(|r| r.host_address())
@@ -405,7 +421,7 @@ impl Region {
         })?;
 
         match self.region_type {
-            RegionType::Ram => {
+            RegionType::Ram | RegionType::RamDevice => {
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                 let slice = unsafe {
                     std::slice::from_raw_parts((host_addr + offset) as *const u8, count as usize)
@@ -484,7 +500,7 @@ impl Region {
         })?;
 
         match self.region_type {
-            RegionType::Ram => {
+            RegionType::Ram | RegionType::RamDevice => {
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                 let slice = unsafe {
                     std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, count as usize)
@@ -672,7 +688,7 @@ impl Region {
                         })?;
                 }
             }
-            RegionType::Ram | RegionType::IO | RegionType::RomDevice => {
+            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
                 self.render_terminate_region(base, addr_range, flat_view)
                     .chain_err(||
                         format!(
@@ -794,7 +810,7 @@ impl Region {
                     )
                 })?;
             }
-            RegionType::Ram | RegionType::IO | RegionType::RomDevice => {
+            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
                 self.render_terminate_region(base, addr_range, &mut flat_view)
                 .chain_err(|| {
                     format!(
@@ -851,8 +867,9 @@ mod test {
 
     #[test]
     fn test_ram_region() {
-        let mem_mapping =
-            Arc::new(HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false).unwrap());
+        let mem_mapping = Arc::new(
+            HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false, false).unwrap(),
+        );
         let ram_region = Region::init_ram_region(mem_mapping.clone());
         let data: [u8; 10] = [10; 10];
         let mut res_data: [u8; 10] = [0; 10];
@@ -886,7 +903,8 @@ mod test {
     fn test_ram_region_access() {
         // the target guest address is 0~1024 (1024 not included)
         let rgn_start = GuestAddress(0);
-        let host_mmap = HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false).unwrap();
+        let host_mmap =
+            HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false, false).unwrap();
         let ram_region = Region::init_ram_region(Arc::new(host_mmap));
 
         let file = TempFile::new().unwrap();
