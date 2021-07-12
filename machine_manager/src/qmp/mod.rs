@@ -414,6 +414,7 @@ fn qmp_command_exec(
         (query_status, query_status),
         (query_version, query_version),
         (query_commands, query_commands),
+        (query_target, query_target),
         (query_migrate, query_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),

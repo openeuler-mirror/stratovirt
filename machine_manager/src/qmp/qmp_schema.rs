@@ -186,6 +186,13 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-target")]
+    query_target {
+        #[serde(default)]
+        arguments: query_target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -1054,6 +1061,37 @@ impl Command for query_commands {
     }
 }
 
+/// Query target:
+///
+/// Query the target platform where the StratoVirt is running.
+///
+/// # Example
+///
+/// ```text
+/// # for X86 platform.
+/// -> { "execute": "query-target" }
+/// <- {"return":{"arch":"x86_64"}}
+///
+/// # for Aarch64 platform.
+/// -> { "execute": "query-target" }
+/// <- {"return":{"arch":"aarch64"}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_target {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct Target {
+    pub arch: String,
+}
+
+impl Command for query_target {
+    type Res = Target;
+
+    fn back(self) -> Target {
+        Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate serde;
@@ -1448,6 +1486,48 @@ mod tests {
             Err(e) => e.to_string(),
         };
         let part_msg = r#"unknown variant `hello-world`"#;
+        assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_commands() {
+        // query-version
+        let json_msg = r#"
+        { 
+            "execute": "query-version" 
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+
+        // query-target
+        let json_msg = r#"
+        { 
+            "execute": "query-target" 
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
+        assert!(err_msg.contains(part_msg));
+
+        // query-commands
+        let json_msg = r#"
+        { 
+            "execute": "query-commands" 
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let part_msg = r#"ok"#;
         assert!(err_msg.contains(part_msg));
     }
 }

@@ -16,7 +16,7 @@ use std::os::unix::io::RawFd;
 
 use strum::VariantNames;
 
-use crate::qmp::qmp_schema::{CacheOptions, Cmd, FileOptions, QmpCommand};
+use crate::qmp::qmp_schema::{CacheOptions, Cmd, FileOptions, QmpCommand, Target};
 use crate::qmp::{Response, Version};
 
 /// State for KVM VM.
@@ -183,6 +183,19 @@ pub trait DeviceInterface {
             vec_cmd.push(cmd);
         }
         Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    /// Query the target platform where the StratoVirt is running.
+    fn query_target(&self) -> Response {
+        #[cfg(target_arch = "x86_64")]
+        let target = Target {
+            arch: "x86_64".to_string(),
+        };
+        #[cfg(target_arch = "aarch64")]
+        let target = Target {
+            arch: "aarch64".to_string(),
+        };
+        Response::create_response(serde_json::to_value(&target).unwrap(), None)
     }
 }
 
