@@ -310,7 +310,7 @@ pub trait Command: Serialize {
 }
 
 /// `TimeStamp` structure for `QmpEvent`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TimeStamp {
     seconds: u64,
     microseconds: u64,
@@ -415,6 +415,9 @@ fn qmp_command_exec(
         (query_version, query_version),
         (query_commands, query_commands),
         (query_target, query_target),
+        (query_kvm, query_kvm),
+        (query_events, query_events),
+        (query_machines, query_machines),
         (query_migrate, query_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),

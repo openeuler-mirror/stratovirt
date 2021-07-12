@@ -16,7 +16,9 @@ use std::os::unix::io::RawFd;
 
 use strum::VariantNames;
 
-use crate::qmp::qmp_schema::{CacheOptions, Cmd, FileOptions, QmpCommand, Target};
+use crate::qmp::qmp_schema::{
+    CacheOptions, Cmd, Events, FileOptions, KvmInfo, MachineInfo, QmpCommand, QmpEvent, Target,
+};
 use crate::qmp::{Response, Version};
 
 /// State for KVM VM.
@@ -196,6 +198,57 @@ pub trait DeviceInterface {
             arch: "aarch64".to_string(),
         };
         Response::create_response(serde_json::to_value(&target).unwrap(), None)
+    }
+
+    /// Query all events of StratoVirt.
+    fn query_events(&self) -> Response {
+        let mut vec_events = Vec::new();
+        for event in QmpEvent::VARIANTS {
+            let cmd = Events {
+                name: String::from(*event),
+            };
+            vec_events.push(cmd);
+        }
+        Response::create_response(serde_json::to_value(&vec_events).unwrap(), None)
+    }
+
+    /// Query if kvm is used.
+    fn query_kvm(&self) -> Response {
+        let kvm = KvmInfo {
+            enabled: true,
+            present: true,
+        };
+        Response::create_response(serde_json::to_value(&kvm).unwrap(), None)
+    }
+
+    /// Query machine types supported by StratoVirt.
+    fn query_machines(&self) -> Response {
+        let mut vec_machine = Vec::new();
+        let machine_info = MachineInfo {
+            hotplug: false,
+            name: "none".to_string(),
+            numa_mem_support: false,
+            cpu_max: 255,
+            deprecated: false,
+        };
+        vec_machine.push(machine_info);
+        let machine_info = MachineInfo {
+            hotplug: false,
+            name: "microvm".to_string(),
+            numa_mem_support: false,
+            cpu_max: 255,
+            deprecated: false,
+        };
+        vec_machine.push(machine_info);
+        let machine_info = MachineInfo {
+            hotplug: false,
+            name: "standard_vm".to_string(),
+            numa_mem_support: false,
+            cpu_max: 255,
+            deprecated: false,
+        };
+        vec_machine.push(machine_info);
+        Response::create_response(serde_json::to_value(&vec_machine).unwrap(), None)
     }
 }
 

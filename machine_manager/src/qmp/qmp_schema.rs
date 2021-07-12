@@ -193,6 +193,28 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-kvm")]
+    query_kvm {
+        #[serde(default)]
+        arguments: query_kvm,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-machines")]
+    query_machines {
+        #[serde(default)]
+        arguments: query_machines,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-events")]
+    #[strum(serialize = "query-events")]
+    query_events {
+        #[serde(default)]
+        arguments: query_events,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -851,7 +873,7 @@ impl Command for getfd {
 ///
 /// If the command-line option "-no-shutdown" has been specified, StratoVirt
 /// will not exit, and a STOP event will eventually follow the SHUTDOWN event
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Shutdown {
     /// If true, the shutdown was triggered by a guest request (such as
@@ -865,7 +887,7 @@ pub struct Shutdown {
 /// Reset
 ///
 /// Emitted when the virtual machine is reset
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Reset {
     /// If true, the reset was triggered by a guest request (such as
@@ -903,7 +925,7 @@ pub struct Resume {}
 ///                "path": "/machine/peripheral/virtio-net-mmio-0" },
 ///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceDeleted {
     /// Device name.
@@ -914,7 +936,7 @@ pub struct DeviceDeleted {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
 #[serde(tag = "event")]
 pub enum QmpEvent {
     #[serde(rename = "SHUTDOWN")]
@@ -1088,6 +1110,96 @@ impl Command for query_target {
     type Res = Target;
 
     fn back(self) -> Target {
+        Default::default()
+    }
+}
+
+/// Query machines:
+///
+/// Query machine information.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-machines" }
+/// <- {"return":[{"cpu-max":255,"deprecated":false,"hotpluggable-cpus":true,"name":"none","numa-mem-supported":false},
+/// {"cpu-max":255,"deprecated":false,"hotpluggable-cpus":true,"name":"microvm","numa-mem-supported":false},
+/// {"cpu-max":255,"deprecated":false,"hotpluggable-cpus":true,"name":"standardvm","numa-mem-supported":false}]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_machines {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MachineInfo {
+    #[serde(rename = "hotpluggable-cpus")]
+    pub hotplug: bool,
+    pub name: String,
+    #[serde(rename = "numa-mem-supported")]
+    pub numa_mem_support: bool,
+    #[serde(rename = "cpu-max")]
+    pub cpu_max: u8,
+    pub deprecated: bool,
+}
+
+impl Command for query_machines {
+    type Res = Vec<MachineInfo>;
+
+    fn back(self) -> Vec<MachineInfo> {
+        Default::default()
+    }
+}
+
+/// Query events:
+///
+/// Query all events of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-events" }
+/// <- {"return":[{"name":"Shutdown"},{"name":"Reset"},
+/// {"name":"Stop"},{"name":"Resume"},{"name":"DeviceDeleted"},
+/// {"name":"BalloonChanged"}]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct Events {
+    pub name: String,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_events {}
+
+impl Command for query_events {
+    type Res = Vec<Events>;
+
+    fn back(self) -> Vec<Events> {
+        Default::default()
+    }
+}
+
+/// Query KVM:
+///
+/// Query if KVM is enabled.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-kvm" }
+/// <- {"return":{"enabled":true,"present":true}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_kvm {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct KvmInfo {
+    pub enabled: bool,
+    pub present: bool,
+}
+
+impl Command for query_kvm {
+    type Res = KvmInfo;
+
+    fn back(self) -> KvmInfo {
         Default::default()
     }
 }
