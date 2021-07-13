@@ -43,5 +43,11 @@ fn run() -> Result<()> {
     let args = create_args_parser().get_matches()?;
     #[allow(unused_variables)]
     let handler = OzoneHandler::new(&args).chain_err(|| "Failed to parse cmdline args")?;
+
+    if args.is_present("clean_resource") {
+        handler.teardown()?;
+    } else {
+        handler.realize()?;
+    }
     Ok(())
 }
