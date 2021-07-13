@@ -18,6 +18,7 @@ use handler::OzoneHandler;
 
 mod args;
 mod handler;
+mod syscall;
 
 error_chain! {
     links {
