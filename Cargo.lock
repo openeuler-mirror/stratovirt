@@ -622,6 +622,7 @@ dependencies = [
  "acpi",
  "address_space",
  "byteorder",
+ "devices",
  "error-chain",
  "hypervisor",
  "kvm-ioctls",
