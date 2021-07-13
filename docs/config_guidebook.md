@@ -603,3 +603,74 @@ You can enable StratoVirt's logging by:
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
 StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
+
+## 5. Ozone
+Ozone is a lightweight secure sandbox for StratoVirt, it provides secure environment for StratoVirt 
+by limiting resources of StratoVirt using 'namespace'.
+
+### 5.1 Usage
+Ozone can be launched by the following commands:
+```shell
+$ ./ozone \
+    -name stratovirt_ozone \
+    -exec_file /path/to/stratovirt \
+    -gid 100 \
+    -uid 100 \
+    -netns /path/to/network_name_space \
+    -source /path/to/source_files \
+    [-clean-resource] \
+    --
+    <arguments for launching stratovirt>
+```
+
+About the arguments:
+* `name` : the name of ozone, it should be unique.
+* `exec_file` : path to the StratoVirt binary file. NB: it should be a statically linked binary file.
+* `uid` : the user id.
+* `gid` : the group id.
+* `netns` : path to a existed network namespace.
+* `source` : path to the source file, such as `rootfs` and `vmlinux`.
+* `clean-resource` : a flag to clean resource.
+* `--` : these two dashes are used to splite args, the args followed are used to launched StratoVirt.
+
+### 5.2 Example
+As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.
+
+On top of that, the path-related arguments are different. They are all in the current(`./`) directory. 
+
+For net name space, it can be created by the following command with name "mynet":
+```shell
+$ sudo ip netns add mynet
+```
+After creating, there is a file named `mynet` in `/var/run/netns`.
+
+The following example illustrates how to config a ozone under netns `mynet`.
+
+```shell
+$ ./ozone \
+    -name stratovirt_ozone \
+    -exec_file /path/to/stratovirt \
+    -gid 100 \
+    -uid 100 \
+    -netns /var/run/netns/mynet \
+    -source /path/to/vmlinux.bin /path/to/rootfs \
+    -- \
+    -kernel ./vmlinux.bin \
+    -append console=ttyS0 root=/dev/vda reboot=k panic=1 rw \
+    -drive file=./rootfs,id=rootfs,readonly=off \
+    -device virtio-blk-device,drive=rootfs \
+    -qmp unix:./stratovirt.socket,server,nowait \
+    -serial stdio
+```
+
+Once the process of StratoVirt exits, the following command can be used to clean the environment.
+```shell
+$ ./ozone \
+    -name stratovirt_ozone \
+    -exec_file /path/to/stratovirt \
+    -gid 100 \
+    -uid 100 \
+    -netns /path/to/network_name_space \
+    -source /path/to/vmlinux.bin /path/to/rootfs \
+    -clean-resource
+```
