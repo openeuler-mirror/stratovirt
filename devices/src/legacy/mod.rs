@@ -78,6 +78,7 @@ pub mod errors {
     }
 }
 
+mod chardev;
 #[allow(dead_code)]
 mod fwcfg;
 #[allow(dead_code)]
@@ -94,6 +95,7 @@ mod serial;
 
 #[cfg(target_arch = "x86_64")]
 pub use self::rtc::{RTC, RTC_IRQ, RTC_PORT_INDEX};
+pub use chardev::{Chardev, InputReceiver};
 #[cfg(target_arch = "x86_64")]
 pub use fwcfg::FwCfgIO;
 #[cfg(target_arch = "aarch64")]

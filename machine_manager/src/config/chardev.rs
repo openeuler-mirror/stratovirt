@@ -26,6 +26,15 @@ const MAX_PATH_LENGTH: usize = 4096;
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 
+/// Charecter device options.
+#[derive(Debug, Clone)]
+pub enum ChardevType {
+    Stdio,
+    Pty,
+    Socket(String),
+    File(String),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConsoleConfig {
     pub id: String,
@@ -38,10 +47,10 @@ pub struct VirtioConsole {
     pub console_cfg: ConsoleConfig,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct CharDevice {
+#[derive(Debug, Clone)]
+pub struct ChardevConfig {
     pub id: String,
-    pub backend: String,
+    pub backend: ChardevType,
 }
 
 impl ConfigCheck for ConsoleConfig {
