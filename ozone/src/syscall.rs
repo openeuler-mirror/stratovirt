@@ -109,3 +109,85 @@ pub fn close(fd: libc::c_int) -> Result<()> {
     }
     .into()
 }
+
+/// Unshare into a new mount namespace.
+///
+/// # Arguments
+///
+/// * `flags` - Flags of unshare syscall.
+pub fn unshare(flags: libc::c_int) -> Result<()> {
+    SyscallResult {
+        ret: unsafe { libc::unshare(flags) },
+    }
+    .into()
+}
+
+/// Set hostname
+///
+/// # Arguments
+///
+/// * `Hostname` - The host name.
+pub fn set_host_name(host_name: &str) -> Result<()> {
+    let len = host_name.len() as libc::size_t;
+    let name = into_cstring(host_name)?;
+    SyscallResult {
+        ret: unsafe { libc::sethostname(name.as_ptr(), len) },
+    }
+    .into()
+}
+
+/// Reassociate thread with a namespace.
+///
+/// # Arguments
+///
+/// * `fd` - File descriptor refering to one of magic links in a /proc/[pid]/ns/ directory.
+/// * `nstype` - Namespace type.
+pub fn setns(fd: i32, nstype: i32) -> Result<()> {
+    SyscallResult {
+        ret: unsafe { libc::setns(fd, nstype) },
+    }
+    .into()
+}
+
+/// Create folder using a relative path.
+///
+/// # Arguments
+///
+/// * `path` - The relative path of filder.
+pub fn mkdir(path: &str) -> Result<()> {
+    let path_ptr = into_cstring(path)?;
+    SyscallResult {
+        ret: unsafe { libc::mkdir(path_ptr.as_ptr(), libc::S_IRUSR | libc::S_IWUSR) },
+    }
+    .into()
+}
+
+/// Change the root mount in the mount namespace of the calling process.
+///
+/// # Arguments
+///
+/// * `new_root` - The new root path, but can't be "/".
+/// * `put_old` - The old root path.
+pub fn pivot_root(new_root: &str, put_root: &str) -> Result<()> {
+    let new_path = into_cstring(new_root)?;
+    let old_path = into_cstring(put_root)?;
+    SyscallResult {
+        ret: unsafe { libc::syscall(libc::SYS_pivot_root, new_path.as_ptr(), old_path.as_ptr()) }
+            as libc::c_int,
+    }
+    .into()
+}
+
+/// Change working directory.
+///
+/// # Arguments
+///
+/// * `new_path` - The new path of working directory.
+pub fn chdir(new_path: &str) -> Result<()> {
+    let path = into_cstring(new_path)?;
+
+    SyscallResult {
+        ret: unsafe { libc::chdir(path.as_ptr()) },
+    }
+    .into()
+}

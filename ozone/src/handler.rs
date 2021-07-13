@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{syscall, ErrorKind, Result, ResultExt};
+use crate::{namespace, syscall, ErrorKind, Result, ResultExt};
 use std::{
     fs::{canonicalize, read_dir},
     path::{Path, PathBuf},
@@ -171,6 +171,12 @@ impl OzoneHandler {
             self.bind_mount_file(source_file_path)?;
         }
 
+        namespace::set_uts_namespace("Ozone")?;
+        namespace::set_ipc_namespace()?;
+        if let Some(netns_path) = &self.netns_path {
+            namespace::set_network_namespace(netns_path)?;
+        }
+        namespace::set_mount_namespace(self.chroot_dir.to_str().unwrap())?;
         Ok(())
     }
 
