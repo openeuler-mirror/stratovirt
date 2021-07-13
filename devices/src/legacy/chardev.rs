@@ -12,7 +12,7 @@
 
 use std::fs::{read_link, File, OpenOptions};
 use std::io::{Stdin, Stdout};
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -22,10 +22,14 @@ use machine_manager::{
     config::{ChardevConfig, ChardevType},
     temp_cleaner::TempCleaner,
 };
+use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
 use util::set_termi_raw_mode;
 use util::unix::limit_permission;
+use vmm_sys_util::epoll::EventSet;
 
 use super::errors::{Result, ResultExt};
+
+const BUFF_SIZE: usize = 4096;
 
 /// Provide input receiver method used by frontends.
 pub trait InputReceiver: Send {
@@ -37,11 +41,13 @@ pub struct Chardev {
     /// Type of backend device.
     pub backend: ChardevType,
     /// UnixListener for socket-type chardev.
-    listener: Option<UnixListener>,
+    pub listener: Option<UnixListener>,
     /// Chardev input.
     pub input: Option<Arc<Mutex<dyn CommunicatInInterface>>>,
     /// Chardev output.
     pub output: Option<Arc<Mutex<dyn CommunicatOutInterface>>>,
+    /// Input receiver method.
+    ops: Option<Arc<dyn Fn(&[u8]) + Send + Sync>>,
 }
 
 impl Chardev {
@@ -51,6 +57,7 @@ impl Chardev {
             listener: None,
             input: None,
             output: None,
+            ops: None,
         }
     }
 
@@ -95,6 +102,13 @@ impl Chardev {
             }
         };
         Ok(())
+    }
+
+    pub fn set_input_callback<T: 'static + InputReceiver>(&mut self, dev: &Arc<Mutex<T>>) {
+        let cloned_dev = dev.clone();
+        self.ops = Some(Arc::new(move |data: &[u8]| {
+            cloned_dev.lock().unwrap().input_handle(data)
+        }));
     }
 }
 
@@ -145,6 +159,121 @@ fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
         );
     }
     Ok((master, path))
+}
+
+fn get_notifier_handler(
+    chardev: Arc<Mutex<Chardev>>,
+    backend: ChardevType,
+) -> Box<NotifierCallback> {
+    match backend {
+        ChardevType::Stdio | ChardevType::Pty => Box::new(move |event, _| {
+            if event == EventSet::IN {
+                let mut buffer = [0_u8; BUFF_SIZE];
+                let locked_chardev = chardev.lock().unwrap();
+                if let Some(input) = locked_chardev.input.clone() {
+                    if let Ok(index) = input.lock().unwrap().read(&mut buffer) {
+                        if let Some(ops) = locked_chardev.ops.clone() {
+                            ops(&mut buffer[..index]);
+                        }
+                    } else {
+                        error!("Failed to read input data");
+                    }
+                } else {
+                    error!("Failed to get chardev input fd");
+                }
+            }
+            None
+        }),
+        ChardevType::Socket(_) => Box::new(move |_, _| {
+            let mut locked_chardev = chardev.lock().unwrap();
+            let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
+            let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
+            let stream_fd = stream.as_raw_fd();
+            let stream_arc = Arc::new(Mutex::new(stream));
+            locked_chardev.input = Some(stream_arc.clone());
+            locked_chardev.output = Some(stream_arc);
+
+            let cloned_chardev = chardev.clone();
+            let inner_handler = Box::new(move |event, _| {
+                if event == EventSet::IN {
+                    let mut buffer = [0_u8; BUFF_SIZE];
+                    let locked_chardev = cloned_chardev.lock().unwrap();
+                    if let Some(input) = locked_chardev.input.clone() {
+                        if let Ok(index) = input.lock().unwrap().read(&mut buffer) {
+                            if let Some(ops) = locked_chardev.ops.clone() {
+                                ops(&mut buffer[..index]);
+                            }
+                        } else {
+                            error!("Failed to read input data");
+                        }
+                    } else {
+                        error!("Failed to get chardev input fd");
+                    }
+                }
+                if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                    cloned_chardev.lock().unwrap().input = None;
+                    cloned_chardev.lock().unwrap().output = None;
+                    Some(vec![EventNotifier::new(
+                        NotifierOperation::Delete,
+                        stream_fd,
+                        Some(listener_fd),
+                        EventSet::IN | EventSet::HANG_UP,
+                        Vec::new(),
+                    )])
+                } else {
+                    None
+                }
+            });
+            Some(vec![EventNotifier::new(
+                NotifierOperation::AddShared,
+                stream_fd,
+                Some(listener_fd),
+                EventSet::IN | EventSet::HANG_UP,
+                vec![Arc::new(Mutex::new(inner_handler))],
+            )])
+        }),
+        ChardevType::File(_) => Box::new(move |_, _| None),
+    }
+}
+
+impl EventNotifierHelper for Chardev {
+    fn internal_notifiers(chardev: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+        let backend = chardev.lock().unwrap().backend.clone();
+        let cloned_chardev = chardev.clone();
+        match backend {
+            ChardevType::Stdio | ChardevType::Pty => {
+                if let Some(input) = chardev.lock().unwrap().input.clone() {
+                    notifiers.push(EventNotifier::new(
+                        NotifierOperation::AddShared,
+                        input.lock().unwrap().as_raw_fd(),
+                        None,
+                        EventSet::IN,
+                        vec![Arc::new(Mutex::new(get_notifier_handler(
+                            cloned_chardev,
+                            backend,
+                        )))],
+                    ));
+                }
+            }
+            ChardevType::Socket(_) => {
+                if let Some(listener) = chardev.lock().unwrap().listener.as_ref() {
+                    notifiers.push(EventNotifier::new(
+                        NotifierOperation::AddShared,
+                        listener.as_raw_fd(),
+                        None,
+                        EventSet::IN,
+                        vec![Arc::new(Mutex::new(get_notifier_handler(
+                            cloned_chardev,
+                            backend,
+                        )))],
+                    ));
+                }
+            }
+            ChardevType::File(_) => (),
+        }
+        notifiers
+    }
 }
 
 /// Provide backend trait object receiving the input from the guest.
