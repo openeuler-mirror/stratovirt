@@ -86,7 +86,9 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::{
-    config::{BootSource, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig},
+    config::{
+        BootSource, ChardevType, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig,
+    },
     event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
 };
@@ -643,7 +645,7 @@ impl MachineOps for LightMachine {
         )
         .chain_err(|| "Failed to realize serial device.")?;
 
-        if config.stdio {
+        if config.chardev.backend == ChardevType::Stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
                 .chain_err(|| MachineErrorKind::RegNotifierErr)?;
         }

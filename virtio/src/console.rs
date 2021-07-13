@@ -19,7 +19,7 @@ use address_space::AddressSpace;
 use devices::legacy::{Chardev, InputReceiver};
 use error_chain::ChainedError;
 use machine_manager::{
-    config::{ChardevType, ConsoleConfig},
+    config::{ChardevType, VirtioConsole},
     event_loop::EventLoop,
 };
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -308,13 +308,7 @@ impl Console {
     /// # Arguments
     ///
     /// * `console_cfg` - Device configuration set by user.
-    pub fn new(console_cfg: ConsoleConfig) -> Self {
-        use machine_manager::config::ChardevConfig;
-
-        let chardev_cfg = ChardevConfig {
-            id: console_cfg.id,
-            backend: ChardevType::Socket(console_cfg.socket_path),
-        };
+    pub fn new(console_cfg: VirtioConsole) -> Self {
         Console {
             state: VirtioConsoleState {
                 device_features: 0_u64,
@@ -322,7 +316,7 @@ impl Console {
                 config_space: VirtioConsoleConfig::new(),
             },
             reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg))),
+            chardev: Arc::new(Mutex::new(Chardev::new(console_cfg.chardev))),
         }
     }
 }
@@ -459,17 +453,23 @@ impl MigrationHook for Console {}
 mod tests {
     pub use super::super::*;
     pub use super::*;
-    use std::fs::remove_file;
     use std::mem::size_of;
+
+    use machine_manager::config::{ChardevConfig, ChardevType};
 
     #[test]
     fn test_set_driver_features() {
-        let console_cfg = ConsoleConfig {
-            id: "console".to_string(),
-            socket_path: "test_console.sock".to_string(),
+        let chardev_cfg = ChardevConfig {
+            id: "chardev".to_string(),
+            backend: ChardevType::Stdio,
         };
-        let mut console = Console::new(console_cfg);
-        assert!(console.realize().is_ok());
+        let mut console = Console::new(VirtioConsole {
+            id: "console".to_string(),
+            chardev: chardev_cfg.clone(),
+        });
+        let mut chardev = Chardev::new(chardev_cfg);
+        chardev.output = Some(Arc::new(Mutex::new(std::io::stdout())));
+        console.chardev = Arc::new(Mutex::new(chardev));
 
         //If the device feature is 0, all driver features are not supported.
         console.state.device_features = 0;
@@ -520,20 +520,21 @@ mod tests {
             console.state.driver_features,
             (1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
-
-        //Clean up the test environment
-        remove_file("test_console.sock").unwrap();
     }
 
     #[test]
     fn test_read_config() {
-        let console_cfg = ConsoleConfig {
-            id: "console".to_string(),
-            socket_path: "test_console1.sock".to_string(),
+        let chardev_cfg = ChardevConfig {
+            id: "chardev".to_string(),
+            backend: ChardevType::Stdio,
         };
-
-        let mut console = Console::new(console_cfg);
-        assert!(console.realize().is_ok());
+        let mut console = Console::new(VirtioConsole {
+            id: "console".to_string(),
+            chardev: chardev_cfg.clone(),
+        });
+        let mut chardev = Chardev::new(chardev_cfg);
+        chardev.output = Some(Arc::new(Mutex::new(std::io::stdout())));
+        console.chardev = Arc::new(Mutex::new(chardev));
 
         //The offset of configuration that needs to be read exceeds the maximum
         let offset = size_of::<VirtioConsoleConfig>() as u64;
@@ -552,8 +553,5 @@ mod tests {
         let expect_data: Vec<u8> = vec![1];
         assert_eq!(console.read_config(offset, &mut read_data).is_ok(), true);
         assert_eq!(read_data, expect_data);
-
-        //Clean up the test environment
-        remove_file("test_console1.sock").unwrap();
     }
 }

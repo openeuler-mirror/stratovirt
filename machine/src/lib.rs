@@ -362,7 +362,7 @@ pub trait MachineOps {
     fn add_virtio_console(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_virtconsole(vm_config, cfg_args)?;
         let sys_mem = self.get_sys_mem();
-        let console = Arc::new(Mutex::new(Console::new(device_cfg.console_cfg)));
+        let console = Arc::new(Mutex::new(Console::new(device_cfg.clone())));
         if let Some(serial) = &vm_config.virtio_serial {
             if serial.pci_bdf.is_none() {
                 let device = VirtioMmioDevice::new(sys_mem, console.clone());

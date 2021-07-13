@@ -31,7 +31,7 @@ use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
+use machine_manager::config::{BootSource, ChardevType, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
@@ -330,7 +330,7 @@ impl MachineOps for StdMachine {
             region_size,
         )?;
 
-        if config.stdio {
+        if config.chardev.backend == ChardevType::Stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
                 .chain_err(|| MachineErrorKind::RegNotifierErr)?;
         }

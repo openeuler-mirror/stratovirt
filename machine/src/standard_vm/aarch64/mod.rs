@@ -26,7 +26,7 @@ use devices::legacy::{
 use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
 use hypervisor::KVM_FDS;
-use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
+use machine_manager::config::{BootSource, ChardevType, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
@@ -317,7 +317,7 @@ impl MachineOps for StdMachine {
         )
         .chain_err(|| "Failed to realize PL011")?;
 
-        if config.stdio {
+        if config.chardev.backend == ChardevType::Stdio {
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
         }
         Ok(())
