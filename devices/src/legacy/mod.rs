@@ -74,6 +74,9 @@ pub mod errors {
             WritePFlashRomErr {
                 display("Failed to write to Flash ROM")
             }
+            RegNotifierErr {
+                display("Failed to register event notifier.")
+            }
         }
     }
 }
