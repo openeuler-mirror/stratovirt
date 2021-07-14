@@ -225,14 +225,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("iothread")
-                .multiple(true)
-                .long("iothread")
-                .value_name("id=str")
-                .help("configure a iothread ID 'str'")
-                .takes_values(true),
-        )
-        .arg(
             Arg::with_name("balloon")
                 .long("balloon")
                 .value_name("[deflate_on_oom=bool]")
@@ -241,11 +233,12 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("rng")
-                .long("rng")
-                .value_name("random_file=path[,byte_per_sec=]")
-                .help("add rng device")
-                .takes_value(true),
+            Arg::with_name("object")
+                .multiple(true)
+                .long("object")
+                .value_name("-object virtio-rng-device,rng=rng_name,max-bytes=1234,period=1000")
+                .help("add object")
+                .takes_values(true),
         )
 }
 
@@ -277,7 +270,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
-    add_args_to_config!((args.value_of("rng")), vm_cfg, add_rng);
+    add_args_to_config!((args.value_of("object")), vm_cfg, add_object);
     add_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,

@@ -122,8 +122,8 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_root_port, parse_virtconsole,
-    parse_virtio_serial, parse_vsock, MachineMemConfig, PFlashConfig, PciBdf, RngConfig,
+    get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_rng_dev, parse_root_port,
+    parse_virtconsole, parse_virtio_serial, parse_vsock, MachineMemConfig, PFlashConfig, PciBdf,
     SerialConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
@@ -131,7 +131,7 @@ use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use virtio::{balloon_allow_list, Balloon, Block, Console, VirtioMmioDevice, VirtioPciDevice};
+use virtio::{balloon_allow_list, Balloon, Block, Console, Rng, VirtioMmioDevice, VirtioPciDevice};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -403,8 +403,26 @@ pub trait MachineOps {
     ///
     /// # Arguments
     ///
-    /// * `config` - Device configuration.
-    fn add_rng_device(&mut self, _config: &RngConfig) -> Result<()> {
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration arguments.
+    fn add_virtio_rng(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_rng_dev(vm_config, cfg_args)?;
+        let sys_mem = self.get_sys_mem();
+        let rng_dev = Arc::new(Mutex::new(Rng::new(device_cfg.clone())));
+        if cfg_args.contains("virtio-rng-device") {
+            let device = VirtioMmioDevice::new(sys_mem, rng_dev);
+            self.realize_virtio_mmio_device(device)
+                .chain_err(|| "Failed to add virtio mmio rng device")?;
+        } else {
+            let bdf = get_pci_bdf(cfg_args)?;
+            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+            let sys_mem = self.get_sys_mem().clone();
+            let vitio_pci_device =
+                VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, rng_dev, parent_bus);
+            vitio_pci_device
+                .realize()
+                .chain_err(|| "Failed to add pci rng device")?;
+        }
         Ok(())
     }
 
@@ -492,10 +510,6 @@ pub trait MachineOps {
             }
         }
 
-        if let Some(rng) = cloned_vm_config.rng.as_ref() {
-            self.add_rng_device(rng)?;
-        }
-
         for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
             match dev.0.as_str() {
@@ -525,6 +539,9 @@ pub trait MachineOps {
                 }
                 "virtconsole" => {
                     self.add_virtio_console(vm_config, cfg_args)?;
+                }
+                "virtio-rng-device" | "virtio-rng-pci" => {
+                    self.add_virtio_rng(&cloned_vm_config, cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

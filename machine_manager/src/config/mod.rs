@@ -31,7 +31,7 @@ use std::str::FromStr;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 
-pub use self::errors::{ErrorKind, Result};
+pub use self::errors::{ErrorKind, Result, ResultExt};
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
@@ -108,6 +108,31 @@ pub mod errors {
 
 pub const MAX_STRING_LENGTH: usize = 255;
 
+#[derive(Debug, Clone)]
+pub enum ObjConfig {
+    Rng(RngObjConfig),
+}
+
+fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
+    let mut cmd_params = CmdParser::new("rng-object");
+    cmd_params.push("").push("id").push("filename");
+
+    cmd_params.parse(&object_args)?;
+    let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
+        obj_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "rng-object").into());
+    };
+    let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
+        name
+    } else {
+        return Err(ErrorKind::FieldIsMissing("filename", "rng-object").into());
+    };
+    let rng_obj_cfg = RngObjConfig { id, filename };
+
+    Ok(rng_obj_cfg)
+}
+
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
 #[derive(Clone, Default, Debug)]
 pub struct VmConfig {
@@ -121,7 +146,7 @@ pub struct VmConfig {
     pub devices: Vec<(String, String)>,
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
-    pub rng: Option<RngConfig>,
+    pub object: HashMap<String, ObjConfig>,
     pub pflashs: Option<Vec<PFlashConfig>>,
     pub dev_name: HashMap<String, u8>,
 }
@@ -145,22 +170,12 @@ impl VmConfig {
             bail!("kernel file is required for microvm machine type, which is not provided");
         }
 
-        if self.rng.is_some() {
-            self.rng.as_ref().unwrap().check()?;
-        }
-
         if self.boot_source.initrd.is_none() && self.drives.is_none() {
             bail!("Before Vm start, set a initrd or drive_file as rootfs");
         }
 
         if self.serial.is_some() && self.serial.as_ref().unwrap().stdio && is_daemonize {
             bail!("Serial with stdio and daemonize can't be set together");
-        }
-
-        if self.iothreads.is_some() {
-            for iothread in self.iothreads.as_ref().unwrap() {
-                iothread.check()?;
-            }
         }
 
         Ok(())
@@ -173,6 +188,44 @@ impl VmConfig {
     /// * `name` - The name `String` updated to `VmConfig`.
     pub fn add_name(&mut self, name: &str) -> Result<()> {
         self.guest_name = name.to_string();
+        Ok(())
+    }
+
+    /// Add argument `object` to `VmConfig`.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_args` - The args of object.
+    pub fn add_object(&mut self, object_args: &str) -> Result<()> {
+        let mut cmd_params = CmdParser::new("object");
+        cmd_params.push("");
+
+        cmd_params.get_parameters(&object_args)?;
+        let obj_type = cmd_params.get_value::<String>("")?;
+        if obj_type.is_none() {
+            bail!("Object type not specified");
+        }
+        let device_type = obj_type.unwrap();
+        match device_type.as_str() {
+            "iothread" => {
+                self.add_iothread(&object_args)
+                    .chain_err(|| "Failed to add iothread")?;
+            }
+            "rng-random" => {
+                let rng_cfg = parse_rng_obj(&object_args)?;
+                let id = rng_cfg.id.clone();
+                let object_config = ObjConfig::Rng(rng_cfg);
+                if self.object.get(&id).is_none() {
+                    self.object.insert(id, object_config);
+                } else {
+                    bail!("Object: {:?} has been added");
+                }
+            }
+            _ => {
+                bail!("Unknow object type: {:?}", &device_type);
+            }
+        }
+
         Ok(())
     }
 }
