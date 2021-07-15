@@ -171,7 +171,7 @@ impl VmConfig {
         if let Some(serial_type) = cmd_parser.get_value::<String>("")? {
             match serial_type.as_str() {
                 "stdio" => stdio = true,
-                _ => return Err(ErrorKind::InvalidParam(serial_type).into()),
+                _ => return Err(ErrorKind::InvalidParam(serial_type, "serial".to_string()).into()),
             }
         };
         self.serial = Some(SerialConfig { stdio });
