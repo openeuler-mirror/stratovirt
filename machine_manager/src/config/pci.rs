@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use super::CmdParser;
+use super::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
 /// Basic information of pci devices such as bus number,
 /// slot number and function number.
@@ -43,6 +43,20 @@ impl Default for PciBdf {
 pub struct RootPortConfig {
     pub port: u8,
     pub id: String,
+}
+
+impl ConfigCheck for RootPortConfig {
+    fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "root_port id".to_string(),
+                MAX_STRING_LENGTH,
+            )
+            .into());
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for RootPortConfig {
@@ -121,6 +135,7 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     } else {
         return Err(ErrorKind::FieldIsMissing("id", "rootport").into());
     }
+    root_port.check()?;
 
     Ok(root_port)
 }

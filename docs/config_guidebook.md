@@ -218,7 +218,7 @@ In host, it will be presented as a UnixSocket.
 
 Five properties can be set for chardev.
 
-* id: unique chardev-id.
+* id: unique chardev-id.(optional)
 * socket: the type of redirect method. NB: currently only socket type is supported.
 * path: the path of socket in the host.
 * server: run as a server. This argument is required.
@@ -236,13 +236,13 @@ of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio device
--device virtio-serial-device
--chardev socket,path=socket_path,id=virtioconsole1,server,nowait
+-device virtio-serial-device[,id=virtio-serial0]
+-chardev socket,path=socket_path,id=virtioconsole1
 -device virtconsole,chardev=virtioconsole1,id=console_id
 
 # virtio pci device
--device virtio-serial-pci,bus=pcie.0,addr=0x1
--chardev socket,path=socket_path,id=virtioconsole1,server,nowait
+-device virtio-serial-pci,bus=pcie.0,addr=0x1[,id=virtio-serial0]
+-chardev socket,path=socket_path,id=virtioconsole1
 -device virtconsole,chardev=virtioconsole1,id=console_id
 ```
 NB:

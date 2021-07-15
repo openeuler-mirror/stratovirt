@@ -12,13 +12,30 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{errors::Result, pci_args_check};
+use super::{
+    errors::{ErrorKind, Result},
+    pci_args_check, ConfigCheck, MAX_STRING_LENGTH,
+};
 use crate::config::{CmdParser, ExBool, VmConfig};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BalloonConfig {
     pub id: String,
     pub deflate_on_oom: bool,
+}
+
+impl ConfigCheck for BalloonConfig {
+    fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "balloon id".to_string(),
+                MAX_STRING_LENGTH,
+            )
+            .into());
+        }
+
+        Ok(())
+    }
 }
 
 pub fn parse_balloon(vm_config: &mut VmConfig, balloon_config: &str) -> Result<BalloonConfig> {
@@ -42,6 +59,7 @@ pub fn parse_balloon(vm_config: &mut VmConfig, balloon_config: &str) -> Result<B
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         balloon.id = id;
     }
+    balloon.check()?;
     vm_config.dev_name.insert("balloon".to_string(), 1);
     Ok(balloon)
 }
