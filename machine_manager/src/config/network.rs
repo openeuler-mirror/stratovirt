@@ -13,8 +13,6 @@
 extern crate serde;
 extern crate serde_json;
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -153,7 +151,7 @@ pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     Ok(net)
 }
 
-pub fn parse_net(vm_config: &VmConfig, net_config: &str) -> Result<NetworkInterfaceConfig> {
+pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkInterfaceConfig> {
     let mut cmd_parser = CmdParser::new("virtio-net");
     cmd_parser
         .push("")
@@ -181,12 +179,7 @@ pub fn parse_net(vm_config: &VmConfig, net_config: &str) -> Result<NetworkInterf
     netdevinterfacecfg.iothread = cmd_parser.get_value::<String>("iothread")?;
     netdevinterfacecfg.mac = cmd_parser.get_value::<String>("mac")?;
 
-    let netconfig = &vm_config.netdevs;
-    if netconfig.is_none() {
-        bail!("No netdev configuration for net device found");
-    }
-
-    if let Some(netcfg) = netconfig.as_ref().unwrap().get(&netdev) {
+    if let Some(netcfg) = &vm_config.netdevs.remove(&netdev) {
         netdevinterfacecfg.id = netid;
         netdevinterfacecfg.host_dev_name = netcfg.ifname.clone();
         netdevinterfacecfg.tap_fd = netcfg.tap_fd;
@@ -213,12 +206,9 @@ impl VmConfig {
 
         cmd_parser.parse(netdev_config)?;
         let drive_cfg = parse_netdev(cmd_parser)?;
-        if self.netdevs.is_none() {
-            self.netdevs = Some(HashMap::new());
-        }
         let netdev_id = drive_cfg.id.clone();
-        if self.netdevs.as_mut().unwrap().get(&netdev_id).is_none() {
-            self.netdevs.as_mut().unwrap().insert(netdev_id, drive_cfg);
+        if self.netdevs.get(&netdev_id).is_none() {
+            self.netdevs.insert(netdev_id, drive_cfg);
         } else {
             bail!("Netdev {:?} has been added");
         }
@@ -267,7 +257,7 @@ mod tests {
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_netdev("tap,id=eth0,ifname=tap0").is_ok());
         let net_cfg_res = parse_net(
-            &vm_config,
+            &mut vm_config,
             "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0",
         );
         assert!(net_cfg_res.is_ok());
@@ -285,7 +275,7 @@ mod tests {
             .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
             .is_ok());
         let net_cfg_res = parse_net(
-            &vm_config,
+            &mut vm_config,
             "virtio-net-device,id=net1,netdev=eth1,mac=12:34:56:78:9A:BC",
         );
         assert!(net_cfg_res.is_ok());
@@ -302,7 +292,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
-        let net_cfg_res = parse_net(&vm_config, "virtio-net-device,id=net1,netdev=eth1");
+        let net_cfg_res = parse_net(&mut vm_config, "virtio-net-device,id=net1,netdev=eth1");
         assert!(net_cfg_res.is_ok());
         let network_configs = net_cfg_res.unwrap();
         assert_eq!(network_configs.id, "net1");
@@ -314,14 +304,14 @@ mod tests {
             .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
             .is_ok());
         let net_cfg_res = parse_net(
-            &vm_config,
+            &mut vm_config,
             "virtio-net-device,id=net1,netdev=eth2,mac=12:34:56:78:9A:BC",
         );
         assert!(net_cfg_res.is_err());
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
-        let net_cfg_res = parse_net(&vm_config, "virtio-net-device,id=net1,netdev=eth3");
+        let net_cfg_res = parse_net(&mut vm_config, "virtio-net-device,id=net1,netdev=eth3");
         assert!(net_cfg_res.is_err());
     }
 
@@ -334,7 +324,7 @@ mod tests {
             .is_ok());
         let net_cfg =
             "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC";
-        let net_cfg_res = parse_net(&vm_config, net_cfg);
+        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
         assert!(net_cfg_res.is_ok());
         let network_configs = net_cfg_res.unwrap();
         assert_eq!(network_configs.id, "net1");
@@ -351,5 +341,8 @@ mod tests {
         let pci = pci_bdf.unwrap();
         assert_eq!(pci.bus, "pcie.0".to_string());
         assert_eq!(pci.addr, (1, 2));
+
+        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
+        assert!(net_cfg_res.is_err());
     }
 }

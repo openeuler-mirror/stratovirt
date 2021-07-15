@@ -141,8 +141,8 @@ pub struct VmConfig {
     pub guest_name: String,
     pub machine_config: MachineConfig,
     pub boot_source: BootSource,
-    pub drives: Option<HashMap<String, DriveConfig>>,
-    pub netdevs: Option<HashMap<String, NetDevcfg>>,
+    pub drives: HashMap<String, DriveConfig>,
+    pub netdevs: HashMap<String, NetDevcfg>,
     pub chardev: HashMap<String, ChardevConfig>,
     pub virtio_serial: Option<VirtioSerialInfo>,
     pub devices: Vec<(String, String)>,
@@ -172,7 +172,7 @@ impl VmConfig {
             bail!("kernel file is required for microvm machine type, which is not provided");
         }
 
-        if self.boot_source.initrd.is_none() && self.drives.is_none() {
+        if self.boot_source.initrd.is_none() && self.drives.is_empty() {
             bail!("Before Vm start, set a initrd or drive_file as rootfs");
         }
 

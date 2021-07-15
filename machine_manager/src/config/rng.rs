@@ -65,7 +65,7 @@ impl ConfigCheck for RngConfig {
     }
 }
 
-pub fn parse_rng_dev(vm_config: &VmConfig, rng_config: &str) -> Result<RngConfig> {
+pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngConfig> {
     let mut cmd_parser = CmdParser::new("rng");
     cmd_parser
         .push("")
@@ -110,12 +110,11 @@ pub fn parse_rng_dev(vm_config: &VmConfig, rng_config: &str) -> Result<RngConfig
     } else if cmd_parser.get_value::<u64>("period")?.is_some() {
         bail!("Argument 'max-bytes' is missing");
     }
-    let obj_config = &vm_config.object;
 
-    if let Some(object_cfg) = obj_config.get(&rng) {
+    if let Some(object_cfg) = vm_config.object.remove(&rng) {
         #[allow(irrefutable_let_patterns)]
         if let ObjConfig::Rng(obj_cfg) = object_cfg {
-            rng_cfg.random_file = obj_cfg.filename.clone();
+            rng_cfg.random_file = obj_cfg.filename;
         }
     } else {
         bail!("Object for rng-random device not found");
@@ -137,7 +136,7 @@ mod tests {
         assert!(vm_config
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
-        let rng_config = parse_rng_dev(&vm_config, "virtio-rng-device,rng=objrng0");
+        let rng_config = parse_rng_dev(&mut vm_config, "virtio-rng-device,rng=objrng0");
         assert!(rng_config.is_ok());
         let config = rng_config.unwrap();
         assert_eq!(config.random_file, "/path/to/random_file");
@@ -148,7 +147,7 @@ mod tests {
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
         let rng_config = parse_rng_dev(
-            &vm_config,
+            &mut vm_config,
             "virtio-rng-device,rng=objrng0,max-bytes=1234,period=1000",
         );
         assert!(rng_config.is_ok());
@@ -164,7 +163,7 @@ mod tests {
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
         let rng_config = parse_rng_dev(
-            &vm_config,
+            &mut vm_config,
             "virtio-rng-device,rng=objrng0,max-bytes=63,period=1000",
         );
         assert!(rng_config.is_err());
@@ -174,7 +173,7 @@ mod tests {
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
         let rng_config = parse_rng_dev(
-            &vm_config,
+            &mut vm_config,
             "virtio-rng-device,rng=objrng0,max-bytes=64,period=1000",
         );
         assert!(rng_config.is_ok());
@@ -187,7 +186,7 @@ mod tests {
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
         let rng_config = parse_rng_dev(
-            &vm_config,
+            &mut vm_config,
             "virtio-rng-device,rng=objrng0,max-bytes=1000000000,period=1000",
         );
         assert!(rng_config.is_ok());
@@ -200,7 +199,7 @@ mod tests {
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
         let rng_config = parse_rng_dev(
-            &vm_config,
+            &mut vm_config,
             "virtio-rng-device,rng=objrng0,max-bytes=1000000001,period=1000",
         );
         assert!(rng_config.is_err());
@@ -213,7 +212,7 @@ mod tests {
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
         let rng_cfg = "virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x1.0x3";
-        let rng_config = parse_rng_dev(&vm_config, rng_cfg);
+        let rng_config = parse_rng_dev(&mut vm_config, rng_cfg);
         assert!(rng_config.is_ok());
         let config = rng_config.unwrap();
         assert_eq!(config.random_file, "/path/to/random_file");
@@ -224,12 +223,16 @@ mod tests {
         assert_eq!(pci.bus, "pcie.0".to_string());
         assert_eq!(pci.addr, (1, 3));
 
+        // object "objrng0" has been removed.
+        let rng_config = parse_rng_dev(&mut vm_config, rng_cfg);
+        assert!(rng_config.is_err());
+
         let mut vm_config = VmConfig::default();
         assert!(vm_config
             .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
             .is_ok());
         let rng_cfg = "virtio-rng-device,rng=objrng0,bus=pcie.0,addr=0x1.0x3";
-        let rng_config = parse_rng_dev(&vm_config, rng_cfg);
+        let rng_config = parse_rng_dev(&mut vm_config, rng_cfg);
         assert!(rng_config.is_err());
     }
 }

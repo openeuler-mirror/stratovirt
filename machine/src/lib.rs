@@ -275,7 +275,7 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
-    fn add_virtio_mmio_block(&mut self, _vm_config: &VmConfig, _cfg_args: &str) -> Result<()> {
+    fn add_virtio_mmio_block(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
         bail!("Virtio mmio devices Not supported!");
     }
 
@@ -327,7 +327,7 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
-    fn add_virtio_mmio_net(&mut self, _vm_config: &VmConfig, _cfg_args: &str) -> Result<()> {
+    fn add_virtio_mmio_net(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
         bail!("Virtio mmio device Not supported!");
     }
 
@@ -406,7 +406,7 @@ pub trait MachineOps {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration arguments.
-    fn add_virtio_rng(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
+    fn add_virtio_rng(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_rng_dev(vm_config, cfg_args)?;
         let sys_mem = self.get_sys_mem();
         let rng_dev = Arc::new(Mutex::new(Rng::new(device_cfg.clone())));
@@ -432,7 +432,7 @@ pub trait MachineOps {
         bail!("No pci host found");
     }
 
-    fn add_virtio_pci_blk(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
+    fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let sys_mem = self.get_sys_mem();
@@ -452,7 +452,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_virtio_pci_net(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
+    fn add_virtio_pci_net(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let sys_mem = self.get_sys_mem();
@@ -551,16 +551,16 @@ pub trait MachineOps {
             let cfg_args = dev.1.as_str();
             match dev.0.as_str() {
                 "virtio-blk-device" => {
-                    self.add_virtio_mmio_block(&cloned_vm_config, cfg_args)?;
+                    self.add_virtio_mmio_block(vm_config, cfg_args)?;
                 }
                 "virtio-blk-pci" => {
-                    self.add_virtio_pci_blk(&vm_config, cfg_args)?;
+                    self.add_virtio_pci_blk(vm_config, cfg_args)?;
                 }
                 "virtio-net-device" => {
-                    self.add_virtio_mmio_net(&cloned_vm_config, cfg_args)?;
+                    self.add_virtio_mmio_net(vm_config, cfg_args)?;
                 }
                 "virtio-net-pci" => {
-                    self.add_virtio_pci_net(&vm_config, cfg_args)?;
+                    self.add_virtio_pci_net(vm_config, cfg_args)?;
                 }
                 "pcie-root-port" => {
                     self.add_pci_root_port(cfg_args)?;
@@ -578,7 +578,7 @@ pub trait MachineOps {
                     self.add_virtio_console(vm_config, cfg_args)?;
                 }
                 "virtio-rng-device" | "virtio-rng-pci" => {
-                    self.add_virtio_rng(&cloned_vm_config, cfg_args)?;
+                    self.add_virtio_rng(vm_config, cfg_args)?;
                 }
                 "vfio-pci" => {
                     self.add_vfio_device(&vm_config, cfg_args, vfio_dev.clone())?;
