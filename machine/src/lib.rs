@@ -110,6 +110,7 @@ use virtio::{
 };
 
 use std::os::unix::io::AsRawFd;
+use std::path::Path;
 use std::sync::{Arc, Barrier, Mutex, Weak};
 
 #[cfg(target_arch = "x86_64")]
@@ -120,17 +121,19 @@ use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 use hypervisor::KVM_FDS;
-use kvm_ioctls::VcpuFd;
+use kvm_ioctls::{DeviceFd, VcpuFd};
 use machine_manager::config::{
-    get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_rng_dev, parse_root_port,
+    get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_rng_dev, parse_root_port, parse_vfio,
     parse_virtconsole, parse_virtio_serial, parse_vsock, MachineMemConfig, PFlashConfig, PciBdf,
-    SerialConfig, VmConfig,
+    SerialConfig, VfioConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
+use vfio::vfio_pci::create_vfio_device;
+use vfio::{VfioContainer, VfioPciDevice};
 use virtio::{balloon_allow_list, Balloon, Block, Console, Rng, VirtioMmioDevice, VirtioPciDevice};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -471,6 +474,29 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_vfio_device(
+        &mut self,
+        vm_config: &VmConfig,
+        cfg_args: &str,
+        dev_fd: Arc<DeviceFd>,
+    ) -> Result<()> {
+        let sys_mem = self.get_sys_mem().clone();
+        let container = Arc::new(
+            VfioContainer::new(dev_fd, &sys_mem).chain_err(|| "Failed to create vfio container")?,
+        );
+
+        let device_cfg: VfioConfig = parse_vfio(vm_config, cfg_args)?;
+        let path = "/sys/bus/pci/devices/".to_string() + &device_cfg.host;
+        let name = device_cfg.id;
+        let bdf = get_pci_bdf(cfg_args)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let vfio_pci_dev = VfioPciDevice::new(Path::new(&path), container, devfn, name, parent_bus)
+            .chain_err(|| "Failed to create vfio pci device")?;
+
+        VfioPciDevice::realize(vfio_pci_dev).chain_err(|| "Failed to realize vfio pci device")?;
+        Ok(())
+    }
+
     fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> Result<(u8, Weak<Mutex<PciBus>>)> {
         let pci_host = self.get_pci_host()?;
         let bus = pci_host.lock().unwrap().root_bus.clone();
@@ -517,6 +543,10 @@ pub trait MachineOps {
                 .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
         }
 
+        // Create an emulated kvm device that is used for VFIO. It should be created only once.
+        // See the kernel docs for `KVM_CREATE_DEVICE` to get more info.
+        let vfio_dev = create_vfio_device().chain_err(|| "Failed to create kvm device for VFIO")?;
+
         for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
             match dev.0.as_str() {
@@ -549,6 +579,9 @@ pub trait MachineOps {
                 }
                 "virtio-rng-device" | "virtio-rng-pci" => {
                     self.add_virtio_rng(&cloned_vm_config, cfg_args)?;
+                }
+                "vfio-pci" => {
+                    self.add_vfio_device(&vm_config, cfg_args, vfio_dev.clone())?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

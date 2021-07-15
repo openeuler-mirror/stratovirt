@@ -298,6 +298,8 @@ dependencies = [
  "serde_json",
  "sysbus",
  "util",
+ "vfio",
+ "vfio-bindings",
  "virtio",
  "vmm-sys-util",
 ]

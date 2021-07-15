@@ -407,3 +407,9 @@ Copyright notice:
 Copyright (c) 2019 Peter Glotfelty
 License: MIT
 Please see above.
+
+Software: vfio-bindings 0.2.0
+Copyright notice:
+Copyright (c) 2019 Intel Corporation. All Rights Reserved.
+License: Apache License Version 2.0 or BSD 3-Clause License
+Please see above.
