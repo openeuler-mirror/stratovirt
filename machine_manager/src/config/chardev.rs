@@ -71,6 +71,7 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ConsoleConfig> {
     } else {
         return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
     };
+
     if let Some(chardev_type) = cmd_parser.get_value::<String>("")? {
         if chardev_type == *"socket" {
             if let Some(chardev_path) = cmd_parser.get_value::<String>("path")? {
@@ -78,6 +79,20 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ConsoleConfig> {
             } else {
                 return Err(ErrorKind::FieldIsMissing("path", "chardev").into());
             };
+            if let Some(server) = cmd_parser.get_value::<String>("server")? {
+                if server.ne("") {
+                    bail!("No parament needed for server");
+                }
+            } else {
+                bail!("Argument \'nowait\' is needed for socket chardev.");
+            }
+            if let Some(nowait) = cmd_parser.get_value::<String>("nowait")? {
+                if nowait.ne("") {
+                    bail!("No parament needed for nowait");
+                }
+            } else {
+                bail!("Argument \'nowait\' is needed for socket chardev.");
+            }
         } else {
             bail!("Unsupported chardev type: {:?}", &chardev_type);
         }
@@ -116,12 +131,18 @@ pub fn parse_virtconsole(vm_config: &VmConfig, config_args: &str) -> Result<Virt
 }
 
 impl VmConfig {
-    /// Add console config to `VmConfig`.
+    /// Add chardev config to `VmConfig`.
     pub fn add_chardev(&mut self, chardev_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("chardev");
-        cmd_parser.push("").push("id").push("path");
+        cmd_parser
+            .push("")
+            .push("id")
+            .push("path")
+            .push("server")
+            .push("nowait");
 
         cmd_parser.parse(chardev_config)?;
+
         let chardev = parse_chardev(cmd_parser)?;
         chardev.check()?;
         let chardev_id = chardev.id.clone();
@@ -276,7 +297,7 @@ mod tests {
         let mut vm_config = VmConfig::default();
         assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
         assert!(vm_config
-            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
             .is_ok());
         let virt_console = parse_virtconsole(
             &mut vm_config,
@@ -299,7 +320,7 @@ mod tests {
         let mut vm_config = VmConfig::default();
         assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
         assert!(vm_config
-            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
             .is_ok());
         let virt_console = parse_virtconsole(
             &mut vm_config,
@@ -317,7 +338,7 @@ mod tests {
                 .is_ok()
         );
         assert!(vm_config
-            .add_chardev("socket,id=test_console,path=/path/to/socket")
+            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
             .is_ok());
         let virt_console = parse_virtconsole(
             &mut vm_config,
