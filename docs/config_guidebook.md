@@ -216,12 +216,19 @@ Virtio console is a general-purpose serial device for data transfer between the 
 Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it.
 In host, it will be presented as a UnixSocket.
 
-Six properties can be set for virtio console device.
+Five properties can be set for chardev.
 
-* id: unique device-id.
+* id: unique chardev-id.
 * socket: the type of redirect method. NB: currently only socket type is supported.
-* path: the path of virtio console socket in the host.
+* path: the path of socket in the host.
+* server: run as a server. This argument is required.
+* nowait: do not wait for connection. This argument is required.
+
+Two properties can be set for virtconsole.
+* id: unique device-id.
 * chardev: char device of virtio console device.
+
+Two properties can be set for virtio-serial-pci, while no properties set for virtio-serial-device.
 * bus: bus number of virtio console.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
@@ -230,12 +237,12 @@ of device and the second one represents function number of it.
 ```shell
 # virtio mmio device
 -device virtio-serial-device
--chardev socket,path=socket_path,id=virtioconsole1
+-chardev socket,path=socket_path,id=virtioconsole1,server,nowait
 -device virtconsole,chardev=virtioconsole1,id=console_id
 
 # virtio pci device
 -device virtio-serial-pci,bus=pcie.0,addr=0x1
--chardev socket,path=socket_path,id=virtioconsole1
+-chardev socket,path=socket_path,id=virtioconsole1,server,nowait
 -device virtconsole,chardev=virtioconsole1,id=console_id
 ```
 NB:
@@ -384,7 +391,24 @@ StratoVirt supports UnixSocket-type qmp, you can set it by:
 
 ```shell
 # cmdline
--qmp unix:/path/to/api/socket
+-qmp unix:/path/to/api/socket,server,nowait
+```
+Where, the information about 'server' and 'nowait' can be found in chapter 2.4 Virtio-console.
+
+On top of that, monitor can be used to create qmp connection as well. 
+The following commands can be used to create a monitor.
+
+Three properties can be set for monitor.
+
+* id: unique device id.
+* chardev: char device of monitor.
+* mode: the model of monitor. NB: currently only "control" is supported.
+
+
+```shell
+# cmdline
+-chardev socket,path=/path/to/monitor/sock,id=chardev_id,server,nowait
+-mon chardev=chardev_id,id=monitor_id,mode=control
 ```
 
 ### 3.2 qmp Connection
