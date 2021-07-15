@@ -17,3 +17,10 @@ rustflags = [
     "-C", "link-arg=-lgcc",
     "-C", "link-arg=-lfdt",
 ]
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
