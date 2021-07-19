@@ -14,6 +14,8 @@
 extern crate error_chain;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate migration_derive;
 
 pub mod errors {
     error_chain! {

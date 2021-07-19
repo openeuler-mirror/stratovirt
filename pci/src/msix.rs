@@ -13,8 +13,9 @@
 use std::sync::{Arc, Mutex};
 
 use address_space::{GuestAddress, Region, RegionOps};
-use hypervisor::KVM_FDS;
-use util::num_ops::round_up;
+use hypervisor::{MsiVector, KVM_FDS};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use util::{byte_code::ByteCode, num_ops::round_up};
 
 use crate::config::{CapId, PciConfig, RegionType};
 use crate::errors::{Result, ResultExt};
@@ -44,6 +45,21 @@ pub struct Message {
     pub data: u32,
 }
 
+/// The state of msix device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct MsixState {
+    /// MSI-X entries table. Max length of msix table is 2048(`MSIX_TABLE_SIZE_MAX`).
+    table: [u8; 2048],
+    /// MSI-X pba table. Max length of pba table is 256.
+    pba: [u8; 256],
+    func_masked: bool,
+    enabled: bool,
+    msix_cap_offset: u16,
+    dev_id: u16,
+}
+
 /// MSI-X structure.
 pub struct Msix {
     /// MSI-X table.
@@ -52,6 +68,7 @@ pub struct Msix {
     func_masked: bool,
     enabled: bool,
     msix_cap_offset: u16,
+    dev_id: u16,
 }
 
 impl Msix {
@@ -62,13 +79,15 @@ impl Msix {
     /// * `table_size` - Size in bytes of MSI-X table.
     /// * `pba_size` - Size in bytes of MSI-X PBA.
     /// * `msix_cap_offset` - Offset of MSI-X capability in configuration space.
-    pub fn new(table_size: u32, pba_size: u32, msix_cap_offset: u16) -> Self {
+    /// * `dev_id` - Dev_id for device.
+    pub fn new(table_size: u32, pba_size: u32, msix_cap_offset: u16, dev_id: u16) -> Self {
         let mut msix = Msix {
             table: vec![0; table_size as usize],
             pba: vec![0; pba_size as usize],
             func_masked: true,
             enabled: true,
             msix_cap_offset,
+            dev_id,
         };
         msix.mask_all_vectors();
         msix
@@ -229,6 +248,94 @@ impl Msix {
     }
 }
 
+impl StateTransfer for Msix {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let mut state = MsixState::default();
+
+        for (idx, table_byte) in self.table.iter().enumerate() {
+            state.table[idx] = *table_byte;
+        }
+        for (idx, pba_byte) in self.pba.iter().enumerate() {
+            state.pba[idx] = *pba_byte;
+        }
+        state.func_masked = self.func_masked;
+        state.enabled = self.enabled;
+        state.msix_cap_offset = self.msix_cap_offset;
+        state.dev_id = self.dev_id;
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        let msix_state = *MsixState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("MSIX_DEVICE"))?;
+
+        let table_length = self.table.len();
+        let pba_length = self.pba.len();
+        self.table = msix_state.table[..table_length].to_vec();
+        self.pba = msix_state.pba[..pba_length].to_vec();
+        self.func_masked = msix_state.func_masked;
+        self.enabled = msix_state.enabled;
+        self.msix_cap_offset = msix_state.msix_cap_offset;
+        self.dev_id = msix_state.dev_id;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&MsixState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Msix {
+    fn resume(&mut self) -> migration::errors::Result<()> {
+        if self.enabled && !self.func_masked {
+            for vector in 0..self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
+                if self.is_vector_masked(vector) {
+                    continue;
+                }
+
+                let msg = self.get_message(vector);
+
+                // update and commit irq routing
+                {
+                    let kvm_fds = KVM_FDS.load_signal_safe();
+                    let mut locked_irq_table = kvm_fds.irq_route_table.lock().unwrap();
+                    let allocated_gsi = match locked_irq_table.allocate_gsi() {
+                        Ok(gsi) => gsi,
+                        Err(e) => bail!("Failed to allocate new gsi: {}", e),
+                    };
+                    let msi_vector = MsiVector {
+                        msg_addr_hi: msg.address_hi,
+                        msg_addr_lo: msg.address_lo,
+                        msg_data: msg.data,
+                        masked: false,
+                        #[cfg(target_arch = "aarch64")]
+                        dev_id: self.dev_id as u32,
+                    };
+                    if let Err(e) = locked_irq_table.add_msi_route(allocated_gsi, msi_vector) {
+                        bail!("Failed to add msi route to global irq routing table: {}", e);
+                    }
+                }
+                if let Err(e) = KVM_FDS.load().commit_irq_routing() {
+                    bail!("Failed to commit irq routing: {}", e);
+                }
+
+                if self.is_vector_pending(vector) {
+                    self.clear_pending_vector(vector);
+                    send_msix(msg, self.dev_id);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 fn is_msix_enabled(msix_cap_offset: usize, config: &[u8]) -> bool {
     let offset: usize = msix_cap_offset + MSIX_CAP_CONTROL as usize;
     let msix_ctl = le_read_u16(&config, offset).unwrap();
@@ -291,12 +398,16 @@ pub fn init_msix(bar_id: usize, vector_nr: u32, config: &mut PciConfig, dev_id: 
         table_size,
         pba_size,
         msix_cap_offset as u16,
+        dev_id,
     )));
     let bar_size = ((table_size + pba_size) as u64).next_power_of_two();
     let region = Region::init_container_region(bar_size);
     Msix::register_memory_region(msix.clone(), &region, dev_id)?;
     config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);
-    config.msix = Some(msix);
+    config.msix = Some(msix.clone());
+
+    #[cfg(not(test))]
+    MigrationManager::register_device_instance_mutex(MsixState::descriptor(), msix);
 
     Ok(())
 }
@@ -338,7 +449,7 @@ mod tests {
     #[test]
     fn test_mask_vectors() {
         let nr_vector = 2_u32;
-        let mut msix = Msix::new(nr_vector * MSIX_TABLE_ENTRY_SIZE as u32, 64, 64);
+        let mut msix = Msix::new(nr_vector * MSIX_TABLE_ENTRY_SIZE as u32, 64, 64, 0);
 
         assert!(msix.table[MSIX_TABLE_VEC_CTL as usize] & MSIX_TABLE_MASK_BIT > 0);
         assert!(
@@ -354,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_pending_vectors() {
-        let mut msix = Msix::new(MSIX_TABLE_ENTRY_SIZE as u32, 64, 64);
+        let mut msix = Msix::new(MSIX_TABLE_ENTRY_SIZE as u32, 64, 64, 0);
 
         msix.set_pending_vector(0);
         assert!(msix.is_vector_pending(0));
@@ -364,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_get_message() {
-        let mut msix = Msix::new(MSIX_TABLE_ENTRY_SIZE as u32, 64, 64);
+        let mut msix = Msix::new(MSIX_TABLE_ENTRY_SIZE as u32, 64, 64, 0);
         le_write_u32(&mut msix.table, 0, 0x1000_0000).unwrap();
         le_write_u32(&mut msix.table, 4, 0x2000_0000).unwrap();
         le_write_u32(&mut msix.table, 8, 0x3000_0000).unwrap();

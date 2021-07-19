@@ -383,6 +383,8 @@ dependencies = [
  "libc",
  "log",
  "machine_manager",
+ "migration",
+ "migration_derive",
  "sysbus",
  "util",
  "vmm-sys-util",
