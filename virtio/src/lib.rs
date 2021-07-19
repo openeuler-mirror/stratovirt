@@ -272,7 +272,7 @@ pub trait VirtioDevice: Send {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: Vec<Arc<Mutex<Queue>>>,
+        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<EventFd>,
     ) -> Result<()>;
 

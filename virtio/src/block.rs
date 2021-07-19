@@ -935,7 +935,7 @@ impl VirtioDevice for Block {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
@@ -943,7 +943,7 @@ impl VirtioDevice for Block {
         self.sender = Some(sender);
 
         let mut handler = BlockIoHandler {
-            queue: queues.remove(0),
+            queue: queues[0].clone(),
             queue_evt: queue_evts.remove(0),
             mem_space,
             disk_image: self.disk_image.clone(),
@@ -1256,7 +1256,7 @@ mod tests {
             .activate(
                 mem_space.clone(),
                 interrupt_cb,
-                queues,
+                &queues,
                 vec![event.try_clone().unwrap()],
             )
             .unwrap();

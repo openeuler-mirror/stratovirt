@@ -89,7 +89,10 @@ const PCIE_CAP_SIZE: u8 = 0x3c;
 const PCIE_CAP_VERSION_2: u16 = 0x0002;
 const PCIE_CAP_SLOT_IMPLEMENTED: u16 = 0x0100;
 
-const STATUS: u8 = 0x06;
+/// 16 bits PCI Status.
+pub const STATUS: u8 = 0x06;
+/// PCI Interrupt Status.
+pub const STATUS_INTERRUPT: u8 = 0x08;
 const CACHE_LINE_SIZE: u8 = 0x0c;
 const PRIMARY_BUS_NUM: u8 = 0x18;
 const IO_LIMIT: u8 = 0x1d;

@@ -430,7 +430,7 @@ impl VirtioDevice for Console {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         queue_evts.remove(0); // input_queue_evt never used
@@ -440,8 +440,8 @@ impl VirtioDevice for Console {
         }
 
         let handler = ConsoleHandler {
-            input_queue: queues.remove(0),
-            output_queue: queues.remove(0),
+            input_queue: queues[0].clone(),
+            output_queue: queues[1].clone(),
             output_queue_evt: queue_evts.remove(0),
             mem_space,
             interrupt_cb,

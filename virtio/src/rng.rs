@@ -342,11 +342,11 @@ impl VirtioDevice for Rng {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let handler = RngHandler {
-            queue: queues.remove(0),
+            queue: queues[0].clone(),
             queue_evt: queue_evts.remove(0),
             reset_evt: self.reset_evt.as_raw_fd(),
             interrupt_cb,
