@@ -150,10 +150,24 @@ struct Greeting {
 }
 
 #[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
-struct Version {
+pub struct Version {
     #[serde(rename = "qemu")]
     application: VersionNumber,
     package: String,
+}
+
+impl Version {
+    pub fn new(micro: u8, minor: u8, major: u8) -> Self {
+        let version_number = VersionNumber {
+            micro,
+            minor,
+            major,
+        };
+        Version {
+            application: version_number,
+            package: "StratoVirt-".to_string() + env!("CARGO_PKG_VERSION"),
+        }
+    }
 }
 
 #[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
@@ -203,7 +217,7 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<ErrorMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<String>,
 }
 
 impl Response {
@@ -214,7 +228,7 @@ impl Response {
     /// * `v` - The `Value` of qmp `return` field.
     /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
     ///          `id`.
-    pub fn create_response(v: Value, id: Option<u32>) -> Self {
+    pub fn create_response(v: Value, id: Option<String>) -> Self {
         Response {
             return_: Some(v),
             error: None,
@@ -237,7 +251,7 @@ impl Response {
     /// * `err_class` - The `QmpErrorClass` of qmp `error` field.
     /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
     ///          `id`.
-    pub fn create_error_response(err_class: schema::QmpErrorClass, id: Option<u32>) -> Self {
+    pub fn create_error_response(err_class: schema::QmpErrorClass, id: Option<String>) -> Self {
         Response {
             return_: None,
             error: Some(ErrorMessage::new(&err_class)),
@@ -245,7 +259,7 @@ impl Response {
         }
     }
 
-    fn change_id(&mut self, id: Option<u32>) {
+    fn change_id(&mut self, id: Option<String>) {
         self.id = id;
     }
 }
@@ -398,6 +412,8 @@ fn qmp_command_exec(
         (stop, pause),
         (cont, resume),
         (query_status, query_status),
+        (query_version, query_version),
+        (query_commands, query_commands),
         (query_migrate, query_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
@@ -557,13 +573,13 @@ mod tests {
     fn test_qmp_resp() {
         // 1.Empty response and ID change;
         let mut resp = Response::create_empty_response();
-        resp.change_id(Some(0));
+        resp.change_id(Some("0".to_string()));
 
-        let json_msg = r#"{"return":{},"id":0}"#;
+        let json_msg = r#"{"return":{},"id":"0"}"#;
         assert_eq!(serde_json::to_string(&resp).unwrap(), json_msg);
 
-        resp.change_id(Some(1));
-        let json_msg = r#"{"return":{},"id":1}"#;
+        resp.change_id(Some("1".to_string()));
+        let json_msg = r#"{"return":{},"id":"1"}"#;
         assert_eq!(serde_json::to_string(&resp).unwrap(), json_msg);
 
         // 2.Normal response

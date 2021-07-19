@@ -14,8 +14,10 @@ extern crate util;
 
 use std::os::unix::io::RawFd;
 
-use crate::qmp::qmp_schema::{CacheOptions, FileOptions};
-use crate::qmp::Response;
+use strum::VariantNames;
+
+use crate::qmp::qmp_schema::{CacheOptions, Cmd, FileOptions, QmpCommand};
+use crate::qmp::{Response, Version};
 
 /// State for KVM VM.
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -164,6 +166,24 @@ pub trait DeviceInterface {
 
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
+
+    /// Query the version of StratoVirt.
+    fn query_version(&self) -> Response {
+        let version = Version::new(0, 1, 4);
+        Response::create_response(serde_json::to_value(&version).unwrap(), None)
+    }
+
+    /// Query all commands of StratoVirt.
+    fn query_commands(&self) -> Response {
+        let mut vec_cmd = Vec::new();
+        for qmp_cmd in QmpCommand::VARIANTS {
+            let cmd = Cmd {
+                name: String::from(*qmp_cmd),
+            };
+            vec_cmd.push(cmd);
+        }
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
 }
 
 /// Migrate external api

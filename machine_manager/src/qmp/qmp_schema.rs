@@ -12,10 +12,14 @@
 
 extern crate serde;
 extern crate serde_json;
+extern crate strum;
+extern crate strum_macros;
 
 use serde::{Deserialize, Serialize};
 pub use serde_json::Value as Any;
+use strum_macros::{EnumIter, EnumString, EnumVariantNames};
 
+use super::Version;
 use crate::qmp::{Command, Empty, TimeStamp};
 
 /// A error enum for qmp
@@ -52,7 +56,7 @@ impl QmpErrorClass {
 }
 
 /// A enum to store all command struct
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
 #[serde(tag = "execute")]
 #[serde(deny_unknown_fields)]
 pub enum QmpCommand {
@@ -60,109 +64,127 @@ pub enum QmpCommand {
     qmp_capabilities {
         #[serde(default)]
         arguments: qmp_capabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
     },
     quit {
         #[serde(default)]
         arguments: quit,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     stop {
         #[serde(default)]
         arguments: stop,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     cont {
         #[serde(default)]
         arguments: cont,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     device_add {
         arguments: Box<device_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     device_del {
         arguments: device_del,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     netdev_add {
         arguments: Box<netdev_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     netdev_del {
         arguments: netdev_del,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "query-hotpluggable-cpus")]
+    #[strum(serialize = "query-hotpluggable-cpus")]
     query_hotpluggable_cpus {
         #[serde(default)]
         arguments: query_hotpluggable_cpus,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "query-cpus")]
+    #[strum(serialize = "query-cpus")]
     query_cpus {
         #[serde(default)]
         arguments: query_cpus,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "query-status")]
     query_status {
         #[serde(default)]
         arguments: query_status,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     getfd {
         arguments: getfd,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "blockdev-add")]
     blockdev_add {
         arguments: blockdev_add,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "blockdev-del")]
     blockdev_del {
         arguments: blockdev_del,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "balloon")]
     balloon {
         #[serde(default)]
         arguments: balloon,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "query-balloon")]
     query_balloon {
         #[serde(default)]
         arguments: query_balloon,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "migrate")]
     migrate {
         arguments: migrate,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
     },
     #[serde(rename = "query-migrate")]
     query_migrate {
         #[serde(default)]
         arguments: query_migrate,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<u32>,
+        id: Option<String>,
+    },
+    #[serde(rename = "query-version")]
+    query_version {
+        #[serde(default)]
+        arguments: query_version,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-commands")]
+    query_commands {
+        #[serde(default)]
+        arguments: query_commands,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
     },
 }
 
@@ -975,6 +997,59 @@ pub struct balloon {
 impl Command for balloon {
     type Res = Empty;
     fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// version:
+///
+/// Query version of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-version" }
+/// <- {"return":{"package":"StratoVirt-0.3.0","qemu":{"major":4,"micro":0,"minor":1}}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_version {}
+
+impl Command for query_version {
+    type Res = Version;
+
+    fn back(self) -> Version {
+        Default::default()
+    }
+}
+
+/// Query commands:
+///
+/// Query all qmp commands of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-commands" }
+/// <- {"return":[{"name":"qmp_capabilities"},{"name":"quit"},{"name":"stop"},
+/// {"name":"cont"},{"name":"device_add"},{"name":"device_del"},{"name":"netdev_add"},
+/// {"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},{"name":"query-cpus"},
+/// {"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
+/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},
+/// {"name":"migrate"},{"name":"query_migrate"},{"name":"query_version"},
+/// {"name":"query_target"},{"name":"query_commands"}]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_commands {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct Cmd {
+    pub name: String,
+}
+
+impl Command for query_commands {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
         Default::default()
     }
 }
