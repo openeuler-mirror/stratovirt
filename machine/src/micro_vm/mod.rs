@@ -53,8 +53,6 @@ pub mod errors {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-mod kvm_state;
 mod mem_layout;
 mod syscall;
 
@@ -698,12 +696,6 @@ impl MachineOps for LightMachine {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
-
-        #[cfg(target_arch = "x86_64")]
-        MigrationManager::register_device_instance(
-            kvm_state::KvmDeviceState::descriptor(),
-            Arc::new(kvm_state::KvmDevice {}),
-        );
 
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,

@@ -12,5 +12,7 @@ kvm-bindings = ">=0.3.0"
 kvm-ioctls = "0.6.0"
 lazy_static = "1.4.0"
 log = "0.4.8"
+migration = { path = "../migration" }
+migration_derive = { path = "../migration_derive" }
 util = { path = "../util" }
 vmm-sys-util = ">=0.7.0"

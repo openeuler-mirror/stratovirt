@@ -14,7 +14,7 @@ use kvm_bindings::{
     kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_CLOCK_TSC_STABLE, KVM_IRQCHIP_IOAPIC,
 };
 
-use hypervisor::KVM_FDS;
+use super::KVM_FDS;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 
@@ -22,7 +22,7 @@ use util::byte_code::ByteCode;
 pub struct KvmDevice {}
 
 /// Status of kvm device.
-/// Kvm device include pit, kvm_clock, irq in x86_64.
+/// Kvm device include pit, kvm_clock, irq on x86_64 platform.
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]

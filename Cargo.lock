@@ -195,6 +195,8 @@ dependencies = [
  "kvm-ioctls",
  "lazy_static",
  "log",
+ "migration",
+ "migration_derive",
  "util",
  "vmm-sys-util",
 ]
@@ -281,7 +283,6 @@ dependencies = [
  "log",
  "machine_manager",
  "migration",
- "migration_derive",
  "pci",
  "serde",
  "serde_json",

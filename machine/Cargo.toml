@@ -23,7 +23,6 @@ devices = { path = "../devices" }
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
-migration_derive = { path = "../migration_derive" }
 pci = { path = "../pci" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
