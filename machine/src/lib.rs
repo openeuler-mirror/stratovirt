@@ -105,7 +105,9 @@ mod standard_vm;
 pub use micro_vm::LightMachine;
 use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
-use virtio::{VhostKern, VirtioConsoleState, VirtioMmioState};
+use virtio::{
+    BlockState, RngState, VhostKern, VirtioConsoleState, VirtioMmioState, VirtioNetState,
+};
 
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Barrier, Mutex, Weak};
@@ -290,18 +292,19 @@ pub trait MachineOps {
                 self.realize_virtio_mmio_device(device)
                     .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
             );
-            MigrationManager::register_device_instance_mutex(
-                VhostKern::VsockState::descriptor(),
-                vsock,
-            );
         } else {
             let bdf = get_pci_bdf(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let vitpcidev = VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, vsock, parent_bus);
-            vitpcidev
+            let virtio_pci_device =
+                VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, vsock.clone(), parent_bus);
+            virtio_pci_device
                 .realize()
                 .chain_err(|| "Failed to add virtio pci vsock device")?;
         }
+        MigrationManager::register_device_instance_mutex(
+            VhostKern::VsockState::descriptor(),
+            vsock,
+        );
 
         Ok(())
     }
@@ -338,8 +341,8 @@ pub trait MachineOps {
             let bdf = get_pci_bdf(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
             let sys_mem = self.get_sys_mem().clone();
-            let vitpcidev = VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus);
-            vitpcidev
+            let virtio_pci_device = VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus);
+            virtio_pci_device
                 .realize()
                 .chain_err(|| "Failed to add virtio pci balloon device")?;
         }
@@ -365,10 +368,6 @@ pub trait MachineOps {
                     self.realize_virtio_mmio_device(device)
                         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
                 );
-                MigrationManager::register_device_instance_mutex(
-                    VirtioConsoleState::descriptor(),
-                    console,
-                );
             } else {
                 let name = device_cfg.id;
                 let bdf = if let Some(virtio_serial_info) = &vm_config.virtio_serial {
@@ -380,7 +379,7 @@ pub trait MachineOps {
                 let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
                 let sys_mem = self.get_sys_mem().clone();
                 let virtio_pci_device =
-                    VirtioPciDevice::new(name, devfn, sys_mem, console, parent_bus);
+                    VirtioPciDevice::new(name, devfn, sys_mem, console.clone(), parent_bus);
                 virtio_pci_device
                     .realize()
                     .chain_err(|| "Failed  to add virtio pci console device")?;
@@ -388,6 +387,7 @@ pub trait MachineOps {
         } else {
             bail!("No virtio-serial-bus specified");
         }
+        MigrationManager::register_device_instance_mutex(VirtioConsoleState::descriptor(), console);
 
         Ok(())
     }
@@ -408,7 +408,7 @@ pub trait MachineOps {
         let sys_mem = self.get_sys_mem();
         let rng_dev = Arc::new(Mutex::new(Rng::new(device_cfg.clone())));
         if cfg_args.contains("virtio-rng-device") {
-            let device = VirtioMmioDevice::new(sys_mem, rng_dev);
+            let device = VirtioMmioDevice::new(sys_mem, rng_dev.clone());
             self.realize_virtio_mmio_device(device)
                 .chain_err(|| "Failed to add virtio mmio rng device")?;
         } else {
@@ -416,11 +416,12 @@ pub trait MachineOps {
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
             let sys_mem = self.get_sys_mem().clone();
             let vitio_pci_device =
-                VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, rng_dev, parent_bus);
+                VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, rng_dev.clone(), parent_bus);
             vitio_pci_device
                 .realize()
                 .chain_err(|| "Failed to add pci rng device")?;
         }
+        MigrationManager::register_device_instance_mutex(RngState::descriptor(), rng_dev);
         Ok(())
     }
 
@@ -434,11 +435,17 @@ pub trait MachineOps {
         let sys_mem = self.get_sys_mem();
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
-        let vitpcidev =
-            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus);
-        vitpcidev
+        let pcidev = VirtioPciDevice::new(
+            device_cfg.id,
+            devfn,
+            sys_mem.clone(),
+            device.clone(),
+            parent_bus,
+        );
+        pcidev
             .realize()
             .chain_err(|| "Failed to add virtio pci blk device")?;
+        MigrationManager::register_device_instance_mutex(BlockState::descriptor(), device);
         Ok(())
     }
 
@@ -452,6 +459,10 @@ pub trait MachineOps {
             VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus)
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
+            MigrationManager::register_device_instance_mutex(
+                VirtioNetState::descriptor(),
+                device.clone(),
+            );
             VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus)
         };
         virtio_pci_device
