@@ -58,6 +58,23 @@ impl<T: BitOps> Bitmap<T> {
         Ok(())
     }
 
+    /// Clear the bit of bitmap.
+    ///
+    /// # Arguments
+    ///
+    /// * `num` - the input number
+    pub fn clear(&mut self, num: usize) -> Result<()> {
+        let index = self.bit_index(num);
+        if index >= self.size() {
+            return Err(ErrorKind::OutOfBound(index as u64, self.vol() as u64).into());
+        }
+        self.data[index] = T::bit_and(
+            self.data[index],
+            T::bit_not(T::one().rhs(self.bit_pos(num))),
+        );
+        Ok(())
+    }
+
     /// Query bitmap if contains input number or not.
     ///
     /// # Arguments
@@ -107,6 +124,20 @@ impl<T: BitOps> Bitmap<T> {
             }
         }
         Ok(num)
+    }
+
+    /// Return a new offset to get a zero bit from input offset.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - the input offset as the query's start.
+    pub fn find_next_zero(&self, offset: usize) -> Result<usize> {
+        for i in offset + 1..self.vol() {
+            if !self.contain(i)? {
+                return Ok(i);
+            }
+        }
+        bail!("Failed to get new zero bit")
     }
 
     fn bit_index(&self, num: usize) -> usize {

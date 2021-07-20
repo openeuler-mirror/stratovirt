@@ -33,6 +33,7 @@ pub mod errors {
             Util(util::errors::Error, util::errors::ErrorKind);
             Virtio(virtio::errors::Error, virtio::errors::ErrorKind);
             MachineManager(machine_manager::config::errors::Error, machine_manager::config::errors::ErrorKind);
+            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
         }
 
         foreign_links {

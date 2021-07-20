@@ -255,6 +255,16 @@ impl MachineOps for StdMachine {
             .unwrap()
             .create_irq_chip()
             .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
+        KVM_FDS
+            .load()
+            .irq_route_table
+            .lock()
+            .unwrap()
+            .init_irq_route_table();
+        KVM_FDS
+            .load()
+            .commit_irq_routing()
+            .chain_err(|| "Failed to commit irq routing for kvm irqchip")?;
         Ok(())
     }
 

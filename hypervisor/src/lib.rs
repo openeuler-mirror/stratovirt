@@ -18,10 +18,15 @@ extern crate error_chain;
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate vmm_sys_util;
 
 #[allow(clippy::upper_case_acronyms)]
 pub mod errors {
     error_chain! {
+        links {
+            Util(util::errors::Error, util::errors::ErrorKind);
+        }
         foreign_links {
             KVMIoctl(kvm_ioctls::Error);
         }
