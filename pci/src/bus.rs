@@ -66,6 +66,10 @@ impl PciBus {
     ///
     /// * `offset` - Offset of bus number register.
     pub fn number(&self, offset: usize) -> u8 {
+        if self.parent_bridge.is_none() {
+            return 0;
+        }
+
         let mut data = vec![0_u8; 1];
         self.parent_bridge
             .as_ref()
