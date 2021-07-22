@@ -157,7 +157,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .multiple(true)
                 .long("netdev")
                 .value_name(
-                    "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfds=][,iothread=]",
+                    "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfd=][,iothread=]",
                 )
                 .help("configure a host TAP network with ID 'str'")
                 .takes_values(true),

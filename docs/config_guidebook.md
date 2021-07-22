@@ -167,39 +167,51 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 Virtio-net is a virtual Ethernet card in VM. It can enable the network capability of VM.
 
-Four properties are supported for virtio net device.
+Four properties are supported for netdev.
+* tap: the type of net device. NB: currently only tap is supported.
+* id: unique netdev id.
+* ifname: name of tap device in host.
+* fd: the fd of opened tap device. 
+NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given, 
+the tap device would be created according to `ifname`.
 
-* netid: unique device-id in StratoVirt.
-* host_dev_name: name of tap device in host.
-* mac: set mac address in VM. (optional)
+
+Five properties are supported for virtio-net-device or virtio-net-pci.
+* id: unique net device id.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used.
 It has no effect when vhost is set.
+* netdev: netdev of net device.
+* vhost: whether to run as a vhost-net device.
+* mac: set mac address in VM (optional).
 
-For virtio-net-pci, two more properties are required.
+Two more properties are supported for virtio pci net device.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
-of device and the second one represents function number of it.
+of device and the second one represents function number of it. For virtio pci net device, it 
+is a single function device, the function number should be set to zero.
 
 ```shell
 # virtio mmio net device
--netdev id=host_dev_name[,mac=12:34:56:78:9A:BC]
--device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name[,mac=12:34:56:78:9A:BC]
+-device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1]
 # virtio pci net device
--netdev id=host_dev_name[,mac=12:34:56:78:9A:BC]
--device virtio-net-pci,netdev=host_dev_name,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name[,mac=12:34:56:78:9A:BC]
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
 ```
 
-StratoVirt also supports vhost-net to get a higher performance in network.
+StratoVirt also supports vhost-net to get a higher performance in network. It can be set by 
+giving `vhost` property, and one more property is supported for vhost-net device.
 
-It can be set by given `vhost` property.
+* vhostfd: fd for vhost-net device, it could be configured when `vhost=on`. If this argument is not 
+given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatically.
 
 ```shell
 # virtio mmio net device
--netdev id=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
--device virtio-net-device,netdev=host_dev_name,id=netid[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC,vhostfd=2]
+-device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1]
 # virtio pci net device
--netdev id=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC]
--device virtio-net-pci,netdev=host_dev_name,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC,vhostfd=2]
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
 ```
 
 *How to set a tap device?*
@@ -213,7 +225,7 @@ $ ifconfig qbr0 up; ifconfig tap0 up
 $ ifconfig qbr0 1.1.1.1
 
 # Run StratoVirt
-... -netdev id=net-0,netdev=tap0 ...
+... -netdev tap,id=netdevid,ifname=tap0 ...
 
 # In guest
 $ ip link set eth0 up
