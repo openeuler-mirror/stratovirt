@@ -17,7 +17,6 @@ extern crate log;
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
 use machine::{LightMachine, MachineOps, StdMachine};
@@ -32,7 +31,7 @@ use machine_manager::{
     temp_cleaner::TempCleaner,
 };
 use util::loop_context::EventNotifierHelper;
-use util::unix::{limit_permission, parse_uri, UnixPath};
+use util::unix::{parse_uri, UnixPath};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
 error_chain! {
@@ -136,44 +135,46 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
 
-    let (api_path, _) = check_api_channel(&cmd_args)?;
-    let listener = UnixListener::bind(&api_path)
-        .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
-    // add file to temporary pool, so it could be clean when vm exit.
-    TempCleaner::add_path(api_path.clone());
-    limit_permission(&api_path)
-        .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
+    let listeners = check_api_channel(&cmd_args, vm_config)?;
+    let mut sockets = Vec::new();
+    let vm: Arc<Mutex<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
+        MachineType::MicroVm => {
+            let vm = Arc::new(Mutex::new(
+                LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
+            ));
+            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
+                .chain_err(|| "Failed to realize micro VM.")?;
+            EventLoop::set_manager(vm.clone(), None);
 
-    let (vm, api_socket): (Arc<Mutex<dyn MachineOps + Send + Sync>>, Socket) =
-        match vm_config.machine_config.mach_type {
-            MachineType::MicroVm => {
-                let vm = Arc::new(Mutex::new(
-                    LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
-                ));
-                MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
-                    .chain_err(|| "Failed to realize micro VM.")?;
-                EventLoop::set_manager(vm.clone(), None);
+            for listener in listeners {
+                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
+            }
+            vm
+        }
+        MachineType::StandardVm => {
+            let vm = Arc::new(Mutex::new(
+                StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
+            ));
+            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
+                .chain_err(|| "Failed to realize standard VM.")?;
+            EventLoop::set_manager(vm.clone(), None);
 
-                (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+            for listener in listeners {
+                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
             }
-            MachineType::StandardVm => {
-                let vm = Arc::new(Mutex::new(
-                    StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
-                ));
-                MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
-                    .chain_err(|| "Failed to realize standard VM.")?;
-                EventLoop::set_manager(vm.clone(), None);
-
-                (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
+            vm
+        }
+        MachineType::None => {
+            let vm = Arc::new(Mutex::new(
+                StdMachine::new(&vm_config).chain_err(|| "Failed to init NoneVM")?,
+            ));
+            EventLoop::set_manager(vm.clone(), None);
+            for listener in listeners {
+                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
             }
-            MachineType::None => {
-                let vm = Arc::new(Mutex::new(
-                    StdMachine::new(&vm_config).chain_err(|| "Failed to init NoneVM")?,
-                ));
-                EventLoop::set_manager(vm.clone(), None);
-                (vm.clone(), Socket::from_unix_listener(listener, Some(vm)))
-            }
-        };
+            vm
+        }
+    };
 
     if let Some(uri) = cmd_args.value_of("incoming") {
         if let (UnixPath::File, path) = parse_uri(&uri)? {
@@ -184,11 +185,13 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
     }
 
-    EventLoop::update_event(
-        EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(api_socket))),
-        None,
-    )
-    .chain_err(|| "Failed to add api event to MainLoop")?;
+    for socket in sockets {
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(socket))),
+            None,
+        )
+        .chain_err(|| "Failed to add api event to MainLoop")?;
+    }
 
     vm.lock()
         .unwrap()

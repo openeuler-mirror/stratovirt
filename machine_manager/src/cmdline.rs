@@ -13,11 +13,17 @@
 use error_chain::bail;
 
 use crate::{
-    config::{MachineType, VmConfig},
+    config::{CmdParser, MachineType, VmConfig},
     errors::{Result, ResultExt},
+    temp_cleaner::TempCleaner,
 };
-use util::arg_parser::{Arg, ArgMatches, ArgParser};
-use util::unix::{parse_uri, UnixPath};
+use util::unix::parse_uri;
+use util::{
+    arg_parser::{Arg, ArgMatches, ArgParser},
+    unix::limit_permission,
+};
+
+use std::os::unix::net::UnixListener;
 
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
@@ -137,7 +143,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .value_name("unix:socket_path")
                 .help("set qmp's unixsocket path")
                 .takes_value(true)
-                .required(true),
         )
         .arg(
             Arg::with_name("drive")
@@ -240,6 +245,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .help("add object")
                 .takes_values(true),
         )
+        .arg(
+            Arg::with_name("mon")
+                .long("mon")
+                .value_name("chardev=chardev_id,id=mon_id[,mode=control]")
+                .help("-mon is another way to create qmp channel. To use it, the chardev should be specified")
+                .takes_value(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -301,12 +313,74 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
 /// # Errors
 ///
 /// The value of `qmp` is illegel.
-pub fn check_api_channel(args: &ArgMatches) -> Result<(String, UnixPath)> {
-    if let Some(api) = args.value_of("qmp") {
-        let (api_type, api_path) =
-            parse_uri(&api).chain_err(|| "Failed to parse qmp socket path")?;
-        Ok((api_path, api_type))
-    } else {
-        bail!("Please use \'-qmp\' to give a qmp path for Unix socket");
+pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<Vec<UnixListener>> {
+    let mut sock_paths = Vec::new();
+    if let Some(qmp_config) = args.value_of("qmp") {
+        let mut cmd_parser = CmdParser::new("qmp");
+        cmd_parser.push("").push("server").push("nowait");
+
+        cmd_parser.parse(&qmp_config)?;
+        if let Some(uri) = cmd_parser.get_value::<String>("")? {
+            let (_api_type, api_path) =
+                parse_uri(&uri).chain_err(|| "Failed to parse qmp socket path")?;
+            sock_paths.push(api_path);
+        } else {
+            bail!("No uri found for qmp");
+        }
+        if cmd_parser.get_value::<String>("server")?.is_none() {
+            bail!("Argument \'server\' is needed for qmp");
+        }
+        if cmd_parser.get_value::<String>("nowait")?.is_none() {
+            bail!("Argument \'nowait\' is needed for qmp");
+        }
     }
+    if let Some(mon_config) = args.value_of("mon") {
+        let mut cmd_parser = CmdParser::new("monitor");
+        cmd_parser.push("id").push("mode").push("chardev");
+
+        cmd_parser.parse(&mon_config)?;
+
+        let chardev = if let Some(dev) = cmd_parser.get_value::<String>("chardev")? {
+            dev
+        } else {
+            bail!("Argument \'chardev\'  is missing for \'mon\'");
+        };
+
+        if let Some(mode) = cmd_parser.get_value::<String>("mode")? {
+            if mode != *"control" {
+                bail!("Invalid \'mode\' parament: {:?} for monitor", &mode);
+            }
+        } else {
+            bail!("Argument \'mode\' of \'mon\' should be set to \'control\'.");
+        }
+
+        if let Some(cfg) = vm_config.chardev.remove(&chardev) {
+            sock_paths.push(cfg.socket_path);
+        } else {
+            bail!("No chardev found: {}", &chardev);
+        }
+    }
+
+    if sock_paths.is_empty() {
+        bail!("Please use \'-qmp\' or \'-mon\' to give a qmp path for Unix socket");
+    }
+    let mut listeners = Vec::new();
+    for path in sock_paths {
+        listeners.push(
+            bind_socket(path.clone())
+                .chain_err(|| format!("Failed to bind socket for path: {:?}", &path))?,
+        )
+    }
+
+    Ok(listeners)
+}
+
+fn bind_socket(path: String) -> Result<UnixListener> {
+    let listener =
+        UnixListener::bind(&path).chain_err(|| format!("Failed to bind socket file {}", &path))?;
+    // Add file to temporary pool, so it could be cleaned when vm exits.
+    TempCleaner::add_path(path.clone());
+    limit_permission(&path)
+        .chain_err(|| format!("Failed to limit permission for socket file {}", &path))?;
+    Ok(listener)
 }

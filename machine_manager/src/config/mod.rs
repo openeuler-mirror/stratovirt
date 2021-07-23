@@ -271,7 +271,7 @@ pub struct CmdParser {
 
 impl CmdParser {
     /// Allocates an empty `CmdParser`.
-    fn new(name: &str) -> Self {
+    pub fn new(name: &str) -> Self {
         CmdParser {
             name: name.to_string(),
             params: HashMap::<String, Option<String>>::new(),
@@ -283,7 +283,7 @@ impl CmdParser {
     /// # Arguments
     ///
     /// * `param_field`: The cmdline parameter field name.
-    fn push(&mut self, param_field: &str) -> &mut Self {
+    pub fn push(&mut self, param_field: &str) -> &mut Self {
         self.params.insert(param_field.to_string(), None);
 
         self
@@ -294,18 +294,24 @@ impl CmdParser {
     /// # Arguments
     ///
     /// * `cmd_param`: The whole cmdline parameter string.
-    fn parse(&mut self, cmd_param: &str) -> Result<()> {
+    pub fn parse(&mut self, cmd_param: &str) -> Result<()> {
         if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
             return Err(ErrorKind::InvalidParam(cmd_param.to_string()).into());
         }
         let param_items = cmd_param.split(',').collect::<Vec<&str>>();
-        for param_item in param_items {
+        for (i, param_item) in param_items.iter().enumerate() {
             if param_item.starts_with('=') || param_item.ends_with('=') {
                 return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
             }
             let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
             let (param_key, param_value) = match param.len() {
-                1 => ("", param[0]),
+                1 => {
+                    if i == 0 {
+                        ("", param[0])
+                    } else {
+                        (param[0], "")
+                    }
+                }
                 2 => (param[0], param[1]),
                 _ => {
                     return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
@@ -369,7 +375,7 @@ impl CmdParser {
     /// # Arguments
     ///
     /// * `param_field`: The cmdline parameter field name.
-    fn get_value<T: FromStr>(&self, param_field: &str) -> Result<Option<T>> {
+    pub fn get_value<T: FromStr>(&self, param_field: &str) -> Result<Option<T>> {
         match self.params.get(param_field) {
             Some(value) => {
                 let field_msg = if param_field.is_empty() {
