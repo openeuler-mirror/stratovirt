@@ -157,7 +157,6 @@ impl VmConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SerialConfig {
-    pub id: String,
     pub stdio: bool,
 }
 
@@ -175,12 +174,7 @@ impl VmConfig {
                 _ => return Err(ErrorKind::InvalidParam(serial_type).into()),
             }
         };
-        let id = if let Some(serial_id) = cmd_parser.get_value::<String>("id")? {
-            serial_id
-        } else {
-            "".to_string()
-        };
-        self.serial = Some(SerialConfig { id, stdio });
+        self.serial = Some(SerialConfig { stdio });
 
         Ok(())
     }
@@ -262,24 +256,47 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
 
 #[derive(Clone, Default, Debug)]
 pub struct VirtioSerialInfo {
+    pub id: String,
     pub pci_bdf: Option<PciBdf>,
+}
+
+impl ConfigCheck for VirtioSerialInfo {
+    fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "virtio-serial id".to_string(),
+                MAX_STRING_LENGTH,
+            )
+            .into());
+        }
+
+        Ok(())
+    }
 }
 
 pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Result<()> {
     let mut cmd_parser = CmdParser::new("virtio-serial");
-    cmd_parser.push("").push("bus").push("addr");
+    cmd_parser.push("").push("id").push("bus").push("addr");
     cmd_parser.parse(serial_config)?;
     pci_args_check(&cmd_parser)?;
 
     if vm_config.virtio_serial.is_none() {
-        vm_config.virtio_serial = Some(if serial_config.contains("-pci") {
+        let id = if let Some(id) = cmd_parser.get_value::<String>("id")? {
+            id
+        } else {
+            "".to_string()
+        };
+        let virtio_serial = if serial_config.contains("-pci") {
             let pci_bdf = get_pci_bdf(serial_config)?;
             VirtioSerialInfo {
+                id,
                 pci_bdf: Some(pci_bdf),
             }
         } else {
-            VirtioSerialInfo { pci_bdf: None }
-        });
+            VirtioSerialInfo { id, pci_bdf: None }
+        };
+        virtio_serial.check()?;
+        vm_config.virtio_serial = Some(virtio_serial);
     } else {
         bail!("Only one virtio serial device is supported");
     }

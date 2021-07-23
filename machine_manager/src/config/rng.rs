@@ -34,6 +34,12 @@ pub struct RngConfig {
 
 impl ConfigCheck for RngConfig {
     fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_PATH_LENGTH {
+            return Err(
+                ErrorKind::StringLengthTooLong("rng id".to_string(), MAX_PATH_LENGTH).into(),
+            );
+        }
+
         if self.random_file.len() > MAX_PATH_LENGTH {
             return Err(ErrorKind::StringLengthTooLong(
                 "rng random file".to_string(),
