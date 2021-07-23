@@ -292,13 +292,7 @@ pub struct Empty {}
 /// Command trait for Deserialize and find back Response.
 pub trait Command: Serialize {
     type Res: DeserializeOwned;
-    const NAME: &'static str;
     fn back(self) -> Self::Res;
-}
-
-/// Event trait for Deserialize.
-pub trait Event: DeserializeOwned {
-    const NAME: &'static str;
 }
 
 /// `TimeStamp` structure for `QmpEvent`.

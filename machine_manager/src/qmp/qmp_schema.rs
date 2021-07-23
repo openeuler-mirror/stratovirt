@@ -16,7 +16,7 @@ extern crate serde_json;
 use serde::{Deserialize, Serialize};
 pub use serde_json::Value as Any;
 
-use crate::qmp::{Command, Empty, Event, TimeStamp};
+use crate::qmp::{Command, Empty, TimeStamp};
 
 /// A error enum for qmp
 #[allow(clippy::upper_case_acronyms)]
@@ -181,7 +181,6 @@ pub enum QmpCommand {
 pub struct qmp_capabilities {}
 
 impl Command for qmp_capabilities {
-    const NAME: &'static str = "qmp_capabilities";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -207,7 +206,6 @@ impl Command for qmp_capabilities {
 pub struct quit {}
 
 impl Command for quit {
-    const NAME: &'static str = "quit";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -230,7 +228,6 @@ impl Command for quit {
 pub struct stop {}
 
 impl Command for stop {
-    const NAME: &'static str = "stop";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -253,7 +250,6 @@ impl Command for stop {
 pub struct cont {}
 
 impl Command for cont {
-    const NAME: &'static str = "cont";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -310,7 +306,6 @@ pub struct device_add {
 }
 
 impl Command for device_add {
-    const NAME: &'static str = "device_add";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -372,7 +367,6 @@ pub struct blockdev_add {
 }
 
 impl Command for blockdev_add {
-    const NAME: &'static str = "blockdev-add";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -416,7 +410,6 @@ pub struct netdev_add {
 }
 
 impl Command for netdev_add {
-    const NAME: &'static str = "netdev_add";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -459,7 +452,6 @@ pub struct device_del {
 }
 
 impl Command for device_del {
-    const NAME: &'static str = "device_del";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -475,7 +467,6 @@ pub struct blockdev_del {
 }
 
 impl Command for blockdev_del {
-    const NAME: &'static str = "blockdev-del";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -508,7 +499,6 @@ pub struct netdev_del {
 }
 
 impl Command for netdev_del {
-    const NAME: &'static str = "netdev_del";
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -544,7 +534,6 @@ impl Command for netdev_del {
 pub struct query_hotpluggable_cpus {}
 
 impl Command for query_hotpluggable_cpus {
-    const NAME: &'static str = "query-hotpluggable-cpus";
     type Res = Vec<HotpluggableCPU>;
 
     fn back(self) -> Vec<HotpluggableCPU> {
@@ -618,7 +607,6 @@ pub struct CpuInstanceProperties {
 pub struct query_cpus {}
 
 impl Command for query_cpus {
-    const NAME: &'static str = "query-cpus";
     type Res = Vec<CpuInfo>;
 
     fn back(self) -> Vec<CpuInfo> {
@@ -694,7 +682,6 @@ pub struct CpuInfoArm {}
 pub struct query_status {}
 
 impl Command for query_status {
-    const NAME: &'static str = "query-status";
     type Res = StatusInfo;
 
     fn back(self) -> StatusInfo {
@@ -770,8 +757,6 @@ pub struct migrate {
 }
 
 impl Command for migrate {
-    const NAME: &'static str = "migrate";
-
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -786,7 +771,6 @@ impl Command for migrate {
 pub struct query_migrate {}
 
 impl Command for query_migrate {
-    const NAME: &'static str = "query-migrate";
     type Res = MigrationInfo;
 
     fn back(self) -> MigrationInfo {
@@ -822,8 +806,6 @@ pub struct getfd {
 }
 
 impl Command for getfd {
-    const NAME: &'static str = "getfd";
-
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -851,10 +833,6 @@ pub struct Shutdown {
     pub reason: String,
 }
 
-impl Event for Shutdown {
-    const NAME: &'static str = "SHUTDOWN";
-}
-
 /// Reset
 ///
 /// Emitted when the virtual machine is reset
@@ -868,10 +846,6 @@ pub struct Reset {
     pub guest: bool,
 }
 
-impl Event for Reset {
-    const NAME: &'static str = "RESET";
-}
-
 /// Stop
 ///
 /// Emitted when the virtual machine is stopped
@@ -879,20 +853,12 @@ impl Event for Reset {
 #[serde(deny_unknown_fields)]
 pub struct Stop {}
 
-impl Event for Stop {
-    const NAME: &'static str = "STOP";
-}
-
 /// Resume
 ///
 /// Emitted when the virtual machine resumes execution
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Resume {}
-
-impl Event for Resume {
-    const NAME: &'static str = "RESUME";
-}
 
 /// DeviceDeleted
 ///
@@ -917,10 +883,6 @@ pub struct DeviceDeleted {
     /// Device path.
     #[serde(rename = "path")]
     pub path: String,
-}
-
-impl Event for DeviceDeleted {
-    const NAME: &'static str = "DEVICE_DELETED";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -974,7 +936,6 @@ pub enum QmpEvent {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_balloon {}
 impl Command for query_balloon {
-    const NAME: &'static str = "query-balloon";
     type Res = BalloonInfo;
     fn back(self) -> BalloonInfo {
         Default::default()
@@ -1012,7 +973,6 @@ pub struct balloon {
 }
 
 impl Command for balloon {
-    const NAME: &'static str = "balloon";
     type Res = Empty;
     fn back(self) -> Empty {
         Default::default()
