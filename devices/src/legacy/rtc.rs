@@ -162,7 +162,7 @@ impl RTC {
 
     fn read_data(&self, data: &mut [u8]) -> bool {
         if data.len() != 1 {
-            error!("RTC only support reading data byte by byte.");
+            error!("RTC only supports reading data byte by byte.");
             return false;
         }
 
@@ -203,14 +203,14 @@ impl RTC {
 
     fn write_data(&mut self, data: &[u8]) -> bool {
         if data.len() != 1 {
-            error!("RTC only support writing data byte by byte.");
+            error!("RTC only supports writing data byte by byte.");
             return false;
         }
 
         match self.cur_index {
             RTC_REG_C | RTC_REG_D => {
-                error!(
-                    "read-only register , index: {}, data {}",
+                warn!(
+                    "Failed to write: read-only register, index {}, data {}",
                     self.cur_index, data[0]
                 );
                 return false;
@@ -236,8 +236,8 @@ impl RTC {
 impl SysBusDevOps for RTC {
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         if offset == 0 {
-            warn!(
-                "Only reading data for 0x71 is permitted, ioport is 0x{:x}",
+            debug!(
+                "Reading from ioport 0x{:x} is not supported yet",
                 base.0 + offset
             );
             data[0] = 0xFF;
