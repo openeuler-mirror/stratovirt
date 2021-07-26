@@ -230,3 +230,17 @@ pub fn mknod(node_path: &str, mode: libc::mode_t, dev: libc::dev_t) -> Result<()
     }
     .into()
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::*;
+
+    #[test]
+    fn test_into_cstring() {
+        let str = into_cstring("stratovirt");
+        assert!(str.is_ok());
+        let str = str.unwrap();
+        let cstr = CString::new("stratovirt").unwrap();
+        assert_eq!(cstr, str);
+    }
+}

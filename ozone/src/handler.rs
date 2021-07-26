@@ -299,3 +299,49 @@ fn disinfect_process() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+
+    pub use super::*;
+
+    fn create_handler() -> OzoneHandler {
+        let mut dir = env::temp_dir();
+        dir.push("test_ozone_example");
+        dir.push("stratovirt");
+        let exec_file_path = dir.clone();
+        dir.pop();
+        let chroot_dir = PathBuf::from("/srv/ozone/ozone");
+        let mut source_file_paths = Vec::new();
+        dir.push("rootfs");
+        source_file_paths.push(dir.clone());
+        dir.pop();
+        dir.push("vmlinux.bin");
+        source_file_paths.push(dir);
+        OzoneHandler {
+            name: "ozone".to_string(),
+            uid: 100,
+            gid: 100,
+            exec_file_path,
+            netns_path: None,
+            chroot_dir,
+            source_file_paths,
+            extra_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_disinfect_process() {
+        assert!(disinfect_process().is_ok());
+    }
+
+    #[test]
+    fn test_exec_file_name() {
+        let handler = create_handler();
+        let exec_file = handler.exec_file_name();
+        assert!(exec_file.is_ok());
+        let exec_file = exec_file.unwrap();
+        assert_eq!(exec_file, "stratovirt");
+    }
+}
