@@ -215,6 +215,28 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "qom-list-types")]
+    list_type {
+        #[serde(default)]
+        arguments: list_type,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "device-list-properties")]
+    device_list_properties {
+        #[serde(default)]
+        arguments: device_list_properties,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "block-commit")]
+    #[strum(serialize = "block-commit")]
+    block_commit {
+        #[serde(default)]
+        arguments: block_commit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -1200,6 +1222,77 @@ impl Command for query_kvm {
     type Res = KvmInfo;
 
     fn back(self) -> KvmInfo {
+        Default::default()
+    }
+}
+
+/// List all Qom type.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "qom-list-types" }
+/// <- {"return":[{"name":"ioh3420","parent":"pcie-root-port-base"},
+/// {"name":"pcie-root-port","parent":"pcie-root-port-base"},
+/// {"name":"pcie-pci-bridge","parent":"base-pci-bridge"},
+/// {"name":"pci-bridge","parent":"base-pci-bridge"}]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct list_type {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct TypeLists {
+    name: String,
+    parent: String,
+}
+
+impl TypeLists {
+    pub fn new(name: String, parent: String) -> Self {
+        TypeLists { name, parent }
+    }
+}
+
+impl Command for list_type {
+    type Res = Vec<TypeLists>;
+
+    fn back(self) -> Vec<TypeLists> {
+        Default::default()
+    }
+}
+
+/// Get device list properties.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "device-list-properties", "arguments": {"typename": "virtio-blk-pci"} }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct device_list_properties {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceProps {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub prop_type: String,
+}
+
+impl Command for device_list_properties {
+    type Res = Vec<DeviceProps>;
+
+    fn back(self) -> Vec<DeviceProps> {
+        Default::default()
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct block_commit {}
+
+impl Command for block_commit {
+    type Res = Vec<DeviceProps>;
+
+    fn back(self) -> Vec<DeviceProps> {
         Default::default()
     }
 }

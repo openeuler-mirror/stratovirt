@@ -421,6 +421,8 @@ fn qmp_command_exec(
         (query_migrate, query_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
+        (list_type, list_type),
+        (device_list_properties, device_list_properties),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (device_add, device_add, id, driver, addr, lun),
         (device_del, device_del, id),
