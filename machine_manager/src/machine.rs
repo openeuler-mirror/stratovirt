@@ -312,6 +312,26 @@ pub trait DeviceInterface {
         let vec_cmd: Vec<PropList> = Vec::new();
         Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
     }
+
+    fn qom_get(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn query_block(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn query_named_block_nodes(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn query_blockstats(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
 }
 
 /// Migrate external api

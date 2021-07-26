@@ -295,6 +295,38 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "qom_get")]
+    #[strum(serialize = "qom_get")]
+    qom_get {
+        #[serde(default)]
+        arguments: qom_get,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-block")]
+    #[strum(serialize = "query-block")]
+    query_block {
+        #[serde(default)]
+        arguments: query_block,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-named-block-nodes")]
+    #[strum(serialize = "query-named-block-nodes")]
+    query_named_block_nodes {
+        #[serde(default)]
+        arguments: query_named_block_nodes,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-blockstats")]
+    #[strum(serialize = "query-blockstats")]
+    query_blockstats {
+        #[serde(default)]
+        arguments: query_blockstats,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -1538,6 +1570,82 @@ impl Command for query_chardev {
     type Res = Vec<ChardevInfo>;
 
     fn back(self) -> Vec<ChardevInfo> {
+        Default::default()
+    }
+}
+
+/// Get qom properties.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "qom_get" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct qom_get {}
+
+impl Command for qom_get {
+    type Res = bool;
+
+    fn back(self) -> bool {
+        Default::default()
+    }
+}
+
+/// Query blocks of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-block" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_block {}
+
+impl Command for query_block {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
+        Default::default()
+    }
+}
+
+/// Query named block node.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-named-block-nodes" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_named_block_nodes {}
+
+impl Command for query_named_block_nodes {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
+        Default::default()
+    }
+}
+
+/// Query status of blocks.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-blockstats" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_blockstats {}
+
+impl Command for query_blockstats {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
         Default::default()
     }
 }
