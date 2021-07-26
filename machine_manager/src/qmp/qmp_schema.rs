@@ -265,6 +265,36 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-qmp-schema")]
+    query_qmp_schema {
+        #[serde(default)]
+        arguments: query_qmp_schema,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-sev-capabilities")]
+    query_sev_capabilities {
+        #[serde(default)]
+        arguments: query_sev_capabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-chardev")]
+    #[strum(serialize = "query-chardev")]
+    query_chardev {
+        #[serde(default)]
+        arguments: query_chardev,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "qom-list")]
+    #[strum(serialize = "qom-list")]
+    qom_list {
+        #[serde(default)]
+        arguments: qom_list,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -1417,6 +1447,97 @@ impl Command for query_migrate_capabilities {
     type Res = Vec<MigrateCapabilities>;
 
     fn back(self) -> Vec<MigrateCapabilities> {
+        Default::default()
+    }
+}
+
+/// Query target of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-qmp-schema" }
+/// <- {"return":{}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_qmp_schema {}
+
+impl Command for query_qmp_schema {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// Query capabilities of sev.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-sev-capabilities" }
+/// <- {"return":{}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_sev_capabilities {}
+
+impl Command for query_sev_capabilities {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// List all Qom.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "qom-list" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct qom_list {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct PropList {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub prop_type: String,
+}
+
+impl Command for qom_list {
+    type Res = Vec<PropList>;
+
+    fn back(self) -> Vec<PropList> {
+        Default::default()
+    }
+}
+
+/// Query char devices.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-chardev" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_chardev {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct ChardevInfo {
+    #[serde(rename = "frontend-open")]
+    pub open: bool,
+    pub filename: String,
+    pub label: String,
+}
+
+impl Command for query_chardev {
+    type Res = Vec<ChardevInfo>;
+
+    fn back(self) -> Vec<ChardevInfo> {
         Default::default()
     }
 }
