@@ -505,10 +505,8 @@ pub trait MachineOps {
         }
 
         if let Some(pflashs) = cloned_vm_config.pflashs.as_ref() {
-            for pflash in pflashs {
-                self.add_pflash_device(pflash)
-                    .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
-            }
+            self.add_pflash_device(pflashs)
+                .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
         }
 
         for dev in &cloned_vm_config.devices {
@@ -554,7 +552,7 @@ pub trait MachineOps {
     }
 
     /// Add pflash device.
-    fn add_pflash_device(&mut self, _config: &PFlashConfig) -> Result<()> {
+    fn add_pflash_device(&mut self, _configs: &[PFlashConfig]) -> Result<()> {
         bail!("Pflash device is not supported!");
     }
 

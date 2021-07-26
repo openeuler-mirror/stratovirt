@@ -386,51 +386,60 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_pflash_device(&mut self, config: &PFlashConfig) -> MachineResult<()> {
+    fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> MachineResult<()> {
         use super::errors::ResultExt;
 
+        let mut configs_vec = configs.to_vec();
+        configs_vec.sort_by_key(|c| c.unit);
         // The two PFlash devices locates below 4GB, this variable represents the end address
         // of current PFlash device.
-        static mut FLASH_END: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-        // Safe because the PFlash devices is added in succession and `FLASH_END` variable
-        // will only be initialized and modified by the main thread.
-        let flash_end: u64 = unsafe { FLASH_END };
+        let mut flash_end: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        for config in configs_vec {
+            let mut fd = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(config.path_on_host.clone())?;
+            let pfl_size = fd.metadata().unwrap().len();
 
-        let mut fd = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(config.path_on_host.clone())?;
-        let pfl_size = fd.metadata().unwrap().len();
+            if config.unit == 0 {
+                // According to the Linux/x86 boot protocol, the memory region of
+                // 0x000000 - 0x100000 (1 MiB) is for BIOS usage. And the top 128
+                // KiB is for BIOS code which is stored in the first PFlash.
+                let rom_base = 0xe0000;
+                let rom_size = 0x20000;
+                fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
 
-        if config.unit == 0 {
-            let rom_base = 0xe0000;
-            let rom_size = 0x20000;
-            fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
+                let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
+                    GuestAddress(rom_base),
+                    rom_size,
+                    None,
+                    false,
+                    false,
+                    false,
+                )?));
+                rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
+                rom_region.set_priority(10);
+                self.sys_mem.root().add_subregion(rom_region, rom_base)?;
 
-            let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
-                GuestAddress(rom_base),
-                rom_size,
-                None,
-                false,
-                false,
-                false,
-            )?));
-            rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
-            rom_region.set_priority(10);
-            self.sys_mem.root().add_subregion(rom_region, rom_base)?;
+                fd.seek(SeekFrom::Start(0))?;
+            }
 
-            fd.seek(SeekFrom::Start(0))?;
-        }
-
-        let sector_len: u32 = 1024 * 4;
-        let pflash = PFlash::new(pfl_size, fd, sector_len, 4_u32, 1_u32, config.read_only)
+            let sector_len: u32 = 1024 * 4;
+            let pflash = PFlash::new(
+                pfl_size,
+                Some(fd),
+                sector_len,
+                4_u32,
+                1_u32,
+                config.read_only,
+            )
             .chain_err(|| "Failed to create pflash device")?;
-        PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
-            .chain_err(|| "Failed to realize pflash device")?;
+            PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
+                .chain_err(|| "Failed to realize pflash device")?;
 
-        unsafe {
-            FLASH_END -= pfl_size;
+            flash_end -= pfl_size;
         }
+
         Ok(())
     }
 

@@ -26,7 +26,7 @@ use super::errors::{ErrorKind, Result, ResultExt};
 /// PFlash structure
 pub struct PFlash {
     /// File to save data in PFlash ROM.
-    fd_blk: File,
+    fd_blk: Option<File>,
     /// Number of blocks.
     blk_num: u32,
     /// Length of block.
@@ -81,7 +81,7 @@ impl PFlash {
     /// * file size is smaller than PFlash size.
     pub fn new(
         size: u64,
-        fd_blk: File,
+        fd_blk: Option<File>,
         block_len: u32,
         bank_width: u32,
         device_width: u32,
@@ -95,13 +95,15 @@ impl PFlash {
             bail!("PFlash: num-blocks is zero which is invalid.");
         }
 
-        let file_size = fd_blk.metadata().unwrap().len();
-        if file_size < size {
-            bail!(
-                "PFlash requires 0x{:X} bytes, given file provides 0x{:X} bytes",
-                size,
-                file_size
-            );
+        if let Some(fd) = &fd_blk {
+            let file_size = fd.metadata().unwrap().len();
+            if file_size < size {
+                bail!(
+                    "PFlash requires 0x{:X} bytes, given file provides 0x{:X} bytes",
+                    size,
+                    file_size
+                );
+            }
         }
 
         let num_devices: u32 = if device_width == 0 {
@@ -233,21 +235,24 @@ impl PFlash {
     }
 
     fn set_rom_mem(&mut self, rom_region: Arc<Region>) -> Result<()> {
-        let flash_size = self.blk_num * self.block_len;
-        let file_size = self.fd_blk.metadata().unwrap().len();
+        if let Some(fd_blk) = &mut self.fd_blk {
+            let flash_size = self.blk_num * self.block_len;
+            let file_size = fd_blk.metadata().unwrap().len();
 
-        let mut file_content = vec![0_u8; file_size as usize];
-        self.fd_blk
-            .read_exact(&mut file_content)
-            .chain_err(|| "Failed to read fd_blk of PFlash device")?;
+            let mut file_content = vec![0_u8; file_size as usize];
+            fd_blk
+                .read_exact(&mut file_content)
+                .chain_err(|| "Failed to read fd_blk of PFlash device")?;
 
-        let host_addr = rom_region.get_host_address().unwrap();
+            let host_addr = rom_region.get_host_address().unwrap();
 
-        // Safe because host_addr of the region is allocated and flash_size is limited.
-        let mut dst =
-            unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, flash_size as usize) };
-        dst.write_all(&file_content)
-            .chain_err(|| ErrorKind::WritePFlashRomErr)?;
+            // Safe because host_addr of the region is allocated and flash_size is limited.
+            let mut dst = unsafe {
+                std::slice::from_raw_parts_mut(host_addr as *mut u8, flash_size as usize)
+            };
+            dst.write_all(&file_content)
+                .chain_err(|| ErrorKind::WritePFlashRomErr)?;
+        }
         self.rom = Some(rom_region);
 
         Ok(())
@@ -355,12 +360,14 @@ impl PFlash {
             std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, size as usize)
         };
 
-        self.fd_blk
-            .seek(SeekFrom::Start(offset))
-            .chain_err(|| ErrorKind::PFlashFileSeekErr(offset))?;
-        self.fd_blk
-            .write_all(src)
-            .chain_err(|| "Failed to update content of PFlash Rom to fd_blk")?;
+        if let Some(fd_blk) = &mut self.fd_blk {
+            fd_blk
+                .seek(SeekFrom::Start(offset))
+                .chain_err(|| ErrorKind::PFlashFileSeekErr(offset))?;
+            fd_blk
+                .write_all(src)
+                .chain_err(|| "Failed to update content of PFlash Rom to fd_blk")?;
+        }
 
         Ok(())
     }
@@ -945,7 +952,7 @@ mod test {
             .open(file_name)
             .unwrap();
 
-        let pflash = PFlash::new(flash_size, fd, sector_len, 4, 2, read_only).unwrap();
+        let pflash = PFlash::new(flash_size, Some(fd), sector_len, 4, 2, read_only).unwrap();
         let sysbus = sysbus_init();
         let dev = Arc::new(Mutex::new(pflash));
         let region_ops = sysbus.build_region_ops(&dev);
