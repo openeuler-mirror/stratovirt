@@ -17,8 +17,8 @@ use std::os::unix::io::RawFd;
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    CacheOptions, Cmd, DeviceProps, Events, FileOptions, KvmInfo, MachineInfo, QmpCommand,
-    QmpEvent, Target, TypeLists,
+    CacheOptions, Cmd, CmdLine, DeviceProps, Events, FileOptions, KvmInfo, MachineInfo,
+    MigrateCapabilities, QmpCommand, QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -273,6 +273,26 @@ pub trait DeviceInterface {
     fn device_list_properties(&self) -> Response {
         let vec_props = Vec::<DeviceProps>::new();
         Response::create_response(serde_json::to_value(&vec_props).unwrap(), None)
+    }
+
+    fn query_tpm_models(&self) -> Response {
+        let tpm_models = Vec::<String>::new();
+        Response::create_response(serde_json::to_value(&tpm_models).unwrap(), None)
+    }
+
+    fn query_tpm_types(&self) -> Response {
+        let tpm_types = Vec::<String>::new();
+        Response::create_response(serde_json::to_value(&tpm_types).unwrap(), None)
+    }
+
+    fn query_command_line_options(&self) -> Response {
+        let cmd_lines = Vec::<CmdLine>::new();
+        Response::create_response(serde_json::to_value(&cmd_lines).unwrap(), None)
+    }
+
+    fn query_migrate_capabilities(&self) -> Response {
+        let caps = Vec::<MigrateCapabilities>::new();
+        Response::create_response(serde_json::to_value(&caps).unwrap(), None)
     }
 }
 

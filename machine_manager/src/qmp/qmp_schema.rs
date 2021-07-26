@@ -237,6 +237,34 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-tpm-models")]
+    query_tpm_models {
+        #[serde(default)]
+        arguments: query_tpm_models,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-tpm-types")]
+    query_tpm_types {
+        #[serde(default)]
+        arguments: query_tpm_types,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-command-line-options")]
+    query_command_line_options {
+        #[serde(default)]
+        arguments: query_command_line_options,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-migrate-capabilities")]
+    query_migrate_capabilities {
+        #[serde(default)]
+        arguments: query_migrate_capabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -1293,6 +1321,102 @@ impl Command for block_commit {
     type Res = Vec<DeviceProps>;
 
     fn back(self) -> Vec<DeviceProps> {
+        Default::default()
+    }
+}
+
+/// Query tpm models of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-tpm-models" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_tpm_models {}
+
+impl Command for query_tpm_models {
+    type Res = Vec<String>;
+
+    fn back(self) -> Vec<String> {
+        Default::default()
+    }
+}
+
+/// Query target of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-tpm-types" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_tpm_types {}
+
+impl Command for query_tpm_types {
+    type Res = Vec<String>;
+
+    fn back(self) -> Vec<String> {
+        Default::default()
+    }
+}
+
+/// Query command line options.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-command-line-options" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_command_line_options {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct CmdParameter {
+    name: String,
+    help: String,
+    #[serde(rename = "type")]
+    paramter_type: String,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct CmdLine {
+    pub parameters: Vec<CmdParameter>,
+    pub option: String,
+}
+
+impl Command for query_command_line_options {
+    type Res = Vec<CmdLine>;
+
+    fn back(self) -> Vec<CmdLine> {
+        Default::default()
+    }
+}
+
+/// Query capabilities of migration.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-migrate-capabilities" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_migrate_capabilities {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MigrateCapabilities {
+    pub state: bool,
+    pub capability: String,
+}
+
+impl Command for query_migrate_capabilities {
+    type Res = Vec<MigrateCapabilities>;
+
+    fn back(self) -> Vec<MigrateCapabilities> {
         Default::default()
     }
 }
