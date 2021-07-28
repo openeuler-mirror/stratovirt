@@ -395,3 +395,15 @@ Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Alex Crichton <alex@alexcrichton.com>
 License: MIT or Apache License Version 2.0
 Please see above.
+
+Software: strum 0.20
+Copyright notice:
+Copyright (c) 2019 Peter Glotfelty
+License: MIT
+Please see above.
+
+Software: strum_macros 0.20
+Copyright notice:
+Copyright (c) 2019 Peter Glotfelty
+License: MIT
+Please see above.

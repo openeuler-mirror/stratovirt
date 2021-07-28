@@ -14,8 +14,12 @@ extern crate util;
 
 use std::os::unix::io::RawFd;
 
-use crate::qmp::qmp_schema::{CacheOptions, FileOptions};
-use crate::qmp::Response;
+use strum::VariantNames;
+
+use crate::qmp::qmp_schema::{
+    CacheOptions, Cmd, Events, FileOptions, KvmInfo, MachineInfo, QmpCommand, QmpEvent, Target,
+};
+use crate::qmp::{Response, Version};
 
 /// State for KVM VM.
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -164,6 +168,88 @@ pub trait DeviceInterface {
 
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
+
+    /// Query the version of StratoVirt.
+    fn query_version(&self) -> Response {
+        let version = Version::new(0, 1, 4);
+        Response::create_response(serde_json::to_value(&version).unwrap(), None)
+    }
+
+    /// Query all commands of StratoVirt.
+    fn query_commands(&self) -> Response {
+        let mut vec_cmd = Vec::new();
+        for qmp_cmd in QmpCommand::VARIANTS {
+            let cmd = Cmd {
+                name: String::from(*qmp_cmd),
+            };
+            vec_cmd.push(cmd);
+        }
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    /// Query the target platform where the StratoVirt is running.
+    fn query_target(&self) -> Response {
+        #[cfg(target_arch = "x86_64")]
+        let target = Target {
+            arch: "x86_64".to_string(),
+        };
+        #[cfg(target_arch = "aarch64")]
+        let target = Target {
+            arch: "aarch64".to_string(),
+        };
+        Response::create_response(serde_json::to_value(&target).unwrap(), None)
+    }
+
+    /// Query all events of StratoVirt.
+    fn query_events(&self) -> Response {
+        let mut vec_events = Vec::new();
+        for event in QmpEvent::VARIANTS {
+            let cmd = Events {
+                name: String::from(*event),
+            };
+            vec_events.push(cmd);
+        }
+        Response::create_response(serde_json::to_value(&vec_events).unwrap(), None)
+    }
+
+    /// Query if kvm is used.
+    fn query_kvm(&self) -> Response {
+        let kvm = KvmInfo {
+            enabled: true,
+            present: true,
+        };
+        Response::create_response(serde_json::to_value(&kvm).unwrap(), None)
+    }
+
+    /// Query machine types supported by StratoVirt.
+    fn query_machines(&self) -> Response {
+        let mut vec_machine = Vec::new();
+        let machine_info = MachineInfo {
+            hotplug: false,
+            name: "none".to_string(),
+            numa_mem_support: false,
+            cpu_max: 255,
+            deprecated: false,
+        };
+        vec_machine.push(machine_info);
+        let machine_info = MachineInfo {
+            hotplug: false,
+            name: "microvm".to_string(),
+            numa_mem_support: false,
+            cpu_max: 255,
+            deprecated: false,
+        };
+        vec_machine.push(machine_info);
+        let machine_info = MachineInfo {
+            hotplug: false,
+            name: "standard_vm".to_string(),
+            numa_mem_support: false,
+            cpu_max: 255,
+            deprecated: false,
+        };
+        vec_machine.push(machine_info);
+        Response::create_response(serde_json::to_value(&vec_machine).unwrap(), None)
+    }
 }
 
 /// Migrate external api
