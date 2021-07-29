@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
-use std::fs::{create_dir, read_dir, File};
+use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::mem::size_of;
 use std::path::PathBuf;
@@ -28,6 +28,10 @@ use crate::status::MigrationStatus;
 
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
 const HEADER_LENGTH: usize = 4096;
+/// The suffix used for snapshot memory storage.
+const MEMORY_PATH_SUFFIX: &str = "memory";
+/// The suffix used for snapshot device state storage.
+const DEVICE_PATH_SUFFIX: &str = "state";
 
 impl MigrationManager {
     /// Do snapshot for `VM`.
@@ -54,7 +58,7 @@ impl MigrationManager {
 
         // Save device state
         let mut vm_state_path = PathBuf::from(path);
-        vm_state_path.push("state");
+        vm_state_path.push(DEVICE_PATH_SUFFIX);
         match File::create(vm_state_path) {
             Ok(mut state_file) => {
                 Self::save_header(FileFormat::Device, &mut state_file)?;
@@ -68,7 +72,7 @@ impl MigrationManager {
 
         // Save memory data
         let mut vm_memory_path = PathBuf::from(path);
-        vm_memory_path.push("memory");
+        vm_memory_path.push(MEMORY_PATH_SUFFIX);
         match File::create(vm_memory_path) {
             Ok(mut memory_file) => {
                 Self::save_header(FileFormat::MemoryFull, &mut memory_file)?;
@@ -99,31 +103,35 @@ impl MigrationManager {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
 
-        let snapshot_path = PathBuf::from(path);
+        let mut snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
             return Err(ErrorKind::InvalidSnapshotPath.into());
         }
 
-        let paths = read_dir(snapshot_path).chain_err(|| "Failed to open snapshot dir")?;
-        for path in paths {
-            if let Ok(file_path) = path {
-                let mut file =
-                    File::open(file_path.path()).chain_err(|| "Failed to open snapshot file")?;
-
-                let header = Self::load_header(&mut file)?;
-                header
-                    .check_header()
-                    .chain_err(|| "Failed to check snapshot file header")?;
-
-                if header.format == FileFormat::Device {
-                    let snapshot_desc_db = Self::load_descriptor_db(&mut file, header.desc_len)?;
-                    Self::load_vmstate(snapshot_desc_db, &mut file)?;
-                } else if header.format == FileFormat::MemoryFull {
-                    Self::load_memory(&mut file)?;
-                }
-            }
+        snapshot_path.push(MEMORY_PATH_SUFFIX);
+        let mut memory_file =
+            File::open(&snapshot_path).chain_err(|| "Failed to open memory snapshot file")?;
+        let memory_header = Self::load_header(&mut memory_file)?;
+        memory_header.check_header()?;
+        if memory_header.format != FileFormat::MemoryFull {
+            bail!("Invalid memory snapshot file");
+        }
+        snapshot_path.pop();
+        snapshot_path.push(DEVICE_PATH_SUFFIX);
+        let mut device_state_file =
+            File::open(&snapshot_path).chain_err(|| "Failed to open device state snapshot file")?;
+        let device_state_header = Self::load_header(&mut device_state_file)?;
+        device_state_header.check_header()?;
+        if device_state_header.format != FileFormat::Device {
+            bail!("Invalid device state snapshot file");
         }
 
+        Self::load_memory(&mut memory_file).chain_err(|| "Failed to load snpashot memory")?;
+        let snapshot_desc_db =
+            Self::load_descriptor_db(&mut device_state_file, device_state_header.desc_len)
+                .chain_err(|| "Failed to load device descriptor db")?;
+        Self::load_vmstate(snapshot_desc_db, &mut device_state_file)
+            .chain_err(|| "Failed to load snapshot device state")?;
         Self::resume()?;
 
         // Set status to `Completed`

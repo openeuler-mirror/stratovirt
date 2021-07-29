@@ -73,7 +73,7 @@ impl MigrationStatus {
                 _ => Err(ErrorKind::InvalidStatusTransfer(self, new_status).into()),
             },
             MigrationStatus::Failed => match new_status {
-                MigrationStatus::Setup => Ok(new_status),
+                MigrationStatus::Setup | MigrationStatus::Active => Ok(new_status),
                 _ => Err(ErrorKind::InvalidStatusTransfer(self, new_status).into()),
             },
         }
@@ -101,6 +101,14 @@ mod tests {
         status = status.transfer(MigrationStatus::Completed).unwrap();
 
         // Completed to Active.
+        assert!(status.transfer(MigrationStatus::Active).is_ok());
+        status = status.transfer(MigrationStatus::Active).unwrap();
+
+        // Any to Failed.
+        assert!(status.transfer(MigrationStatus::Failed).is_ok());
+        status = status.transfer(MigrationStatus::Failed).unwrap();
+
+        // Failed to Active.
         assert!(status.transfer(MigrationStatus::Active).is_ok());
         status = status.transfer(MigrationStatus::Active).unwrap();
 
