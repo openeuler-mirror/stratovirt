@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use kvm_bindings::{kvm_irq_routing, KVMIO};
+
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
 use virtio::VhostKern::*;
@@ -46,6 +48,9 @@ const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
 const KVM_SET_USER_MEMORY_REGION: u32 = 0x4020_ae46;
 const KVM_IOEVENTFD: u32 = 0x4040_ae79;
 const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
+
+// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
+ioctl_iow_nr!(KVM_SET_GSI_ROUTING, KVMIO, 0x6a, kvm_irq_routing);
 
 /// Create a syscall whitelist for seccomp.
 ///
@@ -143,4 +148,5 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
 }
