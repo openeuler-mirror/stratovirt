@@ -726,12 +726,12 @@ impl VirtioDevice for Net {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
-        let rx_queue = queues.remove(0);
+        let rx_queue = queues[0].clone();
         let rx_queue_evt = queue_evts.remove(0);
-        let tx_queue = queues.remove(0);
+        let tx_queue = queues[1].clone();
         let tx_queue_evt = queue_evts.remove(0);
 
         let (sender, receiver) = channel();

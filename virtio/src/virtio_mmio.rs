@@ -438,7 +438,7 @@ impl VirtioMmioDevice {
         self.device.lock().unwrap().activate(
             self.mem_space.clone(),
             cb,
-            self.queues.clone(),
+            &self.queues,
             queue_evts,
         )?;
 
@@ -687,7 +687,7 @@ impl MigrationHook for VirtioMmioDevice {
             if let Err(e) = self.device.lock().unwrap().activate(
                 self.mem_space.clone(),
                 cb,
-                self.queues.clone(),
+                &self.queues,
                 queue_evts,
             ) {
                 bail!("Failed to resume virtio mmio device: {}", e);
@@ -833,7 +833,7 @@ mod tests {
             &mut self,
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
-            mut _queues: Vec<Arc<Mutex<Queue>>>,
+            _queues: &[Arc<Mutex<Queue>>],
             mut _queue_evts: Vec<EventFd>,
         ) -> Result<()> {
             self.b_active = true;

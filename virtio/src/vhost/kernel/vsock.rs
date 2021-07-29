@@ -225,7 +225,7 @@ impl VirtioDevice for Vsock {
         &mut self,
         _: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        queues: Vec<Arc<Mutex<Queue>>>,
+        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let cid = self.vsock_cfg.guest_cid;

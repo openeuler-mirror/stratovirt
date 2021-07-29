@@ -20,6 +20,9 @@ extern crate lazy_static;
 extern crate log;
 #[macro_use]
 extern crate vmm_sys_util;
+#[cfg(target_arch = "x86_64")]
+#[macro_use]
+extern crate migration_derive;
 
 #[allow(clippy::upper_case_acronyms)]
 pub mod errors {

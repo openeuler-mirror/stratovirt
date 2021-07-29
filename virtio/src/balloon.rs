@@ -858,16 +858,16 @@ impl VirtioDevice for Balloon {
         &mut self,
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         if queues.len() != QUEUE_NUM_BALLOON {
             return Err(ErrorKind::IncorrectQueueNum(QUEUE_NUM_BALLOON, queues.len()).into());
         }
 
-        let inf_queue = queues.remove(0);
+        let inf_queue = queues[0].clone();
         let inf_queue_evt = queue_evts.remove(0);
-        let def_queue = queues.remove(0);
+        let def_queue = queues[1].clone();
         let def_queue_evt = queue_evts.remove(0);
 
         self.interrupt_cb = Some(interrupt_cb.clone());
@@ -1223,7 +1223,7 @@ mod tests {
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         assert!(bln
-            .activate(mem_space, interrupt_cb, queues, queue_evts)
+            .activate(mem_space, interrupt_cb, &queues, queue_evts)
             .is_err());
     }
 

@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
 use error_chain::ChainedError;
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use util::byte_code::ByteCode;
 
 use super::config::{
     PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
@@ -27,6 +29,20 @@ use crate::msix::init_msix;
 use crate::{le_read_u16, le_write_u16, ranges_overlap, PciDevOps};
 
 const DEVICE_ID_RP: u16 = 0x000c;
+
+/// Device state root port.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct RootPortState {
+    /// Max length of config_space is 4096.
+    config_space: [u8; 4096],
+    write_mask: [u8; 4096],
+    write_clear_mask: [u8; 4096],
+    last_cap_end: u16,
+    last_ext_cap_offset: u16,
+    last_ext_cap_end: u16,
+}
 
 pub struct RootPort {
     name: String,
@@ -141,6 +157,9 @@ impl PciDevOps for RootPort {
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
+        // Need to drop locked_root_port in order to register root_port instance.
+        drop(locked_root_port);
+        MigrationManager::register_device_instance_mutex(RootPortState::descriptor(), root_port);
 
         Ok(())
     }
@@ -227,6 +246,48 @@ impl PciDevOps for RootPort {
         self.name.clone()
     }
 }
+
+impl StateTransfer for RootPort {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let mut state = RootPortState::default();
+
+        for idx in 0..self.config.config.len() {
+            state.config_space[idx] = self.config.config[idx];
+            state.write_mask[idx] = self.config.write_mask[idx];
+            state.write_clear_mask[idx] = self.config.write_clear_mask[idx];
+        }
+        state.last_cap_end = self.config.last_cap_end;
+        state.last_ext_cap_end = self.config.last_ext_cap_end;
+        state.last_ext_cap_offset = self.config.last_ext_cap_offset;
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        let root_port_state = *RootPortState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("ROOT_PORT"))?;
+
+        let length = self.config.config.len();
+        self.config.config = root_port_state.config_space[..length].to_vec();
+        self.config.write_mask = root_port_state.write_mask[..length].to_vec();
+        self.config.write_clear_mask = root_port_state.write_clear_mask[..length].to_vec();
+        self.config.last_cap_end = root_port_state.last_cap_end;
+        self.config.last_ext_cap_end = root_port_state.last_ext_cap_end;
+        self.config.last_ext_cap_offset = root_port_state.last_ext_cap_offset;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&RootPortState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for RootPort {}
 
 #[cfg(test)]
 mod tests {

@@ -11,6 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 mod interrupt;
+#[cfg(target_arch = "x86_64")]
+mod state;
 
 use std::sync::{Arc, Mutex};
 
@@ -32,7 +34,7 @@ pub struct KVMFds {
 
 impl KVMFds {
     pub fn new() -> Self {
-        match Kvm::new() {
+        let kvm_fds = match Kvm::new() {
             Ok(fd) => {
                 let vm_fd = match fd.create_vm() {
                     Ok(vm_fd) => vm_fd,
@@ -52,7 +54,15 @@ impl KVMFds {
                 error!("Failed to open /dev/kvm: {}", e);
                 KVMFds::default()
             }
-        }
+        };
+
+        #[cfg(target_arch = "x86_64")]
+        migration::MigrationManager::register_device_instance(
+            state::KvmDeviceState::descriptor(),
+            Arc::new(state::KvmDevice {}),
+        );
+
+        kvm_fds
     }
 
     /// Sets the gsi routing table entries. It will overwrite previously set entries.
