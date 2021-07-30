@@ -15,7 +15,7 @@ NB: machine type "none" is used to get the capabilities of stratovirt.
 
 ```shell
 # cmdline
--machine [type=]name[,dump-guest-core=on|off][,mem-share=on|off]
+-machine [type=]name[,dump-guest-core=on|off,mem-share=on|off]
 ```
 
 ### 1.2 Cpu Number
@@ -92,7 +92,7 @@ And the given kernel parameters will be actually analyzed by boot loader.
 ``` shell
 # cmdline
 -kernel /path/to/kernel \
--append console=ttyS0 rebook=k panic=1 pci=off tsc=reliable ipv6.disable=1
+-append "console=ttyS0 rebook=k panic=1 pci=off tsc=reliable ipv6.disable=1"
 ```
 
 ### 1.6 Initrd Configuration
@@ -110,13 +110,16 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 
 ## 2. Device Configuration
 
-StratoVirt supports to deploy one kind of legacy device and four kinds of virtio-mmio devices.
+For machine type "microvm", only virtio-mmio and legacy devices are supported.
+Maximum number of user createable devices is 11 on x86_64 and 160 on aarch64.
 
-The max number of devices is 16 on x86_64 platform and 32 on aarch64 platform.
+For machine type "standard_vm", virtio-pci devices are supported instead of virtio-mmio
+devices. As for now pci bridges are not implemented yet, there is currently only one
+root bus named pcie.0. As a result, a total of 32 pci devices can be configured.
 
 ### 2.1 iothread
 
-Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads du to `iothread` configuration, 
+Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads due to `iothread` configuration,
 and these threads can be used by devices exclusively improving performance.
 
 There is only one argument for iothread:
@@ -134,23 +137,28 @@ Virtio block device is a virtual block device, which process read and write requ
 
 Seven properties are supported for virtio block device.
 
-* drive_id: unique device-id in StratoVirt
-* path_on_host: the path of block device in host
-* serial_num: serial number of virtio block (optional)
-* read_only: whether virtio block device is read-only or not
-* direct: open block device with `O_DIRECT` mode or not
-* iothread: indicate which iothread will be used, if not specified the main thread will be used
-* iops: used to limit IO operations for block device
+* drive_id: unique device-id in StratoVirt.
+* path_on_host: the path of block device in host.
+* serial_num: serial number of virtio block. (optional)
+* read_only: whether virtio block device is read-only. If not set, default is false.
+* direct: open block device with `O_DIRECT` mode. If not set, default is true.
+* iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
+* iops: used to limit IO operations for block device. (optional)
+
+For virtio-blk-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. The first number represents slot number
+of device and the second one represents function number of it.
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
 
 ```shell
 # virtio mmio block device.
--drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
+-drive id=drive_id,file=path_on_host[,serial=serial_num,readonly=off,direct=off]
 -device virtio-blk-device,drive=drive_id[,iothread=iothread1,iops=200]
 # virtio pci block device.
--drive id=drive_id,file=path_on_host,serial=serial_num,readonly=off,direct=off
+-drive id=drive_id,file=path_on_host[,serial=serial_num,readonly=off,direct=off]
 -device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1,iops=200]
 
 ```
@@ -161,11 +169,16 @@ Virtio-net is a virtual Ethernet card in VM. It can enable the network capabilit
 
 Four properties are supported for virtio net device.
 
-* netid: unique device-id in StratoVirt
-* host_dev_name: name of tap device in host
-* mac: set mac address in VM (optional)
-* iothread: indicate which iothread will be used, if not specified the main thread will be used. 
-It only affects on virito-net, not vhost-net.
+* netid: unique device-id in StratoVirt.
+* host_dev_name: name of tap device in host.
+* mac: set mac address in VM. (optional)
+* iothread: indicate which iothread will be used, if not specified the main thread will be used.
+It has no effect when vhost is set.
+
+For virtio-net-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. The first number represents slot number
+of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio net device
@@ -228,7 +241,7 @@ Two properties can be set for virtconsole.
 * id: unique device-id.
 * chardev: char device of virtio console device.
 
-Two properties can be set for virtio-serial-pci, while no properties set for virtio-serial-device.
+For virtio-serial-pci, two more properties are required.
 * bus: bus number of virtio console.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
@@ -259,10 +272,15 @@ If you want use it, need:
 
 And `modprobe vhost_vsock` in the host.
 
- Two properties can be set for virtio vsock device.
+Two properties can be set for virtio vsock device.
 
-* vsock_id: unique device-id in StratoVirt
-* guest_cid: a unique Context-ID in host to each guest, it should satisfy `3<=guest_cid<u32:MAX`
+* vsock_id: unique device-id in StratoVirt.
+* guest_cid: a unique Context-ID in host to each guest, it should satisfy `3<=guest_cid<u32:MAX`.
+
+For vhost-vsock-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio device.
@@ -301,12 +319,17 @@ There is only one argument for serial device:
 -serial stdio
 ```
 
-### 2.7 Virtio_Balloon
+### 2.7 Virtio-balloon
 Balloon is a virtio device, it offers a flex memory mechanism for VM.
 
 Only one property is supported for virtio-balloon.
 * deflate_on_oom: whether to deflate balloon when there is no enough memory in guest.
 This feature can prevent OOM occur in guest.
+
+For virtio-balloon-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio balloon device
@@ -318,23 +341,25 @@ This feature can prevent OOM occur in guest.
 ### 2.8 Virtio-rng
 Virtio rng is a paravirtualized random number generator device, it provides a hardware rng device to the guest.
 
-If you want use it, need:
+If you want to use it, need:
 
 * Guest kernel config: CONFIG_HW_RANDOM=y CONFIG_HW_RANDOM_VIA=y CONFIG_HW_RANDOM_VIRTIO=y
 
 Five properties are supported for virtio-rng.
-* filename: the path of character device generates with random number in host
+* filename: the path of character device generates with random number in host.
 * period: period of timer to limit the rate of char stream. unit: millisecond.
-* max-bytes: the max bytes that the character device generates with a random number in the 'period' of time. 
-* bus: name of bus which to attach.
-* addr: including slot number and function number. The first number represents slot number
-of device and the second one represents function number of it. For virtio pci rng device, it 
-is a single function device, the function number should be set to zero.
+* max-bytes: the max bytes that the character device generates with a random number in the 'period' of time.
 
- NB: 
- * The limited rate will be transformed to bytes/sec. For instance: if period=100, max-bytes=100; the fainal 
+For virtio-rng-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it. As virtio pci rng device is a
+single function device, the function number should be set to zero.
+
+ NB:
+ * The limited rate will be transformed to bytes/sec. For instance: if period=100, max-bytes=100; the final
  result is that the max number of bytes generated by rng device is 1000.
- * Limited rate should between 64(include) and 1000000000(not include). In other words: 
+ * Limited rate should between 64(include) and 1000000000(not include). In other words:
  64 <= max-bytes/period < 1000000000.
 
 ```shell
@@ -352,7 +377,7 @@ Bridge.
 
 Four parameters are supported for pcie root port.
 * port: port number of root port.
-* bus: bus number of root port.
+* bus: name of bus which to attach.
 * addr: including slot number and function number.
 * id: the name of secondary bus.
 
@@ -367,9 +392,9 @@ Usually, two PFlash devices are added to the main board. The first PFlash device
 
 Four properties can be set for PFlash device.
 
-* file: the path of PFlash device in host
-* readonly: whether PFlash device is read-only or not. Default option is false. Note that the PFlash device which stores binary code should be read-only, the PFlash device which stores boot information should be readable and writable
-* unit: unique device-id for PFlash devices. It should satisfy `0<=unit<=1`. Note that the unit of the PFlash device which stores binary code should be 0, the unit of the PFlash device which stores boot information should be 1
+* file: the path of PFlash device in host.
+* readonly: whether PFlash device is read-only or not. Default option is false. Note that the PFlash device which stores binary code should be read-only, the PFlash device which stores boot information should be readable and writable.
+* unit: unique device-id for PFlash devices. It should satisfy `0<=unit<=1`. Note that the unit of the PFlash device which stores binary code should be 0, the unit of the PFlash device which stores boot information should be 1.
 * if: the type of drive, in this case it is 'pflash'.
 
 ```shell
@@ -395,7 +420,7 @@ StratoVirt supports UnixSocket-type qmp, you can set it by:
 ```
 Where, the information about 'server' and 'nowait' can be found in chapter 2.4 Virtio-console.
 
-On top of that, monitor can be used to create qmp connection as well. 
+On top of that, monitor can be used to create qmp connection as well.
 The following commands can be used to create a monitor.
 
 Three properties can be set for monitor.
@@ -579,7 +604,7 @@ And you can also restore StratoVirt's **pid number** to a file by:
 ### 4.2 Seccomp
 
 StratoVirt use [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html) to limit the syscalls
-in StratoVirt process by default. StratoVirt use only 40 syscalls in x86_64 (39 syscalls in aarch64) after running.  
+in StratoVirt process by default. StratoVirt use only 40 syscalls in x86_64 (39 syscalls in aarch64) after running.
 It will make a slight influence on performance to StratoVirt. If you want to disable seccomp, you can
 run StratoVirt with `-disable-seccomp`.
 
