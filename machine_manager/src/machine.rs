@@ -17,7 +17,8 @@ use std::os::unix::io::RawFd;
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    CacheOptions, Cmd, Events, FileOptions, KvmInfo, MachineInfo, QmpCommand, QmpEvent, Target,
+    CacheOptions, ChardevInfo, Cmd, CmdLine, DeviceProps, Events, FileOptions, KvmInfo,
+    MachineInfo, MigrateCapabilities, PropList, QmpCommand, QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -249,6 +250,87 @@ pub trait DeviceInterface {
         };
         vec_machine.push(machine_info);
         Response::create_response(serde_json::to_value(&vec_machine).unwrap(), None)
+    }
+
+    /// Get the list type
+    fn list_type(&self) -> Response {
+        let mut vec_types = Vec::new();
+        // These devices are used to interconnect with libvirt, but not been implemented yet.
+        let list_types: Vec<(&str, &str)> = vec![
+            ("ioh3420", "pcie-root-port-base"),
+            ("pcie-root-port", "pcie-root-port-base"),
+            ("pcie-pci-bridge", "base-pci-bridge"),
+            ("pci-bridge", "base-pci-bridge"),
+            ("virtio-blk-pci-transitional", "virtio-blk-pci-base"),
+        ];
+        for list in list_types {
+            let re = TypeLists::new(String::from(list.0), String::from(list.1));
+            vec_types.push(re);
+        }
+        Response::create_response(serde_json::to_value(&vec_types).unwrap(), None)
+    }
+
+    fn device_list_properties(&self) -> Response {
+        let vec_props = Vec::<DeviceProps>::new();
+        Response::create_response(serde_json::to_value(&vec_props).unwrap(), None)
+    }
+
+    fn query_tpm_models(&self) -> Response {
+        let tpm_models = Vec::<String>::new();
+        Response::create_response(serde_json::to_value(&tpm_models).unwrap(), None)
+    }
+
+    fn query_tpm_types(&self) -> Response {
+        let tpm_types = Vec::<String>::new();
+        Response::create_response(serde_json::to_value(&tpm_types).unwrap(), None)
+    }
+
+    fn query_command_line_options(&self) -> Response {
+        let cmd_lines = Vec::<CmdLine>::new();
+        Response::create_response(serde_json::to_value(&cmd_lines).unwrap(), None)
+    }
+
+    fn query_migrate_capabilities(&self) -> Response {
+        let caps = Vec::<MigrateCapabilities>::new();
+        Response::create_response(serde_json::to_value(&caps).unwrap(), None)
+    }
+
+    fn query_qmp_schema(&self) -> Response {
+        Response::create_empty_response()
+    }
+
+    fn query_sev_capabilities(&self) -> Response {
+        Response::create_empty_response()
+    }
+
+    fn query_chardev(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn qom_list(&self) -> Response {
+        let vec_cmd: Vec<PropList> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn qom_get(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn query_block(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn query_named_block_nodes(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn query_blockstats(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
     }
 }
 

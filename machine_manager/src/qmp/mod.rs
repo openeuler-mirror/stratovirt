@@ -418,9 +418,23 @@ fn qmp_command_exec(
         (query_kvm, query_kvm),
         (query_events, query_events),
         (query_machines, query_machines),
+        (query_tpm_models, query_tpm_models),
+        (query_tpm_types, query_tpm_types),
+        (query_command_line_options, query_command_line_options),
+        (query_migrate_capabilities, query_migrate_capabilities),
+        (query_qmp_schema, query_qmp_schema),
+        (query_sev_capabilities, query_sev_capabilities),
+        (query_chardev, query_chardev),
+        (qom_list, qom_list),
+        (qom_get, qom_get),
+        (query_block, query_block),
+        (query_named_block_nodes, query_named_block_nodes),
+        (query_blockstats, query_blockstats),
         (query_migrate, query_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
+        (list_type, list_type),
+        (device_list_properties, device_list_properties),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (device_add, device_add, id, driver, addr, lun),
         (device_del, device_del, id),
@@ -448,7 +462,10 @@ fn qmp_command_exec(
 
     // Change response id with input qmp message
     qmp_response.change_id(id);
-    (serde_json::to_string(&qmp_response).unwrap(), shutdown_flag)
+    (
+        serde_json::to_string(&qmp_response).unwrap() + "\r",
+        shutdown_flag,
+    )
 }
 
 /// The struct `QmpChannel` is the only struct can handle Global variable
@@ -526,6 +543,7 @@ impl QmpChannel {
             let writer = writer_unlocked.as_mut().unwrap();
             writer.flush().unwrap();
             writer.write(event_str.as_bytes()).unwrap();
+            writer.write(&[b'\r']).unwrap();
             writer.write(&[b'\n']).unwrap();
             info!("EVENT: --> {:?}", event);
         }

@@ -215,6 +215,118 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "qom-list-types")]
+    list_type {
+        #[serde(default)]
+        arguments: list_type,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "device-list-properties")]
+    device_list_properties {
+        #[serde(default)]
+        arguments: device_list_properties,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "block-commit")]
+    #[strum(serialize = "block-commit")]
+    block_commit {
+        #[serde(default)]
+        arguments: block_commit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-tpm-models")]
+    query_tpm_models {
+        #[serde(default)]
+        arguments: query_tpm_models,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-tpm-types")]
+    query_tpm_types {
+        #[serde(default)]
+        arguments: query_tpm_types,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-command-line-options")]
+    query_command_line_options {
+        #[serde(default)]
+        arguments: query_command_line_options,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-migrate-capabilities")]
+    query_migrate_capabilities {
+        #[serde(default)]
+        arguments: query_migrate_capabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-qmp-schema")]
+    query_qmp_schema {
+        #[serde(default)]
+        arguments: query_qmp_schema,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-sev-capabilities")]
+    query_sev_capabilities {
+        #[serde(default)]
+        arguments: query_sev_capabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-chardev")]
+    #[strum(serialize = "query-chardev")]
+    query_chardev {
+        #[serde(default)]
+        arguments: query_chardev,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "qom-list")]
+    #[strum(serialize = "qom-list")]
+    qom_list {
+        #[serde(default)]
+        arguments: qom_list,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "qom_get")]
+    #[strum(serialize = "qom_get")]
+    qom_get {
+        #[serde(default)]
+        arguments: qom_get,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-block")]
+    #[strum(serialize = "query-block")]
+    query_block {
+        #[serde(default)]
+        arguments: query_block,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-named-block-nodes")]
+    #[strum(serialize = "query-named-block-nodes")]
+    query_named_block_nodes {
+        #[serde(default)]
+        arguments: query_named_block_nodes,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-blockstats")]
+    #[strum(serialize = "query-blockstats")]
+    query_blockstats {
+        #[serde(default)]
+        arguments: query_blockstats,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -1200,6 +1312,340 @@ impl Command for query_kvm {
     type Res = KvmInfo;
 
     fn back(self) -> KvmInfo {
+        Default::default()
+    }
+}
+
+/// List all Qom type.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "qom-list-types" }
+/// <- {"return":[{"name":"ioh3420","parent":"pcie-root-port-base"},
+/// {"name":"pcie-root-port","parent":"pcie-root-port-base"},
+/// {"name":"pcie-pci-bridge","parent":"base-pci-bridge"},
+/// {"name":"pci-bridge","parent":"base-pci-bridge"}]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct list_type {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct TypeLists {
+    name: String,
+    parent: String,
+}
+
+impl TypeLists {
+    pub fn new(name: String, parent: String) -> Self {
+        TypeLists { name, parent }
+    }
+}
+
+impl Command for list_type {
+    type Res = Vec<TypeLists>;
+
+    fn back(self) -> Vec<TypeLists> {
+        Default::default()
+    }
+}
+
+/// Get device list properties.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "device-list-properties", "arguments": {"typename": "virtio-blk-pci"} }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct device_list_properties {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceProps {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub prop_type: String,
+}
+
+impl Command for device_list_properties {
+    type Res = Vec<DeviceProps>;
+
+    fn back(self) -> Vec<DeviceProps> {
+        Default::default()
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct block_commit {}
+
+impl Command for block_commit {
+    type Res = Vec<DeviceProps>;
+
+    fn back(self) -> Vec<DeviceProps> {
+        Default::default()
+    }
+}
+
+/// Query tpm models of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-tpm-models" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_tpm_models {}
+
+impl Command for query_tpm_models {
+    type Res = Vec<String>;
+
+    fn back(self) -> Vec<String> {
+        Default::default()
+    }
+}
+
+/// Query target of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-tpm-types" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_tpm_types {}
+
+impl Command for query_tpm_types {
+    type Res = Vec<String>;
+
+    fn back(self) -> Vec<String> {
+        Default::default()
+    }
+}
+
+/// Query command line options.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-command-line-options" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_command_line_options {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct CmdParameter {
+    name: String,
+    help: String,
+    #[serde(rename = "type")]
+    paramter_type: String,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct CmdLine {
+    pub parameters: Vec<CmdParameter>,
+    pub option: String,
+}
+
+impl Command for query_command_line_options {
+    type Res = Vec<CmdLine>;
+
+    fn back(self) -> Vec<CmdLine> {
+        Default::default()
+    }
+}
+
+/// Query capabilities of migration.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-migrate-capabilities" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_migrate_capabilities {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MigrateCapabilities {
+    pub state: bool,
+    pub capability: String,
+}
+
+impl Command for query_migrate_capabilities {
+    type Res = Vec<MigrateCapabilities>;
+
+    fn back(self) -> Vec<MigrateCapabilities> {
+        Default::default()
+    }
+}
+
+/// Query target of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-qmp-schema" }
+/// <- {"return":{}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_qmp_schema {}
+
+impl Command for query_qmp_schema {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// Query capabilities of sev.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-sev-capabilities" }
+/// <- {"return":{}}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_sev_capabilities {}
+
+impl Command for query_sev_capabilities {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// List all Qom.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "qom-list" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct qom_list {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct PropList {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub prop_type: String,
+}
+
+impl Command for qom_list {
+    type Res = Vec<PropList>;
+
+    fn back(self) -> Vec<PropList> {
+        Default::default()
+    }
+}
+
+/// Query char devices.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-chardev" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_chardev {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct ChardevInfo {
+    #[serde(rename = "frontend-open")]
+    pub open: bool,
+    pub filename: String,
+    pub label: String,
+}
+
+impl Command for query_chardev {
+    type Res = Vec<ChardevInfo>;
+
+    fn back(self) -> Vec<ChardevInfo> {
+        Default::default()
+    }
+}
+
+/// Get qom properties.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "qom_get" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct qom_get {}
+
+impl Command for qom_get {
+    type Res = bool;
+
+    fn back(self) -> bool {
+        Default::default()
+    }
+}
+
+/// Query blocks of StratoVirt.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-block" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_block {}
+
+impl Command for query_block {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
+        Default::default()
+    }
+}
+
+/// Query named block node.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-named-block-nodes" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_named_block_nodes {}
+
+impl Command for query_named_block_nodes {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
+        Default::default()
+    }
+}
+
+/// Query status of blocks.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-blockstats" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_blockstats {}
+
+impl Command for query_blockstats {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
         Default::default()
     }
 }
