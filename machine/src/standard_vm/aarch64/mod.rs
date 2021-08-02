@@ -24,6 +24,7 @@ use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
 };
 use devices::{InterruptController, InterruptControllerConfig};
+use error_chain::ChainedError;
 use hypervisor::KVM_FDS;
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::event_loop::EventLoop;
@@ -32,6 +33,7 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use sysbus::{SysBus, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
@@ -360,8 +362,13 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
 
-        let fw_cfg = locked_vm.add_fwcfg_device()?;
-        let boot_config = Some(locked_vm.load_boot_source(Some(&fw_cfg))?);
+        let boot_config = if !is_migrate {
+            let fwcfg = locked_vm.add_fwcfg_device()?;
+            Some(locked_vm.load_boot_source(Some(&fwcfg))?)
+        } else {
+            None
+        };
+
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
@@ -386,6 +393,10 @@ impl MachineOps for StdMachine {
         }
 
         locked_vm.register_power_event(&locked_vm.power_button)?;
+
+        if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
+            bail!("Failed to set migration status {}", e);
+        }
         Ok(())
     }
 
@@ -626,8 +637,48 @@ impl DeviceInterface for StdMachine {
     }
 }
 
+impl MigrateInterface for StdMachine {
+    fn migrate(&self, uri: String) -> Response {
+        use util::unix::{parse_uri, UnixPath};
+
+        match parse_uri(&uri) {
+            Ok((UnixPath::File, path)) => {
+                if let Err(e) = MigrationManager::save_snapshot(&path) {
+                    error!(
+                        "Failed to migrate to path \'{:?}\': {}",
+                        path,
+                        e.display_chain()
+                    );
+                    let _ = MigrationManager::set_status(MigrationStatus::Failed)
+                        .map_err(|e| error!("{}", e));
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                        None,
+                    );
+                }
+            }
+            _ => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
+                    None,
+                );
+            }
+        }
+
+        Response::create_empty_response()
+    }
+
+    fn query_migrate(&self) -> Response {
+        let status_str = MigrationManager::migration_get_status().to_string();
+        let migration_info = qmp_schema::MigrationInfo {
+            status: Some(status_str),
+        };
+
+        Response::create_response(serde_json::to_value(migration_info).unwrap(), None)
+    }
+}
+
 impl MachineInterface for StdMachine {}
-impl MigrateInterface for StdMachine {}
 impl MachineExternalInterface for StdMachine {}
 
 impl EventLoopManager for StdMachine {
