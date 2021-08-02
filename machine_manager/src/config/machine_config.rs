@@ -205,7 +205,9 @@ impl VmConfig {
 }
 
 fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
-    if origin_value.contains('M') ^ origin_value.contains('m') {
+    if (origin_value.ends_with('M') | origin_value.ends_with('m'))
+        && (origin_value.contains('M') ^ origin_value.contains('m'))
+    {
         let value = origin_value.replacen("M", "", 1);
         let value = value.replacen("m", "", 1);
         get_inner(
@@ -216,7 +218,9 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
                 })?
                 .checked_mul(M),
         )
-    } else if origin_value.contains('G') ^ origin_value.contains('g') {
+    } else if (origin_value.ends_with('G') | origin_value.ends_with('g'))
+        && (origin_value.contains('G') ^ origin_value.contains('g'))
+    {
         let value = origin_value.replacen("G", "", 1);
         let value = value.replacen("g", "", 1);
         get_inner(
