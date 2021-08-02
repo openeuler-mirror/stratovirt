@@ -78,7 +78,7 @@ rm -f ${socket_path}
     -machine microvm
     -kernel ${kernel_path} \
     -smp 1 \
-    -m 1024m \
+    -m 1024 \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=${rootfs_path},id=rootfs,readonly=off,direct=off \
     -device virtio-blk-device,drive=rootfs
