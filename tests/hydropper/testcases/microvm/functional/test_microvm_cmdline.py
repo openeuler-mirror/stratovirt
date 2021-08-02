@@ -21,6 +21,9 @@ import pytest
 import utils.exception
 import utils.utils_common
 from utils.config import CONFIG
+from utils.utils_logging import TestLog
+
+LOG = TestLog.get_global_log()
 
 def _get_corefilesize(vm_pid, dump_guestcore):
     """
@@ -213,7 +216,7 @@ def test_microvm_with_seccomp(microvm, with_seccomp):
 
 @pytest.mark.acceptance
 @pytest.mark.parametrize("mem_size", [2 * 1024 * 1024 * 1024])
-def test_lightvm_mem_hugepage(microvm, mem_size):
+def test_microvm_mem_hugepage(microvm, mem_size):
     """
     Test lightvm with hugepage configuration for guest RAM.
     Test lightvm with hugepages by set memory backend.
@@ -252,8 +255,16 @@ def test_lightvm_mem_hugepage(microvm, mem_size):
                      capture_output=True, check=False).stdout.strip()
         _old_hugepages_free = output.decode('utf-8').lstrip("HugePages_Free:").rstrip("kB").strip()
 
-        hugepages_count = int(_old_hugepages_count) + vm_mem_size / (int(hugepage_size) * 1024) + 1
-        run("sysctl vm.nr_hugepages=%s" % int(hugepages_count), shell=True, check=False)
+        target_hugepages_count = int(_old_hugepages_count) + vm_mem_size / (int(hugepage_size) * 1024) + 1
+        run("sysctl vm.nr_hugepages=%s" % int(target_hugepages_count), shell=True, check=False)
+
+        # Make sure that setting hugepage count is successful, otherwise recover environment and exit.
+        output = run("cat /proc/meminfo | grep HugePages_Total", shell=True,
+                     capture_output=True, check=False).stdout.strip()
+        new_hugepages_count = output.decode('utf-8').lstrip("HugePages_Total:").rstrip("kB").strip()
+        if int(new_hugepages_count) < target_hugepages_count:
+            recover_host_hugepages(mount_dir, _old_hugepages_count, is_mounted)
+            pytest.skip("No enough memory left in host to launch VM with hugepages")
 
         return mount_dir, _old_hugepages_count, _old_hugepages_free, is_mounted
 
@@ -270,12 +281,17 @@ def test_lightvm_mem_hugepage(microvm, mem_size):
     test_vm.basic_config(mem_size=mem_size, mem_path=mount_dir)
     test_vm.launch()
 
-    # check remaining hugepages count on host.
+    # Check remaining hugepages count on host.
     output = run("cat /proc/meminfo | grep HugePages_Free", shell=True,
                  capture_output=True, check=False).stdout.strip()
     remain_free_count = output.decode('utf-8').lstrip("HugePages_Free:").rstrip("kB").strip()
-    assert int(remain_free_count) >= int(old_huge_free)
+
+    check_failed = False
+    if int(remain_free_count) < int(old_huge_free):
+        check_failed = True
 
     test_vm.shutdown()
-
     recover_host_hugepages(mount_dir, old_huge_cnt, is_mounted)
+    if check_failed:
+        pytest.xfail(reason="Reduction of hugepages is abnormal: current free cnt %d, old free cnt %d" %
+                            (int(remain_free_count), int(old_huge_free)))
