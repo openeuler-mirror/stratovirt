@@ -35,7 +35,7 @@ const PIC_MASTER_PINS: u32 = 8;
 #[cfg(target_arch = "x86_64")]
 const PIC_SLACE_PINS: u32 = 8;
 #[cfg(target_arch = "aarch64")]
-const IOCHIP_NUM_PINS: u32 = 256;
+const IOCHIP_NUM_PINS: u32 = 192;
 #[cfg(target_arch = "aarch64")]
 const KVM_IRQCHIP: u32 = 0;
 

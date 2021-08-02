@@ -14,7 +14,10 @@ use std::sync::{Arc, Mutex};
 
 use kvm_ioctls::DeviceFd;
 
-use super::{state::GICv3State, GICConfig, GICDevice, UtilResult};
+use super::{
+    state::{GICv3ItsState, GICv3State},
+    GICConfig, GICDevice, UtilResult,
+};
 use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
 use hypervisor::KVM_FDS;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
@@ -110,7 +113,7 @@ pub struct GICv3 {
     /// Number of vCPUs, determines the number of redistributor and CPU interface.
     pub(crate) vcpu_count: u64,
     /// GICv3 ITS device.
-    its_dev: Option<GICv3Its>,
+    pub(crate) its_dev: Option<Arc<GICv3Its>>,
     /// Maximum irq number.
     pub(crate) nr_irqs: u32,
     /// GICv3 redistributor info, support multiple redistributor regions.
@@ -180,7 +183,9 @@ impl GICv3 {
         };
 
         if let Some(its_range) = config.its_range {
-            gicv3.its_dev = Some(GICv3Its::new(&its_range).chain_err(|| "Failed to create ITS")?);
+            gicv3.its_dev = Some(Arc::new(
+                GICv3Its::new(&its_range).chain_err(|| "Failed to create ITS")?,
+            ));
         }
 
         Ok(gicv3)
@@ -264,14 +269,16 @@ impl GICv3 {
 
 impl MachineLifecycle for GICv3 {
     fn pause(&self) -> bool {
-        let attr = kvm_bindings::kvm_device_attr {
-            group: kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
-            attr: u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES),
-            addr: 0,
-            flags: 0,
-        };
-
-        if self.device_fd().set_device_attr(&attr).is_ok() {
+        // VM change state will flush REDIST pending tables into guest RAM.
+        if KvmDevice::kvm_device_access(
+            self.device_fd(),
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
+            kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES as u64,
+            0,
+            true,
+        )
+        .is_ok()
+        {
             let mut state = self.state.lock().unwrap();
             *state = KvmVmState::Running;
 
@@ -383,6 +390,12 @@ impl GICDevice for GICv3 {
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
         let gicv3 = Arc::new(GICv3::new(gic_conf)?);
         MigrationManager::register_device_instance(GICv3State::descriptor(), gicv3.clone());
+        if gicv3.its_dev.is_some() {
+            MigrationManager::register_device_instance(
+                GICv3ItsState::descriptor(),
+                gicv3.its_dev.as_ref().unwrap().clone(),
+            );
+        }
 
         Ok(gicv3)
     }
@@ -441,7 +454,7 @@ impl GICDevice for GICv3 {
     }
 }
 
-struct GICv3Its {
+pub(crate) struct GICv3Its {
     /// The fd for the GICv3Its device
     fd: DeviceFd,
 
@@ -507,6 +520,31 @@ impl GICv3Its {
         .chain_err(|| "KVM failed to initialize ITS")?;
 
         Ok(())
+    }
+
+    pub(crate) fn access_gic_its(&self, attr: u32, its_value: &mut u64, write: bool) -> Result<()> {
+        KvmDevice::kvm_device_access(
+            &self.fd,
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ITS_REGS,
+            attr as u64,
+            its_value as *const u64 as u64,
+            write,
+        )
+    }
+
+    pub(crate) fn access_gic_its_tables(&self, save: bool) -> Result<()> {
+        let attr = if save {
+            kvm_bindings::KVM_DEV_ARM_ITS_SAVE_TABLES as u64
+        } else {
+            kvm_bindings::KVM_DEV_ARM_ITS_RESTORE_TABLES as u64
+        };
+        KvmDevice::kvm_device_access(
+            &self.fd,
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
+            attr,
+            std::ptr::null::<u64>() as u64,
+            true,
+        )
     }
 }
 
