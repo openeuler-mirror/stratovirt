@@ -458,6 +458,12 @@ impl VirtioDevice for Console {
 
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        self.reset_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)
+    }
 }
 
 impl StateTransfer for Console {
