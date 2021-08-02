@@ -16,7 +16,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
-use migration::errors::{ErrorKind, Result};
+use migration::errors::{ErrorKind, Result, ResultExt};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 use util::unix::host_page_size;
@@ -112,20 +112,21 @@ impl MigrationHook for AddressSpace {
             let host_mmap = Arc::new(
                 HostMemMapping::new(
                     GuestAddress(ram_state.base_address),
+                    None,
                     ram_state.size,
                     Some(file_backend),
                     false,
                     false,
                     false,
                 )
-                .map_err(|e| ErrorKind::RestoreVmMemoryErr(e.to_string()))?,
+                .chain_err(|| ErrorKind::RestoreVmMemoryErr)?,
             );
             self.root()
                 .add_subregion(
                     Region::init_ram_region(host_mmap.clone()),
                     host_mmap.start_address().raw_value(),
                 )
-                .map_err(|e| ErrorKind::RestoreVmMemoryErr(e.to_string()))?;
+                .chain_err(|| ErrorKind::RestoreVmMemoryErr)?;
         }
 
         Ok(())

@@ -1409,7 +1409,8 @@ mod tests {
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
         let mem_size: u64 = 1024 * 1024;
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), mem_size, None, false, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(0), None, mem_size, None, false, false, false)
+                .unwrap(),
         );
         sys_mem
             .root()

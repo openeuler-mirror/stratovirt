@@ -890,6 +890,7 @@ mod tests {
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),
+                None,
                 SYSTEM_SPACE_SIZE,
                 None,
                 false,

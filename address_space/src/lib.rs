@@ -37,7 +37,15 @@
 //!     let space = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
 //!
 //!     // 2. create an Ram-type Region, and set it's priority
-//!     let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000, None, false, false, false).unwrap());
+//!     let mem_mapping = Arc::new(HostMemMapping::new(
+//!         GuestAddress(0),
+//!         None,
+//!         0x1000,
+//!         None,
+//!         false,
+//!         false,
+//!         false,
+//!     ).unwrap());
 //!     let ram_region = Region::init_ram_region(mem_mapping.clone());
 //!     ram_region.set_priority(10);
 //!

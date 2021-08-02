@@ -588,7 +588,7 @@ mod test {
 
     fn create_ram_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
         let mem_mapping = Arc::new(
-            HostMemMapping::new(GuestAddress(addr), size, None, false, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(addr), None, size, None, false, false, false).unwrap(),
         );
         FlatRange {
             addr_range: AddressRange::new(
