@@ -14,7 +14,7 @@ use std::mem::size_of;
 
 use libc::c_uint;
 
-use super::gicv3::{GICv3, GICv3Access};
+use super::gicv3::{GICv3, GICv3Access, GICv3Its};
 use super::GIC_IRQ_INTERNAL;
 use crate::interrupt_controller::errors::Result;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -29,6 +29,7 @@ const GICD_CTLR: u64 = 0x0000;
 const GICD_STATUSR: u64 = 0x0010;
 const GICD_IGROUPR: u64 = 0x0080;
 const GICD_ISENABLER: u64 = 0x0100;
+const GICD_ICENABLER: u64 = 0x0180;
 const GICD_ISPENDR: u64 = 0x0200;
 const GICD_ISACTIVER: u64 = 0x0300;
 const GICD_IPRIORITYR: u64 = 0x0400;
@@ -49,8 +50,11 @@ const GICR_PENDBASER: u64 = 0x0078;
 /// SGI and PPI Redistributor registers, offsets from RD_base
 const GICR_IGROUPR0: u64 = 0x1_0080;
 const GICR_ISENABLER0: u64 = 0x1_0100;
+const GICR_ICENABLER0: u64 = 0x1_0180;
 const GICR_ISPENDR0: u64 = 0x1_0200;
+const GICR_ICPENDR0: u64 = 0x1_0280;
 const GICR_ISACTIVER0: u64 = 0x1_0300;
+const GICR_ICACTIVER0: u64 = 0x1_0380;
 const GICR_IPRIORITYR: u64 = 0x1_0400;
 const GICR_ICFGR1: u64 = 0x1_0C04;
 const NR_GICR_IPRIORITYR: usize = 8;
@@ -74,6 +78,15 @@ const ICC_IGRPEN1_EL1: u64 = 0xc667;
 /// GICv3 CPU interface control regiter pribits[8:10]
 const ICC_CTLR_EL1_PRIBITS_MASK: u64 = 0x700;
 const ICC_CTLR_EL1_PRIBITS_SHIFT: u64 = 0x8;
+
+/// GIC Its registers
+const GITS_CTLR: u32 = 0x0000;
+const GITS_IIDR: u32 = 0x0004;
+const GITS_CBASER: u32 = 0x0080;
+const GITS_CWRITER: u32 = 0x0088;
+const GITS_CREADR: u32 = 0x0090;
+const GITS_BASER: u32 = 0x0100;
+const NR_GITS_BASER: usize = 8;
 
 /// The status of GICv3 redistributor.
 #[repr(C)]
@@ -100,6 +113,7 @@ struct GICv3RedistState {
 #[derive(Copy, Clone, ByteCode)]
 struct GICv3DistState {
     irq_base: u64,
+    gicd_statusr: u32,
     gicd_igroupr: u32,
     gicd_isenabler: u32,
     gicd_ispendr: u32,
@@ -199,35 +213,6 @@ impl GICv3 {
     }
 
     fn set_redist(&self, mut redist: GICv3RedistState, plpis: bool) -> Result<()> {
-        self.access_gic_redistributor(GICR_CTLR, redist.vcpu, &mut redist.gicr_ctlr, true)?;
-        self.access_gic_redistributor(GICR_STATUSR, redist.vcpu, &mut redist.gicr_statusr, true)?;
-        self.access_gic_redistributor(GICR_WAKER, redist.vcpu, &mut redist.gicr_waker, true)?;
-        self.access_gic_redistributor(GICR_IGROUPR0, redist.vcpu, &mut redist.gicr_igroupr0, true)?;
-        self.access_gic_redistributor(
-            GICR_ISENABLER0,
-            redist.vcpu,
-            &mut redist.gicr_ienabler0,
-            true,
-        )?;
-
-        self.access_gic_redistributor(GICR_ICFGR1, redist.vcpu, &mut redist.edge_trigger, true)?;
-        self.access_gic_redistributor(GICR_ISPENDR0, redist.vcpu, &mut redist.gicr_ipendr0, true)?;
-        self.access_gic_redistributor(
-            GICR_ISACTIVER0,
-            redist.vcpu,
-            &mut redist.gicr_iactiver0,
-            true,
-        )?;
-
-        for i in 0..NR_GICR_IPRIORITYR {
-            self.access_gic_redistributor(
-                GICR_IPRIORITYR + REGISTER_SIZE * i as u64,
-                redist.vcpu,
-                &mut redist.gicr_ipriorityr[i],
-                true,
-            )?;
-        }
-
         // gic redistributor type is PLPIS
         if plpis {
             self.access_gic_redistributor(
@@ -256,6 +241,37 @@ impl GICv3 {
             )?;
         }
 
+        self.access_gic_redistributor(GICR_CTLR, redist.vcpu, &mut redist.gicr_ctlr, true)?;
+        self.access_gic_redistributor(GICR_STATUSR, redist.vcpu, &mut redist.gicr_statusr, true)?;
+        self.access_gic_redistributor(GICR_WAKER, redist.vcpu, &mut redist.gicr_waker, true)?;
+        self.access_gic_redistributor(GICR_IGROUPR0, redist.vcpu, &mut redist.gicr_igroupr0, true)?;
+        self.access_gic_redistributor(GICR_ISENABLER0, redist.vcpu, &mut !0, true)?;
+        self.access_gic_redistributor(
+            GICR_ISENABLER0,
+            redist.vcpu,
+            &mut redist.gicr_ienabler0,
+            true,
+        )?;
+        self.access_gic_redistributor(GICR_ICFGR1, redist.vcpu, &mut redist.edge_trigger, true)?;
+        self.access_gic_redistributor(GICR_ICPENDR0, redist.vcpu, &mut !0, true)?;
+        self.access_gic_redistributor(GICR_ISPENDR0, redist.vcpu, &mut redist.gicr_ipendr0, true)?;
+        self.access_gic_redistributor(GICR_ICACTIVER0, redist.vcpu, &mut !0, true)?;
+        self.access_gic_redistributor(
+            GICR_ISACTIVER0,
+            redist.vcpu,
+            &mut redist.gicr_iactiver0,
+            true,
+        )?;
+
+        for i in 0..NR_GICR_IPRIORITYR {
+            self.access_gic_redistributor(
+                GICR_IPRIORITYR + REGISTER_SIZE * i as u64,
+                redist.vcpu,
+                &mut redist.gicr_ipriorityr[i],
+                true,
+            )?;
+        }
+
         Ok(())
     }
 
@@ -264,6 +280,13 @@ impl GICv3 {
             irq_base,
             ..Default::default()
         };
+
+        let offset = dist.irq_base / (GIC_IRQ_INTERNAL as u64 / REGISTER_SIZE);
+        self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, false)?;
+        self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, false)?;
+        self.access_gic_distributor(dist.irq_base, &mut dist.line_level, false)?;
+        self.access_gic_distributor(GICD_ISPENDR + offset, &mut dist.gicd_ispendr, false)?;
+        self.access_gic_distributor(GICD_ISACTIVER + offset, &mut dist.gicd_isactiver, false)?;
 
         // edge trigger
         for i in 0..NR_GICD_ICFGR {
@@ -302,43 +325,13 @@ impl GICv3 {
             )?;
         }
 
-        if (dist.irq_base + GIC_IRQ_INTERNAL as u64) > self.nr_irqs as u64 {
-            return Ok(dist);
-        }
-
-        let offset = dist.irq_base / (GIC_IRQ_INTERNAL as u64 / REGISTER_SIZE);
-        self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, false)?;
-        self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, false)?;
-        self.access_gic_distributor(GICD_ISPENDR + offset, &mut dist.gicd_ispendr, false)?;
-        self.access_gic_distributor(GICD_ISACTIVER + offset, &mut dist.gicd_isactiver, false)?;
-        self.access_gic_line_level(dist.irq_base, &mut dist.line_level, false)?;
-
         Ok(dist)
     }
 
     fn set_dist(&self, mut dist: GICv3DistState) -> Result<()> {
-        // edge trigger
-        for i in 0..NR_GICD_ICFGR {
-            if ((i * GIC_IRQ_INTERNAL as usize / NR_GICD_ICFGR) as u64 + dist.irq_base)
-                > self.nr_irqs as u64
-            {
-                break;
-            }
-            let offset = (dist.irq_base + i as u64) / REGISTER_SIZE;
-            self.access_gic_distributor(GICD_ICFGR + offset, &mut dist.gicd_icfgr[i], true)?;
-        }
-
-        for i in 0..NR_GICD_IPRIORITYR {
-            if (i as u64 * REGISTER_SIZE + dist.irq_base) > self.nr_irqs as u64 {
-                break;
-            }
-            let offset = dist.irq_base + REGISTER_SIZE * i as u64;
-            self.access_gic_distributor(
-                GICD_IPRIORITYR + offset,
-                &mut dist.gicd_ipriorityr[i],
-                true,
-            )?;
-        }
+        let offset = dist.irq_base / (GIC_IRQ_INTERNAL as u64 / REGISTER_SIZE);
+        self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, true)?;
+        self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, true)?;
 
         for i in 0..NR_GICD_IROUTER {
             if (i as u64 + dist.irq_base) > self.nr_irqs as u64 {
@@ -354,16 +347,32 @@ impl GICv3 {
             )?;
         }
 
-        if (dist.irq_base + GIC_IRQ_INTERNAL as u64) > self.nr_irqs as u64 {
-            return Ok(());
+        // edge trigger
+        for i in 0..NR_GICD_ICFGR {
+            if ((i * GIC_IRQ_INTERNAL as usize / NR_GICD_ICFGR) as u64 + dist.irq_base)
+                > self.nr_irqs as u64
+            {
+                break;
+            }
+            let offset = (dist.irq_base + i as u64) / REGISTER_SIZE;
+            self.access_gic_distributor(GICD_ICFGR + offset, &mut dist.gicd_icfgr[i], true)?;
         }
 
-        let offset = dist.irq_base / (GIC_IRQ_INTERNAL as u64 / REGISTER_SIZE);
-        self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, true)?;
-        self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, true)?;
+        self.access_gic_line_level(dist.irq_base, &mut dist.line_level, true)?;
         self.access_gic_distributor(GICD_ISPENDR + offset, &mut dist.gicd_ispendr, true)?;
         self.access_gic_distributor(GICD_ISACTIVER + offset, &mut dist.gicd_isactiver, true)?;
-        self.access_gic_line_level(dist.irq_base, &mut dist.line_level, true)?;
+
+        for i in 0..NR_GICD_IPRIORITYR {
+            if (i as u64 * REGISTER_SIZE + dist.irq_base) > self.nr_irqs as u64 {
+                break;
+            }
+            let offset = dist.irq_base + REGISTER_SIZE * i as u64;
+            self.access_gic_distributor(
+                GICD_IPRIORITYR + offset,
+                &mut dist.gicd_ipriorityr[i],
+                true,
+            )?;
+        }
 
         Ok(())
     }
@@ -374,9 +383,6 @@ impl GICv3 {
             ..Default::default()
         };
 
-        self.access_gic_cpu(ICC_PMR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_pmr_el1, false)?;
-        self.access_gic_cpu(ICC_BPR0_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr0_el1, false)?;
-        self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, false)?;
         self.access_gic_cpu(ICC_SRE_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_sre_el1, false)?;
         self.access_gic_cpu(ICC_CTLR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_ctlr_el1, false)?;
         self.access_gic_cpu(
@@ -391,6 +397,9 @@ impl GICv3 {
             &mut gic_cpu.icc_igrpen1_el1,
             false,
         )?;
+        self.access_gic_cpu(ICC_PMR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_pmr_el1, false)?;
+        self.access_gic_cpu(ICC_BPR0_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr0_el1, false)?;
+        self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, false)?;
 
         // ICC_CTLR_EL1.PRIbits is [10:8] in ICC_CTLR_EL1
         // PRIBits indicate the number of priority bits implemented, independently for each target PE.
@@ -458,9 +467,6 @@ impl GICv3 {
     }
 
     fn set_cpu(&self, mut gic_cpu: GICv3CPUState) -> Result<()> {
-        self.access_gic_cpu(ICC_PMR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_pmr_el1, true)?;
-        self.access_gic_cpu(ICC_BPR0_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr0_el1, true)?;
-        self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, true)?;
         self.access_gic_cpu(ICC_SRE_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_sre_el1, true)?;
         self.access_gic_cpu(ICC_CTLR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_ctlr_el1, true)?;
         self.access_gic_cpu(
@@ -475,6 +481,9 @@ impl GICv3 {
             &mut gic_cpu.icc_igrpen1_el1,
             true,
         )?;
+        self.access_gic_cpu(ICC_PMR_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_pmr_el1, true)?;
+        self.access_gic_cpu(ICC_BPR0_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr0_el1, true)?;
+        self.access_gic_cpu(ICC_BPR1_EL1, gic_cpu.vcpu, &mut gic_cpu.icc_bpr1_el1, true)?;
 
         // ICC_CTLR_EL1.PRIbits is [10:8] in ICC_CTLR_EL1
         // PRIBits indicate the number of priority bits implemented, independently for each target PE.
@@ -574,15 +583,6 @@ impl StateTransfer for GICv3 {
             .map_err(|e| ErrorKind::GetGicRegsError("redist_typer_h", e.to_string()))?;
         self.access_gic_distributor(GICD_CTLR, &mut state.gicd_ctlr, false)
             .map_err(|e| ErrorKind::GetGicRegsError("gicd_ctlr", e.to_string()))?;
-        self.access_gic_distributor(GICD_STATUSR, &mut state.gicd_statusr, false)
-            .map_err(|e| ErrorKind::GetGicRegsError("gicd_statusr", e.to_string()))?;
-
-        for irq in (GIC_IRQ_INTERNAL..self.nr_irqs).step_by(32) {
-            state.irq_dist[state.dist_len] = self
-                .get_dist(irq as u64)
-                .map_err(|e| ErrorKind::GetGicRegsError("dist", e.to_string()))?;
-            state.dist_len += 1;
-        }
 
         let plpis = (state.redist_typer_l & 1) != 0;
         for cpu in 0..self.vcpu_count {
@@ -590,6 +590,18 @@ impl StateTransfer for GICv3 {
                 .get_redist(cpu as usize, plpis)
                 .map_err(|e| ErrorKind::GetGicRegsError("redist", e.to_string()))?;
             state.redist_len += 1;
+        }
+
+        self.access_gic_distributor(GICD_STATUSR, &mut state.gicd_statusr, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("gicd_statusr", e.to_string()))?;
+        for irq in (GIC_IRQ_INTERNAL..self.nr_irqs).step_by(32) {
+            state.irq_dist[state.dist_len] = self
+                .get_dist(irq as u64)
+                .map_err(|e| ErrorKind::GetGicRegsError("dist", e.to_string()))?;
+            state.dist_len += 1;
+        }
+
+        for cpu in 0..self.vcpu_count {
             state.vcpu_iccr[state.iccr_len] = self
                 .get_cpu(cpu as usize)
                 .map_err(|e| ErrorKind::GetGicRegsError("cpu", e.to_string()))?;
@@ -604,10 +616,13 @@ impl StateTransfer for GICv3 {
 
         let state = GICv3State::from_bytes(state).unwrap();
 
-        let mut regu32 = 0_u32;
+        let mut regu32 = state.redist_typer_l;
         self.access_gic_redistributor(GICR_TYPER, 0, &mut regu32, false)
-            .map_err(|e| ErrorKind::SetGicRegsError("gicr_typer", e.to_string()))?;
+            .map_err(|e| ErrorKind::SetGicRegsError("gicr_typer_l", e.to_string()))?;
         let plpis: bool = regu32 & 1 != 0;
+        regu32 = state.redist_typer_h;
+        self.access_gic_redistributor(GICR_TYPER + 4, 0, &mut regu32, false)
+            .map_err(|e| ErrorKind::SetGicRegsError("gicr_typer_h", e.to_string()))?;
 
         regu32 = state.gicd_ctlr;
         self.access_gic_distributor(GICD_CTLR, &mut regu32, true)
@@ -618,11 +633,6 @@ impl StateTransfer for GICv3 {
                 .map_err(|e| ErrorKind::SetGicRegsError("redist", e.to_string()))?;
         }
 
-        for gicv3_iccr in state.vcpu_iccr[0..state.iccr_len].iter() {
-            self.set_cpu(*gicv3_iccr)
-                .map_err(|e| ErrorKind::SetGicRegsError("cpu", e.to_string()))?;
-        }
-
         regu32 = state.gicd_statusr;
         self.access_gic_distributor(GICD_STATUSR, &mut regu32, true)
             .map_err(|e| ErrorKind::SetGicRegsError("gicd_statusr", e.to_string()))?;
@@ -630,6 +640,11 @@ impl StateTransfer for GICv3 {
         for gicv3_dist in state.irq_dist[0..state.dist_len].iter() {
             self.set_dist(*gicv3_dist)
                 .map_err(|e| ErrorKind::SetGicRegsError("dist", e.to_string()))?
+        }
+
+        for gicv3_iccr in state.vcpu_iccr[0..state.iccr_len].iter() {
+            self.set_cpu(*gicv3_iccr)
+                .map_err(|e| ErrorKind::SetGicRegsError("cpu", e.to_string()))?;
         }
 
         Ok(())
@@ -645,3 +660,81 @@ impl StateTransfer for GICv3 {
 }
 
 impl MigrationHook for GICv3 {}
+
+// The state of GICv3Its device.
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct GICv3ItsState {
+    ctlr: u64,
+    iidr: u64,
+    cbaser: u64,
+    cwriter: u64,
+    creadr: u64,
+    baser: [u64; 8],
+}
+
+impl StateTransfer for GICv3Its {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        use migration::errors::ErrorKind;
+
+        let mut state = GICv3ItsState::default();
+        self.access_gic_its_tables(true)
+            .map_err(|e| ErrorKind::GetGicRegsError("Its table", e.to_string()))?;
+        for i in 0..8 {
+            self.access_gic_its(GITS_BASER + 8 * i as u32, &mut state.baser[i], false)
+                .map_err(|e| ErrorKind::GetGicRegsError("Its baser", e.to_string()))?;
+        }
+        self.access_gic_its(GITS_CTLR, &mut state.ctlr, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("Its ctlr", e.to_string()))?;
+        self.access_gic_its(GITS_CBASER, &mut state.cbaser, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("Its cbaser", e.to_string()))?;
+        self.access_gic_its(GITS_CREADR, &mut state.creadr, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("Its creadr", e.to_string()))?;
+        self.access_gic_its(GITS_CWRITER, &mut state.cwriter, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("Its cwriter", e.to_string()))?;
+        self.access_gic_its(GITS_IIDR, &mut state.iidr, false)
+            .map_err(|e| ErrorKind::GetGicRegsError("Its iidr", e.to_string()))?;
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state(&self, state: &[u8]) -> migration::errors::Result<()> {
+        use migration::errors::ErrorKind;
+
+        let mut its_state = *GICv3ItsState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("GICv3Its"))?;
+
+        self.access_gic_its(GITS_IIDR, &mut its_state.iidr, true)
+            .map_err(|e| ErrorKind::SetGicRegsError("Its iidr", e.to_string()))?;
+        // It must be written before GITS_CREADR, because GITS_CBASER write access will reset
+        // GITS_CREADR.
+        self.access_gic_its(GITS_CBASER, &mut its_state.cbaser, true)
+            .map_err(|e| ErrorKind::SetGicRegsError("Its cbaser", e.to_string()))?;
+        self.access_gic_its(GITS_CREADR, &mut its_state.creadr, true)
+            .map_err(|e| ErrorKind::SetGicRegsError("Its readr", e.to_string()))?;
+        self.access_gic_its(GITS_CWRITER, &mut its_state.cwriter, true)
+            .map_err(|e| ErrorKind::SetGicRegsError("Its cwriter", e.to_string()))?;
+
+        for i in 0..8 {
+            self.access_gic_its(GITS_BASER + 8 * i as u32, &mut its_state.baser[i], true)
+                .map_err(|e| ErrorKind::SetGicRegsError("Its baser", e.to_string()))?;
+        }
+        self.access_gic_its_tables(false)
+            .map_err(|e| ErrorKind::SetGicRegsError("Its table", e.to_string()))?;
+        self.access_gic_its(GITS_CTLR, &mut its_state.ctlr, true)
+            .map_err(|e| ErrorKind::SetGicRegsError("Its ctlr", e.to_string()))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&GICv3ItsState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for GICv3Its {}

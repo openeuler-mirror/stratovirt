@@ -22,6 +22,7 @@ use acpi::{
 use address_space::{errors::ResultExt, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use machine_manager::config::{BootSource, Param};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
@@ -50,10 +51,14 @@ const INT_MS: u32 = 1 | 1 << 1 | 1 << 2 | 1 << 3;
 
 const PL011_FIFO_SIZE: usize = 16;
 
+/// Device state of PL011.
 #[allow(clippy::upper_case_acronyms)]
-pub struct PL011 {
-    /// Read FIFO.
-    rfifo: Vec<u32>,
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct PL011State {
+    /// Read FIFO. PL011_FIFO_SIZE is 16.
+    rfifo: [u32; 16],
     /// Flag Register.
     flags: u32,
     /// Line Control Register.
@@ -72,16 +77,45 @@ pub struct PL011 {
     fbrd: u32,
     /// Interrut FIFO Level Select Register.
     ifl: u32,
-    /// Identifier Register.
-    id: Vec<u8>,
+    /// Identifier Register. Length is 8.
+    id: [u8; 8],
     /// FIFO Status.
     read_pos: u32,
     read_count: u32,
     read_trigger: u32,
     /// Raw Interrupt Status Register.
     int_level: u32,
-    /// Interrupt Mask Set/Clear Register.
+    /// Interrupt Mask Set/Clean Register.
     int_enabled: u32,
+}
+
+impl PL011State {
+    fn new() -> Self {
+        PL011State {
+            rfifo: [0; PL011_FIFO_SIZE],
+            flags: (PL011_FLAG_TXFE | PL011_FLAG_RXFE) as u32,
+            lcr: 0,
+            rsr: 0,
+            cr: 0x300,
+            dmacr: 0,
+            ilpr: 0,
+            ibrd: 0,
+            fbrd: 0,
+            ifl: 0x12, // Receive and transmit enable
+            id: [0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1],
+            read_pos: 0,
+            read_count: 0,
+            read_trigger: 1,
+            int_level: 0,
+            int_enabled: 0,
+        }
+    }
+}
+
+#[allow(clippy::upper_case_acronyms)]
+pub struct PL011 {
+    /// Device state.
+    state: PL011State,
     /// Interrupt event file descriptor.
     interrupt_evt: EventFd,
     /// Operation methods.
@@ -94,22 +128,7 @@ impl PL011 {
     /// Create a new `PL011` instance with default parameters.
     pub fn new() -> Result<Self> {
         Ok(PL011 {
-            rfifo: vec![0; PL011_FIFO_SIZE],
-            flags: (PL011_FLAG_TXFE | PL011_FLAG_RXFE) as u32,
-            lcr: 0,
-            rsr: 0,
-            cr: 0x300,
-            dmacr: 0,
-            ilpr: 0,
-            ibrd: 0,
-            fbrd: 0,
-            ifl: 0x12, // Receive and transmit enable
-            id: vec![0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1],
-            read_pos: 0,
-            read_count: 0,
-            read_trigger: 1,
-            int_level: 0,
-            int_enabled: 0,
+            state: PL011State::new(),
             interrupt_evt: EventFd::new(libc::EFD_NONBLOCK)?,
             output: Some(Box::new(std::io::stdout())),
             res: SysRes::default(),
@@ -119,7 +138,7 @@ impl PL011 {
     fn interrupt(&self) {
         let irq_mask = INT_E | INT_MS | INT_RT | INT_TX | INT_RX;
 
-        let flag = self.int_level & self.int_enabled;
+        let flag = self.state.int_level & self.state.int_enabled;
         if flag & irq_mask != 0 {
             if let Err(e) = self.interrupt_evt.write(1) {
                 error!(
@@ -136,22 +155,22 @@ impl PL011 {
     ///
     /// * `data` - A u8-type array.
     pub fn receive(&mut self, data: &[u8]) {
-        self.flags &= !PL011_FLAG_RXFE as u32;
+        self.state.flags &= !PL011_FLAG_RXFE as u32;
         for val in data {
-            let mut slot = (self.read_pos + self.read_count) as usize;
+            let mut slot = (self.state.read_pos + self.state.read_count) as usize;
             if slot >= PL011_FIFO_SIZE {
                 slot -= PL011_FIFO_SIZE;
             }
-            self.rfifo[slot] = *val as u32;
-            self.read_count += 1;
+            self.state.rfifo[slot] = *val as u32;
+            self.state.read_count += 1;
         }
 
         // If in character-mode, or in FIFO-mode and FIFO is full, trigger the interrupt.
-        if ((self.lcr & 0x10) == 0) || (self.read_count as usize == PL011_FIFO_SIZE) {
-            self.flags |= PL011_FLAG_RXFF as u32;
+        if ((self.state.lcr & 0x10) == 0) || (self.state.read_count as usize == PL011_FIFO_SIZE) {
+            self.state.flags |= PL011_FLAG_RXFF as u32;
         }
-        if self.read_count >= self.read_trigger {
-            self.int_level |= INT_RX as u32;
+        if self.state.read_count >= self.state.read_trigger {
+            self.state.int_level |= INT_RX as u32;
             self.interrupt();
         }
     }
@@ -176,6 +195,8 @@ impl PL011 {
             param_type: "earlycon".to_string(),
             value: format!("pl011,mmio,0x{:08x}", region_base),
         });
+
+        MigrationManager::register_device_instance_mutex(PL011State::descriptor(), dev.clone());
         Ok(dev)
     }
 }
@@ -187,69 +208,69 @@ impl SysBusDevOps for PL011 {
         match offset >> 2 {
             0 => {
                 // Data register.
-                self.flags &= !(PL011_FLAG_RXFF as u32);
-                let c = self.rfifo[self.read_pos as usize];
+                self.state.flags &= !(PL011_FLAG_RXFF as u32);
+                let c = self.state.rfifo[self.state.read_pos as usize];
 
-                if self.read_count > 0 {
-                    self.read_count -= 1;
-                    self.read_pos += 1;
-                    if self.read_pos as usize == PL011_FIFO_SIZE {
-                        self.read_pos = 0;
+                if self.state.read_count > 0 {
+                    self.state.read_count -= 1;
+                    self.state.read_pos += 1;
+                    if self.state.read_pos as usize == PL011_FIFO_SIZE {
+                        self.state.read_pos = 0;
                     }
                 }
-                if self.read_count == 0 {
-                    self.flags |= PL011_FLAG_RXFE as u32;
+                if self.state.read_count == 0 {
+                    self.state.flags |= PL011_FLAG_RXFE as u32;
                 }
-                if self.read_count == self.read_trigger - 1 {
-                    self.int_level &= !(INT_RX as u32);
+                if self.state.read_count == self.state.read_trigger - 1 {
+                    self.state.int_level &= !(INT_RX as u32);
                 }
-                self.rsr = c >> 8;
+                self.state.rsr = c >> 8;
                 self.interrupt();
                 ret = c;
             }
             1 => {
-                ret = self.rsr;
+                ret = self.state.rsr;
             }
             6 => {
-                ret = self.flags;
+                ret = self.state.flags;
             }
             8 => {
-                ret = self.ilpr;
+                ret = self.state.ilpr;
             }
             9 => {
-                ret = self.ibrd;
+                ret = self.state.ibrd;
             }
             10 => {
-                ret = self.fbrd;
+                ret = self.state.fbrd;
             }
             11 => {
-                ret = self.lcr;
+                ret = self.state.lcr;
             }
             12 => {
-                ret = self.cr;
+                ret = self.state.cr;
             }
             13 => {
-                ret = self.ifl;
+                ret = self.state.ifl;
             }
             14 => {
                 // Interrupt Mask Set/Clear Register
-                ret = self.int_enabled;
+                ret = self.state.int_enabled;
             }
             15 => {
                 // Raw Interrupt Status Register
-                ret = self.int_level;
+                ret = self.state.int_level;
             }
             16 => {
                 // Masked Interrupt Status Register
-                ret = self.int_level & self.int_enabled;
+                ret = self.state.int_level & self.state.int_enabled;
             }
             18 => {
-                ret = self.dmacr;
+                ret = self.state.dmacr;
             }
             0x3f8..=0x400 => {
                 // Register 0xFE0~0xFFC is UART Peripheral Identification Registers
                 // and PrimeCell Identification Registers.
-                ret = *self.id.get(((offset - 0xfe0) >> 2) as usize).unwrap() as u32;
+                ret = *self.state.id.get(((offset - 0xfe0) >> 2) as usize).unwrap() as u32;
             }
             _ => {
                 error!("Failed to read pl011: Invalid offset 0x{:x}", offset);
@@ -287,49 +308,49 @@ impl SysBusDevOps for PL011 {
                     error!("Failed to flush pl011, error is {}", e);
                 }
 
-                self.int_level |= INT_TX as u32;
+                self.state.int_level |= INT_TX as u32;
                 self.interrupt();
             }
             1 => {
-                self.rsr = 0;
+                self.state.rsr = 0;
             }
             8 => {
-                self.ilpr = value;
+                self.state.ilpr = value;
             }
             9 => {
-                self.ibrd = value;
+                self.state.ibrd = value;
             }
             10 => {
-                self.fbrd = value;
+                self.state.fbrd = value;
             }
             11 => {
                 // PL011 works in two modes: character mode or FIFO mode.
                 // Reset FIFO if the mode is changed.
-                if (self.lcr ^ value) & 0x10 != 0 {
-                    self.read_count = 0;
-                    self.read_pos = 0;
+                if (self.state.lcr ^ value) & 0x10 != 0 {
+                    self.state.read_count = 0;
+                    self.state.read_pos = 0;
                 }
-                self.lcr = value;
-                self.read_trigger = 1;
+                self.state.lcr = value;
+                self.state.read_trigger = 1;
             }
             12 => {
-                self.cr = value;
+                self.state.cr = value;
             }
             13 => {
-                self.ifl = value;
-                self.read_trigger = 1;
+                self.state.ifl = value;
+                self.state.read_trigger = 1;
             }
             14 => {
-                self.int_enabled = value;
+                self.state.int_enabled = value;
                 self.interrupt();
             }
             17 => {
                 // Interrupt Clear Register, write only
-                self.int_level &= !value;
+                self.state.int_level &= !value;
                 self.interrupt();
             }
             18 => {
-                self.dmacr = value;
+                self.state.dmacr = value;
                 if value & 3 != 0 {
                     error!("pl011: DMA not implemented");
                 }
@@ -355,6 +376,29 @@ impl SysBusDevOps for PL011 {
         SysBusDevType::PL011
     }
 }
+
+impl StateTransfer for PL011 {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *PL011State::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("PL011"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&PL011State::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for PL011 {}
 
 impl AmlBuilder for PL011 {
     fn aml_bytes(&self) -> Vec<u8> {
@@ -395,7 +439,8 @@ impl EventNotifierHelper for PL011 {
         let mut handlers = Vec::new();
         let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
             Box::new(move |_, _| {
-                let remain_space = PL011_FIFO_SIZE - pl011.lock().unwrap().read_count as usize;
+                let remain_space =
+                    PL011_FIFO_SIZE - pl011.lock().unwrap().state.read_count as usize;
                 let mut out = vec![0_u8; remain_space];
                 match std::io::stdin().lock().read_raw(&mut out) {
                     Ok(count) => {
@@ -430,33 +475,33 @@ mod test {
     #[test]
     fn test_receive() {
         let mut pl011_dev = PL011::new().unwrap();
-        assert_eq!(pl011_dev.rfifo, vec![0; PL011_FIFO_SIZE]);
-        assert_eq!(pl011_dev.flags, 0x90);
-        assert_eq!(pl011_dev.lcr, 0);
-        assert_eq!(pl011_dev.rsr, 0);
-        assert_eq!(pl011_dev.cr, 0x300);
-        assert_eq!(pl011_dev.dmacr, 0);
-        assert_eq!(pl011_dev.ilpr, 0);
-        assert_eq!(pl011_dev.ibrd, 0);
-        assert_eq!(pl011_dev.fbrd, 0);
-        assert_eq!(pl011_dev.ifl, 0x12);
+        assert_eq!(pl011_dev.state.rfifo, [0; PL011_FIFO_SIZE]);
+        assert_eq!(pl011_dev.state.flags, 0x90);
+        assert_eq!(pl011_dev.state.lcr, 0);
+        assert_eq!(pl011_dev.state.rsr, 0);
+        assert_eq!(pl011_dev.state.cr, 0x300);
+        assert_eq!(pl011_dev.state.dmacr, 0);
+        assert_eq!(pl011_dev.state.ilpr, 0);
+        assert_eq!(pl011_dev.state.ibrd, 0);
+        assert_eq!(pl011_dev.state.fbrd, 0);
+        assert_eq!(pl011_dev.state.ifl, 0x12);
         assert_eq!(
-            pl011_dev.id,
-            vec![0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1]
+            pl011_dev.state.id,
+            [0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1]
         );
-        assert_eq!(pl011_dev.read_pos, 0);
-        assert_eq!(pl011_dev.read_count, 0);
-        assert_eq!(pl011_dev.read_trigger, 1);
-        assert_eq!(pl011_dev.int_level, 0);
-        assert_eq!(pl011_dev.int_enabled, 0);
+        assert_eq!(pl011_dev.state.read_pos, 0);
+        assert_eq!(pl011_dev.state.read_count, 0);
+        assert_eq!(pl011_dev.state.read_trigger, 1);
+        assert_eq!(pl011_dev.state.int_level, 0);
+        assert_eq!(pl011_dev.state.int_enabled, 0);
 
         let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
         pl011_dev.receive(&data);
-        assert_eq!(pl011_dev.read_count, data.len() as u32);
+        assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
-            assert_eq!(pl011_dev.rfifo[i], data[i] as u32);
+            assert_eq!(pl011_dev.state.rfifo[i], data[i] as u32);
         }
-        assert_eq!(pl011_dev.flags, 0xC0);
-        assert_eq!(pl011_dev.int_level, INT_RX);
+        assert_eq!(pl011_dev.state.flags, 0xC0);
+        assert_eq!(pl011_dev.state.int_level, INT_RX);
     }
 }
