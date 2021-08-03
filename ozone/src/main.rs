@@ -18,6 +18,7 @@ use handler::OzoneHandler;
 
 mod args;
 mod capability;
+mod cgroup;
 mod handler;
 mod namespace;
 mod syscall;

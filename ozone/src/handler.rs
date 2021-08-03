@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::cgroup::{init_cgroup, parse_cgroup, CgroupCfg};
 use crate::{capability, namespace, syscall, ErrorKind, Result, ResultExt};
 
 use std::process::Command;
@@ -51,6 +52,8 @@ pub struct OzoneHandler {
     name: String,
     uid: u32,
     gid: u32,
+    node: Option<String>,
+    cgroup: Option<CgroupCfg>,
     netns_path: Option<String>,
     capability: Option<String>,
     exec_file_path: PathBuf,
@@ -103,6 +106,20 @@ impl OzoneHandler {
                     })?,
                 );
             }
+        }
+        if let Some(node) = args.value_of("numa") {
+            handler.node = Some(
+                (&node)
+                    .parse::<String>()
+                    .map_err(|_| ErrorKind::DigitalParseError("numa", node))?,
+            );
+        }
+        if let Some(config) = args.values_of("cgroup") {
+            let mut cgroup_cfg = init_cgroup();
+            for cfg in config {
+                parse_cgroup(&mut cgroup_cfg, &cfg).chain_err(|| "Failed to parse cgroup")?
+            }
+            handler.cgroup = Some(cgroup_cfg);
         }
         handler.extra_args = args.extra_args();
         handler.netns_path = args.value_of("network namespace");
@@ -217,6 +234,7 @@ impl OzoneHandler {
     pub fn realize(&self) -> Result<()> {
         // First, disinfect the process.
         disinfect_process().chain_err(|| "Failed to disinfect process")?;
+
         self.create_chroot_dir()?;
         self.copy_exec_file()?;
         for source_file_path in self.source_file_paths.iter() {
@@ -338,6 +356,8 @@ mod tests {
             source_file_paths,
             extra_args: Vec::new(),
             capability: None,
+            node: None,
+            cgroup: None,
         }
     }
 

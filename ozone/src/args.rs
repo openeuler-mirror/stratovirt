@@ -83,4 +83,19 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .required(false)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("cgroup")
+                .long("cgroup")
+                .help("set cgroup arguments, use -cgroup <controler1>=<value1> ...")
+                .required(false)
+                .takes_values(true),
+        )
+        .arg(
+            Arg::with_name("numa")
+                .long("numa")
+                .value_name("set numa node")
+                .help("set the numa node of the ozone.")
+                .required(false)
+                .takes_value(true),
+        )
 }
