@@ -54,8 +54,8 @@ pub mod errors {
             InvalidJsonField(field: String) {
                 display("Invalid json field \'{}\'", field)
             }
-            InvalidParam(param: String) {
-                display("Invalid parameter \'{}\'", param)
+            InvalidParam(param: String, name: String) {
+                display("Invalid parameter \'{}\' for \'{}\'", param, name)
             }
             ConvertValueFailed(param: String, value: String) {
                 display("Unable to parse \'{}\' for \'{}\'", value, param)
@@ -298,12 +298,14 @@ impl CmdParser {
     /// * `cmd_param`: The whole cmdline parameter string.
     pub fn parse(&mut self, cmd_param: &str) -> Result<()> {
         if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
-            return Err(ErrorKind::InvalidParam(cmd_param.to_string()).into());
+            return Err(ErrorKind::InvalidParam(cmd_param.to_string(), self.name.clone()).into());
         }
         let param_items = cmd_param.split(',').collect::<Vec<&str>>();
         for (i, param_item) in param_items.iter().enumerate() {
             if param_item.starts_with('=') || param_item.ends_with('=') {
-                return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+                return Err(
+                    ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
+                );
             }
             let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
             let (param_key, param_value) = match param.len() {
@@ -316,7 +318,9 @@ impl CmdParser {
                 }
                 2 => (param[0], param[1]),
                 _ => {
-                    return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+                    return Err(
+                        ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
+                    );
                 }
             };
 
@@ -330,7 +334,9 @@ impl CmdParser {
                     );
                 }
             } else {
-                return Err(ErrorKind::InvalidParam(param[0].to_string()).into());
+                return Err(
+                    ErrorKind::InvalidParam(param[0].to_string(), self.name.clone()).into(),
+                );
             }
         }
 
@@ -344,7 +350,7 @@ impl CmdParser {
     /// * `cmd_param`: The whole cmdline parameter string.
     fn get_parameters(&mut self, cmd_param: &str) -> Result<()> {
         if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
-            return Err(ErrorKind::InvalidParam(cmd_param.to_string()).into());
+            return Err(ErrorKind::InvalidParam(cmd_param.to_string(), self.name.clone()).into());
         }
         let param_items = cmd_param.split(',').collect::<Vec<&str>>();
         for param_item in param_items {
@@ -353,7 +359,9 @@ impl CmdParser {
                 1 => ("", param[0]),
                 2 => (param[0], param[1]),
                 _ => {
-                    return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+                    return Err(
+                        ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
+                    );
                 }
             };
 
