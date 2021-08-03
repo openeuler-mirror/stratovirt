@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::cgroup::{init_cgroup, parse_cgroup, CgroupCfg};
+use crate::cgroup::{self, init_cgroup, parse_cgroup, CgroupCfg};
 use crate::{capability, namespace, syscall, ErrorKind, Result, ResultExt};
 
 use std::process::Command;
@@ -241,6 +241,16 @@ impl OzoneHandler {
             self.bind_mount_file(source_file_path)?;
         }
 
+        let exec_file = self.exec_file_name()?;
+        if let Some(node) = self.node.clone() {
+            cgroup::set_numa_node(&node, &exec_file, &self.name)
+                .chain_err(|| "Failed to set numa node")?;
+        }
+        if let Some(cgroup) = &self.cgroup {
+            cgroup::realize_cgroup(cgroup, exec_file, self.name.clone())
+                .chain_err(|| "Failed to realize cgroup")?;
+        }
+
         namespace::set_uts_namespace("Ozone")?;
         namespace::set_ipc_namespace()?;
         if let Some(netns_path) = &self.netns_path {
@@ -304,6 +314,14 @@ impl OzoneHandler {
 
         std::fs::remove_dir_all(&self.chroot_dir)
             .chain_err(|| "Failed to remove chroot dir path")?;
+        if self.node.is_some() {
+            cgroup::clean_node(self.exec_file_name()?, self.name.clone())
+                .chain_err(|| "Failed to clean numa node")?;
+        }
+        if let Some(cgroup) = &self.cgroup {
+            cgroup::clean_cgroup(cgroup, self.exec_file_name()?, self.name.clone())
+                .chain_err(|| "Failed to remove cgroup directory")?;
+        }
         Ok(())
     }
 }

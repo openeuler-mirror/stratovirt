@@ -40,6 +40,9 @@ error_chain! {
         CapsError(cap_option: &'static str) {
             display("Failed to execute {}", cap_option)
         }
+        WriteError(path: String, value: String) {
+            display("Failed to write {} to {}", value, path)
+        }
     }
 }
 
