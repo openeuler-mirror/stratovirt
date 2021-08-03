@@ -21,19 +21,22 @@ use crate::config::{CapId, PciConfig, RegionType};
 use crate::errors::{Result, ResultExt};
 use crate::{le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64};
 
-const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
-const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
+pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
+pub const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
 const MSIX_TABLE_VEC_CTL: u16 = 0x0c;
 const MSIX_TABLE_MASK_BIT: u8 = 0x01;
+pub const MSIX_TABLE_BIR: u16 = 0x07;
+pub const MSIX_TABLE_OFFSET: u32 = 0xffff_fff8;
 const MSIX_MSG_UPPER_ADDR: u16 = 0x04;
 const MSIX_MSG_DATA: u16 = 0x08;
 
-const MSIX_CAP_CONTROL: u8 = 0x02;
-const MSIX_CAP_ENABLE: u16 = 0x8000;
-const MSIX_CAP_FUNC_MASK: u16 = 0x4000;
-const MSIX_CAP_SIZE: u8 = 12;
-const MSIX_CAP_TABLE: u8 = 0x04;
-const MSIX_CAP_PBA: u8 = 0x08;
+pub const MSIX_CAP_CONTROL: u8 = 0x02;
+pub const MSIX_CAP_ENABLE: u16 = 0x8000;
+pub const MSIX_CAP_FUNC_MASK: u16 = 0x4000;
+pub const MSIX_CAP_SIZE: u8 = 12;
+pub const MSIX_CAP_ID: u8 = 0x11;
+pub const MSIX_CAP_TABLE: u8 = 0x04;
+pub const MSIX_CAP_PBA: u8 = 0x08;
 
 /// MSI-X message structure.
 pub struct Message {
@@ -65,10 +68,10 @@ pub struct Msix {
     /// MSI-X table.
     pub table: Vec<u8>,
     pba: Vec<u8>,
-    func_masked: bool,
-    enabled: bool,
-    msix_cap_offset: u16,
-    dev_id: u16,
+    pub func_masked: bool,
+    pub enabled: bool,
+    pub msix_cap_offset: u16,
+    pub dev_id: u16,
 }
 
 impl Msix {
@@ -109,7 +112,7 @@ impl Msix {
         }
     }
 
-    fn is_vector_masked(&self, vector: u16) -> bool {
+    pub fn is_vector_masked(&self, vector: u16) -> bool {
         if !self.enabled || self.func_masked {
             return true;
         }
@@ -200,7 +203,7 @@ impl Msix {
         Ok(())
     }
 
-    fn get_message(&self, vector: u16) -> Message {
+    pub fn get_message(&self, vector: u16) -> Message {
         let entry_offset: u16 = vector * MSIX_TABLE_ENTRY_SIZE;
         let mut offset = entry_offset as usize;
         let address_lo = le_read_u32(&self.table, offset).unwrap();
@@ -336,7 +339,7 @@ impl MigrationHook for Msix {
     }
 }
 
-fn is_msix_enabled(msix_cap_offset: usize, config: &[u8]) -> bool {
+pub fn is_msix_enabled(msix_cap_offset: usize, config: &[u8]) -> bool {
     let offset: usize = msix_cap_offset + MSIX_CAP_CONTROL as usize;
     let msix_ctl = le_read_u16(&config, offset).unwrap();
     if msix_ctl & MSIX_CAP_ENABLE > 0 {

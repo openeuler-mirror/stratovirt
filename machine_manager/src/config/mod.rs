@@ -23,6 +23,7 @@ mod machine_config;
 mod network;
 mod pci;
 mod rng;
+mod vfio;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -42,6 +43,7 @@ pub use machine_config::*;
 pub use network::*;
 pub use pci::*;
 pub use rng::*;
+pub use vfio::*;
 
 pub mod errors {
     error_chain! {

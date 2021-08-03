@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use kvm_bindings::{kvm_irq_routing, KVMIO};
+use kvm_bindings::{kvm_irq_routing, kvm_irqfd, KVMIO};
+use vfio_bindings::bindings::vfio::{VFIO_BASE, VFIO_TYPE};
 
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
@@ -51,6 +52,10 @@ const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
 ioctl_iow_nr!(KVM_SET_GSI_ROUTING, KVMIO, 0x6a, kvm_irq_routing);
+ioctl_iow_nr!(KVM_IRQFD, KVMIO, 0x76, kvm_irqfd);
+
+// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/vfio.h
+ioctl_io_nr!(VFIO_DEVICE_SET_IRQS, VFIO_TYPE, VFIO_BASE + 0x0a);
 
 /// Create a syscall whitelist for seccomp.
 ///
@@ -149,4 +154,6 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQFD() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_SET_IRQS() as u32)
 }

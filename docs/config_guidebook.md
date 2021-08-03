@@ -403,6 +403,33 @@ Four properties can be set for PFlash device.
 -drive file=/path/to/data_storage_file,if=pfalsh,unit=1,
 ```
 
+### 2.11 VFIO
+The VFIO driver is an IOMMU/device agnostic framework for exposing direct access to userspace, in a secure, IOMMU protected environment. Virtual machine often makes use of direct device access when configured for the highest possible I/O performance.
+
+In order to successfully use VFIO device, it is mandatory that hardware supports virtualization and IOMMU groups. 
+
+Assume user wants to access PCI device 0000:1a:00.3.
+The device is attached to PCI bus, therefore user will make use of vfio-pci to manage the group:
+```shell
+# cmdline
+modprobe vfio-pci
+```
+Binding this device to the vfio-pci driver, it will create the VFIO group character devices for this group.
+```shell
+# cmdline 
+echo 0000:1a:00.3 > /sys/bus/pci/devices/0000:1a:00.3/driver/unbind
+echo `lspci -ns 0000:1a:00.3 | awk -F':| ' '{print $5" "$6}'` > /sys/bus/pci/drivers/vfio-pci/new_id
+```
+Four properties are supported for VFIO device
+* host:  PCI device info in the system that contains domain, bus number, slot number and function number.
+* id: VFIO device name.
+* bus: bus number of VFIO device.
+* addr: including slot number and function number.
+```shell
+# cmdline
+-device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03
+```
+
 ## 3. StratoVirt Management
 
 StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
