@@ -43,7 +43,10 @@ impl FromStr for MachineType {
         match s.to_lowercase().as_str() {
             "none" => Ok(MachineType::None),
             "microvm" => Ok(MachineType::MicroVm),
-            "standard_vm" => Ok(MachineType::StandardVm),
+            #[cfg(target_arch = "x86_64")]
+            "q35" => Ok(MachineType::StandardVm),
+            #[cfg(target_arch = "aarch64")]
+            "virt" => Ok(MachineType::StandardVm),
             _ => Err(()),
         }
     }
@@ -115,8 +118,16 @@ impl VmConfig {
             .push("usb")
             .push("dump-guest-core")
             .push("mem-share");
-
+        #[cfg(target_arch = "aarch64")]
+        cmd_parser.push("gic-version");
         cmd_parser.parse(mach_config)?;
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(gic_version) = cmd_parser.get_value::<u8>("gic-version")? {
+            if gic_version != 3 {
+                bail!("Unsupported gic version, only gicv3 is supported");
+            }
+        }
 
         if let Some(accel) = cmd_parser.get_value::<String>("accel")? {
             if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") {

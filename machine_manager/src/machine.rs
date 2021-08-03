@@ -249,13 +249,25 @@ pub trait DeviceInterface {
             deprecated: false,
         };
         vec_machine.push(machine_info);
+        #[cfg(target_arch = "x86_64")]
         let machine_info = MachineInfo {
             hotplug: false,
-            name: "standard_vm".to_string(),
+            name: "q35".to_string(),
             numa_mem_support: false,
             cpu_max: 255,
             deprecated: false,
         };
+        #[cfg(target_arch = "x86_64")]
+        vec_machine.push(machine_info);
+        #[cfg(target_arch = "aarch64")]
+        let machine_info = MachineInfo {
+            hotplug: false,
+            name: "virt".to_string(),
+            numa_mem_support: false,
+            cpu_max: 255,
+            deprecated: false,
+        };
+        #[cfg(target_arch = "aarch64")]
         vec_machine.push(machine_info);
         Response::create_response(serde_json::to_value(&vec_machine).unwrap(), None)
     }
@@ -264,7 +276,8 @@ pub trait DeviceInterface {
     fn list_type(&self) -> Response {
         let mut vec_types = Vec::new();
         // These devices are used to interconnect with libvirt, but not been implemented yet.
-        let list_types: Vec<(&str, &str)> = vec![
+        #[allow(unused_mut)]
+        let mut list_types: Vec<(&str, &str)> = vec![
             ("ioh3420", "pcie-root-port-base"),
             ("pcie-root-port", "pcie-root-port-base"),
             ("pcie-pci-bridge", "base-pci-bridge"),
@@ -277,6 +290,8 @@ pub trait DeviceInterface {
             ("vhost-vsock-device", "virtio-device"),
             ("iothread", "object"),
         ];
+        #[cfg(target_arch = "aarch64")]
+        list_types.push(("gpex-pcihost", "pcie-host-bridge"));
         for list in list_types {
             let re = TypeLists::new(String::from(list.0), String::from(list.1));
             vec_types.push(re);
@@ -285,7 +300,12 @@ pub trait DeviceInterface {
     }
 
     fn device_list_properties(&self) -> Response {
-        let vec_props = Vec::<DeviceProps>::new();
+        let mut vec_props = Vec::<DeviceProps>::new();
+        let prop = DeviceProps {
+            name: "disable-legacy".to_string(),
+            prop_type: "OnOffAuto".to_string(),
+        };
+        vec_props.push(prop);
         Response::create_response(serde_json::to_value(&vec_props).unwrap(), None)
     }
 

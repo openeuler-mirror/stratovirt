@@ -7,7 +7,8 @@ StratoVirt can only be launched via cmdline arguments.
 ### 1.1 Machine Config
 
 General configuration of machine, including
-* type: The type of machine, three types of machine are available: "none", "microvm" and "standard_vm".
+* type: The type of machine, three types of machine are available: "none", "microvm", 
+"q35"(x86_64 platform) and "virt" (aarch64 platform).
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
 * mem-share: Guest memory is sharable with other processes or not.
 * accel: accelerate module, supported value `kvm`. (optional). If not set, default is KVM.
@@ -125,7 +126,7 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 For machine type "microvm", only virtio-mmio and legacy devices are supported.
 Maximum number of user createable devices is 11 on x86_64 and 160 on aarch64.
 
-For machine type "standard_vm", virtio-pci devices are supported instead of virtio-mmio
+For standard VM (machine type "q35" on x86_64, and "virt" on aarch64) , virtio-pci devices are supported instead of virtio-mmio
 devices. As for now pci bridges are not implemented yet, there is currently only one
 root bus named pcie.0. As a result, a total of 32 pci devices can be configured.
 
@@ -783,7 +784,8 @@ Now there are 5 states during snapshot:
 
 Snapshot-restore support machine type:
 - `microvm`
-- `standard_vm`
+- `q35` (on x86_64 platform)
+- `virt` (on aarch64 platform)
 
 Some devices and feature don't support to be snapshot yet:
 - `vhost-net`
