@@ -199,3 +199,45 @@ fn inherit_config(path: &Path, file: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::*;
+
+    #[test]
+    fn test_parse_cgroup() {
+        let mut cgroup = init_cgroup();
+        assert!(parse_cgroup(&mut cgroup, "cpuset.cpus=3-4,8-9").is_ok());
+        assert!(parse_cgroup(&mut cgroup, "memory.limit_in_bytes=1000000").is_ok());
+        if let Some(cpuset) = cgroup.get("cpuset.cpus") {
+            assert!(cpuset.is_some());
+            let cpuset = cpuset.as_ref().unwrap();
+            assert_eq!(cpuset, "3-4,8-9");
+        } else {
+            assert!(false);
+        }
+        if let Some(cpuset) = cgroup.get("memory.limit_in_bytes") {
+            assert!(cpuset.is_some());
+            let cpuset = cpuset.as_ref().unwrap();
+            assert_eq!(cpuset, "1000000");
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn test_parse_cgroup_01() {
+        let mut cgroup = init_cgroup();
+        assert!(parse_cgroup(&mut cgroup, "cpuset.cus=3-4,8-9").is_err());
+        assert!(parse_cgroup(&mut cgroup, "cpuset.cpus=3-4").is_ok());
+        assert!(parse_cgroup(&mut cgroup, "memory.limit_bytes=1000000").is_err());
+        if let Some(cpuset) = cgroup.get("cpuset.cpus") {
+            assert!(cpuset.is_some());
+            let cpuset = cpuset.as_ref().unwrap();
+            assert_eq!(cpuset, "3-4");
+        } else {
+            assert!(false);
+        }
+        assert!(cgroup.get("memory.limit_in_bytes").unwrap().is_none());
+    }
+}
