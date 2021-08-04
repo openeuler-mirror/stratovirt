@@ -337,8 +337,8 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
     fn test_write_host_mem_read_only() {
+        const BAD_ADDRESS: i32 = 14;
         let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false, true).unwrap();
         let host_addr = ram1.host_address();
         let slice = unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, 1) };
@@ -347,8 +347,10 @@ mod test {
         let mut f = temp_file.into_file();
         f.write("This is temp file".as_bytes()).unwrap();
         f.seek(SeekFrom::Start(0)).unwrap();
-        // It should panic because PROT_WRITE is not set to the anonymous file.
-        f.read_exact(slice).unwrap();
+        assert_eq!(
+            f.read_exact(slice).unwrap_err().raw_os_error(),
+            Some(BAD_ADDRESS)
+        );
     }
 
     #[test]
