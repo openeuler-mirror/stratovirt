@@ -280,13 +280,13 @@ mod tests {
         }
         #[cfg(target_arch = "aarch64")]
         {
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 256);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 257);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 258);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 259);
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 260);
-            assert!(irq_route_table.release_gsi(258).is_ok());
-            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 258);
+            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 192);
+            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 193);
+            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 194);
+            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 195);
+            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 196);
+            assert!(irq_route_table.release_gsi(195).is_ok());
+            assert_eq!(irq_route_table.allocate_gsi().unwrap(), 195);
         }
     }
 }
