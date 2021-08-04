@@ -13,7 +13,7 @@
 use error_chain::bail;
 
 use crate::{
-    config::{CmdParser, MachineType, VmConfig},
+    config::{ChardevType, CmdParser, MachineType, VmConfig},
     errors::{Result, ResultExt},
     temp_cleaner::TempCleaner,
 };
@@ -181,8 +181,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("serial")
                 .long("serial")
-                .value_name("[stdio]")
-                .help("add serial and set chardev [stdio] for it")
+                .value_name("backend[,path=,server,nowait] or chardev:char_id")
+                .help("add serial and set chardev for it")
                 .takes_value(true),
         )
         .arg(
@@ -273,7 +273,6 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
-    add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,
@@ -285,6 +284,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_netdev);
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_chardev);
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_devices);
+    add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
 
     // Check the mini-set for Vm to start is ok
     if vm_cfg.machine_config.mach_type != MachineType::None {
@@ -339,14 +339,18 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 
         if let Some(mode) = cmd_parser.get_value::<String>("mode")? {
             if mode != *"control" {
-                bail!("Invalid \'mode\' parament: {:?} for monitor", &mode);
+                bail!("Invalid \'mode\' parameter: {:?} for monitor", &mode);
             }
         } else {
             bail!("Argument \'mode\' of \'mon\' should be set to \'control\'.");
         }
 
         if let Some(cfg) = vm_config.chardev.remove(&chardev) {
-            sock_paths.push(cfg.socket_path);
+            if let ChardevType::Socket(path) = cfg.backend {
+                sock_paths.push(path);
+            } else {
+                bail!("Only socket-type of chardev can be used for monitor");
+            }
         } else {
             bail!("No chardev found: {}", &chardev);
         }

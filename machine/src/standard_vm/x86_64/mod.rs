@@ -32,7 +32,6 @@ use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SE
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
-use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle, MigrateInterface,
@@ -41,7 +40,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use sysbus::SysBus;
-use util::loop_context::{EventLoopManager, EventNotifierHelper};
+use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use virtio::{qmp_balloon, qmp_query_balloon};
@@ -320,20 +319,12 @@ impl MachineOps for StdMachine {
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
-
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
-        let serial = Serial::realize(
-            Serial::default(),
-            &mut self.sysbus,
-            region_base,
-            region_size,
-        )?;
-
-        if config.stdio {
-            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
-                .chain_err(|| MachineErrorKind::RegNotifierErr)?;
-        }
+        let serial = Serial::new(config.clone());
+        serial
+            .realize(&mut self.sysbus, region_base, region_size)
+            .chain_err(|| "Failed to realize serial device.")?;
         Ok(())
     }
 

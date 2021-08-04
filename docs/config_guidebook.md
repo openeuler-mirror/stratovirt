@@ -239,15 +239,7 @@ $ ping 1.1.1.1
 
 Virtio console is a general-purpose serial device for data transfer between the guest and host.
 Character devices at /dev/hvc0 to /dev/hvc7 in guest will be created once setting it.
-In host, it will be presented as a UnixSocket.
-
-Five properties can be set for chardev.
-
-* id: unique chardev-id.(optional)
-* socket: the type of redirect method. NB: currently only socket type is supported.
-* path: the path of socket in the host.
-* server: run as a server. This argument is required.
-* nowait: do not wait for connection. This argument is required.
+To set the virtio console, chardev for redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
 
 Two properties can be set for virtconsole.
 * id: unique device-id.
@@ -257,7 +249,6 @@ For virtio-serial-pci, two more properties are required.
 * bus: bus number of virtio console.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
-
 
 ```shell
 # virtio mmio device
@@ -320,15 +311,23 @@ Serial is a legacy device for VM, it is a communication interface which bridges 
 
 Commonly, we use serial as ttyS0 to output console message in StratoVirt.
 
-In StratoVirt, we can set *one* serial and bind it with host's stdio.
+In StratoVirt, there are two ways to set serial and bind it with host's character device.
+NB: We can only set *one* serial.
 
-There is only one argument for serial device:
-
-* stdio: bind serial with stdio
-
+To use the first method, chardev for redirection will be required. See [section 2.12 Chardev](#212-chardev) for details.
 ```shell
-# cmdline
+# add a chardev and redirect the serial port to chardev
+-chardev backend,id=chardev_id[,path=path,server,nowait]
+-serial chardev:chardev_id
+```
+
+Or you can simply use `-serial dev` to bind serial with character device.
+```shell
+# simplifed redirect methods
 -serial stdio
+-serial pty
+-serial socket,path=socket_path,server,nowait
+-serial file,path=file_path
 ```
 
 ### 2.7 Virtio-balloon
@@ -440,6 +439,25 @@ Four properties are supported for VFIO device
 ```shell
 # cmdline
 -device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03
+```
+
+### 2.12 Chardev
+The type of chardev backend could be: stdio, pty, socket and file(output only).
+
+Five properties can be set for chardev.
+
+* id: unique chardev-id.
+* backend: the type of redirect method.
+* path: the path of backend in the host. This argument is only required for socket-type chardev and file-type chardev.
+* server: run as a server. This argument is only required for socket-type chardev.
+* nowait: do not wait for connection. This argument is only required for socket-type chardev.
+
+```shell
+# redirect methods
+-chardev stdio,id=chardev_id
+-chardev pty,id=chardev_id
+-chardev socket,id=chardev_id,path=socket_path,server,nowait
+-chardev file,id=chardev_id,path=file_path
 ```
 
 ## 3. StratoVirt Management

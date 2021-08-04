@@ -87,7 +87,6 @@ use machine_manager::machine::{
 };
 use machine_manager::{
     config::{BootSource, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig},
-    event_loop::EventLoop,
     qmp::{qmp_schema, QmpChannel, Response},
 };
 use migration::{MigrationManager, MigrationStatus};
@@ -96,7 +95,7 @@ use sysbus::SysBus;
 use sysbus::{SysBusDevType, SysRes};
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::loop_context::{EventLoopManager, EventNotifierHelper};
+use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use virtio::{
@@ -633,20 +632,16 @@ impl MachineOps for LightMachine {
         #[cfg(target_arch = "aarch64")]
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
 
-        let serial = Serial::realize(
-            Serial::default(),
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            #[cfg(target_arch = "aarch64")]
-            &self.boot_source,
-        )
-        .chain_err(|| "Failed to realize serial device.")?;
-
-        if config.stdio {
-            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)
-                .chain_err(|| MachineErrorKind::RegNotifierErr)?;
-        }
+        let serial = Serial::new(config.clone());
+        serial
+            .realize(
+                &mut self.sysbus,
+                region_base,
+                region_size,
+                #[cfg(target_arch = "aarch64")]
+                &self.boot_source,
+            )
+            .chain_err(|| "Failed to realize serial device.")?;
         Ok(())
     }
 

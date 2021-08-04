@@ -27,7 +27,6 @@ use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
 use hypervisor::KVM_FDS;
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
-use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle, MigrateInterface,
@@ -38,7 +37,7 @@ use pci::{PciDevOps, PciHost};
 use sysbus::{SysBus, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::loop_context::{EventLoopManager, EventNotifierHelper};
+use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use virtio::{qmp_balloon, qmp_query_balloon};
@@ -304,22 +303,18 @@ impl MachineOps for StdMachine {
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         use crate::errors::ResultExt;
 
-        let dev = PL011::new().chain_err(|| "Failed to create PL011")?;
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
 
-        let serial = PL011::realize(
-            dev,
-            &mut self.sysbus,
-            region_base,
-            region_size,
-            &self.boot_source,
-        )
-        .chain_err(|| "Failed to realize PL011")?;
-
-        if config.stdio {
-            EventLoop::update_event(EventNotifierHelper::internal_notifiers(serial), None)?;
-        }
+        let pl011 = PL011::new(config.clone()).chain_err(|| "Failed to create PL011")?;
+        pl011
+            .realize(
+                &mut self.sysbus,
+                region_base,
+                region_size,
+                &self.boot_source,
+            )
+            .chain_err(|| "Failed to realize PL011")?;
         Ok(())
     }
 

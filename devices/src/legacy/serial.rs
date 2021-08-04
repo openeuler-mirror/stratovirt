@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::VecDeque;
-use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
 use acpi::{
@@ -23,13 +22,14 @@ use address_space::GuestAddress;
 use hypervisor::KVM_FDS;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
+use machine_manager::{config::SerialConfig, event_loop::EventLoop};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
-use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierOperation};
-use util::set_termi_raw_mode;
-use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, terminal::Terminal};
+use util::loop_context::EventNotifierHelper;
+use vmm_sys_util::eventfd::EventFd;
 
+use super::chardev::{Chardev, InputReceiver};
 use super::errors::{ErrorKind, Result};
 
 pub const SERIAL_ADDR: u64 = 0x3f8;
@@ -111,36 +111,36 @@ pub struct Serial {
     state: SerialState,
     /// Interrupt event file descriptor.
     interrupt_evt: Option<EventFd>,
-    /// Operation methods.
-    output: Option<Box<dyn std::io::Write + Send + Sync>>,
     /// System resource.
     res: SysRes,
-}
-
-impl Default for Serial {
-    fn default() -> Self {
-        Self {
-            rbr: VecDeque::new(),
-            state: SerialState::new(),
-            interrupt_evt: None,
-            output: None,
-            res: SysRes::default(),
-        }
-    }
+    /// Character device for redirection.
+    chardev: Arc<Mutex<Chardev>>,
 }
 
 impl Serial {
+    pub fn new(cfg: SerialConfig) -> Self {
+        Serial {
+            rbr: VecDeque::new(),
+            state: SerialState::new(),
+            interrupt_evt: None,
+            res: SysRes::default(),
+            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
+        }
+    }
     pub fn realize(
         mut self,
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
         #[cfg(target_arch = "aarch64")] bs: &Arc<Mutex<BootSource>>,
-    ) -> Result<Arc<Mutex<Self>>> {
+    ) -> Result<()> {
         use super::errors::ResultExt;
 
-        set_termi_raw_mode().chain_err(|| "Failed to set terminal to raw mode")?;
-        self.output = Some(Box::new(std::io::stdout()));
+        self.chardev
+            .lock()
+            .unwrap()
+            .realize()
+            .chain_err(|| "Failed to realize chardev")?;
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
         self.set_sys_resource(sysbus, region_base, region_size)
             .chain_err(|| ErrorKind::SetSysResErr)?;
@@ -154,7 +154,14 @@ impl Serial {
             param_type: "earlycon".to_string(),
             value: format!("uart,mmio,0x{:08x}", region_base),
         });
-        Ok(dev)
+        let locked_dev = dev.lock().unwrap();
+        locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
+            None,
+        )
+        .chain_err(|| ErrorKind::RegNotifierErr)?;
+        Ok(())
     }
 
     /// Update interrupt identification register,
@@ -179,27 +186,6 @@ impl Serial {
                 return;
             }
             error!("serial: failed to update iir.");
-        }
-    }
-
-    /// Append `data` to receiver buffer register, and update IIR.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - A u8-type array.
-    pub fn receive(&mut self, data: &[u8]) {
-        if self.state.mcr & UART_MCR_LOOP == 0 {
-            let len = self.rbr.len();
-            if len >= RECEIVER_BUFF_SIZE {
-                error!(
-                    "serial: maximum receive buffer size exceeded (len = {}).",
-                    len,
-                );
-            }
-
-            self.rbr.extend(data);
-            self.state.lsr |= UART_LSR_DR;
-            self.update_iir();
         }
     }
 
@@ -304,14 +290,18 @@ impl Serial {
                         self.rbr.push_back(data);
                         self.state.lsr |= UART_LSR_DR;
                     } else {
-                        let output = match &mut self.output {
-                            Some(o) => o,
-                            None => bail!("serial: failed to get output fd."),
-                        };
-                        output
+                        let output = self.chardev.lock().unwrap().output.clone();
+                        if output.is_none() {
+                            self.update_iir();
+                            bail!("serial: failed to get output fd.");
+                        }
+                        let mut locked_output = output.as_ref().unwrap().lock().unwrap();
+                        locked_output
                             .write_all(&[data])
                             .chain_err(|| "serial: failed to write.")?;
-                        output.flush().chain_err(|| "serial: failed to flush.")?;
+                        locked_output
+                            .flush()
+                            .chain_err(|| "serial: failed to flush.")?;
                     }
 
                     self.update_iir();
@@ -342,6 +332,25 @@ impl Serial {
         }
 
         Ok(())
+    }
+}
+
+impl InputReceiver for Serial {
+    fn input_handle(&mut self, data: &[u8]) {
+        if self.state.mcr & UART_MCR_LOOP == 0 {
+            let len = self.rbr.len();
+            if len >= RECEIVER_BUFF_SIZE {
+                error!(
+                    "serial: maximum receive buffer size exceeded (len = {}).",
+                    len,
+                );
+                return;
+            }
+
+            self.rbr.extend(data);
+            self.state.lsr |= UART_LSR_DR;
+            self.update_iir();
+        }
     }
 }
 
@@ -382,40 +391,6 @@ impl SysBusDevOps for Serial {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Serial
-    }
-}
-
-impl EventNotifierHelper for Serial {
-    /// Add serial to `EventNotifier`.
-    ///
-    /// # Arguments
-    ///
-    /// * `serial` - Serial instance.
-    fn internal_notifiers(serial: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-
-        let mut handlers = Vec::new();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, _| {
-                let mut out = [0_u8; 64];
-                if let Ok(count) = std::io::stdin().lock().read_raw(&mut out) {
-                    serial.lock().unwrap().receive(&out[..count]);
-                }
-                None
-            });
-
-        handlers.push(Arc::new(Mutex::new(handler)));
-
-        let notifier = EventNotifier::new(
-            NotifierOperation::AddShared,
-            libc::STDIN_FILENO,
-            None,
-            EventSet::IN,
-            handlers,
-        );
-
-        notifiers.push(notifier);
-        notifiers
     }
 }
 
@@ -484,11 +459,18 @@ impl MigrationHook for Serial {}
 #[cfg(test)]
 mod test {
     use super::*;
+    use machine_manager::config::{ChardevConfig, ChardevType};
 
     #[test]
     fn test_methods_of_serial() {
         // test new method
-        let mut usart = Serial::default();
+        let chardev_cfg = ChardevConfig {
+            id: "chardev".to_string(),
+            backend: ChardevType::Stdio,
+        };
+        let mut usart = Serial::new(SerialConfig {
+            chardev: chardev_cfg.clone(),
+        });
         assert_eq!(usart.state.ier, 0);
         assert_eq!(usart.state.iir, 1);
         assert_eq!(usart.state.lcr, 3);
@@ -501,7 +483,7 @@ mod test {
 
         // test receive method
         let data = [0x01, 0x02];
-        usart.receive(&data);
+        usart.input_handle(&data);
         assert_eq!(usart.rbr.is_empty(), false);
         assert_eq!(usart.rbr.len(), 2);
         assert_eq!(usart.rbr.front(), Some(&0x01));
@@ -515,7 +497,10 @@ mod test {
         // for write_internal with first argument to work,
         // you need to set output at first
         assert!(usart.write_internal(0, 0x03).is_err());
-        usart.output = Some(Box::new(std::io::stdout()));
+        let mut chardev = Chardev::new(chardev_cfg);
+        chardev.output = Some(Arc::new(Mutex::new(std::io::stdout())));
+        usart.chardev = Arc::new(Mutex::new(chardev));
+
         assert!(usart.write_internal(0, 0x03).is_ok());
         usart.write_internal(3, 0xff).unwrap();
         assert_eq!(usart.read_internal(3), 0xff);
@@ -534,8 +519,13 @@ mod test {
 
     #[test]
     fn test_serial_migration_interface() {
-        let mut usart = Serial::default();
-
+        let chardev_cfg = ChardevConfig {
+            id: "chardev".to_string(),
+            backend: ChardevType::Stdio,
+        };
+        let mut usart = Serial::new(SerialConfig {
+            chardev: chardev_cfg,
+        });
         // Get state vector for usart
         let serial_state_result = usart.get_state_vec();
         assert!(serial_state_result.is_ok());

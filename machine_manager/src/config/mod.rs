@@ -143,7 +143,7 @@ pub struct VmConfig {
     pub boot_source: BootSource,
     pub drives: Option<HashMap<String, DriveConfig>>,
     pub netdevs: Option<HashMap<String, NetDevcfg>>,
-    pub chardev: HashMap<String, ConsoleConfig>,
+    pub chardev: HashMap<String, ChardevConfig>,
     pub virtio_serial: Option<VirtioSerialInfo>,
     pub devices: Vec<(String, String)>,
     pub serial: Option<SerialConfig>,
@@ -176,8 +176,22 @@ impl VmConfig {
             bail!("Before Vm start, set a initrd or drive_file as rootfs");
         }
 
-        if self.serial.is_some() && self.serial.as_ref().unwrap().stdio && is_daemonize {
-            bail!("Serial with stdio and daemonize can't be set together");
+        let mut stdio_count = 0;
+        if let Some(serial) = self.serial.as_ref() {
+            if serial.chardev.backend == ChardevType::Stdio {
+                stdio_count += 1;
+            }
+        }
+        for (_, char_dev) in self.chardev.clone() {
+            if char_dev.backend == ChardevType::Stdio {
+                stdio_count += 1;
+            }
+        }
+        if stdio_count > 0 && is_daemonize {
+            bail!("Device redirected to stdio and daemonize can't be set together");
+        }
+        if stdio_count > 1 {
+            bail!("Can't set multiple devices redirected to stdio");
         }
 
         Ok(())
