@@ -281,7 +281,7 @@ impl AmlToUuid {
 
 impl AmlBuilder for AmlToUuid {
     fn aml_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
+        let mut uuid_bytes = Vec::new();
 
         // If the UUID is "aabbccdd-eeff-gghh-iijj-kkllmmnnoopp", then the encoded order is:
         // dd cc bb aa ff ee hh gg ii jj kk ll mm nn oo pp
@@ -289,11 +289,18 @@ impl AmlBuilder for AmlToUuid {
 
         for i in index {
             let mut chars = self.name.chars();
-            bytes.push(
+            uuid_bytes.push(
                 (chars.nth(*i).unwrap().to_digit(16).unwrap() as u8) << 4
                     | chars.next().unwrap().to_digit(16).unwrap() as u8,
             );
         }
+
+        let mut bytes = vec![0x11];
+        // ToUUID is a Buffer, so the `opcode` and `pkg_length` have to be added in the front.
+        let len_bytes = AmlInteger(uuid_bytes.len() as u64).aml_bytes();
+        bytes.extend(build_pkg_length(len_bytes.len() + uuid_bytes.len(), true));
+        bytes.extend(len_bytes);
+        bytes.extend(uuid_bytes);
 
         bytes
     }
@@ -1801,8 +1808,8 @@ mod test {
         assert_eq!(
             uuid.aml_bytes(),
             &[
-                0x5B, 0x4D, 0xDB, 0x33, 0xF7, 0x1F, 0x1C, 0x40, 0x96, 0x57, 0x74, 0x41, 0xC0, 0x3D,
-                0xD7, 0x66
+                0x11, 0x13, 0x0a, 0x10, 0x5B, 0x4D, 0xDB, 0x33, 0xF7, 0x1F, 0x1C, 0x40, 0x96, 0x57,
+                0x74, 0x41, 0xC0, 0x3D, 0xD7, 0x66
             ]
         );
     }
