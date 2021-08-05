@@ -40,6 +40,8 @@ const QUEUE_NUM_CONSOLE: usize = 2;
 /// Size of virtqueue.
 const QUEUE_SIZE_CONSOLE: u16 = 256;
 
+const BUFF_SIZE: usize = 4096;
+
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 struct VirtioConsoleConfig {
@@ -136,6 +138,10 @@ impl InputReceiver for ConsoleHandler {
                 e.display_chain()
             )
         }
+    }
+
+    fn get_remain_space_size(&mut self) -> usize {
+        BUFF_SIZE
     }
 }
 

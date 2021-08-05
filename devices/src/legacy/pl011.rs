@@ -204,6 +204,10 @@ impl InputReceiver for PL011 {
             self.interrupt();
         }
     }
+
+    fn get_remain_space_size(&mut self) -> usize {
+        PL011_FIFO_SIZE - self.state.read_count as usize
+    }
 }
 
 impl SysBusDevOps for PL011 {

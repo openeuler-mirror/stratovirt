@@ -352,6 +352,10 @@ impl InputReceiver for Serial {
             self.update_iir();
         }
     }
+
+    fn get_remain_space_size(&mut self) -> usize {
+        RECEIVER_BUFF_SIZE
+    }
 }
 
 impl SysBusDevOps for Serial {

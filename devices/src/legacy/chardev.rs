@@ -29,11 +29,11 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::errors::{Result, ResultExt};
 
-const BUFF_SIZE: usize = 4096;
-
-/// Provide input receiver method used by frontends.
+/// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {
     fn input_handle(&mut self, buffer: &[u8]);
+
+    fn get_remain_space_size(&mut self) -> usize;
 }
 
 /// Character device structure.
@@ -46,8 +46,10 @@ pub struct Chardev {
     pub input: Option<Arc<Mutex<dyn CommunicatInInterface>>>,
     /// Chardev output.
     pub output: Option<Arc<Mutex<dyn CommunicatOutInterface>>>,
-    /// Input receiver method.
-    ops: Option<Arc<dyn Fn(&[u8]) + Send + Sync>>,
+    /// Handle the input data and trigger interrupt if necessary.
+    receive: Option<Arc<dyn Fn(&[u8]) + Send + Sync>>,
+    /// Return the remain space size of receiver buffer.
+    get_remain_space_size: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
 }
 
 impl Chardev {
@@ -57,7 +59,8 @@ impl Chardev {
             listener: None,
             input: None,
             output: None,
-            ops: None,
+            receive: None,
+            get_remain_space_size: None,
         }
     }
 
@@ -106,8 +109,12 @@ impl Chardev {
 
     pub fn set_input_callback<T: 'static + InputReceiver>(&mut self, dev: &Arc<Mutex<T>>) {
         let cloned_dev = dev.clone();
-        self.ops = Some(Arc::new(move |data: &[u8]| {
+        self.receive = Some(Arc::new(move |data: &[u8]| {
             cloned_dev.lock().unwrap().input_handle(data)
+        }));
+        let cloned_dev = dev.clone();
+        self.get_remain_space_size = Some(Arc::new(move || {
+            cloned_dev.lock().unwrap().get_remain_space_size()
         }));
     }
 }
@@ -166,21 +173,18 @@ fn get_notifier_handler(
     backend: ChardevType,
 ) -> Box<NotifierCallback> {
     match backend {
-        ChardevType::Stdio | ChardevType::Pty => Box::new(move |event, _| {
-            if event == EventSet::IN {
-                let mut buffer = [0_u8; BUFF_SIZE];
-                let locked_chardev = chardev.lock().unwrap();
-                if let Some(input) = locked_chardev.input.clone() {
-                    if let Ok(index) = input.lock().unwrap().read(&mut buffer) {
-                        if let Some(ops) = locked_chardev.ops.clone() {
-                            ops(&mut buffer[..index]);
-                        }
-                    } else {
-                        error!("Failed to read input data");
-                    }
+        ChardevType::Stdio | ChardevType::Pty => Box::new(move |_, _| {
+            let locked_chardev = chardev.lock().unwrap();
+            let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();
+            let mut buffer = vec![0_u8; buff_size];
+            if let Some(input) = locked_chardev.input.clone() {
+                if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
+                    locked_chardev.receive.as_ref().unwrap()(&mut buffer[..index]);
                 } else {
-                    error!("Failed to get chardev input fd");
+                    error!("Failed to read input data");
                 }
+            } else {
+                error!("Failed to get chardev input fd");
             }
             None
         }),
@@ -196,13 +200,12 @@ fn get_notifier_handler(
             let cloned_chardev = chardev.clone();
             let inner_handler = Box::new(move |event, _| {
                 if event == EventSet::IN {
-                    let mut buffer = [0_u8; BUFF_SIZE];
                     let locked_chardev = cloned_chardev.lock().unwrap();
+                    let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();
+                    let mut buffer = vec![0_u8; buff_size];
                     if let Some(input) = locked_chardev.input.clone() {
-                        if let Ok(index) = input.lock().unwrap().read(&mut buffer) {
-                            if let Some(ops) = locked_chardev.ops.clone() {
-                                ops(&mut buffer[..index]);
-                            }
+                        if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
+                            locked_chardev.receive.as_ref().unwrap()(&mut buffer[..index]);
                         } else {
                             error!("Failed to read input data");
                         }
@@ -277,9 +280,16 @@ impl EventNotifierHelper for Chardev {
 }
 
 /// Provide backend trait object receiving the input from the guest.
-pub trait CommunicatInInterface:
-    std::io::Read + std::marker::Send + std::os::unix::io::AsRawFd
-{
+pub trait CommunicatInInterface: std::marker::Send + std::os::unix::io::AsRawFd {
+    fn chr_read_raw(&mut self, buf: &mut [u8]) -> Result<usize> {
+        use libc::read;
+        // Safe because this only read the bytes from terminal within the buffer.
+        let ret = unsafe { read(self.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) };
+        if ret < 0 {
+            bail!("Failed to read buffer");
+        }
+        Ok(ret as usize)
+    }
 }
 
 /// Provide backend trait object processing the output from the guest.
