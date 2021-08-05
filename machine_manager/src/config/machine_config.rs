@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
-use util::num_ops::round_down;
 
 const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_MEMSIZE: u64 = 256;
@@ -93,14 +92,8 @@ impl Default for MachineConfig {
 impl ConfigCheck for MachineConfig {
     fn check(&self) -> Result<()> {
         if self.mem_config.mem_size < MIN_MEMSIZE || self.mem_config.mem_size > MAX_MEMSIZE {
-            return Err(ErrorKind::IllegalValue(
-                "Memory size".to_string(),
-                MIN_MEMSIZE,
-                true,
-                MAX_MEMSIZE,
-                true,
-            )
-            .into());
+            bail!("Memory size must >= 256MiB and <= 512GiB, default unit: MiB, current memory size: {:?} bytes", 
+            &self.mem_config.mem_size);
         }
 
         Ok(())
@@ -205,7 +198,9 @@ impl VmConfig {
 }
 
 fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
-    if origin_value.contains('M') ^ origin_value.contains('m') {
+    if (origin_value.ends_with('M') | origin_value.ends_with('m'))
+        && (origin_value.contains('M') ^ origin_value.contains('m'))
+    {
         let value = origin_value.replacen("M", "", 1);
         let value = value.replacen("m", "", 1);
         get_inner(
@@ -216,7 +211,9 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
                 })?
                 .checked_mul(M),
         )
-    } else if origin_value.contains('G') ^ origin_value.contains('g') {
+    } else if (origin_value.ends_with('G') | origin_value.ends_with('g'))
+        && (origin_value.contains('G') ^ origin_value.contains('g'))
+    {
         let value = origin_value.replacen("G", "", 1);
         let value = value.replacen("g", "", 1);
         get_inner(
@@ -232,13 +229,9 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
             ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
         })?;
 
-        if let Some(round) = round_down(size, M) {
-            if size != round {
-                return Err(ErrorKind::Unaligned("memory".to_string(), size, M).into());
-            }
-        }
+        let memory_size = size.checked_mul(M);
 
-        get_inner(Some(size))
+        get_inner(memory_size)
     }
 }
 

@@ -36,15 +36,15 @@ By default, after booted, VM will online all CPUs you set.
 StratoVirt supports to set the size of VM's memory in cmdline.
 
 This allows you to set the size of memory that VM will support.
-You can choose `M` or `G` as unit (default unit is `Byte`).
+You can choose `G` as unit (default unit is `M`).
 
 Default VM memory size is 256M. The supported VM memory size is among [256M, 512G].
 
 ```shell
 # cmdline
 -m [size=]megs
--m 805306368
--m 256M
+-m 256m
+-m 256
 -m 1G
 ```
 
