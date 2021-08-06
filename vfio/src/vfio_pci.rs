@@ -619,7 +619,7 @@ impl VfioPciDevice {
                     GuestAddress(gpa + mmap.offset),
                     mmap.size,
                     Some(fb),
-                    true,
+                    false,
                     true,
                     read_only,
                 )

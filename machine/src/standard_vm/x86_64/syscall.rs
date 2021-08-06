@@ -139,7 +139,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_unlink),
         BpfRule::new(libc::SYS_madvise)
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
-            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32),
+            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32),
     ]
 }
 
