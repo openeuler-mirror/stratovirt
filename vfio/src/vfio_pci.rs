@@ -347,7 +347,6 @@ impl VfioPciDevice {
 
             let bar_region = if i == table_bar {
                 let region = Region::init_container_region(size);
-                region.set_priority(-1);
                 region
                     .add_subregion(
                         Region::init_io_region(table_size as u64, table_ops.clone()),
@@ -627,6 +626,8 @@ impl VfioPciDevice {
                 .chain_err(|| "Failed to create HostMemMapping")?;
 
                 let ram_device = Region::init_ram_device_region(Arc::new(host_mmap));
+                // Avoid being covered by user memory region.
+                ram_device.set_priority(1);
                 let parent_bus = self.parent_bus.upgrade().unwrap();
                 let locked_parent_bus = parent_bus.lock().unwrap();
                 locked_parent_bus
