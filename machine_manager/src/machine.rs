@@ -13,6 +13,7 @@
 extern crate util;
 
 use std::os::unix::io::RawFd;
+use std::sync::{Arc, Mutex};
 
 use strum::VariantNames;
 
@@ -21,6 +22,12 @@ use crate::qmp::qmp_schema::{
     MachineInfo, MigrateCapabilities, PropList, QmpCommand, QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
+
+#[derive(Clone)]
+pub struct PathInfo {
+    pub path: String,
+    pub label: String,
+}
 
 /// State for KVM VM.
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -310,8 +317,19 @@ pub trait DeviceInterface {
     }
 
     fn query_chardev(&self) -> Response {
-        let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        let mut vec_chardev_info: Vec<ChardevInfo> = Vec::new();
+        let locked_paths = PTY_PATH.lock().unwrap().clone();
+        for path in locked_paths.iter() {
+            let chardev_path = &path.path;
+            let chardev_label = &path.label;
+            let info = ChardevInfo {
+                open: true,
+                filename: chardev_path.to_string().replace("\"", ""),
+                label: chardev_label.to_string().replace("\"", ""),
+            };
+            vec_chardev_info.push(info);
+        }
+        Response::create_response(serde_json::to_value(&vec_chardev_info).unwrap(), None)
     }
 
     fn qom_list(&self) -> Response {
@@ -362,3 +380,7 @@ pub trait MachineInterface: MachineLifecycle + MachineAddressInterface {}
 
 /// Machine interface which is exposed to outer hypervisor.
 pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface + MigrateInterface {}
+
+lazy_static! {
+    pub static ref PTY_PATH: Arc<Mutex<Vec<PathInfo>>> = Arc::new(Mutex::new(Vec::new()));
+}

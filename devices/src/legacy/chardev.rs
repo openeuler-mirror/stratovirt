@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use libc::{cfmakeraw, tcgetattr, tcsetattr, termios};
+use machine_manager::machine::{PathInfo, PTY_PATH};
 use machine_manager::{
     config::{ChardevConfig, ChardevType},
     temp_cleaner::TempCleaner,
@@ -38,6 +39,8 @@ pub trait InputReceiver: Send {
 
 /// Character device structure.
 pub struct Chardev {
+    /// Id of chardev.
+    pub id: String,
     /// Type of backend device.
     pub backend: ChardevType,
     /// UnixListener for socket-type chardev.
@@ -53,6 +56,7 @@ pub struct Chardev {
 impl Chardev {
     pub fn new(chardev_cfg: ChardevConfig) -> Self {
         Chardev {
+            id: chardev_cfg.id,
             backend: chardev_cfg.backend,
             listener: None,
             input: None,
@@ -72,6 +76,11 @@ impl Chardev {
                 let (master, path) =
                     set_pty_raw_mode().chain_err(|| "Failed to set pty to raw mode")?;
                 info!("Pty path is: {:?}", path);
+                let path_info = PathInfo {
+                    path: format!("pty:{:?}", &path),
+                    label: self.id.clone(),
+                };
+                PTY_PATH.lock().unwrap().push(path_info);
                 // Safe because `master_arc` is the only one owner for the file descriptor.
                 let master_arc = unsafe { Arc::new(Mutex::new(File::from_raw_fd(master))) };
                 self.input = Some(master_arc.clone());
