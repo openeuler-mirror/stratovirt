@@ -24,8 +24,6 @@ const CURRENT_VERSION: u32 = 1;
 const COMPAT_VERSION: u32 = 1;
 #[cfg(target_arch = "x86_64")]
 const EAX_VENDOR_INFO: u32 = 0x0;
-#[cfg(target_arch = "aarch64")]
-const MIDR_PATH: &str = "/sys/devices/system/cpu/cpu0/regs/identification/midr_el1";
 
 /// Format type for migration.
 /// Different file format will have different file layout.
@@ -76,17 +74,6 @@ fn cpu_model() -> [u8; 16] {
     buffer
 }
 
-#[cfg(target_arch = "aarch64")]
-fn cpu_model() -> [u8; 16] {
-    use std::fs::File;
-    use std::io::Read;
-
-    let mut midr_file = File::open(MIDR_PATH).unwrap();
-    let mut midr_el1 = [0u8; 16];
-    midr_file.read_exact(&mut midr_el1).unwrap();
-    midr_el1
-}
-
 /// Structure used to mark some message in migration.
 #[derive(Copy, Clone, Debug)]
 pub struct MigrationHeader {
@@ -105,6 +92,7 @@ pub struct MigrationHeader {
     /// The version of hypervisor.
     hypervisor_version: u32,
     /// The type of Cpu model.
+    #[cfg(target_arch = "x86_64")]
     cpu_model: [u8; 16],
     /// Operation system type.
     os_type: [u8; 8],
@@ -126,6 +114,7 @@ impl Default for MigrationHeader {
             byte_order: EndianType::Little,
             hypervisor_type: [b'k', b'v', b'm', b'0', b'0', b'0', b'0', b'0'],
             hypervisor_version: Kvm::new().unwrap().get_api_version() as u32,
+            #[cfg(target_arch = "x86_64")]
             cpu_model: cpu_model(),
             #[cfg(target_os = "linux")]
             os_type: [b'l', b'i', b'n', b'u', b'x', b'0', b'0', b'0'],
@@ -161,6 +150,7 @@ impl MigrationHeader {
             return Err(ErrorKind::HeaderItemNotFit("Byte order".to_string()).into());
         }
 
+        #[cfg(target_arch = "x86_64")]
         if self.cpu_model != cpu_model() {
             return Err(ErrorKind::HeaderItemNotFit("Cpu model".to_string()).into());
         }
