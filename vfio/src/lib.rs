@@ -17,6 +17,22 @@ extern crate log;
 #[macro_use]
 extern crate vmm_sys_util;
 
+pub mod errors {
+    error_chain! {
+        links {
+            PciErr(pci::errors::Error, pci::errors::ErrorKind);
+        }
+        errors {
+            UnregMemBar(id: usize) {
+                display("Failed to unmap BAR {} in memory space.", id)
+            }
+            VfioIoctl(ioctl: String, result: i32) {
+                display("Vfio ioctl failed: {}, result is: {}", ioctl, result)
+            }
+        }
+    }
+}
+
 mod vfio_dev;
 pub mod vfio_pci;
 
