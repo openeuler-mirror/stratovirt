@@ -253,12 +253,12 @@ of device and the second one represents function number of it.
 ```shell
 # virtio mmio device
 -device virtio-serial-device[,id=virtio-serial0]
--chardev socket,path=socket_path,id=virtioconsole1
+-chardev socket,path=socket_path,id=virtioconsole1,server,nowait
 -device virtconsole,chardev=virtioconsole1,id=console_id
 
 # virtio pci device
 -device virtio-serial-pci,bus=pcie.0,addr=0x1[,id=virtio-serial0]
--chardev socket,path=socket_path,id=virtioconsole1
+-chardev socket,path=socket_path,id=virtioconsole1,server,nowait
 -device virtconsole,chardev=virtioconsole1,id=console_id
 ```
 NB:
@@ -475,7 +475,7 @@ StratoVirt supports UnixSocket-type qmp, you can set it by:
 # cmdline
 -qmp unix:/path/to/api/socket,server,nowait
 ```
-Where, the information about 'server' and 'nowait' can be found in chapter 2.4 Virtio-console.
+Where, the information about 'server' and 'nowait' can be found in [section 2.12 Chardev](#212-chardev)
 
 On top of that, monitor can be used to create qmp connection as well.
 The following commands can be used to create a monitor.
