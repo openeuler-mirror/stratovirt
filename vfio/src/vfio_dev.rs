@@ -27,8 +27,8 @@ use vmm_sys_util::ioctl::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
 };
 
+use super::errors::{ErrorKind, Result, ResultExt};
 use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
-use pci::errors::{ErrorKind, Result, ResultExt};
 
 /// Refer to VFIO in https://github.com/torvalds/linux/blob/master/include/uapi/linux/vfio.h
 const IOMMU_GROUP: &str = "iommu_group";

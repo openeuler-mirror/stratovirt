@@ -35,9 +35,6 @@ pub mod errors {
             PciRegister(offset: u64) {
                 display("Unsupported pci register, 0x{:x}", offset)
             }
-            VfioIoctl(ioctl: String, result: i32) {
-                display("Vfio ioctl failed: {}, result is: {}", ioctl, result)
-            }
         }
     }
 }

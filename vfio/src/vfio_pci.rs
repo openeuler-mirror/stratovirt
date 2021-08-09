@@ -24,6 +24,7 @@ use vfio_bindings::bindings::vfio;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_mut_ref;
 
+use super::errors::{ErrorKind, Result, ResultExt};
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use hypervisor::{MsiVector, KVM_FDS};
 #[cfg(target_arch = "aarch64")]
@@ -33,7 +34,7 @@ use pci::config::{
     COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
     IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE, REG_SIZE,
 };
-use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
+use pci::errors::Result as PciResult;
 use pci::msix::{
     is_msix_enabled, Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK, MSIX_CAP_ID,
     MSIX_CAP_SIZE, MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE, MSIX_TABLE_OFFSET,
@@ -105,7 +106,7 @@ impl VfioPciDevice {
         devfn: u8,
         name: String,
         parent_bus: Weak<Mutex<PciBus>>,
-    ) -> PciResult<Self> {
+    ) -> Result<Self> {
         Ok(VfioPciDevice {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             pci_config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
@@ -124,7 +125,7 @@ impl VfioPciDevice {
         })
     }
 
-    fn get_pci_config(&mut self) -> PciResult<()> {
+    fn get_pci_config(&mut self) -> Result<()> {
         let argsz: u32 = size_of::<vfio::vfio_region_info>() as u32;
         let mut info = vfio::vfio_region_info {
             argsz,
@@ -159,7 +160,7 @@ impl VfioPciDevice {
 
     /// Disable I/O, MMIO, bus master and INTx states, And clear host device bar size information.
     /// Guest OS can get residual addresses from the host if not clear bar size.
-    fn pci_config_reset(&mut self) -> PciResult<()> {
+    fn pci_config_reset(&mut self) -> Result<()> {
         let mut cmd = le_read_u16(&self.pci_config.config, COMMAND as usize)?;
         cmd &= !(COMMAND_IO_SPACE
             | COMMAND_MEMORY_SPACE
@@ -190,7 +191,7 @@ impl VfioPciDevice {
     }
 
     /// Get MSI-X table, vfio_irq and entry information from vfio device.
-    fn get_msix_info(&mut self) -> PciResult<VfioMsixInfo> {
+    fn get_msix_info(&mut self) -> Result<VfioMsixInfo> {
         let n = self.vfio_device.clone().dev_info.num_irqs;
         let vfio_irq = self
             .vfio_device
@@ -229,7 +230,7 @@ impl VfioPciDevice {
 
     /// Get vfio bars information. Vfio device won't allow to mmap the MSI-X table area,
     /// we need to separate MSI-X table area and region mmap area.
-    fn bar_region_info(&mut self) -> PciResult<Vec<VfioBar>> {
+    fn bar_region_info(&mut self) -> Result<Vec<VfioBar>> {
         let mut vfio_bars: Vec<VfioBar> = Vec::new();
         let mut infos = self
             .vfio_device
@@ -265,7 +266,7 @@ impl VfioPciDevice {
         Ok(vfio_bars)
     }
 
-    fn fixup_msix_region(&self, vfio_bars: &mut Vec<VfioBar>) -> PciResult<()> {
+    fn fixup_msix_region(&self, vfio_bars: &mut Vec<VfioBar>) -> Result<()> {
         let msix_info = self
             .msix_info
             .as_ref()
@@ -312,7 +313,7 @@ impl VfioPciDevice {
         Ok(())
     }
 
-    fn register_bars(&mut self) -> PciResult<()> {
+    fn register_bars(&mut self) -> Result<()> {
         let msix_info = self
             .msix_info
             .as_ref()
@@ -346,7 +347,6 @@ impl VfioPciDevice {
 
             let bar_region = if i == table_bar {
                 let region = Region::init_container_region(size);
-                region.set_priority(-1);
                 region
                     .add_subregion(
                         Region::init_io_region(table_size as u64, table_ops.clone()),
@@ -386,7 +386,7 @@ impl VfioPciDevice {
     }
 
     /// Create region ops for MSI-X table.
-    fn get_table_region_ops(&mut self) -> PciResult<RegionOps> {
+    fn get_table_region_ops(&mut self) -> Result<RegionOps> {
         let msix_info = self
             .msix_info
             .as_ref()
@@ -569,7 +569,7 @@ impl VfioPciDevice {
     }
 
     /// Add all guest memory regions into IOMMU table.
-    fn map_guest_memory(&mut self) -> PciResult<()> {
+    fn map_guest_memory(&mut self) -> Result<()> {
         let container = &self.vfio_device.container;
         let regions = container.vfio_mem_info.regions.lock().unwrap();
 
@@ -583,7 +583,7 @@ impl VfioPciDevice {
 
     /// Avoid VM exits when guest OS read or write device MMIO regions, it maps bar regions into
     /// the guest OS.
-    fn setup_bars_mmap(&mut self) -> PciResult<()> {
+    fn setup_bars_mmap(&mut self) -> Result<()> {
         for i in vfio::VFIO_PCI_BAR0_REGION_INDEX..vfio::VFIO_PCI_ROM_REGION_INDEX {
             let gpa = self.pci_config.get_bar_address(i as usize);
             if gpa == BAR_SPACE_UNMAPPED || gpa == 0 {
@@ -619,13 +619,15 @@ impl VfioPciDevice {
                     GuestAddress(gpa + mmap.offset),
                     mmap.size,
                     Some(fb),
-                    true,
+                    false,
                     true,
                     read_only,
                 )
                 .chain_err(|| "Failed to create HostMemMapping")?;
 
                 let ram_device = Region::init_ram_device_region(Arc::new(host_mmap));
+                // Avoid being covered by user memory region.
+                ram_device.set_priority(1);
                 let parent_bus = self.parent_bus.upgrade().unwrap();
                 let locked_parent_bus = parent_bus.lock().unwrap();
                 locked_parent_bus
@@ -637,7 +639,7 @@ impl VfioPciDevice {
         Ok(())
     }
 
-    fn vfio_enable_msix(&mut self) -> PciResult<()> {
+    fn vfio_enable_msix(&mut self) -> Result<()> {
         let mut gsi_routes = self.gsi_msi_routes.lock().unwrap();
         if gsi_routes.len() == 0 {
             let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
@@ -665,7 +667,7 @@ impl VfioPciDevice {
         Ok(())
     }
 
-    fn vfio_disable_msix(&mut self) -> PciResult<()> {
+    fn vfio_disable_msix(&mut self) -> Result<()> {
         self.vfio_device
             .disable_irqs()
             .chain_err(|| "Failed disable irqfds in kvm")?;
@@ -683,16 +685,18 @@ impl PciDevOps for VfioPciDevice {
     }
 
     fn realize(mut self) -> PciResult<()> {
+        use pci::errors::ResultExt as PciResultExt;
+
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
-        self.vfio_device
-            .reset()
-            .chain_err(|| "Failed to reset vfio device")?;
+        PciResultExt::chain_err(self.vfio_device.reset(), || "Failed to reset vfio device")?;
 
-        self.get_pci_config()
-            .chain_err(|| "Failed to get vfio device pci config space")?;
-        self.pci_config_reset()
-            .chain_err(|| "Failed to reset vfio device pci config space")?;
+        PciResultExt::chain_err(self.get_pci_config(), || {
+            "Failed to get vfio device pci config space"
+        })?;
+        PciResultExt::chain_err(self.pci_config_reset(), || {
+            "Failed to reset vfio device pci config space"
+        })?;
 
         #[cfg(target_arch = "aarch64")]
         {
@@ -706,15 +710,14 @@ impl PciDevOps for VfioPciDevice {
             self.dev_id = self.set_dev_id(bus_num, self.devfn);
         }
 
-        self.msix_info = Some(
-            self.get_msix_info()
-                .chain_err(|| "Failed to get MSI-X info")?,
-        );
-        self.vfio_bars = Arc::new(Mutex::new(
-            self.bar_region_info()
-                .chain_err(|| "Fail to get bar region info")?,
-        ));
-        self.register_bars().chain_err(|| "Fail to register bars")?;
+        self.msix_info = Some(PciResultExt::chain_err(self.get_msix_info(), || {
+            "Failed to get MSI-X info"
+        })?);
+        self.vfio_bars = Arc::new(Mutex::new(PciResultExt::chain_err(
+            self.bar_region_info(),
+            || "Failed to get bar region info",
+        )?));
+        PciResultExt::chain_err(self.register_bars(), || "Failed to register bars")?;
 
         let devfn = self.devfn;
         let dev = Arc::new(Mutex::new(self));
@@ -869,7 +872,7 @@ fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute]) -> Vec<RawFd> {
     rawfds
 }
 
-pub fn create_vfio_device() -> PciResult<Arc<DeviceFd>> {
+pub fn create_vfio_device() -> Result<Arc<DeviceFd>> {
     let mut vfio_device = kvm_create_device {
         type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
         fd: 0,
