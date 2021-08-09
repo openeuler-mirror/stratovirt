@@ -399,7 +399,7 @@ Four parameters are supported for pcie root port.
 ### 2.10 PFlash
 PFlash is a virtualized flash device, it provides code storage and data storage for EDK2 during standard boot.
 
-Usually, two PFlash devices are added to the main board. The first PFlash device is used to store binary code for EDK2 firmware, so this device is usually read-only. The second device is used to store configuration information related to standard boot, so this device is usually readable and writable.
+Usually, two PFlash devices are added to the main board. The first PFlash device is used to store binary code for EDK2 firmware, so this device is usually read-only. The second device is used to store configuration information related to standard boot, so this device is usually readable and writable. You can check out the [boot](./boot.md) to learn how to get the EDK2 firmware files.
 
 Four properties can be set for PFlash device.
 
