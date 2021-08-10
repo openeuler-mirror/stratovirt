@@ -65,6 +65,7 @@ pub struct DriveConfig {
     pub read_only: bool,
     pub direct: bool,
     pub serial_num: Option<String>,
+    pub iops: Option<u64>,
 }
 
 impl Default for DriveConfig {
@@ -75,6 +76,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             serial_num: None,
+            iops: None,
         }
     }
 }
@@ -130,6 +132,13 @@ impl ConfigCheck for BlkDevConfig {
 
 pub fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     let mut drive = DriveConfig::default();
+
+    if let Some(format) = cmd_parser.get_value::<String>("format")? {
+        if format.ne("raw") {
+            bail!("Only \'raw\' type of block is supported");
+        }
+    }
+
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         drive.id = id;
     } else {
@@ -151,6 +160,7 @@ pub fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     if let Some(serial) = cmd_parser.get_value::<String>("serial")? {
         drive.serial_num = Some(serial);
     }
+    drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
     Ok(drive)
 }
 
@@ -162,12 +172,16 @@ pub fn parse_blk(vm_config: &VmConfig, drive_config: &str) -> Result<BlkDevConfi
         .push("bus")
         .push("addr")
         .push("drive")
-        .push("iothread")
-        .push("iops");
+        .push("bootindex")
+        .push("iothread");
 
     cmd_parser.parse(drive_config)?;
 
     pci_args_check(&cmd_parser)?;
+
+    if let Err(ref e) = cmd_parser.get_value::<u8>("bootindex") {
+        bail!("Failed to parse \'bootindex\': {:?}", &e);
+    }
 
     let mut blkdevcfg = BlkDevConfig::default();
     let blkdrive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
@@ -178,9 +192,6 @@ pub fn parse_blk(vm_config: &VmConfig, drive_config: &str) -> Result<BlkDevConfi
 
     if let Some(iothread) = cmd_parser.get_value::<String>("iothread")? {
         blkdevcfg.iothread = Some(iothread);
-    }
-    if let Some(iops) = cmd_parser.get_value::<String>("iops")? {
-        blkdevcfg.iothread = Some(iops);
     }
 
     let drv_cfg = &vm_config.drives;
@@ -194,6 +205,7 @@ pub fn parse_blk(vm_config: &VmConfig, drive_config: &str) -> Result<BlkDevConfi
         blkdevcfg.read_only = drive_arg.read_only;
         blkdevcfg.direct = drive_arg.direct;
         blkdevcfg.serial_num = drive_arg.serial_num.clone();
+        blkdevcfg.iops = drive_arg.iops;
     } else {
         bail!("No drive configured matched for blk device");
     }
@@ -272,7 +284,9 @@ impl VmConfig {
             .push("id")
             .push("readonly")
             .push("direct")
+            .push("format")
             .push("if")
+            .push("throttling.iops-total")
             .push("serial");
 
         cmd_parser.parse(block_config)?;
@@ -312,6 +326,7 @@ impl VmConfig {
         cmd_parser
             .push("if")
             .push("file")
+            .push("format")
             .push("readonly")
             .push("unit");
 
@@ -319,6 +334,11 @@ impl VmConfig {
 
         let mut pflash = PFlashConfig::default();
 
+        if let Some(format) = cmd_parser.get_value::<String>("format")? {
+            if format.ne("raw") {
+                bail!("Only \'raw\' type of pflash is supported");
+            }
+        }
         if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
             pflash.path_on_host = drive_path;
         } else {
@@ -350,11 +370,11 @@ mod tests {
     fn test_drive_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on,throttling.iops-total=200")
             .is_ok());
         let blk_cfg_res = parse_blk(
             &vm_config,
-            "virtio-blk-device,drive=rootfs,iothread=iothread1,iops=200",
+            "virtio-blk-device,drive=rootfs,iothread=iothread1",
         );
         assert!(blk_cfg_res.is_ok());
         let blk_device_config = blk_cfg_res.unwrap();

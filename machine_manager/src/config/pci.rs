@@ -119,6 +119,8 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
         .push("bus")
         .push("addr")
         .push("port")
+        .push("chassis")
+        .push("multifunction")
         .push("id");
     cmd_parser.parse(rootport_cfg)?;
 
@@ -129,6 +131,7 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     } else {
         return Err(ErrorKind::FieldIsMissing("port", "rootport").into());
     }
+    let _ = cmd_parser.get_value::<u8>("chassis")?;
 
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         root_port.id = id;

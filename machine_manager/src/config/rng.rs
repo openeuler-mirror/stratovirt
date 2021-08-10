@@ -69,6 +69,7 @@ pub fn parse_rng_dev(vm_config: &VmConfig, rng_config: &str) -> Result<RngConfig
     let mut cmd_parser = CmdParser::new("rng");
     cmd_parser
         .push("")
+        .push("id")
         .push("bus")
         .push("addr")
         .push("max-bytes")
@@ -82,6 +83,12 @@ pub fn parse_rng_dev(vm_config: &VmConfig, rng_config: &str) -> Result<RngConfig
         rng_id
     } else {
         return Err(ErrorKind::FieldIsMissing("rng", "rng").into());
+    };
+
+    rng_cfg.id = if let Some(rng_id) = cmd_parser.get_value::<String>("id")? {
+        rng_id
+    } else {
+        "".to_string()
     };
 
     if let Some(max) = cmd_parser.get_value::<u64>("max-bytes")? {
@@ -106,7 +113,6 @@ pub fn parse_rng_dev(vm_config: &VmConfig, rng_config: &str) -> Result<RngConfig
     let obj_config = &vm_config.object;
 
     if let Some(object_cfg) = obj_config.get(&rng) {
-        rng_cfg.id = rng;
         #[allow(irrefutable_let_patterns)]
         if let ObjConfig::Rng(obj_cfg) = object_cfg {
             rng_cfg.random_file = obj_cfg.filename.clone();

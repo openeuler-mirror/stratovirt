@@ -262,6 +262,12 @@ pub trait DeviceInterface {
             ("pcie-pci-bridge", "base-pci-bridge"),
             ("pci-bridge", "base-pci-bridge"),
             ("virtio-blk-pci-transitional", "virtio-blk-pci-base"),
+            ("memory-backend-file", "memory-backend"),
+            ("virtio-rng-device", "virtio-device"),
+            ("rng-random", "rng-backend"),
+            ("vfio-pci", "pci-device"),
+            ("vhost-vsock-device", "virtio-device"),
+            ("iothread", "object"),
         ];
         for list in list_types {
             let re = TypeLists::new(String::from(list.0), String::from(list.1));
