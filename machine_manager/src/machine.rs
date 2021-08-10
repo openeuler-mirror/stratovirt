@@ -18,8 +18,9 @@ use std::sync::{Arc, Mutex};
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    CacheOptions, ChardevInfo, Cmd, CmdLine, DeviceProps, Events, FileOptions, KvmInfo,
-    MachineInfo, MigrateCapabilities, PropList, QmpCommand, QmpEvent, Target, TypeLists,
+    CacheOptions, ChardevInfo, Cmd, CmdLine, DeviceProps, Events, FileOptions, GicCap,
+    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, PropList, QmpCommand, QmpEvent,
+    Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -356,6 +357,20 @@ pub trait DeviceInterface {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
         Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
     }
+
+    fn query_gic_capabilities(&self) -> Response {
+        let vec_gic: Vec<GicCap> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_gic).unwrap(), None)
+    }
+
+    fn query_iothreads(&self) -> Response {
+        let mut vec_iothreads: Vec<IothreadInfo> = Vec::new();
+        let locked_threads = IOTHREADS.lock().unwrap();
+        for thread in locked_threads.iter() {
+            vec_iothreads.push(thread.clone());
+        }
+        Response::create_response(serde_json::to_value(&vec_iothreads).unwrap(), None)
+    }
 }
 
 /// Migrate external api
@@ -383,4 +398,5 @@ pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface + Migrate
 
 lazy_static! {
     pub static ref PTY_PATH: Arc<Mutex<Vec<PathInfo>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref IOTHREADS: Arc<Mutex<Vec<IothreadInfo>>> = Arc::new(Mutex::new(Vec::new()));
 }

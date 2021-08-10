@@ -14,7 +14,10 @@ extern crate util;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::{process, thread};
+
+use crate::machine::IOTHREADS;
+use crate::qmp::qmp_schema::IothreadInfo;
 
 use super::config::IothreadConfig;
 use util::loop_context::{EventLoopContext, EventLoopManager, EventNotifier};
@@ -58,6 +61,14 @@ impl EventLoop {
                 if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                     for (id, ctx) in &mut event_loop.io_threads {
                         thread::Builder::new().name(id.to_string()).spawn(move || {
+                            let iothread_info = IothreadInfo {
+                                shrink: 0,
+                                pid: process::id(),
+                                grow: 0,
+                                max: 0,
+                                id: id.to_string(),
+                            };
+                            IOTHREADS.lock().unwrap().push(iothread_info);
                             while let Ok(ret) = ctx.run() {
                                 if !ret {
                                     break;
