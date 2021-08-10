@@ -292,7 +292,8 @@ impl PFlash {
                 resp = self.ident[1];
             }
             _ => {
-                bail!("Device ID 2 and 3 are not supported");
+                debug!("Device ID 2 and 3 are not supported");
+                return Ok(0);
             }
         }
 
