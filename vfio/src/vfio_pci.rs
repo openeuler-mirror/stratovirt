@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -36,9 +37,9 @@ use pci::config::{
 };
 use pci::errors::Result as PciResult;
 use pci::msix::{
-    is_msix_enabled, Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK, MSIX_CAP_ID,
-    MSIX_CAP_SIZE, MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE, MSIX_TABLE_OFFSET,
-    MSIX_TABLE_SIZE_MAX,
+    is_msix_enabled, update_dev_id, Msix, MSIX_CAP_CONTROL, MSIX_CAP_ENABLE, MSIX_CAP_FUNC_MASK,
+    MSIX_CAP_ID, MSIX_CAP_SIZE, MSIX_CAP_TABLE, MSIX_TABLE_BIR, MSIX_TABLE_ENTRY_SIZE,
+    MSIX_TABLE_OFFSET, MSIX_TABLE_SIZE_MAX,
 };
 use pci::{
     le_read_u16, le_read_u32, le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps,
@@ -93,7 +94,7 @@ pub struct VfioPciDevice {
     // Maintains a list of GSI with irqfds that are registered to kvm.
     gsi_msi_routes: Arc<Mutex<Vec<GsiMsiRoute>>>,
     devfn: u8,
-    dev_id: u16,
+    dev_id: Arc<AtomicU16>,
     name: String,
     parent_bus: Weak<Mutex<PciBus>>,
 }
@@ -119,7 +120,7 @@ impl VfioPciDevice {
             vfio_bars: Arc::new(Mutex::new(Vec::with_capacity(PCI_NUM_BARS as usize))),
             gsi_msi_routes: Arc::new(Mutex::new(Vec::new())),
             devfn,
-            dev_id: 0,
+            dev_id: Arc::new(AtomicU16::new(0)),
             name,
             parent_bus,
         })
@@ -404,7 +405,7 @@ impl VfioPciDevice {
             table_size,
             table_size / 128,
             cap_offset as u16,
-            self.dev_id,
+            self.dev_id.load(Ordering::Acquire),
         )));
         self.pci_config.msix = Some(msix.clone());
 
@@ -418,6 +419,9 @@ impl VfioPciDevice {
 
         let cloned_dev = self.vfio_device.clone();
         let cloned_gsi_routes = self.gsi_msi_routes.clone();
+        let parent_bus = self.parent_bus.clone();
+        let dev_id = self.dev_id.clone();
+        let devfn = self.devfn;
         let write = move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
             let mut locked_msix = msix.lock().unwrap();
             locked_msix.table[offset as usize..(offset as usize + data.len())]
@@ -429,13 +433,15 @@ impl VfioPciDevice {
             }
 
             let entry = locked_msix.get_message(vector as u16);
+
+            update_dev_id(&parent_bus, devfn, &dev_id);
             let msix_vector = MsiVector {
                 msg_addr_lo: entry.address_lo,
                 msg_addr_hi: entry.address_hi,
                 msg_data: entry.data,
                 masked: false,
                 #[cfg(target_arch = "aarch64")]
-                dev_id: locked_msix.dev_id as u32,
+                dev_id: dev_id.load(Ordering::Acquire) as u32,
             };
 
             let mut locked_gsi_routes = cloned_gsi_routes.lock().unwrap();
@@ -707,7 +713,7 @@ impl PciDevOps for VfioPciDevice {
                 .lock()
                 .unwrap()
                 .number(SECONDARY_BUS_NUM as usize);
-            self.dev_id = self.set_dev_id(bus_num, self.devfn);
+            self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.devfn)));
         }
 
         self.msix_info = Some(PciResultExt::chain_err(self.get_msix_info(), || {
@@ -799,7 +805,8 @@ impl PciDevOps for VfioPciDevice {
         }
 
         if ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + 4) {
-            self.pci_config.write(offset, data, self.dev_id);
+            self.pci_config
+                .write(offset, data, self.dev_id.load(Ordering::Acquire));
 
             if le_read_u32(&self.pci_config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
                 != 0
@@ -822,7 +829,8 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         } else if ranges_overlap(offset, end, BAR_0 as usize, (BAR_5 as usize) + REG_SIZE) {
-            self.pci_config.write(offset, data, self.dev_id);
+            self.pci_config
+                .write(offset, data, self.dev_id.load(Ordering::Acquire));
 
             if size == 4 && LittleEndian::read_u32(data) != 0xffff_ffff {
                 let parent_bus = self.parent_bus.upgrade().unwrap();
@@ -838,7 +846,8 @@ impl PciDevOps for VfioPciDevice {
             }
         } else if ranges_overlap(offset, end, cap_offset, cap_offset + MSIX_CAP_SIZE as usize) {
             let was_enable = is_msix_enabled(cap_offset, &self.pci_config.config);
-            self.pci_config.write(offset, data, self.dev_id);
+            self.pci_config
+                .write(offset, data, self.dev_id.load(Ordering::Acquire));
             let is_enable = is_msix_enabled(cap_offset, &self.pci_config.config);
 
             if !was_enable && is_enable {
@@ -853,7 +862,8 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         } else {
-            self.pci_config.write(offset, data, self.dev_id);
+            self.pci_config
+                .write(offset, data, self.dev_id.load(Ordering::Acquire));
         }
     }
 
