@@ -13,8 +13,6 @@
 extern crate serde;
 extern crate serde_json;
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -164,7 +162,7 @@ pub fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     Ok(drive)
 }
 
-pub fn parse_blk(vm_config: &VmConfig, drive_config: &str) -> Result<BlkDevConfig> {
+pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevConfig> {
     let mut cmd_parser = CmdParser::new("virtio-blk");
     cmd_parser
         .push("")
@@ -194,12 +192,7 @@ pub fn parse_blk(vm_config: &VmConfig, drive_config: &str) -> Result<BlkDevConfi
         blkdevcfg.iothread = Some(iothread);
     }
 
-    let drv_cfg = &vm_config.drives;
-    if drv_cfg.is_none() {
-        bail!("No drive configured for blk device");
-    }
-
-    if let Some(drive_arg) = drv_cfg.as_ref().unwrap().get(&blkdrive) {
+    if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
         blkdevcfg.id = drive_arg.id.clone();
         blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
         blkdevcfg.read_only = drive_arg.read_only;
@@ -291,12 +284,10 @@ impl VmConfig {
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;
-        if self.drives.is_none() {
-            self.drives = Some(HashMap::new());
-        }
+
         let drive_id = drive_cfg.id.clone();
-        if self.drives.as_mut().unwrap().get(&drive_id).is_none() {
-            self.drives.as_mut().unwrap().insert(drive_id, drive_cfg);
+        if self.drives.get(&drive_id).is_none() {
+            self.drives.insert(drive_id, drive_cfg);
         } else {
             bail!("Drive {:?} has been added", drive_id);
         }
@@ -373,7 +364,7 @@ mod tests {
             .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on,throttling.iops-total=200")
             .is_ok());
         let blk_cfg_res = parse_blk(
-            &vm_config,
+            &mut vm_config,
             "virtio-blk-device,drive=rootfs,iothread=iothread1",
         );
         assert!(blk_cfg_res.is_ok());
@@ -389,7 +380,7 @@ mod tests {
             .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
             .is_ok());
         let blk_cfg_res = parse_blk(
-            &vm_config,
+            &mut vm_config,
             "virtio-blk-device,drive=rootfs1,iothread=iothread1,iops=200",
         );
         assert!(blk_cfg_res.is_err()); // Can not find drive named "rootfs1".
@@ -402,7 +393,7 @@ mod tests {
             .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
             .is_ok());
         let blk_cfg = "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs";
-        let blk_cfg_res = parse_blk(&vm_config, blk_cfg);
+        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
         assert!(blk_cfg_res.is_ok());
         let drive_configs = blk_cfg_res.unwrap();
         assert_eq!(drive_configs.id, "rootfs");
@@ -416,6 +407,10 @@ mod tests {
         let pci = pci_bdf.unwrap();
         assert_eq!(pci.bus, "pcie.0".to_string());
         assert_eq!(pci.addr, (1, 2));
+
+        //  drive "rootfs" has been removed.
+        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
+        assert!(blk_cfg_res.is_err());
     }
 
     #[test]

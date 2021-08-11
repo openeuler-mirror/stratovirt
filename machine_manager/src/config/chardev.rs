@@ -425,7 +425,7 @@ mod tests {
         let console_cfg = virt_console.unwrap();
 
         assert_eq!(console_cfg.id, "console1");
-        let serial_info = vm_config.virtio_serial.unwrap();
+        let serial_info = vm_config.virtio_serial.clone().unwrap();
         assert!(serial_info.pci_bdf.is_some());
         let bdf = serial_info.pci_bdf.unwrap();
         assert_eq!(bdf.bus, "pcie.0");

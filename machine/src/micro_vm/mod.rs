@@ -645,7 +645,11 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_virtio_mmio_net(&mut self, vm_config: &VmConfig, cfg_args: &str) -> MachineResult<()> {
+    fn add_virtio_mmio_net(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> MachineResult<()> {
         let device_cfg = parse_net(vm_config, cfg_args)?;
         if device_cfg.vhost_type.is_some() {
             let net = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &self.sys_mem)));
@@ -665,7 +669,11 @@ impl MachineOps for LightMachine {
         Ok(())
     }
 
-    fn add_virtio_mmio_block(&mut self, vm_config: &VmConfig, cfg_args: &str) -> MachineResult<()> {
+    fn add_virtio_mmio_block(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> MachineResult<()> {
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
             bail!(
