@@ -172,7 +172,7 @@ pub trait DeviceInterface {
 
     /// Query the version of StratoVirt.
     fn query_version(&self) -> Response {
-        let version = Version::new(0, 1, 4);
+        let version = Version::new(1, 0, 5);
         Response::create_response(serde_json::to_value(&version).unwrap(), None)
     }
 

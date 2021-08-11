@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_qmp_greeting_msg() {
-        let greeting_msg = QmpGreeting::create_greeting(1, 0, 4);
+        let greeting_msg = QmpGreeting::create_greeting(1, 0, 5);
 
         let json_msg = r#"
             {
@@ -578,7 +578,7 @@ mod tests {
                         "qemu":{
                             "micro": 1,
                             "minor": 0,
-                            "major": 4
+                            "major": 5
                         },
                         "package": ""
                     },
@@ -727,7 +727,7 @@ mod tests {
         let length = client.read(&mut buffer).unwrap();
         let qmp_response: QmpGreeting =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
-        let qmp_greeting = QmpGreeting::create_greeting(1, 0, 4);
+        let qmp_greeting = QmpGreeting::create_greeting(1, 0, 5);
         assert_eq!(qmp_greeting, qmp_response);
 
         // 2.send empty response
