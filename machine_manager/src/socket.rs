@@ -169,7 +169,7 @@ impl Socket {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
             let resp = if is_greeting {
-                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 4)).unwrap() + "\r"
+                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 5)).unwrap() + "\r"
             } else {
                 serde_json::to_string(&Response::create_empty_response()).unwrap() + "\r"
             };
