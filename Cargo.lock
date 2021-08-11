@@ -309,6 +309,7 @@ name = "machine_manager"
 version = "0.3.0"
 dependencies = [
  "error-chain",
+ "lazy_static",
  "libc",
  "log",
  "serde",

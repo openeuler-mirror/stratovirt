@@ -327,6 +327,22 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-gic-capabilities")]
+    #[strum(serialize = "query-gic-capabilities")]
+    query_gic_capabilities {
+        #[serde(default)]
+        arguments: query_gic_capabilities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "query-iothreads")]
+    #[strum(serialize = "query-iothreads")]
+    query_iothreads {
+        #[serde(default)]
+        arguments: query_iothreads,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// qmp_capabilities
@@ -1646,6 +1662,64 @@ impl Command for query_blockstats {
     type Res = Vec<Cmd>;
 
     fn back(self) -> Vec<Cmd> {
+        Default::default()
+    }
+}
+
+/// Query capabilities of gic.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-gic-capabilities" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_gic_capabilities {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct GicCap {
+    emulated: bool,
+    version: u32,
+    kernel: bool,
+}
+
+impl Command for query_gic_capabilities {
+    type Res = Vec<GicCap>;
+
+    fn back(self) -> Vec<GicCap> {
+        Default::default()
+    }
+}
+
+/// Query information of iothreads.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-iothreads" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_iothreads {}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct IothreadInfo {
+    #[serde(rename = "poll-shrink")]
+    pub shrink: u32,
+    #[serde(rename = "thread-id")]
+    pub pid: u32,
+    #[serde(rename = "poll-grow")]
+    pub grow: u32,
+    #[serde(rename = "poll-max-ns")]
+    pub max: u32,
+    pub id: String,
+}
+
+impl Command for query_iothreads {
+    type Res = Vec<IothreadInfo>;
+
+    fn back(self) -> Vec<IothreadInfo> {
         Default::default()
     }
 }

@@ -31,8 +31,8 @@ If you'd like to build StratoVirt yourself, you should check out the [build_guid
 ## 3. Run StratoVirt
 
 With StratoVirt binary (either installed with yum, or built from source), we can boot a guest linux machine.
-Now StratoVirt provides two kinds of machine, which are microvm and standard_vm. As a quick start, we show
-how to start a VM with microvm.
+Now StratoVirt provides two kinds of machine, which are microvm and standard_vm("q35" on x86_64 platform and 
+"virt" on aarch64 platform). As a quick start, we show how to start a VM with microvm.
 
 First, you will need an PE format Linux kernel binary, and an ext4 file system image (as rootfs).
 * `x86_64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/vmlinux.bin) and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/openEuler-21.03-stratovirt-x86_64.img.xz).

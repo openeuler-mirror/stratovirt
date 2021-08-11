@@ -43,7 +43,10 @@ impl FromStr for MachineType {
         match s.to_lowercase().as_str() {
             "none" => Ok(MachineType::None),
             "microvm" => Ok(MachineType::MicroVm),
-            "standard_vm" => Ok(MachineType::StandardVm),
+            #[cfg(target_arch = "x86_64")]
+            "q35" => Ok(MachineType::StandardVm),
+            #[cfg(target_arch = "aarch64")]
+            "virt" => Ok(MachineType::StandardVm),
             _ => Err(()),
         }
     }
@@ -111,11 +114,31 @@ impl VmConfig {
         cmd_parser
             .push("")
             .push("type")
+            .push("accel")
+            .push("usb")
             .push("dump-guest-core")
             .push("mem-share");
-
+        #[cfg(target_arch = "aarch64")]
+        cmd_parser.push("gic-version");
         cmd_parser.parse(mach_config)?;
 
+        #[cfg(target_arch = "aarch64")]
+        if let Some(gic_version) = cmd_parser.get_value::<u8>("gic-version")? {
+            if gic_version != 3 {
+                bail!("Unsupported gic version, only gicv3 is supported");
+            }
+        }
+
+        if let Some(accel) = cmd_parser.get_value::<String>("accel")? {
+            if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") {
+                bail!("Only \'kvm\', \'kvm:tcg\' and \'tcg\' are supported for \'accel\' of \'machine\'");
+            }
+        }
+        if let Some(usb) = cmd_parser.get_value::<ExBool>("usb")? {
+            if usb.into() {
+                bail!("Argument \'usb\' should be set to \'off\'");
+            }
+        }
         if let Some(mach_type) = cmd_parser
             .get_value::<MachineType>("")
             .chain_err(|| "Unrecognized machine type")?
@@ -161,7 +184,12 @@ impl VmConfig {
     /// Add '-smp' cpu config to `VmConfig`.
     pub fn add_cpu(&mut self, cpu_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("smp");
-        cmd_parser.push("").push("cpus");
+        cmd_parser
+            .push("")
+            .push("sockets")
+            .push("cores")
+            .push("threads")
+            .push("cpus");
 
         cmd_parser.parse(cpu_config)?;
 
@@ -172,6 +200,22 @@ impl VmConfig {
         } else {
             return Err(ErrorKind::FieldIsMissing("cpus", "smp").into());
         };
+
+        if let Some(sockets) = cmd_parser.get_value::<u64>("sockets")? {
+            if sockets.ne(&cpu) {
+                bail!("Invalid \'sockets\' arguments for \'smp\', it should equal to the number of cpus");
+            }
+        }
+        if let Some(cores) = cmd_parser.get_value::<u64>("cores")? {
+            if cores.ne(&1) {
+                bail!("Invalid \'cores\' arguments for \'smp\', it should be \'1\'");
+            }
+        }
+        if let Some(threads) = cmd_parser.get_value::<u64>("threads")? {
+            if threads.ne(&1) {
+                bail!("Invalid \'threads\' arguments for \'smp\', it should be \'1\'");
+            }
+        }
 
         // limit cpu count
         if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {

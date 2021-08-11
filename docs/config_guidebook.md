@@ -7,9 +7,12 @@ StratoVirt can only be launched via cmdline arguments.
 ### 1.1 Machine Config
 
 General configuration of machine, including
-* type: The type of machine, three types of machine are avaiable: "none", "microvm" and "standard_vm".
+* type: The type of machine, three types of machine are available: "none", "microvm", 
+"q35"(x86_64 platform) and "virt" (aarch64 platform).
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
 * mem-share: Guest memory is sharable with other processes or not.
+* accel: accelerate module, supported value `kvm`. (optional). If not set, default is KVM.
+* usb: whether use usb. supported value `off`. (optional). If not set, default is off.
 
 NB: machine type "none" is used to get the capabilities of stratovirt.
 
@@ -25,10 +28,20 @@ StratoVirt supports to set the number of VCPUs(**nr_vcpus**).
 This allows you to set the maximum number of VCPUs that VM will support. The maximum value is 254 and the minimum value that makes sense is 1.
 
 By default, after booted, VM will online all CPUs you set.
+Four properties are supported for `smp`.
+* cpus: the number of VCPUs.
+* sockets: the number of socket. (optional). If not set, default is the value of `cpus`.
+* cores: the number of core. (optional). If not set, default is one.
+* threads: the number of thread. (optional). If not set, default is one.
+NB: the arguments of cpu topology is used to interconnect with libvirt, but the cpu topology of StratoVirt 
+is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads). 
+If it is configured, the sockets number should equals to the number of cpu, `cores` should be `1` 
+and `threads` should be `1`.
+
 
 ```shell
 # cmdline
--smp [cpus=]n
+-smp [cpus=]n[,sockets=n,cores=1,threads=1]
 ```
 
 ### 1.3 Memory Size
@@ -113,7 +126,7 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 For machine type "microvm", only virtio-mmio and legacy devices are supported.
 Maximum number of user createable devices is 11 on x86_64 and 160 on aarch64.
 
-For machine type "standard_vm", virtio-pci devices are supported instead of virtio-mmio
+For standard VM (machine type "q35" on x86_64, and "virt" on aarch64) , virtio-pci devices are supported instead of virtio-mmio
 devices. As for now pci bridges are not implemented yet, there is currently only one
 root bus named pcie.0. As a result, a total of 32 pci devices can be configured.
 
@@ -135,7 +148,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-Seven properties are supported for virtio block device.
+Eight properties are supported for virtio block device.
 
 * drive_id: unique device-id in StratoVirt.
 * path_on_host: the path of block device in host.
@@ -144,6 +157,8 @@ Seven properties are supported for virtio block device.
 * direct: open block device with `O_DIRECT` mode. If not set, default is true.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
 * iops: used to limit IO operations for block device. (optional)
+* format: the format of block image, default value `raw`. NB: currently only `raw` is supported. (optional)
+If not set, default is raw.
 
 For virtio-blk-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -391,9 +406,12 @@ Four parameters are supported for pcie root port.
 * bus: name of bus which to attach.
 * addr: including slot number and function number.
 * id: the name of secondary bus.
+* chassis: the number of chassis. Interconnect with libvirt only.(optional).
+* multifunction: whether to open multi function for pcie root port.(optional). 
+If not set, default value is false.
 
 ```shell
--device pcie-root-port,port=0x1,addr=0x1.0x2,bus=pcie.0,id=pcie.1
+-device pcie-root-port,port=0x1,addr=0x1,bus=pcie.0,id=pcie.1[,multifunction=on]
 ```
 
 ### 2.10 PFlash
@@ -766,7 +784,8 @@ Now there are 5 states during snapshot:
 
 Snapshot-restore support machine type:
 - `microvm`
-- `standard_vm`
+- `q35` (on x86_64 platform)
+- `virt` (on aarch64 platform)
 
 Some devices and feature don't support to be snapshot yet:
 - `vhost-net`
@@ -853,3 +872,14 @@ $ ./ozone \
     -source /path/to/vmlinux.bin /path/to/rootfs \
     -clean-resource
 ```
+
+## 6. Libvirt
+Libvirt launchs StratoVirt by creating cmdlines. But some of these commands
+such as: cpu, overcommit, uuid, no-user-config, nodefaults, sandbox, msg, rtc, no-shutdown,
+nographic, realtime, display, usb, mem-prealloc and boot, are not supported by StratoVirt.
+To launch StratoVirt from libvirt successfully, StratoVirt needs to put these arguments into
+white list. However, these cmdlines never function.
+
+Apart from the above commands, some arguments are playing the same roles. Like 'format'
+and 'bootindex' for virtio-blk; 'chassis' for pcie-root-port; 'sockets',
+'cores' and 'threads' for smp; 'accel' and 'usb' for machine; "format" for pflash device.
