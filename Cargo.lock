@@ -2,7 +2,7 @@
 # It is not intended for manual editing.
 [[package]]
 name = "StratoVirt"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "error-chain",
  "hypervisor",
@@ -20,7 +20,7 @@ dependencies = [
 
 [[package]]
 name = "acpi"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "address_space",
  "error-chain",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "address_space"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "arc-swap",
  "error-chain",
@@ -98,7 +98,7 @@ checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 
 [[package]]
 name = "boot_loader"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "address_space",
  "devices",
@@ -131,7 +131,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "cpu"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "error-chain",
  "hypervisor",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "devices"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "acpi",
  "address_space",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "hypervisor"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "arc-swap",
  "error-chain",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "machine"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "acpi",
  "address_space",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "machine_manager"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "error-chain",
  "lazy_static",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "error-chain",
  "kvm-ioctls",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "migration_derive"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "migration",
  "proc-macro2",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "pci"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "acpi",
  "address_space",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "sysbus"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "acpi",
  "address_space",
@@ -574,7 +574,7 @@ checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
 
 [[package]]
 name = "util"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "byteorder",
  "error-chain",
@@ -594,7 +594,7 @@ checksum = "5fecdca9a5291cc2b8dcf7dc02453fee791a280f3743cb0905f8822ae463b3fe"
 
 [[package]]
 name = "vfio"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "address_space",
  "byteorder",
@@ -618,7 +618,7 @@ checksum = "4a21f546f2bda37f5a8cfb138c87f95b8e34d2d78d6a7a92ba3785f4e08604a7"
 
 [[package]]
 name = "virtio"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "acpi",
  "address_space",
