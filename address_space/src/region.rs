@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use crate::address_space::FlatView;
@@ -27,6 +27,10 @@ pub enum RegionType {
     IO,
     /// Container type.
     Container,
+    /// RomDevice type.
+    RomDevice,
+    /// RamDevice type.
+    RamDevice,
 }
 
 /// Represents a memory region, used by mem-mapped IO or Ram.
@@ -38,7 +42,7 @@ pub struct Region {
     priority: Arc<AtomicI32>,
     /// Size of Region.
     size: Arc<AtomicU64>,
-    /// Offset in parent Container-type region.It won't be changed once initialized.
+    /// Offset in parent Container-type region. It won't be changed once initialized.
     offset: Arc<Mutex<GuestAddress>>,
     /// If not Ram-type Region, `mem_mapping` is None. It won't be changed once initialized.
     mem_mapping: Option<Arc<HostMemMapping>>,
@@ -50,6 +54,8 @@ pub struct Region {
     space: Arc<RwLock<Weak<AddressSpace>>>,
     /// Sub-regions array, keep sorted
     subregions: Arc<RwLock<Vec<Region>>>,
+    /// This field is useful for RomDevice-type Region. If true, in read-only mode, otherwise in IO mode.
+    rom_dev_romd: Arc<AtomicBool>,
 }
 
 /// Used to trigger events.
@@ -104,7 +110,7 @@ impl RegionIoEventFd {
 }
 
 /// FlatRange is a piece of continuous memory address。
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct FlatRange {
     /// The address range.
     pub addr_range: AddressRange,
@@ -112,6 +118,20 @@ pub struct FlatRange {
     pub owner: Region,
     /// The offset within Region.
     pub offset_in_region: u64,
+    /// Rom Device Read-only mode.
+    pub rom_dev_romd: Option<bool>,
+}
+
+impl Eq for FlatRange {}
+
+impl PartialEq for FlatRange {
+    fn eq(&self, other: &Self) -> bool {
+        self.addr_range.base == other.addr_range.base
+            && self.owner.region_type == other.owner.region_type
+            && self.rom_dev_romd.unwrap_or(false) == other.rom_dev_romd.unwrap_or(false)
+            && self.owner == other.owner
+            && self.offset_in_region == other.offset_in_region
+    }
 }
 
 /// Implement PartialEq/Eq for comparison of Region.
@@ -151,6 +171,7 @@ impl Region {
             io_evtfds: Arc::new(Mutex::new(Vec::new())),
             space: Arc::new(RwLock::new(Weak::new())),
             subregions: Arc::new(RwLock::new(Vec::new())),
+            rom_dev_romd: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -168,7 +189,7 @@ impl Region {
     /// # Arguments
     ///
     /// * `size` - Size of IO region.
-    /// * `dev` - Operation of Region.
+    /// * `ops` - Operation of Region.
     pub fn init_io_region(size: u64, ops: RegionOps) -> Region {
         Region::init_region_internal(size, RegionType::IO, None, Some(ops))
     }
@@ -180,6 +201,38 @@ impl Region {
     /// * `size` - Size of container region.
     pub fn init_container_region(size: u64) -> Region {
         Region::init_region_internal(size, RegionType::Container, None, None)
+    }
+
+    /// Initialize RomDevice-type region.
+    ///
+    /// # Arguments
+    ///
+    /// * `mem_mapping` - Mapped memory of this region.
+    /// * `ops` - Operation functions of this region.
+    pub fn init_rom_device_region(mem_mapping: Arc<HostMemMapping>, ops: RegionOps) -> Region {
+        let mut region = Region::init_region_internal(
+            mem_mapping.size(),
+            RegionType::RomDevice,
+            Some(mem_mapping),
+            Some(ops),
+        );
+        region.rom_dev_romd = Arc::new(AtomicBool::new(true));
+
+        region
+    }
+
+    /// Initialize RamDevice-type region.
+    ///
+    /// # Arguments
+    ///
+    /// * `mem_mapping` - Mapped memory of this region.
+    pub fn init_ram_device_region(mem_mapping: Arc<HostMemMapping>) -> Region {
+        Region::init_region_internal(
+            mem_mapping.size(),
+            RegionType::RamDevice,
+            Some(mem_mapping),
+            None,
+        )
     }
 
     /// Get the type of this region.
@@ -222,10 +275,57 @@ impl Region {
         self.offset.lock().unwrap().0 = offset.raw_value();
     }
 
+    /// Returns the minimum address managed by the region.
+    /// If this region is not `Ram` type, this function will return `None`.
+    pub fn start_addr(&self) -> Option<GuestAddress> {
+        if self.region_type != RegionType::Ram {
+            return None;
+        }
+
+        self.mem_mapping.as_ref().map(|r| r.start_address())
+    }
+
+    /// Change mode of RomDevice-type region,
+    ///
+    /// # Arguments
+    ///
+    /// * `read_only` - Set region to read-only mode or not.
+    pub fn set_rom_device_romd(&self, read_only: bool) -> Result<()> {
+        if self.region_type != RegionType::RomDevice {
+            return Err(ErrorKind::RegionType(self.region_type).into());
+        }
+
+        let old_mode = self.rom_dev_romd.as_ref().load(Ordering::SeqCst);
+
+        if old_mode != read_only {
+            self.rom_dev_romd
+                .as_ref()
+                .store(read_only, Ordering::SeqCst);
+
+            if let Some(space) = self.space.read().unwrap().upgrade() {
+                space.update_topology()?;
+            } else {
+                debug!("set RomDevice-type region to read-only mode, which has no belonged address-space");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get read-only mode of RomDevice-type region. Return true if in read-only mode, otherwise return false.
+    /// Return None if it is not a RomDevice-type region.
+    pub fn get_rom_device_romd(&self) -> Option<bool> {
+        if self.region_type != RegionType::RomDevice {
+            None
+        } else {
+            Some(self.rom_dev_romd.as_ref().load(Ordering::SeqCst))
+        }
+    }
+
     /// Get the host address if this region is backed by host-memory,
     /// Return `None` if it is not a Ram-type region.
     pub fn get_host_address(&self) -> Option<u64> {
-        if self.region_type != RegionType::Ram {
+        if self.region_type == RegionType::IO || self.region_type == RegionType::Container {
             return None;
         }
         self.mem_mapping.as_ref().map(|r| r.host_address())
@@ -321,13 +421,33 @@ impl Region {
         })?;
 
         match self.region_type {
-            RegionType::Ram => {
+            RegionType::Ram | RegionType::RamDevice => {
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                 let slice = unsafe {
                     std::slice::from_raw_parts((host_addr + offset) as *const u8, count as usize)
                 };
                 dst.write_all(slice)
                     .chain_err(|| "Failed to write content of Ram to mutable buffer")?;
+            }
+            RegionType::RomDevice => {
+                if self.rom_dev_romd.as_ref().load(Ordering::SeqCst) {
+                    let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
+                    let read_ret = unsafe {
+                        std::slice::from_raw_parts(
+                            (host_addr + offset) as *const u8,
+                            count as usize,
+                        )
+                    };
+                    dst.write_all(read_ret)?;
+                } else {
+                    let mut read_ret = vec![0_u8; count as usize];
+
+                    let read_ops = self.ops.as_ref().unwrap().read.as_ref();
+                    if !read_ops(&mut read_ret, base, offset) {
+                        return Err(ErrorKind::IoAccess(base.raw_value(), offset, count).into());
+                    }
+                    dst.write_all(&read_ret)?;
+                }
             }
             RegionType::IO => {
                 if count >= std::usize::MAX as u64 {
@@ -380,7 +500,7 @@ impl Region {
         })?;
 
         match self.region_type {
-            RegionType::Ram => {
+            RegionType::Ram | RegionType::RamDevice => {
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                 let slice = unsafe {
                     std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, count as usize)
@@ -388,7 +508,7 @@ impl Region {
                 src.read_exact(slice)
                     .chain_err(|| "Failed to write buffer to Ram")?;
             }
-            RegionType::IO => {
+            RegionType::RomDevice | RegionType::IO => {
                 if count >= std::usize::MAX as u64 {
                     return Err(ErrorKind::Overflow(count).into());
                 }
@@ -568,7 +688,7 @@ impl Region {
                         })?;
                 }
             }
-            RegionType::Ram | RegionType::IO => {
+            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
                 self.render_terminate_region(base, addr_range, flat_view)
                     .chain_err(||
                         format!(
@@ -635,6 +755,7 @@ impl Region {
                         },
                         owner: self.clone(),
                         offset_in_region,
+                        rom_dev_romd: self.get_rom_device_romd(),
                     },
                 );
                 index += 1;
@@ -656,6 +777,7 @@ impl Region {
                     addr_range: AddressRange::new(start, remain),
                     owner: self.clone(),
                     offset_in_region,
+                    rom_dev_romd: self.get_rom_device_romd(),
                 },
             );
         }
@@ -677,8 +799,8 @@ impl Region {
     ) -> Result<FlatView> {
         let mut flat_view = FlatView::default();
         match self.region_type {
-            RegionType::Container => self
-                .render_region_pass(base, addr_range, &mut flat_view)
+            RegionType::Container => {
+                self.render_region_pass(base, addr_range, &mut flat_view)
                 .chain_err(|| {
                     format!(
                         "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
@@ -686,9 +808,10 @@ impl Region {
                         addr_range.base.raw_value(),
                         addr_range.size
                     )
-                })?,
-            RegionType::Ram | RegionType::IO => self
-                .render_terminate_region(base, addr_range, &mut flat_view)
+                })?;
+            }
+            RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
+                self.render_terminate_region(base, addr_range, &mut flat_view)
                 .chain_err(|| {
                     format!(
                         "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
@@ -696,7 +819,8 @@ impl Region {
                         addr_range.base.raw_value(),
                         addr_range.size
                     )
-                })?,
+                })?;
+            }
         }
         Ok(flat_view)
     }
@@ -743,8 +867,9 @@ mod test {
 
     #[test]
     fn test_ram_region() {
-        let mem_mapping =
-            Arc::new(HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false).unwrap());
+        let mem_mapping = Arc::new(
+            HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false, false).unwrap(),
+        );
         let ram_region = Region::init_ram_region(mem_mapping.clone());
         let data: [u8; 10] = [10; 10];
         let mut res_data: [u8; 10] = [0; 10];
@@ -778,7 +903,8 @@ mod test {
     fn test_ram_region_access() {
         // the target guest address is 0~1024 (1024 not included)
         let rgn_start = GuestAddress(0);
-        let host_mmap = HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false).unwrap();
+        let host_mmap =
+            HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false, false).unwrap();
         let ram_region = Region::init_ram_region(Arc::new(host_mmap));
 
         let file = TempFile::new().unwrap();

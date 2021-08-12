@@ -42,9 +42,9 @@ macro_rules! __offset_of {
 /// ```
 #[macro_export]
 macro_rules! offset_of {
-    ($type_name:ty, $field:ident) => { __offset_of!($type_name, $field) };
+    ($type_name:ty, $field:ident) => { $crate::__offset_of!($type_name, $field) };
     ($type_name:ty, $field:ident, $($sub_type_name:ty, $sub_field:ident), +) => {
-        __offset_of!($type_name, $field) + offset_of!($($sub_type_name, $sub_field), +)
+        $crate::__offset_of!($type_name, $field) + offset_of!($($sub_type_name, $sub_field), +)
     };
 }
 

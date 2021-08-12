@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::{
+    errors::{ErrorKind, Result, ResultExt},
+    get_pci_bdf, pci_args_check, PciBdf,
+};
 use crate::config::{CmdParser, ConfigCheck, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
@@ -23,157 +23,231 @@ const MAX_PATH_LENGTH: usize = 4096;
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 
+/// Charecter device options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChardevType {
+    Stdio,
+    Pty,
+    Socket(String),
+    File(String),
+}
+
 /// Config structure for virtio-console.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ConsoleConfig {
-    pub console_id: String,
-    pub socket_path: String,
+#[derive(Debug, Clone)]
+pub struct VirtioConsole {
+    pub id: String,
+    pub chardev: ChardevConfig,
 }
 
-impl ConsoleConfig {
-    /// Create `ConsoleConfig` from `Value` structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
+/// Config structure for character device.
+#[derive(Debug, Clone)]
+pub struct ChardevConfig {
+    pub id: String,
+    pub backend: ChardevType,
 }
 
-impl ConfigCheck for ConsoleConfig {
+impl ConfigCheck for ChardevConfig {
     fn check(&self) -> Result<()> {
-        if self.console_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(ErrorKind::StringLengthTooLong(
-                "console id".to_string(),
+                "chardev id".to_string(),
                 MAX_STRING_LENGTH,
             )
             .into());
         }
 
-        if self.socket_path.len() > MAX_PATH_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("socket path".to_string(), MAX_PATH_LENGTH).into(),
-            );
+        if let ChardevType::Socket(path) | ChardevType::File(path) = &self.backend {
+            if path.len() > MAX_PATH_LENGTH {
+                return Err(ErrorKind::StringLengthTooLong(
+                    "socket path".to_string(),
+                    MAX_PATH_LENGTH,
+                )
+                .into());
+            }
         }
-
         Ok(())
     }
 }
 
+fn check_chardev_args(cmd_parser: CmdParser) -> Result<()> {
+    if let Some(chardev_type) = cmd_parser.get_value::<String>("")? {
+        let chardev_str = chardev_type.as_str();
+        let server = cmd_parser.get_value::<String>("server")?;
+        let nowait = cmd_parser.get_value::<String>("nowait")?;
+        match chardev_str {
+            "stdio" | "pty" | "file" => {
+                if server.is_some() {
+                    bail!(
+                        "Chardev of {}-type does not support \'server\' argument",
+                        chardev_str
+                    );
+                }
+                if nowait.is_some() {
+                    bail!(
+                        "Chardev of {}-type does not support \'nowait\' argument",
+                        chardev_str
+                    );
+                }
+            }
+            "socket" => {
+                if let Some(server) = server {
+                    if server.ne("") {
+                        bail!("No parameter needed for server");
+                    }
+                } else {
+                    bail!("Argument \'server\' is needed for socket-type chardev.");
+                }
+                if let Some(nowait) = nowait {
+                    if nowait.ne("") {
+                        bail!("No parameter needed for nowait");
+                    }
+                } else {
+                    bail!("Argument \'nowait\' is needed for socket-type chardev.");
+                }
+            }
+            _ => (),
+        }
+    }
+    Ok(())
+}
+
+pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
+    let chardev_id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
+        chardev_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
+    };
+    let backend = cmd_parser.get_value::<String>("")?;
+    let path = cmd_parser.get_value::<String>("path")?;
+    check_chardev_args(cmd_parser)?;
+    let chardev_type = if let Some(backend) = backend {
+        match backend.as_str() {
+            "stdio" => ChardevType::Stdio,
+            "pty" => ChardevType::Pty,
+            "socket" => {
+                if let Some(path) = path {
+                    ChardevType::Socket(path)
+                } else {
+                    return Err(ErrorKind::FieldIsMissing("path", "socket-type chardev").into());
+                }
+            }
+            "file" => {
+                if let Some(path) = path {
+                    ChardevType::File(path)
+                } else {
+                    return Err(ErrorKind::FieldIsMissing("path", "file-type chardev").into());
+                }
+            }
+            _ => return Err(ErrorKind::InvalidParam(backend, "chardev".to_string()).into()),
+        }
+    } else {
+        return Err(ErrorKind::FieldIsMissing("backend", "chardev").into());
+    };
+
+    Ok(ChardevConfig {
+        id: chardev_id,
+        backend: chardev_type,
+    })
+}
+
+pub fn parse_virtconsole(vm_config: &mut VmConfig, config_args: &str) -> Result<VirtioConsole> {
+    let mut cmd_parser = CmdParser::new("virtconsole");
+    cmd_parser.push("").push("id").push("chardev");
+    cmd_parser.parse(config_args)?;
+
+    let chardev_name = if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
+        chardev
+    } else {
+        return Err(ErrorKind::FieldIsMissing("chardev", "virtconsole").into());
+    };
+
+    let id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
+        chardev_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "virtconsole").into());
+    };
+
+    if let Some(char_dev) = vm_config.chardev.remove(&chardev_name) {
+        return Ok(VirtioConsole {
+            id,
+            chardev: char_dev,
+        });
+    }
+    bail!("Chardev {:?} not found or is in use", &chardev_name);
+}
+
 impl VmConfig {
-    /// Add new virtio-console device to `VmConfig`.
-    fn add_console(&mut self, console: ConsoleConfig) -> Result<()> {
-        if self.consoles.is_some() {
-            for c in self.consoles.as_ref().unwrap() {
-                if c.console_id == console.console_id {
-                    return Err(ErrorKind::IdRepeat(
-                        "virtio-console".to_string(),
-                        c.console_id.to_string(),
+    /// Add chardev config to `VmConfig`.
+    pub fn add_chardev(&mut self, chardev_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("chardev");
+        cmd_parser
+            .push("")
+            .push("id")
+            .push("path")
+            .push("server")
+            .push("nowait");
+
+        cmd_parser.parse(chardev_config)?;
+
+        let chardev = parse_chardev(cmd_parser)?;
+        chardev.check()?;
+        let chardev_id = chardev.id.clone();
+        if self.chardev.get(&chardev_id).is_none() {
+            self.chardev.insert(chardev_id, chardev);
+        } else {
+            bail!("Chardev {:?} has been added", &chardev_id);
+        }
+        Ok(())
+    }
+}
+
+/// Config structure for serial.
+#[derive(Debug, Clone)]
+pub struct SerialConfig {
+    pub chardev: ChardevConfig,
+}
+
+impl VmConfig {
+    pub fn add_serial(&mut self, serial_config: &str) -> Result<()> {
+        let parse_vec: Vec<&str> = serial_config.split(':').collect();
+        let chardev_id = match parse_vec[0] {
+            "chardev" => {
+                if parse_vec.len() == 2 {
+                    parse_vec[1]
+                } else {
+                    return Err(ErrorKind::InvalidParam(
+                        serial_config.to_string(),
+                        "serial".to_string(),
                     )
                     .into());
                 }
             }
-            self.consoles.as_mut().unwrap().push(console);
-        } else {
-            self.consoles = Some(vec![console]);
-        }
-
-        Ok(())
-    }
-
-    /// Update '-console ...' network config to `VmConfig`.
-    pub fn update_console(&mut self, console_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("chardev");
-        cmd_parser.push("id").push("path");
-
-        cmd_parser.parse(console_config)?;
-
-        let mut console = ConsoleConfig::default();
-        if let Some(console_id) = cmd_parser.get_value::<String>("id")? {
-            console.console_id = console_id;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
-        };
-        if let Some(console_path) = cmd_parser.get_value::<String>("path")? {
-            console.socket_path = console_path;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("path", "chardev").into());
-        };
-
-        self.add_console(console)
-    }
-
-    /// Get virtio-console's config from `device` and `chardev` config.
-    pub fn get_virtio_console(&self) -> Vec<ConsoleConfig> {
-        let mut console_cfg: Vec<ConsoleConfig> = Vec::new();
-        if let Some(console_devs) = self.consoles.as_ref() {
-            for console_dev in console_devs {
-                console_cfg.push(console_dev.clone())
-            }
-        }
-        console_cfg
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SerialConfig {
-    pub stdio: bool,
-}
-
-impl SerialConfig {
-    /// Create `SerialConfig` from `Value` structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
-}
-
-impl VmConfig {
-    pub fn update_serial(&mut self, serial_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("serial");
-        cmd_parser.push("");
-
-        cmd_parser.parse(serial_config)?;
-
-        let mut stdio = false;
-        if let Some(serial_type) = cmd_parser.get_value::<String>("")? {
-            match serial_type.as_str() {
-                "stdio" => stdio = true,
-                _ => return Err(ErrorKind::InvalidParam(serial_type).into()),
+            _ => {
+                let chardev_config = serial_config.to_string() + &",id=serial_chardev".to_string();
+                self.add_chardev(&chardev_config)
+                    .chain_err(|| "Failed to add chardev")?;
+                "serial_chardev"
             }
         };
-        self.serial = Some(SerialConfig { stdio });
-
-        Ok(())
+        if let Some(char_dev) = self.chardev.remove(chardev_id) {
+            self.serial = Some(SerialConfig { chardev: char_dev });
+            return Ok(());
+        }
+        bail!("Chardev {:?} not found or is in use", chardev_id);
     }
 }
 
 /// Config structure for virtio-vsock.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VsockConfig {
-    pub vsock_id: String,
+    pub id: String,
     pub guest_cid: u64,
     pub vhost_fd: Option<i32>,
 }
 
-impl VsockConfig {
-    /// Create `VsockConfig` from `Value` structure.
-    /// `Value` structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
-}
-
 impl ConfigCheck for VsockConfig {
     fn check(&self) -> Result<()> {
-        if self.vsock_id.len() > MAX_STRING_LENGTH {
+        if self.id.len() > MAX_STRING_LENGTH {
             return Err(
                 ErrorKind::StringLengthTooLong("vsock id".to_string(), MAX_STRING_LENGTH).into(),
             );
@@ -194,170 +268,192 @@ impl ConfigCheck for VsockConfig {
     }
 }
 
-impl VmConfig {
-    pub fn update_vsock(&mut self, vsock_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("device");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("guest-cid")
-            .push("vhostfd");
+pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
+    let mut cmd_parser = CmdParser::new("vhost-vsock");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("bus")
+        .push("addr")
+        .push("guest-cid")
+        .push("vhostfd");
+    cmd_parser.parse(vsock_config)?;
+    pci_args_check(&cmd_parser)?;
+    let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
+        vsock_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
+    };
 
-        cmd_parser.parse(vsock_config)?;
+    let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
+        cid
+    } else {
+        return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
+    };
+    let device_type = cmd_parser.get_value::<String>("")?;
+    // Safe, because "parse_vsock" function only be called when certain
+    // devices type are added.
+    let dev_type = device_type.unwrap();
+    if dev_type == *"vhost-vsock-device" {
+        if cmd_parser.get_value::<String>("bus")?.is_some() {
+            bail!("virtio mmio device does not support bus property");
+        }
+        if cmd_parser.get_value::<String>("addr")?.is_some() {
+            bail!("virtio mmio device does not support addr property");
+        }
+    }
+    let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
+    let vsock = VsockConfig {
+        id,
+        guest_cid,
+        vhost_fd,
+    };
+    Ok(vsock)
+}
 
-        if let Some(device_type) = cmd_parser.get_value::<String>("")? {
-            if device_type == "vsock" {
-                if self.vsock.is_some() {
-                    bail!("Device vsock can only be set one for one StratoVirt VM.");
-                }
+#[derive(Clone, Default, Debug)]
+pub struct VirtioSerialInfo {
+    pub id: String,
+    pub pci_bdf: Option<PciBdf>,
+}
 
-                let vsock_id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
-                    vsock_id
-                } else {
-                    return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
-                };
-
-                let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
-                    cid
-                } else {
-                    return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
-                };
-
-                let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
-                self.vsock = Some(VsockConfig {
-                    vsock_id,
-                    guest_cid,
-                    vhost_fd,
-                });
-            } else {
-                return Err(ErrorKind::UnknownDeviceType(device_type).into());
-            }
+impl ConfigCheck for VirtioSerialInfo {
+    fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "virtio-serial id".to_string(),
+                MAX_STRING_LENGTH,
+            )
+            .into());
         }
 
         Ok(())
     }
 }
 
+pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Result<()> {
+    let mut cmd_parser = CmdParser::new("virtio-serial");
+    cmd_parser.push("").push("id").push("bus").push("addr");
+    cmd_parser.parse(serial_config)?;
+    pci_args_check(&cmd_parser)?;
+
+    if vm_config.virtio_serial.is_none() {
+        let id = if let Some(id) = cmd_parser.get_value::<String>("id")? {
+            id
+        } else {
+            "".to_string()
+        };
+        let virtio_serial = if serial_config.contains("-pci") {
+            let pci_bdf = get_pci_bdf(serial_config)?;
+            VirtioSerialInfo {
+                id,
+                pci_bdf: Some(pci_bdf),
+            }
+        } else {
+            VirtioSerialInfo { id, pci_bdf: None }
+        };
+        virtio_serial.check()?;
+        vm_config.virtio_serial = Some(virtio_serial);
+    } else {
+        bail!("Only one virtio serial device is supported");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::parse_virtio_serial;
+
     #[test]
-    fn test_console_config_json_parser() {
-        let json = r#"
-        [{
-            "console_id": "test_console",
-            "socket_path": "/path/to/socket"
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let configs = ConsoleConfig::from_value(&value);
-        assert!(configs.is_ok());
-        let console_configs = configs.unwrap();
-        assert_eq!(console_configs.len(), 1);
-        assert_eq!(console_configs[0].console_id, "test_console");
-        assert_eq!(console_configs[0].socket_path, "/path/to/socket");
-        let json = r#"
-        [{
-            "console_id": "test_console",
-            "console_type": "unix_socket"
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let configs = ConsoleConfig::from_value(&value);
-        assert!(configs.is_err());
+    fn test_mmio_console_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
+        assert!(vm_config
+            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
+            .is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console,id=console1",
+        );
+        assert!(virt_console.is_ok());
+        let console_cfg = virt_console.unwrap();
+        assert_eq!(console_cfg.id, "console1");
+        assert_eq!(
+            console_cfg.chardev.backend,
+            ChardevType::Socket("/path/to/socket".to_string())
+        );
+
+        let mut vm_config = VmConfig::default();
+        assert!(
+            parse_virtio_serial(&mut vm_config, "virtio-serial-device,bus=pcie.0,addr=0x1")
+                .is_err()
+        );
+        assert!(vm_config
+            .add_chardev("sock,id=test_console,path=/path/to/socket")
+            .is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(parse_virtio_serial(&mut vm_config, "virtio-serial-device").is_ok());
+        assert!(vm_config
+            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
+            .is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console1,id=console1",
+        );
+        // test_console1 does not exist.
+        assert!(virt_console.is_err());
     }
 
     #[test]
-    fn test_console_config_cmdline_parser() {
+    fn test_pci_console_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
+        assert!(
+            parse_virtio_serial(&mut vm_config, "virtio-serial-pci,bus=pcie.0,addr=0x1.0x2")
+                .is_ok()
+        );
         assert!(vm_config
-            .update_console("id=test_console,path=/path/to/socket")
+            .add_chardev("socket,id=test_console,path=/path/to/socket,server,nowait")
             .is_ok());
-        let console_configs = vm_config.get_virtio_console();
-        assert_eq!(console_configs.len(), 1);
-        assert_eq!(console_configs[0].console_id, "test_console");
-        assert_eq!(console_configs[0].socket_path, "/path/to/socket");
-        assert!(console_configs[0].check().is_ok());
+        let virt_console = parse_virtconsole(
+            &mut vm_config,
+            "virtconsole,chardev=test_console,id=console1",
+        );
+        assert!(virt_console.is_ok());
+        let console_cfg = virt_console.unwrap();
+
+        assert_eq!(console_cfg.id, "console1");
+        let serial_info = vm_config.virtio_serial.clone().unwrap();
+        assert!(serial_info.pci_bdf.is_some());
+        let bdf = serial_info.pci_bdf.unwrap();
+        assert_eq!(bdf.bus, "pcie.0");
+        assert_eq!(bdf.addr, (1, 2));
+        assert_eq!(
+            console_cfg.chardev.backend,
+            ChardevType::Socket("/path/to/socket".to_string())
+        );
     }
-    #[test]
-    fn test_serial_config_parser() {
-        let mut vm_config = VmConfig::default();
-        let json = r#"
-        {
-            "stdio": false
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let config = SerialConfig::from_value(&value);
-        assert!(config.is_ok());
-        assert!(!config.as_ref().unwrap().stdio);
-        vm_config.serial = config.ok();
-        assert!(vm_config.update_serial("stdio").is_ok());
-        assert!(vm_config.serial.as_ref().unwrap().stdio);
-    }
-    #[test]
-    fn test_vsock_config_json_parser() {
-        let json = r#"
-        {
-            "vsock_id": "test_vsock",
-            "guest_cid": 3,
-            "vhost_fd": 4
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let config = VsockConfig::from_value(&value);
-        assert!(config.is_ok());
-        let vsock_config = config.unwrap();
-        assert_eq!(vsock_config.vsock_id, "test_vsock");
-        assert_eq!(vsock_config.guest_cid, 3);
-        assert_eq!(vsock_config.vhost_fd, Some(4));
-        let json = r#"
-        {
-            "vsock_id": "test_vsock",
-            "guest_cid": "3"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let config = VsockConfig::from_value(&value);
-        assert!(config.is_err());
-    }
+
     #[test]
     fn test_vsock_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .update_vsock("vsock,id=test_vsock,guest-cid=3")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 3);
-            assert_eq!(vsock_config.vhost_fd, None);
-            assert!(vsock_config.check().is_ok())
-        } else {
-            assert!(false)
-        }
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .update_vsock("vsock,id=test_vsock,guest-cid=3,vhostfd=4")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 3);
-            assert_eq!(vsock_config.vhost_fd, Some(4));
-            assert!(vsock_config.check().is_ok())
-        } else {
-            assert!(false)
-        }
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config
-            .update_vsock("vsock,id=test_vsock,guest-cid=1")
-            .is_ok());
-        if let Some(vsock_config) = vm_config.vsock {
-            assert_eq!(vsock_config.vsock_id, "test_vsock");
-            assert_eq!(vsock_config.guest_cid, 1);
-            assert_eq!(vsock_config.vhost_fd, None);
-            assert!(vsock_config.check().is_err())
-        } else {
-            assert!(false)
-        }
+        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3");
+        assert!(vsock_cfg_op.is_ok());
+
+        let vsock_config = vsock_cfg_op.unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, None);
+        assert!(vsock_config.check().is_ok());
+
+        let vsock_cfg_op = parse_vsock("vhost-vsock-device,id=test_vsock,guest-cid=3,vhostfd=4");
+        assert!(vsock_cfg_op.is_ok());
+
+        let vsock_config = vsock_cfg_op.unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, Some(4));
+        assert!(vsock_config.check().is_ok());
     }
 }

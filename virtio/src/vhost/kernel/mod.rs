@@ -14,26 +14,28 @@ mod net;
 mod vsock;
 
 pub use net::Net;
-pub use vsock::Vsock;
+pub use vsock::{Vsock, VsockState};
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
 use util::byte_code::ByteCode;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
 
 use super::super::errors::{ErrorKind, Result, ResultExt};
-use super::super::{QueueConfig, VIRTIO_MMIO_INT_VRING};
+use super::super::{QueueConfig, VirtioInterrupt, VirtioInterruptType};
 use super::{VhostNotify, VhostOps};
+use crate::error_chain::ChainedError;
 
 /// Refer to VHOST_VIRTIO in
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
@@ -41,10 +43,12 @@ const VHOST: u32 = 0xaf;
 ioctl_ior_nr!(VHOST_GET_FEATURES, VHOST, 0x00, u64);
 ioctl_iow_nr!(VHOST_SET_FEATURES, VHOST, 0x00, u64);
 ioctl_io_nr!(VHOST_SET_OWNER, VHOST, 0x01);
+ioctl_io_nr!(VHOST_RESET_OWNER, VHOST, 0x02);
 ioctl_iow_nr!(VHOST_SET_MEM_TABLE, VHOST, 0x03, VhostMemory);
 ioctl_iow_nr!(VHOST_SET_VRING_NUM, VHOST, 0x10, VhostVringState);
 ioctl_iow_nr!(VHOST_SET_VRING_ADDR, VHOST, 0x11, VhostVringAddr);
 ioctl_iow_nr!(VHOST_SET_VRING_BASE, VHOST, 0x12, VhostVringState);
+ioctl_iowr_nr!(VHOST_GET_VRING_BASE, VHOST, 0x12, VhostVringState);
 ioctl_iow_nr!(VHOST_SET_VRING_KICK, VHOST, 0x20, VhostVringFile);
 ioctl_iow_nr!(VHOST_SET_VRING_CALL, VHOST, 0x21, VhostVringFile);
 ioctl_iow_nr!(VHOST_NET_SET_BACKEND, VHOST, 0x30, VhostVringFile);
@@ -254,6 +258,14 @@ impl VhostOps for VhostBackend {
         Ok(())
     }
 
+    fn reset_owner(&self) -> Result<()> {
+        let ret = unsafe { ioctl(self, VHOST_RESET_OWNER()) };
+        if ret < 0 {
+            return Err(ErrorKind::VhostIoctl("VHOST_RESET_OWNER".to_string()).into());
+        }
+        Ok(())
+    }
+
     fn get_features(&self) -> Result<u64> {
         let mut avail_features: u64 = 0;
         let ret = unsafe { ioctl_with_mut_ref(self, VHOST_GET_FEATURES(), &mut avail_features) };
@@ -368,6 +380,19 @@ impl VhostOps for VhostBackend {
         Ok(())
     }
 
+    fn get_vring_base(&self, queue_idx: usize) -> Result<u16> {
+        let vring_state = VhostVringState {
+            index: queue_idx as u32,
+            num: 0,
+        };
+
+        let ret = unsafe { ioctl_with_ref(self, VHOST_GET_VRING_BASE(), &vring_state) };
+        if ret < 0 {
+            return Err(ErrorKind::VhostIoctl("VHOST_GET_VRING_BASE".to_string()).into());
+        }
+        Ok(vring_state.num as u16)
+    }
+
     fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
         let vring_file = VhostVringFile {
             index: queue_idx as u32,
@@ -394,9 +419,26 @@ impl VhostOps for VhostBackend {
 }
 
 pub struct VhostIoHandler {
-    interrupt_evt: EventFd,
-    interrupt_status: Arc<AtomicU32>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
+    reset_evt: RawFd,
+}
+
+impl VhostIoHandler {
+    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+        for host_notify in self.host_notifies.iter() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                host_notify.notify_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+
+        notifiers
+    }
 }
 
 impl EventNotifierHelper for VhostIoHandler {
@@ -408,12 +450,18 @@ impl EventNotifierHelper for VhostIoHandler {
             Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
 
-                let v = vhost.clone();
-                let v = v.lock().unwrap();
-                v.interrupt_status
-                    .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-                if let Err(e) = v.interrupt_evt.write(1) {
-                    error!("Failed to write interrupt eventfd for vhost {}", e);
+                let locked_vhost_handler = vhost.lock().unwrap();
+
+                for host_notify in locked_vhost_handler.host_notifies.iter() {
+                    if let Err(e) = (locked_vhost_handler.interrupt_cb)(
+                        &VirtioInterruptType::Vring,
+                        Some(&host_notify.queue.lock().unwrap()),
+                    ) {
+                        error!(
+                            "Failed to trigger interrupt for vhost device, error is {}",
+                            e.display_chain()
+                        );
+                    }
                 }
 
                 None as Option<Vec<EventNotifier>>
@@ -429,6 +477,20 @@ impl EventNotifierHelper for VhostIoHandler {
                 vec![h.clone()],
             ));
         }
+
+        // Register event notifier for reset_evt.
+        let vhost = vhost_handler.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(vhost.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            vhost_handler.lock().unwrap().reset_evt,
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
 
         notifiers
     }

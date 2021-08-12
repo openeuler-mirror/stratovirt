@@ -32,6 +32,10 @@ pub trait VhostOps {
     /// of the vhost backend. This must be run before any other vhost commands.
     fn set_owner(&self) -> Result<()>;
 
+    /// Give up ownership, reset the device. Add calling `set_owner` function
+    /// later is permitted.
+    fn reset_owner(&self) -> Result<()>;
+
     /// Get a bitmask of supported vhost specific features.
     fn get_features(&self) -> Result<u64>;
 
@@ -65,6 +69,12 @@ pub trait VhostOps {
     /// * `queue_idx` - Index of the queue to set.
     /// * `last_avail_idx` - Index of the available descriptor.
     fn set_vring_base(&self, queue_idx: usize, last_avail_idx: u16) -> Result<()>;
+
+    /// Get address for the vring.
+    ///
+    /// # Arguments
+    /// * `queue_idx` - Index of the queue to get.
+    fn get_vring_base(&self, queue_idx: usize) -> Result<u16>;
 
     /// Set eventfd to signal when buffers have been used.
     ///

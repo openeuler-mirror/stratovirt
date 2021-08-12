@@ -1,0 +1,85 @@
+<domain type='kvm'>
+    <name>StratoVirt</name>
+    <memory unit='GiB'>8</memory>
+    <!-- hugepages -->
+    <memoryBacking>
+    <hugepages>
+        <page size='1' unit='GiB' />
+    </hugepages>
+    </memoryBacking>
+    <vcpu>4</vcpu>
+    <!-- iothread -->
+    <iothreads>1</iothreads>
+    <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <kernel>/path/to/standard_vm_kernel</kernel>
+    <cmdline>console=ttys0 root=/dev/vda reboot=k panic=1 rw</cmdline>
+    <loader readonly='yes' type='pflash'>/path/to/pflash</loader>
+    <nvram template='/path/to/OVMF_VARS'/>/path/to/OVMF_VARS</nvram>
+    </os>
+    <features>
+        <acpi/>
+    </features>
+    <devices>
+        <emulator>/path/to/StratoVirt_binary_file</emulator>
+        <controller type='pci' index='0' model='pcie-root' />
+        <!-- pcie-root-port -->
+        <controller type='pci' index='1' model='pcie-root-port' />
+        <controller type='pci' index='2' model='pcie-root-port' />
+        <controller type='pci' index='3' model='pcie-root-port' />
+        <controller type='pci' index='4' model='pcie-root-port' />
+        <controller type='pci' index='5' model='pcie-root-port' />
+        <controller type='pci' index='6' model='pcie-root-port' />
+        <controller type='pci' index='7' model='pcie-root-port' />
+        <!-- block -->
+        <disk type='file' device='disk' iothread='1'>
+            <driver name='qemu'  type='raw'/>
+            <source file='/path/to/rootfs'/>
+            <target dev='hda' bus='virtio'/>
+            <iotune>
+                <total_iops_sec>1000</total_iops_sec>
+            </iotune>
+            <address type='pci' domain='0x000' bus='0x01' slot='0x00' function='0x00'/>
+        </disk>
+        <!-- net -->
+        <interface type='ethernet'>
+            <mac address='de:ad:be:ef:00:01'/>
+            <source bridge='qbr0'/>
+            <target dev='tap0'/>
+            <model type='virtio'/>
+            <address type='pci' domain='0x000' bus='0x02' slot='0x00' function='0x00'/>
+        </interface>
+        <!-- virtio-serial -->
+        <controller type='virtio-serial' index='0'>
+            <alias name='virt-serial0'/>
+            <address type='pci' domain='0x000' bus='0x03' slot='0x00' function='0x00'/>
+        </controller>
+        <console type='pty'>
+            <target type='virtio' port='0'/>
+            <alias name='console0'/>
+        </console>
+        <!-- balloon -->
+        <memballoon model='virtio'>
+            <alias name='balloon0'/>
+            <address type='pci' domain='0x000' bus='0x04' slot='0x00' function='0x00'/>
+        </memballoon>
+        <!-- rng -->
+        <rng model='virtio'>
+            <rate period='1000' bytes='1234'/>
+            <backend model='random'>/dev/random</backend>
+            <address type='pci' domain='0x000' bus='0x05' slot='0x00' function='0x00'/>
+        </rng>
+        <!-- vsock -->
+        <vsock model='virtio'>
+            <cid auto='no' address='3'/>
+            <address type='pci' domain='0x000' bus='0x06' slot='0x00' function='0x00'/>
+        </vsock>
+        <!-- vfio -->
+        <hostdev model='subsystem' type='pci' managed='yes'>
+        <driver name='vfio'/>
+        <source>
+            <address domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
+        </source>
+        </hostdev>
+    </devices>
+</domain>

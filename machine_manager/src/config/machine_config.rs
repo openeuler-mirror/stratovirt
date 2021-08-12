@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
-use util::num_ops::round_down;
 
 const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_MEMSIZE: u64 = 256;
@@ -30,9 +29,11 @@ const MIN_MEMSIZE: u64 = 268_435_456;
 const M: u64 = 1024 * 1024;
 const G: u64 = 1024 * 1024 * 1024;
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MachineType {
+    None,
     MicroVm,
+    StandardVm,
 }
 
 impl FromStr for MachineType {
@@ -40,7 +41,12 @@ impl FromStr for MachineType {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "none" => Ok(MachineType::None),
             "microvm" => Ok(MachineType::MicroVm),
+            #[cfg(target_arch = "x86_64")]
+            "q35" => Ok(MachineType::StandardVm),
+            #[cfg(target_arch = "aarch64")]
+            "virt" => Ok(MachineType::StandardVm),
             _ => Err(()),
         }
     }
@@ -86,84 +92,11 @@ impl Default for MachineConfig {
     }
 }
 
-impl MachineConfig {
-    /// Create `MachineConfig` from `Value` structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
-        let mut machine_config = MachineConfig::default();
-        if let serde_json::Value::Object(items) = value {
-            for (name, item) in items {
-                let item_str = item.to_string().replace("\"", "");
-                match name.as_str() {
-                    "type" => {
-                        machine_config.mach_type =
-                            item_str.parse::<MachineType>().map_err(|_| {
-                                ErrorKind::ConvertValueFailed("MachineType".to_string(), item_str)
-                            })?
-                    }
-                    "vcpu_count" => {
-                        let cpu = item_str.parse::<u64>().map_err(|_| {
-                            ErrorKind::ConvertValueFailed("vcpu_count".to_string(), item_str)
-                        })?;
-                        // limit cpu count
-                        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
-                            return Err(ErrorKind::IllegalValue(
-                                "CPU number".to_string(),
-                                MIN_NR_CPUS,
-                                true,
-                                MAX_NR_CPUS,
-                                true,
-                            )
-                            .into());
-                        }
-
-                        machine_config.nr_cpus = cpu as u8;
-                    }
-                    "mem_size" => {
-                        machine_config.mem_config.mem_size = memory_unit_conversion(&item_str)
-                            .map_err(|_| {
-                                ErrorKind::ConvertValueFailed("mem_size".to_string(), item_str)
-                            })?
-                    }
-                    "mem_path" => machine_config.mem_config.mem_path = Some(item_str),
-                    "mem_share" => {
-                        machine_config.mem_config.mem_share =
-                            item_str.parse::<bool>().map_err(|_| {
-                                ErrorKind::ConvertValueFailed("mem_share".to_string(), item_str)
-                            })?
-                    }
-                    "dump_guest_core" => {
-                        machine_config.mem_config.dump_guest_core =
-                            item_str.parse::<bool>().map_err(|_| {
-                                ErrorKind::ConvertValueFailed(
-                                    "dump_guest_core".to_string(),
-                                    item_str,
-                                )
-                            })?
-                    }
-                    _ => return Err(ErrorKind::InvalidJsonField(name.to_string()).into()),
-                }
-            }
-        }
-
-        Ok(machine_config)
-    }
-}
-
 impl ConfigCheck for MachineConfig {
     fn check(&self) -> Result<()> {
         if self.mem_config.mem_size < MIN_MEMSIZE || self.mem_config.mem_size > MAX_MEMSIZE {
-            return Err(ErrorKind::IllegalValue(
-                "Memory size".to_string(),
-                MIN_MEMSIZE,
-                true,
-                MAX_MEMSIZE,
-                true,
-            )
-            .into());
+            bail!("Memory size must >= 256MiB and <= 512GiB, default unit: MiB, current memory size: {:?} bytes", 
+            &self.mem_config.mem_size);
         }
 
         Ok(())
@@ -171,21 +104,41 @@ impl ConfigCheck for MachineConfig {
 }
 
 impl VmConfig {
-    /// Update argument `name` to `VmConfig`.
+    /// Add argument `name` to `VmConfig`.
     ///
     /// # Arguments
     ///
-    /// * `name` - The name `String` updated to `VmConfig`.
-    pub fn update_machine(&mut self, mach_config: &str) -> Result<()> {
+    /// * `name` - The name `String` added to `VmConfig`.
+    pub fn add_machine(&mut self, mach_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("machine");
         cmd_parser
             .push("")
             .push("type")
+            .push("accel")
+            .push("usb")
             .push("dump-guest-core")
             .push("mem-share");
-
+        #[cfg(target_arch = "aarch64")]
+        cmd_parser.push("gic-version");
         cmd_parser.parse(mach_config)?;
 
+        #[cfg(target_arch = "aarch64")]
+        if let Some(gic_version) = cmd_parser.get_value::<u8>("gic-version")? {
+            if gic_version != 3 {
+                bail!("Unsupported gic version, only gicv3 is supported");
+            }
+        }
+
+        if let Some(accel) = cmd_parser.get_value::<String>("accel")? {
+            if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") {
+                bail!("Only \'kvm\', \'kvm:tcg\' and \'tcg\' are supported for \'accel\' of \'machine\'");
+            }
+        }
+        if let Some(usb) = cmd_parser.get_value::<ExBool>("usb")? {
+            if usb.into() {
+                bail!("Argument \'usb\' should be set to \'off\'");
+            }
+        }
         if let Some(mach_type) = cmd_parser
             .get_value::<MachineType>("")
             .chain_err(|| "Unrecognized machine type")?
@@ -208,8 +161,8 @@ impl VmConfig {
         Ok(())
     }
 
-    /// Update '-m' memory config to `VmConfig`.
-    pub fn update_memory(&mut self, mem_config: &str) -> Result<()> {
+    /// Add '-m' memory config to `VmConfig`.
+    pub fn add_memory(&mut self, mem_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("m");
         cmd_parser.push("").push("size");
 
@@ -228,10 +181,15 @@ impl VmConfig {
         Ok(())
     }
 
-    /// Update '-smp' cpu config to `VmConfig`.
-    pub fn update_cpu(&mut self, cpu_config: &str) -> Result<()> {
+    /// Add '-smp' cpu config to `VmConfig`.
+    pub fn add_cpu(&mut self, cpu_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("smp");
-        cmd_parser.push("").push("cpus");
+        cmd_parser
+            .push("")
+            .push("sockets")
+            .push("cores")
+            .push("threads")
+            .push("cpus");
 
         cmd_parser.parse(cpu_config)?;
 
@@ -242,6 +200,22 @@ impl VmConfig {
         } else {
             return Err(ErrorKind::FieldIsMissing("cpus", "smp").into());
         };
+
+        if let Some(sockets) = cmd_parser.get_value::<u64>("sockets")? {
+            if sockets.ne(&cpu) {
+                bail!("Invalid \'sockets\' arguments for \'smp\', it should equal to the number of cpus");
+            }
+        }
+        if let Some(cores) = cmd_parser.get_value::<u64>("cores")? {
+            if cores.ne(&1) {
+                bail!("Invalid \'cores\' arguments for \'smp\', it should be \'1\'");
+            }
+        }
+        if let Some(threads) = cmd_parser.get_value::<u64>("threads")? {
+            if threads.ne(&1) {
+                bail!("Invalid \'threads\' arguments for \'smp\', it should be \'1\'");
+            }
+        }
 
         // limit cpu count
         if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
@@ -261,14 +235,16 @@ impl VmConfig {
         Ok(())
     }
 
-    pub fn update_mem_path(&mut self, mem_path: &str) -> Result<()> {
+    pub fn add_mem_path(&mut self, mem_path: &str) -> Result<()> {
         self.machine_config.mem_config.mem_path = Some(mem_path.replace("\"", ""));
         Ok(())
     }
 }
 
 fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
-    if origin_value.contains('M') ^ origin_value.contains('m') {
+    if (origin_value.ends_with('M') | origin_value.ends_with('m'))
+        && (origin_value.contains('M') ^ origin_value.contains('m'))
+    {
         let value = origin_value.replacen("M", "", 1);
         let value = value.replacen("m", "", 1);
         get_inner(
@@ -279,7 +255,9 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
                 })?
                 .checked_mul(M),
         )
-    } else if origin_value.contains('G') ^ origin_value.contains('g') {
+    } else if (origin_value.ends_with('G') | origin_value.ends_with('g'))
+        && (origin_value.contains('G') ^ origin_value.contains('g'))
+    {
         let value = origin_value.replacen("G", "", 1);
         let value = value.replacen("g", "", 1);
         get_inner(
@@ -295,13 +273,9 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
             ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
         })?;
 
-        if let Some(round) = round_down(size, M) {
-            if size != round {
-                return Err(ErrorKind::Unaligned("memory".to_string(), size, M).into());
-            }
-        }
+        let memory_size = size.checked_mul(M);
 
-        get_inner(Some(size))
+        get_inner(memory_size)
     }
 }
 
@@ -316,111 +290,6 @@ fn get_inner<T>(outer: Option<T>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_config_json_parser() {
-        let json = r#"
-        {
-            "vcpu_count": 1,
-            "mem_size": 268435456,
-            "dump_guest_core": false
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value);
-        assert!(machine_config.is_ok());
-        let machine_config = machine_config.unwrap();
-
-        assert_eq!(machine_config.nr_cpus, 1);
-        assert_eq!(machine_config.mem_config.mem_size, 268_435_456);
-        assert_eq!(machine_config.mem_config.dump_guest_core, false);
-    }
-
-    #[test]
-    fn test_config_json_parser_unit() {
-        // Unit 'M'
-        let json = r#"
-        {
-            "mem_size": "1024M"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value).unwrap();
-        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
-
-        // Unit 'm'
-        let json = r#"
-        {
-            "mem_size": "1024m"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value).unwrap();
-        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
-
-        // Unit 'G'
-        let json = r#"
-        {
-            "mem_size": "1G"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value).unwrap();
-        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
-
-        // Unit 'g'
-        let json = r#"
-        {
-            "mem_size": "1g"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value).unwrap();
-        assert_eq!(machine_config.mem_config.mem_size, 1_073_741_824);
-
-        // Round down
-        let json = r#"
-        {
-            "mem_size": "1073741900"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        assert!(MachineConfig::from_value(&value).is_err());
-    }
-
-    #[test]
-    fn test_config_cmdline_parser() {
-        let json = r#"
-        {
-            "vcpu_count": 1,
-            "mem_size": 268435456,
-            "dump_guest_core": false
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let machine_config = MachineConfig::from_value(&value);
-
-        let mut vm_config = VmConfig::default();
-        vm_config.machine_config = machine_config.unwrap();
-
-        assert!(vm_config.update_cpu("8").is_ok());
-        assert_eq!(vm_config.machine_config.nr_cpus, 8);
-        assert!(vm_config.update_cpu("cpus=16").is_ok());
-        assert_eq!(vm_config.machine_config.nr_cpus, 16);
-        assert!(vm_config.update_cpu("nr_cpus=32").is_err());
-        assert_eq!(vm_config.machine_config.nr_cpus, 16);
-
-        assert!(vm_config.update_memory("256m").is_ok());
-        assert_eq!(vm_config.machine_config.mem_config.mem_size, 268_435_456);
-        assert!(vm_config.update_memory("512M").is_ok());
-        assert_eq!(vm_config.machine_config.mem_config.mem_size, 536_870_912);
-        assert!(vm_config.update_memory("size=1G").is_ok());
-        assert_eq!(vm_config.machine_config.mem_config.mem_size, 1_073_741_824);
-
-        assert!(!vm_config.machine_config.mem_config.dump_guest_core);
-        assert!(vm_config.update_machine("dump-guest-core=true").is_ok());
-        assert!(vm_config.machine_config.mem_config.dump_guest_core);
-    }
 
     #[test]
     fn test_health_check() {

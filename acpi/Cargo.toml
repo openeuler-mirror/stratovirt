@@ -1,0 +1,15 @@
+[package]
+name = "acpi"
+version = "0.3.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2018"
+license = "Mulan PSL v2"
+description = "acpi module"
+
+[dependencies]
+error-chain = "0.12.4"
+log = "0.4.8"
+
+address_space = { path = "../address_space" }
+util = {path = "../util"}
+machine_manager = {path = "../machine_manager"}

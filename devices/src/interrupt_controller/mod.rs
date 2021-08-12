@@ -32,3 +32,18 @@ mod aarch64;
 pub use aarch64::GICConfig as InterruptControllerConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::InterruptController;
+
+pub mod errors {
+    error_chain! {
+        errors {
+            #[cfg(target_arch = "aarch64")]
+            InvalidConfig(err_info: String) {
+                display("Invalid GIC config: {}.", err_info)
+            }
+            #[cfg(target_arch = "aarch64")]
+            CreateKvmDevice(err: kvm_ioctls::Error) {
+                display("Failed to create KVM device: {:#?}.", err)
+            }
+        }
+    }
+}

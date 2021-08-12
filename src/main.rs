@@ -17,13 +17,12 @@ extern crate log;
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
-use error_chain::ChainedError;
-use kvm_ioctls::{Kvm, VmFd};
+use machine::{LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
+    config::MachineType,
     config::VmConfig,
     event_loop::EventLoop,
     qmp::QmpChannel,
@@ -31,18 +30,15 @@ use machine_manager::{
     socket::Socket,
     temp_cleaner::TempCleaner,
 };
-use micro_vm::{register_seccomp, syscall_allow_list, LightMachine};
 use util::loop_context::EventNotifierHelper;
-use util::unix::limit_permission;
-use util::{arg_parser, daemonize::daemonize, logger};
-use virtio::balloon_allow_list;
-use vmm_sys_util::terminal::Terminal;
+use util::unix::{parse_uri, UnixPath};
+use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
 error_chain! {
     links {
        Manager(machine_manager::errors::Error, machine_manager::errors::ErrorKind);
        Util(util::errors::Error, util::errors::ErrorKind);
-       Vm(micro_vm::errors::Error, micro_vm::errors::ErrorKind);
+       Machine(machine::errors::Error, machine::errors::ErrorKind);
     }
     foreign_links {
         Io(std::io::Error);
@@ -73,10 +69,7 @@ fn run() -> Result<()> {
     }
 
     std::panic::set_hook(Box::new(|panic_msg| {
-        std::io::stdin()
-            .lock()
-            .set_canon_mode()
-            .expect("Failed to set terminal to canon mode.");
+        set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
 
         let panic_file = panic_msg.location().map_or("", |loc| loc.file());
         let panic_line = panic_msg.location().map_or(0, |loc| loc.line());
@@ -91,20 +84,17 @@ fn run() -> Result<()> {
         exit_with_code(VM_EXIT_GENE_ERR);
     }));
 
-    let vm_config: VmConfig = create_vmconfig(&cmd_args)?;
+    let mut vm_config: VmConfig = create_vmconfig(&cmd_args)?;
     info!("VmConfig is {:?}", vm_config);
 
-    match real_main(&cmd_args, vm_config) {
+    match real_main(&cmd_args, &mut vm_config) {
         Ok(()) => {
             info!("MainLoop over, Vm exit");
             // clean temporary file
             TempCleaner::clean();
         }
         Err(ref e) => {
-            std::io::stdin()
-                .lock()
-                .set_canon_mode()
-                .chain_err(|| "Failed to set terminal to canon mode.")?;
+            set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
             if cmd_args.is_present("display log") {
                 error!("{}", error_chain::ChainedError::display_chain(e));
             } else {
@@ -124,19 +114,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn get_vm_fds() -> Result<(Kvm, Arc<VmFd>)> {
-    let kvm_fd = Kvm::new().chain_err(|| "Failed to open /dev/kvm.")?;
-    let vm_fd = Arc::new(
-        kvm_fd
-            .create_vm()
-            .chain_err(|| "KVM: failed to create VM fd failed")?,
-    );
-    Ok((kvm_fd, vm_fd))
-}
-
-fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<()> {
-    let balloon_switch_on = vm_config.balloon.is_some();
-
+fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Result<()> {
     TempCleaner::object_init();
 
     if cmd_args.is_present("daemonize") {
@@ -149,61 +127,83 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: VmConfig) -> Result<(
             }
             Err(e) => bail!("Daemonize start failed: {}", e),
         }
-    } else {
-        if cmd_args.value_of("pidfile").is_some() {
-            bail!("-pidfile must be used with -daemonize together.");
-        }
-        std::io::stdin()
-            .lock()
-            .set_raw_mode()
-            .chain_err(|| "Failed to set terminal to raw mode.")?;
+    } else if cmd_args.value_of("pidfile").is_some() {
+        bail!("-pidfile must be used with -daemonize together.");
     }
 
     QmpChannel::object_init();
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
 
-    let (kvm_fd, vm_fd) = get_vm_fds()?;
-    let vm = match LightMachine::new(&vm_config) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("{}", e.display_chain());
-            bail!("Failed to init micro VM.");
+    let listeners = check_api_channel(&cmd_args, vm_config)?;
+    let mut sockets = Vec::new();
+    let vm: Arc<Mutex<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
+        MachineType::MicroVm => {
+            let vm = Arc::new(Mutex::new(
+                LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
+            ));
+            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
+                .chain_err(|| "Failed to realize micro VM.")?;
+            EventLoop::set_manager(vm.clone(), None);
+
+            for listener in listeners {
+                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
+            }
+            vm
+        }
+        MachineType::StandardVm => {
+            let vm = Arc::new(Mutex::new(
+                StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
+            ));
+            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
+                .chain_err(|| "Failed to realize standard VM.")?;
+            EventLoop::set_manager(vm.clone(), None);
+
+            for listener in listeners {
+                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
+            }
+            vm
+        }
+        MachineType::None => {
+            let vm = Arc::new(Mutex::new(
+                StdMachine::new(&vm_config).chain_err(|| "Failed to init NoneVM")?,
+            ));
+            EventLoop::set_manager(vm.clone(), None);
+            for listener in listeners {
+                sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
+            }
+            vm
         }
     };
-    let vm = match LightMachine::realize(vm, &vm_config, (kvm_fd, &vm_fd)) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("{}", e.display_chain());
-            bail!("Failed to realize micro VM.");
+
+    if let Some(uri) = cmd_args.value_of("incoming") {
+        if let (UnixPath::File, path) = parse_uri(&uri)? {
+            migration::MigrationManager::restore_snapshot(&path)
+                .chain_err(|| "Failed to start with incoming migration.")?;
+        } else {
+            bail!("Unsupported incoming unix path type.")
         }
-    };
-    EventLoop::set_manager(vm.clone(), None);
-    let api_socket = {
-        let (api_path, _) = check_api_channel(&cmd_args)?;
-        let listener = UnixListener::bind(&api_path)
-            .chain_err(|| format!("Failed to bind api socket {}", &api_path))?;
+    }
 
-        // add file to temporary pool, so it could be clean when vm exit.
-        TempCleaner::add_path(api_path.clone());
+    for socket in sockets {
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(socket))),
+            None,
+        )
+        .chain_err(|| "Failed to add api event to MainLoop")?;
+    }
 
-        limit_permission(&api_path)
-            .chain_err(|| format!("Failed to limit permission for api socket {}", &api_path))?;
-        Socket::from_unix_listener(listener, Some(vm.clone()))
-    };
-    EventLoop::update_event(
-        EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(api_socket))),
-        None,
-    )
-    .chain_err(|| "Failed to add api event to MainLoop")?;
+    vm.lock()
+        .unwrap()
+        .run(cmd_args.is_present("freeze_cpu"))
+        .chain_err(|| "Failed to start VM.")?;
 
-    vm.vm_start(cmd_args.is_present("freeze_cpu"))?;
+    let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
     if !cmd_args.is_present("disable-seccomp") {
-        let mut allow_list = syscall_allow_list();
-        if balloon_switch_on {
-            balloon_allow_list(&mut allow_list);
-        }
-        register_seccomp(allow_list)?;
+        vm.lock()
+            .unwrap()
+            .register_seccomp(balloon_switch_on)
+            .chain_err(|| "Failed to register seccomp rules.")?;
     }
 
     EventLoop::loop_run().chain_err(|| "MainLoop exits unexpectedly: error occurs")?;

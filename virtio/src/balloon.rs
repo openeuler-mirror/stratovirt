@@ -18,14 +18,10 @@ use std::{
     time::Duration,
 };
 
-use super::{
-    errors::*, Element, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG,
-    VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BALLOON,
-};
 use address_space::{
-    host_page_size, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType,
-    RegionIoEventFd, RegionType,
+    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
+use error_chain::ChainedError;
 use machine_manager::{
     config::BalloonConfig, event_loop::EventLoop, qmp::qmp_schema::BalloonInfo, qmp::QmpChannel,
 };
@@ -37,8 +33,14 @@ use util::{
     },
     num_ops::{read_u32, round_down, write_u32},
     seccomp::BpfRule,
+    unix::host_page_size,
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
+
+use super::{
+    errors::*, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
@@ -50,7 +52,6 @@ const BALLOON_DEFLATE_EVENT: bool = false;
 const BITS_OF_TYPE_U64: u64 = 64;
 
 static mut BALLOON_DEV: Option<Arc<Mutex<Balloon>>> = None;
-type VirtioBalloonInterrupt = Box<dyn Fn(u32) -> Result<()> + Send + Sync>;
 
 /// IO vector, used to find memory segments.
 #[derive(Clone, Copy, Default)]
@@ -447,8 +448,10 @@ struct BalloonIoHandler {
     def_queue: Arc<Mutex<Queue>>,
     /// Deflate EventFd.
     def_evt: EventFd,
+    /// EventFd for device reset
+    reset_evt: RawFd,
     /// The interrupt call back function.
-    interrupt_cb: Arc<VirtioBalloonInterrupt>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     /// Balloon Memory information.
     mem_info: BlnMemInfo,
     /// Event timer for BALLOON_CHANGED event.
@@ -466,42 +469,39 @@ impl BalloonIoHandler {
     ///
     /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the balloon.
     fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
+        let queue = if req_type {
+            &self.inf_queue
+        } else {
+            &self.def_queue
+        };
+        let mut locked_queue = queue.lock().unwrap();
+        while let Ok(elem) = locked_queue
+            .vring
+            .pop_avail(&self.mem_space, self.driver_features)
         {
-            let queue = if req_type {
-                &mut self.inf_queue
-            } else {
-                &mut self.def_queue
-            };
-            let mut unlocked_queue = queue.lock().unwrap();
-            while let Ok(elem) = unlocked_queue
-                .vring
-                .pop_avail(&self.mem_space, self.driver_features)
-            {
-                match Request::parse(&elem) {
-                    Ok(req) => {
-                        if !self.mem_info.has_huge_page() {
-                            req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
-                        }
-                        unlocked_queue
-                            .vring
-                            .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
-                            .chain_err(|| "Failed to add balloon response into used queue")?;
+            match Request::parse(&elem) {
+                Ok(req) => {
+                    if !self.mem_info.has_huge_page() {
+                        req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
                     }
-                    Err(e) => {
-                        error!("Fail to parse available descriptor chain: {:?}", e);
-                        break;
-                    }
+                    locked_queue
+                        .vring
+                        .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
+                        .chain_err(|| "Failed to add balloon response into used queue")?;
+                }
+                Err(e) => {
+                    error!(
+                        "Fail to parse available descriptor chain, error is {}",
+                        e.display_chain()
+                    );
+                    break;
                 }
             }
         }
-        self.signal_used_queue()
-            .chain_err(|| "Failed to notify used queue after processing balloon events")?;
-        Ok(())
-    }
 
-    /// Trigger interrupt to notify vm.
-    fn signal_used_queue(&self) -> Result<()> {
-        (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING).chain_err(|| "Failed to write interrupt eventfd")
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
+            .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
+        Ok(())
     }
 
     /// Send balloon changed event.
@@ -517,6 +517,41 @@ impl BalloonIoHandler {
     /// Get the memory size of balloon.
     fn get_balloon_memory_size(&self) -> u64 {
         (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
+    }
+
+    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+        let notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.inf_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.def_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.event_timer.clone().lock().unwrap().as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+
+        notifiers
     }
 }
 
@@ -540,64 +575,72 @@ impl EventNotifierHelper for BalloonIoHandler {
     /// Register event notifiers for different queue event.
     fn internal_notifiers(balloon_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        {
-            let cloned_balloon_io = balloon_io.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                if let Err(ref e) = locked_balloon_io.process_balloon_queue(BALLOON_INFLATE_EVENT) {
-                    error!(
-                        "Failed to inflate balloon: {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
-                };
-                None
-            });
-            let locked_balloon_io = balloon_io.lock().unwrap();
-            notifiers.push(build_event_notifier(
-                locked_balloon_io.inf_evt.as_raw_fd(),
-                handler,
-            ));
-        }
+        let locked_balloon_io = balloon_io.lock().unwrap();
 
-        {
-            let cloned_balloon_io = balloon_io.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                if let Err(ref e) = locked_balloon_io.process_balloon_queue(BALLOON_DEFLATE_EVENT) {
-                    error!(
-                        "Failed to deflate balloon: {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
-                };
-                None
-            });
-            let locked_balloon_io = balloon_io.lock().unwrap();
-            notifiers.push(build_event_notifier(
-                locked_balloon_io.def_evt.as_raw_fd(),
-                handler,
-            ));
-        }
-        {
-            let cloned_balloon_io = balloon_io.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-                let locked_balloon_io = cloned_balloon_io.lock().unwrap();
-                locked_balloon_io.send_balloon_changed_event();
-                None
-            });
-            let locked_balloon_io = balloon_io.lock().unwrap();
-            notifiers.push(build_event_notifier(
-                locked_balloon_io
-                    .event_timer
-                    .clone()
-                    .lock()
-                    .unwrap()
-                    .as_raw_fd(),
-                handler,
-            ));
-        }
+        // register event notifier for inflate event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            if let Err(e) = cloned_balloon_io
+                .lock()
+                .unwrap()
+                .process_balloon_queue(BALLOON_INFLATE_EVENT)
+            {
+                error!("Failed to inflate balloon: {}", e.display_chain());
+            };
+            None
+        });
+        notifiers.push(build_event_notifier(
+            locked_balloon_io.inf_evt.as_raw_fd(),
+            handler,
+        ));
+
+        // register event notifier for deflate event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            if let Err(e) = cloned_balloon_io
+                .lock()
+                .unwrap()
+                .process_balloon_queue(BALLOON_DEFLATE_EVENT)
+            {
+                error!("Failed to deflate balloon: {}", e.display_chain());
+            };
+            None
+        });
+        notifiers.push(build_event_notifier(
+            locked_balloon_io.def_evt.as_raw_fd(),
+            handler,
+        ));
+
+        // register event notifier for reset event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(cloned_balloon_io.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(build_event_notifier(locked_balloon_io.reset_evt, handler));
+
+        // register event notifier for timer event.
+        let cloned_balloon_io = balloon_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            cloned_balloon_io
+                .lock()
+                .unwrap()
+                .send_balloon_changed_event();
+            None
+        });
+        notifiers.push(build_event_notifier(
+            locked_balloon_io
+                .event_timer
+                .clone()
+                .lock()
+                .unwrap()
+                .as_raw_fd(),
+            handler,
+        ));
+
         notifiers
     }
 }
@@ -613,13 +656,15 @@ pub struct Balloon {
     /// Target memory pages.
     num_pages: u32,
     /// Interrupt callback function.
-    interrupt_cb: Option<Arc<VirtioBalloonInterrupt>>,
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Balloon memory information.
     mem_info: BlnMemInfo,
     /// Memory space
     mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
+    /// EventFd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Balloon {
@@ -643,6 +688,7 @@ impl Balloon {
             mem_info: BlnMemInfo::new(),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -659,11 +705,12 @@ impl Balloon {
 
     /// Notify configuration changes to VM.
     fn signal_config_change(&self) -> Result<()> {
-        if self.interrupt_cb.is_none() {
-            return Err(ErrorKind::DeviceNotActivated("balloon".to_string()).into());
+        if let Some(interrupt_cb) = &self.interrupt_cb {
+            interrupt_cb(&VirtioInterruptType::Config, None)
+                .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))
+        } else {
+            Err(ErrorKind::DeviceNotActivated("balloon".to_string()).into())
         }
-        let interrupt = self.interrupt_cb.as_ref().unwrap();
-        (*interrupt)(VIRTIO_MMIO_INT_CONFIG)
     }
 
     /// Set the target memory size of guest. Note that
@@ -810,29 +857,20 @@ impl VirtioDevice for Balloon {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_stats: Arc<AtomicU32>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         if queues.len() != QUEUE_NUM_BALLOON {
             return Err(ErrorKind::IncorrectQueueNum(QUEUE_NUM_BALLOON, queues.len()).into());
         }
 
-        let inf_queue = queues.remove(0);
+        let inf_queue = queues[0].clone();
         let inf_queue_evt = queue_evts.remove(0);
-        let def_queue = queues.remove(0);
+        let def_queue = queues[1].clone();
         let def_queue_evt = queue_evts.remove(0);
-        let interrupt_evt = interrupt_evt
-            .try_clone()
-            .chain_err(|| "Failed to clone event fd for balloon device")?;
-        let interrupt_stats = interrupt_stats;
-        let cb = Arc::new(Box::new(move |status: u32| {
-            interrupt_stats.fetch_or(status, Ordering::SeqCst);
-            interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
-        }) as VirtioBalloonInterrupt);
 
-        self.interrupt_cb = Some(cb.clone());
+        self.interrupt_cb = Some(interrupt_cb.clone());
         let handler = BalloonIoHandler {
             driver_features: self.driver_features,
             mem_space,
@@ -840,7 +878,8 @@ impl VirtioDevice for Balloon {
             inf_evt: inf_queue_evt,
             def_queue,
             def_evt: def_queue_evt,
-            interrupt_cb: cb.clone(),
+            reset_evt: self.reset_evt.as_raw_fd(),
+            interrupt_cb,
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
             balloon_actual: self.actual.clone(),
@@ -855,8 +894,10 @@ impl VirtioDevice for Balloon {
         Ok(())
     }
 
-    fn reset(&mut self) -> Option<()> {
-        None
+    fn reset(&mut self) -> Result<()> {
+        self.reset_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)
     }
 
     fn update_config(
@@ -922,7 +963,7 @@ mod tests {
         let root = Region::init_container_region(1 << 36);
         let sys_space = AddressSpace::new(root).unwrap();
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), MEMORY_SIZE, None, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(0), MEMORY_SIZE, None, false, false, false).unwrap(),
         );
         sys_space
             .root()
@@ -935,8 +976,9 @@ mod tests {
     }
 
     fn create_flat_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
-        let mem_mapping =
-            Arc::new(HostMemMapping::new(GuestAddress(addr), size, None, false, false).unwrap());
+        let mem_mapping = Arc::new(
+            HostMemMapping::new(GuestAddress(addr), size, None, false, false, false).unwrap(),
+        );
         FlatRange {
             addr_range: AddressRange::new(
                 mem_mapping.start_address().unchecked_add(offset_in_region),
@@ -944,12 +986,14 @@ mod tests {
             ),
             owner: Region::init_ram_region(mem_mapping.clone()),
             offset_in_region,
+            rom_dev_romd: None,
         }
     }
 
     #[test]
     fn test_balloon_init() {
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
 
@@ -983,13 +1027,14 @@ mod tests {
         let ram_size = bln.mem_info.get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
 
-        assert!(bln.reset().is_none());
+        assert!(bln.reset().is_ok());
         assert!(bln.update_config(None).is_err());
     }
 
     #[test]
     fn test_read_config() {
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
 
@@ -1007,6 +1052,7 @@ mod tests {
     #[test]
     fn test_write_config() {
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
 
@@ -1023,6 +1069,7 @@ mod tests {
     fn test_balloon_process() {
         let mem_space = address_space_init();
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
@@ -1036,10 +1083,16 @@ mod tests {
 
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
-        let cb = Arc::new(Box::new(move |status: u32| {
-            interrupt_status.fetch_or(status, Ordering::SeqCst);
-            interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
-        }) as VirtioBalloonInterrupt);
+        let cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
+                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+            },
+        ) as VirtioInterrupt);
 
         bln.interrupt_cb = Some(cb.clone());
         assert_eq!(bln.get_guest_memory_size(), MEMORY_SIZE);
@@ -1063,6 +1116,7 @@ mod tests {
 
         let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let event_def = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let event_reset = EventFd::new(libc::EFD_NONBLOCK).unwrap();
 
         let mut handler = BalloonIoHandler {
             driver_features: bln.driver_features,
@@ -1071,6 +1125,7 @@ mod tests {
             inf_evt: event_inf.try_clone().unwrap(),
             def_queue: queue2,
             def_evt: event_def,
+            reset_evt: event_reset.as_raw_fd(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),
@@ -1144,6 +1199,16 @@ mod tests {
         let mem_space = address_space_init();
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
+        let interrupt_cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
+                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+            },
+        ) as VirtioInterrupt);
 
         let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
         queue_config_inf.desc_table = GuestAddress(0);
@@ -1159,17 +1224,12 @@ mod tests {
         let queue_evts: Vec<EventFd> = vec![event_inf.try_clone().unwrap()];
 
         let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
             deflate_on_oom: true,
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         assert!(bln
-            .activate(
-                mem_space,
-                interrupt_evt,
-                interrupt_status,
-                queues,
-                queue_evts
-            )
+            .activate(mem_space, interrupt_cb, &queues, queue_evts)
             .is_err());
     }
 

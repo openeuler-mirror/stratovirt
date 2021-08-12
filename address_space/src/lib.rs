@@ -37,7 +37,7 @@
 //!     let space = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
 //!
 //!     // 2. create an Ram-type Region, and set it's priority
-//!     let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000, None, false, false).unwrap());
+//!     let mem_mapping = Arc::new(HostMemMapping::new(GuestAddress(0), 0x1000, None, false, false, false).unwrap());
 //!     let ram_region = Region::init_ram_region(mem_mapping.clone());
 //!     ram_region.set_priority(10);
 //!
@@ -73,12 +73,15 @@
 extern crate error_chain;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate migration_derive;
 
 mod address;
 mod address_space;
 mod host_mmap;
 mod listener;
 mod region;
+mod state;
 
 pub use crate::address_space::AddressSpace;
 pub use address::{AddressRange, GuestAddress};
@@ -156,10 +159,4 @@ pub struct RegionOps {
     /// * `base` - Base address.
     /// * `offset` - Offset from base address.
     pub write: std::sync::Arc<dyn Fn(&[u8], GuestAddress, u64) -> bool + Send + Sync>,
-}
-
-/// Gets the page size of system.
-#[inline]
-pub fn host_page_size() -> u64 {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
 }

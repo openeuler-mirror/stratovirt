@@ -1,0 +1,18 @@
+[package]
+name = "hypervisor"
+version = "0.3.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2018"
+license = "Mulan PSL v2"
+
+[dependencies]
+arc-swap = "0.4.8"
+error-chain = "0.12.4"
+kvm-bindings = ">=0.3.0"
+kvm-ioctls = "0.6.0"
+lazy_static = "1.4.0"
+log = "0.4.8"
+migration = { path = "../migration" }
+migration_derive = { path = "../migration_derive" }
+util = { path = "../util" }
+vmm-sys-util = ">=0.7.0"

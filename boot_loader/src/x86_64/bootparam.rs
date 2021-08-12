@@ -10,7 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::Arc;
+
+use address_space::AddressSpace;
 use util::byte_code::ByteCode;
+
+use super::{
+    X86BootLoaderConfig, EBDA_START, MB_BIOS_BEGIN, REAL_MODE_IVT_BEGIN, VGA_RAM_BEGIN,
+    VMLINUX_RAM_START,
+};
+use crate::errors::{ErrorKind, Result};
 
 pub const E820_RAM: u32 = 1;
 pub const E820_RESERVED: u32 = 2;
@@ -18,6 +27,8 @@ pub const BOOT_VERSION: u16 = 0x0200;
 pub const BOOT_FLAG: u16 = 0xAA55;
 pub const HDRS: u32 = 0x5372_6448;
 pub const UNDEFINED_ID: u8 = 0xFF;
+// Loader type ID: OVMF UEFI virtualization stack.
+pub const UEFI_OVMF_ID: u8 = 0xB;
 
 // Structures below sourced from:
 // https://www.kernel.org/doc/html/latest/x86/boot.html
@@ -38,7 +49,7 @@ pub struct RealModeKernelHeader {
     realmode_swtch: u32,
     start_sys_seg: u16,
     kernel_version: u16,
-    type_of_loader: u8,
+    pub type_of_loader: u8,
     pub loadflags: u8,
     setup_move_size: u16,
     pub code32_start: u32,
@@ -69,31 +80,36 @@ pub struct RealModeKernelHeader {
 impl ByteCode for RealModeKernelHeader {}
 
 impl RealModeKernelHeader {
-    pub fn new(cmdline_ptr: u32, cmdline_size: u32, ramdisk_image: u32, ramdisk_size: u32) -> Self {
+    pub fn new() -> Self {
         RealModeKernelHeader {
             boot_flag: BOOT_FLAG,
             header: HDRS,
             type_of_loader: UNDEFINED_ID,
-            cmdline_ptr,
-            cmdline_size,
-            ramdisk_image,
-            ramdisk_size,
             ..Default::default()
         }
     }
 
-    pub fn setup(
-        &mut self,
-        cmdline_ptr: u32,
-        cmdline_size: u32,
-        ramdisk_image: u32,
-        ramdisk_size: u32,
-    ) {
-        self.type_of_loader = UNDEFINED_ID;
-        self.cmdline_ptr = cmdline_ptr;
+    pub fn check_valid_kernel(&self) -> Result<()> {
+        if self.header != HDRS {
+            return Err(ErrorKind::ElfKernel.into());
+        }
+        if (self.version < BOOT_VERSION) || ((self.loadflags & 0x1) == 0x0) {
+            return Err(ErrorKind::InvalidBzImage.into());
+        }
+        if self.version < 0x202 {
+            return Err(ErrorKind::OldVersionKernel.into());
+        }
+        Ok(())
+    }
+
+    pub fn set_cmdline(&mut self, cmdline_addr: u32, cmdline_size: u32) {
+        self.cmdline_ptr = cmdline_addr;
         self.cmdline_size = cmdline_size;
-        self.ramdisk_image = ramdisk_image;
-        self.ramdisk_size = ramdisk_size;
+    }
+
+    pub fn set_ramdisk(&mut self, addr: u32, size: u32) {
+        self.ramdisk_image = addr;
+        self.ramdisk_size = size;
     }
 }
 
@@ -104,6 +120,14 @@ pub struct E820Entry {
     size: u64,
     type_: u32,
 }
+
+impl E820Entry {
+    pub(crate) fn new(addr: u64, size: u64, type_: u32) -> E820Entry {
+        E820Entry { addr, size, type_ }
+    }
+}
+
+impl ByteCode for E820Entry {}
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -159,8 +183,40 @@ impl BootParams {
     }
 
     pub fn add_e820_entry(&mut self, addr: u64, size: u64, type_: u32) {
-        self.e820_table[self.e820_entries as usize] = E820Entry { addr, size, type_ };
+        self.e820_table[self.e820_entries as usize] = E820Entry::new(addr, size, type_);
         self.e820_entries += 1;
+    }
+
+    pub fn setup_e820_entries(
+        &mut self,
+        config: &X86BootLoaderConfig,
+        sys_mem: &Arc<AddressSpace>,
+    ) {
+        self.add_e820_entry(
+            REAL_MODE_IVT_BEGIN,
+            EBDA_START - REAL_MODE_IVT_BEGIN,
+            E820_RAM,
+        );
+        self.add_e820_entry(EBDA_START, VGA_RAM_BEGIN - EBDA_START, E820_RESERVED);
+        self.add_e820_entry(MB_BIOS_BEGIN, 0, E820_RESERVED);
+
+        let high_memory_start = VMLINUX_RAM_START;
+        let layout_32bit_gap_end = config.gap_range.0 + config.gap_range.1;
+        let mem_end = sys_mem.memory_end_address().raw_value();
+        if mem_end < layout_32bit_gap_end {
+            self.add_e820_entry(high_memory_start, mem_end - high_memory_start, E820_RAM);
+        } else {
+            self.add_e820_entry(
+                high_memory_start,
+                config.gap_range.0 - high_memory_start,
+                E820_RAM,
+            );
+            self.add_e820_entry(
+                layout_32bit_gap_end,
+                mem_end - layout_32bit_gap_end,
+                E820_RAM,
+            );
+        }
     }
 }
 
@@ -171,54 +227,53 @@ mod test {
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 
-    use super::super::{setup_boot_params, X86BootLoaderConfig};
+    use super::super::X86BootLoaderConfig;
     use super::*;
 
     #[test]
     fn test_boot_param() {
-        // test setup_boot_params function
         let root = Region::init_container_region(0x2000_0000);
         let space = AddressSpace::new(root.clone()).unwrap();
         let ram1 = Arc::new(
-            HostMemMapping::new(GuestAddress(0), 0x1000_0000, None, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(0), 0x1000_0000, None, false, false, false).unwrap(),
         );
         let region_a = Region::init_ram_region(ram1.clone());
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
 
         let config = X86BootLoaderConfig {
-            kernel: PathBuf::new(),
+            kernel: Some(PathBuf::new()),
             initrd: Some(PathBuf::new()),
-            initrd_size: 0x1_0000,
             kernel_cmdline: String::from("this_is_a_piece_of_test_string"),
             cpu_count: 2,
             gap_range: (0xC000_0000, 0x4000_0000),
             ioapic_addr: 0xFEC0_0000,
             lapic_addr: 0xFEE0_0000,
+            prot64_mode: false,
+            ident_tss_range: None,
         };
-        let (_, initrd_addr_tmp) = setup_boot_params(&config, &space, None).unwrap();
-        assert_eq!(initrd_addr_tmp, 0xfff_0000);
-        let test_zero_page = space
-            .read_object::<BootParams>(GuestAddress(0x0000_7000))
-            .unwrap();
-        assert_eq!(test_zero_page.e820_entries, 4);
+
+        let boot_hdr = RealModeKernelHeader::default();
+        let mut boot_params = BootParams::new(boot_hdr);
+        boot_params.setup_e820_entries(&config, &space);
+        assert_eq!(boot_params.e820_entries, 4);
 
         unsafe {
-            assert_eq!(test_zero_page.e820_table[0].addr, 0);
-            assert_eq!(test_zero_page.e820_table[0].size, 0x0009_FC00);
-            assert_eq!(test_zero_page.e820_table[0].type_, 1);
+            assert_eq!(boot_params.e820_table[0].addr, 0);
+            assert_eq!(boot_params.e820_table[0].size, 0x0009_FC00);
+            assert_eq!(boot_params.e820_table[0].type_, 1);
 
-            assert_eq!(test_zero_page.e820_table[1].addr, 0x0009_FC00);
-            assert_eq!(test_zero_page.e820_table[1].size, 0x400);
-            assert_eq!(test_zero_page.e820_table[1].type_, 2);
+            assert_eq!(boot_params.e820_table[1].addr, 0x0009_FC00);
+            assert_eq!(boot_params.e820_table[1].size, 0x400);
+            assert_eq!(boot_params.e820_table[1].type_, 2);
 
-            assert_eq!(test_zero_page.e820_table[2].addr, 0x000F_0000);
-            assert_eq!(test_zero_page.e820_table[2].size, 0);
-            assert_eq!(test_zero_page.e820_table[2].type_, 2);
+            assert_eq!(boot_params.e820_table[2].addr, 0x000F_0000);
+            assert_eq!(boot_params.e820_table[2].size, 0);
+            assert_eq!(boot_params.e820_table[2].type_, 2);
 
-            assert_eq!(test_zero_page.e820_table[3].addr, 0x0010_0000);
-            assert_eq!(test_zero_page.e820_table[3].size, 0x0ff0_0000);
-            assert_eq!(test_zero_page.e820_table[3].type_, 1);
+            assert_eq!(boot_params.e820_table[3].addr, 0x0010_0000);
+            assert_eq!(boot_params.e820_table[3].size, 0x0ff0_0000);
+            assert_eq!(boot_params.e820_table[3].type_, 1);
         }
     }
 }

@@ -16,7 +16,7 @@
     $ sudo setfacl -m u:${USER}:rw /dev/kvm
     ```
 
-## 2. Getting the StratoVirt Binary
+## 2. Get the StratoVirt Binary
 
 StratoVirt is offerred by openEuler 20.09 or later. You can install by yum directly.
 
@@ -28,10 +28,11 @@ Now you can find StratoVirt binary with path: `/usr/bin/stratovirt`.
 
 If you'd like to build StratoVirt yourself, you should check out the [build_guide](./build_guide.md).
 
-## 3. Running StratoVirt
+## 3. Run StratoVirt
 
-With StratoVirt binary (either installed with yum, or built from source), we can boot a guest linux machine
- by StratoVirt.
+With StratoVirt binary (either installed with yum, or built from source), we can boot a guest linux machine.
+Now StratoVirt provides two kinds of machine, which are microvm and standard_vm("q35" on x86_64 platform and 
+"virt" on aarch64 platform). As a quick start, we show how to start a VM with microvm.
 
 First, you will need an PE format Linux kernel binary, and an ext4 file system image (as rootfs).
 * `x86_64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/vmlinux.bin) and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/openEuler-21.03-stratovirt-x86_64.img.xz).
@@ -69,22 +70,24 @@ socket_path=`pwd`"/stratovirt.sock"
 kernel_path=`pwd`"/vmlinux.bin"
 rootfs_path=`pwd`"/rootfs.ext4"
 
-# Make sure api-channel can be created.
+# Make sure qmp can be created.
 rm -f ${socket_path}
 
-# Start StratoVirt guest linux machine.
+# Start linux VM with machine type "microvm" by StratoVirt.
 /usr/bin/stratovirt \
+    -machine microvm
     -kernel ${kernel_path} \
     -smp 1 \
-    -m 1024m \
-    -append console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda \
+    -m 1024 \
+    -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=${rootfs_path},id=rootfs,readonly=off,direct=off \
-    -api-channel unix:${socket_path} \
+    -device virtio-blk-device,drive=rootfs
+    -qmp unix:${socket_path},server,nowait \
     -serial stdio
 ```
 
-You should now see a serial in stdio prompting you to log into the guest machine. If you used our 
-`openEuler-21.03-stratovirt-aarch64.img` image, you can login as `root`, using the password 
+You should now see a serial in stdio prompting you to log into the guest machine. If you used our
+`openEuler-21.03-stratovirt-aarch64.img` image, you can login as `root`, using the password
 `openEuler12#$`.
 
 If you want to quit the guest machine, using a `reboot` command inside the guest will actually shutdown

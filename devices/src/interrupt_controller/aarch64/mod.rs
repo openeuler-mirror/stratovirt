@@ -11,19 +11,23 @@
 // See the Mulan PSL v2 for more details.
 
 mod gicv3;
+#[allow(dead_code)]
+mod state;
 
 pub use gicv3::GICv3;
 
 use std::sync::Arc;
 
-use kvm_ioctls::VmFd;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use util::{device_tree, errors::Result as UtilResult};
+use util::{
+    device_tree::{self, FdtBuilder},
+    errors::Result as UtilResult,
+};
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use super::errors::{ErrorKind, Result, ResultExt};
 
 // First 32 are private to each CPU (SGIs and PPIs).
-const GIC_IRQ_INTERNAL: u32 = 32;
+pub(crate) const GIC_IRQ_INTERNAL: u32 = 32;
 
 /// Configure a Interrupt controller.
 pub struct GICConfig {
@@ -74,7 +78,6 @@ pub trait GICDevice: MachineLifecycle {
     /// * `vm` - File descriptor for vmfd.
     /// * `gic_conf` - Configuration for `GIC`.
     fn create_device(
-        vm: &Arc<VmFd>,
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>>
     where
@@ -88,7 +91,7 @@ pub trait GICDevice: MachineLifecycle {
     /// # Arguments
     ///
     /// * `fdt` - Device tree presented by bytes.
-    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> UtilResult<()>;
+    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()>;
 }
 
 /// A wrapper around creating and using a kvm-based interrupt controller.
@@ -101,11 +104,10 @@ impl InterruptController {
     ///
     /// # Arguments
     ///
-    /// * `vm` - File descriptor for vmfd.
     /// * `gic_conf` - Configuration for `GIC`.
-    pub fn new(vm: Arc<VmFd>, gic_conf: &GICConfig) -> Result<InterruptController> {
+    pub fn new(gic_conf: &GICConfig) -> Result<InterruptController> {
         Ok(InterruptController {
-            gic: GICv3::create_device(&vm, gic_conf).chain_err(|| "Failed to realize GIC")?,
+            gic: GICv3::create_device(gic_conf).chain_err(|| "Failed to realize GIC")?,
         })
     }
 
@@ -122,7 +124,7 @@ impl InterruptController {
 }
 
 impl device_tree::CompileFDT for InterruptController {
-    fn generate_fdt_node(&self, fdt: &mut Vec<u8>) -> UtilResult<()> {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
         self.gic.generate_fdt(fdt)?;
         Ok(())
     }

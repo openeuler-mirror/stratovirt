@@ -13,12 +13,16 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use error_chain::ChainedError;
+use hypervisor::KVM_FDS;
 use kvm_bindings::kvm_userspace_memory_region;
-use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
-use util::num_ops::round_down;
+use kvm_ioctls::{IoEventAddress, NoDatamatch};
 
 use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::{host_page_size, AddressRange, FlatRange, RegionIoEventFd, RegionType};
+use crate::{AddressRange, FlatRange, RegionIoEventFd, RegionType};
+use util::{num_ops::round_down, unix::host_page_size};
+
+const MEM_READ_ONLY: u32 = 1 << 1;
 
 /// Request type of listener.
 #[derive(Debug, Copy, Clone)]
@@ -76,8 +80,6 @@ struct MemSlot {
 pub struct KvmMemoryListener {
     /// Id of AddressSpace.
     as_id: Arc<AtomicU32>,
-    /// File descriptor of VM.
-    fd: Arc<VmFd>,
     /// Record all MemSlots.
     slots: Arc<Mutex<Vec<MemSlot>>>,
 }
@@ -88,11 +90,9 @@ impl KvmMemoryListener {
     /// # Arguments
     ///
     /// * `nr_slots` - Number of slots.
-    /// * `vmfd` - The file descriptor of VM.
-    pub fn new(nr_slots: u32, vmfd: Arc<VmFd>) -> KvmMemoryListener {
+    pub fn new(nr_slots: u32) -> KvmMemoryListener {
         KvmMemoryListener {
             as_id: Arc::new(AtomicU32::new(0)),
-            fd: vmfd,
             slots: Arc::new(Mutex::new(vec![MemSlot::default(); nr_slots as usize])),
         }
     }
@@ -185,7 +185,10 @@ impl KvmMemoryListener {
             .checked_sub(aligned_addr.offset_from(range.base))
             .and_then(|sz| round_down(sz, alignment))
             .filter(|&sz| sz > 0_u64)
-            .chain_err(|| format!("Mem slot size is zero after aligned, addr 0x{:X}, size 0x{:X}, alignment 0x{:X}", range.base.raw_value(), range.size, alignment))?;
+            .chain_err(||
+                format!("Mem slot size is zero after aligned, addr 0x{:X}, size 0x{:X}, alignment 0x{:X}",
+                    range.base.raw_value(), range.size, alignment)
+            )?;
 
         Ok(AddressRange::new(aligned_addr, aligned_size))
     }
@@ -200,7 +203,22 @@ impl KvmMemoryListener {
     ///
     /// Return Error if fail to delete kvm_mem_slot.
     fn add_region(&self, flat_range: &FlatRange) -> Result<()> {
-        if flat_range.owner.region_type() != RegionType::Ram {
+        if flat_range.owner.region_type() == RegionType::RomDevice
+            && !flat_range.owner.get_rom_device_romd().unwrap()
+        {
+            if let Err(ref e) = self.delete_region(flat_range) {
+                warn!(
+                    "Rom-device Region changes to IO mode, Failed to delete region: {}",
+                    e.display_chain()
+                );
+            }
+            return Ok(());
+        }
+
+        if flat_range.owner.region_type() != RegionType::Ram
+            && flat_range.owner.region_type() != RegionType::RomDevice
+            && flat_range.owner.region_type() != RegionType::RamDevice
+        {
             return Ok(());
         }
 
@@ -219,25 +237,35 @@ impl KvmMemoryListener {
             .get_free_slot(aligned_addr.raw_value(), aligned_size, aligned_hva)
             .chain_err(|| "Failed to get available KVM mem slot")?;
 
+        let mut flags = 0_u32;
+        if flat_range.owner.get_rom_device_romd().unwrap_or(false) {
+            flags |= MEM_READ_ONLY;
+        }
         let kvm_region = kvm_userspace_memory_region {
             slot: slot_idx | (self.as_id.load(Ordering::SeqCst) << 16),
             guest_phys_addr: aligned_addr.raw_value(),
             memory_size: aligned_size,
             userspace_addr: aligned_hva,
-            flags: 0,
+            flags,
         };
         unsafe {
-            self.fd.set_user_memory_region(kvm_region).or_else(|e| {
-                self.delete_slot(aligned_addr.raw_value(), aligned_size)
-                    .chain_err(|| "Failed to delete Kvm mem slot")?;
-                Err(e).chain_err(|| {
-                    format!(
-                        "KVM register memory region failed: addr 0x{:X}, size 0x{:X}",
-                        aligned_addr.raw_value(),
-                        aligned_size
-                    )
-                })
-            })?;
+            KVM_FDS
+                .load()
+                .vm_fd
+                .as_ref()
+                .unwrap()
+                .set_user_memory_region(kvm_region)
+                .or_else(|e| {
+                    self.delete_slot(aligned_addr.raw_value(), aligned_size)
+                        .chain_err(|| "Failed to delete Kvm mem slot")?;
+                    Err(e).chain_err(|| {
+                        format!(
+                            "KVM register memory region failed: addr 0x{:X}, size 0x{:X}",
+                            aligned_addr.raw_value(),
+                            aligned_size
+                        )
+                    })
+                })?;
         }
         Ok(())
     }
@@ -248,7 +276,10 @@ impl KvmMemoryListener {
     ///
     /// * `flat_range` - Corresponding FlatRange of new-deleted region.
     fn delete_region(&self, flat_range: &FlatRange) -> Result<()> {
-        if flat_range.owner.region_type() != RegionType::Ram {
+        if flat_range.owner.region_type() != RegionType::Ram
+            && flat_range.owner.region_type() != RegionType::RomDevice
+            && flat_range.owner.region_type() != RegionType::RamDevice
+        {
             return Ok(());
         }
 
@@ -257,9 +288,13 @@ impl KvmMemoryListener {
                 .map(|r| (r.base, r.size))
                 .chain_err(|| "Failed to align mem slot")?;
 
-        let mem_slot = self
-            .delete_slot(aligned_addr.raw_value(), aligned_size)
-            .chain_err(|| "Failed to delete KVM mem slot")?;
+        let mem_slot = match self.delete_slot(aligned_addr.raw_value(), aligned_size) {
+            Ok(m) => m,
+            Err(_) => {
+                debug!("no match mem slot registered to KVM, just return");
+                return Ok(());
+            }
+        };
 
         let kvm_region = kvm_userspace_memory_region {
             slot: mem_slot.index | (self.as_id.load(Ordering::SeqCst) << 16),
@@ -269,12 +304,18 @@ impl KvmMemoryListener {
             flags: 0,
         };
         unsafe {
-            self.fd.set_user_memory_region(kvm_region).chain_err(|| {
-                format!(
-                    "KVM unregister memory region failed: addr 0x{:X}",
-                    aligned_addr.raw_value(),
-                )
-            })?;
+            KVM_FDS
+                .load()
+                .vm_fd
+                .as_ref()
+                .unwrap()
+                .set_user_memory_region(kvm_region)
+                .chain_err(|| {
+                    format!(
+                        "KVM unregister memory region failed: addr 0x{:X}",
+                        aligned_addr.raw_value(),
+                    )
+                })?;
         }
 
         Ok(())
@@ -290,24 +331,19 @@ impl KvmMemoryListener {
     ///
     /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
-
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => self
-                    .fd
-                    .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => self
-                    .fd
-                    .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => self
-                    .fd
-                    .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
+                4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
-            self.fd.register_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
+            vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
         };
 
         ioctl_ret.chain_err(|| {
@@ -332,24 +368,19 @@ impl KvmMemoryListener {
     ///
     /// * `ioevtfd` - IoEvent would be deleted.
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => self
-                    .fd
-                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => self
-                    .fd
-                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => self
-                    .fd
-                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
+                4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
-            self.fd
-                .unregister_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
+            vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
         };
 
         ioctl_ret.chain_err(|| {
@@ -411,21 +442,17 @@ impl Listener for KvmMemoryListener {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub struct KvmIoListener {
-    fd: Arc<VmFd>,
+pub struct KvmIoListener;
+
+#[cfg(target_arch = "x86_64")]
+impl Default for KvmIoListener {
+    fn default() -> Self {
+        Self
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 impl KvmIoListener {
-    /// Create a new KvmIoListener.
-    ///
-    /// # Arguments
-    ///
-    /// * `fd` - File descriptor of VM.
-    pub fn new(fd: Arc<VmFd>) -> KvmIoListener {
-        KvmIoListener { fd }
-    }
-
     /// Register a IoEvent to `/dev/kvm`.
     ///
     /// # Arguments
@@ -436,24 +463,19 @@ impl KvmIoListener {
     ///
     /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
-
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => self
-                    .fd
-                    .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => self
-                    .fd
-                    .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => self
-                    .fd
-                    .register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
+                4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
                 _ => bail!("unexpected ioeventfd data length {}", length),
             }
         } else {
-            self.fd.register_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
+            vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
         };
 
         ioctl_ret.chain_err(|| {
@@ -478,25 +500,19 @@ impl KvmIoListener {
     ///
     /// * `ioevtfd` - IoEvent of Region.
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
+        let kvm_fds = KVM_FDS.load();
+        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
-
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => self
-                    .fd
-                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => self
-                    .fd
-                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => self
-                    .fd
-                    .unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
+                4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
-            self.fd
-                .unregister_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
+            vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, NoDatamatch)
         };
 
         ioctl_ret.chain_err(|| {
@@ -552,8 +568,9 @@ impl Listener for KvmIoListener {
 
 #[cfg(test)]
 mod test {
-    use kvm_ioctls::Kvm;
+    use hypervisor::KVMFds;
     use libc::EFD_NONBLOCK;
+    use serial_test::serial;
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
@@ -570,8 +587,9 @@ mod test {
     }
 
     fn create_ram_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
-        let mem_mapping =
-            Arc::new(HostMemMapping::new(GuestAddress(addr), size, None, false, false).unwrap());
+        let mem_mapping = Arc::new(
+            HostMemMapping::new(GuestAddress(addr), size, None, false, false, false).unwrap(),
+        );
         FlatRange {
             addr_range: AddressRange::new(
                 mem_mapping.start_address().unchecked_add(offset_in_region),
@@ -579,23 +597,27 @@ mod test {
             ),
             owner: Region::init_ram_region(mem_mapping.clone()),
             offset_in_region,
+            rom_dev_romd: None,
         }
     }
 
     #[test]
+    #[serial]
     fn test_alloc_slot() {
-        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => KvmMemoryListener::new(4, Arc::new(vm_fd)),
-            Err(_) => return,
-        };
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
+        let kml = KvmMemoryListener::new(4);
         let host_addr = 0u64;
+
         assert_eq!(kml.get_free_slot(0, 100, host_addr).unwrap(), 0);
         assert_eq!(kml.get_free_slot(200, 100, host_addr).unwrap(), 1);
         assert_eq!(kml.get_free_slot(300, 100, host_addr).unwrap(), 2);
         assert_eq!(kml.get_free_slot(500, 100, host_addr).unwrap(), 3);
         assert!(kml.get_free_slot(200, 100, host_addr).is_err());
-
         // no available KVM mem slot
         assert!(kml.get_free_slot(600, 100, host_addr).is_err());
 
@@ -606,14 +628,18 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn test_add_del_ram_region() {
-        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
-            Err(_) => return,
-        };
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
+        let kml = KvmMemoryListener::new(34);
         let ram_size = host_page_size();
         let ram_fr1 = create_ram_range(0, ram_size, 0);
+
         kml.handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .unwrap();
         // flat-range already added, adding again should make an error
@@ -626,16 +652,19 @@ mod test {
         // flat-range already deleted, deleting again should make an error
         assert!(kml
             .handle_request(Some(&ram_fr1), None, ListenerReqType::DeleteRegion)
-            .is_err());
+            .is_ok());
     }
 
     #[test]
+    #[serial]
     fn test_add_region_align() {
-        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
-            Err(_) => return,
-        };
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
+        let kml = KvmMemoryListener::new(34);
         // flat-range not aligned
         let page_size = host_page_size();
         let ram_fr2 = create_ram_range(page_size, 2 * page_size, 1000);
@@ -651,12 +680,15 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn test_add_del_ioeventfd() {
-        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
-            Err(_) => return,
-        };
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
+        let kml = KvmMemoryListener::new(34);
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
@@ -695,13 +727,16 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn test_ioeventfd_with_data_match() {
-        let kml = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => KvmMemoryListener::new(34, Arc::new(vm_fd)),
-            Err(_) => return,
-        };
-        let evtfd_addr = 0x1000_u64;
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
+        let kml = KvmMemoryListener::new(34);
+        let evtfd_addr = 0x1000_u64;
         let mut evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
         evtfd.addr_range.size = 3_u64;
         // Matched data's length must be 2, 4 or 8.
@@ -747,13 +782,16 @@ mod test {
     }
 
     #[test]
+    #[serial]
     #[cfg(target_arch = "x86_64")]
     fn test_kvm_io_listener() {
-        let iol = match Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Ok(vm_fd) => KvmIoListener::new(Arc::new(vm_fd)),
-            Err(_) => return,
-        };
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
+            return;
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
+        let iol = KvmIoListener::default();
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)

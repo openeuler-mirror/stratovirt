@@ -66,6 +66,14 @@ pub struct QueueConfig {
     pub size: u16,
     /// Virtual queue ready bit.
     pub ready: bool,
+    /// Interrupt vector index of the queue for msix
+    pub vector: u16,
+    /// The next index which can be poped in the available vring.
+    next_avail: u16,
+    /// The next index which can be pushed in the used vring.
+    next_used: u16,
+    /// The index of last descriptor used which has triggered interrupt.
+    last_signal_used: u16,
 }
 
 impl QueueConfig {
@@ -81,8 +89,12 @@ impl QueueConfig {
             avail_ring: GuestAddress(0),
             used_ring: GuestAddress(0),
             max_size,
-            size: 0,
+            size: max_size,
             ready: false,
+            vector: 0,
+            next_avail: 0,
+            next_used: 0,
+            last_signal_used: 0,
         }
     }
 }
@@ -430,6 +442,9 @@ pub struct SplitVring {
     /// The queue size set by frontend.
     pub size: u16,
 
+    /// Interrupt vector index of the queue for msix
+    pub vector: u16,
+
     /// The next index which can be popped in the available vring.
     next_avail: Wrapping<u16>,
 
@@ -454,9 +469,10 @@ impl SplitVring {
             ready: queue_config.ready,
             max_size: queue_config.max_size,
             size: queue_config.size,
-            next_avail: Wrapping(0),
-            next_used: Wrapping(0),
-            last_signal_used: Wrapping(0),
+            vector: queue_config.vector,
+            next_avail: Wrapping(queue_config.next_avail),
+            next_used: Wrapping(queue_config.next_used),
+            last_signal_used: Wrapping(queue_config.last_signal_used),
         }
     }
 
@@ -821,6 +837,10 @@ impl VringOps for SplitVring {
             ready: self.ready,
             max_size: self.max_size,
             size: self.size,
+            vector: self.vector,
+            next_avail: self.next_avail.0,
+            next_used: self.next_used.0,
+            last_signal_used: self.last_signal_used.0,
         }
     }
 }
@@ -868,7 +888,15 @@ mod tests {
         let root = Region::init_container_region(1 << 36);
         let sys_space = AddressSpace::new(root).unwrap();
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+            HostMemMapping::new(
+                GuestAddress(0),
+                SYSTEM_SPACE_SIZE,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
         );
         sys_space
             .root()

@@ -20,30 +20,14 @@
 extern crate log;
 #[macro_use]
 extern crate error_chain;
+#[macro_use]
+extern crate migration_derive;
 
 mod interrupt_controller;
-mod legacy;
-
-pub mod errors {
-    error_chain! {
-        errors {
-            #[cfg(target_arch = "aarch64")]
-            InvalidConfig(err_info: String) {
-                display("Invalid GIC config: {}.", err_info)
-            }
-            #[cfg(target_arch = "aarch64")]
-            CreateKvmDevice(err: kvm_ioctls::Error) {
-                display("Failed to create KVM device: {:#?}.", err)
-            }
-            AttachSysBusErr {
-                display("Failed to attach to sysbus.")
-            }
-        }
-    }
-}
+pub mod legacy;
 
 #[cfg(target_arch = "aarch64")]
-pub use interrupt_controller::{InterruptController, InterruptControllerConfig};
-pub use legacy::Serial;
-#[cfg(target_arch = "aarch64")]
-pub use legacy::PL031;
+pub use interrupt_controller::{
+    errors as IntCtrlErrs, InterruptController, InterruptControllerConfig,
+};
+pub use legacy::errors as LegacyErrs;

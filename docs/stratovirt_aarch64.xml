@@ -1,0 +1,77 @@
+<domain type='kvm'>
+    <name>StratoVirt</name>
+    <memory unit='GiB'>8</memory>
+    <!-- hugepages -->
+    <memoryBacking>
+    <hugepages>
+        <page size='1' unit='GiB' />
+    </hugepages>
+    </memoryBacking>
+    <vcpu>4</vcpu>
+    <!-- iothread -->
+    <iothreads>1</iothreads>
+    <os>
+    <type arch='aarch64' machine='virt'>hvm</type>
+    <kernel>/path/to/standard_vm_kernel</kernel>
+    <cmdline>console=ttys0 root=/dev/vda reboot=k panic=1 rw</cmdline>
+    <loader readonly='yes' type='pflash'>/path/to/pflash</loader>
+    </os>
+    <features>
+        <acpi/>
+        <gic version='3'/>
+    </features>
+    <devices>
+        <emulator>/path/to/StratoVirt_binary_file</emulator>
+        <controller type='pci' index='0' model='pcie-root'/>
+        <!-- block -->
+        <disk type='file' device='disk' iothread='1'>
+            <driver name='qemu'  type='raw'/>
+            <source file='/path/to/rootfs'/>
+            <target dev='hda' bus='virtio'/>
+            <address type='pci' domain='0x000' bus='0x00' slot='0x01' function='0x00'/>
+            <iotune>
+                <total_iops_sec>1000</total_iops_sec>
+            </iotune>
+        </disk>
+        <!-- net -->
+        <interface type='ethernet'>
+            <mac address='de:ad:be:ef:00:01'/>
+            <source bridge='qbr0'/>
+            <target dev='tap0'/>
+            <model type='virtio'/>
+            <address type='pci' domain='0x000' bus='0x00' slot='0x02' function='0x00'/>
+        </interface>
+        <!-- virtio-serial -->
+        <controller type='virtio-serial' index='0'>
+            <alias name='virt-serial0'/>
+            <address type='pci' domain='0x000' bus='0x00' slot='0x03' function='0x00'/>
+        </controller>
+        <console type='pty'>
+            <target type='virtio' port='0'/>
+            <alias name='console0'/>
+        </console>
+        <!-- balloon -->
+        <memballoon model='virtio'>
+            <alias name='balloon0'/>
+            <address type='pci' domain='0x000' bus='0x00' slot='0x04' function='0x00'/>
+        </memballoon>
+        <!-- rng -->
+        <rng model='virtio'>
+            <rate period='1000' bytes='1234'/>
+            <backend model='random'>/dev/random</backend>
+            <address type='pci' domain='0x000' bus='0x00' slot='0x05' function='0x00'/>
+        </rng>
+        <!-- vsock -->
+        <vsock model='virtio'>
+            <cid auto='no' address='3'/>
+            <address type='pci' domain='0x000' bus='0x00' slot='0x06' function='0x00'/>
+        </vsock>
+        <!-- vfio -->
+        <hostdev model='subsystem' type='pci' managed='yes'>
+        <driver name='vfio'/>
+        <source>
+            <address domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
+        </source>
+        </hostdev>
+    </devices>
+</domain>

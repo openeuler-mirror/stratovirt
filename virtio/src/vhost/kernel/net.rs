@@ -14,7 +14,6 @@ use std::cmp;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -29,8 +28,8 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::super::{
     net::{build_device_config_space, create_tap, VirtioNetConfig},
-    Queue, VirtioDevice, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1, VIRTIO_NET_F_CSUM,
-    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_TYPE_NET,
 };
 use super::super::{VhostNotify, VhostOps};
@@ -89,6 +88,8 @@ pub struct Net {
     device_config: VirtioNetConfig,
     /// System address space.
     mem_space: Arc<AddressSpace>,
+    /// EventFd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Net {
@@ -102,6 +103,7 @@ impl Net {
             vhost_features: 0_u64,
             device_config: VirtioNetConfig::default(),
             mem_space: mem_space.clone(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -215,9 +217,8 @@ impl VirtioDevice for Net {
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
-        queues: Vec<Arc<Mutex<Queue>>>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let mut host_notifies = Vec::new();
@@ -299,15 +300,31 @@ impl VirtioDevice for Net {
         }
 
         let handler = VhostIoHandler {
-            interrupt_evt: interrupt_evt.try_clone()?,
-            interrupt_status,
+            interrupt_cb,
             host_notifies,
+            reset_evt: self.reset_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
         )?;
+
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        if let Some(backend) = &self.backend {
+            backend
+                .reset_owner()
+                .chain_err(|| "Failed to reset owner for vhost-net")?;
+
+            self.reset_evt
+                .write(1)
+                .chain_err(|| ErrorKind::EventFdWrite)?;
+        } else {
+            bail!("Failed to get backend for vhost-net");
+        }
 
         Ok(())
     }
@@ -325,7 +342,15 @@ mod tests {
         let root = Region::init_container_region(1 << 36);
         let sys_space = AddressSpace::new(root).unwrap();
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+            HostMemMapping::new(
+                GuestAddress(0),
+                SYSTEM_SPACE_SIZE,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
         );
         sys_space
             .root()
@@ -339,18 +364,17 @@ mod tests {
 
     #[test]
     fn test_vhost_net_realize() {
-        let json = r#"
-        [{
-            "iface_id": "eth1",
-            "host_dev_name": "tap1",
-            "mac": "1F:2C:3E:4A:5B:6D",
-            "vhost_type": "vhost-kernel",
-            "tap_fd": 4,
-            "vhost_fd": 5
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let confs = NetworkInterfaceConfig::from_value(&value);
+        let net1 = NetworkInterfaceConfig {
+            id: "eth1".to_string(),
+            host_dev_name: "tap1".to_string(),
+            mac: Some("1F:2C:3E:4A:5B:6D".to_string()),
+            vhost_type: Some("vhost-kernel".to_string()),
+            tap_fd: Some(4),
+            vhost_fd: Some(5),
+            iothread: None,
+        };
+        let conf = vec![net1];
+        let confs = Some(conf);
         let vhost_net_confs = confs.unwrap();
         let vhost_net_conf = vhost_net_confs[0].clone();
         let vhost_net_space = vhost_address_space_init();
@@ -358,16 +382,17 @@ mod tests {
         // the tap_fd and vhost_fd attribute of vhost-net can't be assigned.
         assert_eq!(vhost_net.realize().is_ok(), false);
 
-        let json = r#"
-        [{
-            "iface_id": "eth0",
-            "host_dev_name": "tap0",
-            "mac": "1A:2B:3C:4D:5E:6F",
-            "vhost_type": "vhost-kernel"
-        }]
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let confs = NetworkInterfaceConfig::from_value(&value);
+        let net1 = NetworkInterfaceConfig {
+            id: "eth0".to_string(),
+            host_dev_name: "tap0".to_string(),
+            mac: Some("1A:2B:3C:4D:5E:6F".to_string()),
+            vhost_type: Some("vhost-kernel".to_string()),
+            tap_fd: None,
+            vhost_fd: None,
+            iothread: None,
+        };
+        let conf = vec![net1];
+        let confs = Some(conf);
         let vhost_net_confs = confs.unwrap();
         let vhost_net_conf = vhost_net_confs[0].clone();
         let mut vhost_net = Net::new(&vhost_net_conf, &vhost_net_space);
