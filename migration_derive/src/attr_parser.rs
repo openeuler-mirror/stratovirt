@@ -106,8 +106,6 @@ pub fn validate_version(current_version: &mut u32, compat_version: &mut u32) {
         let version = version_to_u32(version_str);
         if *current_version == 0 {
             *current_version = version;
-        } else if *current_version < version {
-            panic!("current version input is less than version in `Cargo.toml`.");
         }
     } else if *current_version == 0 {
         *current_version = *compat_version;
