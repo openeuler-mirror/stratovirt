@@ -68,7 +68,7 @@ pub struct QueueConfig {
     pub ready: bool,
     /// Interrupt vector index of the queue for msix
     pub vector: u16,
-    /// The next index which can be poped in the available vring.
+    /// The next index which can be popped in the available vring.
     next_avail: u16,
     /// The next index which can be pushed in the used vring.
     next_used: u16,

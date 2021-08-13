@@ -45,6 +45,6 @@ The following figure shows StratoVirt's core architecture which consist of three
 
 - Only the Linux operating system is supported; The recommended kernel version is 4.19;
 - Only Linux is supported as the client operating system, and the recommended kernel version is 4.19;
-- StratoVirt is fullly tested on openEuler;
+- StratoVirt is fully tested on openEuler;
 - Supports a maximum of 254 CPUs;
 

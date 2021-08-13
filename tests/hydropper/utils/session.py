@@ -152,7 +152,7 @@ class ConsoleManager():
                         LOG.debug("Got 'Warning added RSA to known host list")
                     continue
             except aexpect.ExpectTimeoutError as err:
-                # send a empty line to avoid unexpect login timeout
+                # send a empty line to avoid unexpected login timeout
                 # because some message from linux kernel maybe impact match
                 if not last_chance:
                     time.sleep(0.5)

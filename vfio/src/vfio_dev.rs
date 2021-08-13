@@ -464,13 +464,13 @@ impl VfioDevice {
             .iter()
             .collect::<PathBuf>()
             .read_link()
-            .chain_err(|| "Invaild iommu group path")?;
+            .chain_err(|| "Invalid iommu group path")?;
         let group_name = iommu_group
             .file_name()
-            .chain_err(|| "Invaild iommu group name")?;
+            .chain_err(|| "Invalid iommu group name")?;
         let mut group_id = 0;
         if let Some(n) = group_name.to_str() {
-            group_id = n.parse::<u32>().chain_err(|| "Invaild iommu group id")?;
+            group_id = n.parse::<u32>().chain_err(|| "Invalid iommu group id")?;
         }
 
         let mut groups = container.groups.lock().unwrap();
@@ -489,7 +489,7 @@ impl VfioDevice {
     fn vfio_get_device(group: &VfioGroup, name: &Path) -> Result<File> {
         let mut dev_name: &str = "";
         if let Some(n) = name.file_name() {
-            dev_name = n.to_str().chain_err(|| "Invaild device path")?;
+            dev_name = n.to_str().chain_err(|| "Invalid device path")?;
         }
         let path: CString = CString::new(dev_name.as_bytes())
             .chain_err(|| "Failed to convert device name to CString type of data")?;

@@ -103,7 +103,7 @@ impl IrqRouteTable {
     #[cfg(target_arch = "x86_64")]
     pub fn init_irq_route_table(&mut self) {
         // On x86, use `kvm_create_irqchip` to create an interrupt
-        // controller module in the kernel. It creates a virual PIC, a virtual ioapic,
+        // controller module in the kernel. It creates a virtual PIC, a virtual ioapic,
         // and sets up future vcpus to have a local APIC. IRQ routing for GSIs 0-15 is set
         // to both PIC and IOAPIC. GSI 16-23 only go to the IOAPIC.
         for i in 0..IOAPIC_NUM_PINS {

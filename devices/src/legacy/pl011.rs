@@ -74,7 +74,7 @@ pub struct PL011State {
     ibrd: u32,
     /// Fractional Baud Rate Register.
     fbrd: u32,
-    /// Interrut FIFO Level Select Register.
+    /// Interrupt FIFO Level Select Register.
     ifl: u32,
     /// Identifier Register. Length is 8.
     id: [u8; 8],

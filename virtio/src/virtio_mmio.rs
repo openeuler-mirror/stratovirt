@@ -80,7 +80,7 @@ const VENDOR_ID: u32 = 0;
 const MMIO_MAGIC_VALUE: u32 = 0x7472_6976;
 const MMIO_VERSION: u32 = 2;
 
-/// The maximun of virtio queue within a virtio device.
+/// The maximum of virtio queue within a virtio device.
 const MAXIMUM_NR_QUEUES: usize = 8;
 
 /// HostNotifyInfo includes the info needed for notifying backend from guest.
