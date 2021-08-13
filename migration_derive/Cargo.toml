@@ -1,0 +1,19 @@
+[package]
+name = "migration_derive"
+version = "2.0.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2018"
+license = "Mulan PSL v2"
+
+[dependencies]
+syn = { version = "1.0.72", features = ["full", "extra-traits"] }
+quote = "1.0.7"
+proc-macro2 = "1.0"
+
+[dev-dependencies]
+migration = { path = "../migration" }
+util = { path = "../util" }
+
+[lib]
+name = "migration_derive"
+proc-macro = true

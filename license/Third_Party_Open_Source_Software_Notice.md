@@ -1,14 +1,16 @@
 THIRD PARTY OPEN SOURCE SOFTWARE NOTICE
-Please note we provide an open source software notice for the third party open source software along with this software and/or this software component contributed by Huawei (in the following just “this SOFTWARE”). The open source software licenses are granted by the respective right holders. 
+Please note we provide an open source software notice for the third party open source software along with this software and/or this software component contributed by Huawei (in the following just “this SOFTWARE”). The open source software licenses are granted by the respective right holders.
 
 Warranty Disclaimer
 THE OPEN SOURCE SOFTWARE IN THIS SOFTWARE IS DISTRIBUTED IN THE HOPE THAT IT WILL BE USEFUL, BUT WITHOUT ANY WARRANTY, WITHOUT EVEN THE IMPLIED WARRANTY OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. SEE THE APPLICABLE LICENSES FOR MORE DETAILS.
 
-Copyright Notice and License Texts 
-Software: libc 0.2.71
-Copyright notice: 
+Copyright Notice and License Texts
+Software: libc 0.2.94
+Copyright notice:
 Copyright (c) 2014-2020 The Rust Project Developers
-License: MIT or Apache License Version 2.0 
+License: MIT or Apache License Version 2.0
+
+----------------------------------------------------------------
 
 Copyright (C) <year> <copyright holders>
 
@@ -27,8 +29,8 @@ of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
 ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT 
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
 SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
@@ -239,16 +241,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-Software: log 0.4.8
-Copyright notice: 
+Software: log 0.4.14
+Copyright notice:
 Copyright (c) 2014 The Rust Project Developers
 Copyright 2014-2015 The Rust Project Developers
 Copyright 2015 The Rust Project Developers
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: byteorder 1.3.4
-Copyright notice: 
+Software: byteorder 1.4.3
+Copyright notice:
 Copyright (c) 2015 Andrew Gallant
 License: MIT or Unlicense
 Please see above.
@@ -280,22 +282,22 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <http://unlicense.org/>
 
-Software: serde 1.0.114
-Copyright notice:
-Copyright (c) David Tolnay <dtolnay@gmail.com>
-Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com> 
-License: MIT or Apache License Version 2.0
-Please see above.
-
-Software: serde_json 1.0.55
+Software: serde 1.0.125
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: error-chain 0.12.4 
-Copyright notice: 
+Software: serde_json 1.0.64
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: error-chain 0.12.4
+Copyright notice:
 Copyright (c) 2017 The Error-Chain Project Developers
 License: MIT or Apache License Version 2.0
 Please see above.
@@ -342,7 +344,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Software: kvm-ioctls 0.6.0
+Software: kvm-ioctls 0.6.1
 Copyright notice:
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 Portions Copyright 2017 The Chromium OS Authors. All rights reserved.
@@ -351,8 +353,63 @@ Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: kvm-bindings 0.3.0
+Software: kvm-bindings 0.3.1
 Copyright notice:
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: The APACHE 2.0 License
+Please see above.
+
+Software: arc-swap 0.4.8
+Copyright notice:
+Copyright (c) 2017 arc-swap developers
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: lazy_static 1.4.0
+Copyright notice:
+Copyright (c) 2010 The Rust Project Developers
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: serial_test 0.5.1
+Copyright notice:
+Copyright (c) 2018 Tom Parker-Shemilt
+License: MIT
+Please see above.
+
+Software: syn 1.0.72
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: quote 1.0.7
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: proc-macro2 1.0
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+Copyright (c) Alex Crichton <alex@alexcrichton.com>
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: strum 0.20
+Copyright notice:
+Copyright (c) 2019 Peter Glotfelty
+License: MIT
+Please see above.
+
+Software: strum_macros 0.20
+Copyright notice:
+Copyright (c) 2019 Peter Glotfelty
+License: MIT
+Please see above.
+
+Software: vfio-bindings 0.2.0
+Copyright notice:
+Copyright (c) 2019 Intel Corporation. All Rights Reserved.
+License: Apache License Version 2.0 or BSD 3-Clause License
 Please see above.

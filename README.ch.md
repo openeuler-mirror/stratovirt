@@ -19,7 +19,7 @@ $ cargo build --release
 ```
 可以在`target/release/stratovirt`路径下找到生成的二进制文件
 
-### 运行软件
+### 使用StratoVirt启动虚拟机
 为了快速上手StratoVirt，需要准备
 * PE格式或bzImage格式(仅x86_64)的Linux内核镜像
 * ext4文件系统，raw格式rootfs的镜像
@@ -28,13 +28,31 @@ $ cargo build --release
 
 https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
 
+启动标准机型的虚拟机需要指定遵循UEFI的edk2固件文件。
+
 ```shell
-# 如果-api-channel的socket文件已经存在，请先删除它
+# 如果-qmp的socket文件已经存在，请先删除它
+
+# 启动microvm机型
 $ ./target/release/stratovirt \
+    -machine microvm \
     -kernel /path/to/kernel \
-    -append console=ttyS0 root=/dev/vda reboot=k panic=1 \
+    -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -api-channel unix:/path/to/socket \
+    -device virtio-blk-device,drive=rootfs \
+    -qmp unix:/path/to/socket,server,nowait \
+    -serial stdio
+
+# 启动standard_vm机型
+$ ./target/release/stratovirt \
+    -machine standard_vm \
+    -kernel /path/to/kernel \
+    -append "console=ttys0 root=/dev/vda reboot=k panic=1" \
+    -drive file=/path/to/firmware,if=pflash,unit=0,readonly=true \
+    -device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.1 \
+    -drive file=/path/to/rootfs,id=rootfs,readonly=off \
+    -device virtio-blk-pci,drive=rootfs,bus=pcie.1,addr=0x0.0x0 \
+    -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 ```
 

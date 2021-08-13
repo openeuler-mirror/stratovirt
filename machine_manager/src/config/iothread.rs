@@ -1,6 +1,6 @@
 // Copyright (c) 2020 Huawei Technologies Co.,Ltd. All rights reserved.
 //
-// QuantVisor is licensed under Mulan PSL v2.
+// StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
 // PSL v2.
 // You may obtain a copy of Mulan PSL v2 at:
@@ -10,29 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
-use serde::{Deserialize, Serialize};
-
 use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
 
 const MAX_IOTHREAD_NUM: usize = 8;
 
 /// Config structure for iothread.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct IothreadConfig {
     pub id: String,
-}
-
-impl IothreadConfig {
-    /// Create `IothreadConfig` from `Value` structure.
-    /// `Value` structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Vec<Self>> {
-        let ret = serde_json::from_value(value.clone())?;
-        Ok(ret)
-    }
 }
 
 impl ConfigCheck for IothreadConfig {
@@ -51,7 +37,17 @@ impl ConfigCheck for IothreadConfig {
 
 impl VmConfig {
     /// Add new iothread device to `VmConfig`.
-    fn add_iothread(&mut self, iothread: IothreadConfig) -> Result<()> {
+    pub fn add_iothread(&mut self, iothread_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("iothread");
+        cmd_parser.push("").push("id");
+        cmd_parser.parse(iothread_config)?;
+
+        let mut iothread = IothreadConfig::default();
+        if let Some(id) = cmd_parser.get_value::<String>("id")? {
+            iothread.id = id;
+        }
+        iothread.check()?;
+
         if self.iothreads.is_some() {
             if self.iothreads.as_ref().unwrap().len() >= MAX_IOTHREAD_NUM {
                 return Err(ErrorKind::IllegalValue(
@@ -79,18 +75,39 @@ impl VmConfig {
 
         Ok(())
     }
+}
 
-    pub fn update_iothread(&mut self, iothread_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("iothread");
-        cmd_parser.push("id");
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        cmd_parser.parse(iothread_config)?;
+    #[test]
+    fn test_iothread_config_cmdline_parser_01() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.add_object("iothread,id=iothread0").is_ok());
+        assert!(vm_config.iothreads.is_some());
+        let iothreads = vm_config.iothreads.unwrap();
+        assert!(iothreads.len().eq(&1));
+    }
 
-        let mut iothread = IothreadConfig::default();
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            iothread.id = id;
-        }
+    #[test]
+    fn test_iothread_config_cmdline_parser_02() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.add_object("iothread,id=iothread0").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread1").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread2").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread3").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread4").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread5").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread6").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread7").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread8").is_err());
+    }
 
-        self.add_iothread(iothread)
+    #[test]
+    fn test_iothread_config_cmdline_parser_03() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config.add_object("iothread,id=iothread0").is_ok());
+        assert!(vm_config.add_object("iothread,id=iothread0").is_err());
     }
 }

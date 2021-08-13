@@ -17,15 +17,16 @@ use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress};
+use error_chain::ChainedError;
 use machine_manager::{
-    config::{ConfigCheck, DriveConfig},
+    config::{BlkDevConfig, ConfigCheck},
     event_loop::EventLoop,
 };
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
@@ -37,19 +38,16 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Element, Queue, VirtioDevice, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH,
-    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
-    VIRTIO_TYPE_BLOCK,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_BLK_F_FLUSH,
+    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_ID_BYTES,
+    VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
 /// Size of each virtqueue.
 const QUEUE_SIZE_BLK: u16 = 256;
-/// Size of configuration space of the virtio block device.
-const CONFIG_SPACE_SIZE: usize = 16;
 /// Used to compute the number of sectors.
 const SECTOR_SHIFT: u8 = 9;
 /// Size of a sector of the block device.
@@ -57,8 +55,7 @@ const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
 
-type SenderConfig = (Option<File>, u64, Option<String>, bool);
-type VirtioBlockInterrupt = Box<dyn Fn(u32) -> Result<()> + Send + Sync>;
+type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool);
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -110,7 +107,7 @@ pub struct AioCompleteCb {
     desc_index: u16,
     rw_len: u32,
     req_status_addr: GuestAddress,
-    interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
     driver_features: u64,
 }
 
@@ -121,7 +118,7 @@ impl AioCompleteCb {
         desc_index: u16,
         rw_len: u32,
         req_status_addr: GuestAddress,
-        interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
+        interrupt_cb: Option<Arc<VirtioInterrupt>>,
         driver_features: u64,
     ) -> Self {
         AioCompleteCb {
@@ -235,7 +232,7 @@ impl Request {
     fn execute(
         &self,
         aio: &mut Box<Aio<AioCompleteCb>>,
-        disk: &mut File,
+        disk: &File,
         disk_sectors: u64,
         serial_num: &Option<String>,
         direct: bool,
@@ -278,7 +275,7 @@ impl Request {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
                 if direct {
-                    (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
                         "Failed to process block request for reading asynchronously"
                     })?;
                 } else {
@@ -290,7 +287,7 @@ impl Request {
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::Pwritev;
                 if direct {
-                    (*aio).as_mut().rw_aio(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
                         "Failed to process block request for writing asynchronously"
                     })?;
                 } else {
@@ -343,7 +340,7 @@ struct BlockIoHandler {
     /// The address space to which the block device belongs.
     mem_space: Arc<AddressSpace>,
     /// The image file opened by the block device.
-    disk_image: Option<File>,
+    disk_image: Option<Arc<File>>,
     /// The number of sectors of the disk image.
     disk_sectors: u64,
     /// Serial number of the block device.
@@ -358,8 +355,10 @@ struct BlockIoHandler {
     receiver: Receiver<SenderConfig>,
     /// Eventfd for config space update.
     update_evt: RawFd,
+    /// Eventfd for device reset.
+    reset_evt: RawFd,
     /// Callback to trigger an interrupt.
-    interrupt_cb: Arc<VirtioBlockInterrupt>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     /// thread name of io handler
     iothread: Option<String>,
     /// Using the leak bucket to implement IO limits
@@ -498,8 +497,11 @@ impl BlockIoHandler {
         }
 
         if !req_queue.is_empty() || need_interrupt {
-            (self.interrupt_cb)(VIRTIO_MMIO_INT_VRING)
-                .chain_err(|| "Failed to send an interrupt for block")?;
+            (self.interrupt_cb)(
+                &VirtioInterruptType::Vring,
+                Some(&self.queue.lock().unwrap()),
+            )
+            .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -540,13 +542,19 @@ impl BlockIoHandler {
                 return;
             }
 
-            let trigger_interrupt_status = queue_lock
+            if queue_lock
                 .vring
-                .should_notify(&complete_cb.mem_space, complete_cb.driver_features);
-            if trigger_interrupt_status
-                && (*complete_cb.interrupt_cb.as_ref().unwrap())(VIRTIO_MMIO_INT_VRING).is_err()
+                .should_notify(&complete_cb.mem_space, complete_cb.driver_features)
             {
-                error!("Failed to trigger interrupt(aio completion)");
+                if let Err(e) = (*complete_cb.interrupt_cb.as_ref().unwrap())(
+                    &VirtioInterruptType::Vring,
+                    Some(&queue_lock),
+                ) {
+                    error!(
+                        "Failed to trigger interrupt(aio completion) for block device, error is {}",
+                        e.display_chain()
+                    );
+                }
             }
         }) as AioCompleteFunc<AioCompleteCb>);
 
@@ -576,6 +584,52 @@ impl BlockIoHandler {
             );
         }
     }
+
+    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let mut notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.update_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+        if let Some(lb) = self.leak_bucket.as_ref() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                lb.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+        if let Some(aio) = &self.aio {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                aio.fd.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+
+        notifiers
+    }
 }
 
 fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
@@ -601,6 +655,14 @@ impl EventNotifierHelper for BlockIoHandler {
             None
         });
         notifiers.push(build_event_notifier(handler_raw.update_evt, h));
+
+        // Register event notifier for reset_evt.
+        let h_clone = handler.clone();
+        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(h_clone.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(build_event_notifier(handler_raw.reset_evt, h));
 
         // Register event notifier for queue_evt.
         let h_clone = handler.clone();
@@ -661,26 +723,37 @@ impl EventNotifierHelper for BlockIoHandler {
     }
 }
 
+/// State of block device.
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct BlockState {
+    /// Bitmask of features supported by the backend.
+    device_features: u64,
+    /// Bit mask of features negotiated byu the backend and the frontend.
+    driver_features: u64,
+    /// Config space of the block device.
+    config_space: [u8; 16],
+}
+
 /// Block device structure.
 pub struct Block {
     /// Configuration of the block device.
-    blk_cfg: DriveConfig,
+    blk_cfg: BlkDevConfig,
     /// Image file opened.
-    disk_image: Option<File>,
+    disk_image: Option<Arc<File>>,
     /// Number of sectors of the image file.
     disk_sectors: u64,
-    /// Bit mask of features supported by the backend.
-    device_features: u64,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
-    /// Config space of the block device.
-    config_space: [u8; CONFIG_SPACE_SIZE],
+    /// Status of block device.
+    state: BlockState,
     /// Callback to trigger interrupt.
-    interrupt_cb: Option<Arc<VirtioBlockInterrupt>>,
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// The sending half of Rust's channel to send the image file.
     sender: Option<Sender<SenderConfig>>,
     /// Eventfd for config space update.
     update_evt: EventFd,
+    /// Eventfd for device reset.
+    reset_evt: EventFd,
 }
 
 impl Default for Block {
@@ -689,32 +762,39 @@ impl Default for Block {
             blk_cfg: Default::default(),
             disk_image: None,
             disk_sectors: 0,
-            device_features: 0,
-            driver_features: 0,
-            config_space: [0u8; CONFIG_SPACE_SIZE],
+            state: BlockState::default(),
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
 
 impl Block {
-    /// Create a block device.
-    pub fn new() -> Block {
-        Self::default()
+    pub fn new(blk_cfg: BlkDevConfig) -> Block {
+        Self {
+            blk_cfg,
+            disk_image: None,
+            disk_sectors: 0,
+            state: BlockState::default(),
+            interrupt_cb: None,
+            sender: None,
+            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+        }
     }
 
     fn build_device_config_space(&mut self) {
         // capacity: 64bits
         let num_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
         for i in 0..8 {
-            self.config_space[i] = (num_sectors >> (8 * i)) as u8;
+            self.state.config_space[i] = (num_sectors >> (8 * i)) as u8;
         }
 
         // seg_max=128-2: 32bits
         for i in 0..4 {
-            self.config_space[12 + i] = (126 >> (8 * i)) as u8;
+            self.state.config_space[12 + i] = (126 >> (8 * i)) as u8;
         }
     }
 }
@@ -732,14 +812,14 @@ impl VirtioDevice for Block {
             );
         }
 
-        self.device_features = (1_u64 << VIRTIO_F_VERSION_1) | (1_u64 << VIRTIO_BLK_F_FLUSH);
+        self.state.device_features = (1_u64 << VIRTIO_F_VERSION_1) | (1_u64 << VIRTIO_BLK_F_FLUSH);
         if self.blk_cfg.read_only {
-            self.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
+            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
-        self.device_features |= 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        self.device_features |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
-        self.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
-        self.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
+        self.state.device_features |= 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
+        self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
+        self.state.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
 
         self.build_device_config_space();
 
@@ -777,14 +857,14 @@ impl VirtioDevice for Block {
                 .seek(SeekFrom::End(0))
                 .chain_err(|| "Failed to seek the end for block")? as u64;
 
-            self.disk_image = Some(file);
+            self.disk_image = Some(Arc::new(file));
         } else {
             self.disk_image = None;
         }
 
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
         for i in 0..8 {
-            self.config_space[i] = (self.disk_sectors >> (8 * i)) as u8;
+            self.state.config_space[i] = (self.disk_sectors >> (8 * i)) as u8;
         }
 
         Ok(())
@@ -807,28 +887,28 @@ impl VirtioDevice for Block {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.device_features, features_select)
+        read_u32(self.state.device_features, features_select)
     }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.device_features;
+        let unrequested_features = v & !self.state.device_features;
         if unrequested_features != 0 {
             v &= !unrequested_features;
         }
-        self.driver_features |= v;
+        self.state.driver_features |= v;
     }
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_len = self.config_space.len() as u64;
+        let config_len = self.state.config_space.len() as u64;
         if offset >= config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
         }
         if let Some(end) = offset.checked_add(data.len() as u64) {
             data.write_all(
-                &self.config_space[offset as usize..cmp::min(end, config_len) as usize],
+                &self.state.config_space[offset as usize..cmp::min(end, config_len) as usize],
             )?;
         }
 
@@ -838,12 +918,13 @@ impl VirtioDevice for Block {
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
-        let config_len = self.config_space.len();
+        let config_len = self.state.config_space.len();
         if offset as usize + data_len > config_len {
             return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
         }
 
-        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        self.state.config_space[(offset as usize)..(offset as usize + data_len)]
+            .copy_from_slice(data);
 
         Ok(())
     }
@@ -853,35 +934,28 @@ impl VirtioDevice for Block {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
-        let interrupt_evt = interrupt_evt.try_clone()?;
-        let interrupt_status = interrupt_status;
-        let cb = Arc::new(Box::new(move |status: u32| {
-            interrupt_status.fetch_or(status, Ordering::SeqCst);
-            interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
-        }) as VirtioBlockInterrupt);
-
-        self.interrupt_cb = Some(cb.clone());
+        self.interrupt_cb = Some(interrupt_cb.clone());
         let (sender, receiver) = channel();
         self.sender = Some(sender);
 
         let mut handler = BlockIoHandler {
-            queue: queues.remove(0),
+            queue: queues[0].clone(),
             queue_evt: queue_evts.remove(0),
             mem_space,
-            disk_image: self.disk_image.take(),
+            disk_image: self.disk_image.clone(),
             disk_sectors: self.disk_sectors,
             direct: self.blk_cfg.direct,
             serial_num: self.blk_cfg.serial_num.clone(),
             aio: None,
-            driver_features: self.driver_features,
+            driver_features: self.state.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
-            interrupt_cb: cb,
+            reset_evt: self.reset_evt.as_raw_fd(),
+            interrupt_cb,
             iothread: self.blk_cfg.iothread.clone(),
             leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
         };
@@ -896,9 +970,19 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
+    fn reset(&mut self) -> Result<()> {
+        self.reset_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)
+    }
+
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         if let Some(conf) = dev_config {
-            self.blk_cfg = conf.as_any().downcast_ref::<DriveConfig>().unwrap().clone();
+            self.blk_cfg = conf
+                .as_any()
+                .downcast_ref::<BlkDevConfig>()
+                .unwrap()
+                .clone();
         } else {
             self.blk_cfg = Default::default();
         }
@@ -921,12 +1005,41 @@ impl VirtioDevice for Block {
         }
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(VIRTIO_MMIO_INT_CONFIG).chain_err(|| ErrorKind::EventFdWrite)?;
+            interrupt_cb(&VirtioInterruptType::Config, None)
+                .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Config))?;
         }
 
         Ok(())
     }
 }
+
+// Send and Sync is not auto-implemented for `Sender` type.
+// Implementing them is safe because `Sender` field of Block won't change in migration
+// workflow.
+unsafe impl Sync for Block {}
+
+impl StateTransfer for Block {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *BlockState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("BLOCK"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&BlockState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Block {}
 
 #[cfg(test)]
 mod tests {
@@ -934,9 +1047,11 @@ mod tests {
     use super::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::IothreadConfig;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::{thread, time::Duration};
     use vmm_sys_util::tempfile::TempFile;
 
+    const CONFIG_SPACE_SIZE: usize = 16;
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
     const VIRTQ_DESC_F_WRITE: u16 = 0x02;
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
@@ -946,7 +1061,15 @@ mod tests {
         let root = Region::init_container_region(1 << 36);
         let sys_space = AddressSpace::new(root).unwrap();
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+            HostMemMapping::new(
+                GuestAddress(0),
+                SYSTEM_SPACE_SIZE,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
         );
         sys_space
             .root()
@@ -962,11 +1085,11 @@ mod tests {
     #[test]
     fn test_block_init() {
         // New block device
-        let mut block = Block::new();
+        let mut block = Block::default();
         assert_eq!(block.disk_sectors, 0);
-        assert_eq!(block.device_features, 0);
-        assert_eq!(block.driver_features, 0);
-        assert_eq!(block.config_space.len(), 16);
+        assert_eq!(block.state.device_features, 0);
+        assert_eq!(block.state.driver_features, 0);
+        assert_eq!(block.state.config_space.len(), 16);
         assert!(block.disk_image.is_none());
         assert!(block.interrupt_cb.is_none());
         assert!(block.sender.is_none());
@@ -987,7 +1110,7 @@ mod tests {
     // read date are same; Input invalid offset or date length, it will failed.
     #[test]
     fn test_read_write_config() {
-        let mut block = Block::new();
+        let mut block = Block::default();
         block.realize().unwrap();
 
         let expect_config_space: [u8; 8] = [0x00, 020, 0x00, 0x00, 0x00, 0x00, 0x50, 0x00];
@@ -1015,45 +1138,46 @@ mod tests {
     // bit is supported.
     #[test]
     fn test_block_features() {
-        let mut block = Block::new();
+        let mut block = Block::default();
 
         // If the device feature is 0, all driver features are not supported.
-        block.device_features = 0;
+        block.state.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
-        assert_eq!(block.driver_features, 0_u64);
+        assert_eq!(block.state.driver_features, 0_u64);
         assert_eq!(block.get_device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         block.set_driver_features(page, driver_feature);
-        assert_eq!(block.driver_features, 0_u64);
+        assert_eq!(block.state.driver_features, 0_u64);
         assert_eq!(block.get_device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time,  this driver feature bit is supported.
-        block.device_features = 1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        block.state.device_features =
+            1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
         let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(
-            block.driver_features,
+            block.state.driver_features,
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
         );
         assert_eq!(
             block.get_device_features(page),
             (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
         );
-        block.driver_features = 0;
+        block.state.driver_features = 0;
 
-        block.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        block.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         let driver_feature: u32 = (1_u64 << VIRTIO_F_RING_INDIRECT_DESC) as u32;
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
-        assert_eq!(block.driver_features, 0);
+        assert_eq!(block.state.driver_features, 0);
         assert_eq!(block.get_device_features(page), 0_u32);
-        block.driver_features = 0;
+        block.state.driver_features = 0;
     }
 
     // Test `get_serial_num_config`. The function will output the shorter length between 20
@@ -1090,7 +1214,7 @@ mod tests {
         };
         EventLoop::object_init(&Some(vec![io_conf])).unwrap();
 
-        let mut block = Block::new();
+        let mut block = Block::default();
         let file = TempFile::new().unwrap();
         block.blk_cfg.path_on_host = file.as_path().to_str().unwrap().to_string();
 
@@ -1101,6 +1225,20 @@ mod tests {
         let mem_space = address_space_init();
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
+        let interrupt_cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
+                interrupt_evt
+                    .write(1)
+                    .chain_err(|| ErrorKind::EventFdWrite)?;
+
+                Ok(())
+            },
+        ) as VirtioInterrupt);
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
         queue_config.desc_table = GuestAddress(0);
@@ -1111,16 +1249,14 @@ mod tests {
 
         let queues: Vec<Arc<Mutex<Queue>>> =
             vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
-
         let event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
 
         // activate block device
         block
             .activate(
                 mem_space.clone(),
-                interrupt_evt,
-                interrupt_status,
-                queues,
+                interrupt_cb,
+                &queues,
                 vec![event.try_clone().unwrap()],
             )
             .unwrap();

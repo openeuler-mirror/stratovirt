@@ -12,12 +12,12 @@
 
 #[macro_use]
 extern crate error_chain;
-#[macro_use]
-extern crate log;
-extern crate kvm_ioctls;
 
 pub mod errors {
     error_chain! {
+        links {
+            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+        }
         foreign_links {
             KvmIoctl(kvm_ioctls::Error);
         }
@@ -26,9 +26,9 @@ pub mod errors {
 
 use std::sync::{Arc, Mutex};
 
+use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use error_chain::ChainedError;
-use kvm_ioctls::VmFd;
+use hypervisor::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
 
 use errors::{Result, ResultExt};
@@ -94,31 +94,58 @@ impl SysBus {
         match locked_dev.get_type() {
             SysBusDevType::Serial if cfg!(target_arch = "x86_64") => {
                 #[cfg(target_arch = "x86_64")]
-                if let Err(e) = self.sys_io.root().add_subregion(region, region_base) {
-                    error!("{}", e.display_chain());
-                    bail!(
-                        "Failed to register region in I/O space: offset={},size={}",
-                        region_base,
-                        region_size
-                    );
-                }
+                self.sys_io
+                    .root()
+                    .add_subregion(region, region_base)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to register region in I/O space: offset={},size={}",
+                            region_base, region_size
+                        )
+                    })?;
             }
-            _ => {
-                if let Err(e) = self.sys_mem.root().add_subregion(region, region_base) {
-                    error!("{}", e.display_chain());
-                    bail!(
+            SysBusDevType::FwCfg if cfg!(target_arch = "x86_64") => {
+                #[cfg(target_arch = "x86_64")]
+                self.sys_io
+                    .root()
+                    .add_subregion(region, region_base)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to register region in I/O space: offset 0x{:x}, size {}",
+                            region_base, region_size
+                        )
+                    })?;
+            }
+            SysBusDevType::Rtc if cfg!(target_arch = "x86_64") => {
+                #[cfg(target_arch = "x86_64")]
+                self.sys_io
+                    .root()
+                    .add_subregion(region, region_base)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to register region in I/O space: offset 0x{:x}, size {}",
+                            region_base, region_size
+                        )
+                    })?;
+            }
+            _ => self
+                .sys_mem
+                .root()
+                .add_subregion(region, region_base)
+                .chain_err(|| {
+                    format!(
                         "Failed to register region in memory space: offset={},size={}",
-                        region_base,
-                        region_size
-                    );
-                }
-            }
+                        region_base, region_size
+                    )
+                })?,
         }
+
         self.devices.push(dev.clone());
         Ok(())
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct SysRes {
     pub region_base: u64,
     pub region_size: u64,
@@ -135,16 +162,21 @@ impl Default for SysRes {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Eq, PartialEq)]
 pub enum SysBusDevType {
     Serial,
-    #[cfg(target_arch = "aarch64")]
     Rtc,
     VirtioMmio,
+    #[cfg(target_arch = "aarch64")]
+    PL011,
+    FwCfg,
+    Flash,
     Others,
 }
 
 /// Operations for sysbus devices.
-pub trait SysBusDevOps: Send {
+pub trait SysBusDevOps: Send + AmlBuilder {
     /// Read function of device.
     ///
     /// # Arguments
@@ -171,36 +203,59 @@ pub trait SysBusDevOps: Send {
         None
     }
 
-    fn set_irq(&mut self, sysbus: &mut SysBus, vm_fd: &VmFd) -> Result<i32> {
+    fn set_irq(&mut self, sysbus: &mut SysBus) -> Result<i32> {
         let irq = sysbus.min_free_irq;
         if irq > sysbus.free_irqs.1 {
             bail!("IRQ number exhausted.");
         }
-        vm_fd
-            .register_irqfd(self.interrupt_evt().unwrap(), irq as u32)
-            .chain_err(|| "Failed to register irqfd")?;
-        sysbus.min_free_irq = irq + 1;
-        Ok(irq)
+        match self.interrupt_evt() {
+            None => Ok(-1_i32),
+            Some(evt) => {
+                KVM_FDS
+                    .load()
+                    .vm_fd
+                    .as_ref()
+                    .unwrap()
+                    .register_irqfd(evt, irq as u32)
+                    .chain_err(|| "Failed to register irqfd")?;
+                sysbus.min_free_irq = irq + 1;
+                Ok(irq)
+            }
+        }
     }
 
-    fn get_sys_resource(&mut self) -> &mut SysRes;
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        None
+    }
 
     fn set_sys_resource(
         &mut self,
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        vm_fd: &VmFd,
     ) -> Result<()> {
-        let irq = self.set_irq(sysbus, vm_fd)?;
-        let res = self.get_sys_resource();
-        res.region_base = region_base;
-        res.region_size = region_size;
-        res.irq = irq;
-        Ok(())
+        let irq = self.set_irq(sysbus)?;
+        if let Some(res) = self.get_sys_resource() {
+            res.region_base = region_base;
+            res.region_size = region_size;
+            res.irq = irq;
+            return Ok(());
+        }
+        bail!("Failed to get sys resource.");
     }
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Others
+    }
+}
+
+impl AmlBuilder for SysBus {
+    fn aml_bytes(&self) -> Vec<u8> {
+        let mut scope = AmlScope::new("_SB");
+        self.devices.iter().for_each(|dev| {
+            scope.append(&dev.lock().unwrap().aml_bytes());
+        });
+
+        scope.aml_bytes()
     }
 }

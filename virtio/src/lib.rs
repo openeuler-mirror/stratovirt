@@ -33,6 +33,8 @@ extern crate log;
 extern crate machine_manager;
 #[macro_use]
 extern crate vmm_sys_util;
+#[macro_use]
+extern crate migration_derive;
 
 pub mod errors {
     error_chain! {
@@ -42,6 +44,7 @@ pub mod errors {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);
         }
         errors {
             EventFdCreate {
@@ -65,8 +68,8 @@ pub mod errors {
             DevConfigOverflow(offset: u64, size: u64) {
                 display("Failed to r/w dev config space: overflows, offset {}, space size {}", offset, size)
             }
-            InterruptTrigger {
-                display("Failed to trigger interrupt")
+            InterruptTrigger(dev_ty: &'static str, int_type: super::VirtioInterruptType) {
+                display("Failed to trigger interrupt for {}, int-type {:#?}", dev_ty, int_type)
             }
             VhostIoctl(ioctl: String) {
                 display("Vhost ioctl failed: {}", ioctl)
@@ -104,18 +107,20 @@ mod queue;
 mod rng;
 mod vhost;
 mod virtio_mmio;
+#[allow(dead_code)]
+mod virtio_pci;
 
 pub use balloon::*;
-pub use block::Block;
-pub use console::Console;
+pub use block::{Block, BlockState};
+pub use console::{Console, VirtioConsoleState};
 pub use errors::*;
 pub use net::*;
 pub use queue::*;
-pub use rng::Rng;
+pub use rng::{Rng, RngState};
 pub use vhost::kernel as VhostKern;
-pub use virtio_mmio::VirtioMmioDevice;
+pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
+pub use virtio_pci::VirtioPciDevice;
 
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -135,6 +140,13 @@ pub const VIRTIO_TYPE_RNG: u32 = 4;
 pub const VIRTIO_TYPE_BALLOON: u32 = 5;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const _VIRTIO_TYPE_FS: u32 = 26;
+
+// The Status of Virtio Device.
+const CONFIG_STATUS_ACKNOWLEDGE: u32 = 0x01;
+const CONFIG_STATUS_DRIVER: u32 = 0x02;
+const CONFIG_STATUS_DRIVER_OK: u32 = 0x04;
+const CONFIG_STATUS_FEATURES_OK: u32 = 0x08;
+const CONFIG_STATUS_FAILED: u32 = 0x80;
 
 /// Feature Bits, refer to Virtio Spec.
 /// Negotiating this feature indicates that the driver can use descriptors
@@ -211,6 +223,15 @@ pub struct VirtioNetHdr {
     pub num_buffers: u16,
 }
 
+#[derive(Debug)]
+pub enum VirtioInterruptType {
+    Config,
+    Vring,
+}
+
+pub type VirtioInterrupt =
+    Box<dyn Fn(&VirtioInterruptType, Option<&Queue>) -> Result<()> + Send + Sync>;
+
 /// The trait for virtio device operations.
 pub trait VirtioDevice: Send {
     /// Realize low level device.
@@ -250,15 +271,17 @@ pub trait VirtioDevice: Send {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
-        queues: Vec<Arc<Mutex<Queue>>>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<EventFd>,
     ) -> Result<()>;
 
     /// Reset virtio device.
-    fn reset(&mut self) -> Option<()> {
-        None
+    fn reset(&mut self) -> Result<()> {
+        bail!(
+            "Reset this device is not supported, virtio dev type is {}",
+            self.device_type()
+        );
     }
 
     /// Update the low level config of MMIO device,

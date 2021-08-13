@@ -20,6 +20,7 @@ use crate::errors::{ErrorKind, Result};
 
 const PREFIX_CHARS_SHORT: &str = "-";
 const PREFIX_CHARS_LONG: &str = "-";
+const ARG_SEPARATOR: &str = "--";
 const HELP_SHORT: &str = "h";
 const HELP_LONG: &str = "help";
 const VERSION_SHORT: &str = "V";
@@ -75,6 +76,7 @@ pub struct ArgParser<'a> {
 #[derive(Debug, Default, Clone)]
 pub struct ArgMatches<'a> {
     pub args: BTreeMap<&'a str, Arg<'a>>,
+    pub extra_args: Vec<String>,
 }
 
 /// The structure of a command line argument. Used to set all the options that
@@ -179,7 +181,7 @@ impl<'a> ArgParser<'a> {
     /// from [`env::args_os`] in order to allow for invalid UTF-8 code points.
     pub fn get_matches(mut self) -> Result<ArgMatches<'a>> {
         let cmd_args: Vec<String> = env::args().collect();
-        let (arg_hash, multi_vec) = parse_cmdline(&cmd_args, &self.allow_list)?;
+        let (arg_hash, multi_vec, sub_str) = parse_cmdline(&cmd_args, &self.allow_list)?;
 
         if arg_hash.contains_key(HELP_SHORT) || arg_hash.contains_key(HELP_LONG) {
             self.output_help(&mut std::io::stdout());
@@ -195,7 +197,7 @@ impl<'a> ArgParser<'a> {
             (*arg).parse_from_hash(&arg_hash, &multi_vec)?;
         }
 
-        Ok(ArgMatches::new(self.args))
+        Ok(ArgMatches::new(self.args, sub_str))
     }
 
     fn output_help(&self, handle: &mut dyn Write) {
@@ -524,8 +526,8 @@ impl<'a> Arg<'a> {
 }
 
 impl<'a> ArgMatches<'a> {
-    fn new(args: BTreeMap<&'a str, Arg<'a>>) -> Self {
-        ArgMatches { args }
+    fn new(args: BTreeMap<&'a str, Arg<'a>>, extra_args: Vec<String>) -> Self {
+        ArgMatches { args, extra_args }
     }
 
     /// Get the single value for `arg`.
@@ -572,10 +574,25 @@ impl<'a> ArgMatches<'a> {
     pub fn is_present(&self, arg_name: &'a str) -> bool {
         self.args[arg_name].presented
     }
+
+    fn split_arg(args: &[String]) -> (&[String], &[String]) {
+        if let Some(index) = args.iter().position(|arg| arg == ARG_SEPARATOR) {
+            return (&args[..index], &args[index + 1..]);
+        }
+        (&args, &[])
+    }
+
+    pub fn extra_args(&self) -> Vec<String> {
+        self.extra_args.clone()
+    }
 }
 
 #[allow(clippy::map_entry)]
-fn parse_cmdline(cmd_args: &[String], allow_list: &[String]) -> Result<(ArgsMap, Vec<String>)> {
+fn parse_cmdline(
+    cmd_args: &[String],
+    allow_list: &[String],
+) -> Result<(ArgsMap, Vec<String>, Vec<String>)> {
+    let (cmd_args, sub_args) = ArgMatches::split_arg(&cmd_args);
     let mut arg_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut multi_vec: Vec<String> = Vec::new();
 
@@ -617,7 +634,7 @@ fn parse_cmdline(cmd_args: &[String], allow_list: &[String]) -> Result<(ArgsMap,
         }
         j += 1;
     }
-    Ok((arg_map, multi_vec))
+    Ok((arg_map, multi_vec, sub_args.to_vec()))
 }
 
 fn get_name() -> String {
@@ -663,10 +680,10 @@ mod tests {
                     .takes_value(true),
             )
             .arg(
-                Arg::with_name("api-channel")
-                    .long("api-channel")
+                Arg::with_name("qmp")
+                    .long("qmp")
                     .value_name("unix:PATH")
-                    .help("set api-channel's unixsocket path")
+                    .help("set qmp's unixsocket path")
                     .takes_value(true)
                     .required(true),
             )
@@ -704,11 +721,12 @@ mod tests {
             .iter_mut()
             .map(|item| item.to_string())
             .collect::<Vec<String>>();
-        let (arg_hash, multi_vec) = parse_cmdline(&input_vec, &arg_parser.allow_list).unwrap();
+        let (arg_hash, multi_vec, sub_str) =
+            parse_cmdline(&input_vec, &arg_parser.allow_list).unwrap();
         for arg in arg_parser.args.values_mut() {
             assert!((*arg).parse_from_hash(&arg_hash, &multi_vec).is_ok());
         }
-        ArgMatches::new(arg_parser.args)
+        ArgMatches::new(arg_parser.args, sub_str)
     }
 
     #[test]
@@ -778,17 +796,19 @@ mod tests {
 
     #[test]
     fn test_arg_matches() {
-        let arg_matches = create_test_arg_matches("stratovirt -name vm1 -api-channel unix:sv.sock -drive file=/path/to/rootfs,id=rootfs -D -S");
+        let arg_matches = create_test_arg_matches(
+            "stratovirt -name vm1 -qmp unix:sv.sock -drive file=/path/to/rootfs,id=rootfs -D -S",
+        );
 
         assert!(arg_matches.is_present("name"));
-        assert!(arg_matches.is_present("api-channel"));
+        assert!(arg_matches.is_present("qmp"));
         assert!(arg_matches.is_present("drive"));
         assert!(arg_matches.is_present("display log"));
         assert!(arg_matches.is_present("freeze_cpu"));
 
         assert_eq!(arg_matches.value_of("name").as_ref().unwrap(), "vm1");
         assert_eq!(
-            arg_matches.value_of("api-channel").as_ref().unwrap(),
+            arg_matches.value_of("qmp").as_ref().unwrap(),
             "unix:sv.sock"
         );
         assert_eq!(

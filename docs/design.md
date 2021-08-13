@@ -2,18 +2,23 @@
 
 ## Overview
 
-StratoVirt is an open-source lightweight virtualization technology based on Linux Kernel-based Virtual Machine(KVM);
-StratoVirt reduces memory resource consumption and improves VM startup speed while retains isolation capability and security capability of traditional virtualization; 
-StratoVirt can be applied to microservices or serverless scenarios such as function computing;
-StratoVirt reserves interface and design for importing more features, even standard virtualization;
+StratoVirt is an open-source lightweight virtualization technology based on 
+Linux Kernel-based Virtual Machine(KVM);
+StratoVirt reduces memory resource consumption and improves VM startup speed 
+while retains isolation capability and security capability of traditional 
+virtualization; 
+StratoVirt can be applied to microservices or serverless scenarios such as 
+function computing;
+StratoVirt reserves interface and design for importing more features, even 
+standard virtualization;
 
 ## Architecture
 
 The following figure shows StratoVirt's core architecture which consist of three layers from top to bottom;
 
 - OCI compatibility API: StratoVirt uses the QMP protocol to communicate with external systems and is compatible with OCI;
-- BootLoader: StratoVirt uses a simple BootLoader to load the kernel image, instead of the traditional cumbersome BIOS and Grub boot modes, to achieve fast boot;
-- Lightweight: To improve performance and reduce the attack surface, StratoVirt minimizes the simulation of user-mode devices; KVM simulation devices and paravirtualization devices, such as GIC, serial, RTC and virtio devices, are used;
+- BootLoader: StratoVirt uses a simple BootLoader to fast load the kernel image, instead of the traditional cumbersome BIOS and Grub boot modes, to achieve fast boot;
+- Lightweight: To improve performance as well as reduce the attack surface, StratoVirt minimizes the simulation of user-mode devices; KVM simulation devices and paravirtualization devices, such as GIC, serial, RTC and virtio devices, are used;
 
 ![image](images/StratoVirt-arch.png)
 

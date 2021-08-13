@@ -36,13 +36,14 @@ pub mod qmp_schema;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vmm_sys_util::terminal::Terminal;
+use util::leak_bucket::LeakBucket;
+use util::set_termi_canon_mode;
 
 use crate::event_loop::EventLoop;
 use crate::machine::MachineExternalInterface;
@@ -53,7 +54,6 @@ use crate::{
 };
 use qmp_schema as schema;
 use schema::QmpCommand;
-use util::leak_bucket::LeakBucket;
 
 static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 
@@ -150,10 +150,24 @@ struct Greeting {
 }
 
 #[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
-struct Version {
+pub struct Version {
     #[serde(rename = "qemu")]
     application: VersionNumber,
     package: String,
+}
+
+impl Version {
+    pub fn new(micro: u8, minor: u8, major: u8) -> Self {
+        let version_number = VersionNumber {
+            micro,
+            minor,
+            major,
+        };
+        Version {
+            application: version_number,
+            package: "StratoVirt-".to_string() + env!("CARGO_PKG_VERSION"),
+        }
+    }
 }
 
 #[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
@@ -203,7 +217,7 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<ErrorMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<String>,
 }
 
 impl Response {
@@ -214,7 +228,7 @@ impl Response {
     /// * `v` - The `Value` of qmp `return` field.
     /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
     ///          `id`.
-    pub fn create_response(v: Value, id: Option<u32>) -> Self {
+    pub fn create_response(v: Value, id: Option<String>) -> Self {
         Response {
             return_: Some(v),
             error: None,
@@ -237,7 +251,7 @@ impl Response {
     /// * `err_class` - The `QmpErrorClass` of qmp `error` field.
     /// * `id` - The `id` for qmp `Response`, it must be equal to `Request`'s
     ///          `id`.
-    pub fn create_error_response(err_class: schema::QmpErrorClass, id: Option<u32>) -> Self {
+    pub fn create_error_response(err_class: schema::QmpErrorClass, id: Option<String>) -> Self {
         Response {
             return_: None,
             error: Some(ErrorMessage::new(&err_class)),
@@ -245,7 +259,7 @@ impl Response {
         }
     }
 
-    fn change_id(&mut self, id: Option<u32>) {
+    fn change_id(&mut self, id: Option<String>) {
         self.id = id;
     }
 }
@@ -292,17 +306,11 @@ pub struct Empty {}
 /// Command trait for Deserialize and find back Response.
 pub trait Command: Serialize {
     type Res: DeserializeOwned;
-    const NAME: &'static str;
     fn back(self) -> Self::Res;
 }
 
-/// Event trait for Deserialize.
-pub trait Event: DeserializeOwned {
-    const NAME: &'static str;
-}
-
 /// `TimeStamp` structure for `QmpEvent`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TimeStamp {
     seconds: u64,
     microseconds: u64,
@@ -335,7 +343,7 @@ pub fn create_timestamp() -> TimeStamp {
 /// This function will fail when json parser failed or socket file description broke.
 pub fn handle_qmp(
     stream_fd: RawFd,
-    controller: &Arc<dyn MachineExternalInterface>,
+    controller: &Arc<Mutex<dyn MachineExternalInterface>>,
     leak_bucket: &mut LeakBucket,
 ) -> Result<()> {
     let mut qmp_service = crate::socket::SocketHandler::new(stream_fd);
@@ -370,11 +378,8 @@ pub fn handle_qmp(
                 };
                 event!(Shutdown; shutdown_msg);
                 TempCleaner::clean();
+                set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
 
-                std::io::stdin()
-                    .lock()
-                    .set_canon_mode()
-                    .expect("Failed to set terminal to canon mode.");
                 std::process::exit(0);
             }
 
@@ -395,7 +400,7 @@ pub fn handle_qmp(
 /// function, and exec this qmp command.
 fn qmp_command_exec(
     qmp_command: QmpCommand,
-    controller: &Arc<dyn MachineExternalInterface>,
+    controller: &Arc<Mutex<dyn MachineExternalInterface>>,
     if_fd: Option<RawFd>,
 ) -> (String, bool) {
     let mut qmp_response = Response::create_empty_response();
@@ -403,30 +408,54 @@ fn qmp_command_exec(
 
     // Use macro create match to cover most Qmp command
     let mut id = create_command_matches!(
-        qmp_command.clone(); controller; qmp_response;
+        qmp_command.clone(); controller.lock().unwrap(); qmp_response;
         (stop, pause),
         (cont, resume),
         (query_status, query_status),
+        (query_version, query_version),
+        (query_commands, query_commands),
+        (query_target, query_target),
+        (query_kvm, query_kvm),
+        (query_events, query_events),
+        (query_machines, query_machines),
+        (query_tpm_models, query_tpm_models),
+        (query_tpm_types, query_tpm_types),
+        (query_command_line_options, query_command_line_options),
+        (query_migrate_capabilities, query_migrate_capabilities),
+        (query_qmp_schema, query_qmp_schema),
+        (query_sev_capabilities, query_sev_capabilities),
+        (query_chardev, query_chardev),
+        (qom_list, qom_list),
+        (qom_get, qom_get),
+        (query_block, query_block),
+        (query_named_block_nodes, query_named_block_nodes),
+        (query_blockstats, query_blockstats),
+        (query_gic_capabilities, query_gic_capabilities),
+        (query_iothreads, query_iothreads),
+        (query_migrate, query_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
+        (list_type, list_type),
+        (device_list_properties, device_list_properties),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (device_add, device_add, id, driver, addr, lun),
         (device_del, device_del, id),
         (blockdev_add, blockdev_add, node_name, file, cache, read_only),
         (netdev_add, netdev_add, id, if_name, fds),
-        (balloon, balloon, value)
+        (balloon, balloon, value),
+        (migrate, migrate, uri)
     );
 
     // Handle the Qmp command which macro can't cover
     if id.is_none() {
         id = match qmp_command {
             QmpCommand::quit { id, .. } => {
-                controller.destroy();
+                controller.lock().unwrap().destroy();
                 shutdown_flag = true;
                 id
             }
             QmpCommand::getfd { arguments, id } => {
-                qmp_response = controller.getfd(arguments.fd_name, if_fd);
+                qmp_response = controller.lock().unwrap().getfd(arguments.fd_name, if_fd);
                 id
             }
             _ => None,
@@ -435,7 +464,10 @@ fn qmp_command_exec(
 
     // Change response id with input qmp message
     qmp_response.change_id(id);
-    (serde_json::to_string(&qmp_response).unwrap(), shutdown_flag)
+    (
+        serde_json::to_string(&qmp_response).unwrap() + "\r",
+        shutdown_flag,
+    )
 }
 
 /// The struct `QmpChannel` is the only struct can handle Global variable
@@ -513,6 +545,7 @@ impl QmpChannel {
             let writer = writer_unlocked.as_mut().unwrap();
             writer.flush().unwrap();
             writer.write(event_str.as_bytes()).unwrap();
+            writer.write(&[b'\r']).unwrap();
             writer.write(&[b'\n']).unwrap();
             info!("EVENT: --> {:?}", event);
         }
@@ -538,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_qmp_greeting_msg() {
-        let greeting_msg = QmpGreeting::create_greeting(1, 0, 4);
+        let greeting_msg = QmpGreeting::create_greeting(1, 0, 5);
 
         let json_msg = r#"
             {
@@ -547,7 +580,7 @@ mod tests {
                         "qemu":{
                             "micro": 1,
                             "minor": 0,
-                            "major": 4
+                            "major": 5
                         },
                         "package": ""
                     },
@@ -564,13 +597,13 @@ mod tests {
     fn test_qmp_resp() {
         // 1.Empty response and ID change;
         let mut resp = Response::create_empty_response();
-        resp.change_id(Some(0));
+        resp.change_id(Some("0".to_string()));
 
-        let json_msg = r#"{"return":{},"id":0}"#;
+        let json_msg = r#"{"return":{},"id":"0"}"#;
         assert_eq!(serde_json::to_string(&resp).unwrap(), json_msg);
 
-        resp.change_id(Some(1));
-        let json_msg = r#"{"return":{},"id":1}"#;
+        resp.change_id(Some("1".to_string()));
+        let json_msg = r#"{"return":{},"id":"1"}"#;
         assert_eq!(serde_json::to_string(&resp).unwrap(), json_msg);
 
         // 2.Normal response
@@ -696,7 +729,7 @@ mod tests {
         let length = client.read(&mut buffer).unwrap();
         let qmp_response: QmpGreeting =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
-        let qmp_greeting = QmpGreeting::create_greeting(1, 0, 4);
+        let qmp_greeting = QmpGreeting::create_greeting(1, 0, 5);
         assert_eq!(qmp_greeting, qmp_response);
 
         // 2.send empty response

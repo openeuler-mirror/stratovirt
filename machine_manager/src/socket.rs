@@ -61,7 +61,7 @@ pub struct Socket {
     /// Socket stream with RwLock
     stream: RwLock<Option<SocketStream>>,
     /// Perform socket command
-    performer: Option<Arc<dyn MachineExternalInterface>>,
+    performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
 }
 
 impl Socket {
@@ -73,7 +73,7 @@ impl Socket {
     /// * `performer` - The `VM` to perform socket command.
     pub fn from_unix_listener(
         listener: UnixListener,
-        performer: Option<Arc<dyn MachineExternalInterface>>,
+        performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
     ) -> Self {
         Socket {
             sock_type: SocketType::Unix,
@@ -169,9 +169,9 @@ impl Socket {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
             let resp = if is_greeting {
-                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 4)).unwrap()
+                serde_json::to_string(&QmpGreeting::create_greeting(1, 0, 5)).unwrap() + "\r"
             } else {
-                serde_json::to_string(&Response::create_empty_response()).unwrap()
+                serde_json::to_string(&Response::create_empty_response()).unwrap() + "\r"
             };
             handler.send_str(&resp).unwrap();
             info!("QMP: --> {:?}", resp);
@@ -197,7 +197,7 @@ impl Socket {
                     let performer = &socket_mutexed.performer.as_ref().unwrap();
                     if let Err(e) = crate::qmp::handle_qmp(
                         stream_fd,
-                        performer,
+                        &performer,
                         &mut shared_leak_bucket.lock().unwrap(),
                     ) {
                         error!("{}", e);

@@ -16,30 +16,34 @@ extern crate serde_json;
 mod balloon;
 mod boot_source;
 mod chardev;
-mod fs;
+mod devices;
+mod drive;
 mod iothread;
 mod machine_config;
 mod network;
+mod pci;
 mod rng;
+mod vfio;
 
 use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-
 #[cfg(target_arch = "aarch64")]
-use util::device_tree;
+use util::device_tree::{self, FdtBuilder};
 
-pub use self::errors::{ErrorKind, Result};
+pub use self::errors::{ErrorKind, Result, ResultExt};
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
-pub use fs::*;
+pub use devices::*;
+pub use drive::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
+pub use pci::*;
 pub use rng::*;
+pub use vfio::*;
 
 pub mod errors {
     error_chain! {
@@ -50,8 +54,8 @@ pub mod errors {
             InvalidJsonField(field: String) {
                 display("Invalid json field \'{}\'", field)
             }
-            InvalidParam(param: String) {
-                display("Invalid parameter \'{}\'", param)
+            InvalidParam(param: String, name: String) {
+                display("Invalid parameter \'{}\' for \'{}\'", param, name)
             }
             ConvertValueFailed(param: String, value: String) {
                 display("Unable to parse \'{}\' for \'{}\'", value, param)
@@ -96,79 +100,60 @@ pub mod errors {
             Unaligned(param: String, value: u64, align: u64) {
                 display("Input value {} is unaligned with {} for {}.", value, align, param)
             }
+            UnitIdError(id: usize, max: usize){
+                description("Check unit id of pflash device.")
+                display("PFlash unit id given {} should not be more than {}", id, max)
+            }
         }
     }
 }
 
 pub const MAX_STRING_LENGTH: usize = 255;
 
+#[derive(Debug, Clone)]
+pub enum ObjConfig {
+    Rng(RngObjConfig),
+}
+
+fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
+    let mut cmd_params = CmdParser::new("rng-object");
+    cmd_params.push("").push("id").push("filename");
+
+    cmd_params.parse(&object_args)?;
+    let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
+        obj_id
+    } else {
+        return Err(ErrorKind::FieldIsMissing("id", "rng-object").into());
+    };
+    let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
+        name
+    } else {
+        return Err(ErrorKind::FieldIsMissing("filename", "rng-object").into());
+    };
+    let rng_obj_cfg = RngObjConfig { id, filename };
+
+    Ok(rng_obj_cfg)
+}
+
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct VmConfig {
     pub guest_name: String,
     pub machine_config: MachineConfig,
     pub boot_source: BootSource,
-    pub drives: Option<Vec<DriveConfig>>,
-    pub nets: Option<Vec<NetworkInterfaceConfig>>,
-    pub consoles: Option<Vec<ConsoleConfig>>,
-    pub vsock: Option<VsockConfig>,
+    pub drives: HashMap<String, DriveConfig>,
+    pub netdevs: HashMap<String, NetDevcfg>,
+    pub chardev: HashMap<String, ChardevConfig>,
+    pub virtio_serial: Option<VirtioSerialInfo>,
+    pub devices: Vec<(String, String)>,
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
-    pub balloon: Option<BalloonConfig>,
-    pub rng: Option<RngConfig>,
+    pub object: HashMap<String, ObjConfig>,
+    pub pflashs: Option<Vec<PFlashConfig>>,
+    pub dev_name: HashMap<String, u8>,
 }
 
 impl VmConfig {
-    /// Create the `VmConfig` from `Value`.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn create_from_value(value: serde_json::Value) -> Result<VmConfig> {
-        let mut machine_config = MachineConfig::default();
-        let mut boot_source = BootSource::default();
-        let mut drives = None;
-        let mut nets = None;
-        let mut consoles = None;
-        let mut vsock = None;
-        let mut serial = None;
-        let mut iothreads = None;
-        let mut balloon = None;
-        let mut rng = None;
-
-        if let serde_json::Value::Object(items) = value {
-            for (name, item) in items {
-                match name.as_str() {
-                    "machine-config" => machine_config = MachineConfig::from_value(&item)?,
-                    "boot-source" => boot_source = BootSource::from_value(&item)?,
-                    "drive" => drives = Some(DriveConfig::from_value(&item)?),
-                    "net" => nets = Some(NetworkInterfaceConfig::from_value(&item)?),
-                    "console" => consoles = Some(ConsoleConfig::from_value(&item)?),
-                    "vsock" => vsock = Some(VsockConfig::from_value(&item)?),
-                    "serial" => serial = Some(SerialConfig::from_value(&item)?),
-                    "iothread" => iothreads = Some(IothreadConfig::from_value(&item)?),
-                    "balloon" => balloon = Some(BalloonConfig::from_value(&item)?),
-                    "rng" => rng = Some(RngConfig::from_value(&item)?),
-                    _ => return Err(ErrorKind::InvalidJsonField(name).into()),
-                }
-            }
-        }
-
-        Ok(VmConfig {
-            guest_name: "StratoVirt".to_string(),
-            machine_config,
-            boot_source,
-            drives,
-            nets,
-            consoles,
-            vsock,
-            serial,
-            iothreads,
-            balloon,
-            rng,
-        })
-    }
-
     /// Healthy check for `VmConfig`
     pub fn check_vmconfig(&self, is_daemonize: bool) -> Result<()> {
         self.boot_source.check()?;
@@ -181,64 +166,89 @@ impl VmConfig {
             )
             .into());
         }
-
-        if self.drives.is_some() {
-            for drive in self.drives.as_ref().unwrap() {
-                drive.check()?;
-            }
+        if self.boot_source.kernel_file.is_none()
+            && self.machine_config.mach_type == MachineType::MicroVm
+        {
+            bail!("kernel file is required for microvm machine type, which is not provided");
         }
 
-        if self.nets.is_some() {
-            for net in self.nets.as_ref().unwrap() {
-                net.check()?;
-            }
-        }
-
-        if self.consoles.is_some() {
-            for console in self.consoles.as_ref().unwrap() {
-                console.check()?;
-            }
-        }
-
-        if self.vsock.is_some() {
-            self.vsock.as_ref().unwrap().check()?;
-        }
-
-        if self.rng.is_some() {
-            self.rng.as_ref().unwrap().check()?;
-        }
-
-        if self.boot_source.initrd.is_none() && self.drives.is_none() {
+        if self.boot_source.initrd.is_none() && self.drives.is_empty() {
             bail!("Before Vm start, set a initrd or drive_file as rootfs");
         }
 
-        if self.serial.is_some() && self.serial.as_ref().unwrap().stdio && is_daemonize {
-            bail!("Serial with stdio and daemonize can't be set together");
-        }
-
-        if self.iothreads.is_some() {
-            for iothread in self.iothreads.as_ref().unwrap() {
-                iothread.check()?;
+        let mut stdio_count = 0;
+        if let Some(serial) = self.serial.as_ref() {
+            if serial.chardev.backend == ChardevType::Stdio {
+                stdio_count += 1;
             }
+        }
+        for (_, char_dev) in self.chardev.clone() {
+            if char_dev.backend == ChardevType::Stdio {
+                stdio_count += 1;
+            }
+        }
+        if stdio_count > 0 && is_daemonize {
+            bail!("Device redirected to stdio and daemonize can't be set together");
+        }
+        if stdio_count > 1 {
+            bail!("Can't set multiple devices redirected to stdio");
         }
 
         Ok(())
     }
 
-    /// Update argument `name` to `VmConfig`.
+    /// Add argument `name` to `VmConfig`.
     ///
     /// # Arguments
     ///
     /// * `name` - The name `String` updated to `VmConfig`.
-    pub fn update_name(&mut self, name: &str) -> Result<()> {
+    pub fn add_name(&mut self, name: &str) -> Result<()> {
         self.guest_name = name.to_string();
+        Ok(())
+    }
+
+    /// Add argument `object` to `VmConfig`.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_args` - The args of object.
+    pub fn add_object(&mut self, object_args: &str) -> Result<()> {
+        let mut cmd_params = CmdParser::new("object");
+        cmd_params.push("");
+
+        cmd_params.get_parameters(&object_args)?;
+        let obj_type = cmd_params.get_value::<String>("")?;
+        if obj_type.is_none() {
+            bail!("Object type not specified");
+        }
+        let device_type = obj_type.unwrap();
+        match device_type.as_str() {
+            "iothread" => {
+                self.add_iothread(&object_args)
+                    .chain_err(|| "Failed to add iothread")?;
+            }
+            "rng-random" => {
+                let rng_cfg = parse_rng_obj(&object_args)?;
+                let id = rng_cfg.id.clone();
+                let object_config = ObjConfig::Rng(rng_cfg);
+                if self.object.get(&id).is_none() {
+                    self.object.insert(id, object_config);
+                } else {
+                    bail!("Object: {:?} has been added");
+                }
+            }
+            _ => {
+                bail!("Unknow object type: {:?}", &device_type);
+            }
+        }
+
         Ok(())
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 impl device_tree::CompileFDT for VmConfig {
-    fn generate_fdt_node(&self, _fdt: &mut Vec<u8>) -> util::errors::Result<()> {
+    fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> util::errors::Result<()> {
         Ok(())
     }
 }
@@ -277,7 +287,7 @@ pub struct CmdParser {
 
 impl CmdParser {
     /// Allocates an empty `CmdParser`.
-    fn new(name: &str) -> Self {
+    pub fn new(name: &str) -> Self {
         CmdParser {
             name: name.to_string(),
             params: HashMap::<String, Option<String>>::new(),
@@ -289,7 +299,7 @@ impl CmdParser {
     /// # Arguments
     ///
     /// * `param_field`: The cmdline parameter field name.
-    fn push(&mut self, param_field: &str) -> &mut Self {
+    pub fn push(&mut self, param_field: &str) -> &mut Self {
         self.params.insert(param_field.to_string(), None);
 
         self
@@ -300,21 +310,31 @@ impl CmdParser {
     /// # Arguments
     ///
     /// * `cmd_param`: The whole cmdline parameter string.
-    fn parse(&mut self, cmd_param: &str) -> Result<()> {
+    pub fn parse(&mut self, cmd_param: &str) -> Result<()> {
         if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
-            return Err(ErrorKind::InvalidParam(cmd_param.to_string()).into());
+            return Err(ErrorKind::InvalidParam(cmd_param.to_string(), self.name.clone()).into());
         }
         let param_items = cmd_param.split(',').collect::<Vec<&str>>();
-        for param_item in param_items {
+        for (i, param_item) in param_items.iter().enumerate() {
             if param_item.starts_with('=') || param_item.ends_with('=') {
-                return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+                return Err(
+                    ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
+                );
             }
             let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
             let (param_key, param_value) = match param.len() {
-                1 => ("", param[0]),
+                1 => {
+                    if i == 0 {
+                        ("", param[0])
+                    } else {
+                        (param[0], "")
+                    }
+                }
                 2 => (param[0], param[1]),
                 _ => {
-                    return Err(ErrorKind::InvalidParam(param_item.to_string()).into());
+                    return Err(
+                        ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
+                    );
                 }
             };
 
@@ -328,7 +348,46 @@ impl CmdParser {
                     );
                 }
             } else {
-                return Err(ErrorKind::InvalidParam(param[0].to_string()).into());
+                return Err(
+                    ErrorKind::InvalidParam(param[0].to_string(), self.name.clone()).into(),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse all cmdline parameters string into `params`.
+    ///
+    /// # Arguments
+    ///
+    /// * `cmd_param`: The whole cmdline parameter string.
+    fn get_parameters(&mut self, cmd_param: &str) -> Result<()> {
+        if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
+            return Err(ErrorKind::InvalidParam(cmd_param.to_string(), self.name.clone()).into());
+        }
+        let param_items = cmd_param.split(',').collect::<Vec<&str>>();
+        for param_item in param_items {
+            let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
+            let (param_key, param_value) = match param.len() {
+                1 => ("", param[0]),
+                2 => (param[0], param[1]),
+                _ => {
+                    return Err(
+                        ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
+                    );
+                }
+            };
+
+            if self.params.contains_key(param_key) {
+                let field_value = self.params.get_mut(param_key).unwrap();
+                if field_value.is_none() {
+                    *field_value = Some(String::from(param_value));
+                } else {
+                    return Err(
+                        ErrorKind::FieldRepeat(self.name.clone(), param_key.to_string()).into(),
+                    );
+                }
             }
         }
 
@@ -340,7 +399,7 @@ impl CmdParser {
     /// # Arguments
     ///
     /// * `param_field`: The cmdline parameter field name.
-    fn get_value<T: FromStr>(&self, param_field: &str) -> Result<Option<T>> {
+    pub fn get_value<T: FromStr>(&self, param_field: &str) -> Result<Option<T>> {
         match self.params.get(param_field) {
             Some(value) => {
                 let field_msg = if param_field.is_empty() {
@@ -476,43 +535,5 @@ mod tests {
         assert!(cmd_parser.get_value::<ExBool>("test7").is_err());
         assert!(cmd_parser.get_value::<String>("random").unwrap().is_none());
         assert!(cmd_parser.parse("random=false").is_err());
-    }
-
-    #[test]
-    fn test_vmcfg_json_parser() {
-        let kernel_path = String::from("test_vmlinux.bin");
-        let kernel_file = std::fs::File::create(&kernel_path).unwrap();
-        kernel_file.set_len(100_u64).unwrap();
-        let basic_json = r#"
-        {
-            "boot-source": {
-              "kernel_image_path": "test_vmlinux.bin",
-              "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1 root=/dev/vda"
-            },
-            "machine-config": {
-              "vcpu_count": 1,
-              "mem_size": 268435456
-            },
-            "drive": [
-              {
-                "drive_id": "rootfs",
-                "path_on_host": "/path/to/rootfs/image",
-                "direct": false,
-                "read_only": false
-              }
-            ],
-            "serial": {
-              "stdio": true
-            }
-        }
-        "#;
-        let value = serde_json::from_str(basic_json).unwrap();
-        let vm_config_rst = VmConfig::create_from_value(value);
-        assert!(vm_config_rst.is_ok());
-        let vm_config = vm_config_rst.unwrap();
-        assert_eq!(vm_config.guest_name, "StratoVirt");
-        assert!(vm_config.check_vmconfig(false).is_ok());
-        assert!(vm_config.check_vmconfig(true).is_err());
-        std::fs::remove_file(&kernel_path).unwrap();
     }
 }

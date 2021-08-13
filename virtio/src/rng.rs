@@ -14,12 +14,13 @@ use std::fs::File;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use machine_manager::{config::RngConfig, event_loop::EventLoop};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::aio::raw_read;
+use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -31,7 +32,8 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    ElemIovec, Queue, VirtioDevice, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_RNG,
+    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_RNG,
 };
 
 const QUEUE_NUM_RNG: usize = 1;
@@ -52,8 +54,8 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
 struct RngHandler {
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    interrupt_evt: EventFd,
-    interrupt_status: Arc<AtomicU32>,
+    reset_evt: RawFd,
+    interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
     random_file: File,
@@ -120,14 +122,41 @@ impl RngHandler {
         }
 
         if need_interrupt {
-            self.interrupt_status
-                .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::SeqCst);
-            self.interrupt_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock))
+                .chain_err(|| ErrorKind::InterruptTrigger("rng", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
+    }
+
+    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+        let mut notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.reset_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+        if let Some(lb) = self.leak_bucket.as_ref() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                lb.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ));
+        }
+
+        notifiers
     }
 }
 
@@ -152,6 +181,20 @@ impl EventNotifierHelper for RngHandler {
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             rng_handler.lock().unwrap().queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        // Register event notifier for reset_evt
+        let rng_handler_clone = rng_handler.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(rng_handler_clone.lock().unwrap().reset_evt_handler())
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            rng_handler.lock().unwrap().reset_evt,
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],
@@ -190,16 +233,27 @@ impl EventNotifierHelper for RngHandler {
     }
 }
 
+/// State of block device.
+#[repr(C)]
+#[derive(Clone, Copy, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct RngState {
+    /// Bitmask of features supported by the backend.
+    device_features: u64,
+    /// Bitmask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+}
+
 /// Random number generator device structure
 pub struct Rng {
     /// Configuration of virtio rng device
     rng_cfg: RngConfig,
     /// The file descriptor of random number generator
     random_file: Option<File>,
-    /// Bit mask of features supported by the backend.
-    device_features: u64,
-    /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
+    /// The state of Rng device.
+    state: RngState,
+    /// Eventfd for device reset
+    reset_evt: EventFd,
 }
 
 impl Rng {
@@ -207,8 +261,11 @@ impl Rng {
         Rng {
             rng_cfg,
             random_file: None,
-            device_features: 0,
-            driver_features: 0,
+            state: RngState {
+                device_features: 0,
+                driver_features: 0,
+            },
+            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -241,7 +298,7 @@ impl VirtioDevice for Rng {
             .chain_err(|| "Failed to open file of random number generator")?;
 
         self.random_file = Some(file);
-        self.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
+        self.state.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
         Ok(())
     }
 
@@ -262,18 +319,18 @@ impl VirtioDevice for Rng {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.device_features, features_select)
+        read_u32(self.state.device_features, features_select)
     }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
         let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.device_features;
+        let unrequested_features = v & !self.state.device_features;
         if unrequested_features != 0 {
             warn!("Received acknowledge request with unknown feature: {:x}", v);
             v &= !unrequested_features;
         }
-        self.driver_features |= v;
+        self.state.driver_features |= v;
     }
 
     /// Read data of config from guest.
@@ -297,19 +354,16 @@ impl VirtioDevice for Rng {
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
-        interrupt_evt: EventFd,
-        interrupt_status: Arc<AtomicU32>,
-        mut queues: Vec<Arc<Mutex<Queue>>>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let handler = RngHandler {
-            queue: queues.remove(0),
+            queue: queues[0].clone(),
             queue_evt: queue_evts.remove(0),
-            interrupt_evt: interrupt_evt
-                .try_clone()
-                .chain_err(|| "Failed to clone interrupt eventfd for virtio rng")?,
-            interrupt_status,
-            driver_features: self.driver_features,
+            reset_evt: self.reset_evt.as_raw_fd(),
+            interrupt_cb,
+            driver_features: self.state.driver_features,
             mem_space,
             random_file: self
                 .random_file
@@ -327,21 +381,49 @@ impl VirtioDevice for Rng {
 
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        self.reset_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)
+    }
 }
+
+impl StateTransfer for Rng {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        Ok(self.state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *RngState::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("RNG"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&RngState::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for Rng {}
 
 #[cfg(test)]
 mod tests {
     use super::super::*;
     use super::*;
 
+    use std::io::Write;
     use std::mem::size_of;
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use machine_manager::config::RngConfig;
-
-    use std::io::Write;
     use vmm_sys_util::tempfile::TempFile;
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
@@ -353,7 +435,15 @@ mod tests {
         let root = Region::init_container_region(1 << 36);
         let sys_space = AddressSpace::new(root).unwrap();
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), SYSTEM_SPACE_SIZE, None, false, false).unwrap(),
+            HostMemMapping::new(
+                GuestAddress(0),
+                SYSTEM_SPACE_SIZE,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
         );
         sys_space
             .root()
@@ -370,13 +460,14 @@ mod tests {
         let file = TempFile::new().unwrap();
         let random_file = file.as_path().to_str().unwrap().to_string();
         let rng_config = RngConfig {
+            id: "".to_string(),
             random_file: random_file.clone(),
             bytes_per_sec: Some(64),
         };
         let rng = Rng::new(rng_config);
         assert!(rng.random_file.is_none());
-        assert_eq!(rng.driver_features, 0_u64);
-        assert_eq!(rng.device_features, 0_u64);
+        assert_eq!(rng.state.driver_features, 0_u64);
+        assert_eq!(rng.state.device_features, 0_u64);
         assert_eq!(rng.rng_cfg.random_file, random_file);
         assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
 
@@ -394,49 +485,50 @@ mod tests {
             .unwrap()
             .to_string();
         let rng_config = RngConfig {
+            id: "".to_string(),
             random_file,
             bytes_per_sec: Some(64),
         };
         let mut rng = Rng::new(rng_config);
 
         // If the device feature is 0, all driver features are not supported.
-        rng.device_features = 0;
+        rng.state.device_features = 0;
         let driver_feature: u32 = 0xFF;
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
-        assert_eq!(rng.driver_features, 0_u64);
+        assert_eq!(rng.state.driver_features, 0_u64);
         assert_eq!(rng.get_device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         rng.set_driver_features(page, driver_feature);
-        assert_eq!(rng.driver_features, 0_u64);
+        assert_eq!(rng.state.driver_features, 0_u64);
         assert_eq!(rng.get_device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time,  this driver feature bit is supported.
-        rng.device_features =
+        rng.state.device_features =
             1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64;
         let driver_feature: u32 = 1_u32 << VIRTIO_F_RING_INDIRECT_DESC;
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(
-            rng.driver_features,
+            rng.state.driver_features,
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
         );
         assert_eq!(
             rng.get_device_features(page),
             (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
         );
-        rng.driver_features = 0;
+        rng.state.driver_features = 0;
 
-        rng.device_features = 1_u64 << VIRTIO_F_VERSION_1;
+        rng.state.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         let driver_feature: u32 = 1_u32 << VIRTIO_F_RING_INDIRECT_DESC;
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
-        assert_eq!(rng.driver_features, 0);
+        assert_eq!(rng.state.driver_features, 0);
         assert_eq!(rng.get_device_features(page), 0_u32);
-        rng.driver_features = 0;
+        rng.state.driver_features = 0;
     }
 
     #[test]
@@ -476,6 +568,19 @@ mod tests {
     #[test]
     fn test_rng_process_queue_01() {
         let mem_space = address_space_init();
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let interrupt_cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
+                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+            },
+        ) as VirtioInterrupt);
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
         queue_config.desc_table = GuestAddress(0);
@@ -485,11 +590,12 @@ mod tests {
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
+        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_status: Arc::new(AtomicU32::new(0)),
+            reset_evt: reset_event.as_raw_fd(),
+            interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
             random_file: file.into_file(),
@@ -533,12 +639,25 @@ mod tests {
             .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
             .unwrap();
         assert_eq!(idx, 1);
-        assert_eq!(rng_handler.interrupt_evt.read().unwrap(), 1);
+        assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);
     }
 
     #[test]
     fn test_rng_process_queue_02() {
         let mem_space = address_space_init();
+        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_status = Arc::new(AtomicU32::new(0));
+        let interrupt_cb = Arc::new(Box::new(
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+                let status = match int_type {
+                    VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
+                    VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
+                };
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
+                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+            },
+        ) as VirtioInterrupt);
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
         queue_config.desc_table = GuestAddress(0);
@@ -548,11 +667,12 @@ mod tests {
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
+        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            interrupt_status: Arc::new(AtomicU32::new(0)),
+            reset_evt: reset_event.as_raw_fd(),
+            interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
             random_file: file.into_file(),
@@ -624,6 +744,6 @@ mod tests {
             .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
             .unwrap();
         assert_eq!(idx, 1);
-        assert_eq!(rng_handler.interrupt_evt.read().unwrap(), 1);
+        assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);
     }
 }

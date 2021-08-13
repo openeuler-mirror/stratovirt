@@ -14,8 +14,8 @@ use crate::temp_cleaner::TempCleaner;
 use std::io::Write;
 
 use libc::{c_int, c_void, siginfo_t};
+use util::set_termi_canon_mode;
 use vmm_sys_util::signal::register_signal_handler;
-use vmm_sys_util::terminal::Terminal;
 
 pub const VM_EXIT_GENE_ERR: i32 = 1;
 const SYSTEMCALL_OFFSET: isize = 6;
@@ -26,10 +26,7 @@ fn basic_clean() {
     // clean temporary file
     TempCleaner::clean();
 
-    std::io::stdin()
-        .lock()
-        .set_canon_mode()
-        .expect("Failed to set terminal to canon mode.");
+    set_termi_canon_mode().expect("Failed to set terminal to canon mode.");
 }
 
 pub fn exit_with_code(code: i32) {
@@ -39,7 +36,7 @@ pub fn exit_with_code(code: i32) {
     }
 }
 
-extern "C" fn handle_signal_term(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
+extern "C" fn handle_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
     info!("Received kill signal, signal num: {}", num);
     basic_clean();
     exit_with_code(VM_EXIT_GENE_ERR);
@@ -53,10 +50,12 @@ extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) 
     exit_with_code(VM_EXIT_GENE_ERR);
 }
 
-/// Register kill signal handler. Signals suported now are SIGTERM and SIGSYS.
+/// Register kill signal handler. Signals supported now are SIGTERM and SIGSYS.
 pub fn register_kill_signal() {
-    register_signal_handler(libc::SIGTERM, handle_signal_term)
+    register_signal_handler(libc::SIGTERM, handle_signal_kill)
         .expect("Register signal handler for SIGTERM failed!");
     register_signal_handler(libc::SIGSYS, handle_signal_sys)
         .expect("Register signal handler for SIGSYS failed!");
+    register_signal_handler(libc::SIGINT, handle_signal_kill)
+        .expect("Register signal handler for SIGINT failed!");
 }

@@ -12,12 +12,17 @@
 
 use std::sync::{Arc, Mutex};
 
-use kvm_ioctls::{DeviceFd, VmFd};
-use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use util::device_tree;
+use kvm_ioctls::DeviceFd;
 
-use super::{GICConfig, GICDevice, UtilResult};
-use crate::errors::{ErrorKind, Result, ResultExt};
+use super::{
+    state::{GICv3ItsState, GICv3State},
+    GICConfig, GICDevice, UtilResult,
+};
+use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
+use hypervisor::KVM_FDS;
+use machine_manager::machine::{KvmVmState, MachineLifecycle};
+use migration::MigrationManager;
+use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
@@ -66,7 +71,8 @@ impl KvmDevice {
     }
 }
 
-trait GICv3Access {
+/// Access wrapper for GICv3.
+pub trait GICv3Access {
     /// Returns `gicr_attr` of `vCPU`.
     fn vcpu_gicr_attr(&self, cpu: usize) -> u64;
 
@@ -105,11 +111,11 @@ pub struct GICv3 {
     /// The fd for the GICv3 device.
     fd: DeviceFd,
     /// Number of vCPUs, determines the number of redistributor and CPU interface.
-    vcpu_count: u64,
+    pub(crate) vcpu_count: u64,
     /// GICv3 ITS device.
-    its_dev: Option<GICv3Its>,
+    pub(crate) its_dev: Option<Arc<GICv3Its>>,
     /// Maximum irq number.
-    nr_irqs: u32,
+    pub(crate) nr_irqs: u32,
     /// GICv3 redistributor info, support multiple redistributor regions.
     redist_regions: Vec<GicRedistRegion>,
     /// Base address in the guest physical address space of the GICv3 distributor
@@ -122,7 +128,7 @@ pub struct GICv3 {
 }
 
 impl GICv3 {
-    fn new(vm: &Arc<VmFd>, config: &GICConfig) -> Result<Self> {
+    fn new(config: &GICConfig) -> Result<Self> {
         config.check_sanity()?;
 
         let mut gic_device = kvm_bindings::kvm_create_device {
@@ -131,7 +137,13 @@ impl GICv3 {
             flags: 0,
         };
 
-        let gic_fd = match vm.create_device(&mut gic_device) {
+        let gic_fd = match KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
+            .create_device(&mut gic_device)
+        {
             Ok(fd) => fd,
             Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
         };
@@ -171,8 +183,9 @@ impl GICv3 {
         };
 
         if let Some(its_range) = config.its_range {
-            gicv3.its_dev =
-                Some(GICv3Its::new(&vm, &its_range).chain_err(|| "Failed to create ITS")?);
+            gicv3.its_dev = Some(Arc::new(
+                GICv3Its::new(&its_range).chain_err(|| "Failed to create ITS")?,
+            ));
         }
 
         Ok(gicv3)
@@ -256,14 +269,16 @@ impl GICv3 {
 
 impl MachineLifecycle for GICv3 {
     fn pause(&self) -> bool {
-        let attr = kvm_bindings::kvm_device_attr {
-            group: kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
-            attr: u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES),
-            addr: 0,
-            flags: 0,
-        };
-
-        if self.device_fd().set_device_attr(&attr).is_ok() {
+        // VM change state will flush REDIST pending tables into guest RAM.
+        if KvmDevice::kvm_device_access(
+            self.device_fd(),
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
+            kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES as u64,
+            0,
+            true,
+        )
+        .is_ok()
+        {
             let mut state = self.state.lock().unwrap();
             *state = KvmVmState::Running;
 
@@ -316,6 +331,7 @@ impl GICv3Access for GICv3 {
             gicd_value as *mut u32 as u64,
             write,
         )
+        .chain_err(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
     }
 
     fn access_gic_redistributor(
@@ -332,6 +348,12 @@ impl GICv3Access for GICv3 {
             gicr_value as *mut u32 as u64,
             write,
         )
+        .chain_err(|| {
+            format!(
+                "Failed to access gic redistributor for offset 0x{:x}",
+                offset
+            )
+        })
     }
 
     fn access_gic_cpu(
@@ -348,6 +370,7 @@ impl GICv3Access for GICv3 {
             gicc_value as *mut u64 as u64,
             write,
         )
+        .chain_err(|| format!("Failed to access gic cpu for offset 0x{:x}", offset))
     }
 
     fn access_gic_line_level(&self, offset: u64, gicll_value: &mut u32, write: bool) -> Result<()> {
@@ -363,10 +386,18 @@ impl GICv3Access for GICv3 {
 
 impl GICDevice for GICv3 {
     fn create_device(
-        vm: &Arc<VmFd>,
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
-        Ok(Arc::new(GICv3::new(vm, gic_conf)?))
+        let gicv3 = Arc::new(GICv3::new(gic_conf)?);
+        MigrationManager::register_device_instance(GICv3State::descriptor(), gicv3.clone());
+        if gicv3.its_dev.is_some() {
+            MigrationManager::register_device_instance(
+                GICv3ItsState::descriptor(),
+                gicv3.its_dev.as_ref().unwrap().clone(),
+            );
+        }
+
+        Ok(gicv3)
     }
 
     fn realize(&self) -> Result<()> {
@@ -379,7 +410,7 @@ impl GICDevice for GICv3 {
         Ok(())
     }
 
-    fn generate_fdt(&self, fdt: &mut Vec<u8>) -> UtilResult<()> {
+    fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()> {
         let redist_count = self.redist_regions.len() as u32;
         let mut gic_reg = vec![self.dist_base, self.dist_size];
 
@@ -388,40 +419,42 @@ impl GICDevice for GICv3 {
             gic_reg.push(redist.size);
         }
 
-        let node = "/intc";
-        device_tree::add_sub_node(fdt, node)?;
-        device_tree::set_property_string(fdt, node, "compatible", "arm,gic-v3")?;
-        device_tree::set_property(fdt, node, "interrupt-controller", None)?;
-        device_tree::set_property_u32(fdt, node, "#interrupt-cells", 0x3)?;
-        device_tree::set_property_u32(fdt, node, "phandle", device_tree::GIC_PHANDLE)?;
-        device_tree::set_property_u32(fdt, node, "#address-cells", 0x2)?;
-        device_tree::set_property_u32(fdt, node, "#size-cells", 0x2)?;
-        device_tree::set_property_u32(fdt, node, "#redistributor-regions", redist_count)?;
-        device_tree::set_property_array_u64(fdt, node, "reg", &gic_reg)?;
+        let node = "intc";
+        let intc_node_dep = fdt.begin_node(node)?;
+        fdt.set_property_string("compatible", "arm,gic-v3")?;
+        fdt.set_property("interrupt-controller", &Vec::new())?;
+        fdt.set_property_u32("#interrupt-cells", 0x3)?;
+        fdt.set_property_u32("phandle", device_tree::GIC_PHANDLE)?;
+        fdt.set_property_u32("#address-cells", 0x2)?;
+        fdt.set_property_u32("#size-cells", 0x2)?;
+        fdt.set_property_u32("#redistributor-regions", redist_count)?;
+        fdt.set_property_array_u64("reg", &gic_reg)?;
 
         let gic_intr = [
             device_tree::GIC_FDT_IRQ_TYPE_PPI,
             0x9,
             device_tree::IRQ_TYPE_LEVEL_HIGH,
         ];
-        device_tree::set_property_array_u32(fdt, node, "interrupts", &gic_intr)?;
+        fdt.set_property_array_u32("interrupts", &gic_intr)?;
 
         if let Some(its) = &self.its_dev {
-            device_tree::set_property(fdt, node, "ranges", None)?;
+            fdt.set_property("ranges", &Vec::new())?;
             let its_reg = [its.msi_base, its.msi_size];
-            let node = "/intc/its";
-            device_tree::add_sub_node(fdt, node)?;
-            device_tree::set_property_string(fdt, node, "compatible", "arm,gic-v3-its")?;
-            device_tree::set_property(fdt, node, "msi-controller", None)?;
-            device_tree::set_property_u32(fdt, node, "phandle", device_tree::GIC_ITS_PHANDLE)?;
-            device_tree::set_property_array_u64(fdt, node, "reg", &its_reg)?;
+            let node = "its";
+            let its_node_dep = fdt.begin_node(node)?;
+            fdt.set_property_string("compatible", "arm,gic-v3-its")?;
+            fdt.set_property("msi-controller", &Vec::new())?;
+            fdt.set_property_u32("phandle", device_tree::GIC_ITS_PHANDLE)?;
+            fdt.set_property_array_u64("reg", &its_reg)?;
+            fdt.end_node(its_node_dep)?;
         }
+        fdt.end_node(intc_node_dep)?;
 
         Ok(())
     }
 }
 
-struct GICv3Its {
+pub(crate) struct GICv3Its {
     /// The fd for the GICv3Its device
     fd: DeviceFd,
 
@@ -434,14 +467,20 @@ struct GICv3Its {
 }
 
 impl GICv3Its {
-    fn new(vm: &Arc<VmFd>, its_range: &(u64, u64)) -> Result<Self> {
+    fn new(its_range: &(u64, u64)) -> Result<Self> {
         let mut its_device = kvm_bindings::kvm_create_device {
             type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_ITS,
             fd: 0,
             flags: 0,
         };
 
-        let its_fd = match vm.create_device(&mut its_device) {
+        let its_fd = match KVM_FDS
+            .load()
+            .vm_fd
+            .as_ref()
+            .unwrap()
+            .create_device(&mut its_device)
+        {
             Ok(fd) => fd,
             Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
         };
@@ -482,21 +521,49 @@ impl GICv3Its {
 
         Ok(())
     }
+
+    pub(crate) fn access_gic_its(&self, attr: u32, its_value: &mut u64, write: bool) -> Result<()> {
+        KvmDevice::kvm_device_access(
+            &self.fd,
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ITS_REGS,
+            attr as u64,
+            its_value as *const u64 as u64,
+            write,
+        )
+    }
+
+    pub(crate) fn access_gic_its_tables(&self, save: bool) -> Result<()> {
+        let attr = if save {
+            kvm_bindings::KVM_DEV_ARM_ITS_SAVE_TABLES as u64
+        } else {
+            kvm_bindings::KVM_DEV_ARM_ITS_RESTORE_TABLES as u64
+        };
+        KvmDevice::kvm_device_access(
+            &self.fd,
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
+            attr,
+            std::ptr::null::<u64>() as u64,
+            true,
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use hypervisor::KVMFds;
+    use serial_test::serial;
+
     use super::super::GICConfig;
     use super::*;
-    use kvm_ioctls::Kvm;
 
     #[test]
+    #[serial]
     fn test_create_gicv3() {
-        let vm = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
             return;
-        };
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_conf = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
@@ -507,17 +574,17 @@ mod tests {
             redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
             its_range: None,
         };
-
-        assert!(GICv3::new(&vm, &gic_conf).is_ok());
+        assert!(GICv3::new(&gic_conf).is_ok());
     }
 
     #[test]
+    #[serial]
     fn test_create_gic_device() {
-        let vm_fd = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
             return;
-        };
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_config = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
@@ -528,19 +595,19 @@ mod tests {
             redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
             its_range: None,
         };
-
-        let gic = GICv3::new(&vm_fd, &gic_config).unwrap();
+        let gic = GICv3::new(&gic_config).unwrap();
         assert!(gic.its_dev.is_none());
-        assert!(GICv3::new(&vm_fd, &gic_config).is_err());
+        assert!(GICv3::new(&gic_config).is_err());
     }
 
     #[test]
+    #[serial]
     fn test_gic_redist_regions() {
-        let vm_fd = if let Ok(vm_fd) = Kvm::new().and_then(|kvm| kvm.create_vm()) {
-            Arc::new(vm_fd)
-        } else {
+        let kvm_fds = KVMFds::new();
+        if kvm_fds.vm_fd.is_none() {
             return;
-        };
+        }
+        KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_config = GICConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
@@ -551,8 +618,8 @@ mod tests {
             redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000), (256 << 30, 0x200_0000)],
             its_range: Some((0x0808_0000, 0x0002_0000)),
         };
+        let gic = GICv3::new(&gic_config).unwrap();
 
-        let gic = GICv3::new(&vm_fd, &gic_config).unwrap();
         assert!(gic.its_dev.is_some());
         assert_eq!(gic.redist_regions.len(), 2);
     }

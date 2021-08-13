@@ -15,7 +15,6 @@ extern crate serde_json;
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +29,7 @@ const MAX_PATH_LENGTH: usize = 4096;
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct BootSource {
     /// Path of the kernel image.
-    pub kernel_file: PathBuf,
+    pub kernel_file: Option<PathBuf>,
     /// Kernel boot arguments.
     pub kernel_cmdline: KernelParams,
     /// Config of initrd.
@@ -38,28 +37,6 @@ pub struct BootSource {
 }
 
 impl BootSource {
-    /// Create `BootSource` from `Value` structure.
-    ///
-    /// # Arguments
-    ///
-    /// * `Value` - structure can be gotten by `json_file`.
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
-        let mut boot_source = BootSource::default();
-        if let serde_json::Value::Object(items) = value {
-            for (name, item) in items {
-                let item_str = item.to_string().replace("\"", "");
-                match name.as_str() {
-                    "kernel_image_path" => boot_source.kernel_file = PathBuf::from(&item_str),
-                    "boot_args" => boot_source.kernel_cmdline = KernelParams::from_str(item_str),
-                    "initrd_fs_path" => boot_source.initrd = Some(InitrdConfig::new(&item_str)),
-                    _ => return Err(ErrorKind::InvalidJsonField(name.to_string()).into()),
-                }
-            }
-        }
-
-        Ok(boot_source)
-    }
-
     /// Move all the elements of `other` into `Self.kernel_cmdline`.
     pub fn append_kernel_cmdline(&mut self, other: &mut Vec<Param>) {
         self.kernel_cmdline.append(other);
@@ -68,16 +45,17 @@ impl BootSource {
 
 impl ConfigCheck for BootSource {
     fn check(&self) -> Result<()> {
-        if self.kernel_file.to_str().unwrap().len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
-                "kernel_file path".to_string(),
-                MAX_PATH_LENGTH,
-            )
-            .into());
-        }
-
-        if !self.kernel_file.is_file() {
-            return Err(ErrorKind::UnRegularFile("Input kernel_file".to_string()).into());
+        if let Some(kernel_file) = &self.kernel_file {
+            if kernel_file.to_str().unwrap().len() > MAX_PATH_LENGTH {
+                return Err(ErrorKind::StringLengthTooLong(
+                    "kernel_file path".to_string(),
+                    MAX_PATH_LENGTH,
+                )
+                .into());
+            }
+            if !kernel_file.is_file() {
+                return Err(ErrorKind::UnRegularFile("Input kernel_file".to_string()).into());
+            }
         }
 
         self.kernel_cmdline.check()?;
@@ -89,25 +67,20 @@ impl ConfigCheck for BootSource {
     }
 }
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct InitrdConfig {
     /// Path of the initrd image
     pub initrd_file: PathBuf,
-    /// Size of initrd image
+    pub initrd_addr: u64,
     pub initrd_size: u64,
-    pub initrd_addr: Mutex<u64>,
 }
 
 impl InitrdConfig {
     pub fn new(initrd: &str) -> Self {
-        let initrd_size = match std::fs::metadata(initrd) {
-            Ok(meta) => meta.len() as u64,
-            _ => panic!("initrd file init failed {:?}!", initrd),
-        };
         InitrdConfig {
             initrd_file: PathBuf::from(initrd),
-            initrd_size,
-            initrd_addr: Mutex::new(0),
+            initrd_addr: 0,
+            initrd_size: 0,
         }
     }
 }
@@ -127,16 +100,6 @@ impl ConfigCheck for InitrdConfig {
         }
 
         Ok(())
-    }
-}
-
-impl Clone for InitrdConfig {
-    fn clone(&self) -> Self {
-        InitrdConfig {
-            initrd_file: self.initrd_file.to_path_buf(),
-            initrd_size: self.initrd_size,
-            initrd_addr: Mutex::new(0),
-        }
     }
 }
 
@@ -268,20 +231,20 @@ impl fmt::Display for Param {
 }
 
 impl VmConfig {
-    /// Update `-kernel kernel_file` config to `VmConfig`
-    pub fn update_kernel(&mut self, kernel_image: &str) -> Result<()> {
-        self.boot_source.kernel_file = PathBuf::from(kernel_image);
+    /// Add `-kernel kernel_file` config to `VmConfig`
+    pub fn add_kernel(&mut self, kernel_image: &str) -> Result<()> {
+        self.boot_source.kernel_file = Some(PathBuf::from(kernel_image));
         Ok(())
     }
 
-    /// Update  `-append kernel_cmdline` config to `VmConfig`
-    pub fn update_kernel_cmdline(&mut self, cmdline: &[String]) {
+    /// Add  `-append kernel_cmdline` config to `VmConfig`
+    pub fn add_kernel_cmdline(&mut self, cmdline: &[String]) {
         let cmdline: String = cmdline.join(" ");
         self.boot_source.kernel_cmdline = KernelParams::from_str(cmdline);
     }
 
-    /// Update `-initrd initrd_path` config to `VmConfig`
-    pub fn update_initrd(&mut self, initrd: &str) -> Result<()> {
+    /// Add `-initrd initrd_path` config to `VmConfig`
+    pub fn add_initrd(&mut self, initrd: &str) -> Result<()> {
         self.boot_source.initrd = Some(InitrdConfig::new(initrd));
         Ok(())
     }
@@ -310,24 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bootsource_json_parser() {
-        let json = r#"
-        {
-            "kernel_image_path": "/path/to/vmlinux",
-            "boot_args": "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
-        }
-        "#;
-        let value = serde_json::from_str(json).unwrap();
-        let boot_source = BootSource::from_value(&value).unwrap();
-        assert_eq!(boot_source.kernel_file, PathBuf::from("/path/to/vmlinux"));
-        assert_eq!(
-            boot_source.kernel_cmdline.to_string(),
-            "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
-        );
-        assert!(boot_source.initrd.is_none());
-    }
-
-    #[test]
     fn test_bootsource_cmdline_parser() {
         let kernel_path = String::from("vmlinux.bin");
         let initrd_path = String::from("initrd.img");
@@ -336,8 +281,8 @@ mod tests {
         let initrd_file = File::create(&initrd_path).unwrap();
         initrd_file.set_len(100_u64).unwrap();
         let mut vm_config = VmConfig::default();
-        assert!(vm_config.update_kernel(&kernel_path).is_ok());
-        vm_config.update_kernel_cmdline(&vec![
+        assert!(vm_config.add_kernel(&kernel_path).is_ok());
+        vm_config.add_kernel_cmdline(&vec![
             String::from("console=ttyS0"),
             String::from("reboot=k"),
             String::from("panic=1"),
@@ -346,21 +291,21 @@ mod tests {
             String::from("ipv6.disable=1"),
         ]);
         let boot_source = vm_config.clone().boot_source;
-        assert_eq!(boot_source.kernel_file, PathBuf::from(&kernel_path));
+        assert_eq!(boot_source.kernel_file, Some(PathBuf::from(&kernel_path)));
         assert_eq!(
             boot_source.kernel_cmdline.to_string(),
             "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable ipv6.disable=1"
         );
         assert!(boot_source.initrd.is_none());
         assert!(boot_source.check().is_ok());
-        assert!(vm_config.update_initrd(&initrd_path).is_ok());
+        assert!(vm_config.add_initrd(&initrd_path).is_ok());
         let boot_source = vm_config.clone().boot_source;
         assert!(boot_source.initrd.is_some());
         assert!(boot_source.check().is_ok());
         let initrd_config = boot_source.initrd.unwrap();
         assert_eq!(initrd_config.initrd_file, PathBuf::from(&initrd_path));
-        assert_eq!(initrd_config.initrd_size, 100);
-        assert_eq!(*initrd_config.initrd_addr.lock().unwrap(), 0);
+        assert_eq!(initrd_config.initrd_size, 0);
+        assert_eq!(initrd_config.initrd_addr, 0);
         std::fs::remove_file(&kernel_path).unwrap();
         std::fs::remove_file(&initrd_path).unwrap();
     }

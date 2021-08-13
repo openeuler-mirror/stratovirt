@@ -10,17 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fs::File;
-use std::io::Read;
-
 use error_chain::bail;
-use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
 use crate::{
-    config::VmConfig,
+    config::{ChardevType, CmdParser, MachineType, VmConfig},
     errors::{Result, ResultExt},
-    socket::SocketType,
+    temp_cleaner::TempCleaner,
 };
+use util::unix::parse_uri;
+use util::{
+    arg_parser::{Arg, ArgMatches, ArgParser},
+    unix::limit_permission,
+};
+
+use std::os::unix::net::UnixListener;
 
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
@@ -31,11 +34,11 @@ const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 /// # Examples
 ///
 /// ```text
-/// update_args_to_config!(name, vm_cfg, update_name);
-/// update_args_to_config!(name, vm_cfg, update_name, vec);
-/// update_args_to_config!(name, vm_cfg, update_name, bool);
+/// add_args_to_config!(name, vm_cfg, update_name);
+/// add_args_to_config!(name, vm_cfg, update_name, vec);
+/// add_args_to_config!(name, vm_cfg, update_name, bool);
 /// ```
-macro_rules! update_args_to_config {
+macro_rules! add_args_to_config {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temp) = &$x {
             $z.$s(temp)?;
@@ -59,9 +62,9 @@ macro_rules! update_args_to_config {
 /// # Examples
 ///
 /// ```text
-/// update_args_to_config_multi!(drive, vm_cfg, update_drive);
+/// add_args_to_config_multi!(drive, vm_cfg, update_drive);
 /// ```
-macro_rules! update_args_to_config_multi {
+macro_rules! add_args_to_config_multi {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temps) = &$x {
             for temp in temps {
@@ -113,13 +116,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("config-file")
-                .long("config")
-                .value_name("json file path")
-                .help("Sets a config file for vmm.")
-                .takes_value(true),
-        )
-        .arg(
             Arg::with_name("kernel")
                 .long("kernel")
                 .value_name("kernel_path")
@@ -142,12 +138,11 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("api-channel")
-                .long("api-channel")
+            Arg::with_name("qmp")
+                .long("qmp")
                 .value_name("unix:socket_path")
-                .help("set api-channel's unixsocket path")
+                .help("set qmp's unixsocket path")
                 .takes_value(true)
-                .required(true),
         )
         .arg(
             Arg::with_name("drive")
@@ -162,7 +157,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .multiple(true)
                 .long("netdev")
                 .value_name(
-                    "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfds=][,iothread=]",
+                    "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfd=][,iothread=]",
                 )
                 .help("configure a host TAP network with ID 'str'")
                 .takes_values(true),
@@ -186,8 +181,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("serial")
                 .long("serial")
-                .value_name("[stdio]")
-                .help("add serial and set chardev [stdio] for it")
+                .value_name("backend[,path=,server,nowait] or chardev:char_id")
+                .help("add serial and set chardev for it")
                 .takes_value(true),
         )
         .arg(
@@ -228,27 +223,140 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .required(false),
         )
         .arg(
-            Arg::with_name("iothread")
+            Arg::with_name("incoming")
+                .long("incoming")
+                .help("wait for the URI to be specified via migrate_incoming")
+                .value_name("incoming")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("object")
                 .multiple(true)
-                .long("iothread")
-                .value_name("id=str")
-                .help("configure a iothread ID 'str'")
+                .long("object")
+                .value_name("-object virtio-rng-device,rng=rng_name,max-bytes=1234,period=1000")
+                .help("add object")
                 .takes_values(true),
         )
         .arg(
-            Arg::with_name("balloon")
-                .long("balloon")
-                .value_name("[deflate_on_oom=bool]")
-                .help("add balloon device")
-                .can_no_value(true)
+            Arg::with_name("mon")
+                .long("mon")
+                .value_name("chardev=chardev_id,id=mon_id[,mode=control]")
+                .help("-mon is another way to create qmp channel. To use it, the chardev should be specified")
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("rng")
-                .long("rng")
-                .value_name("random_file=path[,byte_per_sec=]")
-                .help("add rng device")
-                .takes_value(true),
+            Arg::with_name("cpu")
+            .long("cpu")
+            .value_name("host")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("overcommit")
+            .long("overcommit")
+            .value_name("[mem-lock=off]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("uuid")
+            .long("uuid")
+            .value_name("[uuid]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("no-user-config")
+            .long("no-user-config")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("nodefaults")
+            .long("nodefaults")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("sandbox")
+            .long("sandbox")
+            .value_name("[on,obsolete=deny]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("msg")
+            .long("msg")
+            .value_name("[timestamp=on]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("rtc")
+            .long("rtc")
+            .value_name("[base=utc]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("no-shutdown")
+            .long("no-shutdown")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("boot")
+            .long("boot")
+            .value_name("[strict=on]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("nographic")
+            .long("nographic")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("realtime")
+            .long("realtime")
+            .value_name("[malock=off]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("display")
+            .long("display")
+            .value_name("[none]")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("usb")
+            .long("usb")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("mem-prealloc")
+            .long("mem-prealloc")
+            .hidden(true)
+            .can_no_value(true)
+            .takes_value(true),
         )
 }
 
@@ -270,58 +378,38 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     // VmConfig can be transformed by json file which described VmConfig
     // directly.
     let mut vm_cfg = VmConfig::default();
-    if let Some(config_file) = args.value_of("config-file") {
-        let config_value = match File::open(&config_file) {
-            Ok(mut f) => {
-                let mut data = String::new();
-                f.read_to_string(&mut data)
-                    .chain_err(|| format!("Failed to read from file:{}", &config_file))?;
-                if config_file.contains("json") {
-                    serde_json::from_str(&data)?
-                } else {
-                    bail!("Only support \'json\' format config-file");
-                }
-            }
-            Err(e) => {
-                bail!("Failed to open config file by: {}", e);
-            }
-        };
-        vm_cfg = VmConfig::create_from_value(config_value)
-            .chain_err(|| "Failed to parse config file to VmConfig")?;
-    }
 
     // Parse cmdline args which need to set in VmConfig
-    update_args_to_config!((args.value_of("name")), vm_cfg, update_name);
-    update_args_to_config!((args.value_of("machine")), vm_cfg, update_machine);
-    update_args_to_config!((args.value_of("memory")), vm_cfg, update_memory);
-    update_args_to_config!((args.value_of("mem-path")), vm_cfg, update_mem_path);
-    update_args_to_config!((args.value_of("smp")), vm_cfg, update_cpu);
-    update_args_to_config!((args.value_of("kernel")), vm_cfg, update_kernel);
-    update_args_to_config!((args.value_of("initrd-file")), vm_cfg, update_initrd);
-    update_args_to_config!((args.value_of("serial")), vm_cfg, update_serial);
-    update_args_to_config!((args.value_of("balloon")), vm_cfg, update_balloon);
-    update_args_to_config!((args.value_of("rng")), vm_cfg, update_rng);
-    update_args_to_config!(
+    add_args_to_config!((args.value_of("name")), vm_cfg, add_name);
+    add_args_to_config!((args.value_of("machine")), vm_cfg, add_machine);
+    add_args_to_config!((args.value_of("memory")), vm_cfg, add_memory);
+    add_args_to_config!((args.value_of("mem-path")), vm_cfg, add_mem_path);
+    add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
+    add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
+    add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
+    add_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,
-        update_kernel_cmdline,
+        add_kernel_cmdline,
         vec
     );
-    update_args_to_config_multi!((args.values_of("drive")), vm_cfg, update_drive);
-    update_args_to_config_multi!((args.values_of("device")), vm_cfg, update_vsock);
-    update_args_to_config_multi!((args.values_of("netdev")), vm_cfg, update_net);
-    update_args_to_config_multi!((args.values_of("chardev")), vm_cfg, update_console);
-    update_args_to_config_multi!((args.values_of("iothread")), vm_cfg, update_iothread);
+    add_args_to_config_multi!((args.values_of("drive")), vm_cfg, add_drive);
+    add_args_to_config_multi!((args.values_of("object")), vm_cfg, add_object);
+    add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_netdev);
+    add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_chardev);
+    add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_devices);
+    add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
 
     // Check the mini-set for Vm to start is ok
-    vm_cfg
-        .check_vmconfig(args.is_present("daemonize"))
-        .chain_err(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
-
+    if vm_cfg.machine_config.mach_type != MachineType::None {
+        vm_cfg
+            .check_vmconfig(args.is_present("daemonize"))
+            .chain_err(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
+    }
     Ok(vm_cfg)
 }
 
-/// This function is to parse api-channel socket path and type.
+/// This function is to parse qmp socket path and type.
 ///
 /// # Arguments
 ///
@@ -329,65 +417,79 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
 ///
 /// # Errors
 ///
-/// The value of `api-channel` is illegel.
-pub fn check_api_channel(args: &ArgMatches) -> Result<(String, SocketType)> {
-    if let Some(api) = args.value_of("api-channel") {
-        let (api_path, api_type) = parse_path(&api)
-            .map(|(path, type_)| (path, type_))
-            .chain_err(|| "Failed to parse api-channel socket path")?;
-        Ok((api_path, api_type))
-    } else {
-        bail!("Please use \'-api-channel\' to give a api-channel path for Unix socket");
-    }
-}
+/// The value of `qmp` is illegel.
+pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<Vec<UnixListener>> {
+    let mut sock_paths = Vec::new();
+    if let Some(qmp_config) = args.value_of("qmp") {
+        let mut cmd_parser = CmdParser::new("qmp");
+        cmd_parser.push("").push("server").push("nowait");
 
-/// This function is to parse a `String` to socket path string and socket type.
-///
-/// # Arguments
-///
-/// * `args_str` - The arguments `String` would be parsed.
-///
-/// # Errors
-///
-/// The arguments `String` is illegal.
-fn parse_path(args_str: &str) -> Result<(String, SocketType)> {
-    let arg: Vec<&str> = args_str.split(',').collect();
-    let item = arg[0].to_string();
-    let path_vec: Vec<&str> = item.split(':').collect();
-    if path_vec.len() > 1 {
-        if path_vec[0] == "unix" {
-            let unix_path = String::from(path_vec[1]);
-            Ok((unix_path, SocketType::Unix))
+        cmd_parser.parse(&qmp_config)?;
+        if let Some(uri) = cmd_parser.get_value::<String>("")? {
+            let (_api_type, api_path) =
+                parse_uri(&uri).chain_err(|| "Failed to parse qmp socket path")?;
+            sock_paths.push(api_path);
         } else {
-            bail!("{} type is not support yet!", path_vec[0]);
+            bail!("No uri found for qmp");
         }
-    } else {
-        bail!("Failed to parse path: {}", args_str);
+        if cmd_parser.get_value::<String>("server")?.is_none() {
+            bail!("Argument \'server\' is needed for qmp");
+        }
+        if cmd_parser.get_value::<String>("nowait")?.is_none() {
+            bail!("Argument \'nowait\' is needed for qmp");
+        }
     }
+    if let Some(mon_config) = args.value_of("mon") {
+        let mut cmd_parser = CmdParser::new("monitor");
+        cmd_parser.push("id").push("mode").push("chardev");
+
+        cmd_parser.parse(&mon_config)?;
+
+        let chardev = if let Some(dev) = cmd_parser.get_value::<String>("chardev")? {
+            dev
+        } else {
+            bail!("Argument \'chardev\'  is missing for \'mon\'");
+        };
+
+        if let Some(mode) = cmd_parser.get_value::<String>("mode")? {
+            if mode != *"control" {
+                bail!("Invalid \'mode\' parameter: {:?} for monitor", &mode);
+            }
+        } else {
+            bail!("Argument \'mode\' of \'mon\' should be set to \'control\'.");
+        }
+
+        if let Some(cfg) = vm_config.chardev.remove(&chardev) {
+            if let ChardevType::Socket(path) = cfg.backend {
+                sock_paths.push(path);
+            } else {
+                bail!("Only socket-type of chardev can be used for monitor");
+            }
+        } else {
+            bail!("No chardev found: {}", &chardev);
+        }
+    }
+
+    if sock_paths.is_empty() {
+        bail!("Please use \'-qmp\' or \'-mon\' to give a qmp path for Unix socket");
+    }
+    let mut listeners = Vec::new();
+    for path in sock_paths {
+        listeners.push(
+            bind_socket(path.clone())
+                .chain_err(|| format!("Failed to bind socket for path: {:?}", &path))?,
+        )
+    }
+
+    Ok(listeners)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_path() {
-        let test_path = "unix:/tmp/stratovirt.sock";
-        assert_eq!(
-            parse_path(test_path).unwrap(),
-            ("/tmp/stratovirt.sock".to_string(), SocketType::Unix)
-        );
-
-        let test_path = "unix:/tmp/stratovirt.sock,nowait,server";
-        assert_eq!(
-            parse_path(test_path).unwrap(),
-            ("/tmp/stratovirt.sock".to_string(), SocketType::Unix)
-        );
-
-        let test_path = "tcp:127.0.0.1:8080,nowait,server";
-        assert!(parse_path(test_path).is_err());
-
-        let test_path = "file:/tmp/stratovirt-file";
-        assert!(parse_path(test_path).is_err());
-    }
+fn bind_socket(path: String) -> Result<UnixListener> {
+    let listener =
+        UnixListener::bind(&path).chain_err(|| format!("Failed to bind socket file {}", &path))?;
+    // Add file to temporary pool, so it could be cleaned when vm exits.
+    TempCleaner::add_path(path.clone());
+    limit_permission(&path)
+        .chain_err(|| format!("Failed to limit permission for socket file {}", &path))?;
+    Ok(listener)
 }

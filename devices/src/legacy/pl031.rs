@@ -10,25 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    error_chain! {
-        foreign_links {
-            Io(std::io::Error);
-        }
-    }
-}
-
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::ChainedError;
-use kvm_ioctls::VmFd;
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
-use errors::Result;
+use super::errors::{ErrorKind, Result, ResultExt};
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
@@ -50,17 +43,27 @@ const RTC_ICR: u64 = 0x1c;
 /// Peripheral ID registers, default value.
 const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1];
 
-/// Pl031 structure.
 #[allow(clippy::upper_case_acronyms)]
-pub struct PL031 {
+/// Status of `PL031` device.
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+pub struct PL031State {
     /// Match register value.
     mr: u32,
     /// Load register value.
     lr: u32,
-    /// Interrupt Mask Set or Clear register value.
+    /// Interrupt mask set or clear register value.
     imsr: u32,
-    /// Raw Interrupt Status register value.
+    /// Raw interrupt status register value.
     risr: u32,
+}
+
+#[allow(clippy::upper_case_acronyms)]
+/// PL031 structure.
+pub struct PL031 {
+    /// State of device PL031.
+    state: PL031State,
     /// The duplicate of Load register value.
     tick_offset: u32,
     /// Record the real time.
@@ -74,10 +77,7 @@ pub struct PL031 {
 impl Default for PL031 {
     fn default() -> Self {
         Self {
-            mr: 0,
-            lr: 0,
-            imsr: 0,
-            risr: 0,
+            state: PL031State::default(),
             // since 1970-01-01 00:00:00,it never cause overflow.
             tick_offset: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -96,19 +96,15 @@ impl PL031 {
         sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-        vm_fd: &VmFd,
     ) -> Result<()> {
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
-        if let Err(e) = self.set_sys_resource(sysbus, region_base, region_size, vm_fd) {
-            error!("{}", e.display_chain());
-            bail!("Failed to allocate system resource.");
-        }
+        self.set_sys_resource(sysbus, region_base, region_size)
+            .chain_err(|| ErrorKind::SetSysResErr)?;
 
         let dev = Arc::new(Mutex::new(self));
-        if let Err(e) = sysbus.attach_device(&dev, region_base, region_size) {
-            error!("{}", e.display_chain());
-            bail!("Failed to attach to system bus.");
-        }
+        sysbus.attach_device(&dev, region_base, region_size)?;
+
+        MigrationManager::register_device_instance_mutex(PL031State::descriptor(), dev);
 
         Ok(())
     }
@@ -145,27 +141,13 @@ impl SysBusDevOps for PL031 {
 
         let mut value: u32 = 0;
         match offset {
-            RTC_DR => {
-                value = self.get_current_value();
-            }
-            RTC_MR => {
-                value = self.mr;
-            }
-            RTC_LR => {
-                value = self.lr;
-            }
-            RTC_CR => {
-                value = 1;
-            }
-            RTC_IMSC => {
-                value = self.imsr;
-            }
-            RTC_RIS => {
-                value = self.risr;
-            }
-            RTC_MIS => {
-                value = self.risr & self.imsr;
-            }
+            RTC_DR => value = self.get_current_value(),
+            RTC_MR => value = self.state.mr,
+            RTC_LR => value = self.state.lr,
+            RTC_CR => value = 1,
+            RTC_IMSC => value = self.state.imsr,
+            RTC_RIS => value = self.state.risr,
+            RTC_MIS => value = self.state.risr & self.state.imsr,
             _ => {}
         }
 
@@ -184,20 +166,18 @@ impl SysBusDevOps for PL031 {
         let value = LittleEndian::read_u32(data);
 
         match offset {
-            RTC_MR => {
-                self.mr = value;
-            }
+            RTC_MR => self.state.mr = value,
             RTC_LR => {
-                self.lr = value;
+                self.state.lr = value;
                 self.tick_offset = value;
                 self.base_time = Instant::now();
             }
             RTC_IMSC => {
-                self.imsr = value & 1;
+                self.state.imsr = value & 1;
                 self.inject_interrupt();
             }
             RTC_ICR => {
-                self.risr = 0;
+                self.state.risr = 0;
                 self.inject_interrupt();
             }
             _ => {}
@@ -210,11 +190,42 @@ impl SysBusDevOps for PL031 {
         self.interrupt_evt.as_ref()
     }
 
-    fn get_sys_resource(&mut self) -> &mut SysRes {
-        &mut self.res
+    fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
+        Some(&mut self.res)
     }
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Rtc
     }
 }
+
+impl AmlBuilder for PL031 {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+impl StateTransfer for PL031 {
+    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+        let state = self.state;
+
+        Ok(state.as_bytes().to_vec())
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+        self.state = *PL031State::from_bytes(state)
+            .ok_or(migration::errors::ErrorKind::FromBytesError("PL031"))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        if let Some(alias) = MigrationManager::get_desc_alias(&PL031State::descriptor().name) {
+            alias
+        } else {
+            !0
+        }
+    }
+}
+
+impl MigrationHook for PL031 {}
