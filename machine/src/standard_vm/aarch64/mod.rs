@@ -179,7 +179,7 @@ impl StdMachineOps for StdMachine {
         let pcihost_root = PciHostRoot::new(root_bus);
         pcihost_root
             .realize()
-            .chain_err(|| "Faile to realize pcihost root device.")?;
+            .chain_err(|| "Failed to realize pcihost root device.")?;
 
         Ok(())
     }

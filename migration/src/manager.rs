@@ -21,7 +21,7 @@ use super::status::MigrationStatus;
 use util::byte_code::ByteCode;
 
 lazy_static! {
-    /// Glocal MigrationMananger to manage all migration combined interface.
+    /// Glocal MigrationManager to manage all migration combined interface.
     pub(crate) static ref MIGRATION_MANAGER: Arc<MigrationManager> = Arc::new(MigrationManager {
         entry: Arc::new(RwLock::new(BTreeMap::<u64, MigrationEntry>::new())),
         desc_db: Arc::new(RwLock::new(HashMap::<String, DeviceStateDesc>::new())),
@@ -135,7 +135,7 @@ pub enum MigrationEntry {
 /// This structure is to manage all resource during migration.
 /// It is also the only way to call on `MIGRATION_MANAGER`.
 pub struct MigrationManager {
-    /// The map offers the deivce_id and combined migratable device entry.
+    /// The map offers the device_id and combined migratable device entry.
     pub(crate) entry: Arc<RwLock<BTreeMap<u64, MigrationEntry>>>,
     /// The map offers the device type and its device state describe structure.
     pub(crate) desc_db: Arc<RwLock<HashMap<String, DeviceStateDesc>>>,

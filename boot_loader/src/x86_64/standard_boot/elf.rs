@@ -79,7 +79,7 @@ impl Elf64Header {
             bail!("Invalid magic in ELF header");
         }
         if self.e_ident[EI_DATA] != ELFDATA2LSB {
-            bail!("Big endian ELF file is not suppored");
+            bail!("Big endian ELF file is not supported");
         }
         if self.e_ident[EI_CLASS] != ELFCLASS64 {
             bail!("Only 64-bit ELF image is supported");

@@ -659,7 +659,7 @@ impl MachineOps for LightMachine {
             let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
             if index >= MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR {
                 bail!(
-                    "A maximum of {} net replaceble devices are supported.",
+                    "A maximum of {} net replaceable devices are supported.",
                     MMIO_REPLACEABLE_NET_NR
                 );
             }
@@ -677,7 +677,7 @@ impl MachineOps for LightMachine {
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
             bail!(
-                "A maximum of {} block replaceble devices are supported.",
+                "A maximum of {} block replaceable devices are supported.",
                 MMIO_REPLACEABLE_BLK_NR
             );
         }

@@ -75,7 +75,7 @@ const ICC_CTLR_EL1: u64 = 0xc664;
 const ICC_SRE_EL1: u64 = 0xc665;
 const ICC_IGRPEN0_EL1: u64 = 0xc666;
 const ICC_IGRPEN1_EL1: u64 = 0xc667;
-/// GICv3 CPU interface control regiter pribits[8:10]
+/// GICv3 CPU interface control register pribits[8:10]
 const ICC_CTLR_EL1_PRIBITS_MASK: u64 = 0x700;
 const ICC_CTLR_EL1_PRIBITS_SHIFT: u64 = 0x8;
 

@@ -307,7 +307,7 @@ impl AddressSpace {
         })
     }
 
-    /// Return the end address fo memory  according to all Ram regions in AddressSpace.
+    /// Return the end address of memory  according to all Ram regions in AddressSpace.
     pub fn memory_end_address(&self) -> GuestAddress {
         self.flat_view
             .load()
