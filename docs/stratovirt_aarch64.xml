@@ -13,7 +13,7 @@
     <os>
     <type arch='aarch64' machine='virt'>hvm</type>
     <kernel>/path/to/standard_vm_kernel</kernel>
-    <cmdline>console=ttys0 root=/dev/vda reboot=k panic=1 rw</cmdline>
+    <cmdline>console=ttyAMA0 root=/dev/vda reboot=k panic=1 rw</cmdline>
     <loader readonly='yes' type='pflash'>/path/to/pflash</loader>
     </os>
     <features>
@@ -24,8 +24,8 @@
         <emulator>/path/to/StratoVirt_binary_file</emulator>
         <controller type='pci' index='0' model='pcie-root'/>
         <!-- block -->
-        <disk type='file' device='disk' iothread='1'>
-            <driver name='qemu'  type='raw'/>
+        <disk type='file' device='disk'>
+            <driver name='qemu'  type='raw' iothread='1'/>
             <source file='/path/to/rootfs'/>
             <target dev='hda' bus='virtio'/>
             <address type='pci' domain='0x000' bus='0x00' slot='0x01' function='0x00'/>
@@ -58,7 +58,7 @@
         <!-- rng -->
         <rng model='virtio'>
             <rate period='1000' bytes='1234'/>
-            <backend model='random'>/dev/random</backend>
+            <backend model='random'>/path/to/random_file</backend>
             <address type='pci' domain='0x000' bus='0x00' slot='0x05' function='0x00'/>
         </rng>
         <!-- vsock -->
@@ -67,7 +67,7 @@
             <address type='pci' domain='0x000' bus='0x00' slot='0x06' function='0x00'/>
         </vsock>
         <!-- vfio -->
-        <hostdev model='subsystem' type='pci' managed='yes'>
+        <hostdev mode='subsystem' type='pci' managed='yes'>
         <driver name='vfio'/>
         <source>
             <address domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
