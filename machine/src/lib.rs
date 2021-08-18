@@ -233,7 +233,7 @@ pub trait MachineOps {
             ));
             cpus.push(cpu.clone());
 
-            MigrationManager::register_device_instance(cpu::ArchCPU::descriptor(), cpu);
+            MigrationManager::register_device_instance(cpu::ArchCPU::descriptor(), cpu, false);
         }
 
         if let Some(boot_config) = boot_cfg {

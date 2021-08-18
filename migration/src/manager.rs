@@ -162,14 +162,22 @@ impl MigrationManager {
     ///
     /// * `device_desc` - The `DeviceStateDesc` of device instance.
     /// * `entry` - Device instance with migratable interface.
-    pub fn register_device_instance<T>(device_desc: DeviceStateDesc, device_entry: Arc<T>)
-    where
+    /// * `reverse` - Register device in order or in the reverse order.
+    pub fn register_device_instance<T>(
+        device_desc: DeviceStateDesc,
+        device_entry: Arc<T>,
+        reverse: bool,
+    ) where
         T: MigrationHook + Sync + Send + 'static,
     {
         Self::register_device_desc(device_desc);
 
         let entry = MigrationEntry::Safe(device_entry);
-        let nr_entry = Self::entry_db_len();
+        let nr_entry = if reverse {
+            !0 - Self::entry_db_len()
+        } else {
+            Self::entry_db_len()
+        };
 
         MIGRATION_MANAGER
             .entry
@@ -333,7 +341,7 @@ mod tests {
         let device_v2 = Arc::new(DeviceV2::default());
         let device_v2_mutex = Arc::new(Mutex::new(DeviceV2::default()));
 
-        MigrationManager::register_device_instance(DeviceV1State::descriptor(), device_v1);
+        MigrationManager::register_device_instance(DeviceV1State::descriptor(), device_v1, false);
         MigrationManager::register_memory_instance(device_v2);
         MigrationManager::register_device_instance_mutex(
             DeviceV2State::descriptor(),
