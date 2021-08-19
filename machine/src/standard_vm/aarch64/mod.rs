@@ -44,9 +44,9 @@ use virtio::{qmp_balloon, qmp_query_balloon};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{AcpiBuilder, StdMachineOps};
-use crate::errors::Result as MachineResult;
 use crate::errors::{ErrorKind, Result};
 use crate::MachineOps;
+use crate::{errors::Result as MachineResult, standard_vm::open_pflash_file};
 use pci_host_root::PciHostRoot;
 use syscall::syscall_whitelist;
 
@@ -397,6 +397,7 @@ impl MachineOps for StdMachine {
 
     /// Add pflash device.
     fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
+        use super::errors::ErrorKind as StdErrorKind;
         use crate::errors::ResultExt;
 
         let mut configs_vec = configs.to_vec();
@@ -407,10 +408,8 @@ impl MachineOps for StdMachine {
         for i in 0..=1 {
             let (fd, read_only) = if i < configs_vec.len() {
                 let config = &configs_vec[i];
-                let fd = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(config.path_on_host.clone())?;
+                let fd = open_pflash_file(&config.path_on_host, config.unit)
+                    .chain_err(|| StdErrorKind::OpenFileErr(config.path_on_host.clone()))?;
                 (Some(fd), config.read_only)
             } else {
                 (None, false)

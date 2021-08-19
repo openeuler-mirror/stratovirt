@@ -49,7 +49,7 @@ use vmm_sys_util::eventfd::EventFd;
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
-use crate::MachineOps;
+use crate::{standard_vm::open_pflash_file, MachineOps};
 use mch::Mch;
 use syscall::syscall_whitelist;
 use util::byte_code::ByteCode;
@@ -398,10 +398,8 @@ impl MachineOps for StdMachine {
         // of current PFlash device.
         let mut flash_end: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
         for config in configs_vec {
-            let mut fd = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(config.path_on_host.clone())?;
+            let mut fd = open_pflash_file(&config.path_on_host, config.unit)
+                .chain_err(|| ErrorKind::OpenFileErr(config.path_on_host.clone()))?;
             let pfl_size = fd.metadata().unwrap().len();
 
             if config.unit == 0 {
