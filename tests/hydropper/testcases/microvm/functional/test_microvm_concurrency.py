@@ -20,10 +20,10 @@ def test_microvm_concurrency(microvms):
     """
     Test multi microvms start:
 
-    1) Set each VM vcpu_count = 4, then launch it and comfirm vcpu count is 4.
+    1) Set each VM vcpu_count = 4, then launch it and confirm vcpu count is 4.
     And increase _succ_sum.
     2) Execute step 1 concurrency by threads.
-    3) Comfirm each VM is execute successffully by _succ_sum
+    3) Confirm each VM is execute successffully by _succ_sum
 
     Note: You can modify CONCURRENT_QUANTITY tag in config/config.ini to set vm quantity.
     """

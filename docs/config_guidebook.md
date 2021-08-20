@@ -124,7 +124,7 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 ## 2. Device Configuration
 
 For machine type "microvm", only virtio-mmio and legacy devices are supported.
-Maximum number of user createable devices is 11 on x86_64 and 160 on aarch64.
+Maximum number of user creatable devices is 11 on x86_64 and 160 on aarch64.
 
 For standard VM (machine type "q35" on x86_64, and "virt" on aarch64) , virtio-pci devices are supported instead of virtio-mmio
 devices. As for now pci bridges are not implemented yet, there is currently only one
@@ -679,10 +679,22 @@ And you can also restore StratoVirt's **pid number** to a file by:
 ### 4.2 Seccomp
 
 StratoVirt use [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html) to limit the syscalls
-in StratoVirt process by default. StratoVirt use only 40 syscalls in x86_64 (39 syscalls in aarch64) after running.
-It will make a slight influence on performance to StratoVirt. If you want to disable seccomp, you can
-run StratoVirt with `-disable-seccomp`.
+in StratoVirt process by default. It will make a slight influence on performance to StratoVirt. 
+* X86_64
 
+| Number of Syscalls | GNU Toolchain | MUSL Toolchain |
+| :----------------: | :-----------: | :------------: |
+|      Micro_vm      |      41       |       41       |
+|    Standard_vm     |      46       |       43       |
+
+* AArch64
+
+| Number of Syscalls | GNU Toolchain | MUSL Toolchain |
+| :----------------: | :-----------: | :------------: |
+|      Micro_vm      |      39       |       40       |
+|    Standard_vm     |      43       |       42       |
+
+If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell
 # cmdline
 -disable-seccomp
@@ -829,7 +841,7 @@ About the arguments:
 * `netns` : path to a existed network namespace.
 * `source` : path to the source file, such as `rootfs` and `vmlinux`.
 * `clean-resource` : a flag to clean resource.
-* `--` : these two dashes are used to splite args, the args followed are used to launched StratoVirt.
+* `--` : these two dashes are used to split args, the args followed are used to launched StratoVirt.
 
 ### 5.2 Example
 As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.
@@ -874,7 +886,7 @@ $ ./ozone \
 ```
 
 ## 6. Libvirt
-Libvirt launchs StratoVirt by creating cmdlines. But some of these commands
+Libvirt launches StratoVirt by creating cmdlines. But some of these commands
 such as: cpu, overcommit, uuid, no-user-config, nodefaults, sandbox, msg, rtc, no-shutdown,
 nographic, realtime, display, usb, mem-prealloc and boot, are not supported by StratoVirt.
 To launch StratoVirt from libvirt successfully, StratoVirt needs to put these arguments into

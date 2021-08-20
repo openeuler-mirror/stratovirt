@@ -389,13 +389,14 @@ impl GICDevice for GICv3 {
         gic_conf: &GICConfig,
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
         let gicv3 = Arc::new(GICv3::new(gic_conf)?);
-        MigrationManager::register_device_instance(GICv3State::descriptor(), gicv3.clone());
         if gicv3.its_dev.is_some() {
             MigrationManager::register_device_instance(
                 GICv3ItsState::descriptor(),
                 gicv3.its_dev.as_ref().unwrap().clone(),
+                true,
             );
         }
+        MigrationManager::register_device_instance(GICv3State::descriptor(), gicv3.clone(), true);
 
         Ok(gicv3)
     }

@@ -221,6 +221,7 @@ pub enum RegionType {
 }
 
 /// Registered bar.
+#[derive(Clone)]
 pub struct Bar {
     region_type: RegionType,
     address: u64,
@@ -266,6 +267,7 @@ pub enum PcieDevType {
 }
 
 /// Configuration space of PCI/PCIe device.
+#[derive(Clone)]
 pub struct PciConfig {
     /// Configuration space data.
     pub config: Vec<u8>,

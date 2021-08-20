@@ -74,7 +74,7 @@ pub struct PL011State {
     ibrd: u32,
     /// Fractional Baud Rate Register.
     fbrd: u32,
-    /// Interrut FIFO Level Select Register.
+    /// Interrupt FIFO Level Select Register.
     ifl: u32,
     /// Identifier Register. Length is 8.
     id: [u8; 8],
@@ -172,6 +172,7 @@ impl PL011 {
             param_type: "earlycon".to_string(),
             value: format!("pl011,mmio,0x{:08x}", region_base),
         });
+        MigrationManager::register_device_instance_mutex(PL011State::descriptor(), dev.clone());
         let locked_dev = dev.lock().unwrap();
         locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
         EventLoop::update_event(

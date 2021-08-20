@@ -92,7 +92,7 @@ ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 40 syscalls
+/// * x86_64-unknown-gnu: 41 syscalls
 /// * x86_64-unknown-musl: 41 syscalls
 /// * aarch64-unknown-gnu: 39 syscalls
 /// * aarch64-unknown-musl: 40 syscalls
@@ -153,6 +153,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_statx),
         #[cfg(all(target_env = "musl", target_arch = "x86_64"))]
         BpfRule::new(libc::SYS_stat),
+        #[cfg(all(target_env = "gnu", target_arch = "x86_64"))]
+        BpfRule::new(libc::SYS_newfstatat),
         #[cfg(all(target_env = "musl", target_arch = "aarch64"))]
         BpfRule::new(libc::SYS_newfstatat),
         #[cfg(target_arch = "x86_64")]

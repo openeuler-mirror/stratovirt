@@ -39,12 +39,15 @@ pub mod errors {
             InitPCIeHostErr {
                 display("Failed to init PCIe host.")
             }
+            OpenFileErr(path: String) {
+                display("Failed to open file: {}.", path)
+            }
         }
     }
 }
 
-use std::mem::size_of;
 use std::sync::{Arc, Mutex};
+use std::{fs::File, mem::size_of};
 
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
@@ -60,6 +63,18 @@ use util::byte_code::ByteCode;
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
+
+fn open_pflash_file(file_name: &str, unit: usize) -> Result<File> {
+    let fd = if unit == 0 {
+        std::fs::OpenOptions::new().read(true).open(file_name)?
+    } else {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file_name)?
+    };
+    Ok(fd)
+}
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
