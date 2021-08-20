@@ -19,13 +19,12 @@ use std::sync::{Arc, Mutex, Weak};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
 use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
-use kvm_ioctls::DeviceFd;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_mut_ref;
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use address_space::{FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
+use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use hypervisor::{MsiVector, KVM_FDS};
 #[cfg(target_arch = "aarch64")]
 use pci::config::SECONDARY_BUS_NUM;
@@ -380,7 +379,7 @@ impl VfioPciDevice {
                 .register_bar(i as usize, bar_region, vfio_bar.region_type, false, size);
         }
 
-        self.map_guest_memory()?;
+        self.do_dma_map()?;
 
         Ok(())
     }
@@ -569,14 +568,17 @@ impl VfioPciDevice {
     }
 
     /// Add all guest memory regions into IOMMU table.
-    fn map_guest_memory(&mut self) -> Result<()> {
+    fn do_dma_map(&mut self) -> Result<()> {
         let container = &self.vfio_device.container;
-        let regions = container.vfio_mem_info.regions.lock().unwrap();
+        let mut regions = container.vfio_mem_info.regions.lock().unwrap();
 
-        for r in regions.iter() {
-            container
-                .vfio_dma_map(r.guest_phys_addr, r.memory_size, r.userspace_addr)
-                .chain_err(|| "Failed to add guest memory region map into IOMMU table")?;
+        for r in regions.iter_mut() {
+            if !r.iommu_mapped {
+                container
+                    .vfio_dma_map(r.guest_phys_addr, r.memory_size, r.userspace_addr)
+                    .chain_err(|| "Failed to add guest memory region map into IOMMU table")?;
+                r.iommu_mapped = true;
+            }
         }
         Ok(())
     }
@@ -872,7 +874,7 @@ fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute]) -> Vec<RawFd> {
     rawfds
 }
 
-pub fn create_vfio_device() -> Result<Arc<DeviceFd>> {
+pub fn create_vfio_container(sys_mem: Arc<AddressSpace>) -> Result<Arc<VfioContainer>> {
     let mut vfio_device = kvm_create_device {
         type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
         fd: 0,
@@ -884,7 +886,10 @@ pub fn create_vfio_device() -> Result<Arc<DeviceFd>> {
         .as_ref()
         .unwrap()
         .create_device(&mut vfio_device)
-        .chain_err(|| "Failed to create VFIO type KVM device")?;
+        .chain_err(|| "Failed to create kvm device for VFIO")?;
 
-    Ok(Arc::new(dev_fd))
+    Ok(Arc::new(
+        VfioContainer::new(Arc::new(dev_fd), &sys_mem)
+            .chain_err(|| "Failed to create vfio container")?,
+    ))
 }
