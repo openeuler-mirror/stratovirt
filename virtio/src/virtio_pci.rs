@@ -24,6 +24,7 @@ use pci::config::{
     VENDOR_ID,
 };
 use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
+use pci::msix::update_dev_id;
 use pci::{config::PciConfig, init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
@@ -459,13 +460,14 @@ pub struct VirtioPciState {
 }
 
 /// Virtio-PCI device structure
+#[derive(Clone)]
 pub struct VirtioPciDevice {
     /// Name of this device
     name: String,
     /// The entity of virtio device
     device: Arc<Mutex<dyn VirtioDevice>>,
     /// Device id
-    dev_id: u16,
+    dev_id: Arc<AtomicU16>,
     /// Devfn
     devfn: u8,
     /// If this device is activated or not.
@@ -500,7 +502,7 @@ impl VirtioPciDevice {
         VirtioPciDevice {
             name,
             device,
-            dev_id: 0_u16,
+            dev_id: Arc::new(AtomicU16::new(0)),
             devfn,
             device_activated: Arc::new(AtomicBool::new(false)),
             sys_mem,
@@ -518,7 +520,7 @@ impl VirtioPciDevice {
     fn assign_interrupt_cb(&mut self) {
         let cloned_common_cfg = self.common_config.clone();
         let cloned_msix = self.config.msix.clone();
-        let dev_id = self.dev_id;
+        let dev_id = self.dev_id.clone();
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, queue: Option<&Queue>| {
                 let vector = match int_type {
@@ -533,7 +535,9 @@ impl VirtioPciDevice {
                 };
 
                 if let Some(msix) = &cloned_msix {
-                    msix.lock().unwrap().notify(vector, dev_id);
+                    msix.lock()
+                        .unwrap()
+                        .notify(vector, dev_id.load(Ordering::Acquire));
                 } else {
                     bail!("Failed to send interrupt, msix does not exist");
                 }
@@ -618,14 +622,7 @@ impl VirtioPciDevice {
             true
         };
 
-        let cloned_virtio_dev = self.device.clone();
-        let cloned_common_cfg = self.common_config.clone();
-        let cloned_virtio_queue = self.queues.clone();
-        let cloned_activated_flag = self.device_activated.clone();
-        let cloned_notify_evts = self.notify_eventfds.clone();
-        let cloned_sys_mem = self.sys_mem.clone();
-        let cloned_int_cb = self.interrupt_cb.clone();
-        let cloned_msix = self.config.msix.as_ref().unwrap().clone();
+        let cloned_pci_device = self.clone();
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
             let value = match data.len() {
                 1 => data[0] as u32,
@@ -639,13 +636,18 @@ impl VirtioPciDevice {
                     return false;
                 }
             };
-            let old_dev_status = cloned_common_cfg.lock().unwrap().device_status;
+            let old_dev_status = cloned_pci_device
+                .common_config
+                .lock()
+                .unwrap()
+                .device_status;
 
-            if let Err(e) = cloned_common_cfg.lock().unwrap().write_common_config(
-                &cloned_virtio_dev,
-                offset,
-                value,
-            ) {
+            if let Err(e) = cloned_pci_device
+                .common_config
+                .lock()
+                .unwrap()
+                .write_common_config(&cloned_pci_device.device.clone(), offset, value)
+            {
                 error!(
                     "Failed to read common config of virtio-pci device, error is {}",
                     e.display_chain(),
@@ -653,21 +655,29 @@ impl VirtioPciDevice {
                 return false;
             }
 
-            if !cloned_activated_flag.load(Ordering::Acquire)
-                && cloned_common_cfg.lock().unwrap().check_device_status(
-                    CONFIG_STATUS_ACKNOWLEDGE
-                        | CONFIG_STATUS_DRIVER
-                        | CONFIG_STATUS_DRIVER_OK
-                        | CONFIG_STATUS_FEATURES_OK,
-                    CONFIG_STATUS_FAILED,
-                )
+            if !cloned_pci_device.device_activated.load(Ordering::Acquire)
+                && cloned_pci_device
+                    .common_config
+                    .lock()
+                    .unwrap()
+                    .check_device_status(
+                        CONFIG_STATUS_ACKNOWLEDGE
+                            | CONFIG_STATUS_DRIVER
+                            | CONFIG_STATUS_DRIVER_OK
+                            | CONFIG_STATUS_FEATURES_OK,
+                        CONFIG_STATUS_FAILED,
+                    )
             {
-                let queue_type = cloned_common_cfg.lock().unwrap().queue_type;
-                let queues_config = &cloned_common_cfg.lock().unwrap().queues_config;
-                let mut locked_queues = cloned_virtio_queue.lock().unwrap();
+                let queue_type = cloned_pci_device.common_config.lock().unwrap().queue_type;
+                let queues_config = &cloned_pci_device
+                    .common_config
+                    .lock()
+                    .unwrap()
+                    .queues_config;
+                let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
                 for q_config in queues_config.iter() {
                     let queue = Queue::new(*q_config, queue_type).unwrap();
-                    if !queue.is_valid(&cloned_sys_mem) {
+                    if !queue.is_valid(&cloned_pci_device.sys_mem) {
                         error!("Failed to activate device: Invalid queue");
                         return false;
                     }
@@ -675,10 +685,10 @@ impl VirtioPciDevice {
                     locked_queues.push(arc_queue.clone());
                 }
 
-                let queue_evts = cloned_notify_evts.clone().events;
-                if let Some(cb) = cloned_int_cb.clone() {
-                    if let Err(e) = cloned_virtio_dev.lock().unwrap().activate(
-                        cloned_sys_mem.clone(),
+                let queue_evts = cloned_pci_device.notify_eventfds.clone().events;
+                if let Some(cb) = cloned_pci_device.interrupt_cb.clone() {
+                    if let Err(e) = cloned_pci_device.device.lock().unwrap().activate(
+                        cloned_pci_device.sys_mem.clone(),
                         cb,
                         &locked_queues,
                         queue_evts,
@@ -689,20 +699,43 @@ impl VirtioPciDevice {
                     error!("Failed to activate device: No interrupt callback");
                     return false;
                 }
-                cloned_activated_flag.store(true, Ordering::Release);
+                cloned_pci_device
+                    .device_activated
+                    .store(true, Ordering::Release);
+
+                update_dev_id(
+                    &cloned_pci_device.parent_bus,
+                    cloned_pci_device.devfn,
+                    &cloned_pci_device.dev_id,
+                );
             }
 
-            if old_dev_status != 0 && cloned_common_cfg.lock().unwrap().device_status == 0 {
-                let mut locked_queues = cloned_virtio_queue.lock().unwrap();
+            if old_dev_status != 0
+                && cloned_pci_device
+                    .common_config
+                    .lock()
+                    .unwrap()
+                    .device_status
+                    == 0
+            {
+                let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
                 locked_queues.clear();
-                cloned_activated_flag.store(false, Ordering::Release);
+                cloned_pci_device
+                    .device_activated
+                    .store(false, Ordering::Release);
+                let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
                 cloned_msix.lock().unwrap().reset();
-                if let Err(e) = cloned_virtio_dev.lock().unwrap().reset() {
+                if let Err(e) = cloned_pci_device.device.lock().unwrap().reset() {
                     error!(
                         "Failed to reset virtio device, error is {}",
                         e.display_chain()
                     );
                 }
+                update_dev_id(
+                    &cloned_pci_device.parent_bus,
+                    cloned_pci_device.devfn,
+                    &cloned_pci_device.dev_id,
+                );
             }
 
             true
@@ -874,15 +907,12 @@ impl PciDevOps for VirtioPciDevice {
         self.modern_mem_region_map(notify_cap)?;
 
         let nvectors = self.device.lock().unwrap().queue_num() + 1;
-        #[cfg(target_arch = "aarch64")]
-        {
-            self.dev_id = self.set_dev_id(0, self.devfn);
-        }
+
         init_msix(
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             nvectors as u32,
             &mut self.config,
-            self.dev_id,
+            self.dev_id.clone(),
         )?;
 
         self.assign_interrupt_cb();
@@ -950,7 +980,8 @@ impl PciDevOps for VirtioPciDevice {
             return;
         }
 
-        self.config.write(offset, data, self.dev_id);
+        self.config
+            .write(offset, data, self.dev_id.clone().load(Ordering::Acquire));
         if ranges_overlap(
             offset,
             end,
@@ -1388,7 +1419,7 @@ mod tests {
             VIRTIO_PCI_MSIX_BAR_IDX as usize,
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
             &mut virtio_pci.config,
-            virtio_pci.dev_id,
+            virtio_pci.dev_id.clone(),
         )
         .unwrap();
         // Prepare valid queue config
