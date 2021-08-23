@@ -36,7 +36,7 @@ const RTC_MINUTES: u8 = 0x02;
 const RTC_MINUTES_ALARM: u8 = 0x03;
 const RTC_HOURS: u8 = 0x04;
 const RTC_HOURS_ARARM: u8 = 0x05;
-const RTC_DAY_OF_WEAK: u8 = 0x06;
+const RTC_DAY_OF_WEEK: u8 = 0x06;
 const RTC_DAY_OF_MONTH: u8 = 0x07;
 const RTC_MONTH: u8 = 0x08;
 const RTC_YEAR: u8 = 0x09;
@@ -61,7 +61,7 @@ const CMOS_MEM_ABOVE_4GB: (u8, u8, u8) = (0x5B, 0x5C, 0x5D);
 fn get_utc_time() -> libc::tm {
     let time_val: libc::time_t = 0_i64;
 
-    // Safe bacause `libc::time` only get time.
+    // Safe because `libc::time` only get time.
     unsafe { libc::time(time_val as *mut i64) };
 
     let mut dest_tm = libc::tm {
@@ -177,7 +177,7 @@ impl RTC {
             RTC_HOURS => {
                 data[0] = bin_to_bcd(tm.tm_hour as u8);
             }
-            RTC_DAY_OF_WEAK => {
+            RTC_DAY_OF_WEEK => {
                 data[0] = bin_to_bcd((tm.tm_wday + 1) as u8);
             }
             RTC_DAY_OF_MONTH => {

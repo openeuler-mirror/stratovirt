@@ -96,8 +96,8 @@ pub struct VfioMemoryRegion {
     pub memory_size: u64,
     // Host virtual address.
     pub userspace_addr: u64,
-    // No flags specified for now.
-    flags_padding: u64,
+    // IOMMU mapped flag.
+    pub iommu_mapped: bool,
 }
 
 /// `VfioMemInfo` structure contains pinning pages information. If any pages need to be zapped from
@@ -131,7 +131,7 @@ impl VfioMemInfo {
             guest_phys_addr,
             memory_size,
             userspace_addr,
-            flags_padding: 0_u64,
+            iommu_mapped: false,
         });
 
         Ok(())
@@ -150,7 +150,7 @@ impl VfioMemInfo {
             guest_phys_addr: fr.addr_range.base.raw_value(),
             memory_size: fr.addr_range.size,
             userspace_addr: hva + fr.offset_in_region,
-            flags_padding: 0_u64,
+            iommu_mapped: false,
         };
         let mut mem_regions = self.regions.lock().unwrap();
         for (index, mr) in mem_regions.iter().enumerate() {
@@ -378,9 +378,11 @@ impl VfioGroup {
             return Err(ErrorKind::VfioIoctl("VFIO_GROUP_SET_CONTAINER".to_string(), ret).into());
         }
 
-        if let Err(e) = container.set_iommu(vfio::VFIO_TYPE1v2_IOMMU) {
-            unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &raw_fd) };
-            return Err(e).chain_err(|| "Failed to set IOMMU");
+        if container.groups.lock().unwrap().is_empty() {
+            if let Err(e) = container.set_iommu(vfio::VFIO_TYPE1v2_IOMMU) {
+                unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &raw_fd) };
+                return Err(e).chain_err(|| "Failed to set IOMMU");
+            }
         }
 
         if let Err(e) = container.kvm_device_add_group(&self.group.as_raw_fd()) {
@@ -464,24 +466,27 @@ impl VfioDevice {
             .iter()
             .collect::<PathBuf>()
             .read_link()
-            .chain_err(|| "Invaild iommu group path")?;
+            .chain_err(|| "Invalid iommu group path")?;
         let group_name = iommu_group
             .file_name()
-            .chain_err(|| "Invaild iommu group name")?;
+            .chain_err(|| "Invalid iommu group name")?;
         let mut group_id = 0;
         if let Some(n) = group_name.to_str() {
-            group_id = n.parse::<u32>().chain_err(|| "Invaild iommu group id")?;
+            group_id = n.parse::<u32>().chain_err(|| "Invalid iommu group id")?;
         }
 
-        let mut groups = container.groups.lock().unwrap();
-        if let Some(g) = groups.get(&group_id) {
+        if let Some(g) = container.groups.lock().unwrap().get(&group_id) {
             return Ok(g.clone());
         }
         let group = Arc::new(VfioGroup::new(group_id)?);
         group
             .connect_container(&container)
             .chain_err(|| "Fail to connect container")?;
-        groups.insert(group_id, group.clone());
+        container
+            .groups
+            .lock()
+            .unwrap()
+            .insert(group_id, group.clone());
 
         Ok(group)
     }
@@ -489,7 +494,7 @@ impl VfioDevice {
     fn vfio_get_device(group: &VfioGroup, name: &Path) -> Result<File> {
         let mut dev_name: &str = "";
         if let Some(n) = name.file_name() {
-            dev_name = n.to_str().chain_err(|| "Invaild device path")?;
+            dev_name = n.to_str().chain_err(|| "Invalid device path")?;
         }
         let path: CString = CString::new(dev_name.as_bytes())
             .chain_err(|| "Failed to convert device name to CString type of data")?;

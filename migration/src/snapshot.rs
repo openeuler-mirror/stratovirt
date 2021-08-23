@@ -94,7 +94,7 @@ impl MigrationManager {
     /// # Notes
     ///
     /// Offers a interface for restore snapshot functions. This function will make VM
-    /// back to the state restored in snapshot file incluing both device and memory.
+    /// back to the state restored in snapshot file including both device and memory.
     ///
     /// # Argument
     ///
@@ -126,7 +126,7 @@ impl MigrationManager {
             bail!("Invalid device state snapshot file");
         }
 
-        Self::load_memory(&mut memory_file).chain_err(|| "Failed to load snpashot memory")?;
+        Self::load_memory(&mut memory_file).chain_err(|| "Failed to load snapshot memory")?;
         let snapshot_desc_db =
             Self::load_descriptor_db(&mut device_state_file, device_state_header.desc_len)
                 .chain_err(|| "Failed to load device descriptor db")?;

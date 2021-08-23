@@ -20,7 +20,7 @@ CPU topology is not supported, please configure the number of VCPUs only.
 ```
 <vcpu>4</vcpu>
 ```
-- Archtecture:
+- Architecture:
 
 Optional value of `arch` are: `aarch64` and `x86_64`. On X86 platform, supported machine is `q35`; on aarch 64 platform, supported machine is `virt`.
 ```

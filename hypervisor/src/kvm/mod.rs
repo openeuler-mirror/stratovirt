@@ -60,6 +60,7 @@ impl KVMFds {
         migration::MigrationManager::register_device_instance(
             state::KvmDeviceState::descriptor(),
             Arc::new(state::KvmDevice {}),
+            false,
         );
 
         kvm_fds

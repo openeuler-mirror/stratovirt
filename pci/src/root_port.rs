@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::atomic::AtomicU16;
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
@@ -117,13 +118,8 @@ impl PciDevOps for RootPort {
         config_space[PREF_MEMORY_LIMIT as usize] = PREF_MEM_RANGE_64BIT;
         self.config
             .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
-        #[cfg(target_arch = "aarch64")]
-        {
-            self.dev_id = self.set_dev_id(0, self.devfn);
-            init_msix(0, 1, &mut self.config, self.dev_id)?;
-        }
-        #[cfg(target_arch = "x86_64")]
-        init_msix(0, 1, &mut self.config, 0)?;
+
+        init_msix(0, 1, &mut self.config, Arc::new(AtomicU16::new(0)))?;
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();

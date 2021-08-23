@@ -25,7 +25,7 @@ class MonitorThread(threading.Thread):
     items = dict()
 
     def __init__(self):
-        """Construtor"""
+        """Constructor"""
         super(MonitorThread, self).__init__()
         self.state_lock = threading.Lock()
         self._state = 'init'

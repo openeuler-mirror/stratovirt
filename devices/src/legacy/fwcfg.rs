@@ -365,7 +365,7 @@ impl FwCfgCommon {
             );
         };
 
-        // unwrap is safe bacause the count of arch_entries and entries is initialized
+        // unwrap is safe because the count of arch_entries and entries is initialized
         // as `FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT`, which is equal to the return
         // value of `max_entry` function.
         if self.is_arch_local() {
@@ -1402,7 +1402,7 @@ mod test {
         fwcfg_dev.lock().unwrap().read(&mut read_data, base, offset);
         assert_eq!(read_data, sig_entry_data);
 
-        // Failed to write beacuse of offset overflow.
+        // Failed to write because of offset overflow.
         let write_data = vec![0x0_u8];
         let offset = 0x18;
         let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);
@@ -1442,7 +1442,7 @@ mod test {
         fwcfg_dev.lock().unwrap().read(&mut read_data, base, offset);
         assert_eq!(read_data, sig_entry_data);
 
-        // Failed to write beacuse of offset overflow.
+        // Failed to write because of offset overflow.
         let write_data = vec![0x0_u8];
         let offset = 0x0c;
         let f_back = fwcfg_dev.lock().unwrap().write(&write_data, base, offset);

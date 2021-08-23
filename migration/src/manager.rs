@@ -21,7 +21,7 @@ use super::status::MigrationStatus;
 use util::byte_code::ByteCode;
 
 lazy_static! {
-    /// Glocal MigrationMananger to manage all migration combined interface.
+    /// Glocal MigrationManager to manage all migration combined interface.
     pub(crate) static ref MIGRATION_MANAGER: Arc<MigrationManager> = Arc::new(MigrationManager {
         entry: Arc::new(RwLock::new(BTreeMap::<u64, MigrationEntry>::new())),
         desc_db: Arc::new(RwLock::new(HashMap::<String, DeviceStateDesc>::new())),
@@ -135,7 +135,7 @@ pub enum MigrationEntry {
 /// This structure is to manage all resource during migration.
 /// It is also the only way to call on `MIGRATION_MANAGER`.
 pub struct MigrationManager {
-    /// The map offers the deivce_id and combined migratable device entry.
+    /// The map offers the device_id and combined migratable device entry.
     pub(crate) entry: Arc<RwLock<BTreeMap<u64, MigrationEntry>>>,
     /// The map offers the device type and its device state describe structure.
     pub(crate) desc_db: Arc<RwLock<HashMap<String, DeviceStateDesc>>>,
@@ -162,14 +162,22 @@ impl MigrationManager {
     ///
     /// * `device_desc` - The `DeviceStateDesc` of device instance.
     /// * `entry` - Device instance with migratable interface.
-    pub fn register_device_instance<T>(device_desc: DeviceStateDesc, device_entry: Arc<T>)
-    where
+    /// * `reverse` - Register device in order or in the reverse order.
+    pub fn register_device_instance<T>(
+        device_desc: DeviceStateDesc,
+        device_entry: Arc<T>,
+        reverse: bool,
+    ) where
         T: MigrationHook + Sync + Send + 'static,
     {
         Self::register_device_desc(device_desc);
 
         let entry = MigrationEntry::Safe(device_entry);
-        let nr_entry = Self::entry_db_len();
+        let nr_entry = if reverse {
+            !0 - Self::entry_db_len()
+        } else {
+            Self::entry_db_len()
+        };
 
         MIGRATION_MANAGER
             .entry
@@ -333,7 +341,7 @@ mod tests {
         let device_v2 = Arc::new(DeviceV2::default());
         let device_v2_mutex = Arc::new(Mutex::new(DeviceV2::default()));
 
-        MigrationManager::register_device_instance(DeviceV1State::descriptor(), device_v1);
+        MigrationManager::register_device_instance(DeviceV1State::descriptor(), device_v1, false);
         MigrationManager::register_memory_instance(device_v2);
         MigrationManager::register_device_instance_mutex(
             DeviceV2State::descriptor(),

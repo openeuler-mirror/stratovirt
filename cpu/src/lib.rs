@@ -494,7 +494,7 @@ impl CPUInterface for CPU {
                             .chain_err(|| "Some error occurred in guest shutdown")?;
                     } else {
                         error!(
-                            "Vcpu{} recevied unexpected system event with type 0x{:x}, flags 0x{:x}",
+                            "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
                             self.id(),
                             event,
                             flags
@@ -569,11 +569,11 @@ impl CPUThreadWorker {
         }
 
         register_signal_handler(VCPU_EXIT_SIGNAL, handle_signal)
-            .chain_err(|| "Failed to registe VCPU_EXIT_SIGNAL signal.")?;
+            .chain_err(|| "Failed to register VCPU_EXIT_SIGNAL signal.")?;
         register_signal_handler(VCPU_PAUSE_SIGNAL, handle_signal)
-            .chain_err(|| "Failed to registe VCPU_PAUSE_SIGNAL signal.")?;
+            .chain_err(|| "Failed to register VCPU_PAUSE_SIGNAL signal.")?;
         register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
-            .chain_err(|| "Failed to registe VCPU_TASK_SIGNAL signal.")?;
+            .chain_err(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
 
         Ok(())
     }

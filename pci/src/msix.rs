@@ -10,16 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::{MsiVector, KVM_FDS};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::{byte_code::ByteCode, num_ops::round_up};
 
-use crate::config::{CapId, PciConfig, RegionType};
+use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};
 use crate::errors::{Result, ResultExt};
-use crate::{le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64};
+use crate::{
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+};
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
 pub const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
@@ -71,7 +74,7 @@ pub struct Msix {
     pub func_masked: bool,
     pub enabled: bool,
     pub msix_cap_offset: u16,
-    pub dev_id: u16,
+    pub dev_id: Arc<AtomicU16>,
 }
 
 impl Msix {
@@ -90,7 +93,7 @@ impl Msix {
             func_masked: true,
             enabled: true,
             msix_cap_offset,
-            dev_id,
+            dev_id: Arc::new(AtomicU16::new(dev_id)),
         };
         msix.mask_all_vectors();
         msix
@@ -148,7 +151,11 @@ impl Msix {
         le_write_u64(&mut self.pba, offset, old_val & pending_bit).unwrap();
     }
 
-    fn register_memory_region(msix: Arc<Mutex<Self>>, region: &Region, dev_id: u16) -> Result<()> {
+    fn register_memory_region(
+        msix: Arc<Mutex<Self>>,
+        region: &Region,
+        dev_id: Arc<AtomicU16>,
+    ) -> Result<()> {
         let locked_msix = msix.lock().unwrap();
         let table_size = locked_msix.table.len() as u64;
         let pba_size = locked_msix.pba.len() as u64;
@@ -170,7 +177,7 @@ impl Msix {
             let is_masked: bool = locked_msix.is_vector_masked(vector);
             if was_masked && !is_masked {
                 locked_msix.clear_pending_vector(vector);
-                locked_msix.notify(vector, dev_id);
+                locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
             }
 
             true
@@ -264,7 +271,7 @@ impl StateTransfer for Msix {
         state.func_masked = self.func_masked;
         state.enabled = self.enabled;
         state.msix_cap_offset = self.msix_cap_offset;
-        state.dev_id = self.dev_id;
+        state.dev_id = self.dev_id.load(Ordering::Acquire);
 
         Ok(state.as_bytes().to_vec())
     }
@@ -280,7 +287,7 @@ impl StateTransfer for Msix {
         self.func_masked = msix_state.func_masked;
         self.enabled = msix_state.enabled;
         self.msix_cap_offset = msix_state.msix_cap_offset;
-        self.dev_id = msix_state.dev_id;
+        self.dev_id = Arc::new(AtomicU16::new(msix_state.dev_id));
 
         Ok(())
     }
@@ -318,7 +325,7 @@ impl MigrationHook for Msix {
                         msg_data: msg.data,
                         masked: false,
                         #[cfg(target_arch = "aarch64")]
-                        dev_id: self.dev_id as u32,
+                        dev_id: self.dev_id.load(Ordering::Acquire) as u32,
                     };
                     if let Err(e) = locked_irq_table.add_msi_route(allocated_gsi, msi_vector) {
                         bail!("Failed to add msi route to global irq routing table: {}", e);
@@ -330,7 +337,7 @@ impl MigrationHook for Msix {
 
                 if self.is_vector_pending(vector) {
                     self.clear_pending_vector(vector);
-                    send_msix(msg, self.dev_id);
+                    send_msix(msg, self.dev_id.load(Ordering::Acquire));
                 }
             }
         }
@@ -377,7 +384,12 @@ fn send_msix(msg: Message, dev_id: u16) {
 }
 
 /// MSI-X initialization.
-pub fn init_msix(bar_id: usize, vector_nr: u32, config: &mut PciConfig, dev_id: u16) -> Result<()> {
+pub fn init_msix(
+    bar_id: usize,
+    vector_nr: u32,
+    config: &mut PciConfig,
+    dev_id: Arc<AtomicU16>,
+) -> Result<()> {
     if vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
         bail!("Too many msix vectors.");
     }
@@ -401,7 +413,7 @@ pub fn init_msix(bar_id: usize, vector_nr: u32, config: &mut PciConfig, dev_id: 
         table_size,
         pba_size,
         msix_cap_offset as u16,
-        dev_id,
+        dev_id.load(Ordering::Acquire),
     )));
     let bar_size = ((table_size + pba_size) as u64).next_power_of_two();
     let region = Region::init_container_region(bar_size);
@@ -415,6 +427,17 @@ pub fn init_msix(bar_id: usize, vector_nr: u32, config: &mut PciConfig, dev_id: 
     Ok(())
 }
 
+pub fn update_dev_id(parent_bus: &Weak<Mutex<PciBus>>, devfn: u8, dev_id: &Arc<AtomicU16>) {
+    let bus_num = parent_bus
+        .upgrade()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .number(SECONDARY_BUS_NUM as usize);
+    let device_id = ((bus_num as u16) << 8) | (devfn as u16);
+    dev_id.store(device_id, Ordering::Release);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,9 +448,15 @@ mod tests {
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
 
         // Too many vectors.
-        assert!(init_msix(0, MSIX_TABLE_SIZE_MAX as u32 + 2, &mut pci_config, 0).is_err());
+        assert!(init_msix(
+            0,
+            MSIX_TABLE_SIZE_MAX as u32 + 2,
+            &mut pci_config,
+            Arc::new(AtomicU16::new(0))
+        )
+        .is_err());
 
-        init_msix(1, 2, &mut pci_config, 0).unwrap();
+        init_msix(1, 2, &mut pci_config, Arc::new(AtomicU16::new(0))).unwrap();
         let msix_cap_start = 64_u8;
         assert_eq!(pci_config.last_cap_end, 64 + MSIX_CAP_SIZE as u16);
         // Capabilities pointer
@@ -492,7 +521,7 @@ mod tests {
     #[test]
     fn test_write_config() {
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
-        init_msix(0, 2, &mut pci_config, 0).unwrap();
+        init_msix(0, 2, &mut pci_config, Arc::new(AtomicU16::new(0))).unwrap();
         let msix = pci_config.msix.as_ref().unwrap();
         let mut locked_msix = msix.lock().unwrap();
         locked_msix.enabled = false;
