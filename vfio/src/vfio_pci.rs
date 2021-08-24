@@ -345,19 +345,19 @@ impl VfioPciDevice {
                 .chain_err(|| "Failed to get vfio bar info")?;
             let size = vfio_bar.size;
 
+            let region = Region::init_container_region(size);
             let bar_region = if i == table_bar {
-                let region = Region::init_container_region(size);
                 region
                     .add_subregion(
                         Region::init_io_region(table_size as u64, table_ops.clone()),
                         table_offset,
                     )
-                    .chain_err(|| ErrorKind::UnregMemBar(i as usize))?;
+                    .chain_err(|| ErrorKind::AddRegBar(i as usize))?;
 
                 if table_offset > 0 {
                     region
                         .add_subregion(Region::init_io_region(table_offset, bar_ops.clone()), 0)
-                        .chain_err(|| ErrorKind::UnregMemBar(i as usize))?;
+                        .chain_err(|| ErrorKind::AddRegBar(i as usize))?;
                 }
 
                 if table_offset + table_size < size {
@@ -369,11 +369,14 @@ impl VfioPciDevice {
                             ),
                             table_offset + table_size,
                         )
-                        .chain_err(|| ErrorKind::UnregMemBar(i as usize))?;
+                        .chain_err(|| ErrorKind::AddRegBar(i as usize))?;
                 }
                 region
             } else {
-                Region::init_io_region(size, bar_ops.clone())
+                region
+                    .add_subregion(Region::init_io_region(size, bar_ops.clone()), 0)
+                    .chain_err(|| ErrorKind::AddRegBar(i as usize))?;
+                region
             };
 
             self.pci_config
@@ -634,14 +637,16 @@ impl VfioPciDevice {
                 .chain_err(|| "Failed to create HostMemMapping")?;
 
                 let ram_device = Region::init_ram_device_region(Arc::new(host_mmap));
-                // Avoid being covered by user memory region.
-                ram_device.set_priority(1);
-                let parent_bus = self.parent_bus.upgrade().unwrap();
-                let locked_parent_bus = parent_bus.lock().unwrap();
-                locked_parent_bus
-                    .mem_region
-                    .add_subregion(ram_device, gpa + mmap.offset)
-                    .chain_err(|| "Failed add to mem region")?;
+                let bar = self
+                    .pci_config
+                    .bars
+                    .get_mut(i as usize)
+                    .chain_err(|| "Failed to get pci bar info")?;
+                bar.region
+                    .as_ref()
+                    .unwrap()
+                    .add_subregion(ram_device, mmap.offset)
+                    .chain_err(|| ErrorKind::AddRegBar(i as usize))?;
             }
         }
         Ok(())
@@ -757,7 +762,7 @@ impl PciDevOps for VfioPciDevice {
             return;
         }
 
-        if offset >= (BAR_0 as usize) && offset < (BAR_5 as usize) + REG_SIZE {
+        if ranges_overlap(offset, end, BAR_0 as usize, BAR_5 as usize + REG_SIZE) {
             self.pci_config.read(offset, data);
             return;
         }
@@ -806,7 +811,7 @@ impl PciDevOps for VfioPciDevice {
             cap_offset = msix.lock().unwrap().msix_cap_offset as usize;
         }
 
-        if ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + 4) {
+        if ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + REG_SIZE) {
             self.pci_config
                 .write(offset, data, self.dev_id.load(Ordering::Acquire));
 
