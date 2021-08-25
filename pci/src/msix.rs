@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use util::{byte_code::ByteCode, num_ops::round_up};
+use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 
 use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};
 use crate::errors::{Result, ResultExt};
@@ -415,7 +415,8 @@ pub fn init_msix(
         msix_cap_offset as u16,
         dev_id.load(Ordering::Acquire),
     )));
-    let bar_size = ((table_size + pba_size) as u64).next_power_of_two();
+    let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
+    bar_size = round_up(bar_size, host_page_size()).unwrap();
     let region = Region::init_container_region(bar_size);
     Msix::register_memory_region(msix.clone(), &region, dev_id)?;
     config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);

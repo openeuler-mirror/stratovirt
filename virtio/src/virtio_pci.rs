@@ -29,7 +29,7 @@ use pci::{
     config::PciConfig, init_msix, init_multifunction, le_write_u16, ranges_overlap, PciBus,
     PciDevOps,
 };
-use util::byte_code::ByteCode;
+use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
@@ -941,9 +941,10 @@ impl PciDevOps for VirtioPciDevice {
 
         self.assign_interrupt_cb();
 
-        let mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
+        let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
             as u64)
             .next_power_of_two();
+        mem_region_size = round_up(mem_region_size, host_page_size()).unwrap();
         let modern_mem_region = Region::init_container_region(mem_region_size);
         self.modern_mem_region_init(&modern_mem_region)?;
 
