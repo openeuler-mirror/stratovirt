@@ -113,7 +113,7 @@ impl Vsock {
     /// The `VIRTIO_VSOCK_EVENT_TRANSPORT_RESET` event indicates that communication has
     /// been interrupted. The driver shuts down established connections and the guest_cid
     /// configuration field is fetched again.
-    fn transport_reset(&mut self) -> Result<()> {
+    fn transport_reset(&self) -> Result<()> {
         let mut event_queue_locked = self.event_queue.as_ref().unwrap().lock().unwrap();
         let element = event_queue_locked
             .vring
@@ -136,7 +136,7 @@ impl Vsock {
             .chain_err(|| format!("Failed to add used ring {}", element.index))?;
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Vring, None)
+            interrupt_cb(&VirtioInterruptType::Vring, Some(&*event_queue_locked))
                 .chain_err(|| ErrorKind::EventFdWrite)?;
         }
 
@@ -337,6 +337,9 @@ impl StateTransfer for Vsock {
             self.backend.as_ref().unwrap().set_running(true),
             || "Failed to set vsock backend running",
         )?;
+        migration::errors::ResultExt::chain_err(self.transport_reset(), || {
+            "Failed to send vsock transport reset event"
+        })?;
 
         Ok(state.as_bytes().to_vec())
     }
@@ -358,10 +361,11 @@ impl StateTransfer for Vsock {
 }
 
 impl MigrationHook for Vsock {
+    #[cfg(target_arch = "aarch64")]
     fn resume(&mut self) -> migration::errors::Result<()> {
-        if let Err(e) = self.transport_reset() {
-            error!("Failed to resume virtio vsock device: {}", e);
-        }
+        migration::errors::ResultExt::chain_err(self.transport_reset(), || {
+            "Failed to resume virtio vsock device"
+        })?;
 
         Ok(())
     }
