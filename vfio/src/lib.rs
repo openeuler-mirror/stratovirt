@@ -23,8 +23,8 @@ pub mod errors {
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
         }
         errors {
-            UnregMemBar(id: usize) {
-                display("Failed to unmap BAR {} in memory space.", id)
+            AddRegBar(id: usize) {
+                display("Failed to add sub region at the BAR {} in memory space.", id)
             }
             VfioIoctl(ioctl: String, result: i32) {
                 display("Vfio ioctl failed: {}, result is: {}", ioctl, result)
