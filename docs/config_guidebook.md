@@ -171,11 +171,11 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ```shell
 # virtio mmio block device.
--drive id=drive_id,file=path_on_host[,serial=serial_num,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-device,drive=drive_id[,iothread=iothread1]
+-drive id=drive_id,file=path_on_host[,readonly=off][,direct=off][,throttling.iops-total=200]
+-device virtio-blk-device,drive=drive_id[,iothread=iothread1][,serial=serial_num]
 # virtio pci block device.
--drive id=drive_id,file=path_on_host[,serial=serial_num,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1]
+-drive id=drive_id,file=path_on_host[,readonly=off][,direct=off][,throttling.iops-total=200]
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1,][serial=serial_num]
 
 ```
 
