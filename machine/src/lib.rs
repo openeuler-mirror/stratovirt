@@ -508,6 +508,11 @@ pub trait MachineOps {
         let bdf = get_pci_bdf(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let device_cfg = parse_root_port(cfg_args)?;
+        let pci_host = self.get_pci_host()?;
+        let bus = pci_host.lock().unwrap().root_bus.clone();
+        if PciBus::find_bus_by_name(&bus, &device_cfg.id).is_some() {
+            bail!("ID {} already exists.");
+        }
         let rootport = RootPort::new(device_cfg.id, devfn, device_cfg.port, parent_bus);
         rootport
             .realize()
