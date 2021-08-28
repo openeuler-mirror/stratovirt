@@ -212,7 +212,7 @@ is a single function device, the function number should be set to zero.
 -device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
 # virtio pci net device
 -netdev tap,id=netdevid,ifname=host_dev_name
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1,mac=12:34:56:78:9A:BC]
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by 
@@ -227,7 +227,7 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 -device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
 # virtio pci net device
 -netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2]
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1,mac=12:34:56:78:9A:BC]
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC]
 ```
 
 *How to set a tap device?*
@@ -273,7 +273,7 @@ of device and the second one represents function number of it.
 -device virtconsole,chardev=virtioconsole1,id=console_id
 
 # virtio pci device
--device virtio-serial-pci,bus=pcie.0,addr=0x1[,id=virtio-serial0]
+-device virtio-serial-pci,bus=pcie.0,addr=0x1.0x0[,multifunction=on,id=virtio-serial0]
 -chardev socket,path=socket_path,id=virtioconsole1,server,nowait
 -device virtconsole,chardev=virtioconsole1,id=console_id
 ```
@@ -307,7 +307,7 @@ of device and the second one represents function number of it.
 -device vhost-vsock-device,id=vsock_id,guest-cid=3
 
 # virtio pci device.
--device vhost-vsock-pci,id=vsock_id,guest-cid=3,bus=pcie.0,addr=0x1.0x0
+-device vhost-vsock-pci,id=vsock_id,guest-cid=3,bus=pcie.0,addr=0x1.0x0[,multifunction=on]
 ```
 
 *You can only set one virtio vsock device for one VM.*
@@ -363,7 +363,7 @@ of device and the second one represents function number of it.
 # virtio mmio balloon device
 -device virtio-balloon-device,deflate-on-oom=true
 # virtio pci balloon device
--device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true
+-device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true[,multifunction=on]
 ```
 
 ### 2.8 Virtio-rng
@@ -396,7 +396,7 @@ single function device, the function number should be set to zero.
 -device virtio-rng-device,rng=objrng0,max-bytes=1234,period=1000
 # virtio pci rng device
 -object rng-random,id=objrng0,filename=/path/to/random_file
--device virtio-rng-pci,rng=objrng0,max-bytes=1234,period=1000,bus=pcie.0,addr=0x1
+-device virtio-rng-pci,rng=objrng0,max-bytes=1234,period=1000,bus=pcie.0,addr=0x1.0x0[,multifunction=on]
 ```
 
 ### 2.9 PCIe root port
@@ -458,7 +458,7 @@ Four properties are supported for VFIO device
 * addr: including slot number and function number.
 ```shell
 # cmdline
--device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03
+-device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03.0x0[,multifunction=on]
 ```
 
 ### 2.12 Chardev

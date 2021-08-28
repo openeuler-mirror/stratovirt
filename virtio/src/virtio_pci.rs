@@ -25,7 +25,10 @@ use pci::config::{
 };
 use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
 use pci::msix::update_dev_id;
-use pci::{config::PciConfig, init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
+use pci::{
+    config::PciConfig, init_msix, init_multifunction, le_write_u16, ranges_overlap, PciBus,
+    PciDevOps,
+};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -487,6 +490,8 @@ pub struct VirtioPciDevice {
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Virtio queues. The vector and Queue will be shared acrossing thread, so all with Arc<Mutex<..>> wrapper.
     queues: Arc<Mutex<Vec<Arc<Mutex<Queue>>>>>,
+    /// Multi-Function flag.
+    multi_func: bool,
 }
 
 impl VirtioPciDevice {
@@ -496,6 +501,7 @@ impl VirtioPciDevice {
         sys_mem: Arc<AddressSpace>,
         device: Arc<Mutex<dyn VirtioDevice>>,
         parent_bus: Weak<Mutex<PciBus>>,
+        multi_func: bool,
     ) -> Self {
         let queue_num = device.lock().unwrap().queue_num();
         let queue_size = device.lock().unwrap().queue_size();
@@ -515,6 +521,7 @@ impl VirtioPciDevice {
             notify_eventfds: NotifyEventFds::new(queue_num),
             interrupt_cb: None,
             queues: Arc::new(Mutex::new(Vec::with_capacity(queue_num))),
+            multi_func,
         }
     }
 
@@ -869,6 +876,12 @@ impl PciDevOps for VirtioPciDevice {
             SUBSYSTEM_ID,
             0x40 + device_type as u16,
         )?;
+        init_multifunction(
+            self.multi_func,
+            &mut self.config.config,
+            self.devfn,
+            self.parent_bus.clone(),
+        )?;
 
         let common_cap = VirtioPciCap::new(
             size_of::<VirtioPciCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
@@ -1146,6 +1159,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping};
+    use pci::{
+        config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
+        le_read_u16,
+    };
     use util::num_ops::{read_u32, write_u32};
     use vmm_sys_util::eventfd::EventFd;
 
@@ -1347,6 +1364,7 @@ mod tests {
             sys_mem,
             virtio_dev,
             Arc::downgrade(&parent_bus),
+            false,
         );
         virtio_pci.init_write_mask().unwrap();
         virtio_pci.init_write_clear_mask().unwrap();
@@ -1381,6 +1399,7 @@ mod tests {
             sys_mem,
             virtio_dev,
             Arc::downgrade(&parent_bus),
+            false,
         );
         assert!(virtio_pci.realize().is_ok());
     }
@@ -1414,6 +1433,7 @@ mod tests {
             sys_mem,
             virtio_dev,
             Arc::downgrade(&parent_bus),
+            false,
         );
 
         // Prepare msix and interrupt callback
@@ -1466,5 +1486,36 @@ mod tests {
         // If device status(not zero) is set to zero, reset the device
         (common_cfg_ops.write)(0_u32.as_bytes(), GuestAddress(0), COMMON_STATUS_REG);
         assert_eq!(virtio_pci.device_activated.load(Ordering::Relaxed), false);
+    }
+
+    #[test]
+    fn test_multifunction() {
+        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
+            Arc::new(Mutex::new(VirtioDeviceTest::new()));
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        let parent_bus = Arc::new(Mutex::new(PciBus::new(
+            String::from("test bus"),
+            #[cfg(target_arch = "x86_64")]
+            Region::init_container_region(1 << 16),
+            sys_mem.root().clone(),
+        )));
+        let mut virtio_pci = VirtioPciDevice::new(
+            String::from("test device"),
+            24,
+            sys_mem,
+            virtio_dev,
+            Arc::downgrade(&parent_bus),
+            true,
+        );
+
+        assert!(init_multifunction(
+            virtio_pci.multi_func,
+            &mut virtio_pci.config.config,
+            virtio_pci.devfn,
+            virtio_pci.parent_bus.clone()
+        )
+        .is_ok());
+        let header_type = le_read_u16(&virtio_pci.config.config, HEADER_TYPE as usize).unwrap();
+        assert_eq!(header_type, HEADER_TYPE_MULTIFUNC as u16);
     }
 }

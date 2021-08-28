@@ -123,9 +123,9 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_rng_dev, parse_root_port, parse_vfio,
-    parse_virtconsole, parse_virtio_serial, parse_vsock, MachineMemConfig, PFlashConfig, PciBdf,
-    SerialConfig, VfioConfig, VmConfig,
+    get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_rng_dev,
+    parse_root_port, parse_vfio, parse_virtconsole, parse_virtio_serial, parse_vsock,
+    MachineMemConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -297,9 +297,16 @@ pub trait MachineOps {
             );
         } else {
             let bdf = get_pci_bdf(cfg_args)?;
+            let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-            let virtio_pci_device =
-                VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, vsock.clone(), parent_bus);
+            let virtio_pci_device = VirtioPciDevice::new(
+                device_cfg.id,
+                devfn,
+                sys_mem,
+                vsock.clone(),
+                parent_bus,
+                multi_func,
+            );
             virtio_pci_device
                 .realize()
                 .chain_err(|| "Failed to add virtio pci vsock device")?;
@@ -342,9 +349,11 @@ pub trait MachineOps {
         } else {
             let name = device_cfg.id;
             let bdf = get_pci_bdf(cfg_args)?;
+            let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
             let sys_mem = self.get_sys_mem().clone();
-            let virtio_pci_device = VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus);
+            let virtio_pci_device =
+                VirtioPciDevice::new(name, devfn, sys_mem, balloon, parent_bus, multi_func);
             virtio_pci_device
                 .realize()
                 .chain_err(|| "Failed to add virtio pci balloon device")?;
@@ -373,16 +382,24 @@ pub trait MachineOps {
                 );
             } else {
                 let name = device_cfg.id;
-                let bdf = if let Some(virtio_serial_info) = &vm_config.virtio_serial {
-                    // Reasonable, because for virtio-serial-pci device, the bdf has been checked.
-                    virtio_serial_info.pci_bdf.clone().unwrap()
+                let virtio_serial_info = if let Some(serial_info) = &vm_config.virtio_serial {
+                    serial_info
                 } else {
-                    bail!("No pci BDF configured for virtconsole");
+                    bail!("No virtio-serial-pci device configured for virtconsole");
                 };
+                // Reasonable, because for virtio-serial-pci device, the bdf has been checked.
+                let bdf = virtio_serial_info.pci_bdf.clone().unwrap();
+                let multi_func = virtio_serial_info.multifunction;
                 let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
                 let sys_mem = self.get_sys_mem().clone();
-                let virtio_pci_device =
-                    VirtioPciDevice::new(name, devfn, sys_mem, console.clone(), parent_bus);
+                let virtio_pci_device = VirtioPciDevice::new(
+                    name,
+                    devfn,
+                    sys_mem,
+                    console.clone(),
+                    parent_bus,
+                    multi_func,
+                );
                 virtio_pci_device
                     .realize()
                     .chain_err(|| "Failed  to add virtio pci console device")?;
@@ -416,10 +433,17 @@ pub trait MachineOps {
                 .chain_err(|| "Failed to add virtio mmio rng device")?;
         } else {
             let bdf = get_pci_bdf(cfg_args)?;
+            let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
             let sys_mem = self.get_sys_mem().clone();
-            let vitio_pci_device =
-                VirtioPciDevice::new(device_cfg.id, devfn, sys_mem, rng_dev.clone(), parent_bus);
+            let vitio_pci_device = VirtioPciDevice::new(
+                device_cfg.id,
+                devfn,
+                sys_mem,
+                rng_dev.clone(),
+                parent_bus,
+                multi_func,
+            );
             vitio_pci_device
                 .realize()
                 .chain_err(|| "Failed to add pci rng device")?;
@@ -434,6 +458,7 @@ pub trait MachineOps {
 
     fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
+        let multi_func = get_multi_function(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let sys_mem = self.get_sys_mem();
         let device_cfg = parse_blk(vm_config, cfg_args)?;
@@ -444,6 +469,7 @@ pub trait MachineOps {
             sys_mem.clone(),
             device.clone(),
             parent_bus,
+            multi_func,
         );
         pcidev
             .realize()
@@ -454,19 +480,34 @@ pub trait MachineOps {
 
     fn add_virtio_pci_net(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
+        let multi_func = get_multi_function(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let sys_mem = self.get_sys_mem();
         let device_cfg = parse_net(vm_config, cfg_args)?;
         let virtio_pci_device = if device_cfg.vhost_type.is_some() {
             let device = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &sys_mem)));
-            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus)
+            VirtioPciDevice::new(
+                device_cfg.id,
+                devfn,
+                sys_mem.clone(),
+                device,
+                parent_bus,
+                multi_func,
+            )
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
             MigrationManager::register_device_instance_mutex(
                 VirtioNetState::descriptor(),
                 device.clone(),
             );
-            VirtioPciDevice::new(device_cfg.id, devfn, sys_mem.clone(), device, parent_bus)
+            VirtioPciDevice::new(
+                device_cfg.id,
+                devfn,
+                sys_mem.clone(),
+                device,
+                parent_bus,
+                multi_func,
+            )
         };
         virtio_pci_device
             .realize()
@@ -484,9 +525,17 @@ pub trait MachineOps {
         let path = "/sys/bus/pci/devices/".to_string() + &device_cfg.host;
         let name = device_cfg.id;
         let bdf = get_pci_bdf(cfg_args)?;
+        let multi_func = get_multi_function(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let vfio_pci_dev = VfioPciDevice::new(Path::new(&path), container, devfn, name, parent_bus)
-            .chain_err(|| "Failed to create vfio pci device")?;
+        let vfio_pci_dev = VfioPciDevice::new(
+            Path::new(&path),
+            container,
+            devfn,
+            name,
+            parent_bus,
+            multi_func,
+        )
+        .chain_err(|| "Failed to create vfio pci device")?;
 
         VfioPciDevice::realize(vfio_pci_dev).chain_err(|| "Failed to realize vfio pci device")?;
         Ok(())
@@ -513,7 +562,13 @@ pub trait MachineOps {
         if PciBus::find_bus_by_name(&bus, &device_cfg.id).is_some() {
             bail!("ID {} already exists.");
         }
-        let rootport = RootPort::new(device_cfg.id, devfn, device_cfg.port, parent_bus);
+        let rootport = RootPort::new(
+            device_cfg.id,
+            devfn,
+            device_cfg.port,
+            parent_bus,
+            device_cfg.multifunction,
+        );
         rootport
             .realize()
             .chain_err(|| "Failed to add pci root port")?;
