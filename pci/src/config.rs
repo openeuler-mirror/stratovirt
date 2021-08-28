@@ -27,6 +27,8 @@ pub const PCI_CONFIG_SPACE_SIZE: usize = 256;
 pub const PCIE_CONFIG_SPACE_SIZE: usize = 4096;
 /// Size in bytes of dword.
 pub const REG_SIZE: usize = 4;
+/// Max number of function.
+pub const MAX_FUNC: u8 = 8;
 
 /// Vendor ID Register.
 pub const VENDOR_ID: u8 = 0x0;
