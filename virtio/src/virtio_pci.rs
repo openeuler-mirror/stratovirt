@@ -439,6 +439,7 @@ impl Clone for NotifyEventFds {
 #[desc_version(compat_version = "0.1.0")]
 pub struct VirtioPciState {
     activated: bool,
+    dev_id: u16,
     /// Max length of config_space is 4096.
     config_space: [u8; 4096],
     write_mask: [u8; 4096],
@@ -1040,6 +1041,7 @@ impl StateTransfer for VirtioPciDevice {
 
         // Save virtio pci state.
         state.activated = self.device_activated.load(Ordering::Relaxed);
+        state.dev_id = self.dev_id.load(Ordering::Acquire);
         {
             let locked_queues = self.queues.lock().unwrap();
             for (index, queue) in locked_queues.iter().enumerate() {
@@ -1083,6 +1085,7 @@ impl StateTransfer for VirtioPciDevice {
         // Set virtio pci state.
         self.device_activated
             .store(pci_state.activated, Ordering::Relaxed);
+        self.dev_id.store(pci_state.dev_id, Ordering::Release);
         {
             let queue_type = self.common_config.lock().unwrap().queue_type;
             let mut locked_queues = self.queues.lock().unwrap();
