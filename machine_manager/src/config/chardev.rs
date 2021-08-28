@@ -16,7 +16,7 @@ use super::{
     errors::{ErrorKind, Result, ResultExt},
     get_pci_bdf, pci_args_check, PciBdf,
 };
-use crate::config::{CmdParser, ConfigCheck, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const MAX_STRING_LENGTH: usize = 255;
 const MAX_PATH_LENGTH: usize = 4096;
@@ -275,6 +275,7 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
         .push("id")
         .push("bus")
         .push("addr")
+        .push("multifunction")
         .push("guest-cid")
         .push("vhostfd");
     cmd_parser.parse(vsock_config)?;
@@ -290,18 +291,7 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     } else {
         return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
     };
-    let device_type = cmd_parser.get_value::<String>("")?;
-    // Safe, because "parse_vsock" function only be called when certain
-    // devices type are added.
-    let dev_type = device_type.unwrap();
-    if dev_type == *"vhost-vsock-device" {
-        if cmd_parser.get_value::<String>("bus")?.is_some() {
-            bail!("virtio mmio device does not support bus property");
-        }
-        if cmd_parser.get_value::<String>("addr")?.is_some() {
-            bail!("virtio mmio device does not support addr property");
-        }
-    }
+
     let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
     let vsock = VsockConfig {
         id,
@@ -315,6 +305,7 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
 pub struct VirtioSerialInfo {
     pub id: String,
     pub pci_bdf: Option<PciBdf>,
+    pub multifunction: bool,
 }
 
 impl ConfigCheck for VirtioSerialInfo {
@@ -333,7 +324,12 @@ impl ConfigCheck for VirtioSerialInfo {
 
 pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Result<()> {
     let mut cmd_parser = CmdParser::new("virtio-serial");
-    cmd_parser.push("").push("id").push("bus").push("addr");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("bus")
+        .push("addr")
+        .push("multifunction");
     cmd_parser.parse(serial_config)?;
     pci_args_check(&cmd_parser)?;
 
@@ -343,14 +339,24 @@ pub fn parse_virtio_serial(vm_config: &mut VmConfig, serial_config: &str) -> Res
         } else {
             "".to_string()
         };
+        let multifunction = if let Some(switch) = cmd_parser.get_value::<ExBool>("multifunction")? {
+            switch.into()
+        } else {
+            false
+        };
         let virtio_serial = if serial_config.contains("-pci") {
             let pci_bdf = get_pci_bdf(serial_config)?;
             VirtioSerialInfo {
                 id,
                 pci_bdf: Some(pci_bdf),
+                multifunction,
             }
         } else {
-            VirtioSerialInfo { id, pci_bdf: None }
+            VirtioSerialInfo {
+                id,
+                pci_bdf: None,
+                multifunction,
+            }
         };
         virtio_serial.check()?;
         vm_config.virtio_serial = Some(virtio_serial);
@@ -434,6 +440,13 @@ mod tests {
             console_cfg.chardev.backend,
             ChardevType::Socket("/path/to/socket".to_string())
         );
+
+        let mut vm_config = VmConfig::default();
+        assert!(parse_virtio_serial(
+            &mut vm_config,
+            "virtio-serial-pci,bus=pcie.0,addr=0x1.0x2,multifunction=on"
+        )
+        .is_ok());
     }
 
     #[test]

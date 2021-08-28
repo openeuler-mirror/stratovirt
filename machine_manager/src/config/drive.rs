@@ -164,6 +164,7 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         .push("id")
         .push("bus")
         .push("addr")
+        .push("multifunction")
         .push("drive")
         .push("bootindex")
         .push("serial")
@@ -412,6 +413,14 @@ mod tests {
         //  drive "rootfs" has been removed.
         let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
         assert!(blk_cfg_res.is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .is_ok());
+        let blk_cfg =
+            "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,multifunction=on";
+        assert!(parse_blk(&mut vm_config, blk_cfg).is_ok());
     }
 
     #[test]
