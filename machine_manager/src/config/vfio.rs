@@ -52,7 +52,8 @@ pub fn parse_vfio(_vm_config: &VmConfig, vfio_config: &str) -> Result<VfioConfig
         .push("host")
         .push("id")
         .push("bus")
-        .push("addr");
+        .push("addr")
+        .push("multifunction");
     cmd_parser.parse(vfio_config)?;
 
     let mut vfio: VfioConfig = VfioConfig::default();
@@ -127,5 +128,10 @@ mod tests {
         let pci = pci_bdf.unwrap();
         assert_eq!(pci.bus, "pcie.0".to_string());
         assert_eq!(pci.addr, (1, 2));
+
+        let mut vm_config = VmConfig::default();
+        let vfio_cfg1 =
+            "vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x1.0x2,multifunction=on";
+        assert!(parse_vfio(&mut vm_config, vfio_cfg1).is_ok());
     }
 }

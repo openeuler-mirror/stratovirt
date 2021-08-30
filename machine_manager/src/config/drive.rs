@@ -62,7 +62,6 @@ pub struct DriveConfig {
     pub path_on_host: String,
     pub read_only: bool,
     pub direct: bool,
-    pub serial_num: Option<String>,
     pub iops: Option<u64>,
 }
 
@@ -73,7 +72,6 @@ impl Default for DriveConfig {
             path_on_host: "".to_string(),
             read_only: false,
             direct: true,
-            serial_num: None,
             iops: None,
         }
     }
@@ -155,9 +153,6 @@ pub fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     if let Some(direct) = cmd_parser.get_value::<ExBool>("direct")? {
         drive.direct = direct.into();
     }
-    if let Some(serial) = cmd_parser.get_value::<String>("serial")? {
-        drive.serial_num = Some(serial);
-    }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
     Ok(drive)
 }
@@ -169,8 +164,10 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         .push("id")
         .push("bus")
         .push("addr")
+        .push("multifunction")
         .push("drive")
         .push("bootindex")
+        .push("serial")
         .push("iothread");
 
     cmd_parser.parse(drive_config)?;
@@ -192,12 +189,15 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         blkdevcfg.iothread = Some(iothread);
     }
 
+    if let Some(serial) = cmd_parser.get_value::<String>("serial")? {
+        blkdevcfg.serial_num = Some(serial);
+    }
+
     if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
         blkdevcfg.id = drive_arg.id.clone();
         blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
         blkdevcfg.read_only = drive_arg.read_only;
         blkdevcfg.direct = drive_arg.direct;
-        blkdevcfg.serial_num = drive_arg.serial_num.clone();
         blkdevcfg.iops = drive_arg.iops;
     } else {
         bail!("No drive configured matched for blk device");
@@ -361,11 +361,13 @@ mod tests {
     fn test_drive_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on,throttling.iops-total=200")
+            .add_drive(
+                "id=rootfs,file=/path/to/rootfs,readonly=off,direct=on,throttling.iops-total=200"
+            )
             .is_ok());
         let blk_cfg_res = parse_blk(
             &mut vm_config,
-            "virtio-blk-device,drive=rootfs,iothread=iothread1",
+            "virtio-blk-device,drive=rootfs,iothread=iothread1,serial=111111",
         );
         assert!(blk_cfg_res.is_ok());
         let blk_device_config = blk_cfg_res.unwrap();
@@ -377,11 +379,11 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
         let blk_cfg_res = parse_blk(
             &mut vm_config,
-            "virtio-blk-device,drive=rootfs1,iothread=iothread1,iops=200",
+            "virtio-blk-device,drive=rootfs1,iothread=iothread1,iops=200,serial=111111",
         );
         assert!(blk_cfg_res.is_err()); // Can not find drive named "rootfs1".
     }
@@ -390,9 +392,9 @@ mod tests {
     fn test_pci_block_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
-        let blk_cfg = "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs";
+        let blk_cfg = "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111";
         let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
         assert!(blk_cfg_res.is_ok());
         let drive_configs = blk_cfg_res.unwrap();
@@ -411,6 +413,14 @@ mod tests {
         //  drive "rootfs" has been removed.
         let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
         assert!(blk_cfg_res.is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .is_ok());
+        let blk_cfg =
+            "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,multifunction=on";
+        assert!(parse_blk(&mut vm_config, blk_cfg).is_ok());
     }
 
     #[test]

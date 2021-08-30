@@ -34,7 +34,7 @@ Optional value of `arch` are: `aarch64` and `x86_64`. On X86 platform, supported
 `/path/to/standard_vm_kernel` is the path of standard vm kernel.
 ```
 <kernel>/path/to/standard_vm_kernel</kernel>
-<cmdline>console=ttys0 root=/dev/vda reboot=k panic=1 rw</cmdline>
+<cmdline>console=ttyS0 root=/dev/vda reboot=k panic=1 rw</cmdline>
 ```
 
 - feature:
@@ -77,7 +77,7 @@ Pflash can be added by the following config.
 `/path/to/pflash` is the path of pflash file.
 ```
 <loader readonly='yes' type='pflash'>/path/to/pflash</loader>
-<nvram template='/path/to/OVMF_VARS'/>/path/to/OVMF_VARS</nvram>
+<nvram template='/path/to/OVMF_VARS'>/path/to/OVMF_VARS</nvram>
 ```
 
 - iothread
@@ -144,7 +144,7 @@ To use `virsh console` command, the virtio console with redirect `pty` should be
 <controller type='pci' index='5' model='pcie-root-port' />
 <rng model='virtio'>
     <rate period='1000' bytes='1234'/>
-    <backend model='random'>/dev/random</backend>
+    <backend model='random'>/path/to/random_file</backend>
     <address type='pci' domain='0x000' bus='0x05' slot='0x00' function='0x00'/>
 </rng>
 ```
@@ -153,7 +153,7 @@ To use `virsh console` command, the virtio console with redirect `pty` should be
 
 ```
 <controller type='pci' index='7' model='pcie-root-port' />
-<hostdev model='subsystem' type='pci' managed='yes'>
+<hostdev mode='subsystem' type='pci' managed='yes'>
 <driver name='vfio'/>
 <source>
     <address domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>

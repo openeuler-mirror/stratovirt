@@ -299,13 +299,20 @@ pub trait DeviceInterface {
         Response::create_response(serde_json::to_value(&vec_types).unwrap(), None)
     }
 
-    fn device_list_properties(&self) -> Response {
+    fn device_list_properties(&self, typename: String) -> Response {
         let mut vec_props = Vec::<DeviceProps>::new();
         let prop = DeviceProps {
             name: "disable-legacy".to_string(),
             prop_type: "OnOffAuto".to_string(),
         };
         vec_props.push(prop);
+        if typename.contains("virtio-balloon") {
+            let prop = DeviceProps {
+                name: "deflate-on-oom".to_string(),
+                prop_type: "bool".to_string(),
+            };
+            vec_props.push(prop);
+        }
         Response::create_response(serde_json::to_value(&vec_props).unwrap(), None)
     }
 

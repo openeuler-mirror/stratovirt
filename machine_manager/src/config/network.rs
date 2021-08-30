@@ -159,6 +159,7 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         .push("netdev")
         .push("bus")
         .push("addr")
+        .push("multifunction")
         .push("mac")
         .push("iothread");
 
@@ -344,5 +345,13 @@ mod tests {
 
         let net_cfg_res = parse_net(&mut vm_config, net_cfg);
         assert!(net_cfg_res.is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
+            .is_ok());
+        let net_cfg =
+            "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,multifunction=on";
+        assert!(parse_net(&mut vm_config, net_cfg).is_ok());
     }
 }
