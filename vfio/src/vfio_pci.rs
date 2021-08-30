@@ -32,7 +32,7 @@ use pci::config::SECONDARY_BUS_NUM;
 use pci::config::{
     PciConfig, RegionType, BAR_0, BAR_5, BAR_IO_SPACE, BAR_MEM_64BIT, BAR_SPACE_UNMAPPED, COMMAND,
     COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
-    IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE, REG_SIZE,
+    HEADER_TYPE, IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE, REG_SIZE,
 };
 use pci::errors::Result as PciResult;
 use pci::msix::{
@@ -41,7 +41,8 @@ use pci::msix::{
     MSIX_TABLE_OFFSET, MSIX_TABLE_SIZE_MAX,
 };
 use pci::{
-    le_read_u16, le_read_u32, le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps,
+    init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, ranges_overlap,
+    PciBus, PciDevOps,
 };
 use util::unix::host_page_size;
 
@@ -96,6 +97,8 @@ pub struct VfioPciDevice {
     dev_id: Arc<AtomicU16>,
     name: String,
     parent_bus: Weak<Mutex<PciBus>>,
+    /// Multi-Function flag.
+    multi_func: bool,
 }
 
 impl VfioPciDevice {
@@ -106,6 +109,7 @@ impl VfioPciDevice {
         devfn: u8,
         name: String,
         parent_bus: Weak<Mutex<PciBus>>,
+        multi_func: bool,
     ) -> Result<Self> {
         Ok(VfioPciDevice {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
@@ -122,6 +126,7 @@ impl VfioPciDevice {
             dev_id: Arc::new(AtomicU16::new(0)),
             name,
             parent_bus,
+            multi_func,
         })
     }
 
@@ -710,6 +715,15 @@ impl PciDevOps for VfioPciDevice {
         PciResultExt::chain_err(self.pci_config_reset(), || {
             "Failed to reset vfio device pci config space"
         })?;
+        PciResultExt::chain_err(
+            init_multifunction(
+                self.multi_func,
+                &mut self.pci_config.config,
+                self.devfn,
+                self.parent_bus.clone(),
+            ),
+            || "Failed to init vfio device multifunction.",
+        )?;
 
         #[cfg(target_arch = "aarch64")]
         {
@@ -762,7 +776,15 @@ impl PciDevOps for VfioPciDevice {
             return;
         }
 
-        if ranges_overlap(offset, end, BAR_0 as usize, BAR_5 as usize + REG_SIZE) {
+        // BAR and header_type are always controlled by StratoVirt.
+        if ranges_overlap(offset, end, BAR_0 as usize, (BAR_5 as usize) + REG_SIZE)
+            || ranges_overlap(
+                offset,
+                end,
+                HEADER_TYPE as usize,
+                (HEADER_TYPE as usize) + 2,
+            )
+        {
             self.pci_config.read(offset, data);
             return;
         }
@@ -778,9 +800,6 @@ impl PciDevOps for VfioPciDevice {
             if i + offset == 0x3d {
                 // Clear INIx
                 *data &= 0;
-            } else if i + offset == 0x0e {
-                // Clear multi-function
-                *data &= 0x7f;
             }
         }
     }

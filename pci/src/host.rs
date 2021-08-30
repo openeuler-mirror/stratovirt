@@ -440,7 +440,7 @@ pub mod tests {
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
         let pio_addr_ops = PciHost::build_pio_addr_ops(pci_host.clone());
         let pio_data_ops = PciHost::build_pio_data_ops(pci_host.clone());
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus);
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus, false);
         root_port.realize().unwrap();
 
         let mut data = [0_u8; 4];
@@ -517,10 +517,10 @@ pub mod tests {
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(pci_host.clone());
 
-        let mut root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone());
+        let mut root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone(), false);
         root_port.write_config(SECONDARY_BUS_NUM as usize, &[1]);
         root_port.realize().unwrap();
-        let mut root_port = RootPort::new("pcie.2".to_string(), 16, 0, root_bus);
+        let mut root_port = RootPort::new("pcie.2".to_string(), 16, 0, root_bus, false);
         root_port.write_config(SECONDARY_BUS_NUM as usize, &[2]);
         root_port.realize().unwrap();
 

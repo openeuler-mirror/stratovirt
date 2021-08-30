@@ -46,11 +46,15 @@ pub mod msix;
 mod root_port;
 
 pub use bus::PciBus;
+use config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 pub use host::PciHost;
 pub use msix::init_msix;
 pub use root_port::RootPort;
 
-use std::mem::size_of;
+use std::{
+    mem::size_of,
+    sync::{Mutex, Weak},
+};
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -105,6 +109,18 @@ le_read!(le_read_u16, read_u16, u16);
 le_read!(le_read_u32, read_u32, u32);
 le_read!(le_read_u64, read_u64, u64);
 
+pub fn pci_devfn(slot: u8, func: u8) -> u8 {
+    ((slot & 0x1f) << 3) | (func & 0x07)
+}
+
+pub fn pci_slot(devfn: u8) -> u8 {
+    devfn >> 3 & 0x1f
+}
+
+pub fn pci_func(devfn: u8) -> u8 {
+    devfn & 0x07
+}
+
 pub trait PciDevOps: Send {
     /// Init writable bit mask.
     fn init_write_mask(&mut self) -> Result<()>;
@@ -148,6 +164,76 @@ pub trait PciDevOps: Send {
 
     /// Get device name.
     fn name(&self) -> String;
+}
+
+/// Init multifunction for pci devices.
+///
+/// # Arguments
+///
+/// * `multifunction` - Whether to open multifunction.
+/// * `config` - Configuration space of pci devices.
+/// * `devfn` - Devfn number.
+/// * `parent_bus` - Parent bus of pci devices.
+pub fn init_multifunction(
+    multifunction: bool,
+    config: &mut Vec<u8>,
+    devfn: u8,
+    parent_bus: Weak<Mutex<PciBus>>,
+) -> Result<()> {
+    let mut header_type =
+        le_read_u16(&config, HEADER_TYPE as usize)? & (!HEADER_TYPE_MULTIFUNC as u16);
+    if multifunction {
+        header_type |= HEADER_TYPE_MULTIFUNC as u16;
+    }
+    le_write_u16(config, HEADER_TYPE as usize, header_type as u16)?;
+
+    // Allow two ways of multifunction bit:
+    // 1. The multifunction bit of all devices must be set;
+    // 2. Function 0 must set the bit, the rest function (1~7) is allowed to
+    // leave the bit to 0.
+    let slot = pci_slot(devfn);
+    let bus = parent_bus.upgrade().unwrap();
+    let locked_bus = bus.lock().unwrap();
+    if pci_func(devfn) != 0 {
+        let pci_dev = locked_bus.devices.get(&pci_devfn(slot, 0));
+        if pci_dev.is_none() {
+            return Ok(());
+        }
+
+        let mut data = vec![0_u8; 2];
+        pci_dev
+            .unwrap()
+            .lock()
+            .unwrap()
+            .read_config(HEADER_TYPE as usize, data.as_mut_slice());
+        if LittleEndian::read_u16(&data) & HEADER_TYPE_MULTIFUNC as u16 == 0 {
+            // Function 0 should set multifunction bit.
+            bail!(
+                "PCI: single function device can't be populated in bus {} function {}.{}",
+                &locked_bus.name,
+                slot,
+                devfn & 0x07
+            );
+        }
+        return Ok(());
+    }
+
+    if multifunction {
+        return Ok(());
+    }
+
+    // If function 0 is set to single function, the rest function should be None.
+    for func in 1..MAX_FUNC {
+        if locked_bus.devices.get(&pci_devfn(slot, func)).is_some() {
+            bail!(
+                "PCI: {}.0 indicates single function, but {}.{} is already populated",
+                slot,
+                slot,
+                func
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Check whether two regions overlap with each other.

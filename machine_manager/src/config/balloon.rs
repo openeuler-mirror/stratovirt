@@ -47,6 +47,7 @@ pub fn parse_balloon(vm_config: &mut VmConfig, balloon_config: &str) -> Result<B
         .push("")
         .push("bus")
         .push("addr")
+        .push("multifunction")
         .push("id")
         .push("deflate-on-oom");
     cmd_parser.parse(balloon_config)?;
@@ -84,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pci_block_config_cmdline_parser() {
+    fn test_pci_balloon_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
         let bln_cfg = "virtio-balloon-pci,deflate-on-oom=true,bus=pcie.0,addr=0x1.0x2,id=balloon0";
         let bln_cfg_res = parse_balloon(&mut vm_config, bln_cfg);
@@ -98,6 +99,10 @@ mod tests {
         let pci = pci_bdf.unwrap();
         assert_eq!(pci.bus, "pcie.0".to_string());
         assert_eq!(pci.addr, (1, 2));
+
+        let mut vm_config = VmConfig::default();
+        let bln_cfg = "virtio-balloon-pci,deflate-on-oom=true,bus=pcie.0,addr=0x1.0x2,id=balloon0,multifunction=on";
+        assert!(parse_balloon(&mut vm_config, bln_cfg).is_ok());
     }
 
     #[test]

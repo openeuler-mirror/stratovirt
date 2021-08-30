@@ -15,7 +15,10 @@ use std::sync::{Arc, Mutex, Weak};
 use acpi::AcpiPMTimer;
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use error_chain::ChainedError;
-use pci::config::{PciConfig, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID};
+use pci::config::{
+    PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, HEADER_TYPE_MULTIFUNC,
+    PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+};
 use pci::errors::Result as PciResult;
 use pci::{le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps};
 use util::byte_code::ByteCode;
@@ -96,6 +99,11 @@ impl PciDevOps for LPCBridge {
             CLASS_CODE_ISA_BRIDGE,
         )?;
         le_write_u32(&mut self.config.write_mask, PM_BASE_OFFSET as usize, 0xff80)?;
+        le_write_u16(
+            &mut self.config.config,
+            HEADER_TYPE as usize,
+            (HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC) as u16,
+        )?;
 
         let parent_bus = self.parent_bus.clone();
         parent_bus
