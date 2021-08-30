@@ -72,6 +72,7 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
         .push("id")
         .push("bus")
         .push("addr")
+        .push("multifunction")
         .push("max-bytes")
         .push("period")
         .push("rng");
@@ -234,5 +235,12 @@ mod tests {
         let rng_cfg = "virtio-rng-device,rng=objrng0,bus=pcie.0,addr=0x1.0x3";
         let rng_config = parse_rng_dev(&mut vm_config, rng_cfg);
         assert!(rng_config.is_err());
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_object("rng-random,id=objrng0,filename=/path/to/random_file")
+            .is_ok());
+        let rng_cfg = "virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x1.0x3,multifunction=on";
+        assert!(parse_rng_dev(&mut vm_config, rng_cfg).is_ok());
     }
 }

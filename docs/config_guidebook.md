@@ -148,7 +148,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-Eight properties are supported for virtio block device.
+Nine properties are supported for virtio block device.
 
 * drive_id: unique device-id in StratoVirt.
 * path_on_host: the path of block device in host.
@@ -156,7 +156,8 @@ Eight properties are supported for virtio block device.
 * read_only: whether virtio block device is read-only. If not set, default is false.
 * direct: open block device with `O_DIRECT` mode. If not set, default is true.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
-* iops: used to limit IO operations for block device. (optional)
+* throttling.iops-total: used to limit IO operations for block device. (optional)
+* if: drive type, for block drive, it should be `none`. If not set, default is `none` (optional)
 * format: the format of block image, default value `raw`. NB: currently only `raw` is supported. (optional)
 If not set, default is raw.
 
@@ -170,11 +171,11 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 ```shell
 # virtio mmio block device.
--drive id=drive_id,file=path_on_host[,serial=serial_num,readonly=off,direct=off]
--device virtio-blk-device,drive=drive_id[,iothread=iothread1,iops=200]
+-drive id=drive_id,file=path_on_host[,readonly=off][,direct=off][,throttling.iops-total=200]
+-device virtio-blk-device,drive=drive_id[,iothread=iothread1][,serial=serial_num]
 # virtio pci block device.
--drive id=drive_id,file=path_on_host[,serial=serial_num,readonly=off,direct=off]
--device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1,iops=200]
+-drive id=drive_id,file=path_on_host[,readonly=off][,direct=off][,throttling.iops-total=200]
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1,][serial=serial_num]
 
 ```
 
@@ -207,11 +208,11 @@ is a single function device, the function number should be set to zero.
 
 ```shell
 # virtio mmio net device
--netdev tap,id=netdevid,ifname=host_dev_name[,mac=12:34:56:78:9A:BC]
--device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name
+-device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
 # virtio pci net device
--netdev tap,id=netdevid,ifname=host_dev_name[,mac=12:34:56:78:9A:BC]
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by 
@@ -222,11 +223,11 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 
 ```shell
 # virtio mmio net device
--netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC,vhostfd=2]
--device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2]
+-device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
 # virtio pci net device
--netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,mac=12:34:56:78:9A:BC,vhostfd=2]
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,iothread=iothread1]
+-netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2]
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC]
 ```
 
 *How to set a tap device?*
@@ -272,7 +273,7 @@ of device and the second one represents function number of it.
 -device virtconsole,chardev=virtioconsole1,id=console_id
 
 # virtio pci device
--device virtio-serial-pci,bus=pcie.0,addr=0x1[,id=virtio-serial0]
+-device virtio-serial-pci,bus=pcie.0,addr=0x1.0x0[,multifunction=on,id=virtio-serial0]
 -chardev socket,path=socket_path,id=virtioconsole1,server,nowait
 -device virtconsole,chardev=virtioconsole1,id=console_id
 ```
@@ -290,10 +291,11 @@ If you want use it, need:
 
 And `modprobe vhost_vsock` in the host.
 
-Two properties can be set for virtio vsock device.
+Three properties can be set for virtio vsock device.
 
 * vsock_id: unique device-id in StratoVirt.
 * guest_cid: a unique Context-ID in host to each guest, it should satisfy `3<=guest_cid<u32:MAX`.
+* vhostfd: fd of vsock device. (optional).
 
 For vhost-vsock-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -305,7 +307,7 @@ of device and the second one represents function number of it.
 -device vhost-vsock-device,id=vsock_id,guest-cid=3
 
 # virtio pci device.
--device vhost-vsock-pci,id=vsock_id,guest-cid=3,bus=pcie.0,addr=0x1.0x0
+-device vhost-vsock-pci,id=vsock_id,guest-cid=3,bus=pcie.0,addr=0x1.0x0[,multifunction=on]
 ```
 
 *You can only set one virtio vsock device for one VM.*
@@ -361,7 +363,7 @@ of device and the second one represents function number of it.
 # virtio mmio balloon device
 -device virtio-balloon-device,deflate-on-oom=true
 # virtio pci balloon device
--device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true
+-device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true[,multifunction=on]
 ```
 
 ### 2.8 Virtio-rng
@@ -394,7 +396,7 @@ single function device, the function number should be set to zero.
 -device virtio-rng-device,rng=objrng0,max-bytes=1234,period=1000
 # virtio pci rng device
 -object rng-random,id=objrng0,filename=/path/to/random_file
--device virtio-rng-pci,rng=objrng0,max-bytes=1234,period=1000,bus=pcie.0,addr=0x1
+-device virtio-rng-pci,rng=objrng0,max-bytes=1234,period=1000,bus=pcie.0,addr=0x1.0x0[,multifunction=on]
 ```
 
 ### 2.9 PCIe root port
@@ -456,7 +458,7 @@ Four properties are supported for VFIO device
 * addr: including slot number and function number.
 ```shell
 # cmdline
--device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03
+-device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03.0x0[,multifunction=on]
 ```
 
 ### 2.12 Chardev

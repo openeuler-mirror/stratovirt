@@ -20,12 +20,13 @@ use util::byte_code::ByteCode;
 
 use super::config::{
     PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
-    COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, HEADER_TYPE_MULTIFUNC,
-    IO_BASE, MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
-    PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE,
+    PCIE_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
+    PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::errors::{Result, ResultExt};
+use crate::init_multifunction;
 use crate::msix::init_msix;
 use crate::{le_read_u16, le_write_u16, ranges_overlap, PciDevOps};
 
@@ -56,6 +57,7 @@ pub struct RootPort {
     io_region: Region,
     mem_region: Region,
     dev_id: u16,
+    multifunction: bool,
 }
 
 impl RootPort {
@@ -68,7 +70,13 @@ impl RootPort {
     /// * `port_num` - Root port number.
     /// * `parent_bus` - Weak reference to the parent bus.
     #[allow(dead_code)]
-    pub fn new(name: String, devfn: u8, port_num: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+    pub fn new(
+        name: String,
+        devfn: u8,
+        port_num: u8,
+        parent_bus: Weak<Mutex<PciBus>>,
+        multifunction: bool,
+    ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = Region::init_container_region(1 << 16);
         let mem_region = Region::init_container_region(u64::max_value());
@@ -90,6 +98,7 @@ impl RootPort {
             io_region,
             mem_region,
             dev_id: 0,
+            multifunction,
         }
     }
 }
@@ -113,9 +122,15 @@ impl PciDevOps for RootPort {
         le_write_u16(config_space, VENDOR_ID as usize, PCI_VENDOR_ID_REDHAT)?;
         le_write_u16(config_space, DEVICE_ID as usize, DEVICE_ID_RP)?;
         le_write_u16(config_space, SUB_CLASS_CODE as usize, CLASS_CODE_PCI_BRIDGE)?;
-        config_space[HEADER_TYPE as usize] = HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC;
+        config_space[HEADER_TYPE as usize] = HEADER_TYPE_BRIDGE;
         config_space[PREF_MEMORY_BASE as usize] = PREF_MEM_RANGE_64BIT;
         config_space[PREF_MEMORY_LIMIT as usize] = PREF_MEM_RANGE_64BIT;
+        init_multifunction(
+            self.multifunction,
+            config_space,
+            self.devfn,
+            self.parent_bus.clone(),
+        )?;
         self.config
             .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
 
@@ -294,7 +309,7 @@ mod tests {
     fn test_read_config() {
         let pci_host = create_pci_host();
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus);
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus, false);
         root_port.realize().unwrap();
 
         let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
@@ -310,7 +325,7 @@ mod tests {
     fn test_write_config() {
         let pci_host = create_pci_host();
         let root_bus = Arc::downgrade(&pci_host.lock().unwrap().root_bus);
-        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus);
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus, false);
         root_port.realize().unwrap();
         let root_port = pci_host.lock().unwrap().find_device(0, 8).unwrap();
 

@@ -1375,7 +1375,9 @@ impl Command for list_type {
 /// <- {"return":[]}
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct device_list_properties {}
+pub struct device_list_properties {
+    pub typename: String,
+}
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceProps {
