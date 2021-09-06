@@ -727,7 +727,7 @@ StratoVirt supports to take a snapshot of a paused VM as VM template. This templ
 First, we create a StratoVirt VM:
 ```shell
 $ ./stratovirt \
-    -machine microvm
+    -machine microvm \
     -kernel path/to/vmlinux.bin \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=path/to/rootfs,id=rootfs,readonly=off,direct=off \
@@ -765,7 +765,7 @@ File `state` contains the device state data of VM devices. File `memory` contain
 Restore from VM template with below command:
 ```shell
 $ ./stratovirt \
-    -machine microvm
+    -machine microvm \
     -kernel path/to/vmlinux.bin \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=path/to/rootfs,id=rootfs,readonly=off,direct=off \
@@ -807,7 +807,7 @@ Some devices and feature don't support to be snapshot yet:
 - `balloon`
 - `hugepage`,`mem-shared`,`backend file of memory`
 
-Some device attributes can't be change:
+Some device attributes can't be changed:
 - `virtio-net`: mac
 - `virtio-blk`: file(only ordinary file or copy file), serial_num
 - `device`: bus, addr
@@ -831,7 +831,7 @@ $ ./ozone \
     -netns /path/to/network_name_space \
     -source /path/to/source_files \
     [-clean-resource] \
-    --
+    -- \
     <arguments for launching stratovirt>
 ```
 
