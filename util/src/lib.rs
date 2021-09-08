@@ -40,6 +40,7 @@ pub mod unix;
 pub mod logger;
 #[macro_use]
 pub mod offsetof;
+pub mod trace;
 
 pub mod errors {
     error_chain! {
