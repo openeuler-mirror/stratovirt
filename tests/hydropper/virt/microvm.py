@@ -27,7 +27,7 @@ class MicroVM(BaseVM):
                  vmconfig=CONFIG.get_default_microvm_vmconfig(),
                  vmlinux=CONFIG.stratovirt_vmlinux, rootfs=CONFIG.stratovirt_rootfs, initrd=CONFIG.stratovirt_initrd,
                  vcpus=4, max_vcpus=8, memslots=0, maxmem=None,
-                 memsize=2524971008, socktype="unix", loglevel="info"):
+                 memsize=2048, socktype="unix", loglevel="info"):
         self.name = name
         self.vmid = uuid
         if "unix" in socktype:
