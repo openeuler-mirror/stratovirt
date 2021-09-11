@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{namespace, syscall, ErrorKind, Result, ResultExt};
+use crate::{capability, namespace, syscall, ErrorKind, Result, ResultExt};
 
 use std::process::Command;
 use std::{
@@ -52,6 +52,7 @@ pub struct OzoneHandler {
     uid: u32,
     gid: u32,
     netns_path: Option<String>,
+    capability: Option<String>,
     exec_file_path: PathBuf,
     chroot_dir: PathBuf,
     source_file_paths: Vec<PathBuf>,
@@ -105,6 +106,7 @@ impl OzoneHandler {
         }
         handler.extra_args = args.extra_args();
         handler.netns_path = args.value_of("network namespace");
+        handler.capability = args.value_of("capability");
         handler.chroot_dir = PathBuf::from(BASE_OZONE_PATH);
         handler.chroot_dir.push(handler.exec_file_name()?);
         handler.chroot_dir.push(Path::new(&handler.name));
@@ -240,6 +242,13 @@ impl OzoneHandler {
                 NEWROOT_DEVICES_PERMISSION[index][2],
             )?;
         }
+        if let Some(capability) = &self.capability {
+            capability::set_capability_for_ozone(capability)
+                .chain_err(|| "Failed to set capability for ozone.")?;
+        } else {
+            capability::clear_all_capabilities()
+                .chain_err(|| "Failed to clean all capability for ozone.")?;
+        }
 
         let mut chroot_exec_file = PathBuf::from("/");
         chroot_exec_file.push(self.exec_file_name()?);
@@ -328,6 +337,7 @@ mod tests {
             chroot_dir,
             source_file_paths,
             extra_args: Vec::new(),
+            capability: None,
         }
     }
 

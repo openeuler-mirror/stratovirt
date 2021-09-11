@@ -75,4 +75,12 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .required(false)
                 .takes_value(false),
         )
+        .arg(
+            Arg::with_name("capability")
+                .long("capability")
+                .value_name("set capabilities")
+                .help("set the capabilities of the ozone.")
+                .required(false)
+                .takes_value(true),
+        )
 }
