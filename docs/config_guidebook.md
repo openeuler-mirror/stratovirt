@@ -818,7 +818,7 @@ For machine type `microvm`, if use `hot-replace` before snapshot, add newly repl
 
 ## 5. Ozone
 Ozone is a lightweight secure sandbox for StratoVirt, it provides secure environment for StratoVirt 
-by limiting resources of StratoVirt using 'namespace'.
+by limiting resources of StratoVirt using 'namespace'. Please run ozone with root permission.
 
 ### 5.1 Usage
 Ozone can be launched by the following commands:
@@ -830,6 +830,8 @@ $ ./ozone \
     -uid 100 \
     -netns /path/to/network_name_space \
     -source /path/to/source_files \
+    -numa numa_node \
+    -cgroup <controller1>=<value1>,<controller2>=<value2> \
     [-clean-resource] \
     -- \
     <arguments for launching stratovirt>
@@ -843,7 +845,9 @@ About the arguments:
 * `netns` : path to a existed network namespace.
 * `source` : path to the source file, such as `rootfs` and `vmlinux`.
 * `clean-resource` : a flag to clean resource.
-* `--` : these two dashes are used to split args, the args followed are used to launched StratoVirt.
+* `numa` : numa node, this argument must be configured if `cpuset.cpus` is set.
+* `cgroup` : set cgroup controller value. supported controller: `cpuset.cpus` and `memory.limit_in_bytes`.
+* `--` : these two dashes are used to splite args, the args followed are used to launched StratoVirt.
 
 ### 5.2 Example
 As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.
@@ -856,7 +860,7 @@ $ sudo ip netns add mynet
 ```
 After creating, there is a file named `mynet` in `/var/run/netns`.
 
-The following example illustrates how to config a ozone under netns `mynet`.
+The following example illustrates how to config a ozone under netns `mynet`, running on cpu "4-5" with memory limitation 1000000 bytes.
 
 ```shell
 $ ./ozone \
@@ -866,6 +870,8 @@ $ ./ozone \
     -uid 100 \
     -netns /var/run/netns/mynet \
     -source /path/to/vmlinux.bin /path/to/rootfs \
+    -numa 0 \
+    -cgroup cpuset.cpus=4-5 memory.limit_in_bytes=1000000 \
     -- \
     -kernel ./vmlinux.bin \
     -append console=ttyS0 root=/dev/vda reboot=k panic=1 rw \
