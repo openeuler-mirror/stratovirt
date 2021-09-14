@@ -83,15 +83,6 @@ def test_microvm_start_with_initrd(test_microvm_with_initrd):
     test_vm.shutdown()
 
 
-@pytest.mark.acceptance
-def test_microvm_with_json(microvm):
-    """Test microvm start with json"""
-    test_vm = microvm
-    test_vm.basic_config(with_json=True)
-    test_vm.launch()
-    test_vm.query_cpus()
-    test_vm.shutdown()
-
 
 @pytest.mark.acceptance
 def test_microvm_with_pidfile(microvm):
