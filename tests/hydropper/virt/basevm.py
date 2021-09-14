@@ -507,7 +507,7 @@ class BaseVM:
                 ballooncfg = 'deflate-on-oom=true'
             else:
                 ballooncfg = 'deflate-on-oom=false'
-            args.extend(['-balloon', ballooncfg])
+            args.extend(['-device', 'virtio-balloon-device', ballooncfg])
 
         if "stratovirt" in self.vmtype and not self.seccomp:
             self._args.append('-disable-seccomp')
