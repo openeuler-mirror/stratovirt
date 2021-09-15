@@ -203,7 +203,7 @@ def test_microvm_with_seccomp(microvm, with_seccomp):
         utils.utils_common.remove_existing_dir(psyscall_path)
 
 @pytest.mark.acceptance
-@pytest.mark.parametrize("mem_size", [2 * 1024 * 1024 * 1024])
+@pytest.mark.parametrize("mem_size", [2 * 1024])
 def test_lightvm_mem_hugepage(microvm, mem_size):
     """
     Test lightvm with hugepage configuration for guest RAM.
@@ -243,7 +243,7 @@ def test_lightvm_mem_hugepage(microvm, mem_size):
                      capture_output=True, check=False).stdout.strip()
         _old_hugepages_free = output.decode('utf-8').lstrip("HugePages_Free:").rstrip("kB").strip()
 
-        hugepages_count = int(_old_hugepages_count) + vm_mem_size / (int(hugepage_size) * 1024) + 1
+        hugepages_count = int(_old_hugepages_count) + (vm_mem_size * 1024 * 1024) / (int(hugepage_size) * 1024) + 1
         run("sysctl vm.nr_hugepages=%s" % int(hugepages_count), shell=True, check=False)
 
         return mount_dir, _old_hugepages_count, _old_hugepages_free, is_mounted
