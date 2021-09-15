@@ -1,8 +1,16 @@
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{prelude::Write, BufRead, BufReader};
+use std::ops::Deref;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+
+use crate::errors::{Result, ResultExt};
 
 lazy_static! {
     static ref TRACE_MARKER_FD: Option<File> = open_trace_marker();
+    static ref TRACE_EVENTS: ArcSwap<HashSet<String>> = ArcSwap::new(Arc::new(HashSet::new()));
 }
 
 fn open_trace_marker() -> Option<File> {
@@ -60,12 +68,12 @@ fn open_trace_marker() -> Option<File> {
     }
 }
 
-pub fn write_trace_marker(func: &str, msg: &str) {
-    if (*TRACE_MARKER_FD).is_none() {
+pub fn write_trace_marker(event: &str, msg: &str) {
+    if !is_trace_event_enabled(event) {
         return;
     }
 
-    let msg = format!("[{}] {}", func, msg);
+    let msg = format!("[{}] {}", event, msg);
     if let Err(e) = (*TRACE_MARKER_FD).as_ref().unwrap().write(msg.as_bytes()) {
         error!("Write trace_marker error: {}", e);
     }
@@ -83,4 +91,32 @@ macro_rules! ftrace {
         let msg = format!("{}", format_args!($($arg)*));
         $crate::trace::write_trace_marker(func, &msg);
     };
+}
+
+pub fn enable_trace_events(file: &str) -> Result<()> {
+    let fd = File::open(file).chain_err(|| format!("Failed to open {}.", file))?;
+    let mut reader = BufReader::new(fd);
+
+    loop {
+        let mut buf = String::new();
+        let size = reader
+            .read_line(&mut buf)
+            .chain_err(|| format!("Read {} error.", file))?;
+
+        if size == 0 {
+            return Ok(());
+        }
+
+        let mut trace_events = (*TRACE_EVENTS).load().deref().deref().clone();
+        trace_events.insert(buf.trim().to_string());
+        (*TRACE_EVENTS).store(Arc::new(trace_events));
+    }
+}
+
+pub fn is_trace_event_enabled(event: &str) -> bool {
+    if (*TRACE_EVENTS).load().is_empty() {
+        return false;
+    }
+
+    (*TRACE_EVENTS).load().contains(event)
 }

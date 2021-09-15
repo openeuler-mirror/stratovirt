@@ -10,20 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::os::unix::net::UnixListener;
+
 use error_chain::bail;
+use util::arg_parser::{Arg, ArgMatches, ArgParser};
+use util::unix::{limit_permission, parse_uri};
 
 use crate::{
-    config::{ChardevType, CmdParser, MachineType, VmConfig},
+    config::{add_trace_events, ChardevType, CmdParser, MachineType, VmConfig},
     errors::{Result, ResultExt},
     temp_cleaner::TempCleaner,
 };
-use util::unix::parse_uri;
-use util::{
-    arg_parser::{Arg, ArgMatches, ArgParser},
-    unix::limit_permission,
-};
-
-use std::os::unix::net::UnixListener;
 
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
@@ -82,167 +79,167 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .about("A light kvm-based hypervisor.")
         .arg(
             Arg::with_name("name")
-                .long("name")
-                .value_name("vm_name")
-                .help("set the name of the guest.")
-                .takes_value(true),
+            .long("name")
+            .value_name("vm_name")
+            .help("set the name of the guest.")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("machine")
-                .long("machine")
-                .value_name("[type=]name[,dump_guest_core=on|off][,mem-share=on|off]")
-                .help("selects emulated machine and set properties")
-                .takes_value(true),
+            .long("machine")
+            .value_name("[type=]name[,dump_guest_core=on|off][,mem-share=on|off]")
+            .help("selects emulated machine and set properties")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("smp")
-                .long("smp")
-                .value_name("[cpus=]n")
-                .help("set the number of CPUs to 'n' (default: 1)")
-                .takes_value(true),
+            .long("smp")
+            .value_name("[cpus=]n")
+            .help("set the number of CPUs to 'n' (default: 1)")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("memory")
-                .long("m")
-                .value_name("[size=]megs[m|M|g|G]")
-                .help("configure guest RAM")
-                .takes_value(true),
+            .long("m")
+            .value_name("[size=]megs[m|M|g|G]")
+            .help("configure guest RAM")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("mem-path")
-                .long("mem-path")
-                .value_name("filebackend file path")
-                .help("configure file path that backs guest memory.")
-                .takes_value(true),
+            .long("mem-path")
+            .value_name("filebackend file path")
+            .help("configure file path that backs guest memory.")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("kernel")
-                .long("kernel")
-                .value_name("kernel_path")
-                .help("use uncompressed kernel image")
-                .takes_value(true),
+            .long("kernel")
+            .value_name("kernel_path")
+            .help("use uncompressed kernel image")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("kernel-cmdline")
-                .multiple(true)
-                .long("append")
-                .value_name("kernel cmdline parameters")
-                .help("use 'cmdline' as kernel command line")
-                .takes_values(true),
+            .multiple(true)
+            .long("append")
+            .value_name("kernel cmdline parameters")
+            .help("use 'cmdline' as kernel command line")
+            .takes_values(true),
         )
         .arg(
             Arg::with_name("initrd-file")
-                .long("initrd")
-                .value_name("initrd_path")
-                .help("use 'initrd-file' as initial ram disk")
-                .takes_value(true),
+            .long("initrd")
+            .value_name("initrd_path")
+            .help("use 'initrd-file' as initial ram disk")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("qmp")
-                .long("qmp")
-                .value_name("unix:socket_path")
-                .help("set qmp's unixsocket path")
-                .takes_value(true)
+            .long("qmp")
+            .value_name("unix:socket_path")
+            .help("set qmp's unixsocket path")
+            .takes_value(true)
         )
         .arg(
             Arg::with_name("drive")
-                .multiple(true)
-                .long("drive")
-                .value_name("file=path,id=str[,readonly=][,direct=][,serial=][,iothread=][iops=]")
-                .help("use 'file' as a drive image")
-                .takes_values(true),
+            .multiple(true)
+            .long("drive")
+            .value_name("file=path,id=str[,readonly=][,direct=][,serial=][,iothread=][iops=]")
+            .help("use 'file' as a drive image")
+            .takes_values(true),
         )
         .arg(
             Arg::with_name("netdev")
-                .multiple(true)
-                .long("netdev")
-                .value_name(
-                    "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfd=][,iothread=]",
-                )
-                .help("configure a host TAP network with ID 'str'")
-                .takes_values(true),
+            .multiple(true)
+            .long("netdev")
+            .value_name(
+                "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfd=][,iothread=]",
+            )
+            .help("configure a host TAP network with ID 'str'")
+            .takes_values(true),
         )
         .arg(
             Arg::with_name("chardev")
-                .multiple(true)
-                .long("chardev")
-                .value_name("id=str,path=socket_path")
-                .help("set char device virtio console for vm")
-                .takes_values(true),
+            .multiple(true)
+            .long("chardev")
+            .value_name("id=str,path=socket_path")
+            .help("set char device virtio console for vm")
+            .takes_values(true),
         )
         .arg(
             Arg::with_name("device")
-                .multiple(true)
-                .long("device")
-                .value_name("vsock,id=str,guest-cid=u32[,vhostfd=]")
-                .help("add virtio vsock device and sets properties")
-                .takes_values(true),
+            .multiple(true)
+            .long("device")
+            .value_name("vsock,id=str,guest-cid=u32[,vhostfd=]")
+            .help("add virtio vsock device and sets properties")
+            .takes_values(true),
         )
         .arg(
             Arg::with_name("serial")
-                .long("serial")
-                .value_name("backend[,path=,server,nowait] or chardev:char_id")
-                .help("add serial and set chardev for it")
-                .takes_value(true),
+            .long("serial")
+            .value_name("backend[,path=,server,nowait] or chardev:char_id")
+            .help("add serial and set chardev for it")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("display log")
-                .long("D")
-                .value_name("log path")
-                .help("output log to logfile (default stderr)")
-                .takes_value(true)
-                .can_no_value(true),
+            .long("D")
+            .value_name("log path")
+            .help("output log to logfile (default stderr)")
+            .takes_value(true)
+            .can_no_value(true),
         )
         .arg(
             Arg::with_name("pidfile")
-                .long("pidfile")
-                .value_name("pidfile path")
-                .help("write PID to 'file'")
-                .takes_value(true),
+            .long("pidfile")
+            .value_name("pidfile path")
+            .help("write PID to 'file'")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("daemonize")
-                .long("daemonize")
-                .help("daemonize StratoVirt after initializing")
-                .takes_value(false)
-                .required(false),
+            .long("daemonize")
+            .help("daemonize StratoVirt after initializing")
+            .takes_value(false)
+            .required(false),
         )
         .arg(
             Arg::with_name("disable-seccomp")
-                .long("disable-seccomp")
-                .help("not use seccomp sandbox for StratoVirt")
-                .takes_value(false)
-                .required(false),
+            .long("disable-seccomp")
+            .help("not use seccomp sandbox for StratoVirt")
+            .takes_value(false)
+            .required(false),
         )
         .arg(
             Arg::with_name("freeze_cpu")
-                .short("S")
-                .long("freeze")
-                .help("Freeze CPU at startup")
-                .takes_value(false)
-                .required(false),
+            .short("S")
+            .long("freeze")
+            .help("Freeze CPU at startup")
+            .takes_value(false)
+            .required(false),
         )
         .arg(
             Arg::with_name("incoming")
-                .long("incoming")
-                .help("wait for the URI to be specified via migrate_incoming")
-                .value_name("incoming")
-                .takes_value(true),
+            .long("incoming")
+            .help("wait for the URI to be specified via migrate_incoming")
+            .value_name("incoming")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("object")
-                .multiple(true)
-                .long("object")
-                .value_name("-object virtio-rng-device,rng=rng_name,max-bytes=1234,period=1000")
-                .help("add object")
-                .takes_values(true),
+            .multiple(true)
+            .long("object")
+            .value_name("-object virtio-rng-device,rng=rng_name,max-bytes=1234,period=1000")
+            .help("add object")
+            .takes_values(true),
         )
         .arg(
             Arg::with_name("mon")
-                .long("mon")
-                .value_name("chardev=chardev_id,id=mon_id[,mode=control]")
-                .help("-mon is another way to create qmp channel. To use it, the chardev should be specified")
-                .takes_value(true),
+            .long("mon")
+            .value_name("chardev=chardev_id,id=mon_id[,mode=control]")
+            .help("-mon is another way to create qmp channel. To use it, the chardev should be specified")
+            .takes_value(true),
         )
         .arg(
             Arg::with_name("cpu")
@@ -358,6 +355,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .can_no_value(true)
             .takes_value(true),
         )
+        .arg(
+            Arg::with_name("trace")
+            .multiple(false)
+            .long("trace")
+            .value_name("events=<file>")
+            .help("specify the file lists trace events to enable")
+            .takes_value(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -399,6 +404,10 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_chardev);
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_devices);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
+
+    if let Some(s) = args.value_of("trace") {
+        add_trace_events(&s)?;
+    }
 
     // Check the mini-set for Vm to start is ok
     if vm_cfg.machine_config.mach_type != MachineType::None {
