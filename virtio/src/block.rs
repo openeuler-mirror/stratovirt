@@ -133,6 +133,7 @@ impl AioCompleteCb {
     }
 }
 
+#[derive(Clone)]
 struct Request {
     desc_index: u16,
     out_header: RequestOutHeader,
@@ -326,6 +327,10 @@ impl Request {
         };
         Ok(0)
     }
+
+    fn get_req_sector_num(&self) -> u64 {
+        self.data_len / SECTOR_SIZE
+    }
 }
 
 /// Control block of Block IO.
@@ -363,6 +368,42 @@ struct BlockIoHandler {
 }
 
 impl BlockIoHandler {
+    fn merge_req_queue(&self, mut req_queue: Vec<Request>) -> Vec<Request> {
+        if req_queue.len() == 1 {
+            return req_queue;
+        }
+
+        req_queue.sort_by(|a, b| a.out_header.sector.cmp(&b.out_header.sector));
+        let mut merge_req_queue = Vec::<Request>::new();
+        let mut continue_merge: bool = false;
+
+        for req in &req_queue {
+            if continue_merge {
+                if let Some(last_req) = merge_req_queue.last_mut() {
+                    if last_req.out_header.sector + last_req.get_req_sector_num()
+                        != req.out_header.sector
+                    {
+                        continue_merge = false;
+                        merge_req_queue.push(req.clone());
+                    } else {
+                        for iov in req.iovec.iter() {
+                            let iovec = Iovec {
+                                iov_base: iov.iov_base,
+                                iov_len: iov.iov_len,
+                            };
+                            last_req.data_len += iovec.iov_len;
+                            last_req.iovec.push(iovec);
+                        }
+                    }
+                }
+            } else {
+                merge_req_queue.push(req.clone());
+            }
+        }
+
+        merge_req_queue
+    }
+
     fn process_queue(&mut self) -> Result<()> {
         let mut req_queue = Vec::new();
         let mut req_index = 0;
@@ -417,9 +458,11 @@ impl BlockIoHandler {
         // unlock queue, because it will be hold below.
         drop(queue);
 
+        let merge_req_queue = self.merge_req_queue(req_queue);
+
         if let Some(disk_img) = self.disk_image.as_mut() {
             req_index = 0;
-            for req in req_queue.iter() {
+            for req in merge_req_queue.iter() {
                 if let Some(ref mut aio) = self.aio {
                     let rw_len = match req.out_header.request_type {
                         VIRTIO_BLK_T_IN => u32::try_from(req.data_len)
@@ -479,8 +522,8 @@ impl BlockIoHandler {
                     req_index += 1;
                 }
             }
-        } else if !req_queue.is_empty() {
-            for req in req_queue.iter() {
+        } else if !merge_req_queue.is_empty() {
+            for req in merge_req_queue.iter() {
                 self.queue
                     .lock()
                     .unwrap()
@@ -493,7 +536,7 @@ impl BlockIoHandler {
             need_interrupt = true
         }
 
-        if !req_queue.is_empty() || need_interrupt {
+        if !merge_req_queue.is_empty() || need_interrupt {
             (self.interrupt_cb)(
                 &VirtioInterruptType::Vring,
                 Some(&self.queue.lock().unwrap()),
