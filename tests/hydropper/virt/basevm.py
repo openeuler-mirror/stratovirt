@@ -368,7 +368,7 @@ class BaseVM:
     def _wait_console_create(self):
         os.stat(self._console_address)
 
-    @retry(wait_fixed=1000, stop_max_attempt_number=30)
+    @retry(wait_fixed=1000, stop_max_attempt_number=70)
     def wait_pid_exit(self):
         """Wait vm pid when vm exit"""
         LOG.debug("===== check pid %s exit" % self.pid)
