@@ -1193,7 +1193,16 @@ mod test {
         let root = Region::init_container_region(1 << 36);
         let sys_space = AddressSpace::new(root).unwrap();
         let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), 0x0010_0000, None, false, false, false).unwrap(),
+            HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                0x1000_0000,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
         );
         sys_space
             .root()

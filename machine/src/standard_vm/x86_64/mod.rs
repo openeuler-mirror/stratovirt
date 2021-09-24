@@ -410,14 +410,16 @@ impl MachineOps for StdMachine {
                 let rom_size = 0x20000;
                 fd.seek(SeekFrom::Start(pfl_size - rom_size))?;
 
-                let rom_region = Region::init_ram_region(Arc::new(HostMemMapping::new(
+                let ram1 = Arc::new(HostMemMapping::new(
                     GuestAddress(rom_base),
+                    None,
                     rom_size,
                     None,
                     false,
                     false,
                     false,
-                )?));
+                )?);
+                let rom_region = Region::init_ram_region(ram1);
                 rom_region.write(&mut fd, GuestAddress(rom_base), 0, rom_size)?;
                 rom_region.set_priority(10);
                 self.sys_mem.root().add_subregion(rom_region, rom_base)?;

@@ -695,17 +695,16 @@ mod test {
     fn test_get_ram_info() {
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root.clone()).unwrap();
-
         let default_ops = RegionOps {
             read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
             write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
         };
 
         let ram1 = Arc::new(
-            HostMemMapping::new(GuestAddress(0), 1000, None, false, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(0), None, 1000, None, false, false, false).unwrap(),
         );
         let ram2 = Arc::new(
-            HostMemMapping::new(GuestAddress(2000), 1000, None, false, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(2000), None, 1000, None, false, false, false).unwrap(),
         );
         let region_a = Region::init_ram_region(ram1.clone());
         let region_b = Region::init_ram_region(ram2.clone());
@@ -770,7 +769,7 @@ mod test {
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root.clone()).unwrap();
         let ram1 = Arc::new(
-            HostMemMapping::new(GuestAddress(0), 1000, None, false, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(0), None, 1000, None, false, false, false).unwrap(),
         );
         let region_a = Region::init_ram_region(ram1.clone());
         root.add_subregion(region_a, ram1.start_address().raw_value())

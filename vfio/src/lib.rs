@@ -21,6 +21,7 @@ pub mod errors {
     error_chain! {
         links {
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
+            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
         }
         errors {
             AddRegBar(id: usize) {
