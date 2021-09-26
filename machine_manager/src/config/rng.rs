@@ -12,9 +12,8 @@
 
 use super::errors::{ErrorKind, Result};
 use super::{pci_args_check, ObjConfig};
-use crate::config::{CmdParser, ConfigCheck, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 
-const MAX_PATH_LENGTH: usize = 4096;
 const MIN_BYTES_PER_SEC: u64 = 64;
 const MAX_BYTES_PER_SEC: u64 = 1_000_000_000;
 

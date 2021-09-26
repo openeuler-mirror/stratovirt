@@ -19,10 +19,8 @@ use super::{
     errors::{ErrorKind, Result},
     pci_args_check,
 };
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
 
-const MAX_STRING_LENGTH: usize = 255;
-const MAX_PATH_LENGTH: usize = 4096;
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
