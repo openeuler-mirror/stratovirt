@@ -163,10 +163,7 @@ impl Request {
         let out_header = mem_space
             .read_object::<RequestOutHeader>(out_iov_elem.addr)
             .chain_err(|| {
-                format!(
-                    "Failed to read header from memory for block request, addr {}",
-                    out_iov_elem.addr.0,
-                )
+                ErrorKind::ReadObjectErr("the block's request header", out_iov_elem.addr.0)
             })?;
 
         if !out_header.is_valid() {

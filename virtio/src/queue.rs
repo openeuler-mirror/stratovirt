@@ -41,14 +41,8 @@ fn checked_offset_mem(
             offset
         );
     }
-    base.checked_add(offset).ok_or_else(|| {
-        ErrorKind::Msg(format!(
-            "Address overflows for queue: base 0x{:X}, size {}",
-            base.raw_value(),
-            offset
-        ))
-        .into()
-    })
+    base.checked_add(offset)
+        .ok_or_else(|| ErrorKind::AddressOverflow("queue", base.raw_value(), offset).into())
 }
 
 /// The configuration of virtqueue.
@@ -261,19 +255,14 @@ impl SplitVringDesc {
             if let Some(desc_addr) = desc_table.checked_add(u64::from(index) * DESCRIPTOR_LEN) {
                 sys_mem
                     .read_object::<SplitVringDesc>(desc_addr)
-                    .chain_err(|| {
-                        format!(
-                            "Failed to read object for a descriptor (index: {}, addr: 0x{:X})",
-                            index,
-                            desc_addr.raw_value()
-                        )
-                    })?
+                    .chain_err(|| ErrorKind::ReadObjectErr("a descriptor", desc_addr.raw_value()))?
             } else {
-                bail!(
-                    "Address overflows for creating a descriptor: addr 0x{:X}, size {}",
+                return Err(ErrorKind::AddressOverflow(
+                    "creating a descriptor",
                     desc_table.raw_value(),
-                    u64::from(index) * DESCRIPTOR_LEN
-                );
+                    u64::from(index) * DESCRIPTOR_LEN,
+                )
+                .into());
             };
         if desc.is_valid(sys_mem, queue_size) {
             Ok(desc)
@@ -485,13 +474,7 @@ impl SplitVring {
     fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
         let avail_flags_idx: SplitVringFlagsIdx = sys_mem
             .read_object::<SplitVringFlagsIdx>(self.avail_ring)
-            .chain_err(|| {
-                format!(
-                    "Failed to get avail idx, avail_ring: 0x{:X}",
-                    self.avail_ring.raw_value()
-                )
-            })?;
-
+            .chain_err(|| ErrorKind::ReadObjectErr("avail id", self.avail_ring.raw_value()))?;
         Ok(avail_flags_idx.idx)
     }
 
@@ -499,12 +482,7 @@ impl SplitVring {
     fn get_avail_flags(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
         let avail_flags_idx: SplitVringFlagsIdx = sys_mem
             .read_object::<SplitVringFlagsIdx>(self.avail_ring)
-            .chain_err(|| {
-                format!(
-                    "Failed to get avail flags, avail_ring: 0x{:X}",
-                    self.avail_ring.raw_value()
-                )
-            })?;
+            .chain_err(|| ErrorKind::ReadObjectErr("avail flags", self.avail_ring.raw_value()))?;
         Ok(avail_flags_idx.flags)
     }
 
@@ -512,12 +490,7 @@ impl SplitVring {
     fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
         let used_flag_idx: SplitVringFlagsIdx = sys_mem
             .read_object::<SplitVringFlagsIdx>(self.used_ring)
-            .chain_err(|| {
-                format!(
-                    "Failed to get used idx, used_ring: 0x{:X}",
-                    self.used_ring.raw_value()
-                )
-            })?;
+            .chain_err(|| ErrorKind::ReadObjectErr("used id", self.used_ring.raw_value()))?;
         Ok(used_flag_idx.idx)
     }
 
@@ -551,18 +524,15 @@ impl SplitVring {
         let used_event: u16 =
             if let Some(used_event_addr) = self.avail_ring.checked_add(used_event_offset) {
                 sys_mem.read_object::<u16>(used_event_addr).chain_err(|| {
-                    format!(
-                        "Failed to get used event idx, avail_ring: 0x{:X}, offset: {}",
-                        self.avail_ring.raw_value(),
-                        used_event_offset,
-                    )
+                    ErrorKind::ReadObjectErr("used event id", used_event_addr.raw_value())
                 })?
             } else {
-                bail!(
-                    "Address overflows for getting used event idx: addr 0x{:X}, size {}",
+                return Err(ErrorKind::AddressOverflow(
+                    "getting used event idx",
                     self.avail_ring.raw_value(),
-                    used_event_offset
-                );
+                    used_event_offset,
+                )
+                .into());
             };
 
         Ok(used_event)
@@ -703,17 +673,15 @@ impl SplitVring {
         let desc_index: u16 =
             if let Some(desc_index_addr) = self.avail_ring.checked_add(index_offset) {
                 sys_mem.read_object::<u16>(desc_index_addr).chain_err(|| {
-                    format!(
-                        "Failed to read the index of descriptor 0x{:X} for popping avail ring",
-                        desc_index_addr.raw_value()
-                    )
+                    ErrorKind::ReadObjectErr("the index of descriptor", desc_index_addr.raw_value())
                 })?
             } else {
-                bail!(
-                    "Address overflows for popping avail ring : addr 0x{:X}, size {}",
+                return Err(ErrorKind::AddressOverflow(
+                    "popping avail ring",
                     self.avail_ring.raw_value(),
-                    index_offset
-                );
+                    index_offset,
+                )
+                .into());
             };
 
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
