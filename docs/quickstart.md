@@ -6,7 +6,8 @@
 
    You can run StratoVirt on both x86_64 and aarch64 platforms.
 
-   And on top of that, the StratoVirt is based on KVM, so please make sure you have KVM module on your platform.
+   And on top of that, the StratoVirt is based on KVM, so please make sure you
+have KVM module on your platform.
 
 * Authority
 
@@ -30,13 +31,16 @@ If you'd like to build StratoVirt yourself, you should check out the [build_guid
 
 ## 3. Run StratoVirt
 
-With StratoVirt binary (either installed with yum, or built from source), we can boot a guest linux machine.
-Now StratoVirt provides two kinds of machine, which are microvm and standard_vm("q35" on x86_64 platform and 
-"virt" on aarch64 platform). As a quick start, we show how to start a VM with microvm.
+With StratoVirt binary (either installed with yum, or built from source), we can
+boot a guest linux machine. Now StratoVirt provides two kinds of machine, which
+are microvm and standard_vm("q35" on x86_64 platform and "virt" on aarch64 platform).
+As a quick start, we show how to start a VM with microvm.
 
 First, you will need an PE format Linux kernel binary, and an ext4 file system image (as rootfs).
-* `x86_64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/vmlinux.bin) and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/openEuler-21.03-stratovirt-x86_64.img.xz).
-* `aarch64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/vmlinux.bin) and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/openEuler-21.03-stratovirt-aarch64.img.xz).
+* `x86_64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/vmlinux.bin)
+and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/x86_64/openEuler-21.03-stratovirt-x86_64.img.xz).
+* `aarch64` boot source: [kernel](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/vmlinux.bin)
+and [rootfs](https://repo.openeuler.org/openEuler-21.03/stratovirt_img/aarch64/openEuler-21.03-stratovirt-aarch64.img.xz).
 
 Or get the kernel and rootfs with shell:
 
@@ -65,6 +69,7 @@ echo "kernel file: ${dest_kernel} and rootfs image: ${dest_rootfs} download over
 ```
 
 Start guest linux machine with StratoVirt:
+
 ```shell
 socket_path=`pwd`"/stratovirt.sock"
 kernel_path=`pwd`"/vmlinux.bin"
@@ -86,11 +91,12 @@ rm -f ${socket_path}
     -serial stdio
 ```
 
-You should now see a serial in stdio prompting you to log into the guest machine. If you used our
-`openEuler-21.03-stratovirt-aarch64.img` image, you can login as `root`, using the password
-`openEuler12#$`.
+You should now see a serial in stdio prompting you to log into the guest machine.
+If you used our `openEuler-21.03-stratovirt-aarch64.img` image, you can login as
+`root`, using the password `openEuler12#$`.
 
-If you want to quit the guest machine, using a `reboot` command inside the guest will actually shutdown
-StratoVirt. This is due to that StratoVirt didn't implement guest power management in microvm type.
+If you want to quit the guest machine, using a `reboot` command inside the guest
+will actually shutdown StratoVirt. This is due to that StratoVirt didn't implement
+guest power management in microvm type.
 
 If you want to know more information on running StratoVirt, go to the [Configuration Guidebook](./config_guidebook.md).
