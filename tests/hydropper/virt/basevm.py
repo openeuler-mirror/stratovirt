@@ -499,7 +499,7 @@ class BaseVM:
                     sockcid = VSOCKS.find_contextid()
                     self.vsock_cid.append(sockcid)
                     args.extend(['-device',
-                                 'vsock,id=vsock-%s,'
+                                 'vhost-vsock-device,id=vsock-%s,'
                                  'guest-cid=%s' % (sockcid, sockcid)])
 
         if self.balloon:
