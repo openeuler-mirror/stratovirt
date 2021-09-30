@@ -24,7 +24,7 @@ from utils.exception import QMPTimeoutError
 def test_microvm_start(microvm, vcpu_count, memsize, vnetnums):
     """Test a normal microvm start"""
     test_vm = microvm
-    test_vm.basic_config(vcpu_count=vcpu_count, mem_size=memsize * 1024 * 1024, vnetnums=vnetnums)
+    test_vm.basic_config(vcpu_count=vcpu_count, mem_size=memsize, vnetnums=vnetnums)
     test_vm.launch()
     vmhwinfo = test_vm.get_guest_hwinfo()
     logging.debug("current vmhwinfo is %s", vmhwinfo)

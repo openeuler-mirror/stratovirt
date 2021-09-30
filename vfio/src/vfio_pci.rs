@@ -17,16 +17,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
-use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
-use vfio_bindings::bindings::vfio;
-use vmm_sys_util::eventfd::EventFd;
-use vmm_sys_util::ioctl::ioctl_with_mut_ref;
-
-use super::errors::{ErrorKind, Result, ResultExt};
-use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use hypervisor::{MsiVector, KVM_FDS};
+use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 #[cfg(target_arch = "aarch64")]
 use pci::config::SECONDARY_BUS_NUM;
 use pci::config::{
@@ -45,7 +40,11 @@ use pci::{
     PciBus, PciDevOps,
 };
 use util::unix::host_page_size;
+use vfio_bindings::bindings::vfio;
+use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::ioctl::ioctl_with_mut_ref;
 
+use super::errors::{ErrorKind, Result, ResultExt};
 use crate::vfio_dev::*;
 
 const PCI_NUM_BARS: u8 = 6;
@@ -625,21 +624,20 @@ impl VfioPciDevice {
 
             for mmap in region.mmaps.iter() {
                 let dev = self.vfio_device.device.try_clone().unwrap();
-                let fb = FileBackend {
+                let fb = Some(FileBackend {
                     file: Arc::new(dev),
                     offset: region.region_offset + mmap.offset,
                     page_size: host_page_size(),
-                };
-
+                });
                 let host_mmap = HostMemMapping::new(
                     GuestAddress(gpa + mmap.offset),
+                    None,
                     mmap.size,
-                    Some(fb),
+                    fb,
                     false,
                     true,
                     read_only,
-                )
-                .chain_err(|| "Failed to create HostMemMapping")?;
+                )?;
 
                 let ram_device = Region::init_ram_device_region(Arc::new(host_mmap));
                 let bar = self

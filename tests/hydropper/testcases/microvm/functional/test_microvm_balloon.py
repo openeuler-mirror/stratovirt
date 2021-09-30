@@ -31,7 +31,7 @@ def test_microvm_balloon_query(microvm):
     test_vm.basic_config(balloon=True, deflate_on_oom=True)
     test_vm.launch()
     resp = test_vm.query_balloon()
-    assert int(resp["return"]["actual"]) == int(microvm.memsize)
+    assert int(resp["return"]["actual"]) == int(microvm.memsize) * 1024 * 1024
 
 @pytest.mark.acceptance
 def test_microvm_balloon(microvm):

@@ -19,10 +19,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{ConfigCheck, VmConfig};
-
-const MAX_STRING_LENGTH: usize = 255;
-const MAX_PATH_LENGTH: usize = 4096;
+use crate::config::{ConfigCheck, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
 
 /// Config struct for boot-source.
 /// Contains `kernel_file`, `kernel_cmdline` and `initrd`.

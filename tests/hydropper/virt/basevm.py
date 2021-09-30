@@ -49,7 +49,7 @@ class BaseVM:
 
     def __init__(self, root_path, name, uuid, bin_path,
                  wrapper=None, args=None, mon_sock=None,
-                 vnetnums=1, rng=False, bytes_per_sec=0, vsocknums=0, balloon=False,
+                 vnetnums=1, rng=False, max_bytes=0, vsocknums=0, balloon=False,
                  vmtype=CONFIG.vmtype, machine=None, freeze=False,
                  daemon=False, config=None, ipalloc="static", incoming=False,
                  error_test=False, dump_guest_core=True, mem_share=True):
@@ -107,7 +107,7 @@ class BaseVM:
         self.vmtype = vmtype
         self.vnetnums = vnetnums
         self.rng = rng
-        self.bytes_per_sec = bytes_per_sec
+        self.max_bytes = max_bytes
         self.vsock_cid = list()
         self.vsocknums = vsocknums
         self.with_json = False
@@ -368,7 +368,7 @@ class BaseVM:
     def _wait_console_create(self):
         os.stat(self._console_address)
 
-    @retry(wait_fixed=1000, stop_max_attempt_number=30)
+    @retry(wait_fixed=1000, stop_max_attempt_number=70)
     def wait_pid_exit(self):
         """Wait vm pid when vm exit"""
         LOG.debug("===== check pid %s exit" % self.pid)
@@ -447,10 +447,10 @@ class BaseVM:
         if self.__qmp_set:
             if "stratovirt" in self.vmtype:
                 if isinstance(self.mon_sock, tuple):
-                    args.extend(['-api-channel',
+                    args.extend(['-qmp',
                                  "tcp:" + str(self.mon_sock[0]) + ":" + str(self.mon_sock[1])])
                 else:
-                    args.extend(['-api-channel', "unix:" + self.mon_sock])
+                    args.extend(['-qmp', "unix:" + self.mon_sock + ",server,nowait"])
             else:
                 moncdev = 'socket,id=mon,path=%s' % self.mon_sock
                 args.extend(['-chardev', moncdev, '-mon',
@@ -467,7 +467,7 @@ class BaseVM:
                                                  self._name + "_" + self.vmid + "-console.sock")
             # It doesn't need to create it first.
             self._remove_files.append(self._console_address)
-            args.extend(['-chardev', 'id=console_0,path=%s' % self._console_address])
+            args.extend(['-device', 'virtio-serial-device', '-chardev', 'socket,path=%s,id=virtioconsole0,server,nowait' % self._console_address, '-device', 'virtconsole,chardev=virtioconsole0,id=console_0'])
 
         if self.vnetnums > 0:
             for _ in range(self.vnetnums - len(self.taps)):
@@ -477,19 +477,21 @@ class BaseVM:
 
             for tapinfo in self.taps:
                 tapname = tapinfo["name"]
-                _tempargs = "id=%s,netdev=%s" % (tapname, tapname)
+                _tempargs = "tap,id=%s,ifname=%s" % (tapname, tapname)
                 if self.vhost_type:
                     _tempargs += ",vhost=on"
+                _devargs = "virtio-net-device,netdev=%s,id=%s" % (tapname, tapname)
                 if self.withmac:
-                    _tempargs += ",mac=%s" % tapinfo["mac"]
-                args.extend(['-netdev', _tempargs])
+                    _devargs += ",mac=%s" % tapinfo["mac"]
+                args.extend(['-netdev', _tempargs, '-device', _devargs])
 
         if self.rng:
-            if self.bytes_per_sec == 0:
-                rngcfg = 'random_file=/dev/urandom'
+            rngcfg = 'rng-random,id=objrng0,filename=/dev/urandom'
+            if self.max_bytes == 0:
+                devcfg = 'virtio-rng-device,rng=objrng0'
             else:
-                rngcfg = 'random_file=/dev/random,bytes_per_sec=%s' % self.bytes_per_sec
-            args.extend(['-rng', rngcfg])
+                devcfg = 'virtio-rng-device,rng=objrng0,max-bytes=%s,period=1000' % self.max_bytes
+            args.extend(['-object', rngcfg, '-device', devcfg])
 
         if self.vsocknums > 0:
             if VSOCKS.init_vsock():
@@ -497,7 +499,7 @@ class BaseVM:
                     sockcid = VSOCKS.find_contextid()
                     self.vsock_cid.append(sockcid)
                     args.extend(['-device',
-                                 'vsock,id=vsock-%s,'
+                                 'vhost-vsock-device,id=vsock-%s,'
                                  'guest-cid=%s' % (sockcid, sockcid)])
 
         if self.balloon:
@@ -505,7 +507,7 @@ class BaseVM:
                 ballooncfg = 'deflate-on-oom=true'
             else:
                 ballooncfg = 'deflate-on-oom=false'
-            args.extend(['-balloon', ballooncfg])
+            args.extend(['-device', 'virtio-balloon-device', ballooncfg])
 
         if "stratovirt" in self.vmtype and not self.seccomp:
             self._args.append('-disable-seccomp')
@@ -611,6 +613,7 @@ class BaseVM:
                     _temp_drive_value += ",readonly=%s" % _temp
                 if _temp_drive_value != "":
                     self.add_args('-drive', _temp_drive_value)
+                    self.add_args('-device', 'virtio-blk-device,drive=%s' % drive["drive_id"])
 
     def add_env(self, key, value):
         """Add key, value to self.env"""

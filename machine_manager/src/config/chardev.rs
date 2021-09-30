@@ -16,10 +16,8 @@ use super::{
     errors::{ErrorKind, Result, ResultExt},
     get_pci_bdf, pci_args_check, PciBdf,
 };
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
 
-const MAX_STRING_LENGTH: usize = 255;
-const MAX_PATH_LENGTH: usize = 4096;
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 

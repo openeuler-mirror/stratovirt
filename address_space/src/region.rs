@@ -868,7 +868,7 @@ mod test {
     #[test]
     fn test_ram_region() {
         let mem_mapping = Arc::new(
-            HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false, false).unwrap(),
+            HostMemMapping::new(GuestAddress(0), None, 1024, None, false, false, false).unwrap(),
         );
         let ram_region = Region::init_ram_region(mem_mapping.clone());
         let data: [u8; 10] = [10; 10];
@@ -903,9 +903,10 @@ mod test {
     fn test_ram_region_access() {
         // the target guest address is 0~1024 (1024 not included)
         let rgn_start = GuestAddress(0);
-        let host_mmap =
-            HostMemMapping::new(GuestAddress(0), 1024u64, None, false, false, false).unwrap();
-        let ram_region = Region::init_ram_region(Arc::new(host_mmap));
+        let host_mmap = Arc::new(
+            HostMemMapping::new(GuestAddress(0), None, 1024, None, false, false, false).unwrap(),
+        );
+        let ram_region = Region::init_ram_region(host_mmap);
 
         let file = TempFile::new().unwrap();
         let mut file_read = std::fs::File::open(file.as_path()).unwrap();
