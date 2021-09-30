@@ -429,7 +429,7 @@ trait AcpiBuilder {
     where
         Self: Sized,
     {
-        let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFSCP", 1);
+        let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFACP", 1);
 
         fadt.set_table_len(208_usize);
         // PM1A_EVENT bit, offset is 56.
@@ -441,8 +441,13 @@ trait AcpiBuilder {
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
         fadt.set_field(76, 0x608);
-        // FADT flag: disable HW_REDUCED_ACPI bit.
-        fadt.set_field(112, 1 << 10 | 1 << 8);
+        #[cfg(target_arch = "aarch64")]
+        {
+            // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
+            fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+            // ARM Boot Architecture Flags
+            fadt.set_field(129, 0x3_u16);
+        }
         // FADT minor revision
         fadt.set_field(131, 3);
         // X_PM_TMR_BLK bit, offset is 208.
@@ -453,6 +458,8 @@ trait AcpiBuilder {
 
         #[cfg(target_arch = "x86_64")]
         {
+            // FADT flag: disable HW_REDUCED_ACPI bit on x86 plantform.
+            fadt.set_field(112, 1 << 10 | 1 << 8);
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);
