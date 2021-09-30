@@ -19,9 +19,8 @@ use super::{
     errors::{ErrorKind, Result},
     pci_args_check,
 };
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_STRING_LENGTH};
 
-const MAX_STRING_LENGTH: usize = 255;
 const MAC_ADDRESS_LENGTH: usize = 17;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

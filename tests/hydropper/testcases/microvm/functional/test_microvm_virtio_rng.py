@@ -59,10 +59,10 @@ def test_microvm_virtio_rng(microvm):
     _check_virtio_rng_device(test_vm)
 
 @pytest.mark.acceptance
-@pytest.mark.parametrize("bytes_per_second", [1000000, 200000])
-def test_microvm_virtio_rng_bytes_limit(microvm, bytes_per_second):
+@pytest.mark.parametrize("max_bytes", [1000000000, 200000000])
+def test_microvm_virtio_rng_bytes_limit(microvm, max_bytes):
     test_vm = microvm
-    test_vm.basic_config(rng=True, bytes_per_sec=bytes_per_second)
+    test_vm.basic_config(rng=True, max_bytes=max_bytes)
     test_vm.launch()
 
     # check virtio rng device

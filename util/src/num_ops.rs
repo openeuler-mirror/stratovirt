@@ -238,4 +238,49 @@ mod test {
         assert_eq!(write_u32(0x1234_5678, 1), 0x1234_5678_0000_0000u64);
         assert_eq!(write_u32(0x1234_5678, 2), 0);
     }
+
+    #[test]
+    fn test_extract_u32() {
+        assert_eq!(extract_u32(0xfefbfffa, 0, 33), None);
+        assert_eq!(extract_u32(0xfefbfffa, 8, 32), None);
+
+        assert_eq!(extract_u32(0xfefbfffa, 0, 8), Some(0xfa));
+        assert_eq!(extract_u32(0xfefbfffa, 16, 16), Some(0xfefb));
+        assert_eq!(extract_u32(0xfefbfffa, 8, 24), Some(0xfefbff));
+        assert_eq!(extract_u32(0xfefbfffa, 0, 32), Some(0xfefbfffa));
+    }
+
+    #[test]
+    fn test_extract_u64() {
+        assert_eq!(extract_u64(0xfbfba0a0ffff5a5a, 0, 65), None);
+        assert_eq!(extract_u64(0xfbfba0a0ffff5a5a, 8, 64), None);
+
+        assert_eq!(extract_u64(0xfbfba0a0ffff5b5a, 0, 8), Some(0x5a));
+        assert_eq!(extract_u64(0xfbfba0a0ffff5b5a, 16, 16), Some(0xffff));
+        assert_eq!(extract_u64(0xfbfba0a0ffff5b5a, 32, 32), Some(0xfbfba0a0));
+        assert_eq!(extract_u64(0xfbfba0a0ffff5b5a, 8, 40), Some(0xa0a0ffff5b));
+        assert_eq!(extract_u64(0xfbfba0a0ffff5b5a, 8, 48), Some(0xfba0a0ffff5b));
+        assert_eq!(
+            extract_u64(0xfbfba0a0ffff5b5a, 8, 56),
+            Some(0xfbfba0a0ffff5b)
+        );
+        assert_eq!(
+            extract_u64(0xfbfba0a0ffff5b5a, 0, 64),
+            Some(0xfbfba0a0ffff5b5a)
+        );
+    }
+
+    #[test]
+    fn test_deposit_u32() {
+        assert_eq!(deposit_u32(0xffff, 0, 33, 0xbaba), None);
+        assert_eq!(deposit_u32(0xffff, 8, 32, 0xbaba), None);
+
+        assert_eq!(deposit_u32(0xfdfcfbfa, 0, 8, 0xbdbcbbba), Some(0xfdfcfbba));
+        assert_eq!(deposit_u32(0xfdfcfbfa, 8, 8, 0xbdbcbbba), Some(0xfdfcbafa));
+        assert_eq!(deposit_u32(0xfdfcfbfa, 16, 8, 0xbdbcbbba), Some(0xfdbafbfa));
+        assert_eq!(deposit_u32(0xfdfcfbfa, 24, 8, 0xbdbcbbba), Some(0xbafcfbfa));
+        assert_eq!(deposit_u32(0xfdfcfbfa, 8, 16, 0xbdbcbbba), Some(0xfdbbbafa));
+        assert_eq!(deposit_u32(0xfdfcfbfa, 8, 24, 0xbdbcbbba), Some(0xbcbbbafa));
+        assert_eq!(deposit_u32(0xfdfcfbfa, 0, 32, 0xbdbcbbba), Some(0xbdbcbbba));
+    }
 }

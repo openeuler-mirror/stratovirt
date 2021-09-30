@@ -65,6 +65,9 @@ pub mod errors {
             QueueDescInvalid {
                 display("Vring descriptor is invalid")
             }
+            AddressOverflow(value: &'static str, address: u64, offset: u64) {
+                display("Address overflows for {}, address: 0x{:x}, offset: {}", value, address, offset)
+            }
             DevConfigOverflow(offset: u64, size: u64) {
                 display("Failed to r/w dev config space: overflows, offset {}, space size {}", offset, size)
             }
@@ -87,7 +90,10 @@ pub mod errors {
                 display("Device {} not activated", devname)
             }
             FailedToWriteConfig {
-                display("Failed to Write config")
+                display("Failed to write config")
+            }
+            ReadObjectErr(object: &'static str, address: u64) {
+                display("Failed to read object for {}, address: 0x{:x}", object, address)
             }
             DevStatErr(status: u32) {
                 display("Invalid device status: 0x{:x}.", status)

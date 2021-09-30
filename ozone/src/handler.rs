@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{namespace, syscall, ErrorKind, Result, ResultExt};
+use crate::cgroup::{self, init_cgroup, parse_cgroup, CgroupCfg};
+use crate::{capability, namespace, syscall, ErrorKind, Result, ResultExt};
 
 use std::process::Command;
 use std::{
@@ -51,7 +52,10 @@ pub struct OzoneHandler {
     name: String,
     uid: u32,
     gid: u32,
+    node: Option<String>,
+    cgroup: Option<CgroupCfg>,
     netns_path: Option<String>,
+    capability: Option<String>,
     exec_file_path: PathBuf,
     chroot_dir: PathBuf,
     source_file_paths: Vec<PathBuf>,
@@ -103,8 +107,23 @@ impl OzoneHandler {
                 );
             }
         }
+        if let Some(node) = args.value_of("numa") {
+            handler.node = Some(
+                (&node)
+                    .parse::<String>()
+                    .map_err(|_| ErrorKind::DigitalParseError("numa", node))?,
+            );
+        }
+        if let Some(config) = args.values_of("cgroup") {
+            let mut cgroup_cfg = init_cgroup();
+            for cfg in config {
+                parse_cgroup(&mut cgroup_cfg, &cfg).chain_err(|| "Failed to parse cgroup")?
+            }
+            handler.cgroup = Some(cgroup_cfg);
+        }
         handler.extra_args = args.extra_args();
         handler.netns_path = args.value_of("network namespace");
+        handler.capability = args.value_of("capability");
         handler.chroot_dir = PathBuf::from(BASE_OZONE_PATH);
         handler.chroot_dir.push(handler.exec_file_name()?);
         handler.chroot_dir.push(Path::new(&handler.name));
@@ -215,10 +234,21 @@ impl OzoneHandler {
     pub fn realize(&self) -> Result<()> {
         // First, disinfect the process.
         disinfect_process().chain_err(|| "Failed to disinfect process")?;
+
         self.create_chroot_dir()?;
         self.copy_exec_file()?;
         for source_file_path in self.source_file_paths.iter() {
             self.bind_mount_file(source_file_path)?;
+        }
+
+        let exec_file = self.exec_file_name()?;
+        if let Some(node) = self.node.clone() {
+            cgroup::set_numa_node(&node, &exec_file, &self.name)
+                .chain_err(|| "Failed to set numa node")?;
+        }
+        if let Some(cgroup) = &self.cgroup {
+            cgroup::realize_cgroup(cgroup, exec_file, self.name.clone())
+                .chain_err(|| "Failed to realize cgroup")?;
         }
 
         namespace::set_uts_namespace("Ozone")?;
@@ -239,6 +269,13 @@ impl OzoneHandler {
                 NEWROOT_DEVICES_PERMISSION[index][1],
                 NEWROOT_DEVICES_PERMISSION[index][2],
             )?;
+        }
+        if let Some(capability) = &self.capability {
+            capability::set_capability_for_ozone(capability)
+                .chain_err(|| "Failed to set capability for ozone.")?;
+        } else {
+            capability::clear_all_capabilities()
+                .chain_err(|| "Failed to clean all capability for ozone.")?;
         }
 
         let mut chroot_exec_file = PathBuf::from("/");
@@ -277,6 +314,14 @@ impl OzoneHandler {
 
         std::fs::remove_dir_all(&self.chroot_dir)
             .chain_err(|| "Failed to remove chroot dir path")?;
+        if self.node.is_some() {
+            cgroup::clean_node(self.exec_file_name()?, self.name.clone())
+                .chain_err(|| "Failed to clean numa node")?;
+        }
+        if let Some(cgroup) = &self.cgroup {
+            cgroup::clean_cgroup(cgroup, self.exec_file_name()?, self.name.clone())
+                .chain_err(|| "Failed to remove cgroup directory")?;
+        }
         Ok(())
     }
 }
@@ -328,6 +373,9 @@ mod tests {
             chroot_dir,
             source_file_paths,
             extra_args: Vec::new(),
+            capability: None,
+            node: None,
+            cgroup: None,
         }
     }
 

@@ -11,9 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParser, ConfigCheck, VmConfig};
-
-const MAX_STRING_LENGTH: usize = 255;
+use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
 
 pub struct VfioConfig {
     pub host: String,

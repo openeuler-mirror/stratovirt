@@ -109,6 +109,7 @@ pub mod errors {
 }
 
 pub const MAX_STRING_LENGTH: usize = 255;
+pub const MAX_PATH_LENGTH: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub enum ObjConfig {

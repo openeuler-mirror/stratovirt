@@ -115,6 +115,66 @@ impl FileBackend {
     }
 }
 
+fn do_mmap(
+    read_only: bool,
+    size: u64,
+    file: &Option<FileBackend>,
+    is_share: bool,
+    dump_guest_core: bool,
+) -> Result<u64> {
+    let mut flags: i32 = 0;
+    let mut fd: i32 = -1;
+    let mut offset: u64 = 0;
+    if let Some(fb) = file.as_ref() {
+        fd = fb.file.as_raw_fd();
+        offset = fb.offset;
+    } else {
+        flags |= libc::MAP_ANONYMOUS;
+    }
+
+    if is_share {
+        flags |= libc::MAP_SHARED;
+    } else {
+        flags |= libc::MAP_PRIVATE;
+    }
+
+    let mut prot = libc::PROT_READ;
+    if !read_only {
+        prot |= libc::PROT_WRITE;
+    }
+
+    // Safe because the return value is checked.
+    let hva = unsafe {
+        libc::mmap(
+            std::ptr::null_mut() as *mut libc::c_void,
+            size as libc::size_t,
+            prot,
+            flags,
+            fd as libc::c_int,
+            offset as libc::off_t,
+        )
+    };
+    if hva == libc::MAP_FAILED {
+        return Err(std::io::Error::last_os_error()).chain_err(|| ErrorKind::Mmap);
+    }
+    if !dump_guest_core {
+        set_memory_undumpable(hva, size);
+    }
+
+    Ok(hva as u64)
+}
+
+fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
+    // Safe because host_addr and size are valid and return value is checked.
+    let ret = unsafe { libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP) };
+    if ret < 0 {
+        error!(
+            "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
 /// Create HostMemMappings according to address ranges.
 ///
 /// # Arguments
@@ -155,19 +215,25 @@ pub fn create_host_mmaps(
         });
     }
 
+    let mut host_addr = do_mmap(
+        false,
+        mem_config.mem_size,
+        &f_back,
+        mem_config.mem_share,
+        mem_config.dump_guest_core,
+    )?;
     let mut mappings = Vec::new();
     for range in ranges.iter() {
-        mappings.push(Arc::new(
-            HostMemMapping::new(
-                GuestAddress(range.0),
-                range.1,
-                f_back.clone(),
-                mem_config.dump_guest_core,
-                mem_config.mem_share,
-                false,
-            )
-            .chain_err(|| "Failed to create HostMemMapping")?,
-        ));
+        mappings.push(Arc::new(HostMemMapping::new(
+            GuestAddress(range.0),
+            Some(host_addr),
+            range.1,
+            f_back.clone(),
+            mem_config.dump_guest_core,
+            mem_config.mem_share,
+            false,
+        )?));
+        host_addr += range.1;
 
         if let Some(mut fb) = f_back.as_mut() {
             fb.offset += range.1
@@ -198,74 +264,29 @@ impl HostMemMapping {
     ///
     /// # Arguments
     ///
-    /// * `guest_addr` - The start address in memory.
+    /// * `guest_addr` - Base GPA.
+    /// * `host_addr` - Base HVA.
     /// * `size` - Size of memory that will be mapped.
-    /// * `file_back` - Information of file and offset-in-file that backs memory.
-    /// * `dump_guest_core` - Include guest memory in core file or not.
+    /// * `file_back` - File backend for memory.
+    /// * `dump_guest_core` - Dump guest memory during coredump or not.
     /// * `is_share` - This mapping is sharable or not.
     /// * `read_only` - This mapping is read only or not.
-    ///
-    /// # Errors
-    ///
-    /// Return Error if fail to map memory.
     pub fn new(
         guest_addr: GuestAddress,
+        host_addr: Option<u64>,
         size: u64,
         file_back: Option<FileBackend>,
         dump_guest_core: bool,
         is_share: bool,
         read_only: bool,
-    ) -> Result<HostMemMapping> {
-        let mut flags = 0_i32;
-        if file_back.is_none() {
-            flags |= libc::MAP_ANONYMOUS;
-        }
-        if is_share {
-            flags |= libc::MAP_SHARED;
+    ) -> Result<Self> {
+        let host_addr = if let Some(addr) = host_addr {
+            addr
         } else {
-            flags |= libc::MAP_PRIVATE;
-        }
-
-        let mut prot = libc::PROT_READ;
-        if !read_only {
-            prot |= libc::PROT_WRITE;
-        }
-
-        let host_addr = unsafe {
-            let hva = libc::mmap(
-                std::ptr::null_mut() as *mut libc::c_void,
-                size as libc::size_t,
-                prot,
-                flags,
-                file_back
-                    .clone()
-                    .map(|fb| fb.file.as_raw_fd())
-                    .unwrap_or(-1),
-                file_back.clone().map(|fb| fb.offset).unwrap_or(0) as i64,
-            );
-            if hva == libc::MAP_FAILED {
-                return Err(std::io::Error::last_os_error()).chain_err(|| ErrorKind::Mmap);
-            }
-            hva
+            do_mmap(read_only, size, &file_back, is_share, dump_guest_core)?
         };
 
-        if !dump_guest_core {
-            unsafe {
-                let madvise_res = libc::madvise(
-                    host_addr as *mut libc::c_void,
-                    size as libc::size_t,
-                    libc::MADV_DONTDUMP,
-                );
-                if madvise_res < 0 {
-                    error!(
-                        "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {}",
-                        std::io::Error::last_os_error()
-                    );
-                }
-            }
-        }
-
-        Ok(HostMemMapping {
+        Ok(Self {
             address_range: AddressRange {
                 base: guest_addr,
                 size,
@@ -323,7 +344,8 @@ mod test {
 
     #[test]
     fn test_ramblock_creation() {
-        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false, false).unwrap();
+        let ram1 =
+            HostMemMapping::new(GuestAddress(0), None, 100, None, false, false, false).unwrap();
         let host_addr = ram1.host_address();
         let slice = unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, 1) };
 
@@ -339,7 +361,10 @@ mod test {
     #[test]
     fn test_write_host_mem_read_only() {
         const BAD_ADDRESS: i32 = 14;
-        let ram1 = HostMemMapping::new(GuestAddress(0), 100u64, None, false, false, true).unwrap();
+
+        let ram1 = Arc::new(
+            HostMemMapping::new(GuestAddress(0), None, 100, None, false, false, true).unwrap(),
+        );
         let host_addr = ram1.host_address();
         let slice = unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, 1) };
 
