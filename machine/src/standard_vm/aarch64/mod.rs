@@ -431,11 +431,11 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
 
-        let boot_config = if !is_migrate {
+        let (boot_config, fwcfg) = if !is_migrate {
             let fwcfg = locked_vm.add_fwcfg_device()?;
-            Some(locked_vm.load_boot_source(Some(&fwcfg))?)
+            (Some(locked_vm.load_boot_source(Some(&fwcfg))?), Some(fwcfg))
         } else {
-            None
+            (None, None)
         };
 
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
@@ -460,6 +460,12 @@ impl MachineOps for StdMachine {
                     fdt_vec.len() as u64,
                 )
                 .chain_err(|| ErrorKind::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+        }
+
+        if let Some(fwcfg) = fwcfg {
+            locked_vm
+                .build_acpi_tables(&fwcfg)
+                .chain_err(|| "Failed to create ACPI tables")?;
         }
 
         locked_vm.register_power_event(&locked_vm.power_button)?;
@@ -637,6 +643,89 @@ impl AcpiBuilder for StdMachine {
         let spcr_begin = StdMachine::add_table_to_loader(acpi_data, loader, &spcr)
             .chain_err(|| "Fail to add SPCR table to loader")?;
         Ok(spcr_begin as u64)
+    }
+
+    fn build_dsdt_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
+
+        // 1. CPU info.
+        let cpus_count = self.cpus.len() as u64;
+        let mut sb_scope = AmlScope::new("\\_SB");
+        for cpu_id in 0..cpus_count {
+            let mut dev = AmlDevice::new(format!("C{:03}", cpu_id).as_str());
+            dev.append_child(AmlNameDecl::new("_HID", AmlString("ACPI0007".to_string())));
+            dev.append_child(AmlNameDecl::new("_UID", AmlInteger(cpu_id)));
+            sb_scope.append_child(dev);
+        }
+
+        // 2. Create pci host bridge node.
+        sb_scope.append_child(self.pci_host.lock().unwrap().clone());
+        dsdt.append_child(sb_scope.aml_bytes().as_slice());
+
+        // 3. Info of devices attached to system bus.
+        dsdt.append_child(self.sysbus.aml_bytes().as_slice());
+
+        let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
+            .chain_err(|| "Fail to add DSDT table to loader")?;
+        Ok(dsdt_begin as u64)
+    }
+
+    fn build_madt_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
+        madt.set_table_len(44);
+
+        // 1. GIC Distributor.
+        let mut gic_dist = AcpiGicDistributor::default();
+        gic_dist.type_id = ACPI_MADT_GENERIC_DISTRIBUTOR;
+        gic_dist.length = 24;
+        gic_dist.base_addr = MEM_LAYOUT[LayoutEntryType::GicDist as usize].0;
+        gic_dist.gic_version = 3;
+        madt.append_child(&gic_dist.aml_bytes());
+
+        // 2. GIC CPU.
+        let cpus_count = self.cpus.len() as u64;
+        for cpu_index in 0..cpus_count {
+            let mpidr = self.cpus[cpu_index as usize].arch().lock().unwrap().mpidr();
+            let mpidr_mask: u64 = 0x007f_ffff;
+            let mut gic_cpu = AcpiGicCpu::default();
+            gic_cpu.type_id = ACPI_MADT_GENERIC_CPU_INTERFACE;
+            gic_cpu.length = 80;
+            gic_cpu.cpu_interface_num = cpu_index as u32;
+            gic_cpu.processor_uid = cpu_index as u32;
+            gic_cpu.flags = 5;
+            gic_cpu.mpidr = mpidr & mpidr_mask;
+            gic_cpu.vgic_interrupt = ARCH_GIC_MAINT_IRQ + INTERRUPT_PPIS_COUNT;
+            madt.append_child(&gic_cpu.aml_bytes());
+        }
+
+        // 3. GIC Redistributor.
+        let mut gic_redist = AcpiGicRedistributor::default();
+        gic_redist.type_id = ACPI_MADT_GENERIC_REDISTRIBUTOR;
+        gic_redist.range_length = MEM_LAYOUT[LayoutEntryType::GicRedist as usize].1 as u32;
+        gic_redist.base_addr = MEM_LAYOUT[LayoutEntryType::GicRedist as usize].0;
+        gic_redist.length = 16;
+        madt.append_child(&gic_redist.aml_bytes());
+
+        // 4. GIC Its.
+        let mut gic_its = AcpiGicIts::default();
+        gic_its.type_id = ACPI_MADT_GENERIC_TRANSLATOR;
+        gic_its.length = 20;
+        gic_its.base_addr = MEM_LAYOUT[LayoutEntryType::GicIts as usize].0;
+        madt.append_child(&gic_its.aml_bytes());
+
+        let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
+            .chain_err(|| "Fail to add MADT table to loader")?;
+        Ok(madt_begin as u64)
     }
 }
 
