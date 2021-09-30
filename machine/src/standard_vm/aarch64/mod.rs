@@ -17,6 +17,16 @@ use std::fs::OpenOptions;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
+use acpi::{
+    AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiTable, AmlBuilder,
+    AmlDevice, AmlInteger, AmlNameDecl, AmlScope, AmlScopeBuilder, AmlString, TableLoader,
+    ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ,
+    ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ, ACPI_GTDT_CAP_ALWAYS_ON,
+    ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP, ACPI_IORT_NODE_PCI_ROOT_COMPLEX,
+    ACPI_MADT_GENERIC_CPU_INTERFACE, ACPI_MADT_GENERIC_DISTRIBUTOR,
+    ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR, ARCH_GIC_MAINT_IRQ,
+    INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
+};
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
@@ -506,7 +516,129 @@ impl MachineOps for StdMachine {
     }
 }
 
-impl AcpiBuilder for StdMachine {}
+impl AcpiBuilder for StdMachine {
+    fn build_gtdt_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        let mut gtdt = AcpiTable::new(*b"GTDT", 2, *b"STRATO", *b"VIRTGTDT", 1);
+        gtdt.set_table_len(96);
+
+        // Secure EL1 interrupt
+        gtdt.set_field(48, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ + INTERRUPT_PPIS_COUNT);
+        // Secure EL1 flags
+        gtdt.set_field(52, ACPI_GTDT_INTERRUPT_MODE_LEVEL);
+
+        // Non secure EL1 interrupt
+        gtdt.set_field(56, ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ + INTERRUPT_PPIS_COUNT);
+        // Non secure EL1 flags
+        gtdt.set_field(60, ACPI_GTDT_INTERRUPT_MODE_LEVEL | ACPI_GTDT_CAP_ALWAYS_ON);
+
+        // Virtual timer interrupt
+        gtdt.set_field(64, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ + INTERRUPT_PPIS_COUNT);
+        // Virtual timer flags
+        gtdt.set_field(68, ACPI_GTDT_INTERRUPT_MODE_LEVEL);
+
+        // Non secure EL2 interrupt
+        gtdt.set_field(72, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ + INTERRUPT_PPIS_COUNT);
+        // Non secure EL2 flags
+        gtdt.set_field(76, ACPI_GTDT_INTERRUPT_MODE_LEVEL);
+
+        let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
+            .chain_err(|| "Fail to add GTDT table to loader")?;
+        Ok(gtdt_begin as u64)
+    }
+
+    fn build_iort_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        let mut iort = AcpiTable::new(*b"IORT", 2, *b"STRATO", *b"VIRTIORT", 1);
+        iort.set_table_len(124);
+
+        // Number of IORT nodes is 2: ITS group node and Root Complex Node.
+        iort.set_field(36, 2_u32);
+        // Node offset
+        iort.set_field(40, 48_u32);
+
+        // ITS group node
+        iort.set_field(48, ACPI_IORT_NODE_ITS_GROUP);
+        // ITS node length
+        iort.set_field(49, 24_u16);
+        // ITS count
+        iort.set_field(64, 1_u32);
+
+        // Root Complex Node
+        iort.set_field(72, ACPI_IORT_NODE_PCI_ROOT_COMPLEX);
+        // Length of Root Complex node
+        iort.set_field(73, 52_u16);
+        // Mapping counts of Root Complex Node
+        iort.set_field(80, 1_u32);
+        // Mapping offset of Root Complex Node
+        iort.set_field(84, 32_u32);
+        // Cache of coherent device
+        iort.set_field(88, 1_u32);
+        // Memory flags of coherent device
+        iort.set_field(95, 3_u8);
+        // Identity RID mapping
+        iort.set_field(108, 0xffff_u32);
+        // Without SMMU, id mapping is the first node in ITS group node
+        iort.set_field(116, 48_u32);
+
+        let iort_begin = StdMachine::add_table_to_loader(acpi_data, loader, &iort)
+            .chain_err(|| "Fail to add IORT table to loader")?;
+        Ok(iort_begin as u64)
+    }
+
+    fn build_spcr_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        let mut spcr = AcpiTable::new(*b"SPCR", 2, *b"STRATO", *b"VIRTSPCR", 1);
+        spcr.set_table_len(80);
+
+        // Interface type: ARM PL011 UART
+        spcr.set_field(36, 3_u8);
+        // Bit width of AcpiGenericAddress
+        spcr.set_field(41, 8_u8);
+        // Access width of AcpiGenericAddress
+        spcr.set_field(43, 1_u8);
+        // Base addr of AcpiGenericAddress
+        spcr.set_field(44, MEM_LAYOUT[LayoutEntryType::Uart as usize].0);
+        // Interrupt Type: Arm GIC Interrupt
+        spcr.set_field(52, 1_u8 << 3);
+        // Irq number used by the UART
+        let mut uart_irq: u32 = 0;
+        for dev in self.sysbus.devices.iter() {
+            let mut locked_dev = dev.lock().unwrap();
+            if locked_dev.get_type() == SysBusDevType::PL011 {
+                uart_irq = locked_dev.get_sys_resource().unwrap().irq as u32;
+                break;
+            }
+        }
+        spcr.set_field(54, uart_irq + INTERRUPT_SGIS_COUNT + INTERRUPT_PPIS_COUNT);
+        // Set baud rate: 3 = 9600
+        spcr.set_field(58, 3_u8);
+        // Stop bit
+        spcr.set_field(60, 1_u8);
+        // Hardware flow control
+        spcr.set_field(61, 2_u8);
+        // PCI Device ID: it is not a PCI device
+        spcr.set_field(64, 0xffff_u16);
+        // PCI Vendor ID: it is not a PCI device
+        spcr.set_field(66, 0xffff_u16);
+
+        let spcr_begin = StdMachine::add_table_to_loader(acpi_data, loader, &spcr)
+            .chain_err(|| "Fail to add SPCR table to loader")?;
+        Ok(spcr_begin as u64)
+    }
+}
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
