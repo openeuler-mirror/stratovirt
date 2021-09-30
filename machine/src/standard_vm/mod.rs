@@ -260,6 +260,36 @@ trait StdMachineOps: AcpiBuilder {
 /// Standard machine struct should at least implement `build_dsdt_table`, `build_madt_table`
 /// and `build_mcfg_table` function.
 trait AcpiBuilder {
+    /// Add ACPI table to the end of table loader, returns the offset of ACPI table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    /// `table` - ACPI table.
+    fn add_table_to_loader(
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+        table: &AcpiTable,
+    ) -> Result<u64> {
+        let mut locked_acpi_data = acpi_data.lock().unwrap();
+        let table_begin = locked_acpi_data.len() as u32;
+        locked_acpi_data.extend(table.aml_bytes());
+        let table_end = locked_acpi_data.len() as u32;
+        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
+        // TableLoader, because TableLoader also needs to acquire this lock.
+        drop(locked_acpi_data);
+
+        loader.add_cksum_entry(
+            ACPI_TABLE_FILE,
+            table_begin + TABLE_CHECKSUM_OFFSET,
+            table_begin,
+            table_end - table_begin,
+        )?;
+
+        Ok(table_begin as u64)
+    }
+
     /// Build ACPI DSDT table, returns the offset of ACPI DSDT table in `acpi_data`.
     ///
     /// # Arguments
