@@ -131,6 +131,24 @@ trait StdMachineOps: AcpiBuilder {
             .chain_err(|| "Failed to build ACPI MADT table")?;
         xsdt_entries.push(madt_addr);
 
+        #[cfg(target_arch = "aarch64")]
+        {
+            let gtdt_addr = self
+                .build_gtdt_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI GTDT table")?;
+            xsdt_entries.push(gtdt_addr);
+
+            let iort_addr = self
+                .build_iort_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI IORT table")?;
+            xsdt_entries.push(iort_addr);
+
+            let spcr_addr = self
+                .build_spcr_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI SPCR table")?;
+            xsdt_entries.push(spcr_addr);
+        }
+
         let mcfg_addr = Self::build_mcfg_table(&acpi_tables, &mut loader)
             .chain_err(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
@@ -268,6 +286,60 @@ trait AcpiBuilder {
         _loader: &mut TableLoader,
     ) -> Result<u64> {
         bail!("Not implemented");
+    }
+
+    /// Build ACPI GTDT table, returns the offset of ACPI GTDT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_gtdt_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI IORT table, returns the offset of ACPI IORT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_iort_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI SPCR table, returns the offset of ACPI SPCR table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_spcr_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
     }
 
     /// Build ACPI MCFG table, returns the offset of ACPI MCFG table in `acpi_data`.
