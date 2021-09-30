@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlExtendedInterrupt, AmlIntShare,
     AmlInteger, AmlMemory32Fixed, AmlNameDecl, AmlReadAndWrite, AmlResTemplate, AmlResourceUsage,
-    AmlScopeBuilder, AmlString,
+    AmlScopeBuilder, AmlString, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
@@ -416,7 +416,7 @@ impl MigrationHook for PL011 {}
 impl AmlBuilder for PL011 {
     fn aml_bytes(&self) -> Vec<u8> {
         let mut acpi_dev = AmlDevice::new("COM0");
-        acpi_dev.append_child(AmlNameDecl::new("_HID", AmlString("ARMH0001".to_string())));
+        acpi_dev.append_child(AmlNameDecl::new("_HID", AmlString("ARMH0011".to_string())));
         acpi_dev.append_child(AmlNameDecl::new("_UID", AmlInteger(0)));
 
         let mut res = AmlResTemplate::new();
@@ -426,10 +426,10 @@ impl AmlBuilder for PL011 {
             self.res.region_size as u32,
         ));
         // SPI start at interrupt number 32 on aarch64 platform.
-        let irq_base = 32_u32;
+        let irq_base = INTERRUPT_PPIS_COUNT + INTERRUPT_SGIS_COUNT;
         res.append_child(AmlExtendedInterrupt::new(
             AmlResourceUsage::Consumer,
-            AmlEdgeLevel::Level,
+            AmlEdgeLevel::Edge,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
             vec![self.res.irq as u32 + irq_base],
