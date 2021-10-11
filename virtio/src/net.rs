@@ -71,16 +71,11 @@ impl ByteCode for VirtioNetConfig {}
 struct TxVirtio {
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    frame_buf: [u8; FRAME_BUF_SIZE],
 }
 
 impl TxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
-        TxVirtio {
-            queue,
-            queue_evt,
-            frame_buf: [0u8; FRAME_BUF_SIZE],
-        }
+        TxVirtio { queue, queue_evt }
     }
 }
 
@@ -242,25 +237,33 @@ impl NetIoHandler {
         let mut need_irq = false;
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
-            let mut read_count = 0;
+            let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
-                let alloc_read_count =
-                    cmp::min(read_count + elem_iov.len as usize, self.tx.frame_buf.len());
-
-                let mut slice = &mut self.tx.frame_buf[read_count..alloc_read_count as usize];
-                self.mem_space
-                    .read(
-                        &mut slice,
-                        elem_iov.addr,
-                        (alloc_read_count - read_count) as u64,
-                    )
-                    .chain_err(|| "Net tx: Failed to read buffer for transmit")?;
-
-                read_count = alloc_read_count;
+                if let Some(hva) = self.mem_space.get_host_address(elem_iov.addr) {
+                    let iovec = libc::iovec {
+                        iov_base: hva as *mut libc::c_void,
+                        iov_len: elem_iov.len as libc::size_t,
+                    };
+                    iovecs.push(iovec);
+                } else {
+                    error!("Failed to get host address for {}", elem_iov.addr.0);
+                }
             }
+            let mut read_len = 0;
             if let Some(tap) = self.tap.as_mut() {
-                tap.write(&self.tx.frame_buf[..read_count as usize])
-                    .chain_err(|| "Net: tx: failed to write to tap")?;
+                if !iovecs.is_empty() {
+                    read_len = unsafe {
+                        libc::writev(
+                            tap.as_raw_fd() as libc::c_int,
+                            iovecs.as_ptr() as *const libc::iovec,
+                            iovecs.len() as libc::c_int,
+                        )
+                    };
+                }
+            };
+            if read_len < 0 {
+                let e = std::io::Error::last_os_error();
+                bail!("Failed to call writev for net handle_tx: {}", e);
             }
 
             queue

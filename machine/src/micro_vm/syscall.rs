@@ -101,6 +101,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
         BpfRule::new(libc::SYS_read),
         BpfRule::new(libc::SYS_write),
+        BpfRule::new(libc::SYS_writev),
         ioctl_allow_list(),
         #[cfg(not(all(target_env = "gnu", target_arch = "x86_64")))]
         BpfRule::new(libc::SYS_epoll_pwait),
