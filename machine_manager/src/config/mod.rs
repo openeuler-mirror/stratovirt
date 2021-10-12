@@ -10,43 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
-mod balloon;
-mod boot_source;
-mod chardev;
-mod devices;
-mod drive;
-mod iothread;
-mod machine_config;
-mod network;
-mod pci;
-mod rng;
-mod vfio;
-
-use std::any::Any;
-use std::collections::HashMap;
-use std::str::FromStr;
-
-#[cfg(target_arch = "aarch64")]
-use util::device_tree::{self, FdtBuilder};
-
-pub use self::errors::{ErrorKind, Result, ResultExt};
-pub use balloon::*;
-pub use boot_source::*;
-pub use chardev::*;
-pub use devices::*;
-pub use drive::*;
-pub use iothread::*;
-pub use machine_config::*;
-pub use network::*;
-pub use pci::*;
-pub use rng::*;
-pub use vfio::*;
-
 pub mod errors {
     error_chain! {
+        links {
+            Util(util::errors::Error, util::errors::ErrorKind);
+        }
         foreign_links {
             JsonSerde(serde_json::Error);
         }
@@ -107,6 +75,39 @@ pub mod errors {
         }
     }
 }
+
+pub use self::errors::{ErrorKind, Result, ResultExt};
+pub use balloon::*;
+pub use boot_source::*;
+pub use chardev::*;
+pub use devices::*;
+pub use drive::*;
+pub use iothread::*;
+pub use machine_config::*;
+pub use network::*;
+pub use pci::*;
+pub use rng::*;
+pub use vfio::*;
+
+mod balloon;
+mod boot_source;
+mod chardev;
+mod devices;
+mod drive;
+mod iothread;
+mod machine_config;
+mod network;
+mod pci;
+mod rng;
+mod vfio;
+
+use std::any::Any;
+use std::collections::HashMap;
+use std::str::FromStr;
+
+#[cfg(target_arch = "aarch64")]
+use util::device_tree::{self, FdtBuilder};
+use util::trace::enable_trace_events;
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
@@ -446,6 +447,18 @@ impl From<ExBool> for bool {
     }
 }
 
+pub fn add_trace_events(config: &str) -> Result<()> {
+    let mut cmd_parser = CmdParser::new("trace");
+    cmd_parser.push("events");
+    cmd_parser.get_parameters(config)?;
+
+    if let Some(file) = cmd_parser.get_value::<String>("events")? {
+        enable_trace_events(&file)?;
+        return Ok(());
+    }
+    bail!("trace: events file must be set.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +549,28 @@ mod tests {
         assert!(cmd_parser.get_value::<ExBool>("test7").is_err());
         assert!(cmd_parser.get_value::<String>("random").unwrap().is_none());
         assert!(cmd_parser.parse("random=false").is_err());
+    }
+
+    #[test]
+    fn test_add_trace_events_01() {
+        assert!(add_trace_events("event=test_trace_events").is_err());
+        assert!(add_trace_events("events").is_err());
+        assert!(add_trace_events("events=test_trace_events").is_err());
+    }
+
+    #[test]
+    fn test_add_trace_events_02() {
+        use std::fs::File;
+        use std::io::Write;
+        use util::trace::is_trace_event_enabled;
+
+        let file = "/tmp/test_trace_events";
+        let mut fd = File::create(file).unwrap();
+        let event = "add_trace_events";
+        fd.write(event.as_bytes()).unwrap();
+        add_trace_events(format!("events={}", file).as_str()).unwrap();
+
+        assert!(is_trace_event_enabled(event));
+        std::fs::remove_file(file);
     }
 }

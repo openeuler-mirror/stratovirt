@@ -447,7 +447,7 @@ modprobe vfio-pci
 ```
 Binding this device to the vfio-pci driver, it will create the VFIO group character devices for this group.
 ```shell
-# cmdline 
+# cmdline
 echo 0000:1a:00.3 > /sys/bus/pci/devices/0000:1a:00.3/driver/unbind
 echo `lspci -ns 0000:1a:00.3 | awk -F':| ' '{print $5" "$6}'` > /sys/bus/pci/drivers/vfio-pci/new_id
 ```
@@ -478,6 +478,17 @@ Five properties can be set for chardev.
 -chardev pty,id=chardev_id
 -chardev socket,id=chardev_id,path=socket_path,server,nowait
 -chardev file,id=chardev_id,path=file_path
+```
+
+### 2.13 Trace
+Users can specify the configuration file which lists events to trace.
+
+One property can be set:
+
+* events: file lists events to trace.
+
+```shell
+-trace events=<file>
 ```
 
 ## 3. StratoVirt Management
