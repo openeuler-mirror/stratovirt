@@ -18,19 +18,28 @@ from subprocess import PIPE
 import pytest
 from utils.config import CONFIG
 
-def _check_virtio_blk_vectors(microvm):
-    _cmd = "lspci |grep -w Virtio"
-    _, output = microvm.serial_cmd(_cmd)
-    index = 0
-    for line in output.splitlines():
-        if "block" in line.strip():
-            _check_vec_cmd = "grep -w virtio%d /proc/interrupts | wc -l" % index
-            _status, _output = microvm.serial_cmd(_check_vec_cmd)
-            vecs = int(_output.splitlines()[-2].strip())
-            expect_vecs = 2
-            assert vecs == expect_vecs
-        index += 1
+def _get_lsblk_info(test_vm):
+    """
+    Get lsblk info
 
+    Returns:
+        {
+            "vdx": {"size": xx, "readonly": xx},
+        }
+    """
+    retdict = {}
+    if test_vm.ssh_session is not None:
+        _output = test_vm.ssh_session.cmd_output("lsblk")
+        for line in _output.split("\n"):
+            temp = line.split()
+            if len(temp) == 6:
+                name = temp[0]
+                size = temp[3]
+                readonly = temp[4]
+                if name not in retdict:
+                    retdict[name] = {"size": size, "readonly": readonly}
+
+    return retdict
 
 @pytest.mark.acceptance
 @pytest.mark.parametrize("readonly", [True, False])
@@ -87,7 +96,7 @@ def test_microvm_virtio_blk_at_dt(test_session_root_path, microvm, testtimes):
             test_vm.add_disk(disk, index=index)
             index += 1
 
-        blkinfo = test_vm.get_lsblk_info()
+        blkinfo = _get_lsblk_info(test_vm)
         logging.debug("blkinfo is %s", blkinfo)
 
         for devid in ["vdb", "vdc", "vdd"]:
@@ -99,7 +108,7 @@ def test_microvm_virtio_blk_at_dt(test_session_root_path, microvm, testtimes):
             test_vm.del_disk(index=index)
             index += 1
 
-        blkinfo = test_vm.get_lsblk_info()
+        blkinfo = _get_lsblk_info(test_vm)
         for devid in ["vdb", "vdc", "vdd"]:
             assert devid not in blkinfo
 
@@ -122,7 +131,7 @@ def test_microvm_virtio_blk_md5(test_session_root_path, microvm):
     test_vm.launch()
     test_vm.add_disk(temp_disk)
 
-    blkinfo = test_vm.get_lsblk_info()
+    blkinfo = _get_lsblk_info(test_vm)
     logging.debug("blkinfo is %s", blkinfo)
 
     format_cmd = "mkfs.ext4 /dev/vdb"

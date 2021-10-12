@@ -715,62 +715,6 @@ class BaseVM:
         LOG.debug("Attempting to run cmd '%s' in vm" % cmd)
         return self.serial_session.run_func("cmd_status_output", cmd, internal_timeout=SERIAL_TIMEOUT)
 
-    def get_guest_hwinfo(self):
-        """
-        Get guest hwinfo via ssh_session
-
-        Returns:
-            {"cpu": {"vcpu_count": xx, "maxvcpu": xx},
-            "mem": {"memsize": xx, "maxmem": xx},
-            "virtio": {"virtio_blk": [{"name": "virtio0"}],
-                    "virtio_console": [{"name": "virtio1"}],
-                    "virtio_net": [{"name": "virtio2"}],
-                    "virtio_rng": [{"name": "virtio3"}],
-                    }
-            }
-        """
-        retdict = {"cpu": {}, "mem": {}, "virtio": {}}
-        if self.ssh_session is not None:
-            vcpu_count = int(self.ssh_session.cmd_output("grep -c processor /proc/cpuinfo"))
-            memsize = int(self.ssh_session.cmd_output("grep MemTotal /proc/meminfo | awk '{print $2}'"))
-            retdict["cpu"] = {"vcpu_count": vcpu_count, "maxvcpu": vcpu_count}
-            retdict["mem"] = {"memsize": memsize, "maxmem": memsize}
-            # ignore virtio_rng device now
-            for dev in ["virtio_blk", "virtio_net", "virtio_console"]:
-                devdir = "/sys/bus/virtio/drivers/%s" % dev
-                _cmd = "test -d %s && ls %s | grep virtio" % (devdir, devdir)
-                virtiodevs = self.ssh_session.cmd_output(_cmd).strip().split()
-                for virtiodev in virtiodevs:
-                    _tempdev = {"name": virtiodev}
-                    if dev not in retdict["virtio"]:
-                        retdict["virtio"][dev] = list()
-                    retdict["virtio"][dev].append(_tempdev)
-
-        return retdict
-
-    def get_lsblk_info(self):
-        """
-        Get lsblk info
-
-        Returns:
-            {
-                "vdx": {"size": xx, "readonly": xx},
-            }
-        """
-        retdict = {}
-        if self.ssh_session is not None:
-            _output = self.ssh_session.cmd_output("lsblk")
-            for line in _output.split("\n"):
-                temp = line.split()
-                if len(temp) == 6:
-                    name = temp[0]
-                    size = temp[3]
-                    readonly = temp[4]
-                    if name not in retdict:
-                        retdict[name] = {"size": size, "readonly": readonly}
-
-        return retdict
-
     def stop(self):
         """Pause all vcpu"""
         return self.qmp_command("stop")
