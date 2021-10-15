@@ -72,8 +72,8 @@ $ pytest -k microvm
 # 执行test_microvm_cmdline中的全部用例
 $ pytest testcases/microvm/functional/test_microvm_cmdline.py
 
-# 执行test_microvm_with_json用例
-$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_with_json
+# 执行test_microvm_without_daemonize用例
+$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_without_daemonize
 ```
 
 ### 增加测试用例

@@ -19,7 +19,6 @@ import logging
 import socket
 import errno
 import aexpect
-from aexpect.exceptions import ExpectError
 from retrying import retry
 from utils.config import CONFIG
 from utils import utils_common
@@ -28,7 +27,6 @@ from utils import remote
 from utils.utils_logging import TestLog
 from utils.session import ConsoleManager
 from utils.resources import NETWORKS
-from utils.resources import VSOCKS
 from utils.exception import VMLifeError
 from utils.exception import QMPError
 from utils.exception import QMPConnectError
@@ -45,21 +43,15 @@ SERIAL_TIMEOUT = 0.5 if CONFIG.timeout_factor > 1 else None
 
 class BaseVM:
     """Class to represent a extract base vm."""
-    logger = TestLog.get_global_log()
 
-    def __init__(self, root_path, name, uuid, bin_path,
-                 wrapper=None, args=None, mon_sock=None,
+    def __init__(self, root_path, name, uuid, bin_path, args=None, mon_sock=None,
                  vnetnums=1, rng=False, max_bytes=0, vsocknums=0, balloon=False,
                  vmtype=CONFIG.vmtype, machine=None, freeze=False,
                  daemon=False, config=None, ipalloc="static", incoming=False,
                  error_test=False, dump_guest_core=True, mem_share=True):
-        if wrapper is None:
-            wrapper = []
         if args is None:
             args = []
         self.qmp_protocol = None
-        # self.__qmp = None
-        # self.__qmp_set = True
         # Copy args in case ew modify them.
         self._args = list(args)
         self._console_address = None
@@ -104,6 +96,8 @@ class BaseVM:
         self.ssh_session = None
         self.taps = list()
         self.vhost_type = None
+        self.vhostfd = None
+        self.net_iothread = None
         self.vmid = uuid
         self.vmtype = vmtype
         self.vnetnums = vnetnums
@@ -111,10 +105,8 @@ class BaseVM:
         self.max_bytes = max_bytes
         self.vsock_cid = list()
         self.vsocknums = vsocknums
-        self.with_json = False
         self.withmac = False
         self.withpid = False
-        self.wrapper = wrapper
         self.balloon = balloon
         self.deflate_on_oom = False
 
@@ -150,7 +142,7 @@ class BaseVM:
 
         self._pre_shutdown()
         if self.daemon or self.is_running():
-            if self.qmp_protocol.qmp_set:
+            if self.qmp_protocol:
                 try:
                     if not has_quit:
                         self.qmp_protocol.qmp_command('quit')
@@ -219,7 +211,7 @@ class BaseVM:
                 command = ''
             LOG.warning(msg, exitcode, command)
 
-        if self.qmp_protocol.qmp_set:
+        if self.qmp_protocol:
             self.qmp_protocol.close_sock()
 
         if self.serial_session:
@@ -244,7 +236,7 @@ class BaseVM:
                                             self._name + "_" + self.vmid + ".sock")
             self._remove_files.append(self._vm_monitor)
 
-        self.parser_config_to_args()
+        # self.parser_config_to_args()
 
     def create_serial_control(self):
         """Create serial control"""
@@ -297,37 +289,6 @@ class BaseVM:
                              CONFIG.vm_password, local_file, dest_file,
                              output_func=self.serial_log.debug, timeout=60.0)
 
-    def launch(self):
-        """Start a vm and establish a qmp connection"""
-        del self._args
-        self._args = list(self.init_args)
-        self._pre_launch()
-        self.full_command = (self.wrapper + [self.bin_path] + self._base_args() + self._args)
-        LOG.debug(self.full_command)
-        if not self.env.keys():
-            self._popen = subprocess.Popen(self.full_command,
-                                           stdin=subprocess.PIPE,
-                                           stdout=subprocess.PIPE,
-                                           shell=False,
-                                           close_fds=True)
-        else:
-            _tempenv = os.environ.copy()
-            for key, _ in self.env.items():
-                _tempenv[key] = self.env[key]
-            self._popen = subprocess.Popen(self.full_command,
-                                           stdin=subprocess.PIPE,
-                                           stdout=subprocess.PIPE,
-                                           shell=False,
-                                           close_fds=True,
-                                           env=_tempenv)
-
-        if self.daemon:
-            self._popen.wait()
-            self.pid = self.get_pid()
-        else:
-            self.pid = self._popen.pid
-        if not self.error_test:
-            self._post_launch()
 
     def post_launch_serial(self):
         """Create a serial and wait for active"""
@@ -339,11 +300,8 @@ class BaseVM:
 
     def post_launch_qmp(self):
         """Set a QMPMonitorProtocol"""
-        if isinstance(self.mon_sock, tuple):
-            self.qmp_protocol = QMPProtocol(self.mon_sock)
-        else:
-            self.qmp_protocol = QMPProtocol(self._vm_monitor)
-        if self.qmp_protocol.qmp_set:
+        self.qmp_protocol = QMPProtocol(self._vm_monitor)
+        if self.qmp_protocol:
             self.qmp_protocol.connect()
 
     def post_launch_vnet(self):
@@ -437,86 +395,35 @@ class BaseVM:
         else:
             args.extend(['-machine', self._machine])
 
-    def _base_args(self):
+    def _common_args(self):
         args = []
         if self._name:
             args.extend(['-name', self._name])
         # uuid is not supported yet, no need to add uuid
         if self.logpath:
             args.extend(['-D', self.logpath])
+
         if "stratovirt" in self.vmtype:
-            if isinstance(self.mon_sock, tuple):
-                args.extend(['-qmp',
-                                "tcp:" + str(self.mon_sock[0]) + ":" + str(self.mon_sock[1])])
-            else:
-                args.extend(['-qmp', "unix:" + self.mon_sock + ",server,nowait"])
-        else:
-            moncdev = 'socket,id=mon,path=%s' % self.mon_sock
-            args.extend(['-chardev', moncdev, '-mon',
-                            'chardev=mon,mode=control'])
+            args.extend(['-qmp', "unix:" + self.mon_sock + ",server,nowait"])
 
         if self.withpid:
             self.pidfile = os.path.join(self._sock_dir, self._name + "_" + "pid.file")
             args.extend(['-pidfile', self.pidfile])
+
         if self._machine is not None:
             self._machine_args(args)
 
-        if self._console_set:
-            self._console_address = os.path.join(self._sock_dir,
-                                                 self._name + "_" + self.vmid + "-console.sock")
-            # It doesn't need to create it first.
-            self._remove_files.append(self._console_address)
-            args.extend(['-device', 'virtio-serial-device', '-chardev', 'socket,path=%s,id=virtioconsole0,server,nowait' % self._console_address, '-device', 'virtconsole,chardev=virtioconsole0,id=console_0'])
-
-        if self.vnetnums > 0:
-            for _ in range(self.vnetnums - len(self.taps)):
-                tapinfo = NETWORKS.generator_tap()
-                LOG.debug("current tapinfo is %s" % tapinfo)
-                self.taps.append(tapinfo)
-
-            for tapinfo in self.taps:
-                tapname = tapinfo["name"]
-                _tempargs = "tap,id=%s,ifname=%s" % (tapname, tapname)
-                if self.vhost_type:
-                    _tempargs += ",vhost=on"
-                _devargs = "virtio-net-device,netdev=%s,id=%s" % (tapname, tapname)
-                if self.withmac:
-                    _devargs += ",mac=%s" % tapinfo["mac"]
-                args.extend(['-netdev', _tempargs, '-device', _devargs])
-
-        if self.rng:
-            rngcfg = 'rng-random,id=objrng0,filename=/dev/urandom'
-            if self.max_bytes == 0:
-                devcfg = 'virtio-rng-device,rng=objrng0'
-            else:
-                devcfg = 'virtio-rng-device,rng=objrng0,max-bytes=%s,period=1000' % self.max_bytes
-            args.extend(['-object', rngcfg, '-device', devcfg])
-
-        if self.vsocknums > 0:
-            if VSOCKS.init_vsock():
-                for _ in range(self.vsocknums - len(self.vsock_cid)):
-                    sockcid = VSOCKS.find_contextid()
-                    self.vsock_cid.append(sockcid)
-                    args.extend(['-device',
-                                 'vhost-vsock-device,id=vsock-%s,'
-                                 'guest-cid=%s' % (sockcid, sockcid)])
-
-        if self.balloon:
-            if self.deflate_on_oom:
-                ballooncfg = 'deflate-on-oom=true'
-            else:
-                ballooncfg = 'deflate-on-oom=false'
-            args.extend(['-device', 'virtio-balloon-device', ballooncfg])
-
         if "stratovirt" in self.vmtype and not self.seccomp:
-            self._args.append('-disable-seccomp')
+            args.append('-disable-seccomp')
 
         if self.daemon:
-            self._args.append('-daemonize')
+            args.append('-daemonize')
 
         if self.freeze:
-            self._args.extend(['-S'])
+            args.extend(['-S'])
+
         return args
+
 
     def is_running(self):
         """Returns true if the VM is running."""
@@ -529,90 +436,23 @@ class BaseVM:
         return self._popen.poll()
 
     def add_drive(self, **kwargs):
-        """Add drive"""
+        """Add drive and device"""
         drivetemp = dict()
+        devicetemp = dict()
         drivetemp["drive_id"] = kwargs.get("drive_id", utils_network.generate_random_name())
+        devicetemp["drive_id"] = drivetemp["drive_id"]
         drivetemp["path_on_host"] = kwargs.get('path_on_host', None)
         drivetemp["read_only"] = kwargs.get("read_only", "true")
-        if "drive" in self.configdict:
-            self.configdict["drive"].append(drivetemp)
+        if "drive" in self.configdict["block"][0]:
+            self.configdict["block"][0]["drive"].append(drivetemp)
         else:
-            self.configdict["drive"] = [drivetemp]
+            self.configdict["block"][0]["drive"] = [drivetemp]
 
-    def basic_config(self, **kwargs):
-        """Change configdict"""
-        if "vcpu_count" in kwargs:
-            self.configdict["machine-config"]["vcpu_count"] = kwargs.get("vcpu_count")
-            del kwargs["vcpu_count"]
-        if "max_vcpus" in kwargs:
-            self.configdict["machine-config"]["max_vcpus"] = kwargs.get("max_vcpus")
-            del kwargs["max_vcpus"]
-        if "mem_size" in kwargs:
-            self.configdict["machine-config"]["mem_size"] = kwargs.get("mem_size")
-            del kwargs["mem_size"]
-        if "mem_path" in kwargs:
-            self.configdict["machine-config"]["mem_path"] = kwargs.get("mem_path")
-            del kwargs["mem_path"]
-        if "vhost_type" in kwargs:
-            self.vhost_type = kwargs.get("vhost_type")
-            del kwargs["vhost_type"]
-
-        for key, value in kwargs.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-
-    def parser_config_to_args(self):
-        """Parser json config to args"""
-        if self.configdict is None:
-            return
-
-        if self.with_json:
-            with open(self.config_json, "w") as fpdest:
-                json.dump(self.configdict, fpdest)
-            self.add_args('-config', self.config_json)
+        if "device" in self.configdict["block"][0]:
+            self.configdict["block"][0]["device"].append(devicetemp)
         else:
-            configdict = self.configdict
-            if "boot-source" in configdict:
-                if "kernel_image_path" in configdict["boot-source"]:
-                    self.add_args('-kernel', configdict["boot-source"]["kernel_image_path"])
-                if "boot_args" in configdict["boot-source"]:
-                    self.add_args('-append', configdict["boot-source"]["boot_args"])
-                if "initrd" in configdict["boot-source"]:
-                    self.add_args('-initrd', configdict["boot-source"]["initrd"])
+            self.configdict["block"][0]["device"] = [devicetemp]
 
-            if "machine-config" in configdict:
-                _temp_cpu_value = ""
-                if "vcpu_count" in configdict["machine-config"]:
-                    _temp_cpu_value = str(configdict["machine-config"]["vcpu_count"])
-                if "max_vcpus" in configdict["machine-config"]:
-                    _temp_cpu_value += ",maxcpus=%s" % configdict["machine-config"]["max_vcpus"]
-                if _temp_cpu_value != "":
-                    self.add_args('-smp', _temp_cpu_value)
-                _temp_mem_value = ""
-                if "mem_size" in configdict["machine-config"]:
-                    _temp_mem_value = str(configdict["machine-config"]["mem_size"])
-                if "mem_slots" in configdict["machine-config"] and \
-                        "max_mem" in configdict["machine-config"]:
-                    _temp_mem_value += ",slots=%s,maxmem=%s" % \
-                                       (configdict["machine-config"]["mem_slots"],
-                                        configdict["machine-config"]["max_mem"])
-                if _temp_mem_value != "":
-                    self.add_args('-m', _temp_mem_value)
-                if "mem_path" in configdict["machine-config"]:
-                    self.add_args('-mem-path', configdict["machine-config"]["mem_path"])
-
-            for drive in configdict.get("drive", []):
-                _temp_drive_value = ""
-                if "drive_id" in drive:
-                    _temp_drive_value = "id=%s" % drive["drive_id"]
-                if "path_on_host" in drive:
-                    _temp_drive_value += ",file=%s" % drive["path_on_host"]
-                if "read_only" in drive:
-                    _temp = "on" if drive["read_only"] else "off"
-                    _temp_drive_value += ",readonly=%s" % _temp
-                if _temp_drive_value != "":
-                    self.add_args('-drive', _temp_drive_value)
-                    self.add_args('-device', 'virtio-blk-device,drive=%s' % drive["drive_id"])
 
     def add_env(self, key, value):
         """Add key, value to self.env"""
@@ -626,13 +466,6 @@ class BaseVM:
         """Add the machine type to cmdline"""
         self._machine = machine_type
 
-    def console_enable(self):
-        """Set console"""
-        self._console_set = True
-
-    def console_disable(self):
-        """Unset console"""
-        self._console_set = False
 
     def set_device_type(self, device_type):
         """Set device type"""
@@ -743,7 +576,7 @@ class BaseVM:
         LOG.debug("hotplug disk %s to vm" % diskpath)
         devid = "drive-%d" % index
         resp = self.qmp_protocol.qmp_command("blockdev-add", node_name="drive-%d" % index,
-                                file={"driver": "file", "filename": diskpath})
+                                             file={"driver": "file", "filename": diskpath})
 
         LOG.debug("blockdev-add return %s" % resp)
         if check:
@@ -821,10 +654,7 @@ class BaseVM:
         """Reconnect qmp when sock is dead"""
         if self.qmp_protocol:
             self.qmp_protocol.close_sock()
-        if isinstance(self.mon_sock, tuple):
-            self.qmp_protocol = QMPProtocol(self.mon_sock)
-        else:
-            self.qmp_protocol = QMPProtocol(self._vm_monitor)
+        self.qmp_protocol = QMPProtocol(self._vm_monitor)
         if self.qmp_protocol:
             self.qmp_protocol.connect()
 
@@ -849,13 +679,12 @@ class BaseVM:
             self._events.append(event)
 
 class QMPProtocol:
-    
+
     '''Set qmp monitor protocol'''
     def __init__(self, address):
-        self.qmp_set = True
         self.events = list()
         self.address = address
-        self.sock =  socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
     def __sock_recv(self, only_event=False):
         """Get data from socket"""

@@ -74,8 +74,8 @@ $ pytest -k microvm
 # Run all cases in test_microvm_cmdline.py
 $ pytest testcases/microvm/functional/test_microvm_cmdline.py
 
-# Run test_microvm_with_json
-$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_with_json
+# Run test_microvm_without_daemonize
+$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_without_daemonize
 ```
 
 ### Add new testcases
