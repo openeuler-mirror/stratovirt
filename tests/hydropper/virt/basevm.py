@@ -103,6 +103,7 @@ class BaseVM:
         self.vnetnums = vnetnums
         self.rng = rng
         self.max_bytes = max_bytes
+        self.rng_files = '/dev/urandom'
         self.vsock_cid = list()
         self.vsocknums = vsocknums
         self.withmac = False

@@ -172,7 +172,7 @@ class MicroVM(BaseVM):
                 args.extend(['-netdev', _temp_net_args, '-device', _temp_device_args])
 
         if self.rng:
-            _temp_rng_args = 'rng-random,id=objrng0,filename=/dev/urandom'
+            _temp_rng_args = 'rng-random,id=objrng0,filename=%s' % self.rng_files
             if self.max_bytes == 0:
                 _temp_device_args = 'virtio-rng-device,rng=objrng0'
             else:

@@ -92,6 +92,7 @@ class ParserConfig(Singleton):
                                                        "true") == "true")
         self.rust_san_check = bool(self.get_option("stratovirt.params", "RUST_SAN_CHECK",
                                                    "false") == "true")
+        self.code_storage_file = self.get_option("stratovirt.params", "CODE_STORAGE_FILE", None)
 
 
         # parser network params

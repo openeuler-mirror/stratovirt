@@ -47,7 +47,7 @@ class StandVM(BaseVM):
         self.memsize = memsize
         self.multifunction = {"net": False, "console": False, "vsock": False,
                               "balloon": False, "rng": False, "pcie_root_port": False, "vfio": False}
-        self.code_storage_file = None
+        self.code_storage_file = CONFIG.code_storage_file
         self.code_storage_readonly = True
         self.data_storage_file = None
         self.inited = False
@@ -183,11 +183,12 @@ class StandVM(BaseVM):
                 args.extend(['-netdev', _temp_net_args, '-device', _temp_device_args])
 
         if self.rng:
-            _temp_rng_args = 'rng-random,id=objrng0,filename=/dev/urandom'
+            self.bus_slot[0] = 'rng'
+            _temp_rng_args = 'rng-random,id=objrng0,filename=%s' % self.rng_files
             if self.max_bytes == 0:
-                _temp_device_args = 'virtio-rng-pci,rng=objrng0'
+                _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x9.0x0'
             else:
-                _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,id=pcie.0,addr=0x1.0x0' % self.max_bytes
+                _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.0,addr=0x9.0x0' % self.max_bytes
             if self.multifunction["rng"]:
                 _temp_device_args += ",multifunction=on"
             args.extend(['-object', _temp_rng_args, '-device', _temp_device_args])
@@ -207,9 +208,9 @@ class StandVM(BaseVM):
             self.bus_slot[2] = 'balloon'
             _temp_balloon_args = "virtio-balloon-pci,bus=pcie.0,addr=0x2.0x0"
             if self.deflate_on_oom:
-                _temp_balloon_args = 'deflate-on-oom=true'
+                _temp_balloon_args += ',deflate-on-oom=true'
             else:
-                _temp_balloon_args = 'deflate-on-oom=false'
+                _temp_balloon_args += ',deflate-on-oom=false'
             if self.multifunction["balloon"]:
                 _temp_balloon_args += ",multifunction=on"
             args.extend(['-device', _temp_balloon_args])

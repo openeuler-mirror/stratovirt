@@ -10,7 +10,7 @@
 # NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 # See the Mulan PSL v2 for more details.
 
-"""Test microvm balloon"""
+"""Test standvm balloon"""
 import time
 import logging
 import pytest
@@ -19,27 +19,27 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
 
 @pytest.mark.acceptance
-def test_microvm_balloon_query(microvm):
+def test_standvm_balloon_query(standvm):
     """
     Test qmp command of querying balloon
 
     steps:
-    1) launch microvm with argument: "-balloon deflate-on-oom=true".
+    1) launch standvm with argument: "-balloon deflate-on-oom=true".
     2) query the memory size, and check if it is 2524971008 which is the default memory size.
     """
-    test_vm = microvm
+    test_vm = standvm
     test_vm.basic_config(balloon=True, deflate_on_oom=True)
     test_vm.launch()
     resp = test_vm.query_balloon()
-    assert int(resp["return"]["actual"]) == int(microvm.memsize) * 1024 * 1024
+    assert int(resp["return"]["actual"]) == int(standvm.memsize) * 1024 * 1024
 
 @pytest.mark.acceptance
-def test_microvm_balloon(microvm):
+def test_standvm_balloon(standvm):
     """
     Test qmp command of setting balloon
 
     steps:
-    1) launch microvm with argument: "-balloon deflate-on-oom=true".
+    1) launch standvm with argument: "-balloon deflate-on-oom=true".
     2) query memory size, and save.
     3) set memory size through balloon device to 814748368.
     4) wait 5 seconds for ballooning.
@@ -51,7 +51,7 @@ def test_microvm_balloon(microvm):
     while that in step 7 equals 2524971008.
 
     """
-    test_vm = microvm
+    test_vm = standvm
     test_vm.basic_config(balloon=True, deflate_on_oom=True)
     test_vm.launch()
     resp = test_vm.query_balloon()
@@ -72,15 +72,15 @@ def test_microvm_balloon(microvm):
     assert ori == set2
 
 @pytest.mark.acceptance
-def test_microvm_balloon_active(microvm):
+def test_standvm_balloon_active(standvm):
     """
     Test qmp command of setting balloon
 
     steps:
-    1) launch microvm without active balloon device.
+    1) launch standvm without active balloon device.
     2) check if balloon device is activated.
     """
-    test_vm = microvm
+    test_vm = standvm
     test_vm.basic_config()
     test_vm.launch()
     resp = test_vm.query_balloon()
