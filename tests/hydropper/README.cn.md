@@ -1,5 +1,5 @@
 # Hydropper：
-hydropper是一个基于pytest的轻量级测试框架，在其基础上封装了虚拟化的相关测试原子，用于stratovirt的黑盒测试。当前hydropper已经提供了一些测试用例，可以帮助开发人员发现和定位stratovirt的问题。
+hydropper是一个基于pytest的轻量级测试框架，在其基础上封装了虚拟化的相关测试原子，用于stratovirt的黑盒测试。当前hydropper已经支持轻量级虚拟场景和标准化虚拟场景的一些测试用例，可以帮助开发人员发现和定位stratovirt的问题。
 
 ## 如何开始
 
