@@ -32,6 +32,10 @@ class MicroVM(BaseVM):
                  vmconfig=CONFIG.get_default_microvm_vmconfig(),
                  vmlinux=CONFIG.stratovirt_vmlinux, rootfs=CONFIG.stratovirt_rootfs, initrd=CONFIG.stratovirt_initrd,
                  vcpus=4, memsize=2048, socktype="unix", loglevel="info"):
+        self._args = list()
+        self._console_address = None
+        self._popen = None
+        self.full_command = None
         self.name = name
         self.vmid = uuid
         if "unix" in socktype:
@@ -41,13 +45,14 @@ class MicroVM(BaseVM):
         self.vmconfig_template_file = vmconfig
         self.vm_json_file = None
         self.vmlinux = vmlinux
+        self.vhost_type = None
         self.rootfs = rootfs
+        self.pid = None
         self.initrd = initrd
         self.vcpus = vcpus
         self.memsize = memsize
         self.inited = False
         self.init_vmjson(root_path)
-        self._args = list()
         super(MicroVM, self).__init__(root_path=root_path,
                                       name=name,
                                       uuid=uuid,

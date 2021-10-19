@@ -32,6 +32,10 @@ class StandVM(BaseVM):
                  vmconfig=CONFIG.get_default_standvm_vmconfig(), vmlinux=CONFIG.stratovirt_stand_vmlinux,
                  rootfs=CONFIG.stratovirt_stand_rootfs, initrd=CONFIG.stratovirt_initrd, pcie_root_port=0,
                  vcpus=4, memsize=2048, socktype="unix", loglevel="info"):
+        self._args = list()
+        self._console_address = None
+        self._popen = None
+        self.full_command = None
         self.name = name
         self.vmid = uuid
         if "unix" in socktype:
@@ -44,6 +48,7 @@ class StandVM(BaseVM):
         self.rootfs = rootfs
         self.initrd = initrd
         self.vcpus = vcpus
+        self.vhost_type = None
         self.memsize = memsize
         self.multifunction = {"net": False, "console": False, "vsock": False,
                               "balloon": False, "rng": False, "pcie_root_port": False, "vfio": False}
@@ -52,9 +57,9 @@ class StandVM(BaseVM):
         self.data_storage_file = None
         self.inited = False
         self.pcie_root_port = pcie_root_port
+        self.pid = None
         self.vfio = False
         self.init_vmjson(root_path)
-        self._args = list()
         self.bus_slot = dict()
         self.bus_slot_init()
         super(StandVM, self).__init__(root_path=root_path,
