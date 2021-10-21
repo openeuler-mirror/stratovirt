@@ -272,11 +272,8 @@ impl NetIoHandler {
         }
 
         if need_irq {
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.rx.queue.lock().unwrap()),
-            )
-            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
+                .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
