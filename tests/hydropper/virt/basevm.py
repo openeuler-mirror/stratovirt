@@ -51,7 +51,7 @@ class BaseVM:
                  error_test=False, dump_guest_core=True, mem_share=True):
         if args is None:
             args = []
-        self.qmp_protocol = None
+        self.qmp = None
         # Copy args in case ew modify them.
         self._args = list(args)
         self._console_address = None
@@ -143,10 +143,10 @@ class BaseVM:
 
         self._pre_shutdown()
         if self.daemon or self.is_running():
-            if self.qmp_protocol:
+            if self.qmp:
                 try:
                     if not has_quit:
-                        self.qmp_protocol.qmp_command('quit')
+                        self.qmp.qmp_command('quit')
                         self.event_wait(name='SHUTDOWN', timeout=10,
                                         match={'data': {'guest': False, 'reason': 'host-qmp-quit'}})
                 # Kill popen no matter what exception occurs
@@ -212,8 +212,8 @@ class BaseVM:
                 command = ''
             LOG.warning(msg, exitcode, command)
 
-        if self.qmp_protocol:
-            self.qmp_protocol.close_sock()
+        if self.qmp:
+            self.qmp.close_sock()
 
         if self.serial_session:
             self.serial_session.run_func("close")
@@ -301,9 +301,9 @@ class BaseVM:
 
     def post_launch_qmp(self):
         """Set a QMPMonitorProtocol"""
-        self.qmp_protocol = QMPProtocol(self._vm_monitor)
-        if self.qmp_protocol:
-            self.qmp_protocol.connect()
+        self.qmp = QMPProtocol(self._vm_monitor)
+        if self.qmp:
+            self.qmp.connect()
 
     def post_launch_vnet(self):
         """Nothing is needed at present"""
@@ -550,33 +550,33 @@ class BaseVM:
 
     def stop(self):
         """Pause all vcpu"""
-        return self.qmp_protocol.qmp_command("stop")
+        return self.qmp.qmp_command("stop")
 
     def cont(self):
         """Resume paused vcpu"""
-        return self.qmp_protocol.qmp_command("cont")
+        return self.qmp.qmp_command("cont")
 
     def device_add(self, **kwargs):
         """Hotplug device"""
-        return self.qmp_protocol.qmp_command("device_add", **kwargs)
+        return self.qmp.qmp_command("device_add", **kwargs)
 
     def device_del(self, **kwargs):
         """Unhotplug device"""
-        return self.qmp_protocol.qmp_command("device_del", **kwargs)
+        return self.qmp.qmp_command("device_del", **kwargs)
 
     def netdev_add(self, **kwargs):
         """Hotplug a netdev"""
-        return self.qmp_protocol.qmp_command("netdev_add", **kwargs)
+        return self.qmp.qmp_command("netdev_add", **kwargs)
 
     def netdev_del(self, **kwargs):
         """Unhotplug a netdev"""
-        return self.qmp_protocol.qmp_command("netdev_del", **kwargs)
+        return self.qmp.qmp_command("netdev_del", **kwargs)
 
     def add_disk(self, diskpath, index=1, check=True):
         """Hotplug a disk to vm"""
         LOG.debug("hotplug disk %s to vm" % diskpath)
         devid = "drive-%d" % index
-        resp = self.qmp_protocol.qmp_command("blockdev-add", node_name="drive-%d" % index,
+        resp = self.qmp.qmp_command("blockdev-add", node_name="drive-%d" % index,
                                              file={"driver": "file", "filename": diskpath})
 
         LOG.debug("blockdev-add return %s" % resp)
@@ -633,31 +633,31 @@ class BaseVM:
 
     def query_hotpluggable_cpus(self):
         """Query hotpluggable cpus"""
-        return self.qmp_protocol.qmp_command("query-hotpluggable-cpus")
+        return self.qmp.qmp_command("query-hotpluggable-cpus")
 
     def query_cpus(self):
         """Query cpus"""
-        return self.qmp_protocol.qmp_command("query-cpus")
+        return self.qmp.qmp_command("query-cpus")
 
     def query_status(self):
         """Query status"""
-        return self.qmp_protocol.qmp_command("query-status")
+        return self.qmp.qmp_command("query-status")
 
     def query_balloon(self):
         """Query balloon size"""
-        return self.qmp_protocol.qmp_command("query-balloon")
+        return self.qmp.qmp_command("query-balloon")
 
     def balloon_set(self, **kwargs):
         """Set balloon size"""
-        return self.qmp_protocol.qmp_command("balloon", **kwargs)
+        return self.qmp.qmp_command("balloon", **kwargs)
 
     def qmp_reconnect(self):
         """Reconnect qmp when sock is dead"""
-        if self.qmp_protocol:
-            self.qmp_protocol.close_sock()
-        self.qmp_protocol = QMPProtocol(self._vm_monitor)
-        if self.qmp_protocol:
-            self.qmp_protocol.connect()
+        if self.qmp:
+            self.qmp.close_sock()
+        self.qmp = QMPProtocol(self._vm_monitor)
+        if self.qmp:
+            self.qmp.connect()
 
     def event_wait(self, name, timeout=60.0, match=None):
         """
@@ -668,7 +668,7 @@ class BaseVM:
             {'data':{'guest':False,'reason':'host-qmp-quit'}}
         """
         while True:
-            event = self.qmp_protocol.get_events(wait=timeout, only_event=True)
+            event = self.qmp.get_events(wait=timeout, only_event=True)
             try:
                 if event['event'] == name:
                     for key in match:

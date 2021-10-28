@@ -15,29 +15,6 @@ import os
 from subprocess import run
 import pytest
 
-def _get_lsblk_info(test_vm):
-    """
-    Get lsblk info
-
-    Returns:
-        {
-            "vdx": {"size": xx, "readonly": xx},
-        }
-    """
-    retdict = {}
-    if test_vm.ssh_session is not None:
-        _output = test_vm.ssh_session.cmd_output("lsblk")
-        for line in _output.split("\n"):
-            temp = line.split()
-            if len(temp) == 6:
-                name = temp[0]
-                size = temp[3]
-                readonly = temp[4]
-                if name not in retdict:
-                    retdict[name] = {"size": size, "readonly": readonly}
-
-    return retdict
-
 @pytest.mark.standvm_accept
 @pytest.mark.parametrize("readonly", [True, False])
 def test_standvm_virtio_blk_configuration(test_session_root_path, standvm, readonly):
