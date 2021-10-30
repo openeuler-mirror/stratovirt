@@ -536,7 +536,7 @@ impl BlockIoHandler {
             need_interrupt = true
         }
 
-        if !merge_req_queue.is_empty() || need_interrupt {
+        if need_interrupt {
             (self.interrupt_cb)(
                 &VirtioInterruptType::Vring,
                 Some(&self.queue.lock().unwrap()),
