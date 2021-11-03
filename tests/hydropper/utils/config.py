@@ -71,14 +71,19 @@ class ParserConfig(Singleton):
 
         # parser stratovirt config
         self.stratovirt_microvm_bin = self.get_option("stratovirt.params", "STRATOVIRT_MICROVM_BINARY", None)
+        self.stratovirt_standvm_bin = self.get_option("stratovirt.params", "STRATOVIRT_STANDVM_BINARY", None)
         self.stratovirt_microvm_boottime_bin = self.get_option("stratovirt.params",
                                                                "STRATOVIRT_MICROVM_BOOTTIME_BINARY", None)
         self.stratovirt_microvm_config = self.get_option("stratovirt.params", "STRATOVIRT_MICROVM_CONFIG",
                                                          "config/test_config/vm_config/micro_vm.json")
+        self.stratovirt_standvm_config = self.get_option("stratovirt.params", "STRATOVIRT_STANDVM_CONFIG",
+                                                         "config/test_config/vm_config/stand_vm.json")
         self.stratovirt_binary_name = self.get_option("stratovirt.params",
                                                       "STRATOVIRT_BINARY_NAME", "microvm")
         self.stratovirt_vmlinux = self.get_option("stratovirt.params", "STRATOVIRT_VMLINUX", None)
+        self.stratovirt_stand_vmlinux = self.get_option("stratovirt.params", "STRATOVIRT_STAND_VMLINUX", None)
         self.stratovirt_rootfs = self.get_option("stratovirt.params", "STRATOVIRT_ROOTFS", None)
+        self.stratovirt_stand_rootfs = self.get_option("stratovirt.params", "STRATOVIRT_STAND_ROOTFS", None)
         self.stratovirt_initrd = self.get_option("stratovirt.params", "STRATOVIRT_INITRD", None)
         self.stratovirt_use_config_file = bool(self.get_option("stratovirt.params", "STRATOVIRT_USE_CONFIG_FILE",
                                                                "false") == "true")
@@ -87,6 +92,7 @@ class ParserConfig(Singleton):
                                                        "true") == "true")
         self.rust_san_check = bool(self.get_option("stratovirt.params", "RUST_SAN_CHECK",
                                                    "false") == "true")
+        self.code_storage_file = self.get_option("stratovirt.params", "CODE_STORAGE_FILE", None)
 
 
         # parser network params
@@ -154,6 +160,10 @@ class ParserConfig(Singleton):
     def get_default_microvm_vmconfig(self):
         """Get default microvm vmconfig file"""
         return self.stratovirt_microvm_config
+
+    def get_default_standvm_vmconfig(self):
+        """Get default standvm vmconfig file"""
+        return self.stratovirt_standvm_config
 
 
 CONFIG = ParserConfig()

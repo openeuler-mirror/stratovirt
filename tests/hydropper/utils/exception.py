@@ -131,3 +131,9 @@ class QMPTimeoutError(QMPError):
 
 class VMLifeError(Exception):
     """Vmlife error exception"""
+
+# standvm error
+class PflashError(Exception):
+    "Lack of code storage file"
+    def __str__(self):
+        return "code_storage_file is not found"
