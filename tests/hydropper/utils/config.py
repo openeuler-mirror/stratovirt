@@ -150,10 +150,23 @@ class ParserConfig(Singleton):
         """
         return self._list_vmconfig_with_vmtype_tag("microvm", tag)
 
+    def get_standvm_by_tag(self, tag):
+        """
+        Get standvm config by tag
+        """
+        return self._list_vmconfig_with_vmtype_tag("standvm", tag)
+
     def list_microvm_tags(self):
         """List microvm all tags"""
         if "microvm" in self.vmconfigs:
             return self.vmconfigs["microvm"].keys()
+
+        return list()
+
+    def list_standvm_tags(self):
+        """List standvm all tags"""
+        if "standvm" in self.vmconfigs:
+            return self.vmconfigs["standvm"].keys()
 
         return list()
 
