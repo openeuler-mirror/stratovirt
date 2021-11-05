@@ -228,7 +228,7 @@ class StandVM(BaseVM):
             _temp_rng_args = 'rng-random,id=objrng0,filename=%s' % self.rng_files
             if self.pcie_root_port["rng"]:
                 if self.pcie_root_port_remain <= 0:
-                        raise PcierootportError
+                    raise PcierootportError
                 if self.max_bytes == 0:
                     _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.%s,addr=0x9.0x0'\
                         % (self.pcie_root_port_remain + 4)

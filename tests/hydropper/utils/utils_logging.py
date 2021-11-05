@@ -207,6 +207,8 @@ class Logger():
 
 class TestLog():
     """Test log"""
+    def __init__(self):
+        self.name = 'Testlog'
 
     _logmaps = dict()
     _logmap_lock = threading.Lock()
