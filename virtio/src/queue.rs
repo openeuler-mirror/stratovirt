@@ -534,7 +534,7 @@ impl SplitVring {
     fn set_avail_event(&self, sys_mem: &Arc<AddressSpace>) -> Result<()> {
         let avail_event_offset =
             VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
-        let event_idx = self.get_avail_idx(sys_mem)?;
+        let event_idx = self.next_avail.0;
 
         fence(Ordering::Release);
         sys_mem
@@ -720,11 +720,6 @@ impl SplitVring {
                 .into());
             };
 
-        if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.set_avail_event(sys_mem)
-                .chain_err(|| "Failed to set avail event for popping avail ring")?;
-        }
-
         let desc = SplitVringDesc::new(
             sys_mem,
             self.desc_table,
@@ -756,6 +751,11 @@ impl SplitVring {
                 elem
             })?
         };
+
+        if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
+            self.set_avail_event(sys_mem)
+                .chain_err(|| "Failed to set avail event for popping avail ring")?;
+        }
 
         Ok(elem)
     }
