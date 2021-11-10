@@ -81,7 +81,7 @@ impl TxVirtio {
 }
 
 struct RxVirtio {
-    unfinished_frame: bool,
+    queue_full: bool,
     need_irqs: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
@@ -92,7 +92,7 @@ struct RxVirtio {
 impl RxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
         RxVirtio {
-            unfinished_frame: false,
+            queue_full: false,
             need_irqs: false,
             queue,
             queue_evt,
@@ -113,16 +113,17 @@ struct NetIoHandler {
     receiver: Receiver<SenderConfig>,
     update_evt: RawFd,
     reset_evt: RawFd,
+    is_listening: bool,
 }
 
 impl NetIoHandler {
     #[allow(clippy::useless_asref)]
-    fn handle_frame_rx(&mut self) -> Result<()> {
-        let elem = self
-            .rx
-            .queue
-            .lock()
-            .unwrap()
+    fn handle_frame_rx(&mut self) -> Result<bool> {
+        let mut queue = self.rx.queue.lock().unwrap();
+        if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
+            return Ok(true);
+        }
+        let elem = queue
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
             .chain_err(|| "Failed to pop avail ring for net rx")?;
@@ -155,10 +156,7 @@ impl NetIoHandler {
             }
         }
 
-        self.rx
-            .queue
-            .lock()
-            .unwrap()
+        queue
             .vring
             .add_used(&self.mem_space, elem.index, write_count as u32)
             .chain_err(|| {
@@ -177,23 +175,7 @@ impl NetIoHandler {
             );
         }
 
-        Ok(())
-    }
-
-    fn handle_last_frame_rx(&mut self) -> Result<()> {
-        if self.handle_frame_rx().is_ok() {
-            self.rx.unfinished_frame = false;
-            self.handle_rx()?;
-        } else if self.rx.need_irqs {
-            self.rx.need_irqs = false;
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.rx.queue.lock().unwrap()),
-            )
-            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
-        }
-
-        Ok(())
+        Ok(false)
     }
 
     fn handle_rx(&mut self) -> Result<()> {
@@ -201,9 +183,17 @@ impl NetIoHandler {
             match tap.read(&mut self.rx.frame_buf) {
                 Ok(count) => {
                     self.rx.bytes_read = count;
-                    if self.handle_frame_rx().is_err() {
-                        self.rx.unfinished_frame = true;
-                        break;
+                    match self.handle_frame_rx() {
+                        Ok(full) => {
+                            if full {
+                                self.rx.queue_full = true;
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Net handle frame rx error: {}", e);
+                            break;
+                        }
                     }
                 }
                 Err(e) => {
@@ -427,12 +417,17 @@ impl EventNotifierHelper for NetIoHandler {
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             let mut locked_net_io = cloned_net_io.lock().unwrap();
             read_fd(fd);
-            if locked_net_io.rx.unfinished_frame {
-                if let Err(ref e) = locked_net_io.handle_last_frame_rx() {
-                    error!(
-                        "Failed to handle last frame(rx event) for net, {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
+            if let Some(tap) = locked_net_io.tap.as_ref() {
+                if !locked_net_io.is_listening {
+                    let notifier = vec![EventNotifier::new(
+                        NotifierOperation::Resume,
+                        tap.as_raw_fd(),
+                        None,
+                        EventSet::IN,
+                        Vec::new(),
+                    )];
+                    locked_net_io.is_listening = true;
+                    return Some(notifier);
                 }
             }
             None
@@ -470,20 +465,27 @@ impl EventNotifierHelper for NetIoHandler {
         if let Some(tap) = locked_net_io.tap.as_ref() {
             let handler: Box<NotifierCallback> = Box::new(move |_, _| {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
-                if locked_net_io.rx.unfinished_frame {
-                    if let Err(ref e) = locked_net_io.handle_last_frame_rx() {
-                        error!(
-                            "Failed to handle last frame(tap event), {}",
-                            error_chain::ChainedError::display_chain(e)
-                        );
-                    }
-                } else if let Err(ref e) = locked_net_io.handle_rx() {
+                if let Err(ref e) = locked_net_io.handle_rx() {
                     error!(
                         "Failed to handle rx(tap event), {}",
                         error_chain::ChainedError::display_chain(e)
                     );
                 }
 
+                if let Some(tap) = locked_net_io.tap.as_ref() {
+                    if locked_net_io.rx.queue_full {
+                        let notifier = vec![EventNotifier::new(
+                            NotifierOperation::Park,
+                            tap.as_raw_fd(),
+                            None,
+                            EventSet::IN,
+                            Vec::new(),
+                        )];
+                        locked_net_io.is_listening = false;
+                        locked_net_io.rx.queue_full = false;
+                        return Some(notifier);
+                    }
+                }
                 None
             });
             let tap_fd = tap.as_raw_fd();
@@ -491,7 +493,7 @@ impl EventNotifierHelper for NetIoHandler {
                 tap_fd,
                 Some(handler),
                 NotifierOperation::AddShared,
-                EventSet::IN | EventSet::EDGE_TRIGGERED,
+                EventSet::IN,
             ));
         }
 
@@ -758,6 +760,7 @@ impl VirtioDevice for Net {
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
             reset_evt: self.reset_evt.as_raw_fd(),
+            is_listening: true,
         };
 
         EventLoop::update_event(

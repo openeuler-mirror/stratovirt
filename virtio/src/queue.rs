@@ -172,6 +172,9 @@ pub trait VringOps {
 
     /// Get the configuration of the vring.
     fn get_queue_config(&self) -> QueueConfig;
+
+    /// The number of descriptor chains in the available ring.
+    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
 }
 
 /// Virtio used element.
@@ -574,13 +577,6 @@ impl SplitVring {
         Ok(used_event)
     }
 
-    /// The number of descriptor chains in the available ring.
-    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let avail_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
-
-        Ok((avail_idx - self.next_avail).0)
-    }
-
     /// Return true if VRING_AVAIL_F_NO_INTERRUPT is set.
     fn is_avail_ring_no_interrupt(&self, sys_mem: &Arc<AddressSpace>) -> bool {
         match self.get_avail_flags(sys_mem) {
@@ -858,6 +854,13 @@ impl VringOps for SplitVring {
             next_used: self.next_used.0,
             last_signal_used: self.last_signal_used.0,
         }
+    }
+
+    /// The number of descriptor chains in the available ring.
+    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
+        let avail_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
+
+        Ok((avail_idx - self.next_avail).0)
     }
 }
 
