@@ -35,6 +35,22 @@ impl FlatView {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct RegionCache {
+    pub reg_type: RegionType,
+    pub start: u64,
+    pub end: u64,
+}
+
+impl Default for RegionCache {
+    fn default() -> Self {
+        RegionCache {
+            reg_type: RegionType::Ram,
+            start: 0,
+            end: 0,
+        }
+    }
+}
 /// Address Space of memory.
 #[derive(Clone)]
 pub struct AddressSpace {
@@ -305,6 +321,22 @@ impl AddressSpace {
             range.owner.region_type() == RegionType::Ram
                 && size <= range.addr_range.end_addr().offset_from(addr)
         })
+    }
+
+    pub fn get_region_cache(&self, addr: GuestAddress) -> Option<RegionCache> {
+        let view = &self.flat_view.load();
+        if let Some(range) = view.find_flatrange(addr) {
+            let reg_type = range.owner.region_type();
+            let start = range.addr_range.base.0;
+            let end = range.addr_range.end_addr().0;
+            let cache = RegionCache {
+                reg_type,
+                start,
+                end,
+            };
+            return Some(cache);
+        }
+        None
     }
 
     /// Return the end address of memory  according to all Ram regions in AddressSpace.
