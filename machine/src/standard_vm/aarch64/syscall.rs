@@ -76,6 +76,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
         BpfRule::new(libc::SYS_read),
         BpfRule::new(libc::SYS_write),
+        BpfRule::new(libc::SYS_writev),
         ioctl_allow_list(),
         BpfRule::new(libc::SYS_epoll_pwait),
         BpfRule::new(libc::SYS_io_getevents),
