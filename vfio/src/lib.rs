@@ -39,10 +39,11 @@ pub mod errors {
 mod vfio_dev;
 mod vfio_pci;
 
-pub use vfio_dev::VfioContainer;
+pub use vfio_dev::{VfioContainer, VfioDevice};
 pub use vfio_pci::VfioPciDevice;
 
 use std::collections::HashMap;
+use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
 use hypervisor::KVM_FDS;
@@ -52,7 +53,9 @@ use vfio_dev::VfioGroup;
 
 lazy_static! {
     static ref KVM_DEVICE_FD: Option<DeviceFd> = create_kvm_vfio_device();
-    static ref GROUPS: Mutex<HashMap<u32, Arc<VfioGroup>>> = Mutex::new(HashMap::new());
+    static ref CONTAINERS: Mutex<HashMap<RawFd, Arc<Mutex<VfioContainer>>>> =
+        Mutex::new(HashMap::new());
+    static ref GROUPS: Mutex<HashMap<u32, Arc<Mutex<VfioGroup>>>> = Mutex::new(HashMap::new());
 }
 
 fn create_kvm_vfio_device() -> Option<DeviceFd> {

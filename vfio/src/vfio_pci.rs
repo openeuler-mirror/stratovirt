@@ -13,7 +13,6 @@
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -102,21 +101,18 @@ pub struct VfioPciDevice {
 impl VfioPciDevice {
     /// New a VFIO PCI device structure for the vfio device created by VMM.
     pub fn new(
-        path: &Path,
-        container: Arc<VfioContainer>,
+        vfio_device: Arc<VfioDevice>,
         devfn: u8,
         name: String,
         parent_bus: Weak<Mutex<PciBus>>,
         multi_func: bool,
-    ) -> Result<Self> {
-        Ok(VfioPciDevice {
+    ) -> Self {
+        Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             pci_config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
             config_size: 0,
             config_offset: 0,
-            vfio_device: Arc::new(
-                VfioDevice::new(container, path).chain_err(|| "Failed to new vfio device")?,
-            ),
+            vfio_device,
             msix_info: None,
             vfio_bars: Arc::new(Mutex::new(Vec::with_capacity(PCI_NUM_BARS as usize))),
             gsi_msi_routes: Arc::new(Mutex::new(Vec::new())),
@@ -125,7 +121,7 @@ impl VfioPciDevice {
             name,
             parent_bus,
             multi_func,
-        })
+        }
     }
 
     fn get_pci_config(&mut self) -> Result<()> {
@@ -581,12 +577,12 @@ impl VfioPciDevice {
 
     /// Add all guest memory regions into IOMMU table.
     fn do_dma_map(&mut self) -> Result<()> {
-        let container = &self.vfio_device.container;
-        let mut regions = container.vfio_mem_info.regions.lock().unwrap();
-
+        let container = &self.vfio_device.container.upgrade().unwrap();
+        let locked_container = container.lock().unwrap();
+        let mut regions = locked_container.vfio_mem_info.regions.lock().unwrap();
         for r in regions.iter_mut() {
             if !r.iommu_mapped {
-                container
+                locked_container
                     .vfio_dma_map(r.guest_phys_addr, r.memory_size, r.userspace_addr)
                     .chain_err(|| "Failed to add guest memory region map into IOMMU table")?;
                 r.iommu_mapped = true;
