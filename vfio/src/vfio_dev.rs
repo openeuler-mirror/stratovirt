@@ -328,10 +328,8 @@ impl VfioContainer {
 /// A vfio group can be created by opening `/dev/vfio/$group_id`, where $group_id represents the
 /// IOMMU group number.
 struct VfioGroup {
-    // `/dev/vfio/group_id` file fd.
+    // `/dev/vfio/$group_id` file fd.
     group: File,
-    #[allow(dead_code)]
-    group_id: u32,
 }
 
 impl VfioGroup {
@@ -364,10 +362,7 @@ impl VfioGroup {
             );
         }
 
-        Ok(VfioGroup {
-            group: file,
-            group_id,
-        })
+        Ok(VfioGroup { group: file })
     }
 
     fn connect_container(&self, container: &VfioContainer) -> Result<()> {
