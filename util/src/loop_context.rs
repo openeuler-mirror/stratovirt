@@ -64,6 +64,8 @@ pub struct EventNotifier {
     pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
     /// Event status
     status: EventStatus,
+    /// The flag representing whether pre polling is required
+    pub io_poll: bool,
 }
 
 impl EventNotifier {
@@ -82,6 +84,7 @@ impl EventNotifier {
             event,
             handlers,
             status: EventStatus::Alive,
+            io_poll: false,
         }
     }
 }

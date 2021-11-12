@@ -404,11 +404,12 @@ impl BlockIoHandler {
         merge_req_queue
     }
 
-    fn process_queue(&mut self) -> Result<()> {
+    fn process_queue(&mut self) -> Result<bool> {
         let mut req_queue = Vec::new();
         let mut req_index = 0;
         let mut last_aio_req_index = 0;
         let mut need_interrupt = false;
+        let mut done = false;
 
         let mut queue = self.queue.lock().unwrap();
 
@@ -438,6 +439,7 @@ impl BlockIoHandler {
                     }
                     req_queue.push(req);
                     req_index += 1;
+                    done = true;
                 }
                 Err(ref e) => {
                     //  If it fails, also need to free descriptor table entry.
@@ -544,7 +546,7 @@ impl BlockIoHandler {
             .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Vring))?;
         }
 
-        Ok(())
+        Ok(done)
     }
 
     fn build_aio(&self) -> Result<Box<Aio<AioCompleteCb>>> {
@@ -717,7 +719,35 @@ impl EventNotifierHelper for BlockIoHandler {
             }
             None
         });
-        notifiers.push(build_event_notifier(handler_raw.queue_evt.as_raw_fd(), h));
+
+        let h_clone = handler.clone();
+        let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
+            let done = h_clone
+                .lock()
+                .unwrap()
+                .process_queue()
+                .chain_err(|| "Failed to handle block IO")
+                .ok()?;
+            if done {
+                Some(Vec::new())
+            } else {
+                None
+            }
+        });
+
+        let mut e = EventNotifier::new(
+            NotifierOperation::AddShared,
+            handler_raw.queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![
+                Arc::new(Mutex::new(h)),
+                Arc::new(Mutex::new(handler_iopoll)),
+            ],
+        );
+        e.io_poll = true;
+
+        notifiers.push(e);
 
         // Register timer event notifier for IO limits
         if let Some(lb) = handler_raw.leak_bucket.as_ref() {
@@ -756,7 +786,33 @@ impl EventNotifierHelper for BlockIoHandler {
                 }
                 None
             });
-            notifiers.push(build_event_notifier(aio.fd.as_raw_fd(), h));
+
+            let h_clone = handler.clone();
+            let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
+                let mut done = false;
+                if let Some(aio) = &mut h_clone.lock().unwrap().aio {
+                    done = aio.handle().chain_err(|| "Failed to handle aio").ok()?;
+                }
+                if done {
+                    Some(Vec::new())
+                } else {
+                    None
+                }
+            });
+
+            let mut e = EventNotifier::new(
+                NotifierOperation::AddShared,
+                aio.fd.as_raw_fd(),
+                None,
+                EventSet::IN,
+                vec![
+                    Arc::new(Mutex::new(h)),
+                    Arc::new(Mutex::new(handler_iopoll)),
+                ],
+            );
+            e.io_poll = true;
+
+            notifiers.push(e);
         }
 
         notifiers
