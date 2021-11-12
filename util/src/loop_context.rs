@@ -23,6 +23,7 @@ use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use crate::errors::{ErrorKind, Result};
 
 const READY_EVENT_MAX: usize = 256;
+const AIO_PRFETCH_CYCLE_TIME: usize = 100;
 
 #[derive(Debug)]
 pub enum NotifierOperation {
@@ -289,42 +290,37 @@ impl EventLoopContext {
             }
         }
 
-        let ev_count = match self.epoll.wait(
-            READY_EVENT_MAX,
-            self.timers_min_timeout(),
-            &mut self.ready_events[..],
-        ) {
-            Ok(ev_count) => ev_count,
-            Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
-            Err(e) => return Err(ErrorKind::EpollWait(e).into()),
-        };
+        self.epoll_wait_manager(self.timers_min_timeout())
+    }
 
-        for i in 0..ev_count {
-            // It`s safe because elements in self.events_map never get released in other functions
-            let event = unsafe {
-                let event_ptr = self.ready_events[i].data() as *const EventNotifier;
-                &*event_ptr as &EventNotifier
-            };
-            if let EventStatus::Alive = event.status {
-                let mut notifiers = Vec::new();
-                for i in 0..event.handlers.len() {
-                    let handle = event.handlers[i].lock().unwrap();
-                    match handle(self.ready_events[i].event_set(), event.raw_fd) {
-                        None => {}
-                        Some(mut notifier) => {
-                            notifiers.append(&mut notifier);
+    pub fn iothread_run(&mut self) -> Result<bool> {
+        if let Some(manager) = &self.manager {
+            if manager.lock().unwrap().loop_should_exit() {
+                manager.lock().unwrap().loop_cleanup()?;
+                return Ok(false);
+            }
+        }
+        let timeout = self.timers_min_timeout();
+
+        if timeout == -1 {
+            for _i in 0..AIO_PRFETCH_CYCLE_TIME {
+                for (_fd, notifer) in self.events.read().unwrap().iter() {
+                    if notifer.io_poll {
+                        if let EventStatus::Alive = notifer.status {
+                            let handle = notifer.handlers[1].lock().unwrap();
+                            match handle(self.ready_events[1].event_set(), notifer.raw_fd) {
+                                None => {}
+                                Some(_) => {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-                self.update_events(notifiers)?;
             }
         }
 
-        self.run_timers();
-
-        self.clear_gc();
-
-        Ok(true)
+        self.epoll_wait_manager(timeout)
     }
 
     /// Call the function given by `func` after `nsec` nanoseconds.
@@ -381,6 +377,42 @@ impl EventLoopContext {
         }
 
         self.timers.drain(0..expired_nr);
+    }
+
+    fn epoll_wait_manager(&mut self, time_out: i32) -> Result<bool> {
+        let ev_count = match self
+            .epoll
+            .wait(READY_EVENT_MAX, time_out, &mut self.ready_events[..])
+        {
+            Ok(ev_count) => ev_count,
+            Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
+            Err(e) => return Err(ErrorKind::EpollWait(e).into()),
+        };
+
+        for i in 0..ev_count {
+            // It`s safe because elements in self.events_map never get released in other functions
+            let event = unsafe {
+                let event_ptr = self.ready_events[i].data() as *const EventNotifier;
+                &*event_ptr as &EventNotifier
+            };
+            if let EventStatus::Alive = event.status {
+                let mut notifiers = Vec::new();
+                for i in 0..event.handlers.len() {
+                    let handle = event.handlers[i].lock().unwrap();
+                    match handle(self.ready_events[i].event_set(), event.raw_fd) {
+                        None => {}
+                        Some(mut notifier) => {
+                            notifiers.append(&mut notifier);
+                        }
+                    }
+                }
+                self.update_events(notifiers)?;
+            }
+        }
+
+        self.run_timers();
+        self.clear_gc();
+        Ok(true)
     }
 }
 

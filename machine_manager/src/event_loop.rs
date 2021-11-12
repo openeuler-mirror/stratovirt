@@ -69,7 +69,7 @@ impl EventLoop {
                                 id: id.to_string(),
                             };
                             IOTHREADS.lock().unwrap().push(iothread_info);
-                            while let Ok(ret) = ctx.run() {
+                            while let Ok(ret) = ctx.iothread_run() {
                                 if !ret {
                                     break;
                                 }
