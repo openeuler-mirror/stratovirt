@@ -16,6 +16,8 @@ extern crate error_chain;
 extern crate log;
 #[macro_use]
 extern crate vmm_sys_util;
+#[macro_use]
+extern crate lazy_static;
 
 pub mod errors {
     error_chain! {
@@ -35,7 +37,36 @@ pub mod errors {
 }
 
 mod vfio_dev;
-pub mod vfio_pci;
+mod vfio_pci;
 
 pub use vfio_dev::VfioContainer;
 pub use vfio_pci::VfioPciDevice;
+
+use hypervisor::KVM_FDS;
+use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
+use kvm_ioctls::DeviceFd;
+
+lazy_static! {
+    static ref KVM_DEVICE_FD: Option<DeviceFd> = create_kvm_vfio_device();
+}
+
+fn create_kvm_vfio_device() -> Option<DeviceFd> {
+    let mut device = kvm_create_device {
+        type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
+        fd: 0,
+        flags: 0,
+    };
+    match KVM_FDS
+        .load()
+        .vm_fd
+        .as_ref()
+        .unwrap()
+        .create_device(&mut device)
+    {
+        Ok(fd) => Some(fd),
+        Err(e) => {
+            error!("{}", e);
+            None
+        }
+    }
+}

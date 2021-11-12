@@ -19,16 +19,16 @@ use std::os::unix::prelude::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_bindings::{kvm_device_attr, KVM_DEV_VFIO_GROUP, KVM_DEV_VFIO_GROUP_ADD};
-use kvm_ioctls::DeviceFd;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::ioctl::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
 };
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
+use super::KVM_DEVICE_FD;
 
 /// Refer to VFIO in https://github.com/torvalds/linux/blob/master/include/uapi/linux/vfio.h
 const IOMMU_GROUP: &str = "iommu_group";
@@ -196,8 +196,6 @@ pub struct VfioContainer {
     container: File,
     // A set of groups in the same container.
     groups: Mutex<HashMap<u32, Arc<VfioGroup>>>,
-    // The fd for kvm device, which type is VFIO.
-    kvm_device: Arc<DeviceFd>,
     // Guest memory regions information.
     pub vfio_mem_info: VfioMemInfo,
 }
@@ -207,7 +205,6 @@ impl VfioContainer {
     ///
     /// # Arguments
     ///
-    /// * `kvm_device` - The fd of kvm device.
     /// * `mem_space` - Memory address space.
     ///
     /// Return Error if
@@ -215,7 +212,7 @@ impl VfioContainer {
     /// * Fail to match container api version or extension.
     /// * Only support api version type1v2 IOMMU.
     /// * Fail to register flat_view into vfio region info.
-    pub fn new(kvm_device: Arc<DeviceFd>, mem_space: &Arc<AddressSpace>) -> Result<Self> {
+    pub fn new(mem_space: &Arc<AddressSpace>) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -247,7 +244,6 @@ impl VfioContainer {
 
         let container = VfioContainer {
             container: file,
-            kvm_device,
             groups: Mutex::new(HashMap::new()),
             vfio_mem_info,
         };
@@ -288,10 +284,12 @@ impl VfioContainer {
             attr: u64::from(KVM_DEV_VFIO_GROUP_ADD),
             addr: group_fd as *const i32 as u64,
         };
-        self.kvm_device
-            .set_device_attr(&attr)
-            .chain_err(|| "Failed to add group to kvm device")?;
-
+        match KVM_DEVICE_FD.as_ref() {
+            Some(fd) => fd
+                .set_device_attr(&attr)
+                .chain_err(|| "Failed to add group to kvm device.")?,
+            None => bail!("Failed to create kvm device."),
+        }
         Ok(())
     }
 

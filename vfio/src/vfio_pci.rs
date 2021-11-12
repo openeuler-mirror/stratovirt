@@ -17,11 +17,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
+use address_space::{FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
 use hypervisor::{MsiVector, KVM_FDS};
-use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 #[cfg(target_arch = "aarch64")]
 use pci::config::SECONDARY_BUS_NUM;
 use pci::config::{
@@ -904,24 +903,4 @@ fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute]) -> Vec<RawFd> {
         }
     }
     rawfds
-}
-
-pub fn create_vfio_container(sys_mem: Arc<AddressSpace>) -> Result<Arc<VfioContainer>> {
-    let mut vfio_device = kvm_create_device {
-        type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
-        fd: 0,
-        flags: 0,
-    };
-    let dev_fd = KVM_FDS
-        .load()
-        .vm_fd
-        .as_ref()
-        .unwrap()
-        .create_device(&mut vfio_device)
-        .chain_err(|| "Failed to create kvm device for VFIO")?;
-
-    Ok(Arc::new(
-        VfioContainer::new(Arc::new(dev_fd), &sys_mem)
-            .chain_err(|| "Failed to create vfio container")?,
-    ))
 }

@@ -132,7 +132,6 @@ use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use vfio::vfio_pci::create_vfio_container;
 use vfio::{VfioContainer, VfioPciDevice};
 use virtio::{balloon_allow_list, Balloon, Block, Console, Rng, VirtioMmioDevice, VirtioPciDevice};
 use vmm_sys_util::epoll::EventSet;
@@ -634,10 +633,10 @@ pub trait MachineOps {
                 }
                 "vfio-pci" => {
                     if container.is_none() {
-                        container = Some(
-                            create_vfio_container(self.get_sys_mem().clone())
+                        container = Some(Arc::new(
+                            VfioContainer::new(self.get_sys_mem())
                                 .chain_err(|| "Failed to create vfio container")?,
-                        );
+                        ));
                     }
                     self.add_vfio_device(&vm_config, cfg_args, container.clone().unwrap())?;
                 }
