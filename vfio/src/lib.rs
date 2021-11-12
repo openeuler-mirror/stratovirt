@@ -42,12 +42,17 @@ mod vfio_pci;
 pub use vfio_dev::VfioContainer;
 pub use vfio_pci::VfioPciDevice;
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use hypervisor::KVM_FDS;
 use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use kvm_ioctls::DeviceFd;
+use vfio_dev::VfioGroup;
 
 lazy_static! {
     static ref KVM_DEVICE_FD: Option<DeviceFd> = create_kvm_vfio_device();
+    static ref GROUPS: Mutex<HashMap<u32, Arc<VfioGroup>>> = Mutex::new(HashMap::new());
 }
 
 fn create_kvm_vfio_device() -> Option<DeviceFd> {

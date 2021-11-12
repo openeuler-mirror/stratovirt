@@ -28,7 +28,7 @@ use vmm_sys_util::ioctl::{
 };
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use super::KVM_DEVICE_FD;
+use super::{GROUPS, KVM_DEVICE_FD};
 
 /// Refer to VFIO in https://github.com/torvalds/linux/blob/master/include/uapi/linux/vfio.h
 const IOMMU_GROUP: &str = "iommu_group";
@@ -325,7 +325,7 @@ impl VfioContainer {
 /// other devices in the system.
 /// A vfio group can be created by opening `/dev/vfio/$group_id`, where $group_id represents the
 /// IOMMU group number.
-struct VfioGroup {
+pub struct VfioGroup {
     // `/dev/vfio/$group_id` file fd.
     group: File,
 }
@@ -468,7 +468,7 @@ impl VfioDevice {
             group_id = n.parse::<u32>().chain_err(|| "Invalid iommu group id")?;
         }
 
-        if let Some(g) = container.groups.lock().unwrap().get(&group_id) {
+        if let Some(g) = (*GROUPS).lock().unwrap().get(&group_id) {
             return Ok(g.clone());
         }
         let group = Arc::new(VfioGroup::new(group_id)?);
@@ -480,7 +480,7 @@ impl VfioDevice {
             .lock()
             .unwrap()
             .insert(group_id, group.clone());
-
+        (*GROUPS).lock().unwrap().insert(group_id, group.clone());
         Ok(group)
     }
 
