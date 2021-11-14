@@ -196,7 +196,7 @@ pub struct VfioContainer {
     container: File,
     // A set of groups in the same container.
     #[allow(dead_code)]
-    groups: Mutex<HashMap<u32, Arc<VfioGroup>>>,
+    groups: HashMap<u32, Arc<VfioGroup>>,
     // Guest memory regions information.
     pub vfio_mem_info: VfioMemInfo,
 }
@@ -245,7 +245,7 @@ impl VfioContainer {
 
         let container = VfioContainer {
             container: file,
-            groups: Mutex::new(HashMap::new()),
+            groups: HashMap::new(),
             vfio_mem_info,
         };
 
