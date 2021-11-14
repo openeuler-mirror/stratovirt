@@ -306,6 +306,7 @@ pub struct VfioGroup {
     // `/dev/vfio/$group_id` file fd.
     group: File,
     container: Option<Weak<Mutex<VfioContainer>>>,
+    devices: HashMap<RawFd, Arc<VfioDevice>>,
 }
 
 impl VfioGroup {
@@ -341,6 +342,7 @@ impl VfioGroup {
         Ok(VfioGroup {
             group: file,
             container: None,
+            devices: HashMap::new(),
         })
     }
 
@@ -408,7 +410,7 @@ impl VfioGroup {
 
 pub struct VfioDevInfo {
     pub num_irqs: u32,
-    pub flags: u32,
+    flags: u32,
 }
 
 /// Vfio device includes the group and container it belongs to, I/O regions and interrupt
@@ -460,18 +462,22 @@ impl VfioDevice {
             bail!("No provided host PCI device, use -device vfio-pci,host=DDDD:BB:DD.F");
         }
         let group = Self::vfio_get_group(&path, mem_as).chain_err(|| "Fail to get iommu group")?;
-        let locked_group = group.lock().unwrap();
+        let mut locked_group = group.lock().unwrap();
         let container = locked_group.container.as_ref().unwrap().clone();
 
         let device =
             Self::vfio_get_device(&locked_group, &path).chain_err(|| "Fail to get vfio device")?;
         let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
-        Ok(Arc::new(VfioDevice {
+        let vfio_dev = Arc::new(VfioDevice {
             device,
             group: Arc::downgrade(&group),
             container,
             dev_info,
-        }))
+        });
+        locked_group
+            .devices
+            .insert(vfio_dev.device.as_raw_fd(), vfio_dev.clone());
+        Ok(vfio_dev)
     }
 
     fn vfio_get_group(
