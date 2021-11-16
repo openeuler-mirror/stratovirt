@@ -16,7 +16,7 @@ use std::num::Wrapping;
 use std::sync::atomic::{fence, Ordering};
 use std::sync::Arc;
 
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
 use util::byte_code::ByteCode;
 
 use super::errors::{ErrorKind, Result, ResultExt};
@@ -246,6 +246,7 @@ impl SplitVringDesc {
         desc_table: GuestAddress,
         queue_size: u16,
         index: u16,
+        cache: &mut Option<RegionCache>,
     ) -> Result<Self> {
         if index >= queue_size {
             return Err(ErrorKind::QueueIndex(index, queue_size).into());
@@ -264,7 +265,7 @@ impl SplitVringDesc {
                 )
                 .into());
             };
-        if desc.is_valid(sys_mem, queue_size) {
+        if desc.is_valid(sys_mem, queue_size, cache) {
             Ok(desc)
         } else {
             Err(ErrorKind::QueueDescInvalid.into())
@@ -272,13 +273,37 @@ impl SplitVringDesc {
     }
 
     /// Return true if the descriptor is valid.
-    fn is_valid(&self, sys_mem: &Arc<AddressSpace>, queue_size: u16) -> bool {
-        if let Err(ref e) = checked_offset_mem(&sys_mem, self.addr, u64::from(self.len)) {
-            error!(
-                "The memory of descriptor is invalid, {} ",
-                error_chain::ChainedError::display_chain(e),
-            );
-            return false;
+    fn is_valid(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        queue_size: u16,
+        cache: &mut Option<RegionCache>,
+    ) -> bool {
+        let mut miss_cached = true;
+        if let Some(reg_cache) = cache {
+            let base = self.addr.0;
+            let offset = self.len as u64;
+            if base > reg_cache.start && base + offset < reg_cache.end {
+                base.checked_add(offset).unwrap();
+                miss_cached = false;
+            }
+        } else {
+            let gotten_cache = sys_mem.get_region_cache(self.addr);
+            if let Some(obtained_cache) = gotten_cache {
+                if obtained_cache.reg_type == RegionType::Ram {
+                    *cache = gotten_cache;
+                }
+            }
+        }
+
+        if miss_cached {
+            if let Err(ref e) = checked_offset_mem(&sys_mem, self.addr, u64::from(self.len)) {
+                error!(
+                    "The memory of descriptor is invalid, {} ",
+                    error_chain::ChainedError::display_chain(e),
+                );
+                return false;
+            }
         }
 
         if self.has_next() && self.next >= queue_size {
@@ -303,8 +328,9 @@ impl SplitVringDesc {
         desc_table: GuestAddress,
         queue_size: u16,
         index: u16,
+        cache: &mut Option<RegionCache>,
     ) -> Result<SplitVringDesc> {
-        SplitVringDesc::new(sys_mem, desc_table, queue_size, index)
+        SplitVringDesc::new(sys_mem, desc_table, queue_size, index, cache)
             .chain_err(|| format!("Failed to find next descriptor {}", index))
     }
 
@@ -342,6 +368,7 @@ impl SplitVringDesc {
         queue_size: u16,
         index: u16,
         mut desc: SplitVringDesc,
+        cache: &mut Option<RegionCache>,
     ) -> Result<Element> {
         let mut elem = Element::new(index);
 
@@ -363,7 +390,7 @@ impl SplitVringDesc {
             elem.desc_num += 1;
 
             if desc.has_next() {
-                desc = Self::next_desc(sys_mem, desc_table, queue_size, desc.next)?;
+                desc = Self::next_desc(sys_mem, desc_table, queue_size, desc.next, cache)?;
             } else {
                 break;
             }
@@ -373,15 +400,20 @@ impl SplitVringDesc {
     }
 
     /// Get element from indirect descriptor chain.
-    fn get_indirect_desc(&self, sys_mem: &Arc<AddressSpace>, index: u16) -> Result<Element> {
+    fn get_indirect_desc(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        index: u16,
+        cache: &mut Option<RegionCache>,
+    ) -> Result<Element> {
         if !self.is_valid_indirect_desc() {
             return Err(ErrorKind::QueueDescInvalid.into());
         }
 
         let desc_num = self.get_desc_num();
         let desc_table = self.addr;
-        let desc = Self::next_desc(sys_mem, desc_table, desc_num, 0)?;
-        Self::get_element(sys_mem, desc_table, desc_num, index, desc)
+        let desc = Self::next_desc(sys_mem, desc_table, desc_num, 0, cache)?;
+        Self::get_element(sys_mem, desc_table, desc_num, index, desc, cache)
             .chain_err(||
                 format!("Failed to get element from indirect descriptor chain {}, table addr: 0x{:X}, size: {}",
                     index, desc_table.raw_value(), desc_num)
@@ -395,8 +427,9 @@ impl SplitVringDesc {
         desc_table: GuestAddress,
         queue_size: u16,
         index: u16,
+        cache: &mut Option<RegionCache>,
     ) -> Result<Element> {
-        Self::get_element(sys_mem, desc_table, queue_size, index, *self).chain_err(|| {
+        Self::get_element(sys_mem, desc_table, queue_size, index, *self, cache).chain_err(|| {
             format!(
                 "Failed to get element from normal descriptor chain {}, table addr: 0x{:X}, size: {}",
                 index, desc_table.raw_value(), queue_size
@@ -410,6 +443,8 @@ impl ByteCode for SplitVringDesc {}
 /// Split vring.
 #[derive(Default, Clone, Copy)]
 pub struct SplitVring {
+    /// Region cache information.
+    pub cache: Option<RegionCache>,
     /// Guest physical address of the descriptor table.
     /// The table is composed of descriptors(SplitVringDesc).
     pub desc_table: GuestAddress,
@@ -452,6 +487,7 @@ impl SplitVring {
     /// * `queue_config` - Configuration of the vring.
     pub fn new(queue_config: QueueConfig) -> Self {
         SplitVring {
+            cache: None,
             desc_table: queue_config.desc_table,
             avail_ring: queue_config.avail_ring,
             used_ring: queue_config.used_ring,
@@ -689,24 +725,36 @@ impl SplitVring {
                 .chain_err(|| "Failed to set avail event for popping avail ring")?;
         }
 
-        let desc = SplitVringDesc::new(sys_mem, self.desc_table, self.actual_size(), desc_index)?;
+        let desc = SplitVringDesc::new(
+            sys_mem,
+            self.desc_table,
+            self.actual_size(),
+            desc_index,
+            &mut self.cache,
+        )?;
         let elem = if desc.is_indirect_desc() {
             if desc.write_only() {
                 bail!("Unexpected descriptor for writing only for popping avail ring");
             }
 
-            desc.get_indirect_desc(sys_mem, desc_index)
+            desc.get_indirect_desc(sys_mem, desc_index, &mut self.cache)
                 .map(|elem| {
                     self.next_avail += Wrapping(1);
                     elem
                 })
                 .chain_err(|| "Failed to get indirect desc for popping avail ring")?
         } else {
-            desc.get_nonindirect_desc(sys_mem, self.desc_table, self.actual_size(), desc_index)
-                .map(|elem| {
-                    self.next_avail += Wrapping(1);
-                    elem
-                })?
+            desc.get_nonindirect_desc(
+                sys_mem,
+                self.desc_table,
+                self.actual_size(),
+                desc_index,
+                &mut self.cache,
+            )
+            .map(|elem| {
+                self.next_avail += Wrapping(1);
+                elem
+            })?
         };
 
         Ok(elem)
