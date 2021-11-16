@@ -385,8 +385,9 @@ impl SplitVringDesc {
         index: u16,
         mut desc: SplitVringDesc,
         cache: &mut Option<RegionCache>,
-    ) -> Result<Element> {
-        let mut elem = Element::new(index);
+        elem: &mut Element,
+    ) -> Result<()> {
+        elem.index = index;
 
         loop {
             if elem.desc_num >= queue_size {
@@ -412,7 +413,7 @@ impl SplitVringDesc {
             }
         }
 
-        Ok(elem)
+        Ok(())
     }
 
     /// Get element from indirect descriptor chain.
@@ -423,7 +424,8 @@ impl SplitVringDesc {
         desc_table_host: u64,
         index: u16,
         cache: &mut Option<RegionCache>,
-    ) -> Result<Element> {
+        elem: &mut Element,
+    ) -> Result<()> {
         if !self.is_valid_indirect_desc() {
             return Err(ErrorKind::QueueDescInvalid.into());
         }
@@ -432,7 +434,7 @@ impl SplitVringDesc {
         let desc_hva = desc_table_host + self.addr.0 - desc_table.0;
         let desc_table = self.addr;
         let desc = Self::next_desc(sys_mem, desc_hva, desc_num, 0, cache)?;
-        Self::get_element(sys_mem, desc_hva, desc_num, index, desc, cache)
+        Self::get_element(sys_mem, desc_hva, desc_num, index, desc, cache, elem)
             .chain_err(||
                 format!("Failed to get element from indirect descriptor chain {}, table addr: 0x{:X}, size: {}",
                     index, desc_table.raw_value(), desc_num)
@@ -447,8 +449,9 @@ impl SplitVringDesc {
         queue_size: u16,
         index: u16,
         cache: &mut Option<RegionCache>,
-    ) -> Result<Element> {
-        Self::get_element(sys_mem, desc_table_host, queue_size, index, *self, cache).chain_err(|| {
+        elem: &mut Element,
+    ) -> Result<()> {
+        Self::get_element(sys_mem, desc_table_host, queue_size, index, *self, cache, elem).chain_err(|| {
             format!(
                 "Failed to get element from normal descriptor chain {}, table addr: 0x{:X}, size: {}",
                 index, desc_table_host, queue_size
@@ -724,7 +727,12 @@ impl SplitVring {
         }
     }
 
-    fn get_vring_element(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element> {
+    fn get_vring_element(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        features: u64,
+        elem: &mut Element,
+    ) -> Result<()> {
         let index_offset = VRING_FLAGS_AND_IDX_LEN
             + AVAILELEM_LEN * u64::from(self.next_avail.0 % self.actual_size());
         let desc_index_addr = self
@@ -749,7 +757,7 @@ impl SplitVring {
             desc_index,
             &mut self.cache,
         )?;
-        let elem = if desc.is_indirect_desc() {
+        if desc.is_indirect_desc() {
             if desc.write_only() {
                 bail!("Unexpected descriptor for writing only for popping avail ring");
             }
@@ -760,6 +768,7 @@ impl SplitVring {
                 self.addr_cache.desc_table_host,
                 desc_index,
                 &mut self.cache,
+                elem,
             )
             .map(|elem| {
                 self.next_avail += Wrapping(1);
@@ -773,6 +782,7 @@ impl SplitVring {
                 self.actual_size(),
                 desc_index,
                 &mut self.cache,
+                elem,
             )
             .map(|elem| {
                 self.next_avail += Wrapping(1);
@@ -785,7 +795,7 @@ impl SplitVring {
                 .chain_err(|| "Failed to set avail event for popping avail ring")?;
         }
 
-        Ok(elem)
+        Ok(())
     }
 }
 
@@ -813,17 +823,11 @@ impl VringOps for SplitVring {
             bail!("failed to pop avail: empty!");
         }
 
-        match self.get_vring_element(sys_mem, features) {
-            Ok(elem) => Ok(elem),
-            Err(ref e) => {
-                error!(
-                    "Failed to get element from split vring, {}",
-                    error_chain::ChainedError::display_chain(e),
-                );
+        let mut element = Element::new(0);
+        self.get_vring_element(sys_mem, features, &mut element)
+            .chain_err(|| "Failed to get vring element")?;
 
-                Err(e.to_string().into())
-            }
-        }
+        Ok(element)
     }
 
     fn push_back(&mut self) {
@@ -1590,10 +1594,7 @@ mod tests {
             )
             .unwrap();
         if let Err(err) = vring.pop_avail(&sys_space, features) {
-            assert_eq!(
-                err.to_string(),
-                "Unexpected descriptor for writing only for popping avail ring"
-            );
+            assert_eq!(err.to_string(), "Failed to get vring element");
         } else {
             assert!(false);
         }
@@ -1659,10 +1660,7 @@ mod tests {
         )
         .unwrap();
         if let Err(err) = vring.pop_avail(&sys_space, features) {
-            assert_eq!(
-                err.to_string(),
-                "Failed to get indirect desc for popping avail ring"
-            );
+            assert_eq!(err.to_string(), "Failed to get vring element");
         } else {
             assert!(false);
         }
