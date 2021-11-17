@@ -422,6 +422,14 @@ impl VfioPciDevice {
 
         let cloned_msix = msix.clone();
         let read = move |data: &mut [u8], _: GuestAddress, offset: u64| -> bool {
+            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+                error!(
+                    "Fail to read vfio msix table, data length {} plus offset {} overflow",
+                    data.len(),
+                    offset
+                );
+                return false;
+            }
             data.copy_from_slice(
                 &cloned_msix.lock().unwrap().table[offset as usize..(offset as usize + data.len())],
             );

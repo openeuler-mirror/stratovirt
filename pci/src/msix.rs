@@ -162,8 +162,16 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let table_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
+            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+                error!(
+                    "Fail to read msi table, illegal data length {}, offset {}",
+                    data.len(),
+                    offset
+                );
+                return false;
+            }
             let offset = offset as usize;
-            data.copy_from_slice(&cloned_msix.lock().unwrap().table[offset..(offset + 4)]);
+            data.copy_from_slice(&cloned_msix.lock().unwrap().table[offset..(offset + data.len())]);
             true
         };
         let cloned_msix = msix.clone();
@@ -193,8 +201,16 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let pba_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
+            if offset as usize + data.len() > cloned_msix.lock().unwrap().pba.len() {
+                error!(
+                    "Fail to read msi pba, illegal data length {}, offset {}",
+                    data.len(),
+                    offset
+                );
+                return false;
+            }
             let offset = offset as usize;
-            data.copy_from_slice(&cloned_msix.lock().unwrap().pba[offset..(offset + 4)]);
+            data.copy_from_slice(&cloned_msix.lock().unwrap().pba[offset..(offset + data.len())]);
             true
         };
         let pba_write = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool { true };
