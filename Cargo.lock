@@ -603,6 +603,7 @@ dependencies = [
  "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
+ "lazy_static",
  "libc",
  "log",
  "pci",

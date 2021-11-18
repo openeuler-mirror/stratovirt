@@ -132,8 +132,7 @@ use machine_manager::machine::{KvmVmState, MachineInterface};
 use migration::MigrationManager;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use vfio::vfio_pci::create_vfio_container;
-use vfio::{VfioContainer, VfioPciDevice};
+use vfio::{VfioDevice, VfioPciDevice};
 use virtio::{balloon_allow_list, Balloon, Block, Console, Rng, VirtioMmioDevice, VirtioPciDevice};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -515,28 +514,15 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_vfio_device(
-        &mut self,
-        vm_config: &VmConfig,
-        cfg_args: &str,
-        container: Arc<VfioContainer>,
-    ) -> Result<()> {
+    fn add_vfio_device(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg: VfioConfig = parse_vfio(vm_config, cfg_args)?;
         let path = "/sys/bus/pci/devices/".to_string() + &device_cfg.host;
-        let name = device_cfg.id;
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let vfio_pci_dev = VfioPciDevice::new(
-            Path::new(&path),
-            container,
-            devfn,
-            name,
-            parent_bus,
-            multi_func,
-        )
-        .chain_err(|| "Failed to create vfio pci device")?;
-
+        let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
+            .chain_err(|| "Failed to create pci device")?;
+        let vfio_pci_dev = VfioPciDevice::new(device, devfn, device_cfg.id, parent_bus, multi_func);
         VfioPciDevice::realize(vfio_pci_dev).chain_err(|| "Failed to realize vfio pci device")?;
         Ok(())
     }
@@ -598,7 +584,6 @@ pub trait MachineOps {
                 .chain_err(|| ErrorKind::AddDevErr("pflash".to_string()))?;
         }
 
-        let mut container: Option<Arc<VfioContainer>> = None;
         for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
             match dev.0.as_str() {
@@ -633,13 +618,7 @@ pub trait MachineOps {
                     self.add_virtio_rng(vm_config, cfg_args)?;
                 }
                 "vfio-pci" => {
-                    if container.is_none() {
-                        container = Some(
-                            create_vfio_container(self.get_sys_mem().clone())
-                                .chain_err(|| "Failed to create vfio container")?,
-                        );
-                    }
-                    self.add_vfio_device(&vm_config, cfg_args, container.clone().unwrap())?;
+                    self.add_vfio_device(&vm_config, cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
