@@ -59,6 +59,7 @@ pub struct MachineMemConfig {
     pub mem_path: Option<String>,
     pub dump_guest_core: bool,
     pub mem_share: bool,
+    pub mem_prealloc: bool,
 }
 
 impl Default for MachineMemConfig {
@@ -68,6 +69,7 @@ impl Default for MachineMemConfig {
             mem_path: None,
             dump_guest_core: true,
             mem_share: false,
+            mem_prealloc: false,
         }
     }
 }
@@ -239,6 +241,10 @@ impl VmConfig {
         self.machine_config.mem_config.mem_path = Some(mem_path.replace("\"", ""));
         Ok(())
     }
+
+    pub fn enable_mem_prealloc(&mut self) {
+        self.machine_config.mem_config.mem_prealloc = true;
+    }
 }
 
 fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
@@ -298,6 +304,7 @@ mod tests {
             mem_path: None,
             mem_share: false,
             dump_guest_core: false,
+            mem_prealloc: false,
         };
         let mut machine_config = MachineConfig {
             mach_type: MachineType::MicroVm,

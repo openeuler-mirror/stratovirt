@@ -706,6 +706,7 @@ impl MachineOps for LightMachine {
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
             is_migrate,
+            vm_config.machine_config.nr_cpus,
         )?;
 
         #[cfg(target_arch = "x86_64")]

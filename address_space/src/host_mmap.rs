@@ -10,15 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::min;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
+use std::thread;
 
 use machine_manager::config::MachineMemConfig;
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
 use util::unix::host_page_size;
+
+const MAX_PREALLOC_THREAD: u8 = 16;
 
 /// FileBackend represents backend-file of `HostMemMapping`.
 #[derive(Clone)]
@@ -175,6 +179,74 @@ fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
     }
 }
 
+/// Get the max number of threads that can be used to touch pages.
+///
+/// # Arguments
+///
+/// * `nr_vcpus` - Number of vcpus.
+fn max_nr_threads(nr_vcpus: u8) -> u8 {
+    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u8 };
+    min(min(nr_host_cpu, MAX_PREALLOC_THREAD), nr_vcpus)
+}
+
+/// Touch pages to pre-alloc memory for VM.
+///
+/// # Arguments
+///
+/// * `start` - The start host address of memory segment.
+/// * `page_size` - Size of host page.
+/// * `nr_pages` - Number of pages.
+fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
+    let mut addr = start;
+    for _i in 0..nr_pages {
+        // Safe, because the data read from raw pointer is written to the same address.
+        unsafe {
+            let read_addr = addr as *mut u8;
+            let data: u8 = *read_addr;
+            // This function is used to prevent complier optimization.
+            // If `*read = data` is used, the complier optimizes it as no-op,
+            // which means that the pages will not be touched.
+            std::ptr::write_volatile(read_addr, data);
+        }
+        addr += page_size;
+    }
+}
+
+/// Pre-alloc memory for virtual machine.
+///
+/// # Arguments
+///
+/// * `host_addr` - The start host address of memory of the virtual machine.
+/// * `size` - Size of memory.
+/// * `nr_vcpus` - Number of vcpus.
+fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+    let page_size = host_page_size();
+    let threads = max_nr_threads(nr_vcpus);
+    let nr_pages = (size + page_size - 1) / page_size;
+    let pages_per_thread = nr_pages / (threads as u64);
+    let left = nr_pages % (threads as u64);
+    let mut addr = host_addr;
+    let mut threads_join = Vec::new();
+    for i in 0..threads {
+        let touch_nr_pages = if i < (left as u8) {
+            pages_per_thread + 1
+        } else {
+            pages_per_thread
+        };
+        let thread = thread::spawn(move || {
+            touch_pages(addr, page_size, touch_nr_pages);
+        });
+        threads_join.push(thread);
+        addr += touch_nr_pages * page_size;
+    }
+    // join all threads to wait for pre-allocating.
+    while let Some(thread) = threads_join.pop() {
+        if let Err(ref e) = thread.join() {
+            error!("Failed to join thread: {:?}", e);
+        }
+    }
+}
+
 /// Create HostMemMappings according to address ranges.
 ///
 /// # Arguments
@@ -184,6 +256,7 @@ fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
 pub fn create_host_mmaps(
     ranges: &[(u64, u64)],
     mem_config: &MachineMemConfig,
+    nr_vcpus: u8,
 ) -> Result<Vec<Arc<HostMemMapping>>> {
     let mut f_back: Option<FileBackend> = None;
 
@@ -222,6 +295,9 @@ pub fn create_host_mmaps(
         mem_config.mem_share,
         mem_config.dump_guest_core,
     )?;
+    if mem_config.mem_prealloc {
+        mem_prealloc(host_addr, mem_config.mem_size, nr_vcpus);
+    }
     let mut mappings = Vec::new();
     for range in ranges.iter() {
         mappings.push(Arc::new(HostMemMapping::new(
@@ -446,9 +522,10 @@ mod test {
             mem_path: Some(mem_path),
             dump_guest_core: false,
             mem_share: false,
+            mem_prealloc: false,
         };
 
-        let host_mmaps = create_host_mmaps(&addr_ranges, &mem_config).unwrap();
+        let host_mmaps = create_host_mmaps(&addr_ranges, &mem_config, 1).unwrap();
         assert_eq!(host_mmaps.len(), 2);
 
         // check the start address and size of HostMemMapping

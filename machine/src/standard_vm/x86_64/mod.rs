@@ -361,6 +361,7 @@ impl MachineOps for StdMachine {
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
             is_migrate,
+            vm_config.machine_config.nr_cpus,
         )?;
 
         locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;

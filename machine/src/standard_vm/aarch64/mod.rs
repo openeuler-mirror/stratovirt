@@ -347,6 +347,7 @@ impl MachineOps for StdMachine {
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_mem,
             is_migrate,
+            vm_config.machine_config.nr_cpus,
         )?;
 
         let vcpu_fds = {
