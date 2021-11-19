@@ -477,19 +477,14 @@ impl VfioPciDevice {
                     .unwrap()
                     .add_msi_route(gsi_route.gsi as u32, msix_vector)
                     .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {}", e));
-
                 KVM_FDS
                     .load()
                     .commit_irq_routing()
                     .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
-
                 KVM_FDS
                     .load()
-                    .vm_fd
-                    .as_ref()
-                    .unwrap()
                     .register_irqfd(gsi_route.irq_fd.as_ref().unwrap(), gsi_route.gsi as u32)
-                    .unwrap_or_else(|e| error!("Failed to register irq, error is {}", e));
+                    .unwrap_or_else(|e| error!("{}", e));
             } else {
                 KVM_FDS
                     .load()
@@ -498,20 +493,18 @@ impl VfioPciDevice {
                     .unwrap()
                     .update_msi_route(gsi_route.gsi as u32, msix_vector)
                     .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {}", e));
-
                 KVM_FDS
                     .load()
                     .commit_irq_routing()
                     .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
             }
+
             cloned_dev
                 .disable_irqs()
                 .unwrap_or_else(|e| error!("Failed to disable irq, error is {}", e));
-
             cloned_dev
                 .enable_irqs(get_irq_rawfds(&locked_gsi_routes))
                 .unwrap_or_else(|e| error!("Failed to enable irq, error is {}", e));
-
             true
         };
 

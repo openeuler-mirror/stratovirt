@@ -14,15 +14,16 @@ mod interrupt;
 #[cfg(target_arch = "x86_64")]
 mod state;
 
+pub use interrupt::MsiVector;
+
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
+use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
 use kvm_ioctls::{Kvm, VmFd};
-
-pub use interrupt::MsiVector;
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::errors::{Result, ResultExt};
-use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default)]
@@ -86,6 +87,22 @@ impl KVMFds {
         }
 
         Ok(())
+    }
+
+    pub fn register_irqfd(&self, fd: &EventFd, gsi: u32) -> Result<()> {
+        self.vm_fd
+            .as_ref()
+            .unwrap()
+            .register_irqfd(fd, gsi)
+            .chain_err(|| format!("Failed to register irqfd: gsi {}.", gsi))
+    }
+
+    pub fn unregister_irqfd(&self, fd: &EventFd, gsi: u32) -> Result<()> {
+        self.vm_fd
+            .as_ref()
+            .unwrap()
+            .unregister_irqfd(fd, gsi)
+            .chain_err(|| format!("Failed to unregister irqfd: gsi {}.", gsi))
     }
 }
 
