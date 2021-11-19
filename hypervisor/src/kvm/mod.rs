@@ -83,10 +83,8 @@ impl KVMFds {
                 .as_ref()
                 .unwrap()
                 .set_gsi_routing(&*irq_routing)
-                .chain_err(|| "Failed to set gsi routing")?;
+                .chain_err(|| "Failed to set gsi routing")
         }
-
-        Ok(())
     }
 
     pub fn register_irqfd(&self, fd: &EventFd, gsi: u32) -> Result<()> {

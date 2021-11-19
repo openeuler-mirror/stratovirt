@@ -278,10 +278,7 @@ impl MachineOps for StdMachine {
             .lock()
             .unwrap()
             .init_irq_route_table();
-        KVM_FDS
-            .load()
-            .commit_irq_routing()
-            .chain_err(|| "Failed to commit irq routing for kvm irqchip")?;
+        KVM_FDS.load().commit_irq_routing()?;
         Ok(())
     }
 

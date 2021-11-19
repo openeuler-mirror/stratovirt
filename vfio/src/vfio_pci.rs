@@ -480,7 +480,7 @@ impl VfioPciDevice {
                 KVM_FDS
                     .load()
                     .commit_irq_routing()
-                    .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
+                    .unwrap_or_else(|e| error!("{}", e));
                 KVM_FDS
                     .load()
                     .register_irqfd(gsi_route.irq_fd.as_ref().unwrap(), gsi_route.gsi as u32)
@@ -496,7 +496,7 @@ impl VfioPciDevice {
                 KVM_FDS
                     .load()
                     .commit_irq_routing()
-                    .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
+                    .unwrap_or_else(|e| error!("{}", e));
             }
 
             cloned_dev

@@ -249,8 +249,6 @@ impl MachineOps for StdMachine {
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
-        use crate::errors::ResultExt;
-
         let intc_conf = InterruptControllerConfig {
             version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
             vcpu_count,
@@ -272,10 +270,7 @@ impl MachineOps for StdMachine {
             .lock()
             .unwrap()
             .init_irq_route_table();
-        KVM_FDS
-            .load()
-            .commit_irq_routing()
-            .chain_err(|| "Failed to commit irq routing for arm gic")?;
+        KVM_FDS.load().commit_irq_routing()?;
         Ok(())
     }
 
