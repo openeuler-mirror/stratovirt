@@ -162,8 +162,7 @@ impl IrqRouteTable {
         Ok(())
     }
 
-    /// Update msi irq route to irq routing table.
-    pub fn update_msi_route(&mut self, gsi: u32, msi_vector: MsiVector) -> Result<()> {
+    fn remove_irq_route(&mut self, gsi: u32) {
         while let Some((index, _)) = self
             .irq_routes
             .iter()
@@ -172,6 +171,11 @@ impl IrqRouteTable {
         {
             self.irq_routes.remove(index);
         }
+    }
+
+    /// Update msi irq route to irq routing table.
+    pub fn update_msi_route(&mut self, gsi: u32, msi_vector: MsiVector) -> Result<()> {
+        self.remove_irq_route(gsi);
         self.add_msi_route(gsi, msi_vector)
             .chain_err(|| "Failed to add msi route")?;
 
@@ -197,15 +201,7 @@ impl IrqRouteTable {
         self.gsi_bitmap
             .clear(gsi as usize)
             .chain_err(|| "Failed to release gsi")?;
-        while let Some((index, _)) = self
-            .irq_routes
-            .iter()
-            .enumerate()
-            .find(|(_, e)| e.gsi == gsi)
-        {
-            self.irq_routes.remove(index);
-        }
-
+        self.remove_irq_route(gsi);
         Ok(())
     }
 
