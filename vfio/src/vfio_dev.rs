@@ -195,8 +195,7 @@ pub struct VfioContainer {
     // `/dev/vfio/vfio` file fd, empowered by the attached groups.
     container: File,
     // A set of groups in the same container.
-    #[allow(dead_code)]
-    groups: HashMap<u32, Arc<VfioGroup>>,
+    groups: HashMap<u32, Arc<Mutex<VfioGroup>>>,
     // Guest memory regions information.
     pub vfio_mem_info: VfioMemInfo,
 }
@@ -527,6 +526,16 @@ impl VfioDevice {
         group.connect_container(mem_as)?;
         let group = Arc::new(Mutex::new(group));
         (*GROUPS).lock().unwrap().insert(group_id, group.clone());
+        group
+            .lock()
+            .unwrap()
+            .container
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .groups
+            .insert(group_id, group.clone());
         Ok(group)
     }
 
