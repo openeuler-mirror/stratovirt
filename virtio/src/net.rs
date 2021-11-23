@@ -123,9 +123,12 @@ impl NetIoHandler {
                 .chain_err(|| "Failed to pop avail ring for net rx")?;
             let mut iovecs = Vec::new();
             for elem_iov in elem.in_iovec.iter() {
-                if let Some(hva) = self.mem_space.get_host_address(elem_iov.addr) {
+                let host_addr = queue
+                    .vring
+                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                if host_addr != 0 {
                     let iovec = libc::iovec {
-                        iov_base: hva as *mut libc::c_void,
+                        iov_base: host_addr as *mut libc::c_void,
                         iov_len: elem_iov.len as libc::size_t,
                     };
                     iovecs.push(iovec);
@@ -177,9 +180,12 @@ impl NetIoHandler {
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
-                if let Some(hva) = self.mem_space.get_host_address(elem_iov.addr) {
+                let host_addr = queue
+                    .vring
+                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                if host_addr != 0 {
                     let iovec = libc::iovec {
-                        iov_base: hva as *mut libc::c_void,
+                        iov_base: host_addr as *mut libc::c_void,
                         iov_len: elem_iov.len as libc::size_t,
                     };
                     iovecs.push(iovec);

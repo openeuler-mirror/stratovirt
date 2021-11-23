@@ -38,6 +38,7 @@ impl FlatView {
 #[derive(Clone, Copy)]
 pub struct RegionCache {
     pub reg_type: RegionType,
+    pub host_base: u64,
     pub start: u64,
     pub end: u64,
 }
@@ -46,6 +47,7 @@ impl Default for RegionCache {
     fn default() -> Self {
         RegionCache {
             reg_type: RegionType::Ram,
+            host_base: 0,
             start: 0,
             end: 0,
         }
@@ -329,8 +331,10 @@ impl AddressSpace {
             let reg_type = range.owner.region_type();
             let start = range.addr_range.base.0;
             let end = range.addr_range.end_addr().0;
+            let host_base = self.get_host_address(GuestAddress(start)).unwrap_or(0);
             let cache = RegionCache {
                 reg_type,
+                host_base,
                 start,
                 end,
             };
