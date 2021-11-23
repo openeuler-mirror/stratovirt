@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::mem::size_of;
+use std::ops::Deref;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::prelude::FileExt;
 use std::path::{Path, PathBuf};
@@ -84,135 +85,31 @@ ioctl_io_nr!(
 );
 ioctl_io_nr!(VFIO_DEVICE_RESET, vfio::VFIO_TYPE, vfio::VFIO_BASE + 0x0b);
 ioctl_io_nr!(VFIO_IOMMU_MAP_DMA, vfio::VFIO_TYPE, vfio::VFIO_BASE + 0x0d);
-
-/// The guest OS memory pages should be previously pinned before mapping into the IOMMU tables.
-/// This provides structure to save all guest OS memory regions information from `AddressSpace`.
-#[repr(C)]
-#[derive(Copy, Clone, Default, PartialEq)]
-pub struct VfioMemoryRegion {
-    // Guest physical address.
-    pub guest_phys_addr: u64,
-    // Size of the memory region.
-    pub memory_size: u64,
-    // Host virtual address.
-    pub userspace_addr: u64,
-    // IOMMU mapped flag.
-    pub iommu_mapped: bool,
-}
-
-/// `VfioMemInfo` structure contains pinning pages information. If any pages need to be zapped from
-/// the virtual address space or new pages are added to guest OS memory, it can re-establish regions
-///  with updated page info.
-#[derive(Clone)]
-pub struct VfioMemInfo {
-    pub regions: Arc<Mutex<Vec<VfioMemoryRegion>>>,
-}
-
-impl VfioMemInfo {
-    fn new() -> VfioMemInfo {
-        VfioMemInfo {
-            regions: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    fn add_listener_region(&self, fr: &FlatRange) -> address_space::errors::Result<()> {
-        if fr.owner.region_type() != address_space::RegionType::Ram {
-            return Ok(());
-        }
-
-        let guest_phys_addr = fr.addr_range.base.raw_value();
-        let memory_size = fr.addr_range.size;
-        let hva = match fr.owner.get_host_address() {
-            Some(addr) => addr,
-            None => bail!("Failed to get host address"),
-        };
-        let userspace_addr = hva + fr.offset_in_region;
-        self.regions.lock().unwrap().push(VfioMemoryRegion {
-            guest_phys_addr,
-            memory_size,
-            userspace_addr,
-            iommu_mapped: false,
-        });
-
-        Ok(())
-    }
-
-    fn del_listener_region(&self, fr: &FlatRange) -> address_space::errors::Result<()> {
-        if fr.owner.region_type() != address_space::RegionType::Ram {
-            return Ok(());
-        }
-
-        let hva = match fr.owner.get_host_address() {
-            Some(addr) => addr,
-            None => bail!("Failed to get host address"),
-        };
-        let target = VfioMemoryRegion {
-            guest_phys_addr: fr.addr_range.base.raw_value(),
-            memory_size: fr.addr_range.size,
-            userspace_addr: hva + fr.offset_in_region,
-            iommu_mapped: false,
-        };
-        let mut mem_regions = self.regions.lock().unwrap();
-        for (index, mr) in mem_regions.iter().enumerate() {
-            if *mr == target {
-                mem_regions.remove(index);
-                return Ok(());
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl Listener for VfioMemInfo {
-    fn priority(&self) -> i32 {
-        0
-    }
-
-    fn handle_request(
-        &self,
-        range: Option<&FlatRange>,
-        _evtfd: Option<&RegionIoEventFd>,
-        req_type: ListenerReqType,
-    ) -> address_space::errors::Result<()> {
-        match req_type {
-            ListenerReqType::AddRegion => {
-                self.add_listener_region(range.unwrap())?;
-            }
-            ListenerReqType::DeleteRegion => {
-                self.del_listener_region(range.unwrap())?;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-}
+ioctl_io_nr!(
+    VFIO_IOMMU_UNMAP_DMA,
+    vfio::VFIO_TYPE,
+    vfio::VFIO_BASE + 0x0e
+);
 
 /// Vfio container class can hold one or more groups. In IOMMUs, page tables are shared between
 /// different groups, vfio container can reduce TLB thrashing and duplicate page tables.
 /// A container can be created by simply opening the `/dev/vfio/vfio` file.
+#[derive(Clone)]
 pub struct VfioContainer {
     // `/dev/vfio/vfio` file fd, empowered by the attached groups.
-    container: File,
+    fd: Arc<File>,
     // A set of groups in the same container.
-    groups: HashMap<u32, Arc<Mutex<VfioGroup>>>,
-    // Guest memory regions information.
-    pub vfio_mem_info: VfioMemInfo,
+    groups: Arc<Mutex<HashMap<u32, Arc<VfioGroup>>>>,
 }
 
 impl VfioContainer {
     /// Create a VFIO container.
     ///
-    /// # Arguments
-    ///
-    /// * `mem_space` - Memory address space.
-    ///
     /// Return Error if
     /// * Fail to open `/dev/vfio/vfio` file.
     /// * Fail to match container api version or extension.
     /// * Only support api version type1v2 IOMMU.
-    /// * Fail to register flat_view into vfio region info.
-    pub fn new(mem_space: &Arc<AddressSpace>) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -245,18 +142,10 @@ impl VfioContainer {
             .into());
         }
 
-        let vfio_mem_info = VfioMemInfo::new();
-        mem_space
-            .register_listener(Box::new(vfio_mem_info.clone()))
-            .chain_err(|| "Failed to register memory to listener")?;
-
-        let container = VfioContainer {
-            container: file,
-            groups: HashMap::new(),
-            vfio_mem_info,
-        };
-
-        Ok(container)
+        Ok(VfioContainer {
+            fd: Arc::new(file),
+            groups: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     /// Set specific IOMMU type for the container.
@@ -270,7 +159,7 @@ impl VfioContainer {
     /// * Fail to set container IOMMU.
     fn set_iommu(&self, val: u32) -> Result<()> {
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
-        let ret = unsafe { ioctl_with_val(&self.container, VFIO_SET_IOMMU(), val.into()) };
+        let ret = unsafe { ioctl_with_val(self.fd.deref(), VFIO_SET_IOMMU(), val.into()) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_SET_IOMMU".to_string(),
@@ -286,11 +175,12 @@ impl VfioContainer {
     /// # Arguments
     ///
     /// * `iova` - GPA of Guest memory region.
+    /// * `size` - Region size.
     /// * `user_addr` - HVA of Guest memory region.
     ///
     /// Return Error if
     /// * Fail to map memory into IOMMU table.
-    pub fn vfio_dma_map(&self, iova: u64, size: u64, user_addr: u64) -> Result<()> {
+    fn vfio_dma_map(&self, iova: u64, size: u64, user_addr: u64) -> Result<()> {
         let map = vfio::vfio_iommu_type1_dma_map {
             argsz: size_of::<vfio::vfio_iommu_type1_dma_map>() as u32,
             flags: vfio::VFIO_DMA_MAP_FLAG_READ | vfio::VFIO_DMA_MAP_FLAG_WRITE,
@@ -300,7 +190,7 @@ impl VfioContainer {
         };
 
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
-        let ret = unsafe { ioctl_with_ref(&self.container, VFIO_IOMMU_MAP_DMA(), &map) };
+        let ret = unsafe { ioctl_with_ref(self.fd.deref(), VFIO_IOMMU_MAP_DMA(), &map) };
         if ret != 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_IOMMU_MAP_DMA".to_string(),
@@ -308,7 +198,102 @@ impl VfioContainer {
             )
             .into());
         }
+        Ok(())
+    }
 
+    /// Unmap DMA region for the "type1" IOMMU interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `iova` - GPA of Guest memory region.
+    /// * `size` - Region size.
+    ///
+    /// Return Error if
+    /// * Fail to unmap DMA region.
+    fn vfio_dma_unmap(&self, iova: u64, size: u64) -> Result<()> {
+        let unmap = vfio::vfio_iommu_type1_dma_unmap {
+            argsz: size_of::<vfio::vfio_iommu_type1_dma_unmap>() as u32,
+            flags: 0,
+            iova,
+            size,
+        };
+
+        // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
+        let ret = unsafe { ioctl_with_ref(self.fd.deref(), VFIO_IOMMU_UNMAP_DMA(), &unmap) };
+        if ret != 0 {
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_IOMMU_UNMAP_DMA".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn add_listener_region(&self, fr: &FlatRange) -> address_space::errors::Result<()> {
+        if fr.owner.region_type() != address_space::RegionType::Ram {
+            return Ok(());
+        }
+
+        let guest_phys_addr = fr.addr_range.base.raw_value();
+        let memory_size = fr.addr_range.size;
+        let hva = match fr.owner.get_host_address() {
+            Some(addr) => addr,
+            None => bail!("Failed to get host address"),
+        };
+        let userspace_addr = hva + fr.offset_in_region;
+        address_space::errors::ResultExt::chain_err(
+            self.vfio_dma_map(guest_phys_addr, memory_size, hva),
+            || {
+                format!(
+                    "Failed to do dma map: gpa 0x{:x}, size 0x{:x}, hva 0x{:x}",
+                    guest_phys_addr, memory_size, userspace_addr
+                )
+            },
+        )?;
+        Ok(())
+    }
+
+    fn del_listener_region(&self, fr: &FlatRange) -> address_space::errors::Result<()> {
+        if fr.owner.region_type() != address_space::RegionType::Ram {
+            return Ok(());
+        }
+
+        let guest_phys_addr = fr.addr_range.base.raw_value();
+        let size = fr.addr_range.size;
+        address_space::errors::ResultExt::chain_err(
+            self.vfio_dma_unmap(guest_phys_addr, size),
+            || {
+                format!(
+                    "Failed to do dma unmap: gpa 0x{:x}, size 0x{:x}.",
+                    guest_phys_addr, size
+                )
+            },
+        )?;
+        Ok(())
+    }
+}
+
+impl Listener for VfioContainer {
+    fn priority(&self) -> i32 {
+        0
+    }
+
+    fn handle_request(
+        &self,
+        range: Option<&FlatRange>,
+        _evtfd: Option<&RegionIoEventFd>,
+        req_type: ListenerReqType,
+    ) -> address_space::errors::Result<()> {
+        match req_type {
+            ListenerReqType::AddRegion => {
+                self.add_listener_region(range.unwrap())?;
+            }
+            ListenerReqType::DeleteRegion => {
+                self.del_listener_region(range.unwrap())?;
+            }
+            _ => {}
+        }
         Ok(())
     }
 }
@@ -320,8 +305,8 @@ impl VfioContainer {
 pub struct VfioGroup {
     // `/dev/vfio/$group_id` file fd.
     group: File,
-    container: Weak<Mutex<VfioContainer>>,
-    devices: HashMap<RawFd, Arc<VfioDevice>>,
+    container: Weak<VfioContainer>,
+    devices: Arc<Mutex<HashMap<RawFd, Arc<VfioDevice>>>>,
 }
 
 impl VfioGroup {
@@ -361,7 +346,7 @@ impl VfioGroup {
         Ok(VfioGroup {
             group: file,
             container: Weak::new(),
-            devices: HashMap::new(),
+            devices: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -384,8 +369,8 @@ impl VfioGroup {
         Ok(())
     }
 
-    fn set_container(&mut self, container: &Arc<Mutex<VfioContainer>>) -> Result<()> {
-        let fd = &container.lock().unwrap().container.as_raw_fd();
+    fn set_container(&mut self, container: &Arc<VfioContainer>) -> Result<()> {
+        let fd = &container.fd.as_raw_fd();
         // Safe as group is the owner of file, and we check the return.
         let ret = unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_SET_CONTAINER(), fd) };
         if ret < 0 {
@@ -401,7 +386,7 @@ impl VfioGroup {
 
     fn unset_container(&mut self) {
         let container = self.container.upgrade().unwrap();
-        let fd = container.lock().unwrap().container.as_raw_fd();
+        let fd = container.fd.as_raw_fd();
         unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &fd) };
         self.container = Weak::new();
     }
@@ -409,24 +394,25 @@ impl VfioGroup {
     fn connect_container(&mut self, mem_as: &Arc<AddressSpace>) -> Result<()> {
         for (_fd, container) in (*CONTAINERS).lock().unwrap().iter() {
             if self.set_container(container).is_ok() {
-                break;
+                self.add_to_kvm_device()?;
+                return Ok(());
             }
-        }
-        if self.container.upgrade().is_none() {
-            let new = Arc::new(Mutex::new(VfioContainer::new(mem_as)?));
-            self.set_container(&new)?;
-            if let Err(e) = new.lock().unwrap().set_iommu(vfio::VFIO_TYPE1v2_IOMMU) {
-                self.unset_container();
-                return Err(e).chain_err(|| "Failed to set IOMMU");
-            }
-            let fd = new.lock().unwrap().container.as_raw_fd();
-            CONTAINERS.lock().unwrap().insert(fd, new);
         }
 
-        if let Err(e) = self.add_to_kvm_device() {
-            self.unset_container();
-            return Err(e);
+        // No containers existed or can not be attached to the existed containers.
+        if self.container.upgrade().is_none() {
+            let container = Arc::new(VfioContainer::new()?);
+            self.set_container(&container)?;
+            container.set_iommu(vfio::VFIO_TYPE1v2_IOMMU)?;
+            CONTAINERS
+                .lock()
+                .unwrap()
+                .insert(container.fd.as_raw_fd(), container);
         }
+        self.add_to_kvm_device()?;
+        mem_as
+            .register_listener(Box::new(self.container.upgrade().unwrap().deref().clone()))
+            .chain_err(|| "Failed to register memory listener.")?;
         Ok(())
     }
 }
@@ -441,8 +427,8 @@ pub struct VfioDevInfo {
 pub struct VfioDevice {
     pub device: File,
     #[allow(dead_code)]
-    group: Weak<Mutex<VfioGroup>>,
-    pub container: Weak<Mutex<VfioContainer>>,
+    group: Weak<VfioGroup>,
+    pub container: Weak<VfioContainer>,
     pub dev_info: VfioDevInfo,
 }
 
@@ -486,26 +472,24 @@ impl VfioDevice {
         }
 
         let group = Self::vfio_get_group(&path, mem_as).chain_err(|| "Fail to get iommu group")?;
-        let mut locked_group = group.lock().unwrap();
         let device =
-            Self::vfio_get_device(&locked_group, &path).chain_err(|| "Fail to get vfio device")?;
+            Self::vfio_get_device(&group, &path).chain_err(|| "Fail to get vfio device")?;
         let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
         let vfio_dev = Arc::new(VfioDevice {
             device,
             group: Arc::downgrade(&group),
-            container: locked_group.container.clone(),
+            container: group.container.clone(),
             dev_info,
         });
-        locked_group
+        group
             .devices
+            .lock()
+            .unwrap()
             .insert(vfio_dev.device.as_raw_fd(), vfio_dev.clone());
         Ok(vfio_dev)
     }
 
-    fn vfio_get_group(
-        dev_path: &Path,
-        mem_as: &Arc<AddressSpace>,
-    ) -> Result<Arc<Mutex<VfioGroup>>> {
+    fn vfio_get_group(dev_path: &Path, mem_as: &Arc<AddressSpace>) -> Result<Arc<VfioGroup>> {
         let iommu_group: PathBuf = [dev_path, Path::new(IOMMU_GROUP)]
             .iter()
             .collect::<PathBuf>()
@@ -523,18 +507,19 @@ impl VfioDevice {
             return Ok(g.clone());
         }
         let mut group = VfioGroup::new(group_id)?;
-        group.connect_container(mem_as)?;
-        let group = Arc::new(Mutex::new(group));
+        if let Err(e) = group.connect_container(mem_as) {
+            group.unset_container();
+            return Err(e);
+        }
+        let group = Arc::new(group);
         (*GROUPS).lock().unwrap().insert(group_id, group.clone());
         group
-            .lock()
-            .unwrap()
             .container
             .upgrade()
             .unwrap()
+            .groups
             .lock()
             .unwrap()
-            .groups
             .insert(group_id, group.clone());
         Ok(group)
     }

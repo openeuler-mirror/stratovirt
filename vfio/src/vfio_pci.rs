@@ -386,8 +386,6 @@ impl VfioPciDevice {
                 .register_bar(i as usize, bar_region, vfio_bar.region_type, false, size);
         }
 
-        self.do_dma_map()?;
-
         Ok(())
     }
 
@@ -570,22 +568,6 @@ impl VfioPciDevice {
             read: Arc::new(read),
             write: Arc::new(write),
         }
-    }
-
-    /// Add all guest memory regions into IOMMU table.
-    fn do_dma_map(&mut self) -> Result<()> {
-        let container = &self.vfio_device.container.upgrade().unwrap();
-        let locked_container = container.lock().unwrap();
-        let mut regions = locked_container.vfio_mem_info.regions.lock().unwrap();
-        for r in regions.iter_mut() {
-            if !r.iommu_mapped {
-                locked_container
-                    .vfio_dma_map(r.guest_phys_addr, r.memory_size, r.userspace_addr)
-                    .chain_err(|| "Failed to add guest memory region map into IOMMU table")?;
-                r.iommu_mapped = true;
-            }
-        }
-        Ok(())
     }
 
     /// Avoid VM exits when guest OS read or write device MMIO regions, it maps bar regions into
