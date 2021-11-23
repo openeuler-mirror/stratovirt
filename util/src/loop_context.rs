@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use libc::{c_void, read};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
-use crate::errors::{ErrorKind, Result};
+use crate::errors::{ErrorKind, Result, ResultExt};
 
 const READY_EVENT_MAX: usize = 256;
 const AIO_PRFETCH_CYCLE_TIME: usize = 100;
@@ -38,6 +38,10 @@ pub enum NotifierOperation {
     /// Delete a file descriptor from the event table, if has one more notifiers,
     /// file descriptor not closed.
     Delete = 8,
+    /// Park a file descriptor from the event table
+    Park = 16,
+    /// Resume a file descriptor from the event table
+    Resume = 32,
 }
 
 enum EventStatus {
@@ -258,6 +262,48 @@ impl EventLoopContext {
         Ok(())
     }
 
+    fn park_event(&mut self, event: &EventNotifier) -> Result<()> {
+        let mut events_map = self.events.write().unwrap();
+        match events_map.get_mut(&event.raw_fd) {
+            Some(notifier) => {
+                self.epoll
+                    .ctl(
+                        ControlOperation::Delete,
+                        notifier.raw_fd,
+                        EpollEvent::default(),
+                    )
+                    .chain_err(|| format!("Failed to park event, event fd:{}", notifier.raw_fd))?;
+                notifier.status = EventStatus::Parked;
+            }
+            _ => {
+                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+            }
+        }
+        Ok(())
+    }
+
+    fn resume_event(&mut self, event: &EventNotifier) -> Result<()> {
+        let mut events_map = self.events.write().unwrap();
+        match events_map.get_mut(&event.raw_fd) {
+            Some(notifier) => {
+                self.epoll
+                    .ctl(
+                        ControlOperation::Add,
+                        notifier.raw_fd,
+                        EpollEvent::new(notifier.event, &**notifier as *const _ as u64),
+                    )
+                    .chain_err(|| {
+                        format!("Failed to resume event, event fd: {}", notifier.raw_fd)
+                    })?;
+                notifier.status = EventStatus::Alive;
+            }
+            _ => {
+                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+            }
+        }
+        Ok(())
+    }
+
     /// update fds registered to `EventLoop` according to the operation type.
     ///
     /// # Arguments
@@ -271,6 +317,12 @@ impl EventLoopContext {
                 }
                 NotifierOperation::Delete => {
                     self.rm_event(&en)?;
+                }
+                NotifierOperation::Park => {
+                    self.park_event(&en)?;
+                }
+                NotifierOperation::Resume => {
+                    self.resume_event(&en)?;
                 }
                 _ => {
                     return Err(ErrorKind::UnExpectedOperationType.into());

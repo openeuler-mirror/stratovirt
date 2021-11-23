@@ -172,6 +172,9 @@ pub trait VringOps {
 
     /// Get the configuration of the vring.
     fn get_queue_config(&self) -> QueueConfig;
+
+    /// The number of descriptor chains in the available ring.
+    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
 }
 
 /// Virtio used element.
@@ -534,7 +537,7 @@ impl SplitVring {
     fn set_avail_event(&self, sys_mem: &Arc<AddressSpace>) -> Result<()> {
         let avail_event_offset =
             VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
-        let event_idx = self.get_avail_idx(sys_mem)?;
+        let event_idx = self.next_avail.0;
 
         fence(Ordering::Release);
         sys_mem
@@ -572,13 +575,6 @@ impl SplitVring {
             };
 
         Ok(used_event)
-    }
-
-    /// The number of descriptor chains in the available ring.
-    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let avail_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
-
-        Ok((avail_idx - self.next_avail).0)
     }
 
     /// Return true if VRING_AVAIL_F_NO_INTERRUPT is set.
@@ -720,11 +716,6 @@ impl SplitVring {
                 .into());
             };
 
-        if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.set_avail_event(sys_mem)
-                .chain_err(|| "Failed to set avail event for popping avail ring")?;
-        }
-
         let desc = SplitVringDesc::new(
             sys_mem,
             self.desc_table,
@@ -756,6 +747,11 @@ impl SplitVring {
                 elem
             })?
         };
+
+        if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
+            self.set_avail_event(sys_mem)
+                .chain_err(|| "Failed to set avail event for popping avail ring")?;
+        }
 
         Ok(elem)
     }
@@ -858,6 +854,13 @@ impl VringOps for SplitVring {
             next_used: self.next_used.0,
             last_signal_used: self.last_signal_used.0,
         }
+    }
+
+    /// The number of descriptor chains in the available ring.
+    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
+        let avail_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
+
+        Ok((avail_idx - self.next_avail).0)
     }
 }
 
