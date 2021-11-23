@@ -321,7 +321,7 @@ impl VfioContainer {
 pub struct VfioGroup {
     // `/dev/vfio/$group_id` file fd.
     group: File,
-    container: Option<Weak<Mutex<VfioContainer>>>,
+    container: Weak<Mutex<VfioContainer>>,
     devices: HashMap<RawFd, Arc<VfioDevice>>,
 }
 
@@ -361,7 +361,7 @@ impl VfioGroup {
 
         Ok(VfioGroup {
             group: file,
-            container: None,
+            container: Weak::new(),
             devices: HashMap::new(),
         })
     }
@@ -396,15 +396,15 @@ impl VfioGroup {
             )
             .into());
         }
-        self.container = Some(Arc::downgrade(container));
+        self.container = Arc::downgrade(container);
         Ok(())
     }
 
     fn unset_container(&mut self) {
-        let container = self.container.as_ref().unwrap().upgrade().unwrap();
+        let container = self.container.upgrade().unwrap();
         let fd = container.lock().unwrap().container.as_raw_fd();
         unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &fd) };
-        self.container = None;
+        self.container = Weak::new();
     }
 
     fn connect_container(&mut self, mem_as: &Arc<AddressSpace>) -> Result<()> {
@@ -413,7 +413,7 @@ impl VfioGroup {
                 break;
             }
         }
-        if self.container.is_none() {
+        if self.container.upgrade().is_none() {
             let new = Arc::new(Mutex::new(VfioContainer::new(mem_as)?));
             self.set_container(&new)?;
             if let Err(e) = new.lock().unwrap().set_iommu(vfio::VFIO_TYPE1v2_IOMMU) {
@@ -485,17 +485,16 @@ impl VfioDevice {
         if !path.exists() {
             bail!("No provided host PCI device, use -device vfio-pci,host=DDDD:BB:DD.F");
         }
+
         let group = Self::vfio_get_group(&path, mem_as).chain_err(|| "Fail to get iommu group")?;
         let mut locked_group = group.lock().unwrap();
-        let container = locked_group.container.as_ref().unwrap().clone();
-
         let device =
             Self::vfio_get_device(&locked_group, &path).chain_err(|| "Fail to get vfio device")?;
         let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
         let vfio_dev = Arc::new(VfioDevice {
             device,
             group: Arc::downgrade(&group),
-            container,
+            container: locked_group.container.clone(),
             dev_info,
         });
         locked_group
