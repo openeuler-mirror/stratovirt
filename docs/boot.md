@@ -86,7 +86,7 @@ The standard_vm machine type of StratoVirt supports bzImage format kernel image 
 
 ### 2. Get firmware for standard boot
 
-Standard boot needs firmware. Stratovirt only supports booting from UEFI (Unified Extensible Firmware Interface) on x86_64 and AArch64 platform.
+Standard boot needs firmware. Stratovirt only supports booting from UEFI (Unified Extensible Firmware Interface) on x86_64 and aarch64 platform.
 
 EDK II is an open-source project that implements UEFI specification. We use EDK II as the firmware to boot VM, and therefore we have to get the corresponding EDK II binary.
 
