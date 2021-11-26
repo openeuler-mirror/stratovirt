@@ -631,6 +631,7 @@ impl VirtioPciDevice {
         };
 
         let cloned_pci_device = self.clone();
+        let cloned_mem_space = self.sys_mem.clone();
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
             let value = match data.len() {
                 1 => data[0] as u32,
@@ -677,13 +678,22 @@ impl VirtioPciDevice {
                     )
             {
                 let queue_type = cloned_pci_device.common_config.lock().unwrap().queue_type;
-                let queues_config = &cloned_pci_device
+                let queues_config = &mut cloned_pci_device
                     .common_config
                     .lock()
                     .unwrap()
                     .queues_config;
                 let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
-                for q_config in queues_config.iter() {
+                for q_config in queues_config.iter_mut() {
+                    q_config.addr_cache.desc_table_host = cloned_mem_space
+                        .get_host_address(q_config.desc_table)
+                        .unwrap_or(0);
+                    q_config.addr_cache.avail_ring_host = cloned_mem_space
+                        .get_host_address(q_config.avail_ring)
+                        .unwrap_or(0);
+                    q_config.addr_cache.used_ring_host = cloned_mem_space
+                        .get_host_address(q_config.used_ring)
+                        .unwrap_or(0);
                     let queue = Queue::new(*q_config, queue_type).unwrap();
                     if !queue.is_valid(&cloned_pci_device.sys_mem) {
                         error!("Failed to activate device: Invalid queue");

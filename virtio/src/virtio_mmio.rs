@@ -397,9 +397,19 @@ impl VirtioMmioDevice {
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(&mut self) -> Result<()> {
         let queues_config =
-            &self.state.config_space.queues_config[0..self.state.config_space.queue_num];
-        for queue_config in queues_config {
-            let queue = Queue::new(*queue_config, self.state.config_space.queue_type)?;
+            &mut self.state.config_space.queues_config[0..self.state.config_space.queue_num];
+        let cloned_mem_space = self.mem_space.clone();
+        for q_config in queues_config.iter_mut() {
+            q_config.addr_cache.desc_table_host = cloned_mem_space
+                .get_host_address(q_config.desc_table)
+                .unwrap_or(0);
+            q_config.addr_cache.avail_ring_host = cloned_mem_space
+                .get_host_address(q_config.avail_ring)
+                .unwrap_or(0);
+            q_config.addr_cache.used_ring_host = cloned_mem_space
+                .get_host_address(q_config.used_ring)
+                .unwrap_or(0);
+            let queue = Queue::new(*q_config, self.state.config_space.queue_type)?;
             if !queue.is_valid(&self.mem_space) {
                 bail!("Invalid queue");
             }

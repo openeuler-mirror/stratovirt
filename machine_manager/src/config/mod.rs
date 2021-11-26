@@ -571,6 +571,6 @@ mod tests {
         add_trace_events(format!("events={}", file).as_str()).unwrap();
 
         assert!(is_trace_event_enabled(event));
-        std::fs::remove_file(file);
+        std::fs::remove_file(file).unwrap();
     }
 }

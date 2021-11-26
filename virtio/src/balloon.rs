@@ -1108,15 +1108,33 @@ mod tests {
 
         let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
         queue_config_inf.desc_table = GuestAddress(0x100);
+        queue_config_inf.addr_cache.desc_table_host = mem_space
+            .get_host_address(queue_config_inf.desc_table)
+            .unwrap();
         queue_config_inf.avail_ring = GuestAddress(0x300);
+        queue_config_inf.addr_cache.avail_ring_host = mem_space
+            .get_host_address(queue_config_inf.avail_ring)
+            .unwrap();
         queue_config_inf.used_ring = GuestAddress(0x600);
+        queue_config_inf.addr_cache.used_ring_host = mem_space
+            .get_host_address(queue_config_inf.used_ring)
+            .unwrap();
         queue_config_inf.ready = true;
         queue_config_inf.size = QUEUE_SIZE;
 
         let mut queue_config_def = QueueConfig::new(QUEUE_SIZE);
         queue_config_def.desc_table = GuestAddress(0x1100);
+        queue_config_def.addr_cache.desc_table_host = mem_space
+            .get_host_address(queue_config_def.desc_table)
+            .unwrap();
         queue_config_def.avail_ring = GuestAddress(0x1300);
+        queue_config_def.addr_cache.avail_ring_host = mem_space
+            .get_host_address(queue_config_def.avail_ring)
+            .unwrap();
         queue_config_def.used_ring = GuestAddress(0x1600);
+        queue_config_def.addr_cache.used_ring_host = mem_space
+            .get_host_address(queue_config_def.used_ring)
+            .unwrap();
         queue_config_def.ready = true;
         queue_config_def.size = QUEUE_SIZE;
 

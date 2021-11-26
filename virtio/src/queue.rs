@@ -45,6 +45,15 @@ fn checked_offset_mem(
         .ok_or_else(|| ErrorKind::AddressOverflow("queue", base.raw_value(), offset).into())
 }
 
+#[derive(Default, Clone, Copy)]
+pub struct VirtioAddrCache {
+    /// Host virtual address of the descriptor table.
+    pub desc_table_host: u64,
+    /// Host virtual address of the available ring.
+    pub avail_ring_host: u64,
+    /// Host virtual address of the used ring.
+    pub used_ring_host: u64,
+}
 /// The configuration of virtqueue.
 #[derive(Default, Clone, Copy)]
 pub struct QueueConfig {
@@ -54,6 +63,8 @@ pub struct QueueConfig {
     pub avail_ring: GuestAddress,
     /// Guest physical address of the used ring.
     pub used_ring: GuestAddress,
+    /// Host address cache.
+    pub addr_cache: VirtioAddrCache,
     /// The maximal size of elements offered by the device.
     pub max_size: u16,
     /// The queue size set by the guest.
@@ -78,10 +89,12 @@ impl QueueConfig {
     /// * `max_size` - The maximum size of the virtqueue.
     ///
     pub fn new(max_size: u16) -> Self {
+        let addr_cache = VirtioAddrCache::default();
         QueueConfig {
             desc_table: GuestAddress(0),
             avail_ring: GuestAddress(0),
             used_ring: GuestAddress(0),
+            addr_cache,
             max_size,
             size: max_size,
             ready: false,
@@ -246,7 +259,7 @@ impl SplitVringDesc {
     /// * `index` - Index of descriptor in the virqueue descriptor table.
     pub fn new(
         sys_mem: &Arc<AddressSpace>,
-        desc_table: GuestAddress,
+        desc_table_host: u64,
         queue_size: u16,
         index: u16,
         cache: &mut Option<RegionCache>,
@@ -255,19 +268,19 @@ impl SplitVringDesc {
             return Err(ErrorKind::QueueIndex(index, queue_size).into());
         }
 
-        let desc =
-            if let Some(desc_addr) = desc_table.checked_add(u64::from(index) * DESCRIPTOR_LEN) {
-                sys_mem
-                    .read_object::<SplitVringDesc>(desc_addr)
-                    .chain_err(|| ErrorKind::ReadObjectErr("a descriptor", desc_addr.raw_value()))?
-            } else {
-                return Err(ErrorKind::AddressOverflow(
+        let desc_addr = desc_table_host
+            .checked_add(u64::from(index) * DESCRIPTOR_LEN)
+            .chain_err(|| {
+                ErrorKind::AddressOverflow(
                     "creating a descriptor",
-                    desc_table.raw_value(),
+                    desc_table_host,
                     u64::from(index) * DESCRIPTOR_LEN,
                 )
-                .into());
-            };
+            })?;
+        let desc = sys_mem
+            .read_object_direct::<SplitVringDesc>(desc_addr)
+            .chain_err(|| ErrorKind::ReadObjectErr("a descriptor", desc_addr))?;
+
         if desc.is_valid(sys_mem, queue_size, cache) {
             Ok(desc)
         } else {
@@ -328,12 +341,12 @@ impl SplitVringDesc {
     /// Get the next descriptor in descriptor chain.
     fn next_desc(
         sys_mem: &Arc<AddressSpace>,
-        desc_table: GuestAddress,
+        desc_table_host: u64,
         queue_size: u16,
         index: u16,
         cache: &mut Option<RegionCache>,
     ) -> Result<SplitVringDesc> {
-        SplitVringDesc::new(sys_mem, desc_table, queue_size, index, cache)
+        SplitVringDesc::new(sys_mem, desc_table_host, queue_size, index, cache)
             .chain_err(|| format!("Failed to find next descriptor {}", index))
     }
 
@@ -367,13 +380,14 @@ impl SplitVringDesc {
     /// Get element from descriptor chain.
     fn get_element(
         sys_mem: &Arc<AddressSpace>,
-        desc_table: GuestAddress,
+        desc_table_host: u64,
         queue_size: u16,
         index: u16,
         mut desc: SplitVringDesc,
         cache: &mut Option<RegionCache>,
-    ) -> Result<Element> {
-        let mut elem = Element::new(index);
+        elem: &mut Element,
+    ) -> Result<()> {
+        elem.index = index;
 
         loop {
             if elem.desc_num >= queue_size {
@@ -393,30 +407,34 @@ impl SplitVringDesc {
             elem.desc_num += 1;
 
             if desc.has_next() {
-                desc = Self::next_desc(sys_mem, desc_table, queue_size, desc.next, cache)?;
+                desc = Self::next_desc(sys_mem, desc_table_host, queue_size, desc.next, cache)?;
             } else {
                 break;
             }
         }
 
-        Ok(elem)
+        Ok(())
     }
 
     /// Get element from indirect descriptor chain.
     fn get_indirect_desc(
         &self,
         sys_mem: &Arc<AddressSpace>,
+        desc_table: GuestAddress,
+        desc_table_host: u64,
         index: u16,
         cache: &mut Option<RegionCache>,
-    ) -> Result<Element> {
+        elem: &mut Element,
+    ) -> Result<()> {
         if !self.is_valid_indirect_desc() {
             return Err(ErrorKind::QueueDescInvalid.into());
         }
 
         let desc_num = self.get_desc_num();
+        let desc_hva = desc_table_host + self.addr.0 - desc_table.0;
         let desc_table = self.addr;
-        let desc = Self::next_desc(sys_mem, desc_table, desc_num, 0, cache)?;
-        Self::get_element(sys_mem, desc_table, desc_num, index, desc, cache)
+        let desc = Self::next_desc(sys_mem, desc_hva, desc_num, 0, cache)?;
+        Self::get_element(sys_mem, desc_hva, desc_num, index, desc, cache, elem)
             .chain_err(||
                 format!("Failed to get element from indirect descriptor chain {}, table addr: 0x{:X}, size: {}",
                     index, desc_table.raw_value(), desc_num)
@@ -427,15 +445,16 @@ impl SplitVringDesc {
     fn get_nonindirect_desc(
         &self,
         sys_mem: &Arc<AddressSpace>,
-        desc_table: GuestAddress,
+        desc_table_host: u64,
         queue_size: u16,
         index: u16,
         cache: &mut Option<RegionCache>,
-    ) -> Result<Element> {
-        Self::get_element(sys_mem, desc_table, queue_size, index, *self, cache).chain_err(|| {
+        elem: &mut Element,
+    ) -> Result<()> {
+        Self::get_element(sys_mem, desc_table_host, queue_size, index, *self, cache, elem).chain_err(|| {
             format!(
                 "Failed to get element from normal descriptor chain {}, table addr: 0x{:X}, size: {}",
-                index, desc_table.raw_value(), queue_size
+                index, desc_table_host, queue_size
             )
         })
     }
@@ -459,6 +478,9 @@ pub struct SplitVring {
     /// Guest physical address of the used ring.
     /// The ring is composed of flags(u16), idx(u16), used_ring[size](UsedElem) and avail_event(u16).
     pub used_ring: GuestAddress,
+
+    /// Host address cache.
+    pub addr_cache: VirtioAddrCache,
 
     /// Indicate whether the queue configuration is finished.
     pub ready: bool,
@@ -494,6 +516,7 @@ impl SplitVring {
             desc_table: queue_config.desc_table,
             avail_ring: queue_config.avail_ring,
             used_ring: queue_config.used_ring,
+            addr_cache: queue_config.addr_cache,
             ready: queue_config.ready,
             max_size: queue_config.max_size,
             size: queue_config.size,
@@ -511,8 +534,8 @@ impl SplitVring {
 
     /// Get the index of the available ring from guest memory.
     fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let avail_flags_idx: SplitVringFlagsIdx = sys_mem
-            .read_object::<SplitVringFlagsIdx>(self.avail_ring)
+        let avail_flags_idx = sys_mem
+            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
             .chain_err(|| ErrorKind::ReadObjectErr("avail id", self.avail_ring.raw_value()))?;
         Ok(avail_flags_idx.idx)
     }
@@ -520,15 +543,17 @@ impl SplitVring {
     /// Get the flags of the available ring from guest memory.
     fn get_avail_flags(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
         let avail_flags_idx: SplitVringFlagsIdx = sys_mem
-            .read_object::<SplitVringFlagsIdx>(self.avail_ring)
+            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
             .chain_err(|| ErrorKind::ReadObjectErr("avail flags", self.avail_ring.raw_value()))?;
         Ok(avail_flags_idx.flags)
     }
 
     /// Get the index of the used ring from guest memory.
     fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
+        // Make sure the idx read from sys_mem is new.
+        fence(Ordering::SeqCst);
         let used_flag_idx: SplitVringFlagsIdx = sys_mem
-            .read_object::<SplitVringFlagsIdx>(self.used_ring)
+            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host)
             .chain_err(|| ErrorKind::ReadObjectErr("used id", self.used_ring.raw_value()))?;
         Ok(used_flag_idx.idx)
     }
@@ -539,11 +564,10 @@ impl SplitVring {
             VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
         let event_idx = self.next_avail.0;
 
-        fence(Ordering::Release);
         sys_mem
-            .write_object(
+            .write_object_direct(
                 &event_idx,
-                GuestAddress(self.used_ring.0 + avail_event_offset),
+                self.addr_cache.used_ring_host + avail_event_offset,
             )
             .chain_err(|| {
                 format!(
@@ -552,7 +576,8 @@ impl SplitVring {
                     avail_event_offset,
                 )
             })?;
-
+        // Make sure the data has been set.
+        fence(Ordering::SeqCst);
         Ok(())
     }
 
@@ -560,19 +585,22 @@ impl SplitVring {
     fn get_used_event(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
         let used_event_offset =
             VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(self.actual_size());
-        let used_event: u16 =
-            if let Some(used_event_addr) = self.avail_ring.checked_add(used_event_offset) {
-                sys_mem.read_object::<u16>(used_event_addr).chain_err(|| {
-                    ErrorKind::ReadObjectErr("used event id", used_event_addr.raw_value())
-                })?
-            } else {
-                return Err(ErrorKind::AddressOverflow(
+        // Make sure the event idx read from sys_mem is new.
+        fence(Ordering::SeqCst);
+        let used_event_addr = self
+            .addr_cache
+            .avail_ring_host
+            .checked_add(used_event_offset)
+            .chain_err(|| {
+                ErrorKind::AddressOverflow(
                     "getting used event idx",
                     self.avail_ring.raw_value(),
                     used_event_offset,
                 )
-                .into());
-            };
+            })?;
+        let used_event = sys_mem
+            .read_object_direct::<u16>(used_event_addr)
+            .chain_err(|| ErrorKind::ReadObjectErr("used event id", used_event_addr))?;
 
         Ok(used_event)
     }
@@ -699,48 +727,62 @@ impl SplitVring {
         }
     }
 
-    fn get_vring_element(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element> {
+    fn get_vring_element(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        features: u64,
+        elem: &mut Element,
+    ) -> Result<()> {
         let index_offset = VRING_FLAGS_AND_IDX_LEN
             + AVAILELEM_LEN * u64::from(self.next_avail.0 % self.actual_size());
-        let desc_index: u16 =
-            if let Some(desc_index_addr) = self.avail_ring.checked_add(index_offset) {
-                sys_mem.read_object::<u16>(desc_index_addr).chain_err(|| {
-                    ErrorKind::ReadObjectErr("the index of descriptor", desc_index_addr.raw_value())
-                })?
-            } else {
-                return Err(ErrorKind::AddressOverflow(
+        let desc_index_addr = self
+            .addr_cache
+            .avail_ring_host
+            .checked_add(index_offset)
+            .chain_err(|| {
+                ErrorKind::AddressOverflow(
                     "popping avail ring",
                     self.avail_ring.raw_value(),
                     index_offset,
                 )
-                .into());
-            };
+            })?;
+        let desc_index = sys_mem
+            .read_object_direct::<u16>(desc_index_addr)
+            .chain_err(|| ErrorKind::ReadObjectErr("the index of descriptor", desc_index_addr))?;
 
         let desc = SplitVringDesc::new(
             sys_mem,
-            self.desc_table,
+            self.addr_cache.desc_table_host,
             self.actual_size(),
             desc_index,
             &mut self.cache,
         )?;
-        let elem = if desc.is_indirect_desc() {
+        if desc.is_indirect_desc() {
             if desc.write_only() {
                 bail!("Unexpected descriptor for writing only for popping avail ring");
             }
 
-            desc.get_indirect_desc(sys_mem, desc_index, &mut self.cache)
-                .map(|elem| {
-                    self.next_avail += Wrapping(1);
-                    elem
-                })
-                .chain_err(|| "Failed to get indirect desc for popping avail ring")?
+            desc.get_indirect_desc(
+                sys_mem,
+                self.desc_table,
+                self.addr_cache.desc_table_host,
+                desc_index,
+                &mut self.cache,
+                elem,
+            )
+            .map(|elem| {
+                self.next_avail += Wrapping(1);
+                elem
+            })
+            .chain_err(|| "Failed to get indirect desc for popping avail ring")?
         } else {
             desc.get_nonindirect_desc(
                 sys_mem,
-                self.desc_table,
+                self.addr_cache.desc_table_host,
                 self.actual_size(),
                 desc_index,
                 &mut self.cache,
+                elem,
             )
             .map(|elem| {
                 self.next_avail += Wrapping(1);
@@ -753,7 +795,7 @@ impl SplitVring {
                 .chain_err(|| "Failed to set avail event for popping avail ring")?;
         }
 
-        Ok(elem)
+        Ok(())
     }
 }
 
@@ -781,17 +823,11 @@ impl VringOps for SplitVring {
             bail!("failed to pop avail: empty!");
         }
 
-        match self.get_vring_element(sys_mem, features) {
-            Ok(elem) => Ok(elem),
-            Err(ref e) => {
-                error!(
-                    "Failed to get element from split vring, {}",
-                    error_chain::ChainedError::display_chain(e),
-                );
+        let mut element = Element::new(0);
+        self.get_vring_element(sys_mem, features, &mut element)
+            .chain_err(|| "Failed to get vring element")?;
 
-                Err(e.to_string().into())
-            }
-        }
+        Ok(element)
     }
 
     fn push_back(&mut self) {
@@ -803,16 +839,15 @@ impl VringOps for SplitVring {
             return Err(ErrorKind::QueueIndex(index, self.size).into());
         }
 
-        let used_ring = self.used_ring;
         let next_used = u64::from(self.next_used.0 % self.actual_size());
         let used_elem_addr =
-            GuestAddress(used_ring.0 + VRING_FLAGS_AND_IDX_LEN + next_used * USEDELEM_LEN);
+            self.addr_cache.used_ring_host + VRING_FLAGS_AND_IDX_LEN + next_used * USEDELEM_LEN;
         let used_elem = UsedElem {
             id: u32::from(index),
             len,
         };
         sys_mem
-            .write_object::<UsedElem>(&used_elem, used_elem_addr)
+            .write_object_direct::<UsedElem>(&used_elem, used_elem_addr)
             .chain_err(|| "Failed to write object for used element")?;
 
         self.next_used += Wrapping(1);
@@ -820,9 +855,9 @@ impl VringOps for SplitVring {
         fence(Ordering::Release);
 
         sys_mem
-            .write_object(
+            .write_object_direct(
                 &(self.next_used.0 as u16),
-                GuestAddress(used_ring.0 + VRING_IDX_POSITION),
+                self.addr_cache.used_ring_host + VRING_IDX_POSITION,
             )
             .chain_err(|| "Failed to write next used idx")?;
 
@@ -846,6 +881,7 @@ impl VringOps for SplitVring {
             desc_table: self.desc_table,
             avail_ring: self.avail_ring,
             used_ring: self.used_ring,
+            addr_cache: self.addr_cache,
             ready: self.ready,
             max_size: self.max_size,
             size: self.size,
@@ -1325,13 +1361,19 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
+        queue_config.addr_cache.desc_table_host =
+            sys_space.get_host_address(queue_config.desc_table).unwrap();
         queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.addr_cache.avail_ring_host =
+            sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
             (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * (QUEUE_SIZE as u64),
             4096,
         ));
+        queue_config.addr_cache.used_ring_host =
+            sys_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1409,13 +1451,19 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
+        queue_config.addr_cache.desc_table_host =
+            sys_space.get_host_address(queue_config.desc_table).unwrap();
         queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.addr_cache.avail_ring_host =
+            sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
             (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * (QUEUE_SIZE as u64),
             4096,
         ));
+        queue_config.addr_cache.used_ring_host =
+            sys_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1503,13 +1551,19 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
+        queue_config.addr_cache.desc_table_host =
+            sys_space.get_host_address(queue_config.desc_table).unwrap();
         queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.addr_cache.avail_ring_host =
+            sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
             (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * (QUEUE_SIZE as u64),
             4096,
         ));
+        queue_config.addr_cache.used_ring_host =
+            sys_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1540,10 +1594,7 @@ mod tests {
             )
             .unwrap();
         if let Err(err) = vring.pop_avail(&sys_space, features) {
-            assert_eq!(
-                err.to_string(),
-                "Unexpected descriptor for writing only for popping avail ring"
-            );
+            assert_eq!(err.to_string(), "Failed to get vring element");
         } else {
             assert!(false);
         }
@@ -1609,10 +1660,7 @@ mod tests {
         )
         .unwrap();
         if let Err(err) = vring.pop_avail(&sys_space, features) {
-            assert_eq!(
-                err.to_string(),
-                "Failed to get indirect desc for popping avail ring"
-            );
+            assert_eq!(err.to_string(), "Failed to get vring element");
         } else {
             assert!(false);
         }
@@ -1624,13 +1672,19 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
+        queue_config.addr_cache.desc_table_host =
+            sys_space.get_host_address(queue_config.desc_table).unwrap();
         queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.addr_cache.avail_ring_host =
+            sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
             (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * (QUEUE_SIZE as u64),
             4096,
         ));
+        queue_config.addr_cache.used_ring_host =
+            sys_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1656,13 +1710,19 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
+        queue_config.addr_cache.desc_table_host =
+            sys_space.get_host_address(queue_config.desc_table).unwrap();
         queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.addr_cache.avail_ring_host =
+            sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
             (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * (QUEUE_SIZE as u64),
             4096,
         ));
+        queue_config.addr_cache.used_ring_host =
+            sys_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
