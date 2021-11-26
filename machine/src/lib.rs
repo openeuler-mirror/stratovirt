@@ -533,7 +533,14 @@ pub trait MachineOps {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
             .chain_err(|| "Failed to create pci device")?;
-        let vfio_pci_dev = VfioPciDevice::new(device, devfn, device_cfg.id, parent_bus, multi_func);
+        let vfio_pci_dev = VfioPciDevice::new(
+            device,
+            devfn,
+            device_cfg.id,
+            parent_bus,
+            multi_func,
+            self.get_sys_mem().clone(),
+        );
         VfioPciDevice::realize(vfio_pci_dev).chain_err(|| "Failed to realize vfio pci device")?;
         Ok(())
     }

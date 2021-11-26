@@ -19,6 +19,9 @@ extern crate migration_derive;
 
 pub mod errors {
     error_chain! {
+        links {
+            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+        }
         errors {
             AddPciCap(id: u8, size: usize) {
                 display("Failed to add PCI capability: id 0x{:x}, size: 0x{:x}.", id, size)
@@ -48,7 +51,6 @@ mod host;
 mod root_port;
 
 pub use bus::PciBus;
-use config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 pub use host::PciHost;
 pub use msix::init_msix;
 pub use root_port::RootPort;
@@ -60,6 +62,7 @@ use std::{
 
 use byteorder::{ByteOrder, LittleEndian};
 
+use config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
 use errors::Result;
 
 const BDF_FUNC_SHIFT: u8 = 3;

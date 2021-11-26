@@ -16,7 +16,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::{FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
+use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
 use hypervisor::{MsiVector, KVM_FDS};
@@ -44,6 +44,7 @@ use vmm_sys_util::ioctl::ioctl_with_mut_ref;
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use crate::vfio_dev::*;
+use crate::{CONTAINERS, GROUPS};
 
 const PCI_NUM_BARS: u8 = 6;
 const PCI_ROM_SLOT: u8 = 6;
@@ -94,8 +95,9 @@ pub struct VfioPciDevice {
     dev_id: Arc<AtomicU16>,
     name: String,
     parent_bus: Weak<Mutex<PciBus>>,
-    /// Multi-Function flag.
+    // Multi-Function flag.
     multi_func: bool,
+    mem_as: Arc<AddressSpace>,
 }
 
 impl VfioPciDevice {
@@ -106,6 +108,7 @@ impl VfioPciDevice {
         name: String,
         parent_bus: Weak<Mutex<PciBus>>,
         multi_func: bool,
+        mem_as: Arc<AddressSpace>,
     ) -> Self {
         Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
@@ -121,6 +124,7 @@ impl VfioPciDevice {
             name,
             parent_bus,
             multi_func,
+            mem_as,
         }
     }
 
@@ -137,9 +141,8 @@ impl VfioPciDevice {
 
         let locked_dev = self.vfio_device.lock().unwrap();
         // Safe as device is the owner of file, and we will verify the result is valid.
-        let ret = unsafe {
-            ioctl_with_mut_ref(&locked_dev.device, VFIO_DEVICE_GET_REGION_INFO(), &mut info)
-        };
+        let ret =
+            unsafe { ioctl_with_mut_ref(&locked_dev.fd, VFIO_DEVICE_GET_REGION_INFO(), &mut info) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_GET_PCI_CONFIG_INFO".to_string(),
@@ -388,6 +391,12 @@ impl VfioPciDevice {
         Ok(())
     }
 
+    fn unregister_bars(&mut self) -> Result<()> {
+        let bus = self.parent_bus.upgrade().unwrap();
+        self.pci_config.unregister_bars(&bus)?;
+        Ok(())
+    }
+
     /// Create region ops for MSI-X table.
     fn get_table_region_ops(&mut self) -> Result<RegionOps> {
         let msix_info = self
@@ -605,7 +614,7 @@ impl VfioPciDevice {
             }
 
             for mmap in region.mmaps.iter() {
-                let dev = self.vfio_device.lock().unwrap().device.try_clone().unwrap();
+                let dev = self.vfio_device.lock().unwrap().fd.try_clone().unwrap();
                 let fb = Some(FileBackend {
                     file: Arc::new(dev),
                     offset: region.region_offset + mmap.offset,
@@ -687,6 +696,33 @@ impl VfioPciDevice {
         }
         Ok(())
     }
+
+    fn unrealize(&mut self) -> Result<()> {
+        self.vfio_disable_msix()?;
+        self.unregister_bars()?;
+
+        let locked_dev = self.vfio_device.lock().unwrap();
+        let group = locked_dev.group.upgrade().unwrap();
+        let mut devices = group.devices.lock().unwrap();
+        devices.remove(&locked_dev.fd.as_raw_fd());
+        if devices.is_empty() {
+            group.del_from_kvm_device()?;
+            GROUPS.lock().unwrap().remove(&group.id);
+
+            let container = locked_dev.container.upgrade().unwrap();
+            let locked_container = container.lock().unwrap();
+            let container_fd = locked_container.fd.as_raw_fd();
+            let mut groups = locked_container.groups.lock().unwrap();
+            groups.remove(&group.id);
+            if groups.is_empty() {
+                drop(groups);
+                drop(locked_container);
+                self.mem_as.unregister_listener(container.clone())?;
+                CONTAINERS.lock().unwrap().remove(&container_fd);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl PciDevOps for VfioPciDevice {
@@ -760,6 +796,18 @@ impl PciDevOps for VfioPciDevice {
         }
 
         Ok(())
+    }
+
+    fn unrealize(&mut self) -> PciResult<()> {
+        if let Err(e) = VfioPciDevice::unrealize(self) {
+            error!("{}", e.display_chain());
+            bail!("Failed to unrealize vfio-pci.");
+        }
+        Ok(())
+    }
+
+    fn devfn(&self) -> Option<u8> {
+        Some(self.devfn)
     }
 
     /// Read pci data from pci config if it emulate, otherwise read from vfio device.
@@ -880,12 +928,12 @@ impl PciDevOps for VfioPciDevice {
 
             if !was_enable && is_enable {
                 if let Err(e) = self.vfio_enable_msix() {
-                    error!("Failed to enable MSI-X, error is {}", e.display_chain());
+                    error!("{}\nFailed to enable MSI-X.", e.display_chain());
                     return;
                 }
             } else if was_enable && !is_enable {
                 if let Err(e) = self.vfio_disable_msix() {
-                    error!("Failed to disable MSI-X, error is {}", e.display_chain());
+                    error!("{}\nFailed to disable MSI-X.", e.display_chain());
                     return;
                 }
             }

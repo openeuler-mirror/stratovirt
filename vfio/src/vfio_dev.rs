@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::mem::size_of;
-use std::ops::Deref;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::prelude::FileExt;
 use std::path::{Path, PathBuf};
@@ -22,7 +21,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
-use kvm_bindings::{kvm_device_attr, KVM_DEV_VFIO_GROUP, KVM_DEV_VFIO_GROUP_ADD};
+use kvm_bindings::{
+    kvm_device_attr, KVM_DEV_VFIO_GROUP, KVM_DEV_VFIO_GROUP_ADD, KVM_DEV_VFIO_GROUP_DEL,
+};
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::ioctl::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
@@ -94,12 +95,13 @@ ioctl_io_nr!(
 /// Vfio container class can hold one or more groups. In IOMMUs, page tables are shared between
 /// different groups, vfio container can reduce TLB thrashing and duplicate page tables.
 /// A container can be created by simply opening the `/dev/vfio/vfio` file.
-#[derive(Clone)]
 pub struct VfioContainer {
-    // `/dev/vfio/vfio` file fd, empowered by the attached groups.
-    fd: Arc<File>,
-    // A set of groups in the same container.
-    groups: Arc<Mutex<HashMap<u32, Arc<VfioGroup>>>>,
+    /// `/dev/vfio/vfio` file fd, empowered by the attached groups.
+    pub fd: File,
+    /// A set of groups in the same container.
+    pub groups: Mutex<HashMap<u32, Arc<VfioGroup>>>,
+    // Whether enabled as a memory listener.
+    enabled: bool,
 }
 
 impl VfioContainer {
@@ -110,14 +112,14 @@ impl VfioContainer {
     /// * Fail to match container api version or extension.
     /// * Only support api version type1v2 IOMMU.
     pub fn new() -> Result<Self> {
-        let file = OpenOptions::new()
+        let fd = OpenOptions::new()
             .read(true)
             .write(true)
             .open(CONTAINER_PATH)
             .chain_err(|| format!("Failed to open {} for VFIO container.", CONTAINER_PATH))?;
 
         // Ioctl is safe. Called file is `/dev/vfio/vfio` fd and we check the return.
-        let v = unsafe { ioctl(&file, VFIO_GET_API_VERSION()) };
+        let v = unsafe { ioctl(&fd, VFIO_GET_API_VERSION()) };
         if v as u32 != vfio::VFIO_API_VERSION {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_GET_API_VERSION".to_string(),
@@ -127,13 +129,8 @@ impl VfioContainer {
         };
 
         // Ioctl is safe. Called file is `/dev/vfio/vfio` fd and we check the return.
-        let ret = unsafe {
-            ioctl_with_val(
-                &file,
-                VFIO_CHECK_EXTENSION(),
-                vfio::VFIO_TYPE1v2_IOMMU.into(),
-            )
-        };
+        let ret =
+            unsafe { ioctl_with_val(&fd, VFIO_CHECK_EXTENSION(), vfio::VFIO_TYPE1v2_IOMMU.into()) };
         if ret != 1 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_CHECK_EXTENSION".to_string(),
@@ -143,8 +140,9 @@ impl VfioContainer {
         }
 
         Ok(VfioContainer {
-            fd: Arc::new(file),
-            groups: Arc::new(Mutex::new(HashMap::new())),
+            fd,
+            groups: Mutex::new(HashMap::new()),
+            enabled: false,
         })
     }
 
@@ -159,7 +157,7 @@ impl VfioContainer {
     /// * Fail to set container IOMMU.
     fn set_iommu(&self, val: u32) -> Result<()> {
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
-        let ret = unsafe { ioctl_with_val(self.fd.deref(), VFIO_SET_IOMMU(), val.into()) };
+        let ret = unsafe { ioctl_with_val(&self.fd, VFIO_SET_IOMMU(), val.into()) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_SET_IOMMU".to_string(),
@@ -190,7 +188,7 @@ impl VfioContainer {
         };
 
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
-        let ret = unsafe { ioctl_with_ref(self.fd.deref(), VFIO_IOMMU_MAP_DMA(), &map) };
+        let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_IOMMU_MAP_DMA(), &map) };
         if ret != 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_IOMMU_MAP_DMA".to_string(),
@@ -219,7 +217,7 @@ impl VfioContainer {
         };
 
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
-        let ret = unsafe { ioctl_with_ref(self.fd.deref(), VFIO_IOMMU_UNMAP_DMA(), &unmap) };
+        let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_IOMMU_UNMAP_DMA(), &unmap) };
         if ret != 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_IOMMU_UNMAP_DMA".to_string(),
@@ -279,6 +277,18 @@ impl Listener for VfioContainer {
         0
     }
 
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    fn disable(&mut self) {
+        self.enabled = false;
+    }
+
     fn handle_request(
         &self,
         range: Option<&FlatRange>,
@@ -303,10 +313,13 @@ impl Listener for VfioContainer {
 /// A vfio group can be created by opening `/dev/vfio/$group_id`, where $group_id represents the
 /// IOMMU group number.
 pub struct VfioGroup {
-    // `/dev/vfio/$group_id` file fd.
-    group: File,
+    /// Group id.
+    pub id: u32,
+    /// `/dev/vfio/$group_id` file fd.
+    pub fd: File,
     container: Weak<Mutex<VfioContainer>>,
-    devices: Mutex<HashMap<RawFd, Arc<Mutex<VfioDevice>>>>,
+    /// Devices in the group.
+    pub devices: Mutex<HashMap<RawFd, Arc<Mutex<VfioDevice>>>>,
 }
 
 impl VfioGroup {
@@ -344,13 +357,15 @@ impl VfioGroup {
         }
 
         Ok(VfioGroup {
-            group: file,
+            id: group_id,
+            fd: file,
             container: Weak::new(),
             devices: Mutex::new(HashMap::new()),
         })
     }
 
     /// Add group to kvm VFIO device.
+    ///
     /// Return Error if
     /// * Fail to set group to kvm device.
     fn add_to_kvm_device(&self) -> Result<()> {
@@ -358,7 +373,7 @@ impl VfioGroup {
             flags: 0,
             group: KVM_DEV_VFIO_GROUP,
             attr: u64::from(KVM_DEV_VFIO_GROUP_ADD),
-            addr: &self.group.as_raw_fd() as *const i32 as u64,
+            addr: &self.fd.as_raw_fd() as *const i32 as u64,
         };
         match KVM_DEVICE_FD.as_ref() {
             Some(fd) => fd
@@ -369,10 +384,30 @@ impl VfioGroup {
         Ok(())
     }
 
+    /// Delete group from kvm VFIO device.
+    ///
+    /// Return Error if
+    /// * Fail to delete group.
+    pub fn del_from_kvm_device(&self) -> Result<()> {
+        let attr = kvm_device_attr {
+            flags: 0,
+            group: KVM_DEV_VFIO_GROUP,
+            attr: u64::from(KVM_DEV_VFIO_GROUP_DEL),
+            addr: &self.fd.as_raw_fd() as *const i32 as u64,
+        };
+        match KVM_DEVICE_FD.as_ref() {
+            Some(fd) => fd
+                .set_device_attr(&attr)
+                .chain_err(|| "Failed to delete group from kvm device.")?,
+            None => bail!("Kvm device hasn't been created."),
+        }
+        Ok(())
+    }
+
     fn set_container(&mut self, container: &Arc<Mutex<VfioContainer>>) -> Result<()> {
         let fd = &container.lock().unwrap().fd.as_raw_fd();
         // Safe as group is the owner of file, and we check the return.
-        let ret = unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_SET_CONTAINER(), fd) };
+        let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_GROUP_SET_CONTAINER(), fd) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_GROUP_SET_CONTAINER".to_string(),
@@ -387,7 +422,7 @@ impl VfioGroup {
     fn unset_container(&mut self) {
         let container = self.container.upgrade().unwrap();
         let fd = container.lock().unwrap().fd.as_raw_fd();
-        unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &fd) };
+        unsafe { ioctl_with_ref(&self.fd, VFIO_GROUP_UNSET_CONTAINER(), &fd) };
         self.container = Weak::new();
     }
 
@@ -427,11 +462,15 @@ pub struct VfioDevInfo {
 /// Vfio device includes the group and container it belongs to, I/O regions and interrupt
 /// notifications info.
 pub struct VfioDevice {
-    pub device: File,
-    #[allow(dead_code)]
-    group: Weak<VfioGroup>,
+    /// File descriptor for a VFIO device instance.
+    pub fd: File,
+    /// Vfio group the device belongs to.
+    pub group: Weak<VfioGroup>,
+    /// Vfio container the device belongs to.
     pub container: Weak<Mutex<VfioContainer>>,
+    /// Information of the vfio device instance.
     pub dev_info: VfioDevInfo,
+    /// Unmasked MSI-X vectors.
     pub nr_vectors: usize,
 }
 
@@ -474,21 +513,22 @@ impl VfioDevice {
             bail!("No provided host PCI device, use -device vfio-pci,host=DDDD:BB:DD.F");
         }
 
-        let group = Self::vfio_get_group(&path, mem_as).chain_err(|| "Fail to get iommu group")?;
-        let device =
-            Self::vfio_get_device(&group, &path).chain_err(|| "Fail to get vfio device")?;
-        let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
+        let group =
+            Self::vfio_get_group(&path, mem_as).chain_err(|| "Failed to get iommu group")?;
+        let fd = Self::vfio_get_device(&group, &path).chain_err(|| "Failed to get vfio device")?;
+        let dev_info = Self::get_dev_info(&fd).chain_err(|| "Failed to get device info")?;
         let vfio_dev = Arc::new(Mutex::new(VfioDevice {
-            device,
+            fd,
             group: Arc::downgrade(&group),
             container: group.container.clone(),
             dev_info,
             nr_vectors: 0,
         }));
-        group.devices.lock().unwrap().insert(
-            vfio_dev.lock().unwrap().device.as_raw_fd(),
-            vfio_dev.clone(),
-        );
+        group
+            .devices
+            .lock()
+            .unwrap()
+            .insert(vfio_dev.lock().unwrap().fd.as_raw_fd(), vfio_dev.clone());
         Ok(vfio_dev)
     }
 
@@ -538,7 +578,7 @@ impl VfioDevice {
             .chain_err(|| "Failed to convert device name to CString type of data")?;
         let ptr = path.as_ptr();
         // Safe as group is the owner of file and make sure ptr is valid.
-        let fd = unsafe { ioctl_with_ptr(&group.group, VFIO_GROUP_GET_DEVICE_FD(), ptr) };
+        let fd = unsafe { ioctl_with_ptr(&group.fd, VFIO_GROUP_GET_DEVICE_FD(), ptr) };
         if fd < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_GROUP_GET_DEVICE_FD".to_string(),
@@ -596,7 +636,7 @@ impl VfioDevice {
                 // Safe as device is the owner of file, and we will verify the result is valid.
                 let ret = unsafe {
                     ioctl_with_mut_ref(
-                        &self.device,
+                        &self.fd,
                         VFIO_DEVICE_GET_REGION_INFO(),
                         &mut (new_info[0].region_info),
                     )
@@ -646,8 +686,7 @@ impl VfioDevice {
         };
 
         // Safe as device is the owner of file, and we will verify the result is valid.
-        let ret =
-            unsafe { ioctl_with_mut_ref(&self.device, VFIO_DEVICE_GET_REGION_INFO(), &mut info) };
+        let ret = unsafe { ioctl_with_mut_ref(&self.fd, VFIO_DEVICE_GET_REGION_INFO(), &mut info) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_DEVICE_GET_REGION_INFO".to_string(),
@@ -698,7 +737,7 @@ impl VfioDevice {
 
             // Safe as device is the owner of file, and we will verify the result is valid.
             let ret =
-                unsafe { ioctl_with_mut_ref(&self.device, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
+                unsafe { ioctl_with_mut_ref(&self.fd, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
             if ret < 0 {
                 return Err(ErrorKind::VfioIoctl(
                     "VFIO_DEVICE_GET_IRQ_INFO".to_string(),
@@ -726,7 +765,7 @@ impl VfioDevice {
     /// * `region_offset` - Vfio device region offset from its device descriptor.
     /// * `addr` - Offset in the region to read data.
     pub fn read_region(&self, buf: &mut [u8], region_offset: u64, addr: u64) -> Result<()> {
-        self.device
+        self.fd
             .read_exact_at(buf, region_offset + addr)
             .chain_err(|| "Failed to read vfio region")?;
 
@@ -741,7 +780,7 @@ impl VfioDevice {
     /// * `region_offset` - Vfio device region offset from its device descriptor.
     /// * `addr` - Offset in the region to write.
     pub fn write_region(&self, buf: &[u8], region_offset: u64, addr: u64) -> Result<()> {
-        self.device
+        self.fd
             .write_all_at(buf, region_offset + addr)
             .chain_err(|| "Failed to write vfio region")?;
 
@@ -770,7 +809,7 @@ impl VfioDevice {
         };
         LittleEndian::write_i32_into(irq_fds.as_slice(), &mut data);
         // Safe as device is the owner of file, and we will verify the result is valid.
-        let ret = unsafe { ioctl_with_ref(&self.device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
+        let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_DEVICE_SET_IRQS".to_string(),
@@ -800,7 +839,7 @@ impl VfioDevice {
         irq_set[0].count = 0u32;
 
         // Safe as device is the owner of file, and we will verify the result is valid.
-        let ret = unsafe { ioctl_with_ref(&self.device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
+        let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl(
                 "VFIO_DEVICE_SET_IRQS".to_string(),
@@ -815,7 +854,7 @@ impl VfioDevice {
     pub fn reset(&self) -> Result<()> {
         // Safe as device is the owner of file, and we verify the device supports being reset.
         if self.dev_info.flags & vfio::VFIO_DEVICE_FLAGS_RESET != 0 {
-            let ret = unsafe { ioctl(&self.device, VFIO_DEVICE_RESET()) };
+            let ret = unsafe { ioctl(&self.fd, VFIO_DEVICE_RESET()) };
             if ret < 0 {
                 return Err(ErrorKind::VfioIoctl(
                     "VFIO_DEVICE_RESET".to_string(),
