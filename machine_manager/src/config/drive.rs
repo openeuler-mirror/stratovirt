@@ -365,6 +365,20 @@ impl VmConfig {
         Ok(())
     }
 
+    /// Delete drive config in vm config by id.
+    ///
+    /// # Arguments
+    ///
+    /// * `drive_id` - Drive id.
+    pub fn del_drive_by_id(&mut self, drive_id: &str) -> Result<()> {
+        if self.drives.get(drive_id).is_some() {
+            self.drives.remove(drive_id);
+        } else {
+            bail!("Drive {} not found", drive_id);
+        }
+        Ok(())
+    }
+
     /// Add new flash device to `VmConfig`.
     fn add_flashdev(&mut self, pflash: PFlashConfig) -> Result<()> {
         if self.pflashs.is_some() {

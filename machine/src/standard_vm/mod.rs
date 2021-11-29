@@ -642,6 +642,21 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    fn blockdev_del(&self, node_name: String) -> Response {
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .del_drive_by_id(&node_name)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
     fn netdev_add(&self, _id: String, _if_name: Option<String>, _fds: Option<String>) -> Response {
         Response::create_empty_response()
     }

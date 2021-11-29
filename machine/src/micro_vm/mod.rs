@@ -1124,6 +1124,13 @@ impl DeviceInterface for LightMachine {
         }
     }
 
+    fn blockdev_del(&self, _node_name: String) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError("blockdev_del not support yet".to_string()),
+            None,
+        )
+    }
+
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response {
         let mut config = NetworkInterfaceConfig {
             id: id.clone(),

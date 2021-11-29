@@ -161,6 +161,9 @@ pub trait DeviceInterface {
         iops: Option<u64>,
     ) -> Response;
 
+    /// Delete a block device.
+    fn blockdev_del(&self, node_name: String) -> Response;
+
     /// Create a new network device.
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response;
 
