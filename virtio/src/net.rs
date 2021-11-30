@@ -42,9 +42,6 @@ use super::{
 const QUEUE_NUM_NET: usize = 2;
 /// Size of each virtqueue.
 const QUEUE_SIZE_NET: u16 = 256;
-/// The maximum buffer size when segmentation offload is enabled.
-/// This includes a 12-byte virtio net header, refer to Virtio Spec.
-const FRAME_BUF_SIZE: usize = 65562;
 
 type SenderConfig = Option<Tap>;
 
@@ -85,8 +82,6 @@ struct RxVirtio {
     need_irqs: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    bytes_read: usize,
-    frame_buf: [u8; FRAME_BUF_SIZE],
 }
 
 impl RxVirtio {
@@ -96,8 +91,6 @@ impl RxVirtio {
             need_irqs: false,
             queue,
             queue_evt,
-            bytes_read: 0,
-            frame_buf: [0u8; FRAME_BUF_SIZE],
         }
     }
 }
@@ -117,107 +110,64 @@ struct NetIoHandler {
 }
 
 impl NetIoHandler {
-    #[allow(clippy::useless_asref)]
-    fn handle_frame_rx(&mut self) -> Result<bool> {
+    fn handle_rx(&mut self) -> Result<()> {
         let mut queue = self.rx.queue.lock().unwrap();
-        if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
-            return Ok(true);
-        }
-        let elem = queue
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-            .chain_err(|| "Failed to pop avail ring for net rx")?;
-
-        let mut write_count = 0;
-        for elem_iov in elem.in_iovec.iter() {
-            let allow_write_count =
-                cmp::min(write_count + elem_iov.len as usize, self.rx.bytes_read);
-
-            let source_slice = &self.rx.frame_buf[write_count..allow_write_count];
-            match self.mem_space.write(
-                &mut source_slice.as_ref(),
-                elem_iov.addr,
-                source_slice.len() as u64,
-            ) {
-                Ok(_) => {
-                    write_count = allow_write_count;
-                }
-                Err(ref e) => {
-                    error!(
-                        "Failed to write slice for net rx: {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
-                    break;
-                }
-            }
-
-            if write_count >= self.rx.bytes_read {
+        while let Some(tap) = self.tap.as_mut() {
+            if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
+                self.rx.queue_full = true;
                 break;
             }
-        }
-
-        queue
-            .vring
-            .add_used(&self.mem_space, elem.index, write_count as u32)
-            .chain_err(|| {
-                format!(
-                    "Failed to add used ring for net rx, index: {}, len: {}",
-                    elem.index, write_count
-                )
-            })?;
-        self.rx.need_irqs = true;
-
-        if write_count < self.rx.bytes_read {
-            bail!(
-                "The length {} which is written is less than the length {} of buffer which is read for net rx",
-                write_count,
-                self.rx.bytes_read
-            );
-        }
-
-        Ok(false)
-    }
-
-    fn handle_rx(&mut self) -> Result<()> {
-        while let Some(tap) = self.tap.as_mut() {
-            match tap.read(&mut self.rx.frame_buf) {
-                Ok(count) => {
-                    self.rx.bytes_read = count;
-                    match self.handle_frame_rx() {
-                        Ok(full) => {
-                            if full {
-                                self.rx.queue_full = true;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Net handle frame rx error: {}", e);
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    match e.raw_os_error() {
-                        Some(err) if err == libc::EAGAIN => (),
-                        Some(err) => {
-                            bail!("Net rx: Failed to read tap, os error: {}", err);
-                        }
-                        _ => {
-                            bail!("Net rx: Failed to read tap and can't get os error code");
-                        }
+            let elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .chain_err(|| "Failed to pop avail ring for net rx")?;
+            let mut iovecs = Vec::new();
+            for elem_iov in elem.in_iovec.iter() {
+                let host_addr = queue
+                    .vring
+                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                if host_addr != 0 {
+                    let iovec = libc::iovec {
+                        iov_base: host_addr as *mut libc::c_void,
+                        iov_len: elem_iov.len as libc::size_t,
                     };
-                    break;
+                    iovecs.push(iovec);
+                } else {
+                    error!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
+            let write_count = unsafe {
+                libc::readv(
+                    tap.as_raw_fd() as libc::c_int,
+                    iovecs.as_ptr() as *const libc::iovec,
+                    iovecs.len() as libc::c_int,
+                )
+            };
+            if write_count < 0 {
+                let e = std::io::Error::last_os_error();
+                queue.vring.push_back();
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    break;
+                }
+                bail!("Failed to call readv for net handle_rx: {}", e);
+            }
+
+            queue
+                .vring
+                .add_used(&self.mem_space, elem.index, write_count as u32)
+                .chain_err(|| {
+                    format!(
+                        "Failed to add used ring for net rx, index: {}, len: {}",
+                        elem.index, write_count
+                    )
+                })?;
+            self.rx.need_irqs = true;
         }
 
         if self.rx.need_irqs {
             self.rx.need_irqs = false;
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.rx.queue.lock().unwrap()),
-            )
-            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
+                .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -230,9 +180,12 @@ impl NetIoHandler {
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
-                if let Some(hva) = self.mem_space.get_host_address(elem_iov.addr) {
+                let host_addr = queue
+                    .vring
+                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                if host_addr != 0 {
                     let iovec = libc::iovec {
-                        iov_base: hva as *mut libc::c_void,
+                        iov_base: host_addr as *mut libc::c_void,
                         iov_len: elem_iov.len as libc::size_t,
                     };
                     iovecs.push(iovec);

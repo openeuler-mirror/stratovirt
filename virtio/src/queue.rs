@@ -188,6 +188,9 @@ pub trait VringOps {
 
     /// The number of descriptor chains in the available ring.
     fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+
+    fn get_host_address_from_cache(&self, addr: GuestAddress, mem_space: &Arc<AddressSpace>)
+        -> u64;
 }
 
 /// Virtio used element.
@@ -897,6 +900,24 @@ impl VringOps for SplitVring {
         let avail_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
 
         Ok((avail_idx - self.next_avail).0)
+    }
+
+    fn get_host_address_from_cache(
+        &self,
+        addr: GuestAddress,
+        mem_space: &Arc<AddressSpace>,
+    ) -> u64 {
+        let host_addr;
+        if let Some(cache) = self.cache {
+            if addr.0 >= cache.start && addr.0 < cache.end {
+                host_addr = cache.host_base + addr.0 - cache.start;
+            } else {
+                host_addr = mem_space.get_host_address(addr).unwrap_or(0);
+            }
+        } else {
+            host_addr = mem_space.get_host_address(addr).unwrap_or(0);
+        }
+        host_addr
     }
 }
 
