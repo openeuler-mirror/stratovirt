@@ -213,6 +213,9 @@ const PCIE_CAP_LINK_SLSV_8GT: u32 = 0x08;
 const PCIE_CAP_LINK_SLSV_16GT: u32 = 0x10;
 // Target Link Speed.
 const PCIE_CAP_LINK_TLS_16GT: u16 = 0x0004;
+// PCIe type flag
+const PCI_EXP_FLAGS_TYPE_SHIFT: u16 = 4;
+const PCI_EXP_FLAGS_TYPE: u16 = 0x00f0;
 
 /// Type of bar region.
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -653,10 +656,11 @@ impl PciConfig {
     pub fn add_pcie_cap(&mut self, devfn: u8, port_num: u8, dev_type: u8) -> Result<usize> {
         let cap_offset: usize = self.add_pci_cap(CapId::Pcie as u8, PCIE_CAP_SIZE as usize)?;
         let mut offset: usize = cap_offset + PcieCap::CapReg as usize;
+        let pci_type = (dev_type << PCI_EXP_FLAGS_TYPE_SHIFT) as u16 & PCI_EXP_FLAGS_TYPE;
         le_write_u16(
             &mut self.config,
             offset,
-            dev_type as u16 | PCIE_CAP_VERSION_2 | PCIE_CAP_SLOT_IMPLEMENTED,
+            pci_type | PCIE_CAP_VERSION_2 | PCIE_CAP_SLOT_IMPLEMENTED,
         )?;
 
         offset = cap_offset + PcieCap::DevCap as usize;
