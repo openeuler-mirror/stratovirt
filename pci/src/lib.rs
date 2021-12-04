@@ -133,6 +133,11 @@ pub trait PciDevOps: Send {
     /// Realize PCI/PCIe device.
     fn realize(self) -> Result<()>;
 
+    /// Unrealize PCI/PCIe device.
+    fn unrealize(&mut self) -> Result<()> {
+        bail!("Unrealize of the pci device is not implemented");
+    }
+
     /// Configuration space read.
     ///
     /// # Arguments
@@ -166,6 +171,16 @@ pub trait PciDevOps: Send {
 
     /// Get device name.
     fn name(&self) -> String;
+
+    /// Reset device
+    fn reset(&mut self) -> Result<()> {
+        bail!("Reset of the pci device is not implemented");
+    }
+
+    /// Get device devfn
+    fn devfn(&self) -> Option<u8> {
+        None
+    }
 }
 
 /// Init multifunction for pci devices.

@@ -18,7 +18,8 @@ use address_space::Region;
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::msix::Msix;
 use crate::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, BDF_FUNC_SHIFT,
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+    BDF_FUNC_SHIFT,
 };
 
 /// Size in bytes of the configuration space of legacy PCI device.
@@ -521,6 +522,39 @@ impl PciConfig {
         self.bars[id].address = BAR_SPACE_UNMAPPED;
         self.bars[id].size = size;
         self.bars[id].region = Some(region);
+    }
+
+    /// Unregister region in PciConfig::bars.
+    ///
+    /// # Arguments
+    ///
+    /// * `bus` - The bus which region registered.
+    pub fn unregister_bars(&mut self, bus: &Arc<Mutex<PciBus>>) -> Result<()> {
+        let locked_bus = bus.lock().unwrap();
+        for bar in self.bars.iter_mut() {
+            match bar.region_type {
+                RegionType::Io =>
+                {
+                    #[cfg(target_arch = "x86_64")]
+                    if let Some(region) = bar.region.as_ref() {
+                        locked_bus
+                            .io_region
+                            .delete_subregion(region)
+                            .chain_err(|| "Failed to unregister io bar")?;
+                    }
+                }
+                _ => {
+                    if let Some(region) = bar.region.as_ref() {
+                        locked_bus
+                            .mem_region
+                            .delete_subregion(region)
+                            .chain_err(|| "Failed to unregister mem bar")?;
+                    }
+                }
+            }
+            bar.region = None;
+        }
+        Ok(())
     }
 
     /// Update bar space mapping once the base address is updated by the guest.

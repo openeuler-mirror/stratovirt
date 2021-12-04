@@ -11,12 +11,14 @@
 // See the Mulan PSL v2 for more details.
 
 use std::mem::size_of;
+use std::ops::Add;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
+use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use pci::config::{
     RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
@@ -980,6 +982,27 @@ impl PciDevOps for VirtioPciDevice {
         Ok(())
     }
 
+    fn unrealize(&mut self) -> PciResult<()> {
+        self.device
+            .lock()
+            .unwrap()
+            .unrealize()
+            .chain_err(|| "Failed to unrealize the virtio device")?;
+
+        let bus = self.parent_bus.upgrade().unwrap();
+        self.config.unregister_bars(&bus)?;
+
+        // QMP send device removal event
+        if QmpChannel::is_connected() {
+            let device_del = schema::DeviceDeleted {
+                device: Some(self.name.clone()),
+                path: "/machine/peripheral/".to_string().add(&self.name),
+            };
+            event!(DeviceDeleted; device_del);
+        }
+        Ok(())
+    }
+
     fn read_config(&self, offset: usize, data: &mut [u8]) {
         let data_size = data.len();
         if offset + data_size > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
@@ -1028,6 +1051,10 @@ impl PciDevOps for VirtioPciDevice {
 
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn devfn(&self) -> Option<u8> {
+        Some(self.devfn)
     }
 }
 
