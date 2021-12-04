@@ -194,8 +194,6 @@ const PCIE_CAP_PORT_NUM_SHIFT: u8 = 24;
 const PCIE_CAP_CLS_X1: u16 = 0x0001;
 // Negotiated link width.
 const PCIE_CAP_NLW_2_5GT: u16 = 0x0010;
-// Data link layer link active
-const PCIE_CAP_LINK_DLLLA: u16 = 0x2000;
 // Attention button present.
 const PCIE_CAP_SLOTCAP_ABP: u32 = 0x0000_0001;
 // Power controller present.
@@ -760,7 +758,7 @@ impl PciConfig {
         le_write_u16(
             &mut self.config,
             offset,
-            PCIE_CAP_CLS_X1 | PCIE_CAP_NLW_2_5GT | PCIE_CAP_LINK_DLLLA,
+            PCIE_CAP_CLS_X1 | PCIE_CAP_NLW_2_5GT,
         )?;
 
         let slot: u8 = devfn >> BDF_FUNC_SHIFT;
