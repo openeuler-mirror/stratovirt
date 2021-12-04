@@ -39,10 +39,12 @@ pub mod errors {
     }
 }
 
-mod bus;
 pub mod config;
-mod host;
+pub mod hotplug;
 pub mod msix;
+
+mod bus;
+mod host;
 mod root_port;
 
 pub use bus::PciBus;

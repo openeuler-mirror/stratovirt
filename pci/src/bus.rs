@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::Region;
 
 use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
+use super::hotplug::HotplugOps;
 use super::PciDevOps;
 
 /// PCI bus structure.
@@ -33,6 +34,8 @@ pub struct PciBus {
     pub io_region: Region,
     /// Memory region which the parent bridge manages.
     pub mem_region: Region,
+    /// Hot Plug controller for obtaining hot plug ops.
+    pub hotplug_controller: Option<Weak<Mutex<dyn HotplugOps>>>,
 }
 
 impl PciBus {
@@ -56,6 +59,7 @@ impl PciBus {
             #[cfg(target_arch = "x86_64")]
             io_region,
             mem_region,
+            hotplug_controller: None,
         }
     }
 
