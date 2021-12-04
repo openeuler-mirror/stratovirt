@@ -86,6 +86,42 @@ pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
 /// The vendor ID for PCI devices other than virtio.
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
+/// PCI Express capability registers, same as kernel defines
+/// Link Training
+pub const PCI_EXP_LNKSTA: u16 = 18;
+/// Data Link Layer Link Active
+pub const PCI_EXP_LNKSTA_DLLLA: u16 = 0x2000;
+/// Negotiated Link Width
+pub const PCI_EXP_LNKSTA_NLW: u16 = 0x03f0;
+/// Slot Control
+pub const PCI_EXP_SLTCTL: u16 = 24;
+/// Power Controller Control
+pub const PCI_EXP_SLTCTL_PCC: u16 = 0x0400;
+/// Attention Button Pressed Enable
+pub const PCI_EXP_SLTCTL_ABPE: u16 = 0x0001;
+/// Presence Detect Changed Enable
+pub const PCI_EXP_SLTCTL_PDCE: u16 = 0x0008;
+/// Command Completed Interrupt Enable
+pub const PCI_EXP_SLTCTL_CCIE: u16 = 0x0010;
+/// Power Indicator off
+pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
+/// Power Indicator on
+pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
+/// Slot Status
+pub const PCI_EXP_SLTSTA: u16 = 26;
+/// Presence Detect Changed
+pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
+/// Presence Detect State
+pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
+
+/// Hot plug event
+/// Presence detect changed
+pub const PCI_EXP_HP_EV_PDC: u16 = PCI_EXP_SLTCTL_PDCE;
+/// Attention button pressed
+pub const PCI_EXP_HP_EV_ABP: u16 = PCI_EXP_SLTCTL_ABPE;
+/// Command completed
+pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
+
 const PCI_CONFIG_HEAD_END: u8 = 64;
 const NEXT_CAP_OFFSET: u8 = 0x01;
 const STATUS_CAP_LIST: u16 = 0x0010;
@@ -291,6 +327,8 @@ pub struct PciConfig {
     pub last_ext_cap_end: u16,
     /// MSI-X information.
     pub msix: Option<Arc<Mutex<Msix>>>,
+    /// Offset of the PCIe extended capability.
+    pub ext_cap_offset: u16,
 }
 
 impl PciConfig {
@@ -320,6 +358,7 @@ impl PciConfig {
             last_ext_cap_offset: 0,
             last_ext_cap_end: PCI_CONFIG_SPACE_SIZE as u16,
             msix: None,
+            ext_cap_offset: PCI_CONFIG_HEAD_END as u16,
         }
     }
 
@@ -689,6 +728,7 @@ impl PciConfig {
     /// * `dev_type` - Device type.
     pub fn add_pcie_cap(&mut self, devfn: u8, port_num: u8, dev_type: u8) -> Result<usize> {
         let cap_offset: usize = self.add_pci_cap(CapId::Pcie as u8, PCIE_CAP_SIZE as usize)?;
+        self.ext_cap_offset = cap_offset as u16;
         let mut offset: usize = cap_offset + PcieCap::CapReg as usize;
         let pci_type = (dev_type << PCI_EXP_FLAGS_TYPE_SHIFT) as u16 & PCI_EXP_FLAGS_TYPE;
         le_write_u16(

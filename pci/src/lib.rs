@@ -111,6 +111,16 @@ le_read!(le_read_u16, read_u16, u16);
 le_read!(le_read_u32, read_u32, u32);
 le_read!(le_read_u64, read_u64, u64);
 
+fn le_write_set_value_u16(buf: &mut [u8], offset: usize, data: u16) -> Result<()> {
+    let val = le_read_u16(buf, offset)?;
+    le_write_u16(buf, offset, val | data)
+}
+
+fn le_write_clear_value_u16(buf: &mut [u8], offset: usize, data: u16) -> Result<()> {
+    let val = le_read_u16(buf, offset)?;
+    le_write_u16(buf, offset, val & !data)
+}
+
 pub fn pci_devfn(slot: u8, func: u8) -> u8 {
     ((slot & 0x1f) << 3) | (func & 0x07)
 }
