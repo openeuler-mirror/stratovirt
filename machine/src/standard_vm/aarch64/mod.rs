@@ -14,7 +14,6 @@ mod pci_host_root;
 mod syscall;
 
 use std::ops::Deref;
-use std::os::unix::io::RawFd;
 use std::sync::{Arc, Condvar, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, Region};
@@ -28,8 +27,8 @@ use error_chain::ChainedError;
 use hypervisor::KVM_FDS;
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::machine::{
-    DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-    MachineInterface, MachineLifecycle, MigrateInterface,
+    KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
+    MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
@@ -40,7 +39,6 @@ use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
-use virtio::{qmp_balloon, qmp_query_balloon};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{AcpiBuilder, StdMachineOps};
@@ -223,6 +221,18 @@ impl StdMachineOps for StdMachine {
         .chain_err(|| "Failed to realize fwcfg device")?;
 
         Ok(fwcfg_dev)
+    }
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.vm_state
+    }
+
+    fn get_cpu_topo(&self) -> &CpuTopology {
+        &self.cpu_topo
+    }
+
+    fn get_cpus(&self) -> &Vec<Arc<CPU>> {
+        &self.cpus
     }
 }
 
@@ -498,136 +508,6 @@ impl MachineAddressInterface for StdMachine {
         self.sys_mem
             .write(&mut data, GuestAddress(addr), count)
             .is_ok()
-    }
-}
-
-impl DeviceInterface for StdMachine {
-    fn query_status(&self) -> Response {
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
-        let qmp_state = match *vmstate {
-            KvmVmState::Running => qmp_schema::StatusInfo {
-                singlestep: false,
-                running: true,
-                status: qmp_schema::RunState::running,
-            },
-            KvmVmState::Paused => qmp_schema::StatusInfo {
-                singlestep: false,
-                running: true,
-                status: qmp_schema::RunState::paused,
-            },
-            _ => Default::default(),
-        };
-
-        Response::create_response(serde_json::to_value(&qmp_state).unwrap(), None)
-    }
-
-    fn query_cpus(&self) -> Response {
-        let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
-        for cpu_index in 0..self.cpu_topo.max_cpus {
-            if self.cpu_topo.get_mask(cpu_index as usize) == 1 {
-                let thread_id = self.cpus[cpu_index as usize].tid();
-                let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = qmp_schema::CpuInstanceProperties {
-                    node_id: None,
-                    socket_id: Some(socketid as isize),
-                    core_id: Some(coreid as isize),
-                    thread_id: Some(threadid as isize),
-                };
-                let cpu_info = qmp_schema::CpuInfo::x86 {
-                    current: true,
-                    qom_path: String::from("/machine/unattached/device[")
-                        + &cpu_index.to_string()
-                        + &"]".to_string(),
-                    halted: false,
-                    props: Some(cpu_instance),
-                    CPU: cpu_index as isize,
-                    thread_id: thread_id as isize,
-                    x86: qmp_schema::CpuInfoX86 {},
-                };
-                cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
-            }
-        }
-        Response::create_response(cpu_vec.into(), None)
-    }
-
-    fn query_hotpluggable_cpus(&self) -> Response {
-        Response::create_empty_response()
-    }
-
-    fn balloon(&self, value: u64) -> Response {
-        if qmp_balloon(value) {
-            return Response::create_empty_response();
-        }
-        Response::create_error_response(
-            qmp_schema::QmpErrorClass::DeviceNotActive(
-                "No balloon device has been activated".to_string(),
-            ),
-            None,
-        )
-    }
-
-    fn query_balloon(&self) -> Response {
-        if let Some(actual) = qmp_query_balloon() {
-            let ret = qmp_schema::BalloonInfo { actual };
-            return Response::create_response(serde_json::to_value(&ret).unwrap(), None);
-        }
-        Response::create_error_response(
-            qmp_schema::QmpErrorClass::DeviceNotActive(
-                "No balloon device has been activated".to_string(),
-            ),
-            None,
-        )
-    }
-
-    fn device_add(
-        &self,
-        _id: String,
-        _driver: String,
-        _addr: Option<String>,
-        _lun: Option<usize>,
-    ) -> Response {
-        Response::create_error_response(
-            qmp_schema::QmpErrorClass::GenericError("device_add not supported yet".to_string()),
-            None,
-        )
-    }
-
-    fn device_del(&self, _device_id: String) -> Response {
-        Response::create_error_response(
-            qmp_schema::QmpErrorClass::GenericError("device_del not supported yet".to_string()),
-            None,
-        )
-    }
-
-    fn blockdev_add(
-        &self,
-        _node_name: String,
-        _file: qmp_schema::FileOptions,
-        _cache: Option<qmp_schema::CacheOptions>,
-        _read_only: Option<bool>,
-    ) -> Response {
-        Response::create_error_response(
-            qmp_schema::QmpErrorClass::GenericError("blockdev_add not supported yet".to_string()),
-            None,
-        )
-    }
-
-    fn netdev_add(&self, _id: String, _if_name: Option<String>, _fds: Option<String>) -> Response {
-        Response::create_error_response(
-            qmp_schema::QmpErrorClass::GenericError("netdev_add not supported yet".to_string()),
-            None,
-        )
-    }
-
-    fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
-        if let Some(fd) = if_fd {
-            QmpChannel::set_fd(fd_name, fd);
-            Response::create_empty_response()
-        } else {
-            let err_resp =
-                qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
-            Response::create_error_response(err_resp, None)
-        }
     }
 }
 
