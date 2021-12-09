@@ -19,6 +19,8 @@ use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
 use super::hotplug::HotplugOps;
 use super::PciDevOps;
 
+type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
+
 /// PCI bus structure.
 pub struct PciBus {
     /// Bus name
@@ -144,6 +146,29 @@ impl PciBus {
         for sub_bus in &locked_bus.child_buses {
             if let Some(b) = PciBus::find_bus_by_name(&sub_bus, bus_name) {
                 return Some(b);
+            }
+        }
+        None
+    }
+
+    /// Find the bus to which the device is attached.
+    ///
+    /// # Arguments
+    ///
+    /// * `pci_bus` - On which bus to find.
+    /// * `name` - Device name.
+    pub fn find_attached_bus(pci_bus: &Arc<Mutex<PciBus>>, name: &str) -> Option<DeviceBusInfo> {
+        // Device is attached in pci_bus.
+        let locked_bus = pci_bus.lock().unwrap();
+        for dev in locked_bus.devices.values() {
+            if dev.lock().unwrap().name() == name {
+                return Some((pci_bus.clone(), dev.clone()));
+            }
+        }
+        // Find in child bus.
+        for bus in &locked_bus.child_buses {
+            if let Some(found) = PciBus::find_attached_bus(bus, name) {
+                return Some(found);
             }
         }
         None
