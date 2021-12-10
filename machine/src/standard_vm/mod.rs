@@ -60,6 +60,7 @@ use acpi::{
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use errors::{Result, ResultExt};
+use machine_manager::config::{ConfigCheck, DriveConfig, VmConfig};
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use util::byte_code::ByteCode;
@@ -145,6 +146,8 @@ trait StdMachineOps: AcpiBuilder {
     fn get_cpu_topo(&self) -> &CpuTopology;
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
+
+    fn get_vm_config(&self) -> &Mutex<VmConfig>;
 }
 
 /// Trait that helps to build ACPI tables.
@@ -464,12 +467,51 @@ impl DeviceInterface for StdMachine {
 
     fn blockdev_add(
         &self,
-        _node_name: String,
-        _file: qmp_schema::FileOptions,
-        _cache: Option<qmp_schema::CacheOptions>,
-        _read_only: Option<bool>,
+        node_name: String,
+        file: qmp_schema::FileOptions,
+        cache: Option<qmp_schema::CacheOptions>,
+        read_only: Option<bool>,
+        iops: Option<u64>,
     ) -> Response {
-        Response::create_empty_response()
+        let read_only = read_only.unwrap_or(false);
+        let direct = if let Some(cache) = cache {
+            cache.direct.unwrap_or(true)
+        } else {
+            true
+        };
+        let config = DriveConfig {
+            id: node_name,
+            path_on_host: file.filename,
+            read_only,
+            direct,
+            iops,
+        };
+
+        if let Err(e) = config.check() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+        // Check whether path is valid after configuration check
+        if let Err(e) = config.check_path() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_drive_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
     }
 
     fn netdev_add(&self, _id: String, _if_name: Option<String>, _fds: Option<String>) -> Response {

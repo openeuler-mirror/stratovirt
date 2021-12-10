@@ -164,6 +164,7 @@ pub trait DeviceInterface {
         file: FileOptions,
         cache: Option<CacheOptions>,
         read_only: Option<bool>,
+        iops: Option<u64>,
     ) -> Response;
 
     /// Create a new network device.

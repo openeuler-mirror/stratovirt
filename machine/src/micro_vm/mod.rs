@@ -1055,6 +1055,7 @@ impl DeviceInterface for LightMachine {
         file: qmp_schema::FileOptions,
         cache: Option<qmp_schema::CacheOptions>,
         read_only: Option<bool>,
+        _iops: Option<u64>,
     ) -> Response {
         const MAX_STRING_LENGTH: usize = 255;
         let read_only = if let Some(ro) = read_only { ro } else { false };

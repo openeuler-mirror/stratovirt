@@ -543,6 +543,8 @@ pub struct blockdev_add {
     pub discard: Option<String>,
     pub id: Option<String>,
     pub options: Option<String>,
+    #[serde(rename = "throttling.iops-total")]
+    pub iops: Option<u64>,
 }
 
 impl Command for blockdev_add {

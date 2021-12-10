@@ -110,6 +110,7 @@ pub struct StdMachine {
     boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
+    vm_config: Mutex<VmConfig>,
 }
 
 impl StdMachine {
@@ -143,6 +144,7 @@ impl StdMachine {
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| ErrorKind::InitPwrBtnErr)?,
+            vm_config: Mutex::new(vm_config.clone()),
         })
     }
 
@@ -233,6 +235,10 @@ impl StdMachineOps for StdMachine {
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>> {
         &self.cpus
+    }
+
+    fn get_vm_config(&self) -> &Mutex<VmConfig> {
+        &self.vm_config
     }
 }
 
