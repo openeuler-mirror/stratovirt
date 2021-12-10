@@ -100,7 +100,8 @@ macro_rules! event {
 macro_rules! create_command_matches {
     ( $command:expr; $executor:expr; $ret:expr;
       $(($cmd_type_1:tt, $func_1:tt)),*;
-      $(($cmd_type_2:tt, $func_2:tt, $($arg:tt),*)),*
+      $(($cmd_type_2:tt, $func_2:tt, $($arg:tt),*)),*;
+      $(($cmd_type_3:tt, $func_3:tt)),*
     ) => {
         match $command {
             $(
@@ -112,6 +113,12 @@ macro_rules! create_command_matches {
             $(
                 $crate::qmp::qmp_schema::QmpCommand::$cmd_type_2{ arguments, id } => {
                     qmp_command_match!($func_2, $executor, arguments, $ret, $($arg),*);
+                    id
+                },
+            )*
+            $(
+                $crate::qmp::qmp_schema::QmpCommand::$cmd_type_3{ arguments, id } => {
+                    qmp_command_match_with_argument!($func_3, $executor, arguments, $ret);
                     id
                 },
             )*
@@ -129,6 +136,13 @@ macro_rules! qmp_command_match {
         $ret = $executor.$func(
             $($cmd.$arg),*
         ).into();
+    };
+}
+
+/// Macro: to execute handle func with all arguments.
+macro_rules! qmp_command_match_with_argument {
+    ( $func:tt, $executor:expr, $cmd:expr, $ret:expr ) => {
+        $ret = $executor.$func($cmd).into();
     };
 }
 
@@ -437,13 +451,13 @@ fn qmp_command_exec(
         (query_balloon, query_balloon),
         (list_type, list_type),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
-        (device_add, device_add, id, driver, addr, lun),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
         (blockdev_add, blockdev_add, node_name, file, cache, read_only, iops),
         (netdev_add, netdev_add, id, if_name, fds),
         (balloon, balloon, value),
-        (migrate, migrate, uri)
+        (migrate, migrate, uri);
+        (device_add, device_add)
     );
 
     // Handle the Qmp command which macro can't cover

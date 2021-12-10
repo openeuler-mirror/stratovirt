@@ -482,7 +482,13 @@ pub struct device_add {
     pub mq: Option<String>,
     #[serde(rename = "vectors")]
     pub vectors: Option<String>,
+    #[serde(rename = "serial")]
+    pub serial_num: Option<String>,
+    pub iothread: Option<String>,
+    pub multifunction: Option<bool>,
 }
+
+pub type DeviceAddArgument = device_add;
 
 impl Command for device_add {
     type Res = Empty;

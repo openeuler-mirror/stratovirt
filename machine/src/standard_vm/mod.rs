@@ -451,13 +451,7 @@ impl DeviceInterface for StdMachine {
         )
     }
 
-    fn device_add(
-        &self,
-        _id: String,
-        _driver: String,
-        _addr: Option<String>,
-        _lun: Option<usize>,
-    ) -> Response {
+    fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         Response::create_empty_response()
     }
 
