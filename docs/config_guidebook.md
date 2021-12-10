@@ -839,6 +839,7 @@ $ ./ozone \
     -exec_file /path/to/stratovirt \
     -gid 100 \
     -uid 100 \
+    -capability [CAP_*] \
     -netns /path/to/network_name_space \
     -source /path/to/source_files \
     -numa numa_node \
@@ -853,6 +854,7 @@ About the arguments:
 * `exec_file` : path to the StratoVirt binary file. NB: it should be a statically linked binary file.
 * `uid` : the user id.
 * `gid` : the group id.
+* `capability` : set the ozone environment capabilities. If not set, forbid any capability.
 * `netns` : path to a existed network namespace.
 * `source` : path to the source file, such as `rootfs` and `vmlinux`.
 * `clean-resource` : a flag to clean resource.
@@ -879,6 +881,7 @@ $ ./ozone \
     -exec_file /path/to/stratovirt \
     -gid 100 \
     -uid 100 \
+    -capability CAP_CHOWN \
     -netns /var/run/netns/mynet \
     -source /path/to/vmlinux.bin /path/to/rootfs \
     -numa 0 \
