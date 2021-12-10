@@ -106,7 +106,8 @@ pub use micro_vm::LightMachine;
 use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
 use virtio::{
-    BlockState, RngState, VhostKern, VirtioConsoleState, VirtioMmioState, VirtioNetState,
+    BlockState, RngState, VhostKern, VirtioConsoleState, VirtioDevice, VirtioMmioState,
+    VirtioNetState,
 };
 
 use std::os::unix::io::AsRawFd;
@@ -455,24 +456,26 @@ pub trait MachineOps {
         bail!("No pci host found");
     }
 
+    fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
+        // If there is no pci bus, skip the id check, such as micro vm.
+        if let Ok(pci_host) = self.get_pci_host() {
+            // Because device_del needs an id when removing a device, it's necessary to ensure that the id is unique.
+            if name.is_empty() {
+                bail!("Device id is empty");
+            }
+            if PciBus::find_attached_bus(&pci_host.lock().unwrap().root_bus, name).is_some() {
+                bail!("Device id {} existed", name);
+            }
+        }
+        Ok(())
+    }
+
     fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let sys_mem = self.get_sys_mem();
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
-        let pcidev = VirtioPciDevice::new(
-            device_cfg.id,
-            devfn,
-            sys_mem.clone(),
-            device.clone(),
-            parent_bus,
-            multi_func,
-        );
-        pcidev
-            .realize()
-            .chain_err(|| "Failed to add virtio pci blk device")?;
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func)?;
         MigrationManager::register_device_instance_mutex(BlockState::descriptor(), device);
         Ok(())
     }
@@ -561,6 +564,28 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_virtio_pci_device(
+        &mut self,
+        id: &str,
+        bdf: &PciBdf,
+        device: Arc<Mutex<dyn VirtioDevice>>,
+        multi_func: bool,
+    ) -> Result<()> {
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let sys_mem = self.get_sys_mem();
+        let pcidev = VirtioPciDevice::new(
+            id.to_string(),
+            devfn,
+            sys_mem.clone(),
+            device,
+            parent_bus,
+            multi_func,
+        );
+        pcidev
+            .realize()
+            .chain_err(|| "Failed to add virtio pci device")?;
+        Ok(())
+    }
     /// Add peripheral devices.
     ///
     /// # Arguments

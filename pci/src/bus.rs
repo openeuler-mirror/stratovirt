@@ -18,6 +18,7 @@ use address_space::Region;
 use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
 use super::hotplug::HotplugOps;
 use super::PciDevOps;
+use crate::errors::{Result, ResultExt};
 
 type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
 
@@ -172,5 +173,31 @@ impl PciBus {
             }
         }
         None
+    }
+
+    /// Detach device from the bus.
+    ///
+    /// # Arguments
+    ///
+    /// * `bus` - Bus to detach from.
+    /// * `dev` - Device attached to the bus.
+    pub fn detach_device(bus: &Arc<Mutex<Self>>, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+        let mut dev_locked = dev.lock().unwrap();
+        dev_locked
+            .unrealize()
+            .chain_err(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
+
+        let devfn = dev_locked
+            .devfn()
+            .chain_err(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
+
+        let mut locked_bus = bus.lock().unwrap();
+        if locked_bus.devices.get(&devfn).is_some() {
+            locked_bus.devices.remove(&devfn);
+        } else {
+            bail!("Device {} not found in the bus", dev_locked.name());
+        }
+
+        Ok(())
     }
 }

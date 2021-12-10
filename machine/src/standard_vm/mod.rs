@@ -51,6 +51,7 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Condvar, Mutex};
 use std::{fs::File, mem::size_of};
 
+use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
 use acpi::{
@@ -59,12 +60,17 @@ use acpi::{
 };
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
+use error_chain::ChainedError;
 use errors::{Result, ResultExt};
-use machine_manager::config::{ConfigCheck, DriveConfig, VmConfig};
+use machine_manager::config::{
+    get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, PciBdf, VmConfig,
+};
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use pci::hotplug::handle_plug;
+use pci::PciBus;
 use util::byte_code::ByteCode;
-use virtio::{qmp_balloon, qmp_query_balloon};
+use virtio::{qmp_balloon, qmp_query_balloon, Block};
 
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
@@ -370,6 +376,50 @@ trait AcpiBuilder {
     }
 }
 
+fn get_device_bdf(bus: Option<String>, addr: Option<String>) -> Result<PciBdf> {
+    let mut pci_bdf = PciBdf {
+        bus: bus.unwrap_or_else(|| String::from("pcie.0")),
+        addr: (0, 0),
+    };
+    let addr = addr.unwrap_or_else(|| String::from("0x0"));
+    pci_bdf.addr = get_pci_df(&addr).chain_err(|| "Failed to get device num or function num")?;
+    Ok(pci_bdf)
+}
+
+impl StdMachine {
+    fn plug_virtio_pci_blk(
+        &mut self,
+        pci_bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        let multifunction = args.multifunction.unwrap_or(false);
+        let drive = if let Some(drv) = &args.drive {
+            drv
+        } else {
+            bail!("Drive not set");
+        };
+
+        let blk = if let Some(conf) = self.get_vm_config().lock().unwrap().drives.get(drive) {
+            let dev = BlkDevConfig {
+                id: conf.id.clone(),
+                path_on_host: conf.path_on_host.clone(),
+                read_only: conf.read_only,
+                direct: conf.direct,
+                serial_num: args.serial_num.clone(),
+                iothread: args.iothread.clone(),
+                iops: conf.iops,
+            };
+            dev.check()?;
+            Arc::new(Mutex::new(Block::new(dev)))
+        } else {
+            bail!("Drive not found");
+        };
+
+        self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction)
+            .chain_err(|| "Failed to add virtio pci device")
+    }
+}
+
 impl DeviceInterface for StdMachine {
     fn query_status(&self) -> Response {
         let vm_state = self.get_vm_state();
@@ -452,7 +502,69 @@ impl DeviceInterface for StdMachine {
     }
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
-        Response::create_empty_response()
+        if let Err(e) = self.check_device_id_existed(&args.id) {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+
+        // Use args.bus.clone() and args.addr.clone() because args borrowed in the following process.
+        let pci_bdf = match get_device_bdf(args.bus.clone(), args.addr.clone()) {
+            Ok(bdf) => bdf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        };
+
+        let driver = args.driver.as_str();
+        match driver {
+            "virtio-blk-pci" => {
+                if let Err(e) = self.plug_virtio_pci_blk(&pci_bdf, args.as_ref()) {
+                    let err_str = format!("Failed to add virtio pci blk: {}", e.to_string());
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            _ => {
+                let err_str = format!("Failed to add device: Driver {} is not support", driver);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_str),
+                    None,
+                );
+            }
+        }
+
+        // It's safe to call get_pci_host().unwrap() because it has been checked before.
+        let locked_pci_host = self.get_pci_host().unwrap().lock().unwrap();
+        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &args.id) {
+            match handle_plug(&bus, &dev) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => {
+                    if let Err(e) = PciBus::detach_device(&bus, &dev) {
+                        error!("{}", e.display_chain());
+                        error!("Failed to detach device");
+                    }
+                    let err_str = format!("Failed to plug device: {}", e.to_string());
+                    Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    )
+                }
+            }
+        } else {
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(
+                    "Failed to add device: Bus not found".to_string(),
+                ),
+                None,
+            )
+        }
     }
 
     fn device_del(&self, _device_id: String) -> Response {
