@@ -149,7 +149,7 @@ pub trait DeviceInterface {
     fn device_add(&mut self, args: Box<DeviceAddArgument>) -> Response;
 
     /// Delete a device with device id.
-    fn device_del(&self, device_id: String) -> Response;
+    fn device_del(&mut self, device_id: String) -> Response;
 
     /// Creates a new block device.
     fn blockdev_add(

@@ -67,7 +67,7 @@ use machine_manager::config::{
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
-use pci::hotplug::handle_plug;
+use pci::hotplug::{handle_plug, handle_unplug_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
 use virtio::{qmp_balloon, qmp_query_balloon, Block};
@@ -567,8 +567,30 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn device_del(&self, _device_id: String) -> Response {
-        Response::create_empty_response()
+    fn device_del(&mut self, device_id: String) -> Response {
+        let pci_host = match self.get_pci_host() {
+            Ok(host) => host,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        };
+
+        let locked_pci_host = pci_host.lock().unwrap();
+        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
+            match handle_unplug_request(&bus, &dev) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            }
+        } else {
+            let err_str = format!("Failed to remove device: id {} not found", &device_id);
+            Response::create_error_response(qmp_schema::QmpErrorClass::GenericError(err_str), None)
+        }
     }
 
     fn blockdev_add(

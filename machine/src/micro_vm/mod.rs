@@ -1022,7 +1022,7 @@ impl DeviceInterface for LightMachine {
         }
     }
 
-    fn device_del(&self, device_id: String) -> Response {
+    fn device_del(&mut self, device_id: String) -> Response {
         match self.del_replaceable_device(&device_id) {
             Ok(path) => {
                 let block_del_event = qmp_schema::DeviceDeleted {
