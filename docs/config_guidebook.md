@@ -697,15 +697,15 @@ in StratoVirt process by default. It will make a slight influence on performance
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      43       |       43       |
-|        q35         |      48       |       45       |
+|      microvm       |      46       |       46       |
+|        q35         |      47       |       47       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      41       |       42       |
-|        virt        |      45       |       44       |
+|      microvm       |      44       |       45       |
+|        virt        |      45       |       45       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell
