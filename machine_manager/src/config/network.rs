@@ -44,6 +44,28 @@ impl Default for NetDevcfg {
     }
 }
 
+impl ConfigCheck for NetDevcfg {
+    fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
+        }
+
+        if self.ifname.len() > MAX_STRING_LENGTH {
+            return Err(
+                ErrorKind::StringLengthTooLong(self.ifname.clone(), MAX_STRING_LENGTH).into(),
+            );
+        }
+
+        if let Some(vhost_type) = self.vhost_type.as_ref() {
+            if vhost_type != "vhost-kernel" {
+                return Err(ErrorKind::UnknownVhostType.into());
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Config struct for network
 /// Contains network device config, such as `host_dev_name`, `mac`...
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +215,59 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     Ok(netdevinterfacecfg)
 }
 
+pub fn get_netdev_config(
+    id: String,
+    if_name: Option<String>,
+    fd: Option<String>,
+    vhost: Option<String>,
+    vhost_fd: Option<String>,
+) -> Result<NetDevcfg> {
+    let mut config = NetDevcfg {
+        id,
+        tap_fd: None,
+        vhost_type: None,
+        vhost_fd: None,
+        ifname: if_name.unwrap_or_else(String::new),
+    };
+
+    if let Some(fd) = fd {
+        match fd.parse::<i32>() {
+            Ok(fd) => config.tap_fd = Some(fd),
+            Err(_e) => {
+                bail!("Failed to get fd: {}", fd);
+            }
+        };
+    }
+    if let Some(vhost) = vhost {
+        match vhost.parse::<ExBool>() {
+            Ok(vhost) => {
+                if vhost.into() {
+                    config.vhost_type = Some(String::from("vhost-kernel"));
+                }
+            }
+            Err(_) => {
+                bail!("Failed to get vhost type: {}", vhost);
+            }
+        };
+    }
+    if let Some(vhostfd) = vhost_fd {
+        match vhostfd.parse::<i32>() {
+            Ok(fd) => config.vhost_fd = Some(fd),
+            Err(_e) => {
+                bail!("Failed to get vhost fd: {}", vhostfd);
+            }
+        };
+    }
+    if config.vhost_fd.is_some() && config.vhost_type.is_none() {
+        bail!("Argument \'vhostfd\' is not needed for virtio-net device");
+    }
+    if config.tap_fd.is_none() && config.ifname.eq("") {
+        bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
+    }
+
+    Ok(config)
+}
+
 impl VmConfig {
     pub fn add_netdev(&mut self, netdev_config: &str) -> Result<()> {
         let mut cmd_parser = CmdParser::new("netdev");
@@ -206,13 +281,16 @@ impl VmConfig {
 
         cmd_parser.parse(netdev_config)?;
         let drive_cfg = parse_netdev(cmd_parser)?;
-        let netdev_id = drive_cfg.id.clone();
-        if self.netdevs.get(&netdev_id).is_none() {
-            self.netdevs.insert(netdev_id, drive_cfg);
-        } else {
-            bail!("Netdev {:?} has been added");
-        }
+        self.add_netdev_with_config(drive_cfg)
+    }
 
+    pub fn add_netdev_with_config(&mut self, conf: NetDevcfg) -> Result<()> {
+        let netdev_id = conf.id.clone();
+        if self.netdevs.get(&netdev_id).is_none() {
+            self.netdevs.insert(netdev_id, conf);
+        } else {
+            bail!("Netdev {:?} has been added", netdev_id);
+        }
         Ok(())
     }
 }

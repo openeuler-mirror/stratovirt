@@ -171,7 +171,15 @@ pub trait DeviceInterface {
     fn blockdev_del(&self, node_name: String) -> Response;
 
     /// Create a new network device.
-    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response;
+    fn netdev_add(
+        &mut self,
+        id: String,
+        if_name: Option<String>,
+        fds: Option<String>,
+        net_type: Option<String>,
+        vhost: Option<String>,
+        vhost_fd: Option<String>,
+    ) -> Response;
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;

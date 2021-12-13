@@ -1142,7 +1142,15 @@ impl DeviceInterface for LightMachine {
         )
     }
 
-    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response {
+    fn netdev_add(
+        &mut self,
+        id: String,
+        if_name: Option<String>,
+        fds: Option<String>,
+        _net_type: Option<String>,
+        _vhost: Option<String>,
+        _vhost_fd: Option<String>,
+    ) -> Response {
         let mut config = NetworkInterfaceConfig {
             id: id.clone(),
             host_dev_name: "".to_string(),
