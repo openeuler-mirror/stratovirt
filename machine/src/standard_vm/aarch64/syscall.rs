@@ -149,6 +149,8 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_GET_FEATURES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_MEM_TABLE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_NET_SET_BACKEND() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_GET_FEATURES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_RESET_OWNER() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
