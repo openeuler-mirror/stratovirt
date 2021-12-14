@@ -288,6 +288,15 @@ impl VmConfig {
         }
         Ok(())
     }
+
+    pub fn del_netdev_by_id(&mut self, id: &str) -> Result<()> {
+        if self.netdevs.get(id).is_some() {
+            self.netdevs.remove(id);
+        } else {
+            bail!("Netdev {} not found", id);
+        }
+        Ok(())
+    }
 }
 
 fn check_mac_address(mac: &str) -> bool {

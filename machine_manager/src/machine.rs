@@ -166,6 +166,8 @@ pub trait DeviceInterface {
     /// Create a new network device.
     fn netdev_add(&mut self, args: Box<NetDevAddArgument>) -> Response;
 
+    fn netdev_del(&mut self, id: String) -> Response;
+
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;
 

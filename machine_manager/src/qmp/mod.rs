@@ -454,6 +454,7 @@ fn qmp_command_exec(
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
         (blockdev_del, blockdev_del, node_name),
+        (netdev_del, netdev_del, id),
         (balloon, balloon, value),
         (migrate, migrate, uri);
         (device_add, device_add),

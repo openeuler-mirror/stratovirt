@@ -865,6 +865,16 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    fn netdev_del(&mut self, id: String) -> Response {
+        match self.get_vm_config().lock().unwrap().del_netdev_by_id(&id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
         if let Some(fd) = if_fd {
             QmpChannel::set_fd(fd_name, fd);
