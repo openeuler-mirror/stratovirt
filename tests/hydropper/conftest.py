@@ -38,14 +38,20 @@ def test_session_root_path():
     delete_test_session = CONFIG.delete_test_session
     monitor_thread = MonitorThread()
     monitor_thread.start()
-    if "stratovirt" in CONFIG.vmtype:
+    if os.path.exists(CONFIG.stratovirt_rootfs):
         _cmd = "cp %s %s.bak" % (CONFIG.stratovirt_rootfs, CONFIG.stratovirt_rootfs)
+        run(_cmd, shell=True, check=True)
+    if os.path.exists(CONFIG.stratovirt_stand_rootfs):
+        _cmd = "cp %s %s.bak" % (CONFIG.stratovirt_stand_rootfs, CONFIG.stratovirt_stand_rootfs)
         run(_cmd, shell=True, check=True)
 
     yield CONFIG.test_session_root_path
 
-    if "stratovirt" in CONFIG.vmtype:
+    if os.path.exists(CONFIG.stratovirt_rootfs):
         _cmd = "cp %s.bak %s" % (CONFIG.stratovirt_rootfs, CONFIG.stratovirt_rootfs)
+        run(_cmd, shell=True, check=True)
+    if os.path.exists(CONFIG.stratovirt_stand_rootfs):
+        _cmd = "cp %s.bak %s" % (CONFIG.stratovirt_stand_rootfs, CONFIG.stratovirt_stand_rootfs)
         run(_cmd, shell=True, check=True)
     monitor_thread.stop()
     monitor_thread.join()
