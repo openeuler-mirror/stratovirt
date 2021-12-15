@@ -49,6 +49,8 @@ pub struct Chardev {
     pub input: Option<Arc<Mutex<dyn CommunicatInInterface>>>,
     /// Chardev output.
     pub output: Option<Arc<Mutex<dyn CommunicatOutInterface>>>,
+    /// Fd of socket stream.
+    pub stream_fd: Option<i32>,
     /// Handle the input data and trigger interrupt if necessary.
     receive: Option<Arc<dyn Fn(&[u8]) + Send + Sync>>,
     /// Return the remain space size of receiver buffer.
@@ -63,6 +65,7 @@ impl Chardev {
             listener: None,
             input: None,
             output: None,
+            stream_fd: None,
             receive: None,
             get_remain_space_size: None,
         }
@@ -202,6 +205,7 @@ fn get_notifier_handler(
             let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
             let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
             let stream_fd = stream.as_raw_fd();
+            locked_chardev.stream_fd = Some(stream_fd);
             let stream_arc = Arc::new(Mutex::new(stream));
             locked_chardev.input = Some(stream_arc.clone());
             locked_chardev.output = Some(stream_arc);
@@ -225,6 +229,7 @@ fn get_notifier_handler(
                 if event & EventSet::HANG_UP == EventSet::HANG_UP {
                     cloned_chardev.lock().unwrap().input = None;
                     cloned_chardev.lock().unwrap().output = None;
+                    cloned_chardev.lock().unwrap().stream_fd = None;
                     Some(vec![EventNotifier::new(
                         NotifierOperation::Delete,
                         stream_fd,

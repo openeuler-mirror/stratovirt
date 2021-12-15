@@ -234,16 +234,23 @@ impl ConsoleHandler {
                 }
             }
             ChardevType::Socket(_) => {
-                let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
                 let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
-                let stream_fd = stream.as_raw_fd();
                 notifiers.push(EventNotifier::new(
                     NotifierOperation::Delete,
-                    stream_fd,
-                    Some(listener_fd),
-                    EventSet::IN | EventSet::HANG_UP,
+                    listener_fd,
+                    None,
+                    EventSet::IN,
                     Vec::new(),
                 ));
+                if let Some(stream_fd) = locked_chardev.stream_fd {
+                    notifiers.push(EventNotifier::new(
+                        NotifierOperation::Delete,
+                        stream_fd,
+                        None,
+                        EventSet::IN | EventSet::HANG_UP,
+                        Vec::new(),
+                    ));
+                }
             }
             _ => (),
         }
