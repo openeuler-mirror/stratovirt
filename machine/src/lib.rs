@@ -55,8 +55,8 @@ pub mod errors {
             RegMemRegionErr(base: u64, size: u64) {
                 display("Failed to register region in memory space: base={},size={}", base, size)
             }
-            InitPwrBtnErr {
-                display("Failed to init power button.")
+            InitEventFdErr(fd: String) {
+                display("Failed to init eventfd {}.", fd)
             }
             RlzVirtioMmioErr {
                 display("Failed to realize virtio mmio.")

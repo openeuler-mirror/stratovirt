@@ -140,9 +140,13 @@ impl StdMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             power_button: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| MachineErrorKind::InitPwrBtnErr)?,
+                .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
         })
+    }
+
+    pub fn handle_reset_request(_vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
+        Ok(())
     }
 
     fn arch_init() -> MachineResult<()> {

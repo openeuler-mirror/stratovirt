@@ -111,6 +111,10 @@ pub struct StdMachine {
     /// VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
     vm_config: Mutex<VmConfig>,
+    /// Reset request, handle VM `Reset` event.
+    reset_req: EventFd,
+    /// Device Tree Blob.
+    dtb_vec: Vec<u8>,
 }
 
 impl StdMachine {
@@ -143,8 +147,11 @@ impl StdMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
             power_button: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| ErrorKind::InitPwrBtnErr)?,
+                .chain_err(|| ErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
+            reset_req: EventFd::new(libc::EFD_NONBLOCK)
+                .chain_err(|| ErrorKind::InitEventFdErr("reset_req".to_string()))?,
+            dtb_vec: Vec::new(),
         })
     }
 
@@ -155,6 +162,10 @@ impl StdMachine {
     /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
     pub fn run(&self, paused: bool) -> Result<()> {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+    }
+
+    pub fn handle_reset_request(_vm: &Arc<Mutex<Self>>) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -337,7 +348,11 @@ impl MachineOps for StdMachine {
         use super::errors::ErrorKind as StdErrorKind;
         use crate::errors::ResultExt;
 
+        let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
+        locked_vm
+            .register_reset_event(&locked_vm.reset_req, clone_vm)
+            .chain_err(|| "Fail to register reset event")?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_mem,
@@ -389,6 +404,7 @@ impl MachineOps for StdMachine {
                 .generate_fdt_node(&mut fdt_helper)
                 .chain_err(|| ErrorKind::GenFdtErr)?;
             let fdt_vec = fdt_helper.finish()?;
+            locked_vm.dtb_vec = fdt_vec.clone();
             locked_vm
                 .sys_mem
                 .write(
@@ -482,6 +498,11 @@ impl MachineLifecycle for StdMachine {
         if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
             return false;
         }
+        true
+    }
+
+    fn reset(&mut self) -> bool {
+        self.reset_req.write(1).unwrap();
         true
     }
 

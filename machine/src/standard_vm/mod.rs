@@ -18,6 +18,10 @@ mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
+use machine_manager::event_loop::EventLoop;
+use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
@@ -55,8 +59,10 @@ pub mod errors {
 use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
+use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::errors::Result as MachineResult;
 use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
@@ -148,6 +154,43 @@ trait StdMachineOps: AcpiBuilder {
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
 
     fn get_vm_config(&self) -> &Mutex<VmConfig>;
+
+    /// Register event notifier for reset of standard machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `reset_req` - Eventfd of the reset request.
+    /// * `clone_vm` - Reference of the StdMachine.
+    fn register_reset_event(
+        &self,
+        reset_req: &EventFd,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let reset_req = reset_req.try_clone().unwrap();
+        let reset_req_fd = reset_req.as_raw_fd();
+        let reset_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
+            Arc::new(Mutex::new(Box::new(move |_, _| {
+                let _ret = reset_req.read().unwrap();
+                if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
+                    error!(
+                        "Fail to reboot standard VM, {}",
+                        error_chain::ChainedError::display_chain(&e)
+                    );
+                }
+
+                None
+            })));
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            reset_req_fd,
+            None,
+            EventSet::IN,
+            vec![reset_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .chain_err(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
 }
 
 /// Trait that helps to build ACPI tables.
