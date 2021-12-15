@@ -201,6 +201,9 @@ pub trait CPUInterface {
     /// Make `CPU` destroy because of guest inner shutdown.
     fn guest_shutdown(&self) -> Result<()>;
 
+    /// Make `CPU` destroy because of guest inner reset.
+    fn guest_reset(&self) -> Result<()>;
+
     /// Handle vcpu event from `kvm`.
     fn kvm_vcpu_exec(&self) -> Result<bool>;
 }
@@ -450,6 +453,21 @@ impl CPUInterface for CPU {
         Ok(())
     }
 
+    fn guest_reset(&self) -> Result<()> {
+        if let Some(vm) = self.vm.upgrade() {
+            vm.lock().unwrap().reset();
+        } else {
+            return Err(ErrorKind::NoMachineInterface.into());
+        }
+
+        if QmpChannel::is_connected() {
+            let reset_msg = schema::Reset { guest: true };
+            event!(Reset; reset_msg);
+        }
+
+        Ok(())
+    }
+
     fn kvm_vcpu_exec(&self) -> Result<bool> {
         let vm = if let Some(vm) = self.vm.upgrade() {
             vm
@@ -487,15 +505,21 @@ impl CPUInterface for CPU {
                 }
                 #[cfg(target_arch = "aarch64")]
                 VcpuExit::SystemEvent(event, flags) => {
-                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN
-                        || event == kvm_bindings::KVM_SYSTEM_EVENT_RESET
-                    {
+                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN {
                         info!(
                             "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
                             self.id()
                         );
                         self.guest_shutdown()
                             .chain_err(|| "Some error occurred in guest shutdown")?;
+                    } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
+                        info!(
+                            "Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal",
+                            self.id()
+                        );
+                        self.guest_reset()
+                            .chain_err(|| "Some error occurred in guest reset")?;
+                        return Ok(true);
                     } else {
                         error!(
                             "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
