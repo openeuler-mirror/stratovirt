@@ -85,14 +85,14 @@ def init_standvm(root_path, bin_path=CONFIG.stratovirt_standvm_bin, **kwargs):
     vm_uuid = str(uuid.uuid4())
     if "aarch" in platform.machine():
         testvm = StandVM(root_path, "standvm", vm_uuid,
-                        bin_path=bin_path, machine="virt",
-                        **kwargs
-                        )
+                         bin_path=bin_path, machine="virt",
+                         **kwargs
+                         )
     else:
         testvm = StandVM(root_path, "standvm", vm_uuid,
-                        bin_path=bin_path, machine="q35",
-                        **kwargs
-                        )
+                         bin_path=bin_path, machine="q35",
+                         **kwargs
+                         )
 
     return testvm
 
@@ -102,6 +102,18 @@ def init_microvm_with_json(root_path, vm_config_json, vmtag):
     vmname = "microvm" + "_" + vmtag
     testvm = MicroVM(root_path, vmname, vm_uuid, bin_path=CONFIG.stratovirt_microvm_bin,
                      vmconfig=vm_config_json)
+    return testvm
+
+def init_standvm_with_json(root_path, vm_config_json, vmtag):
+    """Init a standvm from a json file"""
+    vm_uuid = str(uuid.uuid4())
+    vmname = "standvm" + "_" + vmtag
+    if "aarch" in platform.platform():
+        testvm = StandVM(root_path, vmname, vm_uuid, bin_path=CONFIG.stratovirt_standvm_bin,
+                         machine="virt", vmconfig=vm_config_json)
+    else:
+        testvm = StandVM(root_path, vmname, vm_uuid, bin_path=CONFIG.stratovirt_standvm_bin,
+                         machine="q35", vmconfig=vm_config_json)
     return testvm
 
 
@@ -214,3 +226,19 @@ for capability in CONFIG.list_microvm_tags():
     )
 
     exec(test_microvm_cap_fixture)
+
+TEST_STANDVM_CAP_FIXTURE_TEMPLATE = (
+    "@pytest.fixture()\n"
+    "def test_standvm_with_CAP(test_session_root_path):\n"
+    "    standvm = init_standvm_with_json(test_session_root_path,\n"
+    "                                     CONFIG.get_standvm_by_tag(\"CAP\"), \"CAP\")\n"
+    "    yield standvm\n"
+    "    standvm.kill()"
+)
+
+for capability in CONFIG.list_standvm_tags():
+    test_standvm_cap_fixture = (
+        TEST_STANDVM_CAP_FIXTURE_TEMPLATE.replace('CAP', capability)
+    )
+
+    exec(test_standvm_cap_fixture)

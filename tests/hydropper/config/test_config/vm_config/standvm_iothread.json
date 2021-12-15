@@ -1,0 +1,29 @@
+{
+  "boot-source": {
+    "kernel_image_path": "${VMLINUX}",
+    "boot_args": "rw console=hvc0 lastbus=0 reboot=k panic=1 tsc=reliable ipv6.disable=1 root=/dev/vda"
+  },
+  "block": [
+    {
+      "drive": [
+        {
+          "drive_id": "rootfs",
+          "path_on_host": "${ROOTFS}",
+          "direct": true,
+          "read_only": false,
+          "iops": "200"
+        }
+      ],
+      "device": [
+        {
+          "drive_id": "rootfs",
+          "iothread": "iothread2"
+        }
+      ]
+    }
+  ],
+  "machine-config": {
+    "vcpu_count": "${VCPU}",
+    "mem_size": "${MEMSIZE}"
+  }
+}
