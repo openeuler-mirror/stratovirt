@@ -23,7 +23,7 @@ use address_space::{AddressSpace, GuestAddress};
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
 use error_chain::ChainedError;
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::offset_of;
@@ -946,7 +946,7 @@ impl SysBusDevOps for FwCfgMem {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::errors::Result<()> {
+    ) -> SysBusResult<()> {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
@@ -956,6 +956,11 @@ impl SysBusDevOps for FwCfgMem {
     /// Get device type.
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::FwCfg
+    }
+
+    fn reset(&mut self) -> SysBusResult<()> {
+        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        Ok(())
     }
 }
 
@@ -1113,7 +1118,7 @@ impl SysBusDevOps for FwCfgIO {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> sysbus::errors::Result<()> {
+    ) -> SysBusResult<()> {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
@@ -1122,6 +1127,11 @@ impl SysBusDevOps for FwCfgIO {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::FwCfg
+    }
+
+    fn reset(&mut self) -> SysBusResult<()> {
+        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        Ok(())
     }
 }
 

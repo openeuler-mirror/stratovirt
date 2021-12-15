@@ -879,6 +879,18 @@ impl SysBusDevOps for PFlash {
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Flash
     }
+
+    fn reset(&mut self) -> SysBusResult<()> {
+        use sysbus::errors::ResultExt as SysBusResultExt;
+
+        SysBusResultExt::chain_err(self.rom.as_ref().unwrap().set_rom_device_romd(true), || {
+            "Fail to set PFlash rom region read only"
+        })?;
+        self.cmd = 0x00;
+        self.write_cycle = 0;
+        self.status = 0x80;
+        Ok(())
+    }
 }
 
 impl AmlBuilder for PFlash {

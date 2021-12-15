@@ -243,6 +243,10 @@ pub trait SysBusDevOps: Send + AmlBuilder {
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Others
     }
+
+    fn reset(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl AmlBuilder for SysBus {
