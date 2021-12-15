@@ -314,19 +314,24 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        if let Some(backend) = &self.backend {
-            backend
-                .reset_owner()
-                .chain_err(|| "Failed to reset owner for vhost-net")?;
-
-            self.deactivate_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
-        } else {
-            bail!("Failed to get backend for vhost-net");
-        }
+        self.deactivate_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)?;
 
         Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // No need to close fd manually, because rust will
+        // automatically cleans up variables at the end of the lifecycle.
+        self.backend = None;
+        self.tap = None;
+        self.device_features = 0_u64;
+        self.driver_features = 0_u64;
+        self.vhost_features = 0_u64;
+        self.device_config = VirtioNetConfig::default();
+
+        self.realize()
     }
 }
 

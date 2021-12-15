@@ -437,7 +437,7 @@ impl VhostIoHandler {
 
         notifiers.push(EventNotifier::new(
             NotifierOperation::Delete,
-            self.reset_evt,
+            self.deactivate_evt,
             None,
             EventSet::IN,
             Vec::new(),

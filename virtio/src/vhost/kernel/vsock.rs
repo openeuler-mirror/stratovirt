@@ -150,7 +150,9 @@ impl VirtioDevice for Vsock {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
         let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
             .chain_err(|| "Failed to create backend for vsock")?;
-
+        backend
+            .set_owner()
+            .chain_err(|| "Failed to set owner for vsock")?;
         self.state.device_features = backend
             .get_features()
             .chain_err(|| "Failed to get features for vsock")?;
@@ -242,9 +244,6 @@ impl VirtioDevice for Vsock {
             Some(backend_) => backend_,
         };
         backend
-            .set_owner()
-            .chain_err(|| "Failed to set owner for vsock")?;
-        backend
             .set_features(self.state.driver_features)
             .chain_err(|| "Failed to set features for vsock")?;
         backend
@@ -309,18 +308,22 @@ impl VirtioDevice for Vsock {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        if let Some(backend) = &self.backend {
-            backend
-                .reset_owner()
-                .chain_err(|| "Failed to reset owner for vhost-vsock")?;
+        self.deactivate_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)?;
 
-            self.deactivate_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
-        } else {
-            bail!("Failed to get backend for vhost-vsock");
-        }
         Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // No need to close fd manually, because rust will
+        // automatically cleans up variables at the end of the lifecycle.
+        self.backend = None;
+        self.state = VsockState::default();
+        self.event_queue = None;
+        self.interrupt_cb = None;
+
+        self.realize()
     }
 }
 
