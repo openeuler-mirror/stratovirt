@@ -18,9 +18,9 @@ use std::thread;
 
 use machine_manager::config::MachineMemConfig;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::errors::{Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
-use util::unix::host_page_size;
+use util::unix::{do_mmap, host_page_size};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
 
@@ -116,66 +116,6 @@ impl FileBackend {
             offset: 0_u64,
             page_size: fstat.f_bsize as u64,
         })
-    }
-}
-
-fn do_mmap(
-    read_only: bool,
-    size: u64,
-    file: &Option<FileBackend>,
-    is_share: bool,
-    dump_guest_core: bool,
-) -> Result<u64> {
-    let mut flags: i32 = 0;
-    let mut fd: i32 = -1;
-    let mut offset: u64 = 0;
-    if let Some(fb) = file.as_ref() {
-        fd = fb.file.as_raw_fd();
-        offset = fb.offset;
-    } else {
-        flags |= libc::MAP_ANONYMOUS;
-    }
-
-    if is_share {
-        flags |= libc::MAP_SHARED;
-    } else {
-        flags |= libc::MAP_PRIVATE;
-    }
-
-    let mut prot = libc::PROT_READ;
-    if !read_only {
-        prot |= libc::PROT_WRITE;
-    }
-
-    // Safe because the return value is checked.
-    let hva = unsafe {
-        libc::mmap(
-            std::ptr::null_mut() as *mut libc::c_void,
-            size as libc::size_t,
-            prot,
-            flags,
-            fd as libc::c_int,
-            offset as libc::off_t,
-        )
-    };
-    if hva == libc::MAP_FAILED {
-        return Err(std::io::Error::last_os_error()).chain_err(|| ErrorKind::Mmap);
-    }
-    if !dump_guest_core {
-        set_memory_undumpable(hva, size);
-    }
-
-    Ok(hva as u64)
-}
-
-fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
-    // Safe because host_addr and size are valid and return value is checked.
-    let ret = unsafe { libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP) };
-    if ret < 0 {
-        error!(
-            "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {}",
-            std::io::Error::last_os_error()
-        );
     }
 }
 
@@ -288,10 +228,12 @@ pub fn create_host_mmaps(
         });
     }
 
+    let backend = (&f_back).as_ref();
     let mut host_addr = do_mmap(
-        false,
+        &backend.map(|fb| fb.file.as_ref()),
         mem_config.mem_size,
-        &f_back,
+        backend.map_or(0, |fb| fb.offset),
+        false,
         mem_config.mem_share,
         mem_config.dump_guest_core,
     )?;
@@ -359,7 +301,15 @@ impl HostMemMapping {
         let host_addr = if let Some(addr) = host_addr {
             addr
         } else {
-            do_mmap(read_only, size, &file_back, is_share, dump_guest_core)?
+            let fb = (&file_back).as_ref();
+            do_mmap(
+                &fb.map(|f| f.file.as_ref()),
+                size,
+                fb.map_or(0, |f| f.offset),
+                read_only,
+                is_share,
+                dump_guest_core,
+            )?
         };
 
         Ok(Self {
