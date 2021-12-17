@@ -14,6 +14,7 @@ mod ich9_lpc;
 mod mch;
 mod syscall;
 
+use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
@@ -47,7 +48,7 @@ use vmm_sys_util::eventfd::EventFd;
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
-use crate::{standard_vm::open_pflash_file, MachineOps};
+use crate::MachineOps;
 use mch::Mch;
 use syscall::syscall_whitelist;
 use util::byte_code::ByteCode;
@@ -415,7 +416,10 @@ impl MachineOps for StdMachine {
         // of current PFlash device.
         let mut flash_end: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
         for config in configs_vec {
-            let mut fd = open_pflash_file(&config.path_on_host, config.unit)
+            let mut fd = OpenOptions::new()
+                .read(true)
+                .write(!config.read_only)
+                .open(&config.path_on_host)
                 .chain_err(|| ErrorKind::OpenFileErr(config.path_on_host.clone()))?;
             let pfl_size = fd.metadata().unwrap().len();
 
@@ -445,18 +449,24 @@ impl MachineOps for StdMachine {
             }
 
             let sector_len: u32 = 1024 * 4;
+            let backend = Some(fd);
             let pflash = PFlash::new(
                 pfl_size,
-                Some(fd),
+                &backend,
                 sector_len,
                 4_u32,
                 1_u32,
                 config.read_only,
             )
-            .chain_err(|| "Failed to create pflash device")?;
-            PFlash::realize(pflash, &mut self.sysbus, flash_end - pfl_size, pfl_size)
-                .chain_err(|| "Failed to realize pflash device")?;
-
+            .chain_err(|| ErrorKind::InitPflashErr)?;
+            PFlash::realize(
+                pflash,
+                &mut self.sysbus,
+                flash_end - pfl_size,
+                pfl_size,
+                backend,
+            )
+            .chain_err(|| ErrorKind::RlzPflashErr)?;
             flash_end -= pfl_size;
         }
 

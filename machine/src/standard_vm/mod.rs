@@ -42,14 +42,20 @@ pub mod errors {
             OpenFileErr(path: String) {
                 display("Failed to open file: {}.", path)
             }
+            InitPflashErr {
+                display("Failed to init pflash device.")
+            }
+            RlzPflashErr {
+                display("Failed to realize pflash device.")
+            }
         }
     }
 }
 
+use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Condvar, Mutex};
-use std::{fs::File, mem::size_of};
 
 use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
@@ -76,18 +82,6 @@ use virtio::{qmp_balloon, qmp_query_balloon, Block};
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
-
-fn open_pflash_file(file_name: &str, unit: usize) -> Result<File> {
-    let fd = if unit == 0 {
-        std::fs::OpenOptions::new().read(true).open(file_name)?
-    } else {
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(file_name)?
-    };
-    Ok(fd)
-}
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
