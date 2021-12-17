@@ -14,7 +14,7 @@ StratoVirt的核心架构如下图所示，从上到下分为三层：
   - microvm：为了提高性能和减少攻击面，StratoVirt最小化了用户态设备的模拟。模拟实现了KVM仿真设备和半虚拟化设备，如GIC、串行、RTC和virtio-mmio设备。
   - 标准机型：提供ACPI表实现UEFI启动，支持添加virtio-pci以及VFIO直通设备等，极大提高虚拟机的I/O性能。
 
- ![image](images/StratoVirt-arch.png)
+ ![image](images/StratoVirt-arch.jpg)
 
 ## 特性
 
