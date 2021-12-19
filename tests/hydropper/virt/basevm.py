@@ -98,6 +98,7 @@ class BaseVM:
         self.vhost_type = None
         self.vhostfd = None
         self.net_iothread = None
+        self.iothreads = 0
         self.vmid = uuid
         self.vmtype = vmtype
         self.vnetnums = vnetnums
@@ -110,6 +111,7 @@ class BaseVM:
         self.withpid = False
         self.balloon = balloon
         self.deflate_on_oom = False
+        self.quickstart_incoming = None
 
     def __enter__(self):
         return self
@@ -237,7 +239,14 @@ class BaseVM:
                                             self._name + "_" + self.vmid + ".sock")
             self._remove_files.append(self._vm_monitor)
 
-        # self.parser_config_to_args()
+    def make_iothread_cmd(self, args):
+        """make iothread cmdline"""
+        _temp_iothread_args = ""
+        for i in range(1, self.iothreads + 1):
+            _temp_iothread_args = "iothread,id=iothread%s" % i
+            args.extend(["-object", _temp_iothread_args])
+
+        return args
 
     def create_serial_control(self):
         """Create serial control"""
@@ -423,6 +432,9 @@ class BaseVM:
         if self.freeze:
             args.extend(['-S'])
 
+        if self.quickstart_incoming:
+            args.extend(['-incoming', self.quickstart_incoming])
+
         return args
 
 
@@ -552,6 +564,10 @@ class BaseVM:
         """Pause all vcpu"""
         return self.qmp.qmp_command("stop")
 
+    def migrate(self, **kwargs):
+        """save a template"""
+        return self.qmp.qmp_command("migrate", **kwargs)
+
     def cont(self):
         """Resume paused vcpu"""
         return self.qmp.qmp_command("cont")
@@ -577,7 +593,7 @@ class BaseVM:
         LOG.debug("hotplug disk %s to vm" % diskpath)
         devid = "drive-%d" % index
         resp = self.qmp.qmp_command("blockdev-add", node_name="drive-%d" % index,
-                                             file={"driver": "file", "filename": diskpath})
+                                    file={"driver": "file", "filename": diskpath})
 
         LOG.debug("blockdev-add return %s" % resp)
         if check:

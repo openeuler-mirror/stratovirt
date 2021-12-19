@@ -47,3 +47,14 @@ def remove_existing_dir(dirpath):
         if err.errno == errno.ENOENT:
             return
         raise
+
+def get_timestamp(timestamp):
+    """Get timestamp"""
+    timestr = timestamp[11:29]
+    mill = timestr.split('.')[1]
+    datetime = timestr.split('.')[0]
+    hour = int(datetime.split(':')[0])
+    minute = int(datetime.split(':')[1])
+    second = int(datetime.split(':')[2])
+
+    return float(str(second + minute * 60 + hour * 60 * 24) + '.' + mill)

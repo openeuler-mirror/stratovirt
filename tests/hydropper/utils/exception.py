@@ -137,3 +137,8 @@ class PflashError(Exception):
     "Lack of code storage file"
     def __str__(self):
         return "code_storage_file is not found"
+
+class PcierootportError(Exception):
+    """Insufficient slots"""
+    def __str__(self):
+        return "Insufficient pcie root port slots!!!"

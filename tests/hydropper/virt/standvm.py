@@ -18,6 +18,7 @@ import subprocess
 from virt.basevm import BaseVM
 from utils.config import CONFIG
 from utils.exception import PflashError
+from utils.exception import PcierootportError
 from utils.resources import NETWORKS
 from utils.resources import VSOCKS
 from utils.utils_logging import TestLog
@@ -30,7 +31,7 @@ class StandVM(BaseVM):
     """Class to represent a standardvm"""
     def __init__(self, root_path, name, uuid, bin_path=CONFIG.stratovirt_standvm_bin, machine=None,
                  vmconfig=CONFIG.get_default_standvm_vmconfig(), vmlinux=CONFIG.stratovirt_stand_vmlinux,
-                 rootfs=CONFIG.stratovirt_stand_rootfs, initrd=CONFIG.stratovirt_initrd, pcie_root_port=0,
+                 rootfs=CONFIG.stratovirt_stand_rootfs, initrd=CONFIG.stratovirt_initrd,
                  vcpus=4, memsize=2048, socktype="unix", loglevel="info"):
         self._args = list()
         self._console_address = None
@@ -56,9 +57,13 @@ class StandVM(BaseVM):
         self.code_storage_readonly = True
         self.data_storage_file = None
         self.inited = False
-        self.pcie_root_port = pcie_root_port
+        self.pcie_root_port_num = 0
+        self.pcie_root_port_remain = 0
+        self.pcie_root_port = {"net": False, "console": False, "vsock": False,
+                               "balloon": False, "rng": False, "block": False, "vfio": False}
         self.pid = None
         self.vfio = False
+        self.bdf = None
         self.init_vmjson(root_path)
         self.bus_slot = dict()
         self.bus_slot_init()
@@ -84,12 +89,21 @@ class StandVM(BaseVM):
             addr=0x3.0x0: Virtio-vsock
             addr=0x4.0x0: VFIO
             addr=0x5.0x0 -> addr=0x8.0x0: pcie_root_port
-            addr=0x9.0x0 -> addr=0x17.0x0: None
+            addr=0x9.0x0: Virtio-rng
+            addr=0xa.0x0 -> addr=0x17.0x0: None
             addr=0x18.0x0 -> addr=0x1b.0x0: Virtio-net
             addr=0x1c.0x0 -> addr=0x1f.0x0: Virtio-blk
         """
         for i in range(32):
             self.bus_slot[i] = None
+
+    def bus_slot_display(self):
+        """display bus slot"""
+        LOG.debug("---------bus-slot---------")
+        for key, value in self.bus_slot.items():
+            if value:
+                LOG.debug('{key}:{value}'.format(key=key, value=value))
+        LOG.debug("--------------------------")
 
     def init_vmjson(self, root_path):
         """Generate a temp vm json file"""
@@ -116,10 +130,17 @@ class StandVM(BaseVM):
         del self._args
         self._args = list(self.init_args)
         self._pre_launch()
+        self._make_pcie_root_port()
+        self._make_console_cmd()
+        self._make_net_cmd()
+        self._make_rng_cmd()
+        self._make_vsock_cmd()
+        self._make_balloon_cmd()
+        self._make_vfio_cmd()
         self.parser_config_to_args()
         self.full_command = ([self.bin_path] + self._base_args() + self._args)
         LOG.debug(self.full_command)
-        LOG.debug(self.bus_slot)
+        self.bus_slot_display()
         if not self.env.keys():
             self._popen = subprocess.Popen(self.full_command,
                                            stdin=subprocess.PIPE,
@@ -145,8 +166,8 @@ class StandVM(BaseVM):
         if not self.error_test:
             self._post_launch()
 
-    def _base_args(self):
-        args = self._common_args()
+    def _make_console_cmd(self):
+        """make console cmdline"""
         if self._console_set:
             self._console_address = os.path.join(self._sock_dir,
                                                  self._name + "_" + self.vmid + "-console.sock")
@@ -156,10 +177,12 @@ class StandVM(BaseVM):
             _temp_console_args = "virtio-serial-pci,bus=pcie.0,addr=0x1.0x0"
             if self.multifunction["console"]:
                 _temp_console_args += ",multifunction=on"
-            args.extend(['-device', _temp_console_args, '-chardev',
-                         'socket,path=%s,id=virtioconsole1,server,nowait' % self._console_address,
-                         '-device', 'virtconsole,chardev=virtioconsole1,id=console_0'])
+            self.add_args('-device', _temp_console_args, '-chardev',
+                          'socket,path=%s,id=virtioconsole1,server,nowait' % self._console_address,
+                          '-device', 'virtconsole,chardev=virtioconsole1,id=console_0')
 
+    def _make_net_cmd(self):
+        """make net cmdline"""
         if self.vnetnums > 0:
             for _ in range(self.vnetnums - len(self.taps)):
                 tapinfo = NETWORKS.generator_tap()
@@ -178,55 +201,128 @@ class StandVM(BaseVM):
                     _temp_net_args += ",vhost=on"
                 if self.vhostfd:
                     _temp_net_args += ",vhostfd=%s" % self.vhostfd
-                _temp_device_args = "virtio-net-pci,netdev=%s,id=%s,bus=pcie.0,addr=%s.0x0" % (tapname, tapname, hex(i))
+                if self.pcie_root_port["net"]:
+                    # only one device is supported(pcie root port)
+                    if self.pcie_root_port_remain <= 0:
+                        raise PcierootportError
+                    _temp_device_args = "virtio-net-pci,netdev=%s,id=%s,bus=pcie.%s,addr=%s.0x0"\
+                        % (tapname, tapname, self.pcie_root_port_remain + 4, hex(i))
+                    self.pcie_root_port_remain -= 1
+                    self.pcie_root_port["net"] = False
+                else:
+                    _temp_device_args = "virtio-net-pci,netdev=%s,id=%s,bus=pcie.0,addr=%s.0x0"\
+                        % (tapname, tapname, hex(i))
                 if self.multifunction["net"]:
                     _temp_device_args += ",multifunction=on"
                 if self.net_iothread:
                     _temp_device_args += ",iothread=%s" % self.net_iothread
+                    self.iothreads += 1
                 if self.withmac:
                     _temp_device_args += ",mac=%s" % tapinfo["mac"]
-                args.extend(['-netdev', _temp_net_args, '-device', _temp_device_args])
+                self.add_args('-netdev', _temp_net_args, '-device', _temp_device_args)
 
+    def _make_rng_cmd(self):
+        """make rng cmdline"""
         if self.rng:
-            self.bus_slot[0] = 'rng'
+            self.bus_slot[9] = 'rng'
             _temp_rng_args = 'rng-random,id=objrng0,filename=%s' % self.rng_files
-            if self.max_bytes == 0:
-                _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x9.0x0'
+            if self.pcie_root_port["rng"]:
+                if self.pcie_root_port_remain <= 0:
+                    raise PcierootportError
+                if self.max_bytes == 0:
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.%s,addr=0x9.0x0'\
+                        % (self.pcie_root_port_remain + 4)
+                else:
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.%s,addr=0x9.0x0'\
+                        % (self.max_bytes, self.pcie_root_port_remain + 4)
+                self.pcie_root_port_remain -= 1
+                self.pcie_root_port["rng"] = False
             else:
-                _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.0,addr=0x9.0x0' % self.max_bytes
+                if self.max_bytes == 0:
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x9.0x0'
+                else:
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.0,addr=0x9.0x0'\
+                        % self.max_bytes
             if self.multifunction["rng"]:
                 _temp_device_args += ",multifunction=on"
-            args.extend(['-object', _temp_rng_args, '-device', _temp_device_args])
+            self.add_args('-object', _temp_rng_args, '-device', _temp_device_args)
 
+    def _make_vsock_cmd(self):
+        """make vsock cmdline"""
         if self.vsocknums == 1:
             if VSOCKS.init_vsock():
                 for _ in range(self.vsocknums - len(self.vsock_cid)):
                     sockcid = VSOCKS.find_contextid()
                     self.vsock_cid.append(sockcid)
                     self.bus_slot[3] = 'vsock'
-                    _temp_vsock_args = "vhost-vsock-pci,id=vsock-%s,guest-cid=%s,bus=pcie.0,addr=0x3.0x0" % (sockcid, sockcid)
+                    if self.pcie_root_port["vsock"]:
+                        if self.pcie_root_port_remain <= 0:
+                            raise PcierootportError
+                        _temp_vsock_args = "vhost-vsock-pci,id=vsock-%s,guest-cid=%s,bus=pcie.%s,addr=0x3.0x0"\
+                        % (sockcid, sockcid, self.pcie_root_port_remain + 4)
+                        self.pcie_root_port_remain -= 1
+                        self.pcie_root_port["vsock"] = False
+                    else:
+                        _temp_vsock_args = "vhost-vsock-pci,id=vsock-%s,guest-cid=%s,bus=pcie.0,addr=0x3.0x0"\
+                            % (sockcid, sockcid)
                     if self.multifunction["vsock"]:
                         _temp_vsock_args += ",multifunction=on"
-                    args.extend(['-device', _temp_vsock_args])
+                    self.add_args('-device', _temp_vsock_args)
 
+    def _make_balloon_cmd(self):
+        """make balloon cmdline"""
         if self.balloon:
             self.bus_slot[2] = 'balloon'
-            _temp_balloon_args = "virtio-balloon-pci,bus=pcie.0,addr=0x2.0x0"
+            if self.pcie_root_port["balloon"]:
+                if self.pcie_root_port_remain <= 0:
+                    raise PcierootportError
+                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.%s,addr=0x2.0x0" % (self.pcie_root_port_remain + 4)
+                self.pcie_root_port_remain -= 1
+                self.pcie_root_port["balloon"] = False
+            else:
+                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.0,addr=0x2.0x0"
             if self.deflate_on_oom:
                 _temp_balloon_args += ',deflate-on-oom=true'
             else:
                 _temp_balloon_args += ',deflate-on-oom=false'
             if self.multifunction["balloon"]:
                 _temp_balloon_args += ",multifunction=on"
-            args.extend(['-device', _temp_balloon_args])
+            self.add_args('-device', _temp_balloon_args)
 
-        if self.pcie_root_port > 0:
-            for port_id in range(5, self.pcie_root_port + 5):
-                self.bus_slot[port_id] = 'pcie_root_port'
-                _temp_pcie_args = "pcie-root-port,port=0x%s,addr=0x%s,bus=pcie.0,id=pcie.%s" % (port_id, port_id, port_id)
+    def _make_pcie_root_port(self):
+        """make pcie root port cmdline"""
+        if self.pcie_root_port_num > 0 and self.pcie_root_port_num <= 4:
+            # addr=0x5.0x0 -> addr=0x8.0x0: pcie_root_port
+            self.pcie_root_port_remain = self.pcie_root_port_num
+            for port_id in range(5, self.pcie_root_port_num + 5):
+                self.bus_slot[port_id] = ['pcie_root_port', 'id-' + str(port_id), None]
+                _temp_pcie_args = "pcie-root-port,port=0x%s,addr=0x%s,bus=pcie.0,id=pcie.%s"\
+                    % (port_id, port_id, port_id)
                 if self.multifunction["pcie_root_port"]:
                     _temp_pcie_args += ",multifunction=on"
-                args.extend(['-device', _temp_pcie_args])
+                self.add_args('-device', _temp_pcie_args)
+        elif self.pcie_root_port_num > 4:
+            LOG.debug("Please configure pcie_root_port less than 4")
+
+    def _make_vfio_cmd(self):
+        """make vfio cmdline"""
+        if self.vfio:
+            self.bus_slot[4] = 'vfio'
+            if self.pcie_root_port["vfio"]:
+                if self.pcie_root_port_remain <= 0:
+                    raise PcierootportError
+                _temp_vfio_args = "vfio-pci,host=%s,id=net,bus=pcie.%s,addr=0x04.0x0"\
+                    % (self.bdf, self.pcie_root_port_remain + 4)
+                self.pcie_root_port_remain -= 1
+                self.pcie_root_port["vfio"] = False
+            else:
+                _temp_vfio_args = "vfio-pci,host=%s,id=net,bus=pcie.0,addr=0x04.0x0" % (self.bdf)
+            if self.multifunction["vfio"]:
+                _temp_vfio_args += ",multifunction=on"
+            self.add_args('-device', _temp_vfio_args)
+
+    def _base_args(self):
+        args = self._common_args()
 
         if self.code_storage_file is None:
             raise PflashError
@@ -239,12 +335,8 @@ class StandVM(BaseVM):
             _temp_pflash_args = "file=%s,if=pflash,unit=1," %  self.data_storage_file
             args.extend(['-drive', _temp_pflash_args])
 
-        if self.vfio:
-            self.bus_slot[4] = 'vfio'
-            _temp_vfio_args = "vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x04.0x0"
-            if self.multifunction["vfio"]:
-                _temp_vfio_args += ",multifunction=on"
-                args.extend(['-device', _temp_vfio_args])
+        if self.iothreads > 0:
+            args = self.make_iothread_cmd(args)
 
         return args
 
@@ -322,10 +414,30 @@ class StandVM(BaseVM):
                 i += 28
                 self.bus_slot[i] = 'block'
                 _temp_device_args = ""
-                _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.0,addr=%s.0x0" % (device["drive_id"], hex(i))
+                if self.pcie_root_port["block"]:
+                    # only one device is supported(pcie root port)
+                    if self.pcie_root_port_remain <= 0:
+                        raise PcierootportError
+                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.%s,addr=%s.0x0"\
+                        % (device["drive_id"], self.pcie_root_port_remain + 4, hex(i))
+                    self.pcie_root_port_remain -= 1
+                    self.pcie_root_port["block"] = False
+                else:
+                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.0,addr=%s.0x0"\
+                        % (device["drive_id"], hex(i))
+
                 if "iothread" in device:
                     _temp_device_args += ",iothread=%s" % device["iothread"]
+                    self.iothreads += 1
                 if "serial" in device:
                     _temp_device_args += ",serial=%s" % device["serial"]
                 if _temp_device_args != "":
                     self.add_args('-device', _temp_device_args)
+
+    def config_pcie_root_port(self, device, flag):
+        """configure device in pcie root port"""
+        self.pcie_root_port[device] = flag
+
+    def config_multifunction(self, device, flag):
+        """configure multifunction for device"""
+        self.multifunction[device] = flag

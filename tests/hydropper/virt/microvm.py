@@ -172,6 +172,7 @@ class MicroVM(BaseVM):
                 _temp_device_args = "virtio-net-device,netdev=%s,id=%s" % (tapname, tapname)
                 if self.net_iothread:
                     _temp_device_args += ",iothread=%s" % self.net_iothread
+                    self.iothreads += 1
                 if self.withmac:
                     _temp_device_args += ",mac=%s" % tapinfo["mac"]
                 args.extend(['-netdev', _temp_net_args, '-device', _temp_device_args])
@@ -199,6 +200,9 @@ class MicroVM(BaseVM):
             else:
                 _temp_balloon_args = 'deflate-on-oom=false'
             args.extend(['-device', 'virtio-balloon-device', _temp_balloon_args])
+
+        if self.iothreads > 0:
+            args = self.make_iothread_cmd(args)
 
         return args
 
@@ -277,6 +281,7 @@ class MicroVM(BaseVM):
                 _temp_device_args = "virtio-blk-device,drive=%s" % device["drive_id"]
                 if "iothread" in device:
                     _temp_device_args += ",iothread=%s" % device["iothread"]
+                    self.iothreads += 1
                 if "serial" in device:
                     _temp_device_args += ",serial=%s" % device["serial"]
                 if _temp_device_args != "":
