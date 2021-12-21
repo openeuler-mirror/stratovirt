@@ -1077,7 +1077,7 @@ impl StateTransfer for VirtioPciDevice {
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
-        let pci_state = *VirtioPciState::from_bytes(state)
+        let mut pci_state = *VirtioPciState::from_bytes(state)
             .ok_or(migration::errors::ErrorKind::FromBytesError("PCI_DEVICE"))?;
 
         // Set virtio pci config state.
@@ -1112,7 +1112,17 @@ impl StateTransfer for VirtioPciDevice {
         {
             let queue_type = self.common_config.lock().unwrap().queue_type;
             let mut locked_queues = self.queues.lock().unwrap();
-            for queue_state in pci_state.queues_config[0..pci_state.queue_num].iter() {
+            let cloned_mem_space = self.sys_mem.clone();
+            for queue_state in pci_state.queues_config[0..pci_state.queue_num].iter_mut() {
+                queue_state.addr_cache.desc_table_host = cloned_mem_space
+                    .get_host_address(queue_state.desc_table)
+                    .unwrap_or(0);
+                queue_state.addr_cache.avail_ring_host = cloned_mem_space
+                    .get_host_address(queue_state.avail_ring)
+                    .unwrap_or(0);
+                queue_state.addr_cache.used_ring_host = cloned_mem_space
+                    .get_host_address(queue_state.used_ring)
+                    .unwrap_or(0);
                 locked_queues.push(Arc::new(Mutex::new(
                     Queue::new(*queue_state, queue_type).unwrap(),
                 )))
