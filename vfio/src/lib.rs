@@ -29,8 +29,8 @@ pub mod errors {
             AddRegBar(id: usize) {
                 display("Failed to add sub region at the BAR {} in memory space.", id)
             }
-            VfioIoctl(ioctl: String, result: i32) {
-                display("Vfio ioctl failed: {}, result is: {}", ioctl, result)
+            VfioIoctl(ioctl: String, error: std::io::Error) {
+                display("Vfio ioctl failed: {}, error is: {:?}", ioctl, error)
             }
         }
     }

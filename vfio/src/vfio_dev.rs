@@ -223,7 +223,11 @@ impl VfioContainer {
         // Ioctl is safe. Called file is `/dev/vfio/vfio` fd and we check the return.
         let v = unsafe { ioctl(&file, VFIO_GET_API_VERSION()) };
         if v as u32 != vfio::VFIO_API_VERSION {
-            return Err(ErrorKind::VfioIoctl("VFIO_GET_API_VERSION".to_string(), v).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_GET_API_VERSION".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         };
 
         // Ioctl is safe. Called file is `/dev/vfio/vfio` fd and we check the return.
@@ -235,7 +239,11 @@ impl VfioContainer {
             )
         };
         if ret != 1 {
-            return Err(ErrorKind::VfioIoctl("VFIO_CHECK_EXTENSION".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_CHECK_EXTENSION".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         let vfio_mem_info = VfioMemInfo::new();
@@ -265,7 +273,11 @@ impl VfioContainer {
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
         let ret = unsafe { ioctl_with_val(&self.container, VFIO_SET_IOMMU(), val.into()) };
         if ret < 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_SET_IOMMU".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_SET_IOMMU".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
         Ok(())
     }
@@ -291,7 +303,11 @@ impl VfioContainer {
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
         let ret = unsafe { ioctl_with_ref(&self.container, VFIO_IOMMU_MAP_DMA(), &map) };
         if ret != 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_IOMMU_MAP_DMA".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_IOMMU_MAP_DMA".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         Ok(())
@@ -330,7 +346,11 @@ impl VfioGroup {
         // Safe as file is `iommu_group` fd, and we check the return.
         let ret = unsafe { ioctl_with_mut_ref(&file, VFIO_GROUP_GET_STATUS(), &mut status) };
         if ret < 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_GROUP_GET_STATUS".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_GROUP_GET_STATUS".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
         if status.flags != vfio::VFIO_GROUP_FLAGS_VIABLE {
             bail!(
@@ -370,7 +390,11 @@ impl VfioGroup {
         // Safe as group is the owner of file, and we check the return.
         let ret = unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_SET_CONTAINER(), fd) };
         if ret < 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_GROUP_SET_CONTAINER".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_GROUP_SET_CONTAINER".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
         self.container = Some(Arc::downgrade(container));
         Ok(())
@@ -518,7 +542,11 @@ impl VfioDevice {
         // Safe as group is the owner of file and make sure ptr is valid.
         let fd = unsafe { ioctl_with_ptr(&group.group, VFIO_GROUP_GET_DEVICE_FD(), ptr) };
         if fd < 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_GROUP_GET_DEVICE_FD".to_string(), fd).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_GROUP_GET_DEVICE_FD".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         // Safe as we have verified that fd is a valid FD.
@@ -541,7 +569,11 @@ impl VfioDevice {
             || dev_info.num_regions < vfio::VFIO_PCI_CONFIG_REGION_INDEX + 1
             || dev_info.num_irqs < vfio::VFIO_PCI_MSIX_IRQ_INDEX + 1
         {
-            return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_GET_INFO".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_DEVICE_GET_INFO".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         Ok(VfioDevInfo {
@@ -574,7 +606,7 @@ impl VfioDevice {
                 if ret < 0 {
                     return Err(ErrorKind::VfioIoctl(
                         "VFIO_DEVICE_GET_REGION_INFO".to_string(),
-                        ret,
+                        std::io::Error::last_os_error(),
                     )
                     .into());
                 }
@@ -619,9 +651,11 @@ impl VfioDevice {
         let ret =
             unsafe { ioctl_with_mut_ref(&self.device, VFIO_DEVICE_GET_REGION_INFO(), &mut info) };
         if ret < 0 {
-            return Err(
-                ErrorKind::VfioIoctl("VFIO_DEVICE_GET_REGION_INFO".to_string(), ret).into(),
-            );
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_DEVICE_GET_REGION_INFO".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         Ok(info)
@@ -668,9 +702,11 @@ impl VfioDevice {
             let ret =
                 unsafe { ioctl_with_mut_ref(&self.device, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
             if ret < 0 {
-                return Err(
-                    ErrorKind::VfioIoctl("VFIO_DEVICE_GET_IRQ_INFO".to_string(), ret).into(),
-                );
+                return Err(ErrorKind::VfioIoctl(
+                    "VFIO_DEVICE_GET_IRQ_INFO".to_string(),
+                    std::io::Error::last_os_error(),
+                )
+                .into());
             }
 
             let irq = VfioIrq {
@@ -737,7 +773,11 @@ impl VfioDevice {
         // Safe as device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_ref(&self.device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_SET_IRQS".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_DEVICE_SET_IRQS".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         Ok(())
@@ -758,7 +798,11 @@ impl VfioDevice {
         // Safe as device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_ref(&self.device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_SET_IRQS".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_DEVICE_SET_IRQS".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         Ok(())
@@ -769,7 +813,11 @@ impl VfioDevice {
         if self.dev_info.flags & vfio::VFIO_DEVICE_FLAGS_RESET != 0 {
             let ret = unsafe { ioctl(&self.device, VFIO_DEVICE_RESET()) };
             if ret < 0 {
-                return Err(ErrorKind::VfioIoctl("VFIO_DEVICE_RESET".to_string(), ret).into());
+                return Err(ErrorKind::VfioIoctl(
+                    "VFIO_DEVICE_RESET".to_string(),
+                    std::io::Error::last_os_error(),
+                )
+                .into());
             }
         }
 
