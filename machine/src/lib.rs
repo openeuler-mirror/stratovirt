@@ -514,8 +514,8 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_vfio_device(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg: VfioConfig = parse_vfio(vm_config, cfg_args)?;
+    fn add_vfio_device(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
         let path = "/sys/bus/pci/devices/".to_string() + &device_cfg.host;
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -618,7 +618,7 @@ pub trait MachineOps {
                     self.add_virtio_rng(vm_config, cfg_args)?;
                 }
                 "vfio-pci" => {
-                    self.add_vfio_device(&vm_config, cfg_args)?;
+                    self.add_vfio_device(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
