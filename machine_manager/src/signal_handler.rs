@@ -21,8 +21,6 @@ pub const VM_EXIT_GENE_ERR: i32 = 1;
 const SYSTEMCALL_OFFSET: isize = 6;
 
 fn basic_clean() {
-    info!("Removing environment and exiting...");
-
     // clean temporary file
     TempCleaner::clean();
 
@@ -37,16 +35,25 @@ pub fn exit_with_code(code: i32) {
 }
 
 extern "C" fn handle_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
-    info!("Received kill signal, signal num: {}", num);
     basic_clean();
+    write!(
+        &mut std::io::stderr(),
+        "Received kill signal, signal number: {} \r\n",
+        num
+    )
+    .expect("Failed to write to stderr");
     exit_with_code(VM_EXIT_GENE_ERR);
 }
 
 extern "C" fn handle_signal_sys(_: c_int, info: *mut siginfo_t, _: *mut c_void) {
-    let badcall = unsafe { *(info as *const i32).offset(SYSTEMCALL_OFFSET) as usize };
-    error!("Received a bad system call, number: {}", badcall);
     basic_clean();
-    write!(&mut std::io::stderr(), "Bad system call").expect("Failed to write to stderr");
+    let badcall = unsafe { *(info as *const i32).offset(SYSTEMCALL_OFFSET) as usize };
+    write!(
+        &mut std::io::stderr(),
+        "Received a bad system call, number: {} \r\n",
+        badcall
+    )
+    .expect("Failed to write to stderr");
     exit_with_code(VM_EXIT_GENE_ERR);
 }
 
