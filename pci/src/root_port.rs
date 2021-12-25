@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::AtomicU16;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
@@ -21,14 +21,21 @@ use util::byte_code::ByteCode;
 use super::config::{
     PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
     COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE,
-    PCIE_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
+    PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC,
+    PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW, PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC,
+    PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTSTA, PCI_EXP_SLTSTA_PDC,
+    PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
     PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::errors::{Result, ResultExt};
+use crate::hotplug::HotplugOps;
 use crate::init_multifunction;
 use crate::msix::init_msix;
-use crate::{le_read_u16, le_write_u16, ranges_overlap, PciDevOps};
+use crate::{
+    le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
+    PciDevOps,
+};
 
 const DEVICE_ID_RP: u16 = 0x000c;
 
@@ -56,7 +63,7 @@ pub struct RootPort {
     #[cfg(target_arch = "x86_64")]
     io_region: Region,
     mem_region: Region,
-    dev_id: u16,
+    dev_id: Arc<AtomicU16>,
     multifunction: bool,
 }
 
@@ -97,9 +104,141 @@ impl RootPort {
             #[cfg(target_arch = "x86_64")]
             io_region,
             mem_region,
-            dev_id: 0,
+            dev_id: Arc::new(AtomicU16::new(0)),
             multifunction,
         }
+    }
+
+    fn hotplug_command_completed(&mut self) {
+        if let Err(e) = le_write_set_value_u16(
+            &mut self.config.config,
+            (self.config.ext_cap_offset + PCI_EXP_SLTSTA) as usize,
+            PCI_EXP_HP_EV_CCI,
+        ) {
+            error!("{}", e.display_chain());
+            error!("Failed to write command completed");
+        }
+    }
+
+    fn hotplug_event_notify(&mut self) {
+        if let Some(msix) = self.config.msix.as_mut() {
+            msix.lock()
+                .unwrap()
+                .notify(0, self.dev_id.load(Ordering::Acquire));
+        } else {
+            error!("Failed to send interrupt: msix does not exist");
+        }
+    }
+
+    /// Update register when the guest OS trigger the removal of the device.
+    fn update_register_status(&mut self) -> Result<()> {
+        let cap_offset = self.config.ext_cap_offset;
+        le_write_clear_value_u16(
+            &mut self.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+            PCI_EXP_SLTSTA_PDS,
+        )?;
+        le_write_clear_value_u16(
+            &mut self.config.config,
+            (cap_offset + PCI_EXP_LNKSTA) as usize,
+            PCI_EXP_LNKSTA_DLLLA,
+        )?;
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+            PCI_EXP_SLTSTA_PDC,
+        )?;
+        Ok(())
+    }
+
+    /// Remove all devices attached on the sec bus.
+    fn remove_devices(&mut self) {
+        // Store device in a temp vector and unlock the bus.
+        // If the device unrealize called when the bus is locked, a deadlock occurs.
+        // This is because the device unrealize also requires the bus lock.
+        let locked_bus = self.sec_bus.lock().unwrap();
+        let mut devs = Vec::new();
+        for dev in locked_bus.devices.values() {
+            devs.push(dev.clone());
+        }
+        drop(locked_bus);
+        for dev in devs {
+            let mut locked_dev = dev.lock().unwrap();
+            if let Err(e) = locked_dev.unrealize() {
+                error!("{}", e.display_chain());
+                error!("Failed to unrealize device: name {}", locked_dev.name());
+            }
+        }
+        self.sec_bus.lock().unwrap().devices.clear();
+    }
+
+    fn register_region(&mut self) {
+        let command: u16 = le_read_u16(&self.config.config, COMMAND as usize).unwrap();
+        if command & COMMAND_IO_SPACE != 0 {
+            #[cfg(target_arch = "x86_64")]
+            if let Err(e) = self
+                .parent_bus
+                .upgrade()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .io_region
+                .add_subregion(self.io_region.clone(), 0)
+                .chain_err(|| "Failed to add IO container region.")
+            {
+                error!("{}", e.display_chain());
+            }
+        }
+        if command & COMMAND_MEMORY_SPACE != 0 {
+            if let Err(e) = self
+                .parent_bus
+                .upgrade()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .mem_region
+                .add_subregion(self.mem_region.clone(), 0)
+                .chain_err(|| "Failed to add memory container region.")
+            {
+                error!("{}", e.display_chain());
+            }
+        }
+    }
+
+    fn do_unplug(&mut self, offset: usize, end: usize, old_ctl: u16) {
+        let cap_offset = self.config.ext_cap_offset;
+        // Only care the write config about slot control
+        if !ranges_overlap(
+            offset,
+            end,
+            (cap_offset + PCI_EXP_SLTCTL) as usize,
+            (cap_offset + PCI_EXP_SLTCTL + 2) as usize,
+        ) {
+            return;
+        }
+
+        let status =
+            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
+        let val = le_read_u16(&self.config.config, offset).unwrap();
+        // Only unplug device when the slot is on
+        // Don't unplug when slot is off for guest OS overwrite the off status before slot on.
+        if (status & PCI_EXP_SLTSTA_PDS != 0)
+            && (val as u16 & PCI_EXP_SLTCTL_PCC == PCI_EXP_SLTCTL_PCC)
+            && (val as u16 & PCI_EXP_SLTCTL_PWR_IND_OFF == PCI_EXP_SLTCTL_PWR_IND_OFF)
+            && (old_ctl & PCI_EXP_SLTCTL_PCC != PCI_EXP_SLTCTL_PCC
+                || old_ctl & PCI_EXP_SLTCTL_PWR_IND_OFF != PCI_EXP_SLTCTL_PWR_IND_OFF)
+        {
+            info!("Device {} unplug", self.name());
+            self.remove_devices();
+
+            if let Err(e) = self.update_register_status() {
+                error!("{}", e.display_chain());
+                error!("Failed to update register status");
+            }
+        }
+
+        self.hotplug_command_completed();
+        self.hotplug_event_notify();
     }
 }
 
@@ -134,7 +273,8 @@ impl PciDevOps for RootPort {
         self.config
             .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
 
-        init_msix(0, 1, &mut self.config, Arc::new(AtomicU16::new(0)))?;
+        self.dev_id.store(self.devfn as u16, Ordering::SeqCst);
+        init_msix(0, 1, &mut self.config, self.dev_id.clone())?;
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();
@@ -153,6 +293,8 @@ impl PciDevOps for RootPort {
         let mut locked_root_port = root_port.lock().unwrap();
         locked_root_port.sec_bus.lock().unwrap().parent_bridge =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn PciDevOps>>);
+        locked_root_port.sec_bus.lock().unwrap().hotplug_controller =
+            Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn HotplugOps>>);
         let pci_device = locked_parent_bus.devices.get(&locked_root_port.devfn);
         if pci_device.is_none() {
             locked_parent_bus
@@ -199,7 +341,12 @@ impl PciDevOps for RootPort {
             return;
         }
 
-        self.config.write(offset, data, self.dev_id);
+        let cap_offset = self.config.ext_cap_offset;
+        let old_ctl =
+            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
+
+        self.config
+            .write(offset, data, self.dev_id.load(Ordering::Acquire));
         if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
             || ranges_overlap(offset, end, BAR_0 as usize, BAR_0 as usize + REG_SIZE * 2)
         {
@@ -220,41 +367,98 @@ impl PciDevOps for RootPort {
                 (MEMORY_BASE + 20) as usize,
             )
         {
-            let command: u16 = le_read_u16(&self.config.config, COMMAND as usize).unwrap();
-            if command & COMMAND_IO_SPACE != 0 {
-                #[cfg(target_arch = "x86_64")]
-                if let Err(e) = self
-                    .parent_bus
-                    .upgrade()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .io_region
-                    .add_subregion(self.io_region.clone(), 0)
-                    .chain_err(|| "Failed to add IO container region.")
-                {
-                    error!("{}", e.display_chain());
-                }
-            }
-            if command & COMMAND_MEMORY_SPACE != 0 {
-                if let Err(e) = self
-                    .parent_bus
-                    .upgrade()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .mem_region
-                    .add_subregion(self.mem_region.clone(), 0)
-                    .chain_err(|| "Failed to add memory container region.")
-                {
-                    error!("{}", e.display_chain());
-                }
-            }
+            self.register_region();
         }
+
+        self.do_unplug(offset, end, old_ctl);
     }
 
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    /// Only set slot status to on, and no other device reset actions are implemented.
+    fn reset(&mut self) -> Result<()> {
+        let cap_offset = self.config.ext_cap_offset;
+        le_write_u16(
+            &mut self.config.config,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+            PCI_EXP_SLTSTA_PDS,
+        )?;
+        le_write_u16(
+            &mut self.config.config,
+            (cap_offset + PCI_EXP_SLTCTL) as usize,
+            !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
+        )?;
+        le_write_u16(
+            &mut self.config.config,
+            (cap_offset + PCI_EXP_LNKSTA) as usize,
+            PCI_EXP_LNKSTA_DLLLA,
+        )?;
+        Ok(())
+    }
+}
+
+impl HotplugOps for RootPort {
+    fn plug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+        let devfn = dev
+            .lock()
+            .unwrap()
+            .devfn()
+            .chain_err(|| "Failed to get devfn")?;
+        // Only if devfn is equal to 0, hot plugging is supported.
+        if devfn == 0 {
+            let offset = self.config.ext_cap_offset;
+            le_write_set_value_u16(
+                &mut self.config.config,
+                (offset + PCI_EXP_SLTSTA) as usize,
+                PCI_EXP_SLTSTA_PDS | PCI_EXP_HP_EV_PDC | PCI_EXP_HP_EV_ABP,
+            )?;
+            le_write_set_value_u16(
+                &mut self.config.config,
+                (offset + PCI_EXP_LNKSTA) as usize,
+                PCI_EXP_LNKSTA_NLW | PCI_EXP_LNKSTA_DLLLA,
+            )?;
+            self.hotplug_event_notify();
+        }
+        Ok(())
+    }
+
+    fn unplug_request(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+        let devfn = dev
+            .lock()
+            .unwrap()
+            .devfn()
+            .chain_err(|| "Failed to get devfn")?;
+        if devfn != 0 {
+            return self.unplug(dev);
+        }
+
+        let offset = self.config.ext_cap_offset;
+        le_write_clear_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_LNKSTA) as usize,
+            PCI_EXP_LNKSTA_DLLLA,
+        )?;
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_SLTSTA) as usize,
+            PCI_EXP_HP_EV_ABP,
+        )?;
+        self.hotplug_event_notify();
+        Ok(())
+    }
+
+    fn unplug(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+        let devfn = dev
+            .lock()
+            .unwrap()
+            .devfn()
+            .chain_err(|| "Failed to get devfn")?;
+        let mut locked_dev = dev.lock().unwrap();
+        locked_dev.unrealize()?;
+        self.sec_bus.lock().unwrap().devices.remove(&devfn);
+        Ok(())
     }
 }
 

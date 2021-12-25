@@ -996,30 +996,24 @@ impl DeviceInterface for LightMachine {
         )
     }
 
-    fn device_add(
-        &self,
-        id: String,
-        driver: String,
-        addr: Option<String>,
-        lun: Option<usize>,
-    ) -> Response {
+    fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         // get slot of bus by addr or lun
         let mut slot = 0;
-        if let Some(addr) = addr {
+        if let Some(addr) = args.addr {
             let slot_str = addr.as_str().trim_start_matches("0x");
 
             if let Ok(n) = usize::from_str_radix(slot_str, 16) {
                 slot = n;
             }
-        } else if let Some(lun) = lun {
+        } else if let Some(lun) = args.lun {
             slot = lun + 1;
         }
 
-        match self.add_replaceable_device(&id, &driver, slot) {
+        match self.add_replaceable_device(&args.id, &args.driver, slot) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{}", e.display_chain());
-                error!("Failed to add device: id {}, type {}", id, driver);
+                error!("Failed to add device: id {}, type {}", args.id, args.driver);
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
@@ -1028,7 +1022,7 @@ impl DeviceInterface for LightMachine {
         }
     }
 
-    fn device_del(&self, device_id: String) -> Response {
+    fn device_del(&mut self, device_id: String) -> Response {
         match self.del_replaceable_device(&device_id) {
             Ok(path) => {
                 let block_del_event = qmp_schema::DeviceDeleted {
@@ -1055,6 +1049,7 @@ impl DeviceInterface for LightMachine {
         file: qmp_schema::FileOptions,
         cache: Option<qmp_schema::CacheOptions>,
         read_only: Option<bool>,
+        _iops: Option<u64>,
     ) -> Response {
         const MAX_STRING_LENGTH: usize = 255;
         let read_only = if let Some(ro) = read_only { ro } else { false };
@@ -1127,6 +1122,13 @@ impl DeviceInterface for LightMachine {
                 )
             }
         }
+    }
+
+    fn blockdev_del(&self, _node_name: String) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError("blockdev_del not support yet".to_string()),
+            None,
+        )
     }
 
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response {

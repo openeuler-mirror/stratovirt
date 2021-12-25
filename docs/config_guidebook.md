@@ -175,7 +175,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 -device virtio-blk-device,drive=drive_id[,iothread=iothread1][,serial=serial_num]
 # virtio pci block device.
 -drive id=drive_id,file=path_on_host[,readonly=off][,direct=off][,throttling.iops-total=200]
--device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0[,iothread=iothread1,][serial=serial_num]
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,iothread=iothread1,][serial=serial_num]
 
 ```
 
@@ -273,7 +273,7 @@ of device and the second one represents function number of it.
 -device virtconsole,chardev=virtioconsole1,id=console_id
 
 # virtio pci device
--device virtio-serial-pci,bus=pcie.0,addr=0x1.0x0[,multifunction=on,id=virtio-serial0]
+-device virtio-serial-pci,bus=pcie.0,addr=0x1.0x0,id=virtio-serial0[,multifunction=on]
 -chardev socket,path=socket_path,id=virtioconsole1,server,nowait
 -device virtconsole,chardev=virtioconsole1,id=console_id
 ```
@@ -363,7 +363,7 @@ of device and the second one represents function number of it.
 # virtio mmio balloon device
 -device virtio-balloon-device,deflate-on-oom=true
 # virtio pci balloon device
--device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true[,multifunction=on]
+-device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true,id=balloon-0[,multifunction=on]
 ```
 
 ### 2.8 Virtio-rng
@@ -396,7 +396,7 @@ single function device, the function number should be set to zero.
 -device virtio-rng-device,rng=objrng0,max-bytes=1234,period=1000
 # virtio pci rng device
 -object rng-random,id=objrng0,filename=/path/to/random_file
--device virtio-rng-pci,rng=objrng0,max-bytes=1234,period=1000,bus=pcie.0,addr=0x1.0x0[,multifunction=on]
+-device virtio-rng-pci,rng=objrng0,max-bytes=1234,period=1000,bus=pcie.0,addr=0x1.0x0,id=rng-id[,multifunction=on]
 ```
 
 ### 2.9 PCIe root port
@@ -697,15 +697,15 @@ in StratoVirt process by default. It will make a slight influence on performance
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      43       |       43       |
-|        q35         |      48       |       45       |
+|      microvm       |      46       |       46       |
+|        q35         |      47       |       47       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      41       |       42       |
-|        virt        |      45       |       44       |
+|      microvm       |      44       |       45       |
+|        virt        |      45       |       45       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell

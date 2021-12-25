@@ -26,3 +26,15 @@ impl VmConfig {
         Ok(())
     }
 }
+
+pub fn parse_device_id(device_config: &str) -> Result<String> {
+    let mut cmd_parser = CmdParser::new("device");
+    cmd_parser.push("id");
+
+    cmd_parser.get_parameters(device_config)?;
+    if let Some(id) = cmd_parser.get_value::<String>("id")? {
+        Ok(id)
+    } else {
+        Ok(String::new())
+    }
+}
