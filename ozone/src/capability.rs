@@ -16,8 +16,6 @@ use crate::{syscall, ErrorKind, Result, ResultExt};
 use std::{collections::HashMap, io::Write};
 
 const CAPS_V3: u32 = 0x20080522;
-pub const CAPGET: i64 = 125;
-pub const PR_CAPBSET_DROP: i32 = 24;
 const NR_ALL_CAP: u8 = 41;
 
 fn init_cap() -> HashMap<&'static str, (u8, bool)> {
