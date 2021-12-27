@@ -679,6 +679,18 @@ impl VfioPciDevice {
         self.vfio_device
             .disable_irqs()
             .chain_err(|| "Failed disable irqfds in kvm")?;
+        let routes = self.gsi_msi_routes.lock().unwrap();
+        for route in routes.iter() {
+            if let Some(fd) = &route.irq_fd.as_ref() {
+                KVM_FDS.load().unregister_irqfd(fd, route.gsi as u32)?;
+                KVM_FDS
+                    .load()
+                    .irq_route_table
+                    .lock()
+                    .unwrap()
+                    .release_gsi(route.gsi as u32)?;
+            }
+        }
         Ok(())
     }
 }

@@ -15,9 +15,8 @@ use std::os::raw::c_ulong;
 
 use kvm_bindings::{KVMIO, KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI};
 use kvm_ioctls::{Cap, Kvm};
-use vmm_sys_util::ioctl::ioctl_with_val;
-
 use util::bitmap::Bitmap;
+use vmm_sys_util::ioctl::ioctl_with_val;
 
 use crate::errors::{Result, ResultExt};
 

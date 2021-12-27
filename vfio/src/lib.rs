@@ -24,6 +24,7 @@ pub mod errors {
         links {
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
         }
         errors {
             AddRegBar(id: usize) {
