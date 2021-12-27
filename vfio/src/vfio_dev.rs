@@ -306,7 +306,7 @@ pub struct VfioGroup {
     // `/dev/vfio/$group_id` file fd.
     group: File,
     container: Weak<Mutex<VfioContainer>>,
-    devices: Arc<Mutex<HashMap<RawFd, Arc<VfioDevice>>>>,
+    devices: Mutex<HashMap<RawFd, Arc<Mutex<VfioDevice>>>>,
 }
 
 impl VfioGroup {
@@ -346,7 +346,7 @@ impl VfioGroup {
         Ok(VfioGroup {
             group: file,
             container: Weak::new(),
-            devices: Arc::new(Mutex::new(HashMap::new())),
+            devices: Mutex::new(HashMap::new()),
         })
     }
 
@@ -432,6 +432,7 @@ pub struct VfioDevice {
     group: Weak<VfioGroup>,
     pub container: Weak<Mutex<VfioContainer>>,
     pub dev_info: VfioDevInfo,
+    pub nr_vectors: usize,
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -468,7 +469,7 @@ pub struct VfioIrq {
 }
 
 impl VfioDevice {
-    pub fn new(path: &Path, mem_as: &Arc<AddressSpace>) -> Result<Arc<Self>> {
+    pub fn new(path: &Path, mem_as: &Arc<AddressSpace>) -> Result<Arc<Mutex<Self>>> {
         if !path.exists() {
             bail!("No provided host PCI device, use -device vfio-pci,host=DDDD:BB:DD.F");
         }
@@ -477,17 +478,17 @@ impl VfioDevice {
         let device =
             Self::vfio_get_device(&group, &path).chain_err(|| "Fail to get vfio device")?;
         let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
-        let vfio_dev = Arc::new(VfioDevice {
+        let vfio_dev = Arc::new(Mutex::new(VfioDevice {
             device,
             group: Arc::downgrade(&group),
             container: group.container.clone(),
             dev_info,
-        });
-        group
-            .devices
-            .lock()
-            .unwrap()
-            .insert(vfio_dev.device.as_raw_fd(), vfio_dev.clone());
+            nr_vectors: 0,
+        }));
+        group.devices.lock().unwrap().insert(
+            vfio_dev.lock().unwrap().device.as_raw_fd(),
+            vfio_dev.clone(),
+        );
         Ok(vfio_dev)
     }
 
@@ -752,7 +753,7 @@ impl VfioDevice {
     /// # Arguments
     ///
     /// * `irq_fds` - Irq fds that will be registered to kvm.
-    pub fn enable_irqs(&self, irq_fds: Vec<RawFd>) -> Result<()> {
+    pub fn enable_irqs(&mut self, irq_fds: Vec<RawFd>) -> Result<()> {
         let mut irq_set = array_to_vec::<vfio::vfio_irq_set, u32>(irq_fds.len());
         irq_set[0].argsz =
             (size_of::<vfio::vfio_irq_set>() + irq_fds.len() * size_of::<RawFd>()) as u32;
@@ -760,6 +761,7 @@ impl VfioDevice {
         irq_set[0].index = vfio::VFIO_PCI_MSIX_IRQ_INDEX;
         irq_set[0].start = 0u32;
         irq_set[0].count = irq_fds.len() as u32;
+
         // It is safe as enough memory space to save irq_set data.
         let mut data: &mut [u8] = unsafe {
             irq_set[0]
@@ -776,7 +778,7 @@ impl VfioDevice {
             )
             .into());
         }
-
+        self.nr_vectors = irq_fds.len();
         Ok(())
     }
 
@@ -785,13 +787,18 @@ impl VfioDevice {
     /// # Arguments
     ///
     /// * `irq_fds` - Irq fds that will be registered to kvm.
-    pub fn disable_irqs(&self) -> Result<()> {
+    pub fn disable_irqs(&mut self) -> Result<()> {
+        if self.nr_vectors == 0 {
+            return Ok(());
+        }
+
         let mut irq_set = array_to_vec::<vfio::vfio_irq_set, u32>(0);
         irq_set[0].argsz = size_of::<vfio::vfio_irq_set>() as u32;
         irq_set[0].flags = vfio::VFIO_IRQ_SET_DATA_NONE | vfio::VFIO_IRQ_SET_ACTION_TRIGGER;
         irq_set[0].index = vfio::VFIO_PCI_MSIX_IRQ_INDEX;
         irq_set[0].start = 0u32;
         irq_set[0].count = 0u32;
+
         // Safe as device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_ref(&self.device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {
@@ -801,7 +808,7 @@ impl VfioDevice {
             )
             .into());
         }
-
+        self.nr_vectors = 0;
         Ok(())
     }
 
