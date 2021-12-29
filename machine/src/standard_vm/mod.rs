@@ -412,6 +412,27 @@ impl StdMachine {
         self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction)
             .chain_err(|| "Failed to add virtio pci device")
     }
+
+    fn plug_vfio_pci_device(
+        &mut self,
+        bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        if args.host.is_none() {
+            bail!("Option \"host\" not provided.");
+        }
+
+        if let Err(e) = self.create_vfio_pci_device(
+            &args.id,
+            bdf,
+            args.host.as_ref().unwrap(),
+            args.multifunction.map_or(false, |m| m),
+        ) {
+            error!("{}", e.display_chain());
+            bail!("Failed to plug vfio-pci device.");
+        }
+        Ok(())
+    }
 }
 
 impl DeviceInterface for StdMachine {
@@ -521,6 +542,14 @@ impl DeviceInterface for StdMachine {
                     let err_str = format!("Failed to add virtio pci blk: {}", e.to_string());
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            "vfio-pci" => {
+                if let Err(e) = self.plug_vfio_pci_device(&pci_bdf, args.as_ref()) {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
                     );
                 }

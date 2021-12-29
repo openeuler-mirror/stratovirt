@@ -42,8 +42,7 @@ use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::{AcpiBuilder, StdMachineOps};
-use crate::errors::Result as MachineResult;
+use super::{errors::Result as StdResult, AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind, Result};
 use crate::MachineOps;
 use pci_host_root::PciHostRoot;
@@ -100,7 +99,7 @@ pub struct StdMachine {
     #[cfg(target_arch = "aarch64")]
     irq_chip: Option<Arc<InterruptController>>,
     /// Memory address space.
-    sys_mem: Arc<AddressSpace>,
+    pub sys_mem: Arc<AddressSpace>,
     /// System bus.
     sysbus: SysBus,
     /// PCI/PCIe host bridge.
@@ -160,7 +159,7 @@ impl StdMachine {
 }
 
 impl StdMachineOps for StdMachine {
-    fn init_pci_host(&self) -> super::errors::Result<()> {
+    fn init_pci_host(&self) -> StdResult<()> {
         use super::errors::ResultExt;
 
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
@@ -185,7 +184,7 @@ impl StdMachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
+    fn add_fwcfg_device(&mut self) -> StdResult<Arc<Mutex<dyn FwCfgOps>>> {
         use super::errors::ResultExt;
 
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
@@ -449,7 +448,7 @@ impl MachineOps for StdMachine {
         &self.sys_mem
     }
 
-    fn get_pci_host(&mut self) -> MachineResult<&Arc<Mutex<PciHost>>> {
+    fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
     }
 }

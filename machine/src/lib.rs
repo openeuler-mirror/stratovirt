@@ -139,6 +139,7 @@ use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use errors::{ErrorKind, Result, ResultExt};
+use standard_vm::errors::Result as StdResult;
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -459,7 +460,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
+    fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
         bail!("No pci host found");
     }
 
@@ -525,27 +526,39 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_vfio_device(&mut self, cfg_args: &str) -> Result<()> {
-        let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
-        let path = "/sys/bus/pci/devices/".to_string() + &device_cfg.host;
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multi_func = get_multi_function(cfg_args)?;
+    fn create_vfio_pci_device(
+        &mut self,
+        id: &str,
+        bdf: &PciBdf,
+        host: &str,
+        multifunc: bool,
+    ) -> Result<()> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let path = format!("/sys/bus/pci/devices/{}", host);
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
-            .chain_err(|| "Failed to create pci device")?;
-        let vfio_pci_dev = VfioPciDevice::new(
+            .chain_err(|| "Failed to create vfio device.")?;
+        let vfio_pci = VfioPciDevice::new(
             device,
             devfn,
-            device_cfg.id,
+            id.to_string(),
             parent_bus,
-            multi_func,
+            multifunc,
             self.get_sys_mem().clone(),
         );
-        VfioPciDevice::realize(vfio_pci_dev).chain_err(|| "Failed to realize vfio pci device")?;
+        VfioPciDevice::realize(vfio_pci).chain_err(|| "Failed to realize vfio-pci device.")?;
         Ok(())
     }
 
-    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> Result<(u8, Weak<Mutex<PciBus>>)> {
+    fn add_vfio_device(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
+        let bdf = get_pci_bdf(cfg_args)?;
+        let multifunc = get_multi_function(cfg_args)?;
+        self.create_vfio_pci_device(&device_cfg.id, &bdf, &device_cfg.host, multifunc)?;
+        self.reset_bus(&device_cfg.id)?;
+        Ok(())
+    }
+
+    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> StdResult<(u8, Weak<Mutex<PciBus>>)> {
         let pci_host = self.get_pci_host()?;
         let bus = pci_host.lock().unwrap().root_bus.clone();
         let pci_bus = PciBus::find_bus_by_name(&bus, &bdf.bus);

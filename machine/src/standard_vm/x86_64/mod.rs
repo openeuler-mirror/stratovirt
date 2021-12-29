@@ -90,7 +90,7 @@ pub struct StdMachine {
     /// IO address space.
     sys_io: Arc<AddressSpace>,
     /// Memory address space.
-    sys_mem: Arc<AddressSpace>,
+    pub sys_mem: Arc<AddressSpace>,
     /// System bus.
     sysbus: SysBus,
     /// PCI/PCIe host bridge.
@@ -478,7 +478,7 @@ impl MachineOps for StdMachine {
         &self.sys_mem
     }
 
-    fn get_pci_host(&mut self) -> MachineResult<&Arc<Mutex<PciHost>>> {
+    fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
     }
 }
