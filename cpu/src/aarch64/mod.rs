@@ -15,7 +15,7 @@ mod core_regs;
 
 use std::sync::Arc;
 
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
     kvm_mp_state, kvm_reg_list, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, KVM_MP_STATE_RUNNABLE,
     KVM_MP_STATE_STOPPED,

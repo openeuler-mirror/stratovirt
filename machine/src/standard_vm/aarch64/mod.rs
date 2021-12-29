@@ -25,7 +25,7 @@ use devices::legacy::{
 };
 use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,

@@ -19,7 +19,7 @@ use acpi::{
     AmlResourceUsage, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};

@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
 
 use errors::{Result, ResultExt};

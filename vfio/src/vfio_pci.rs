@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
-use hypervisor::{MsiVector, KVM_FDS};
+use hypervisor::kvm::{MsiVector, KVM_FDS};
 #[cfg(target_arch = "aarch64")]
 use pci::config::SECONDARY_BUS_NUM;
 use pci::config::{
