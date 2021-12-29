@@ -13,7 +13,7 @@
 pub mod caps;
 mod core_regs;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
@@ -110,6 +110,18 @@ impl ArmCPUState {
         }
     }
 
+    pub fn set(&mut self, cpu_state: &Arc<Mutex<ArmCPUState>>) {
+        let locked_cpu_state = cpu_state.lock().unwrap();
+        self.apic_id = locked_cpu_state.apic_id;
+        self.mpidr = locked_cpu_state.mpidr;
+        self.kvi = locked_cpu_state.kvi;
+        self.core_regs = locked_cpu_state.core_regs;
+        self.cpu_events = locked_cpu_state.cpu_events;
+        self.mp_state = locked_cpu_state.mp_state;
+        self.cpreg_len = locked_cpu_state.cpreg_len;
+        self.cpreg_list = locked_cpu_state.cpreg_list;
+    }
+
     /// Set register value in `ArmCPUState` according to `boot_config`.
     ///
     /// # Arguments
@@ -175,6 +187,16 @@ impl ArmCPUState {
     /// Get mpidr value.
     pub fn mpidr(&self) -> u64 {
         self.mpidr
+    }
+
+    /// Get core_regs value.
+    pub fn core_regs(&self) -> kvm_regs {
+        self.core_regs
+    }
+
+    /// Get kvm_vcpu_init.
+    pub fn kvi(&self) -> kvm_vcpu_init {
+        self.kvi
     }
 
     fn set_core_reg(&mut self, boot_config: &ArmCPUBootConfig) {

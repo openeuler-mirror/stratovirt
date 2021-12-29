@@ -226,6 +226,8 @@ pub struct CPU {
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
     /// The capability of VCPU.
     caps: CPUCaps,
+    /// The state backup of architecture CPU right before boot.
+    boot_state: Arc<Mutex<ArchCPU>>,
 }
 
 impl CPU {
@@ -253,7 +255,12 @@ impl CPU {
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
             caps: CPUCaps::init_capabilities(),
+            boot_state: Arc::new(Mutex::new(ArchCPU::default())),
         }
+    }
+
+    pub fn set_to_boot_state(&self) {
+        self.arch_cpu.lock().unwrap().set(&self.boot_state);
     }
 
     /// Get this `CPU`'s ID.
@@ -305,7 +312,7 @@ impl CPUInterface for CPU {
             .unwrap()
             .set_boot_config(&self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
-
+        self.boot_state.lock().unwrap().set(&self.arch_cpu);
         Ok(())
     }
 
@@ -614,6 +621,7 @@ impl CPUThreadWorker {
                         flag = 1;
                     }
                     cpu_state = cvar.wait(cpu_state).unwrap();
+                    self.thread_cpu.reset().unwrap();
                 }
                 CpuLifecycleState::Running => {
                     return Ok(true);

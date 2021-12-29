@@ -13,7 +13,7 @@
 pub mod caps;
 mod cpuid;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use kvm_bindings::{
     kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry, kvm_regs, kvm_segment,
@@ -113,6 +113,23 @@ impl X86CPUState {
             mp_state,
             ..Default::default()
         }
+    }
+
+    pub fn set(&mut self, cpu_state: &Arc<Mutex<X86CPUState>>) {
+        let locked_cpu_state = cpu_state.lock().unwrap();
+        self.nr_vcpus = locked_cpu_state.nr_vcpus;
+        self.apic_id = locked_cpu_state.apic_id;
+        self.regs = locked_cpu_state.regs;
+        self.sregs = locked_cpu_state.sregs;
+        self.fpu = locked_cpu_state.fpu;
+        self.mp_state = locked_cpu_state.mp_state;
+        self.lapic = locked_cpu_state.lapic;
+        self.msr_len = locked_cpu_state.msr_len;
+        self.msr_list = locked_cpu_state.msr_list;
+        self.cpu_events = locked_cpu_state.cpu_events;
+        self.xsave = locked_cpu_state.xsave;
+        self.xcrs = locked_cpu_state.xcrs;
+        self.debugregs = locked_cpu_state.debugregs;
     }
 
     /// Set register value in `X86CPUState` according to `boot_config`.
