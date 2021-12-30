@@ -21,14 +21,15 @@ use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
 use acpi::{
-    AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
-    AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
-    TABLE_CHECKSUM_OFFSET,
+    AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl,
+    AmlPackage, AmlScope, AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE,
+    IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR, TABLE_CHECKSUM_OFFSET,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
+use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
@@ -147,6 +148,23 @@ impl StdMachine {
 
     pub fn handle_reset_request(_vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
         Ok(())
+    }
+
+    pub fn handle_shutdown_request(vm: &Arc<Mutex<Self>>) -> bool {
+        let locked_vm = vm.lock().unwrap();
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            if let Err(e) = cpu.destroy() {
+                error!(
+                    "Failed to destroy vcpu{}, error is {}",
+                    cpu_index,
+                    e.display_chain()
+                );
+            }
+        }
+
+        let mut vmstate = locked_vm.vm_state.0.lock().unwrap();
+        *vmstate = KvmVmState::Shutdown;
+        true
     }
 
     fn arch_init() -> MachineResult<()> {
@@ -512,6 +530,14 @@ impl AcpiBuilder for StdMachine {
         // 3. Info of devices attached to system bus.
         dsdt.append_child(self.sysbus.aml_bytes().as_slice());
 
+        // 4. Add _S5 sleep state.
+        let mut package = AmlPackage::new(4);
+        package.append_child(AmlInteger(5));
+        package.append_child(AmlInteger(0));
+        package.append_child(AmlInteger(0));
+        package.append_child(AmlInteger(0));
+        dsdt.append_child(AmlNameDecl::new("_S5", package).aml_bytes().as_slice());
+
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let dsdt_begin = locked_acpi_data.len() as u32;
         locked_acpi_data.extend(dsdt.aml_bytes());
@@ -671,7 +697,6 @@ impl MachineAddressInterface for StdMachine {
 
 impl MigrateInterface for StdMachine {
     fn migrate(&self, uri: String) -> Response {
-        use crate::error_chain::ChainedError;
         use util::unix::{parse_uri, UnixPath};
 
         match parse_uri(&uri) {

@@ -194,6 +194,39 @@ trait StdMachineOps: AcpiBuilder {
             .chain_err(|| "Failed to register event notifier.")?;
         Ok(())
     }
+
+    #[cfg(target_arch = "x86_64")]
+    fn register_acpi_shutdown_event(
+        &self,
+        shutdown_req: &EventFd,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let shutdown_req = shutdown_req.try_clone().unwrap();
+        let shutdown_req_fd = shutdown_req.as_raw_fd();
+        let shutdown_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
+            Arc::new(Mutex::new(Box::new(move |_, _| {
+                let _ret = shutdown_req.read().unwrap();
+                StdMachine::handle_shutdown_request(&clone_vm);
+                let notifiers = vec![EventNotifier::new(
+                    NotifierOperation::Delete,
+                    shutdown_req_fd,
+                    None,
+                    EventSet::IN,
+                    Vec::new(),
+                )];
+                Some(notifiers)
+            })));
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            shutdown_req_fd,
+            None,
+            EventSet::IN,
+            vec![shutdown_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .chain_err(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
 }
 
 /// Trait that helps to build ACPI tables.
