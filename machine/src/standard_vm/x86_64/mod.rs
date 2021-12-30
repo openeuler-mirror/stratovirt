@@ -228,6 +228,20 @@ impl StdMachine {
             .chain_err(|| MachineErrorKind::CrtPitErr)?;
         Ok(())
     }
+
+    fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
+        use super::errors::ResultExt;
+
+        let clone_vm = vm.clone();
+        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
+        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
+        self.register_reset_event(&ich.reset_req, vm)
+            .chain_err(|| "Fail to register reset event in LPC")?;
+        self.register_acpi_shutdown_event(&ich.shutdown_req, clone_vm)
+            .chain_err(|| "Fail to register shutdown event in LPC")?;
+        PciDevOps::realize(ich)?;
+        Ok(())
+    }
 }
 
 impl StdMachineOps for StdMachine {
@@ -261,11 +275,8 @@ impl StdMachineOps for StdMachine {
             .add_subregion(pio_data_region, 0xcfc)
             .chain_err(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
-        let mch = Mch::new(root_bus.clone(), mmconfig_region, mmconfig_region_ops);
+        let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
         PciDevOps::realize(mch)?;
-
-        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
-        PciDevOps::realize(ich)?;
         Ok(())
     }
 
@@ -405,6 +416,7 @@ impl MachineOps for StdMachine {
     ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
+        let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
@@ -426,6 +438,9 @@ impl MachineOps for StdMachine {
         locked_vm
             .init_pci_host()
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
+        locked_vm
+            .init_ich9_lpc(clone_vm)
+            .chain_err(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
 
         let (boot_config, fwcfg) = if !is_migrate {
