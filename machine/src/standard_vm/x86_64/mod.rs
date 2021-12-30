@@ -27,7 +27,7 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
 use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
@@ -40,7 +40,7 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::SysBus;
+use sysbus::{SysBus, SysBusDevOps};
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
@@ -146,7 +146,37 @@ impl StdMachine {
         })
     }
 
-    pub fn handle_reset_request(_vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
+    pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
+        use crate::errors::ResultExt as MachineResultExt;
+
+        let mut locked_vm = vm.lock().unwrap();
+
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            MachineResultExt::chain_err(cpu.pause(), || {
+                format!("Failed to pause vcpu{}", cpu_index)
+            })?;
+
+            cpu.set_to_boot_state();
+            MachineResultExt::chain_err(cpu.reset(), || {
+                format!("Failed to reset vcpu{}", cpu_index)
+            })?;
+        }
+
+        for dev in locked_vm.sysbus.devices.iter() {
+            MachineResultExt::chain_err(dev.lock().unwrap().reset(), || {
+                "Fail to reset sysbus device"
+            })?;
+        }
+        MachineResultExt::chain_err(locked_vm.pci_host.lock().unwrap().reset(), || {
+            "Fail to reset pci host"
+        })?;
+
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            MachineResultExt::chain_err(cpu.resume(), || {
+                format!("Failed to resume vcpu{}", cpu_index)
+            })?;
+        }
+
         Ok(())
     }
 
