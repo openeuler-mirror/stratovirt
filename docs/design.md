@@ -25,7 +25,7 @@ devices, such as GIC, serial, RTC and virtio-mmio devices are implemented;
   - standard VM: realize UEFI boot with constructed ACPI tables. Virtio-pci and
 VFIO devices can be attached to greatly improve the I/O performance;
 
-![image](images/StratoVirt-arch.png)
+![image](images/StratoVirt-arch.jpg)
 
 ## Features
 
