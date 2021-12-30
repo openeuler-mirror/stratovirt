@@ -22,6 +22,7 @@ use pci::config::{
 use pci::errors::Result as PciResult;
 use pci::{le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps};
 use util::byte_code::ByteCode;
+use vmm_sys_util::eventfd::EventFd;
 
 use super::VENDOR_ID_INTEL;
 use crate::standard_vm::errors::Result;
@@ -31,6 +32,7 @@ const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
 
 const PM_BASE_OFFSET: u8 = 0x40;
 const PM_TIMER_OFFSET: u8 = 8;
+pub const SLEEP_CTRL_OFFSET: u16 = 0xCE9;
 
 /// LPC bridge of ICH9 (IO controller hub 9), Device 1F : Function 0
 #[allow(clippy::upper_case_acronyms)]
@@ -39,6 +41,7 @@ pub struct LPCBridge {
     parent_bus: Weak<Mutex<PciBus>>,
     sys_io: Arc<AddressSpace>,
     pm_timer: Arc<Mutex<AcpiPMTimer>>,
+    pub shutdown_req: EventFd,
 }
 
 impl LPCBridge {
@@ -48,6 +51,7 @@ impl LPCBridge {
             parent_bus,
             sys_io,
             pm_timer: Arc::new(Mutex::new(AcpiPMTimer::new())),
+            shutdown_req: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -72,6 +76,29 @@ impl LPCBridge {
 
         Ok(())
     }
+
+    fn init_sleep_reg(&self) -> Result<()> {
+        let read_ops = move |data: &mut [u8], _addr: GuestAddress, _offset: u64| -> bool {
+            data.fill(0);
+            true
+        };
+
+        let cloned_shutdown_fd = self.shutdown_req.try_clone().unwrap();
+        let write_ops = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool {
+            cloned_shutdown_fd.write(1).unwrap();
+            true
+        };
+
+        let ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        let rst_ctrl_region = Region::init_io_region(0x1, ops);
+        self.sys_io
+            .root()
+            .add_subregion(rst_ctrl_region, SLEEP_CTRL_OFFSET as u64)?;
+        Ok(())
+    }
 }
 
 impl PciDevOps for LPCBridge {
@@ -84,6 +111,8 @@ impl PciDevOps for LPCBridge {
     }
 
     fn realize(mut self) -> PciResult<()> {
+        use pci::errors::ResultExt;
+
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -104,6 +133,9 @@ impl PciDevOps for LPCBridge {
             HEADER_TYPE as usize,
             (HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC) as u16,
         )?;
+
+        self.init_sleep_reg()
+            .chain_err(|| "Fail to init IO region for sleep control register")?;
 
         let parent_bus = self.parent_bus.clone();
         parent_bus

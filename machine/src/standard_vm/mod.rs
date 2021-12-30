@@ -89,6 +89,9 @@ use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
+#[cfg(target_arch = "x86_64")]
+use self::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
+
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
 
@@ -288,8 +291,8 @@ trait AcpiBuilder {
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
         fadt.set_field(76, 0x608);
-        // FADT flag: HW_REDUCED_ACPI bit.
-        fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+        // FADT flag: disable HW_REDUCED_ACPI bit.
+        fadt.set_field(112, 1 << 10 | 1 << 8);
         // FADT minor revision
         fadt.set_field(131, 3);
         // X_PM_TMR_BLK bit, offset is 208.
@@ -297,6 +300,18 @@ trait AcpiBuilder {
         fadt.append_child(&AcpiGenericAddress::new_io_address(0x608_u32).aml_bytes());
         // FADT table size is fixed.
         fadt.set_table_len(276_usize);
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            // Sleep control register, offset is 244.
+            fadt.set_field(244, 0x01_u8);
+            fadt.set_field(245, 0x08_u8);
+            fadt.set_field(248, SLEEP_CTRL_OFFSET as u64);
+            // Sleep status tegister, offset is 256.
+            fadt.set_field(256, 0x01_u8);
+            fadt.set_field(257, 0x08_u8);
+            fadt.set_field(260, SLEEP_CTRL_OFFSET as u64);
+        }
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let fadt_begin = locked_acpi_data.len() as u32;
