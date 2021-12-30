@@ -1,13 +1,12 @@
 #  libvirt
-Libvirt is one of manager for StratoVirt, it manages StratoVirt by creating cmdlines to launch StratoVirt 
-and giving commands via qmp. Currently, five virsh commands are supported to manage StratoVirt: 
-`virsh create`, `virsh destroy`, `virsh suspend`, `virsh resume` and `virsh console`.
+Libvirt是StratoVirt的管理软件，它是通过创建命令行来运行StratoVirt和发送qmp命令来管理StratoVirt。目前，支持五个virsh命令来管理StratoVirt: 
+`virsh create`, `virsh destroy`, `virsh suspend`, `virsh resume` 和 `virsh console`.
 
 
-## Configuration
-StratoVirt can be configured by following ways:
+## 配置
+通过下列方式来配置StratoVirt:
 
-- memory:
+- 内存:
 
 ```
 <memory unit='GiB'>8</memory>
@@ -17,36 +16,36 @@ or
 
 - CPU:
 
-CPU topology is not supported, please configure the number of VCPUs only.
+CPU拓扑还没有支持，请仅配置VCPU的个数。
 ```
 <vcpu>4</vcpu>
 ```
-- Architecture:
+- 架构:
 
-Optional value of `arch` are: `aarch64` and `x86_64`. On X86 platform, supported machine is `q35`; on aarch64 platform, supported machine is `virt`.
+`arch`的可选值为: `aarch64` 和 `x86_64`。在X86平台, 支持的机型是 `q35`；在aarch64平台, 支持的机型是 `virt`.
 ```
 <os>
 	<type arch='x86_64' machine='q35'>hvm</type>
 </os>
 ```
 
-- Kernel and cmdline:
+- 内核和命令行:
 
-`/path/to/standard_vm_kernel` is the path of standard vm kernel.
+`/path/to/standard_vm_kernel` 是标准虚拟机内核的路径.
 ```
 <kernel>/path/to/standard_vm_kernel</kernel>
 <cmdline>console=ttyS0 root=/dev/vda reboot=k panic=1 rw</cmdline>
 ```
 
-- feature:
+- 特性:
 
-As the acpi is used in Standard VM, therefore the acpi feature must be configured.
+由于在标准虚拟机中使用acpi，因此必须配置acpi特性。
 ```
 <features>
     <acpi/>
 </features>
 ```
-For aarch64 platform, as gicv3 is used the `gic` should also be added to feature.
+对于aarch64平台，由于使用了gicv3，因此 `gic` 也应该被加入到特性中。
 ```
 <features>
     <acpi/>
@@ -54,16 +53,16 @@ For aarch64 platform, as gicv3 is used the `gic` should also be added to feature
 </features>
 ```
 
-- emulator:
+- 模拟器:
 
-Set emulator for libvirt, `/path/to/StratoVirt_binary_file` is the path to StratoVirt binary file.
+为了给libvirt设置模拟器， `/path/to/StratoVirt_binary_file` 是StratoVirt二进制的文件路径。
 ```
 <devices>
     <emulator>/path/to/StratoVirt_binary_file</emulator>
 </devices>
 ```
 
-- balloon
+- balloon设备
 ```
 <controller type='pci' index='4' model='pcie-root-port' />
 <memballoon model='virtio'>
@@ -72,22 +71,22 @@ Set emulator for libvirt, `/path/to/StratoVirt_binary_file` is the path to Strat
 </memballoon>
 ```
 
-- pflash
+- pflash设备
 
-Pflash can be added by the following config.
-`/path/to/pflash` is the path of pflash file.
+可以通过以下的配置加入pflash设备。
+`/path/to/pflash` 是pflash设备文件路径。
 ```
 <loader readonly='yes' type='pflash'>/path/to/pflash</loader>
 <nvram template='/path/to/OVMF_VARS'>/path/to/OVMF_VARS</nvram>
 ```
 
-- iothread
+- io线程个数
 
 ```
 <iothreads>1</iothreads>
 ```
 
-- block:
+- 磁盘设备:
 
 ```
 <controller type='pci' index='1' model='pcie-root-port' />
@@ -102,7 +101,7 @@ Pflash can be added by the following config.
 </disk>
 ```
 
-- net 
+- 网卡设备
 
 ```
 <controller type='pci' index='2' model='pcie-root-port' />
@@ -115,9 +114,9 @@ Pflash can be added by the following config.
 </interface>
 ```
 
-- console
+- 串口设备
 
-To use `virsh console` command, the virtio console with redirect `pty` should be configured. 
+为了使用 `virsh console` 命令，virtio串口设备可以通过使用重定向 `pty` 配置。
 ```
 <controller type='pci' index='3' model='pcie-root-port' />
 <controller type='virtio-serial' index='0'>
@@ -130,7 +129,7 @@ To use `virsh console` command, the virtio console with redirect `pty` should be
 </console>
 ```
 
-- vhost-vsock
+- vhost-vsock设备
 
 ```
 <controller type='pci' index='6' model='pcie-root-port' />
@@ -140,7 +139,7 @@ To use `virsh console` command, the virtio console with redirect `pty` should be
 </vsock>
 ```
 
-- rng
+- 随机数设备
 
 ```
 <controller type='pci' index='5' model='pcie-root-port' />
@@ -151,7 +150,7 @@ To use `virsh console` command, the virtio console with redirect `pty` should be
 </rng>
 ```
 
-- vfio
+- 直通设备
 
 ```
 <controller type='pci' index='7' model='pcie-root-port' />
