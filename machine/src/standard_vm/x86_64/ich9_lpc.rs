@@ -10,7 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc, Mutex, Weak,
+};
 
 use acpi::AcpiPMTimer;
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
@@ -33,6 +36,7 @@ const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
 const PM_BASE_OFFSET: u8 = 0x40;
 const PM_TIMER_OFFSET: u8 = 8;
 pub const SLEEP_CTRL_OFFSET: u16 = 0xCE9;
+pub const RST_CTRL_OFFSET: u16 = 0xCF9;
 
 /// LPC bridge of ICH9 (IO controller hub 9), Device 1F : Function 0
 #[allow(clippy::upper_case_acronyms)]
@@ -41,6 +45,9 @@ pub struct LPCBridge {
     parent_bus: Weak<Mutex<PciBus>>,
     sys_io: Arc<AddressSpace>,
     pm_timer: Arc<Mutex<AcpiPMTimer>>,
+    rst_ctrl: Arc<AtomicU8>,
+    /// Reset request trigged by ACPI PM1 Control Registers.
+    pub reset_req: EventFd,
     pub shutdown_req: EventFd,
 }
 
@@ -51,6 +58,8 @@ impl LPCBridge {
             parent_bus,
             sys_io,
             pm_timer: Arc::new(Mutex::new(AcpiPMTimer::new())),
+            rst_ctrl: Arc::new(AtomicU8::new(0)),
+            reset_req: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             shutdown_req: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
@@ -77,6 +86,50 @@ impl LPCBridge {
         Ok(())
     }
 
+    fn init_reset_ctrl_reg(&self) -> Result<()> {
+        let cloned_rst_ctrl = self.rst_ctrl.clone();
+        let read_ops = move |data: &mut [u8], _addr: GuestAddress, _offset: u64| -> bool {
+            let ret_ctrl = cloned_rst_ctrl.load(Ordering::SeqCst);
+            match data.len() {
+                1 => data[0] = ret_ctrl,
+                n => {
+                    error!("Invalid data length {}", n);
+                    return false;
+                }
+            }
+            true
+        };
+
+        let cloned_rst_ctrl = self.rst_ctrl.clone();
+        let cloned_reset_fd = self.reset_req.try_clone().unwrap();
+        let write_ops = move |data: &[u8], _addr: GuestAddress, _offset: u64| -> bool {
+            let value: u8 = match data.len() {
+                1 => data[0] as u8,
+                n => {
+                    error!("Invalid data length {}", n);
+                    return false;
+                }
+            };
+            if value & 0x4_u8 != 0 {
+                cloned_reset_fd.write(1).unwrap();
+                return true;
+            }
+            cloned_rst_ctrl.store(value & 0xA, Ordering::SeqCst);
+            true
+        };
+
+        let ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        let rst_ctrl_region = Region::init_io_region(0x1, ops);
+        self.sys_io
+            .root()
+            .add_subregion(rst_ctrl_region, RST_CTRL_OFFSET as u64)?;
+
+        Ok(())
+    }
+
     fn init_sleep_reg(&self) -> Result<()> {
         let read_ops = move |data: &mut [u8], _addr: GuestAddress, _offset: u64| -> bool {
             data.fill(0);
@@ -93,10 +146,10 @@ impl LPCBridge {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let rst_ctrl_region = Region::init_io_region(0x1, ops);
+        let sleep_reg_region = Region::init_io_region(0x1, ops);
         self.sys_io
             .root()
-            .add_subregion(rst_ctrl_region, SLEEP_CTRL_OFFSET as u64)?;
+            .add_subregion(sleep_reg_region, SLEEP_CTRL_OFFSET as u64)?;
         Ok(())
     }
 }
@@ -136,6 +189,9 @@ impl PciDevOps for LPCBridge {
 
         self.init_sleep_reg()
             .chain_err(|| "Fail to init IO region for sleep control register")?;
+
+        self.init_reset_ctrl_reg()
+            .chain_err(|| "Fail to init IO region for reset control register")?;
 
         let parent_bus = self.parent_bus.clone();
         parent_bus

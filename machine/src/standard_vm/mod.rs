@@ -91,6 +91,8 @@ use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
 #[cfg(target_arch = "x86_64")]
 use self::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
+#[cfg(target_arch = "x86_64")]
+use x86_64::ich9_lpc::RST_CTRL_OFFSET;
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
@@ -336,6 +338,11 @@ trait AcpiBuilder {
 
         #[cfg(target_arch = "x86_64")]
         {
+            // Reset Register bit, offset is 116.
+            fadt.set_field(116, 0x01_u8);
+            fadt.set_field(117, 0x08_u8);
+            fadt.set_field(120, RST_CTRL_OFFSET as u64);
+            fadt.set_field(128, 0x0F_u8);
             // Sleep control register, offset is 244.
             fadt.set_field(244, 0x01_u8);
             fadt.set_field(245, 0x08_u8);
