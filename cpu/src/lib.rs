@@ -272,13 +272,11 @@ impl CPU {
     }
 
     /// Get this `CPU`'s file descriptor.
-    #[cfg(target_arch = "aarch64")]
     pub fn fd(&self) -> &Arc<VcpuFd> {
         &self.fd
     }
 
     /// Get this `CPU`'s architecture-special property.
-    #[cfg(target_arch = "aarch64")]
     pub fn arch(&self) -> &Arc<Mutex<ArchCPU>> {
         &self.arch_cpu
     }

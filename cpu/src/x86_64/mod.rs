@@ -43,6 +43,7 @@ const MSR_LIST: &[u32] = &[
     0xc000_0102, // MSR_KERNEL_GS_BASE, SwapGS GS shadow
     0x0010,      // MSR_IA32_TSC,
     0x01a0,      // MSR_IA32_MISC_ENABLE,
+    0x2ff,       // MSR_MTRRdefType
 ];
 
 const MSR_IA32_MISC_ENABLE: u32 = 0x01a0;
@@ -50,7 +51,7 @@ const MSR_IA32_MISC_ENABLE_FAST_STRING: u64 = 0x1;
 
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct X86CPUBootConfig {
     pub prot64_mode: bool,
     /// Register %rip value
@@ -209,6 +210,7 @@ impl X86CPUState {
         const APIC_LVT1: usize = 0x360;
         const APIC_MODE_NMI: u32 = 0x4;
         const APIC_MODE_EXTINT: u32 = 0x7;
+        const APIC_ID: usize = 0x20;
 
         self.lapic = vcpu_fd
             .get_lapic()
@@ -225,6 +227,9 @@ impl X86CPUState {
             let apic_lvt_lint1 = &mut self.lapic.regs[APIC_LVT1..] as *mut [i8] as *mut u32;
             *apic_lvt_lint1 &= !0x700;
             *apic_lvt_lint1 |= APIC_MODE_NMI << 8;
+
+            let apic_id = &mut self.lapic.regs[APIC_ID..] as *mut [i8] as *mut u32;
+            *apic_id = self.apic_id << 24;
         }
 
         Ok(())
