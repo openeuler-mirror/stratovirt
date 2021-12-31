@@ -46,6 +46,8 @@ use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use vmm_sys_util::eventfd::EventFd;
 
+use self::ich9_lpc::SLEEP_CTRL_OFFSET;
+
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
@@ -720,6 +722,11 @@ impl MachineAddressInterface for StdMachine {
 
     fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
         let count = data.len() as u64;
+        if addr == SLEEP_CTRL_OFFSET as u64 {
+            if let Err(e) = self.cpus[0].pause() {
+                error!("Fail to pause bsp, {}", e.display_chain());
+            }
+        }
         self.sys_io
             .write(&mut data, GuestAddress(addr), count)
             .is_ok()
