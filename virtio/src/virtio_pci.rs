@@ -738,16 +738,18 @@ impl VirtioPciDevice {
             {
                 let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
                 locked_queues.clear();
-                cloned_pci_device
-                    .device_activated
-                    .store(false, Ordering::Release);
-                let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
-                cloned_msix.lock().unwrap().reset();
-                if let Err(e) = cloned_pci_device.device.lock().unwrap().reset() {
-                    error!(
-                        "Failed to reset virtio device, error is {}",
-                        e.display_chain()
-                    );
+                if cloned_pci_device.device_activated.load(Ordering::Acquire) {
+                    cloned_pci_device
+                        .device_activated
+                        .store(false, Ordering::Release);
+                    let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
+                    cloned_msix.lock().unwrap().reset();
+                    if let Err(e) = cloned_pci_device.device.lock().unwrap().reset() {
+                        error!(
+                            "Failed to reset virtio device, error is {}",
+                            e.display_chain()
+                        );
+                    }
                 }
                 update_dev_id(
                     &cloned_pci_device.parent_bus,
