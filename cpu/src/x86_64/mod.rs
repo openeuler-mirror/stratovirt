@@ -164,9 +164,6 @@ impl X86CPUState {
             .chain_err(|| format!("Failed to set cpuid for CPU {}", self.apic_id))?;
 
         vcpu_fd
-            .set_lapic(&self.lapic)
-            .chain_err(|| format!("Failed to set lapic for CPU {}", self.apic_id))?;
-        vcpu_fd
             .set_mp_state(self.mp_state)
             .chain_err(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
         vcpu_fd
@@ -192,6 +189,9 @@ impl X86CPUState {
         vcpu_fd
             .set_debug_regs(&self.debugregs)
             .chain_err(|| format!("Failed to set debug register for CPU {}", self.apic_id))?;
+        vcpu_fd
+            .set_lapic(&self.lapic)
+            .chain_err(|| format!("Failed to set lapic for CPU {}", self.apic_id))?;
         vcpu_fd
             .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len]))
             .chain_err(|| format!("Failed to set msrs for CPU {}", self.apic_id))?;

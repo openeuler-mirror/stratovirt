@@ -151,17 +151,14 @@ impl StdMachine {
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
         use crate::errors::ResultExt as MachineResultExt;
 
-        let mut locked_vm = vm.lock().unwrap();
+        let locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            MachineResultExt::chain_err(cpu.pause(), || {
-                format!("Failed to pause vcpu{}", cpu_index)
+            MachineResultExt::chain_err(cpu.kick(), || {
+                format!("Failed to kick vcpu{}", cpu_index)
             })?;
 
             cpu.set_to_boot_state();
-            MachineResultExt::chain_err(cpu.reset(), || {
-                format!("Failed to reset vcpu{}", cpu_index)
-            })?;
         }
 
         for dev in locked_vm.sysbus.devices.iter() {
@@ -174,8 +171,8 @@ impl StdMachine {
         })?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            MachineResultExt::chain_err(cpu.resume(), || {
-                format!("Failed to resume vcpu{}", cpu_index)
+            MachineResultExt::chain_err(cpu.reset(), || {
+                format!("Failed to reset vcpu{}", cpu_index)
             })?;
         }
 
