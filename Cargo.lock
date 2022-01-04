@@ -23,6 +23,7 @@ name = "acpi"
 version = "2.0.0"
 dependencies = [
  "address_space",
+ "byteorder",
  "error-chain",
  "log",
  "machine_manager",
