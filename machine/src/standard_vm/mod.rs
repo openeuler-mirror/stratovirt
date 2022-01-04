@@ -90,9 +90,7 @@ use aarch64::{LayoutEntryType, MEM_LAYOUT};
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
 
 #[cfg(target_arch = "x86_64")]
-use self::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
-#[cfg(target_arch = "x86_64")]
-use x86_64::ich9_lpc::RST_CTRL_OFFSET;
+use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
@@ -323,6 +321,12 @@ trait AcpiBuilder {
         let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFSCP", 1);
 
         fadt.set_table_len(208_usize);
+        // PM1A_EVENT bit, offset is 56.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(56, 0x600);
+        // PM1A_CONTROL bit, offset is 64.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(64, 0x604);
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
         fadt.set_field(76, 0x608);
@@ -343,6 +347,14 @@ trait AcpiBuilder {
             fadt.set_field(117, 0x08_u8);
             fadt.set_field(120, RST_CTRL_OFFSET as u64);
             fadt.set_field(128, 0x0F_u8);
+            // PM1a event register bit, offset is 148.
+            fadt.set_field(148, 0x01_u8);
+            fadt.set_field(149, 0x20_u8);
+            fadt.set_field(152, PM_EVENT_OFFSET as u64);
+            // PM1a contol register bit, offset is 172.
+            fadt.set_field(172, 0x01_u8);
+            fadt.set_field(173, 0x10_u8);
+            fadt.set_field(176, PM_CTRL_OFFSET as u64);
             // Sleep control register, offset is 244.
             fadt.set_field(244, 0x01_u8);
             fadt.set_field(245, 0x08_u8);
