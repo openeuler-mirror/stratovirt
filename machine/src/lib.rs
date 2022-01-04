@@ -168,23 +168,23 @@ pub trait MachineOps {
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
         is_migrate: bool,
+        nr_cpus: u8,
     ) -> Result<()> {
-        sys_mem
-            .register_listener(Box::new(KvmMemoryListener::new(
-                KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
-            )))
-            .chain_err(|| "Failed to register KVM listener for memory space.")?;
-        #[cfg(target_arch = "x86_64")]
-        sys_io
-            .register_listener(Box::new(KvmIoListener::default()))
-            .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
-
         // Init guest-memory
         // Define ram-region ranges according to architectures
         if !is_migrate {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
-            let mem_mappings = create_host_mmaps(&ram_ranges, &mem_config)
+            let mem_mappings = create_host_mmaps(&ram_ranges, &mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
+            sys_mem
+                .register_listener(Box::new(KvmMemoryListener::new(
+                    KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
+                )))
+                .chain_err(|| "Failed to register KVM listener for memory space.")?;
+            #[cfg(target_arch = "x86_64")]
+            sys_io
+                .register_listener(Box::new(KvmIoListener::default()))
+                .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
             for mmap in mem_mappings.iter() {
                 let base = mmap.start_address().raw_value();
                 let size = mmap.size();
