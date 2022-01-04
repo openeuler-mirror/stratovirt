@@ -15,7 +15,7 @@ use std::sync::{
     Arc, Mutex, Weak,
 };
 
-use acpi::AcpiPMTimer;
+use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use error_chain::ChainedError;
 use pci::config::{
@@ -35,6 +35,8 @@ const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
 
 const PM_BASE_OFFSET: u8 = 0x40;
 const PM_TIMER_OFFSET: u8 = 8;
+pub const PM_EVENT_OFFSET: u16 = 0x600;
+pub const PM_CTRL_OFFSET: u16 = 0x604;
 pub const SLEEP_CTRL_OFFSET: u16 = 0xCE9;
 pub const RST_CTRL_OFFSET: u16 = 0xCF9;
 
@@ -46,6 +48,8 @@ pub struct LPCBridge {
     sys_io: Arc<AddressSpace>,
     pm_timer: Arc<Mutex<AcpiPMTimer>>,
     rst_ctrl: Arc<AtomicU8>,
+    pm_evt: Arc<Mutex<AcpiPmEvent>>,
+    pm_ctrl: Arc<Mutex<AcpiPmCtrl>>,
     /// Reset request trigged by ACPI PM1 Control Registers.
     pub reset_req: EventFd,
     pub shutdown_req: EventFd,
@@ -58,6 +62,8 @@ impl LPCBridge {
             parent_bus,
             sys_io,
             pm_timer: Arc::new(Mutex::new(AcpiPMTimer::new())),
+            pm_evt: Arc::new(Mutex::new(AcpiPmEvent::new())),
+            pm_ctrl: Arc::new(Mutex::new(AcpiPmCtrl::new())),
             rst_ctrl: Arc::new(AtomicU8::new(0)),
             reset_req: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             shutdown_req: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -152,6 +158,56 @@ impl LPCBridge {
             .add_subregion(sleep_reg_region, SLEEP_CTRL_OFFSET as u64)?;
         Ok(())
     }
+
+    fn init_pm_evt_reg(&self) -> Result<()> {
+        let cloned_pmevt = self.pm_evt.clone();
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            cloned_pmevt.lock().unwrap().read(data, addr, offset)
+        };
+
+        let cloned_pmevt = self.pm_evt.clone();
+        let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            cloned_pmevt.lock().unwrap().write(data, addr, offset)
+        };
+
+        let ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        let pm_evt_region = Region::init_io_region(0x4, ops);
+        self.sys_io
+            .root()
+            .add_subregion(pm_evt_region, PM_EVENT_OFFSET as u64)?;
+
+        Ok(())
+    }
+
+    fn init_pm_ctrl_reg(&self) -> Result<()> {
+        let clone_pmctrl = self.pm_ctrl.clone();
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
+            clone_pmctrl.lock().unwrap().read(data, addr, offset)
+        };
+
+        let clone_pmctrl = self.pm_ctrl.clone();
+        let cloned_shutdown_fd = self.shutdown_req.try_clone().unwrap();
+        let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
+            if clone_pmctrl.lock().unwrap().write(data, addr, offset) {
+                cloned_shutdown_fd.write(1).unwrap();
+            }
+            true
+        };
+
+        let ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        let pm_ctrl_region = Region::init_io_region(0x4, ops);
+        self.sys_io
+            .root()
+            .add_subregion(pm_ctrl_region, PM_CTRL_OFFSET as u64)?;
+
+        Ok(())
+    }
 }
 
 impl PciDevOps for LPCBridge {
@@ -192,6 +248,11 @@ impl PciDevOps for LPCBridge {
 
         self.init_reset_ctrl_reg()
             .chain_err(|| "Fail to init IO region for reset control register")?;
+
+        self.init_pm_evt_reg()
+            .chain_err(|| "Fail to init IO region for PM events register")?;
+        self.init_pm_ctrl_reg()
+            .chain_err(|| "Fail to init IO region for PM control register")?;
 
         let parent_bus = self.parent_bus.clone();
         parent_bus
