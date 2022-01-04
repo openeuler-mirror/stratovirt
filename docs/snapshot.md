@@ -11,7 +11,7 @@ $ ./stratovirt \
     -kernel path/to/vmlinux.bin \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:path/to/socket,server,nowait \
     -serial stdio
 ```
@@ -49,7 +49,7 @@ $ ./stratovirt \
     -kernel path/to/vmlinux.bin \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:path/to/socket,server,nowait \
     -serial stdio \
     -incoming file:path/to/template

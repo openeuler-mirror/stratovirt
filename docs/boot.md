@@ -58,7 +58,7 @@ be mounted at boot time in StratoVirt. You can check [Appendix](#2Appendix).
     -m 1024m \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 ```
@@ -223,7 +223,7 @@ fi
     -m 2G \
     -append "console=${con} reboot=k panic=1 root=/dev/vda" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
     -drive file=/path/to/OVMF_VARS.fd,if=pfalsh,unit=1 \
     -qmp unix:/path/to/socket,server,nowait \

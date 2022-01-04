@@ -182,7 +182,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 ```shell
 # virtio mmio block device.
 -drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-device,drive=drive_id[,iothread=iothread1,serial=serial_num]
+-device virtio-blk-device,drive=drive_id,id=blkid[,iothread=iothread1,serial=serial_num]
 # virtio pci block device.
 -drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
 -device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num]
@@ -587,7 +587,7 @@ $ ./stratovirt \
     -kernel path/to/vmlinux.bin \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:path/to/socket,server,nowait \
     -serial stdio \
     -incoming file:path/to/template
@@ -660,7 +660,7 @@ $ ./ozone \
     -kernel ./vmlinux.bin \
     -append console=ttyS0 root=/dev/vda reboot=k panic=1 rw \
     -drive file=./rootfs,id=rootfs,readonly=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:./stratovirt.socket,server,nowait \
     -serial stdio
 ```

@@ -48,7 +48,7 @@ $ ./target/release/stratovirt \
     -kernel /path/to/kernel \
     -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 
