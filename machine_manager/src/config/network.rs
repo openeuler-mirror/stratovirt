@@ -435,4 +435,183 @@ mod tests {
             "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,multifunction=on";
         assert!(parse_net(&mut vm_config, net_cfg).is_ok());
     }
+
+    #[test]
+    fn test_netdev_config_check() {
+        let mut netdev_conf = NetDevcfg::default();
+        for _ in 0..MAX_STRING_LENGTH {
+            netdev_conf.id += "A";
+        }
+        assert!(netdev_conf.check().is_ok());
+
+        // Overflow
+        netdev_conf.id += "A";
+        assert!(netdev_conf.check().is_err());
+
+        let mut netdev_conf = NetDevcfg::default();
+        for _ in 0..MAX_STRING_LENGTH {
+            netdev_conf.ifname += "A";
+        }
+        assert!(netdev_conf.check().is_ok());
+
+        // Overflow
+        netdev_conf.ifname += "A";
+        assert!(netdev_conf.check().is_err());
+
+        let mut netdev_conf = NetDevcfg::default();
+        netdev_conf.vhost_type = None;
+        assert!(netdev_conf.check().is_ok());
+        netdev_conf.vhost_type = Some(String::from("vhost-kernel"));
+        assert!(netdev_conf.check().is_ok());
+        netdev_conf.vhost_type = Some(String::from("vhost-"));
+        assert!(netdev_conf.check().is_err());
+    }
+
+    #[test]
+    fn test_add_netdev_with_config() {
+        let mut vm_config = VmConfig::default();
+
+        let netdev_list = ["netdev-0", "netdev-1", "netdev-2"];
+        for id in netdev_list.iter() {
+            let mut net_conf = NetDevcfg::default();
+            net_conf.id = String::from(*id);
+            assert!(vm_config.add_netdev_with_config(net_conf).is_ok());
+
+            let netdev = vm_config.netdevs.get(*id).unwrap();
+            assert_eq!(*id, netdev.id);
+        }
+
+        let mut net_conf = NetDevcfg::default();
+        net_conf.id = String::from("netdev-0");
+        assert!(vm_config.add_netdev_with_config(net_conf).is_err());
+    }
+
+    #[test]
+    fn test_del_netdev_by_id() {
+        let mut vm_config = VmConfig::default();
+
+        assert!(vm_config.del_netdev_by_id("netdev-0").is_err());
+
+        let netdev_list = ["netdev-0", "netdev-1", "netdev-2"];
+        for id in netdev_list.iter() {
+            let mut net_conf = NetDevcfg::default();
+            net_conf.id = String::from(*id);
+            assert!(vm_config.add_netdev_with_config(net_conf).is_ok());
+
+            let netdev = vm_config.netdevs.get(*id).unwrap();
+            assert_eq!(*id, netdev.id);
+        }
+
+        for id in netdev_list.iter() {
+            let mut net_conf = NetDevcfg::default();
+            net_conf.id = String::from(*id);
+            assert!(vm_config.netdevs.get(*id).is_some());
+            assert!(vm_config.del_netdev_by_id(*id).is_ok());
+            assert!(vm_config.netdevs.get(*id).is_none());
+        }
+    }
+
+    fn create_netdev_add(
+        id: String,
+        if_name: Option<String>,
+        fds: Option<String>,
+        vhost: Option<String>,
+        vhostfds: Option<String>,
+    ) -> Box<qmp_schema::NetDevAddArgument> {
+        Box::new(qmp_schema::NetDevAddArgument {
+            id,
+            if_name,
+            fds,
+            dnssearch: None,
+            net_type: None,
+            vhost,
+            vhostfds,
+            ifname: None,
+            downscript: None,
+            script: None,
+            queues: None,
+        })
+    }
+
+    #[test]
+    fn test_get_netdev_config() {
+        // Invalid vhost
+        let netdev_add = create_netdev_add(
+            String::from("netdev"),
+            None,
+            None,
+            Some(String::from("1")),
+            None,
+        );
+        let net_cfg = get_netdev_config(netdev_add);
+        assert!(net_cfg.is_err());
+
+        // Invalid vhost fd
+        let netdev_add = create_netdev_add(
+            String::from("netdev"),
+            None,
+            None,
+            None,
+            Some(String::from("999999999999999999999")),
+        );
+        let net_cfg = get_netdev_config(netdev_add);
+        assert!(net_cfg.is_err());
+
+        // No need to config vhost fd
+        let netdev_add = create_netdev_add(
+            String::from("netdev"),
+            None,
+            None,
+            None,
+            Some(String::from("55")),
+        );
+        let net_cfg = get_netdev_config(netdev_add);
+        assert!(net_cfg.is_err());
+
+        // No ifname or fd
+        let netdev_add = create_netdev_add(
+            String::from("netdev"),
+            None,
+            None,
+            Some(String::from("on")),
+            Some(String::from("55")),
+        );
+        let net_cfg = get_netdev_config(netdev_add);
+        assert!(net_cfg.is_err());
+
+        let netdev_add = create_netdev_add(
+            String::from("netdev"),
+            Some(String::from("tap0")),
+            None,
+            None,
+            None,
+        );
+        let net_cfg = get_netdev_config(netdev_add);
+        assert!(net_cfg.is_ok());
+        assert_eq!(net_cfg.unwrap().ifname, "tap0");
+
+        let netdev_add = create_netdev_add(
+            String::from("netdev"),
+            Some(String::from("tap0")),
+            None,
+            Some(String::from("on")),
+            None,
+        );
+        let net_cfg = get_netdev_config(netdev_add);
+        assert!(net_cfg.is_ok());
+        assert_eq!(net_cfg.unwrap().vhost_type.unwrap(), "vhost-kernel");
+
+        let netdev_add = create_netdev_add(
+            String::from("netdev"),
+            Some(String::from("tap0")),
+            None,
+            Some(String::from("on")),
+            Some(String::from("12")),
+        );
+        let net_cfg = get_netdev_config(netdev_add);
+        assert!(net_cfg.is_ok());
+        let net_cfg = net_cfg.unwrap();
+        assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
+        assert_eq!(net_cfg.vhost_fd.unwrap(), 12);
+    }
 }

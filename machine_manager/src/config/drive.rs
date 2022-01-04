@@ -556,4 +556,80 @@ mod tests {
         assert_eq!(pflash_cfg.path_on_host, "flash1.fd".to_string());
         assert_eq!(pflash_cfg.read_only, false);
     }
+
+    #[test]
+    fn test_drive_config_check() {
+        let mut drive_conf = DriveConfig::default();
+        for _ in 0..MAX_STRING_LENGTH {
+            drive_conf.id += "A";
+        }
+        assert!(drive_conf.check().is_ok());
+
+        // Overflow
+        drive_conf.id += "A";
+        assert!(drive_conf.check().is_err());
+
+        let mut drive_conf = DriveConfig::default();
+        for _ in 0..MAX_PATH_LENGTH {
+            drive_conf.path_on_host += "A";
+        }
+        assert!(drive_conf.check().is_ok());
+
+        // Overflow
+        drive_conf.path_on_host += "A";
+        assert!(drive_conf.check().is_err());
+
+        let mut drive_conf = DriveConfig::default();
+        drive_conf.iops = Some(MAX_IOPS);
+        assert!(drive_conf.check().is_ok());
+
+        let mut drive_conf = DriveConfig::default();
+        drive_conf.iops = None;
+        assert!(drive_conf.check().is_ok());
+
+        // Overflow
+        drive_conf.iops = Some(MAX_IOPS + 1);
+        assert!(drive_conf.check().is_err());
+    }
+
+    #[test]
+    fn test_add_drive_with_config() {
+        let mut vm_config = VmConfig::default();
+
+        let drive_list = ["drive-0", "drive-1", "drive-2"];
+        for id in drive_list.iter() {
+            let mut drive_conf = DriveConfig::default();
+            drive_conf.id = String::from(*id);
+            assert!(vm_config.add_drive_with_config(drive_conf).is_ok());
+
+            let drive = vm_config.drives.get(*id).unwrap();
+            assert_eq!(*id, drive.id);
+        }
+
+        let mut drive_conf = DriveConfig::default();
+        drive_conf.id = String::from("drive-0");
+        assert!(vm_config.add_drive_with_config(drive_conf).is_err());
+    }
+
+    #[test]
+    fn test_del_drive_by_id() {
+        let mut vm_config = VmConfig::default();
+
+        assert!(vm_config.del_drive_by_id("drive-0").is_err());
+
+        let drive_list = ["drive-0", "drive-1", "drive-2"];
+        for id in drive_list.iter() {
+            let mut drive_conf = DriveConfig::default();
+            drive_conf.id = String::from(*id);
+            assert!(vm_config.add_drive_with_config(drive_conf).is_ok());
+        }
+
+        for id in drive_list.iter() {
+            let mut drive_conf = DriveConfig::default();
+            drive_conf.id = String::from(*id);
+            assert!(vm_config.drives.get(*id).is_some());
+            assert!(vm_config.del_drive_by_id(*id).is_ok());
+            assert!(vm_config.drives.get(*id).is_none());
+        }
+    }
 }
