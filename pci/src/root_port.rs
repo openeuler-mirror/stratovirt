@@ -289,7 +289,7 @@ impl PciDevOps for RootPort {
             .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
 
         self.dev_id.store(self.devfn as u16, Ordering::SeqCst);
-        init_msix(0, 1, &mut self.config, self.dev_id.clone())?;
+        init_msix(0, 1, &mut self.config, self.dev_id.clone(), &self.name)?;
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();
@@ -303,6 +303,7 @@ impl PciDevOps for RootPort {
             .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
             .chain_err(|| "Failed to register subregion in memory space.")?;
 
+        let name = self.name.clone();
         let root_port = Arc::new(Mutex::new(self));
         #[allow(unused_mut)]
         let mut locked_root_port = root_port.lock().unwrap();
@@ -327,7 +328,11 @@ impl PciDevOps for RootPort {
         }
         // Need to drop locked_root_port in order to register root_port instance.
         drop(locked_root_port);
-        MigrationManager::register_device_instance_mutex(RootPortState::descriptor(), root_port);
+        MigrationManager::register_device_instance_mutex_with_id(
+            RootPortState::descriptor(),
+            root_port,
+            &name,
+        );
 
         Ok(())
     }

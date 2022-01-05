@@ -132,7 +132,7 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
-use migration::MigrationManager;
+use migration::{MigrationManager, MigrationRestoreOrder};
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use vfio::{VfioDevice, VfioPciDevice};
@@ -243,7 +243,11 @@ pub trait MachineOps {
             ));
             cpus.push(cpu.clone());
 
-            MigrationManager::register_device_instance(cpu::ArchCPU::descriptor(), cpu, false);
+            MigrationManager::register_device_instance(
+                cpu::ArchCPU::descriptor(),
+                cpu,
+                MigrationRestoreOrder::Default,
+            );
         }
 
         if let Some(boot_config) = boot_cfg {
@@ -486,7 +490,11 @@ pub trait MachineOps {
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
         self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func)?;
-        MigrationManager::register_device_instance_mutex(BlockState::descriptor(), device);
+        MigrationManager::register_device_instance_mutex_with_id(
+            BlockState::descriptor(),
+            device,
+            &device_cfg.id,
+        );
         self.reset_bus(&device_cfg.id)?;
         Ok(())
     }
@@ -502,9 +510,10 @@ pub trait MachineOps {
             )))
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
-            MigrationManager::register_device_instance_mutex(
+            MigrationManager::register_device_instance_mutex_with_id(
                 VirtioNetState::descriptor(),
                 device.clone(),
+                &device_cfg.id,
             );
             device
         };
