@@ -703,7 +703,6 @@ pub trait MachineOps {
         Ok(())
     }
 
-    /// Add pflash device.
     fn add_pflash_device(&mut self, _configs: &[PFlashConfig]) -> Result<()> {
         bail!("Pflash device is not supported!");
     }

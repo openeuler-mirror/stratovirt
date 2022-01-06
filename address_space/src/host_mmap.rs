@@ -18,9 +18,9 @@ use std::thread;
 
 use machine_manager::config::MachineMemConfig;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::errors::{Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
-use util::unix::host_page_size;
+use util::unix::{do_mmap, host_page_size};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
 
@@ -36,7 +36,20 @@ pub struct FileBackend {
 }
 
 impl FileBackend {
-    /// Construct a new FileBackend according to path and length.
+    /// Construct a new FileBackend with an opened file.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - Opened backend file.
+    pub fn new_common(fd: File) -> Self {
+        Self {
+            file: Arc::new(fd),
+            offset: 0,
+            page_size: 0,
+        }
+    }
+
+    /// Construct a new FileBackend with memory backend.
     /// If the file is already created, this function does not change its length.
     ///
     /// # Arguments
@@ -50,7 +63,7 @@ impl FileBackend {
     /// * fail to create the file.
     /// * fail to open the file.
     /// * fail to set file length.
-    pub fn new(file_path: &str, file_len: u64) -> Result<FileBackend> {
+    pub fn new_mem(file_path: &str, file_len: u64) -> Result<FileBackend> {
         let path = std::path::Path::new(&file_path);
         let file = if path.is_dir() {
             let fs_path = format!("{}{}", file_path, "/stratovirt_backmem_XXXXXX");
@@ -71,16 +84,16 @@ impl FileBackend {
             }
             unsafe { File::from_raw_fd(raw_fd) }
         } else {
-            let is_created = !path.exists();
+            let existed = !path.exists();
             // Open the file, if not exist, create it.
             let file_ret = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .open(path)
-                .chain_err(|| format!("Failed to Open file: {}", file_path))?;
+                .chain_err(|| format!("Failed to open file: {}", file_path))?;
 
-            if is_created
+            if existed
                 && unsafe { libc::unlink(std::ffi::CString::new(file_path).unwrap().into_raw()) }
                     != 0
             {
@@ -108,7 +121,11 @@ impl FileBackend {
             file.set_len(file_len)
                 .chain_err(|| format!("Failed to set length of file: {}", file_path))?;
         } else if old_file_len < file_len {
-            bail!("Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})", file_path, file_len);
+            bail!(
+            "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
+            file_path,
+            file_len
+        );
         }
 
         Ok(FileBackend {
@@ -116,66 +133,6 @@ impl FileBackend {
             offset: 0_u64,
             page_size: fstat.f_bsize as u64,
         })
-    }
-}
-
-fn do_mmap(
-    read_only: bool,
-    size: u64,
-    file: &Option<FileBackend>,
-    is_share: bool,
-    dump_guest_core: bool,
-) -> Result<u64> {
-    let mut flags: i32 = 0;
-    let mut fd: i32 = -1;
-    let mut offset: u64 = 0;
-    if let Some(fb) = file.as_ref() {
-        fd = fb.file.as_raw_fd();
-        offset = fb.offset;
-    } else {
-        flags |= libc::MAP_ANONYMOUS;
-    }
-
-    if is_share {
-        flags |= libc::MAP_SHARED;
-    } else {
-        flags |= libc::MAP_PRIVATE;
-    }
-
-    let mut prot = libc::PROT_READ;
-    if !read_only {
-        prot |= libc::PROT_WRITE;
-    }
-
-    // Safe because the return value is checked.
-    let hva = unsafe {
-        libc::mmap(
-            std::ptr::null_mut() as *mut libc::c_void,
-            size as libc::size_t,
-            prot,
-            flags,
-            fd as libc::c_int,
-            offset as libc::off_t,
-        )
-    };
-    if hva == libc::MAP_FAILED {
-        return Err(std::io::Error::last_os_error()).chain_err(|| ErrorKind::Mmap);
-    }
-    if !dump_guest_core {
-        set_memory_undumpable(hva, size);
-    }
-
-    Ok(hva as u64)
-}
-
-fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
-    // Safe because host_addr and size are valid and return value is checked.
-    let ret = unsafe { libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP) };
-    if ret < 0 {
-        error!(
-            "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {}",
-            std::io::Error::last_os_error()
-        );
     }
 }
 
@@ -263,7 +220,7 @@ pub fn create_host_mmaps(
     if let Some(path) = &mem_config.mem_path {
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
         f_back = Some(
-            FileBackend::new(&path, file_len)
+            FileBackend::new_mem(&path, file_len)
                 .chain_err(|| "Failed to create file that backs memory")?,
         );
     } else if mem_config.mem_share {
@@ -288,10 +245,12 @@ pub fn create_host_mmaps(
         });
     }
 
+    let backend = (&f_back).as_ref();
     let mut host_addr = do_mmap(
-        false,
+        &backend.map(|fb| fb.file.as_ref()),
         mem_config.mem_size,
-        &f_back,
+        backend.map_or(0, |fb| fb.offset),
+        false,
         mem_config.mem_share,
         mem_config.dump_guest_core,
     )?;
@@ -359,7 +318,15 @@ impl HostMemMapping {
         let host_addr = if let Some(addr) = host_addr {
             addr
         } else {
-            do_mmap(read_only, size, &file_back, is_share, dump_guest_core)?
+            let fb = (&file_back).as_ref();
+            do_mmap(
+                &fb.map(|f| f.file.as_ref()),
+                size,
+                fb.map_or(0, |f| f.offset),
+                read_only,
+                is_share,
+                dump_guest_core,
+            )?
         };
 
         Ok(Self {
@@ -465,7 +432,7 @@ mod test {
             .unwrap()
             .to_string();
         let file_size = 100u64;
-        let f_back = FileBackend::new(&file_path, file_size);
+        let f_back = FileBackend::new_mem(&file_path, file_size);
         assert!(f_back.is_ok());
         assert_eq!(f_back.as_ref().unwrap().offset, 0u64);
     }
@@ -476,7 +443,7 @@ mod test {
         // and the file will be removed after test-thread exits.
         let file_path = String::from("back_mem_test1");
         let file_size = 100_u64;
-        let f_back = FileBackend::new(&file_path, file_size);
+        let f_back = FileBackend::new_mem(&file_path, file_size);
         assert!(f_back.is_ok());
         assert_eq!(f_back.as_ref().unwrap().offset, 0u64);
         assert_eq!(
@@ -493,11 +460,11 @@ mod test {
         file.set_len(50_u64).unwrap();
 
         let mem_size = 100_u64;
-        let f_back = FileBackend::new(&file_path, mem_size);
+        let f_back = FileBackend::new_mem(&file_path, mem_size);
         assert!(f_back.is_err());
 
         let mem_size = 20_u64;
-        let f_back = FileBackend::new(&file_path, mem_size);
+        let f_back = FileBackend::new_mem(&file_path, mem_size);
         assert!(f_back.is_ok());
         assert_eq!(f_back.as_ref().unwrap().offset, 0u64);
         assert_eq!(
