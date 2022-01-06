@@ -1113,6 +1113,7 @@ impl DeviceInterface for LightMachine {
             serial_num: None,
             iothread: None,
             iops: None,
+            queues: 1,
         };
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),

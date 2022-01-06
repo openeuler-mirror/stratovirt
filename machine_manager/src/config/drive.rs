@@ -20,7 +20,9 @@ use super::{
     errors::{ErrorKind, Result},
     pci_args_check,
 };
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
+use crate::config::{
+    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+};
 
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
@@ -36,6 +38,7 @@ pub struct BlkDevConfig {
     pub serial_num: Option<String>,
     pub iothread: Option<String>,
     pub iops: Option<u64>,
+    pub queues: u16,
 }
 
 impl Default for BlkDevConfig {
@@ -48,6 +51,7 @@ impl Default for BlkDevConfig {
             serial_num: None,
             iothread: None,
             iops: None,
+            queues: 1,
         }
     }
 }
@@ -182,6 +186,17 @@ impl ConfigCheck for BlkDevConfig {
             .into());
         }
 
+        if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
+            return Err(ErrorKind::IllegalValue(
+                "number queues of block device".to_string(),
+                1,
+                true,
+                MAX_VIRTIO_QUEUE as u64,
+                true,
+            )
+            .into());
+        }
+
         Ok(())
     }
 }
@@ -228,7 +243,8 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         .push("drive")
         .push("bootindex")
         .push("serial")
-        .push("iothread");
+        .push("iothread")
+        .push("num-queues");
 
     cmd_parser.parse(drive_config)?;
 
@@ -257,6 +273,10 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         blkdevcfg.id = id;
     } else {
         bail!("No id configured for blk device");
+    }
+
+    if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
+        blkdevcfg.queues = queues;
     }
 
     if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
@@ -444,7 +464,7 @@ mod tests {
             .is_ok());
         let blk_cfg_res = parse_blk(
             &mut vm_config,
-            "virtio-blk-device,drive=rootfs,id=rootfs,iothread=iothread1,serial=111111",
+            "virtio-blk-device,drive=rootfs,id=rootfs,iothread=iothread1,serial=111111,num-queues=4",
         );
         assert!(blk_cfg_res.is_ok());
         let blk_device_config = blk_cfg_res.unwrap();
@@ -453,6 +473,7 @@ mod tests {
         assert_eq!(blk_device_config.direct, true);
         assert_eq!(blk_device_config.read_only, false);
         assert_eq!(blk_device_config.serial_num, Some(String::from("111111")));
+        assert_eq!(blk_device_config.queues, 4);
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
@@ -471,7 +492,7 @@ mod tests {
         assert!(vm_config
             .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
-        let blk_cfg = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111";
+        let blk_cfg = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111,num-queues=4";
         let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
         assert!(blk_cfg_res.is_ok());
         let drive_configs = blk_cfg_res.unwrap();
@@ -480,6 +501,7 @@ mod tests {
         assert_eq!(drive_configs.direct, true);
         assert_eq!(drive_configs.read_only, false);
         assert_eq!(drive_configs.serial_num, Some(String::from("111111")));
+        assert_eq!(drive_configs.queues, 4);
 
         let pci_bdf = get_pci_bdf(blk_cfg);
         assert!(pci_bdf.is_ok());
