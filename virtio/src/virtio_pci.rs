@@ -702,6 +702,9 @@ impl VirtioPciDevice {
                     .queues_config;
                 let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
                 for q_config in queues_config.iter_mut() {
+                    if !q_config.ready {
+                        continue;
+                    }
                     q_config.addr_cache.desc_table_host = cloned_mem_space
                         .get_host_address(q_config.desc_table)
                         .unwrap_or(0);
