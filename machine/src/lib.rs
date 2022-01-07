@@ -171,20 +171,27 @@ pub trait MachineOps {
         nr_cpus: u8,
     ) -> Result<()> {
         // Init guest-memory
-        // Define ram-region ranges according to architectures
+        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time.
+        // The system call registers some notifier functions in the KVM, which are frequently triggered when doing memory prealloc.
+        // To avoid affecting memory prealloc performance, create_host_mmaps needs to be invoked first.
+        let mut mem_mappings = Vec::new();
         if !is_migrate {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
-            let mem_mappings = create_host_mmaps(&ram_ranges, &mem_config, nr_cpus)
+            mem_mappings = create_host_mmaps(&ram_ranges, &mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
-            sys_mem
-                .register_listener(Box::new(KvmMemoryListener::new(
-                    KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
-                )))
-                .chain_err(|| "Failed to register KVM listener for memory space.")?;
-            #[cfg(target_arch = "x86_64")]
-            sys_io
-                .register_listener(Box::new(KvmIoListener::default()))
-                .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
+        }
+
+        sys_mem
+            .register_listener(Box::new(KvmMemoryListener::new(
+                KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
+            )))
+            .chain_err(|| "Failed to register KVM listener for memory space.")?;
+        #[cfg(target_arch = "x86_64")]
+        sys_io
+            .register_listener(Box::new(KvmIoListener::default()))
+            .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
+
+        if !is_migrate {
             for mmap in mem_mappings.iter() {
                 let base = mmap.start_address().raw_value();
                 let size = mmap.size();
