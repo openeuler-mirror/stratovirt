@@ -482,6 +482,8 @@ pub struct device_add {
     pub iothread: Option<String>,
     pub multifunction: Option<bool>,
     pub host: Option<String>,
+    #[serde(rename = "num-queues")]
+    pub queues: Option<u16>,
 }
 
 pub type DeviceAddArgument = device_add;
