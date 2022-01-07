@@ -557,6 +557,7 @@ impl StdMachine {
                 serial_num: args.serial_num.clone(),
                 iothread: args.iothread.clone(),
                 iops: conf.iops,
+                queues: args.queues.unwrap_or(1),
             };
             dev.check()?;
             dev
