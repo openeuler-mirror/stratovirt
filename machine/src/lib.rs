@@ -170,10 +170,10 @@ pub trait MachineOps {
         is_migrate: bool,
         nr_cpus: u8,
     ) -> Result<()> {
-        // Init guest-memory
-        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time.
-        // The system call registers some notifier functions in the KVM, which are frequently triggered when doing memory prealloc.
-        // To avoid affecting memory prealloc performance, create_host_mmaps needs to be invoked first.
+        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time. The system
+        // call registers some notifier functions in the KVM, which are frequently triggered when
+        // doing memory prealloc.To avoid affecting memory prealloc performance, create_host_mmaps
+        // needs to be invoked first.
         let mut mem_mappings = Vec::new();
         if !is_migrate {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
@@ -182,13 +182,13 @@ pub trait MachineOps {
         }
 
         sys_mem
-            .register_listener(Box::new(KvmMemoryListener::new(
+            .register_listener(Arc::new(Mutex::new(KvmMemoryListener::new(
                 KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
-            )))
+            ))))
             .chain_err(|| "Failed to register KVM listener for memory space.")?;
         #[cfg(target_arch = "x86_64")]
         sys_io
-            .register_listener(Box::new(KvmIoListener::default()))
+            .register_listener(Arc::new(Mutex::new(KvmIoListener::default())))
             .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
 
         if !is_migrate {

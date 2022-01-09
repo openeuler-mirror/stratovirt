@@ -54,6 +54,9 @@ impl Default for RegionCache {
         }
     }
 }
+
+type ListenerObj = Arc<Mutex<dyn Listener>>;
+
 /// Address Space of memory.
 #[derive(Clone)]
 pub struct AddressSpace {
@@ -63,7 +66,7 @@ pub struct AddressSpace {
     /// every time the topology changed (add/delete region), flat_view would be updated.
     flat_view: ArcSwap<FlatView>,
     /// The triggered call-backs when flat_view changed.
-    listeners: Arc<Mutex<Vec<Box<dyn Listener>>>>,
+    listeners: Arc<Mutex<Vec<ListenerObj>>>,
     /// The current layout of ioeventfds, which is compared with new ones in topology-update stage.
     ioeventfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
 }
@@ -106,21 +109,50 @@ impl AddressSpace {
     /// # Errors
     ///
     /// Return Error if fail to call `listener`.
-    pub fn register_listener(&self, listener: Box<dyn Listener>) -> Result<()> {
+    pub fn register_listener(&self, listener: ListenerObj) -> Result<()> {
+        let mut locked_listener = listener.lock().unwrap();
         for fr in self.flat_view.load().0.iter() {
-            listener.handle_request(Some(&fr), None, ListenerReqType::AddRegion)?;
+            locked_listener.handle_request(Some(&fr), None, ListenerReqType::AddRegion)?;
         }
+        locked_listener.enable();
 
         let mut idx = 0;
         let mut mls = self.listeners.lock().unwrap();
-        while idx < mls.len() {
-            let ml = mls.get(idx).unwrap();
-            if ml.priority() >= listener.priority() {
+        for ml in mls.iter() {
+            if ml.lock().unwrap().priority() >= locked_listener.priority() {
                 break;
             }
             idx += 1;
         }
+        drop(locked_listener);
         mls.insert(idx, listener);
+        Ok(())
+    }
+
+    /// Unregister listener from the `AddressSpace`.
+    ///
+    /// # Arguments
+    ///
+    /// * `listener` - Provided Listener trait object.
+    ///
+    /// # Errors
+    ///
+    /// Return Error if fail to call `listener`.
+    pub fn unregister_listener(&self, listener: ListenerObj) -> Result<()> {
+        let mut locked_listener = listener.lock().unwrap();
+        for fr in self.flat_view.load().0.iter() {
+            locked_listener.handle_request(Some(&fr), None, ListenerReqType::DeleteRegion)?;
+        }
+        locked_listener.disable();
+        drop(locked_listener);
+
+        let mut mls = self.listeners.lock().unwrap();
+        for (idx, ml) in mls.iter().enumerate() {
+            if !ml.lock().unwrap().enabled() {
+                mls.remove(idx);
+                break;
+            }
+        }
         Ok(())
     }
 
@@ -143,13 +175,18 @@ impl AddressSpace {
     ) -> Result<()> {
         let listeners = self.listeners.lock().unwrap();
         match req_type {
-            ListenerReqType::DeleteRegion | ListenerReqType::AddIoeventfd => listeners
-                .iter()
-                .rev()
-                .try_for_each(|ml| ml.handle_request(flat_range, evtfd, req_type)),
-            _ => listeners
-                .iter()
-                .try_for_each(|ml| ml.handle_request(flat_range, evtfd, req_type)),
+            ListenerReqType::DeleteRegion | ListenerReqType::AddIoeventfd => {
+                listeners.iter().rev().try_for_each(|ml| {
+                    ml.lock()
+                        .unwrap()
+                        .handle_request(flat_range, evtfd, req_type)
+                })
+            }
+            _ => listeners.iter().try_for_each(|ml| {
+                ml.lock()
+                    .unwrap()
+                    .handle_request(flat_range, evtfd, req_type)
+            }),
         }
     }
 
@@ -583,11 +620,11 @@ mod test {
 
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root).unwrap();
-        let listener1 = Box::new(ListenerPrior0);
-        let listener2 = Box::new(ListenerPrior0);
-        let listener3 = Box::new(ListenerPrior3);
-        let listener4 = Box::new(ListenerPrior4);
-        let listener5 = Box::new(ListenerNeg);
+        let listener1 = Arc::new(Mutex::new(ListenerPrior0));
+        let listener2 = Arc::new(Mutex::new(ListenerPrior0));
+        let listener3 = Arc::new(Mutex::new(ListenerPrior3));
+        let listener4 = Arc::new(Mutex::new(ListenerPrior4));
+        let listener5 = Arc::new(Mutex::new(ListenerNeg));
         space.register_listener(listener1).unwrap();
         space.register_listener(listener3).unwrap();
         space.register_listener(listener5).unwrap();
@@ -596,7 +633,7 @@ mod test {
 
         let mut pre_prior = std::i32::MIN;
         for listener in space.listeners.lock().unwrap().iter() {
-            let curr = listener.priority();
+            let curr = listener.lock().unwrap().priority();
             assert!(pre_prior <= curr);
             pre_prior = curr;
         }
@@ -606,8 +643,8 @@ mod test {
     fn test_update_topology() {
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root.clone()).unwrap();
-        let listener = TestListener::default();
-        space.register_listener(Box::new(listener.clone())).unwrap();
+        let listener = Arc::new(Mutex::new(TestListener::default()));
+        space.register_listener(listener.clone()).unwrap();
 
         let default_ops = RegionOps {
             read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
@@ -630,12 +667,20 @@ mod test {
         root.add_subregion(region_c.clone(), 0).unwrap();
 
         assert_eq!(space.flat_view.load().0.len(), 1);
-        assert_eq!(listener.reqs.lock().unwrap().len(), 1);
+        assert_eq!(listener.lock().unwrap().reqs.lock().unwrap().len(), 1);
         assert_eq!(
-            listener.reqs.lock().unwrap().get(0).unwrap().1,
+            listener
+                .lock()
+                .unwrap()
+                .reqs
+                .lock()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .1,
             AddressRange::new(region_c.offset(), region_c.size())
         );
-        listener.reqs.lock().unwrap().clear();
+        listener.lock().unwrap().reqs.lock().unwrap().clear();
 
         // region layout
         //        0      1000   2000   3000   4000   5000   6000   7000   8000
@@ -648,27 +693,28 @@ mod test {
         let region_d = Region::init_io_region(1000, default_ops);
         region_b.add_subregion(region_d.clone(), 0).unwrap();
 
+        let locked_listener = listener.lock().unwrap();
         assert_eq!(space.flat_view.load().0.len(), 3);
-        assert_eq!(listener.reqs.lock().unwrap().len(), 4);
+        assert_eq!(locked_listener.reqs.lock().unwrap().len(), 4);
         // delete flat-range 0~6000 first, belonging to region_c
         assert_eq!(
-            listener.reqs.lock().unwrap().get(0).unwrap().1,
+            locked_listener.reqs.lock().unwrap().get(0).unwrap().1,
             AddressRange::new(region_c.offset(), region_c.size())
         );
         // add range 0~2000, belonging to region_c
         assert_eq!(
-            listener.reqs.lock().unwrap().get(1).unwrap().1,
+            locked_listener.reqs.lock().unwrap().get(1).unwrap().1,
             AddressRange::new(region_c.offset(), 2000)
         );
         // add range 2000~3000, belonging to region_d
         let region_d_range = AddressRange::new(GuestAddress(2000), region_d.size());
         assert_eq!(
-            listener.reqs.lock().unwrap().get(2).unwrap().1,
+            locked_listener.reqs.lock().unwrap().get(2).unwrap().1,
             region_d_range
         );
         // add range 3000~6000, belonging to region_c
         assert_eq!(
-            listener.reqs.lock().unwrap().get(3).unwrap().1,
+            locked_listener.reqs.lock().unwrap().get(3).unwrap().1,
             AddressRange::from((3000, 3000))
         );
     }
@@ -695,33 +741,42 @@ mod test {
         //               [BBBBBBBBBBBBB][CCCCC]
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root.clone()).unwrap();
-        let listener = TestListener::default();
-        space.register_listener(Box::new(listener.clone())).unwrap();
+        let listener = Arc::new(Mutex::new(TestListener::default()));
+        space.register_listener(listener.clone()).unwrap();
 
         let region_b = Region::init_io_region(2000, default_ops.clone());
         region_b.set_priority(1);
         region_b.set_ioeventfds(&ioeventfds);
         let region_c = Region::init_io_region(2000, default_ops);
         region_c.set_ioeventfds(&ioeventfds);
-
         root.add_subregion(region_c, 2000).unwrap();
-        assert_eq!(listener.reqs.lock().unwrap().len(), 2);
+
+        assert_eq!(listener.lock().unwrap().reqs.lock().unwrap().len(), 2);
         assert_eq!(
-            listener.reqs.lock().unwrap().get(1).unwrap().1,
+            listener
+                .lock()
+                .unwrap()
+                .reqs
+                .lock()
+                .unwrap()
+                .get(1)
+                .unwrap()
+                .1,
             AddressRange::new(GuestAddress(2000), 4)
         );
-        listener.reqs.lock().unwrap().clear();
+        listener.lock().unwrap().reqs.lock().unwrap().clear();
 
         root.add_subregion(region_b, 1000).unwrap();
-        assert_eq!(listener.reqs.lock().unwrap().len(), 5);
+        let locked_listener = listener.lock().unwrap();
+        assert_eq!(locked_listener.reqs.lock().unwrap().len(), 5);
         // add ioeventfd of region_b
         assert_eq!(
-            listener.reqs.lock().unwrap().get(3).unwrap().1,
+            locked_listener.reqs.lock().unwrap().get(3).unwrap().1,
             AddressRange::new(GuestAddress(1000), 4)
         );
         // ioeventfd in region_c is shawdowed, delete it
         assert_eq!(
-            listener.reqs.lock().unwrap().get(4).unwrap().1,
+            locked_listener.reqs.lock().unwrap().get(4).unwrap().1,
             AddressRange::new(GuestAddress(2000), 4)
         );
     }
@@ -748,8 +803,8 @@ mod test {
         //                      [CCCCCC]
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root.clone()).unwrap();
-        let listener = TestListener::default();
-        space.register_listener(Box::new(listener.clone())).unwrap();
+        let listener = Arc::new(Mutex::new(TestListener::default()));
+        space.register_listener(listener.clone()).unwrap();
 
         let region_b = Region::init_container_region(5000);
         let region_c = Region::init_io_region(1000, default_ops);
@@ -758,9 +813,10 @@ mod test {
 
         root.add_subregion(region_b, 1000).unwrap();
 
-        assert!(listener.reqs.lock().unwrap().get(1).is_some());
+        let locked_listener = listener.lock().unwrap();
+        assert!(locked_listener.reqs.lock().unwrap().get(1).is_some());
         assert_eq!(
-            listener.reqs.lock().unwrap().get(1).unwrap().1,
+            locked_listener.reqs.lock().unwrap().get(1).unwrap().1,
             AddressRange::new(GuestAddress(2000), 4)
         );
     }

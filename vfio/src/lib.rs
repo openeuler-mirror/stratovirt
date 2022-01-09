@@ -54,7 +54,8 @@ use vfio_dev::VfioGroup;
 
 lazy_static! {
     static ref KVM_DEVICE_FD: Option<DeviceFd> = create_kvm_vfio_device();
-    static ref CONTAINERS: Mutex<HashMap<RawFd, Arc<VfioContainer>>> = Mutex::new(HashMap::new());
+    static ref CONTAINERS: Mutex<HashMap<RawFd, Arc<Mutex<VfioContainer>>>> =
+        Mutex::new(HashMap::new());
     static ref GROUPS: Mutex<HashMap<u32, Arc<VfioGroup>>> = Mutex::new(HashMap::new());
 }
 

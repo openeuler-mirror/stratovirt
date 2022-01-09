@@ -41,6 +41,17 @@ pub trait Listener: Send + Sync {
     /// Get priority.
     fn priority(&self) -> i32;
 
+    /// Is this listener enabled to call.
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    /// Enable listener for address space.
+    fn enable(&mut self) {}
+
+    /// Disable listener for address space.
+    fn disable(&mut self) {}
+
     /// Function that handle request according to request-type.
     ///
     /// # Arguments

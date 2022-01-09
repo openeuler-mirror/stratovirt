@@ -305,7 +305,7 @@ impl Listener for VfioContainer {
 pub struct VfioGroup {
     // `/dev/vfio/$group_id` file fd.
     group: File,
-    container: Weak<VfioContainer>,
+    container: Weak<Mutex<VfioContainer>>,
     devices: Arc<Mutex<HashMap<RawFd, Arc<VfioDevice>>>>,
 }
 
@@ -369,8 +369,8 @@ impl VfioGroup {
         Ok(())
     }
 
-    fn set_container(&mut self, container: &Arc<VfioContainer>) -> Result<()> {
-        let fd = &container.fd.as_raw_fd();
+    fn set_container(&mut self, container: &Arc<Mutex<VfioContainer>>) -> Result<()> {
+        let fd = &container.lock().unwrap().fd.as_raw_fd();
         // Safe as group is the owner of file, and we check the return.
         let ret = unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_SET_CONTAINER(), fd) };
         if ret < 0 {
@@ -386,7 +386,7 @@ impl VfioGroup {
 
     fn unset_container(&mut self) {
         let container = self.container.upgrade().unwrap();
-        let fd = container.fd.as_raw_fd();
+        let fd = container.lock().unwrap().fd.as_raw_fd();
         unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &fd) };
         self.container = Weak::new();
     }
@@ -401,17 +401,19 @@ impl VfioGroup {
 
         // No containers existed or can not be attached to the existed containers.
         if self.container.upgrade().is_none() {
-            let container = Arc::new(VfioContainer::new()?);
+            let container = Arc::new(Mutex::new(VfioContainer::new()?));
             self.set_container(&container)?;
-            container.set_iommu(vfio::VFIO_TYPE1v2_IOMMU)?;
-            CONTAINERS
+            container
                 .lock()
                 .unwrap()
-                .insert(container.fd.as_raw_fd(), container);
+                .set_iommu(vfio::VFIO_TYPE1v2_IOMMU)?;
+
+            let fd = container.lock().unwrap().fd.as_raw_fd();
+            CONTAINERS.lock().unwrap().insert(fd, container);
         }
         self.add_to_kvm_device()?;
         mem_as
-            .register_listener(Box::new(self.container.upgrade().unwrap().deref().clone()))
+            .register_listener(self.container.upgrade().unwrap())
             .chain_err(|| "Failed to register memory listener.")?;
         Ok(())
     }
@@ -428,7 +430,7 @@ pub struct VfioDevice {
     pub device: File,
     #[allow(dead_code)]
     group: Weak<VfioGroup>,
-    pub container: Weak<VfioContainer>,
+    pub container: Weak<Mutex<VfioContainer>>,
     pub dev_info: VfioDevInfo,
 }
 
@@ -516,6 +518,8 @@ impl VfioDevice {
         group
             .container
             .upgrade()
+            .unwrap()
+            .lock()
             .unwrap()
             .groups
             .lock()
