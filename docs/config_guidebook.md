@@ -44,7 +44,9 @@ and `threads` should be `1`.
 -smp [cpus=]n[,sockets=n,cores=1,threads=1]
 ```
 
-### 1.3 Memory Size
+### 1.3 Memory
+
+#### 1.3.1 Memory Size
 
 StratoVirt supports to set the size of VM's memory in cmdline.
 
@@ -59,6 +61,14 @@ Default VM memory size is 256M. The supported VM memory size is among [256M, 512
 -m 256m
 -m 256
 -m 1G
+```
+
+#### 1.3.2 Memory Prealloc
+Memory prealloc is supported by StratoVirt, users can use the following cmdline to configure 
+memory prealloc.
+
+```shell
+-mem-prealloc
 ```
 
 ### 1.4 Backend file of memory
