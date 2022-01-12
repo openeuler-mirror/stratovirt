@@ -33,9 +33,12 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MAC, VIRTIO_TYPE_NET,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 
 /// Number of virtqueues.
@@ -65,6 +68,136 @@ pub struct VirtioNetConfig {
 }
 
 impl ByteCode for VirtioNetConfig {}
+
+/// The control queue is used to verify the multi queue feature.
+pub struct CtrlVirtio {
+    queue: Arc<Mutex<Queue>>,
+    queue_evt: EventFd,
+}
+
+impl CtrlVirtio {
+    pub fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
+        Self { queue, queue_evt }
+    }
+}
+
+/// Handle the frontend and the backend control channel virtio queue events and data.
+pub struct NetCtrlHandler {
+    /// The control virtio queue.
+    pub ctrl: CtrlVirtio,
+    /// Memory space.
+    pub mem_space: Arc<AddressSpace>,
+    /// The interrupt call back function.
+    pub interrupt_cb: Arc<VirtioInterrupt>,
+    // Bit mask of features negotiated by the backend and the frontend.
+    pub driver_features: u64,
+}
+
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+struct CrtlHdr {
+    class: u8,
+    cmd: u8,
+}
+
+impl ByteCode for CrtlHdr {}
+
+impl NetCtrlHandler {
+    fn handle_ctrl(&mut self) -> Result<()> {
+        let elem = self
+            .ctrl
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .pop_avail(&self.mem_space, self.driver_features)
+            .chain_err(|| "Failed to pop avail ring for net control queue")?;
+
+        let mut used_len = 0;
+        if let Some(ctrl_desc) = elem.out_iovec.get(0) {
+            used_len += ctrl_desc.len;
+            let ctrl_hdr = self
+                .mem_space
+                .read_object::<CrtlHdr>(ctrl_desc.addr)
+                .chain_err(|| "Failed to get control queue descriptor")?;
+            match ctrl_hdr.class as u16 {
+                VIRTIO_NET_CTRL_MQ => {
+                    if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
+                        bail!(
+                            "Control queue header command can't match {}",
+                            VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
+                        );
+                    }
+                    if let Some(mq_desc) = elem.out_iovec.get(0) {
+                        used_len += mq_desc.len;
+                        let queue_pairs = self
+                            .mem_space
+                            .read_object::<u16>(mq_desc.addr)
+                            .chain_err(|| "Failed to read multi queue descriptor")?;
+                        if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                            .contains(&queue_pairs)
+                        {
+                            bail!("Invalid queue pairs {}", queue_pairs);
+                        }
+                    }
+                }
+                _ => {
+                    bail!(
+                        "Control queue header class can't match {}",
+                        VIRTIO_NET_CTRL_MQ
+                    );
+                }
+            }
+        }
+        if let Some(status) = elem.in_iovec.get(0) {
+            used_len += status.len;
+            let data = VIRTIO_NET_OK;
+            self.mem_space.write_object::<u8>(&data, status.addr)?;
+        }
+
+        self.ctrl
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .add_used(&self.mem_space, elem.index, used_len)
+            .chain_err(|| format!("Failed to add used ring {}", elem.index))?;
+
+        (self.interrupt_cb)(
+            &VirtioInterruptType::Vring,
+            Some(&self.ctrl.queue.lock().unwrap()),
+        )
+        .chain_err(|| ErrorKind::InterruptTrigger("ctrl", VirtioInterruptType::Vring))?;
+
+        Ok(())
+    }
+}
+
+impl EventNotifierHelper for NetCtrlHandler {
+    fn internal_notifiers(net_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let locked_net_io = net_io.lock().unwrap();
+        let cloned_net_io = net_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            cloned_net_io
+                .lock()
+                .unwrap()
+                .handle_ctrl()
+                .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
+            None
+        });
+        let mut notifiers = Vec::new();
+        let ctrl_fd = locked_net_io.ctrl.queue_evt.as_raw_fd();
+        notifiers.push(build_event_notifier(
+            ctrl_fd,
+            Some(handler),
+            NotifierOperation::AddShared,
+            EventSet::IN,
+        ));
+
+        notifiers
+    }
+}
 
 struct TxVirtio {
     queue: Arc<Mutex<Queue>>,
