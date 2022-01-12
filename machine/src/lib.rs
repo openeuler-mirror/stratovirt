@@ -688,7 +688,8 @@ pub trait MachineOps {
             let cfg_args = dev.1.as_str();
             // Check whether the device id exists to ensure device uniqueness.
             let id = parse_device_id(cfg_args)?;
-            self.check_device_id_existed(&id)?;
+            self.check_device_id_existed(&id)
+                .chain_err(|| format!("Failed to check device id: config {}", cfg_args))?;
             match dev.0.as_str() {
                 "virtio-blk-device" => {
                     self.add_virtio_mmio_block(vm_config, cfg_args)?;
