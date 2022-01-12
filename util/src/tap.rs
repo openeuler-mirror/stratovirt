@@ -25,11 +25,13 @@ pub const TUN_F_UFO: u32 = 16;
 pub const TUN_F_VIRTIO: u32 = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 | TUN_F_UFO;
 
 const IFF_TAP: u16 = 0x02;
+pub const IFF_MULTI_QUEUE: u16 = 0x100;
 const IFF_NO_PI: u16 = 0x1000;
 const IFF_VNET_HDR: u16 = 0x4000;
 const TUNTAP_PATH: &str = "/dev/net/tun";
 
 ioctl_iow_nr!(TUNSETIFF, 84, 202, ::std::os::raw::c_int);
+ioctl_ior_nr!(TUNGETFEATURES, 84, 207, ::std::os::raw::c_uint);
 ioctl_iow_nr!(TUNSETOFFLOAD, 84, 208, ::std::os::raw::c_int);
 ioctl_iow_nr!(TUNSETVNETHDRSZ, 84, 216, ::std::os::raw::c_int);
 
@@ -44,7 +46,7 @@ pub struct Tap {
 }
 
 impl Tap {
-    pub fn new(name: Option<&str>, fd: Option<RawFd>) -> Result<Self> {
+    pub fn new(name: Option<&str>, fd: Option<RawFd>, queue_pairs: u16) -> Result<Self> {
         let file;
 
         if let Some(name) = name {
@@ -61,6 +63,10 @@ impl Tap {
                 ifr_flags: IFF_TAP | IFF_NO_PI | IFF_VNET_HDR,
             };
 
+            if queue_pairs > 1 {
+                if_req.ifr_flags |= IFF_MULTI_QUEUE;
+            }
+
             let file_ = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -68,7 +74,14 @@ impl Tap {
                 .open(TUNTAP_PATH)
                 .chain_err(|| format!("Open {} failed.", TUNTAP_PATH))?;
 
-            unsafe { ioctl_with_mut_ref(&file_, TUNSETIFF(), &mut if_req) };
+            let ret = unsafe { ioctl_with_mut_ref(&file_, TUNSETIFF(), &mut if_req) };
+            if ret < 0 {
+                return Err(format!(
+                    "Failed to set tap ifr flags, error is {}",
+                    std::io::Error::last_os_error()
+                )
+                .into());
+            }
 
             file = file_;
         } else if let Some(fd) = fd {
@@ -77,7 +90,28 @@ impl Tap {
                 File::from_raw_fd(fd)
             };
         } else {
-            return Err("Open tap failed, unsupported operation.".into());
+            return Err(format!(
+                "Open tap failed, unsupported operation, error is {}",
+                std::io::Error::last_os_error()
+            )
+            .into());
+        }
+
+        let mut features = 0;
+        let ret = unsafe { ioctl_with_mut_ref(&file, TUNGETFEATURES(), &mut features) };
+        if ret < 0 {
+            return Err(format!(
+                "Failed to get tap features, error is {}.",
+                std::io::Error::last_os_error()
+            )
+            .into());
+        }
+
+        if (features & IFF_MULTI_QUEUE == 0) && queue_pairs > 1 {
+            bail!(
+                "Tap device doesn't support mq, but command set queue pairs {}.",
+                queue_pairs
+            );
         }
 
         Ok(Tap { file })
@@ -111,5 +145,13 @@ impl Tap {
 
     pub fn as_raw_fd(&self) -> RawFd {
         self.file.as_raw_fd()
+    }
+}
+
+impl Clone for Tap {
+    fn clone(&self) -> Self {
+        Tap {
+            file: self.file.try_clone().unwrap(),
+        }
     }
 }
