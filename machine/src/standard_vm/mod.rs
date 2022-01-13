@@ -776,26 +776,19 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn blockdev_add(
-        &self,
-        node_name: String,
-        file: qmp_schema::FileOptions,
-        cache: Option<qmp_schema::CacheOptions>,
-        read_only: Option<bool>,
-        iops: Option<u64>,
-    ) -> Response {
-        let read_only = read_only.unwrap_or(false);
-        let direct = if let Some(cache) = cache {
+    fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
+        let read_only = args.read_only.unwrap_or(false);
+        let direct = if let Some(cache) = args.cache {
             cache.direct.unwrap_or(true)
         } else {
             true
         };
         let config = DriveConfig {
-            id: node_name,
-            path_on_host: file.filename,
+            id: args.node_name,
+            path_on_host: args.file.filename,
             read_only,
             direct,
-            iops,
+            iops: args.iops,
         };
 
         if let Err(e) = config.check() {
@@ -840,16 +833,8 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn netdev_add(
-        &mut self,
-        id: String,
-        if_name: Option<String>,
-        fds: Option<String>,
-        _net_type: Option<String>,
-        vhost: Option<String>,
-        vhost_fd: Option<String>,
-    ) -> Response {
-        let config = match get_netdev_config(id, if_name, fds, vhost, vhost_fd) {
+    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
+        let config = match get_netdev_config(args) {
             Ok(conf) => conf,
             Err(e) => {
                 return Response::create_error_response(

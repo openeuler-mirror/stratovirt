@@ -453,12 +453,12 @@ fn qmp_command_exec(
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
-        (blockdev_add, blockdev_add, node_name, file, cache, read_only, iops),
         (blockdev_del, blockdev_del, node_name),
-        (netdev_add, netdev_add, id, if_name, fds, net_type, vhost, vhostfds),
         (balloon, balloon, value),
         (migrate, migrate, uri);
-        (device_add, device_add)
+        (device_add, device_add),
+        (blockdev_add, blockdev_add),
+        (netdev_add, netdev_add)
     );
 
     // Handle the Qmp command which macro can't cover

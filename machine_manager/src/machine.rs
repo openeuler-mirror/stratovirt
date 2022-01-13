@@ -19,9 +19,9 @@ use once_cell::sync::Lazy;
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    CacheOptions, ChardevInfo, Cmd, CmdLine, DeviceAddArgument, DeviceProps, Events, FileOptions,
-    GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, PropList, QmpCommand,
-    QmpEvent, Target, TypeLists,
+    BlockDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument, DeviceProps, Events, GicCap,
+    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList,
+    QmpCommand, QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -158,28 +158,13 @@ pub trait DeviceInterface {
     fn device_del(&mut self, device_id: String) -> Response;
 
     /// Creates a new block device.
-    fn blockdev_add(
-        &self,
-        node_name: String,
-        file: FileOptions,
-        cache: Option<CacheOptions>,
-        read_only: Option<bool>,
-        iops: Option<u64>,
-    ) -> Response;
+    fn blockdev_add(&self, args: Box<BlockDevAddArgument>) -> Response;
 
     /// Delete a block device.
     fn blockdev_del(&self, node_name: String) -> Response;
 
     /// Create a new network device.
-    fn netdev_add(
-        &mut self,
-        id: String,
-        if_name: Option<String>,
-        fds: Option<String>,
-        net_type: Option<String>,
-        vhost: Option<String>,
-        vhost_fd: Option<String>,
-    ) -> Response;
+    fn netdev_add(&mut self, args: Box<NetDevAddArgument>) -> Response;
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;

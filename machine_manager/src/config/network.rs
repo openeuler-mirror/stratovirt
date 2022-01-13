@@ -20,6 +20,7 @@ use super::{
     pci_args_check,
 };
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_STRING_LENGTH};
+use crate::qmp::qmp_schema;
 
 const MAC_ADDRESS_LENGTH: usize = 17;
 
@@ -215,22 +216,16 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     Ok(netdevinterfacecfg)
 }
 
-pub fn get_netdev_config(
-    id: String,
-    if_name: Option<String>,
-    fd: Option<String>,
-    vhost: Option<String>,
-    vhost_fd: Option<String>,
-) -> Result<NetDevcfg> {
+pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<NetDevcfg> {
     let mut config = NetDevcfg {
-        id,
+        id: args.id,
         tap_fd: None,
         vhost_type: None,
         vhost_fd: None,
-        ifname: if_name.unwrap_or_else(String::new),
+        ifname: args.if_name.unwrap_or_else(String::new),
     };
 
-    if let Some(fd) = fd {
+    if let Some(fd) = args.fds {
         match fd.parse::<i32>() {
             Ok(fd) => config.tap_fd = Some(fd),
             Err(_e) => {
@@ -238,7 +233,7 @@ pub fn get_netdev_config(
             }
         };
     }
-    if let Some(vhost) = vhost {
+    if let Some(vhost) = args.vhost {
         match vhost.parse::<ExBool>() {
             Ok(vhost) => {
                 if vhost.into() {
@@ -250,7 +245,7 @@ pub fn get_netdev_config(
             }
         };
     }
-    if let Some(vhostfd) = vhost_fd {
+    if let Some(vhostfd) = args.vhostfds {
         match vhostfd.parse::<i32>() {
             Ok(fd) => config.vhost_fd = Some(fd),
             Err(_e) => {
