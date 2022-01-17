@@ -107,6 +107,10 @@ class ParserConfig(Singleton):
         self.netmasklen = self.get_option("network.params", "NETMASK_LEN", "24")
         self.netmask = self.get_option("network.params", "NETMASK", "255.255.255.0")
 
+        # parser katacontainer params
+        self.kata_config_path = self.get_option("katacontainer.params", "KATA_CONFIG_PATH",
+                                                "/usr/share/defaults/kata-containers")
+
     def init_vmconfig_files(self):
         """
         Init vmconfig files(self.vmconfigs) as follow:
