@@ -264,42 +264,252 @@ impl VhostUserClient {
 
 impl VhostOps for VhostUserClient {
     fn set_owner(&self) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::SetOwner as u32, 0, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .chain_err(|| "Failed to send msg for setting owner")?;
+
         Ok(())
     }
 
     fn get_features(&self) -> Result<u64> {
-        Ok(0)
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::GetFeatures as u32;
+        let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .chain_err(|| "Failed to send msg for getting features")?;
+        let features = client
+            .wait_ack_msg::<u64>(request)
+            .chain_err(|| "Failed to wait ack msg for getting features")?;
+
+        Ok(features)
     }
 
     fn set_features(&self, features: u64) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetFeatures as u32,
+            0,
+            size_of::<u64>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&features), payload_opt, &[])
+            .chain_err(|| "Failed to send msg for setting features")?;
+
         Ok(())
     }
 
     fn set_mem_table(&self) -> Result<()> {
+        let mem_regions = self.mem_info.regions.lock().unwrap();
+        if mem_regions.is_empty() {
+            bail!("Failed to initial vhost user memory map, consider using command mem-share=on");
+        }
+
+        let num_region = mem_regions.len();
+        let mut fds = Vec::with_capacity(num_region);
+        let mut memcontext = VhostUserMemContext::default();
+        for region_info in mem_regions.iter() {
+            memcontext.region_add(region_info.region);
+            fds.push(region_info.file_back.file.as_raw_fd());
+        }
+
+        let client = self.client.lock().unwrap();
+        let len = size_of::<VhostUserMemHdr>() + num_region * size_of::<RegionMemInfo>();
+        let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::SetMemTable as u32, 0, len as u32);
+        let memhdr = VhostUserMemHdr::new(num_region as u32, 0);
+        client
+            .sock
+            .send_msg(
+                Some(&hdr),
+                Some(&memhdr),
+                Some(memcontext.regions.as_slice()),
+                &fds,
+            )
+            .chain_err(|| "Failed to send msg for setting mem table")?;
+
         Ok(())
     }
 
     fn set_vring_num(&self, queue_idx: usize, num: u16) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        if queue_idx as u64 > client.max_queue_num {
+            bail!(
+                "The queue index {} is invaild {} for setting vring num",
+                queue_idx,
+                client.max_queue_num
+            );
+        }
+
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetVringNum as u32,
+            0,
+            size_of::<VhostUserVringState>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        let vring_state = VhostUserVringState::new(queue_idx as u32, num as u32);
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
+            .chain_err(|| "Failed to send msg for setting vring num")?;
+
         Ok(())
     }
 
     fn set_vring_addr(&self, queue: &QueueConfig, index: usize, flags: u32) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetVringAddr as u32,
+            0,
+            size_of::<VhostUserVringAddr>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        let desc_user_addr = self
+            .mem_info
+            .addr_to_host(queue.desc_table)
+            .ok_or_else(|| {
+                ErrorKind::Msg(format!(
+                    "Failed to transform desc-table address {}",
+                    queue.desc_table.0
+                ))
+            })?;
+
+        let used_user_addr = self.mem_info.addr_to_host(queue.used_ring).ok_or_else(|| {
+            ErrorKind::Msg(format!(
+                "Failed to transform used ring address {}",
+                queue.used_ring.0
+            ))
+        })?;
+
+        let avail_user_addr = self
+            .mem_info
+            .addr_to_host(queue.avail_ring)
+            .ok_or_else(|| {
+                ErrorKind::Msg(format!(
+                    "Failed to transform avail ring address {}",
+                    queue.avail_ring.0
+                ))
+            })?;
+        let vring_addr = VhostUserVringAddr {
+            index: index as u32,
+            flags,
+            desc_user_addr,
+            used_user_addr,
+            avail_user_addr,
+            log_guest_addr: 0_u64,
+        };
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&vring_addr), payload_opt, &[])
+            .chain_err(|| "Failed to send msg for setting vring addr")?;
+
         Ok(())
     }
 
     fn set_vring_base(&self, queue_idx: usize, last_avail_idx: u16) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        if queue_idx as u64 > client.max_queue_num {
+            bail!(
+                "The queue index {} is invalid {} for setting vring base",
+                queue_idx,
+                client.max_queue_num
+            );
+        }
+
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetVringBase as u32,
+            0,
+            size_of::<VhostUserVringState>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        let vring_state = VhostUserVringState::new(queue_idx as u32, last_avail_idx as u32);
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
+            .chain_err(|| "Failed to send msg for setting vring base")?;
+
         Ok(())
     }
 
     fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        if queue_idx as u64 > client.max_queue_num {
+            bail!(
+                "The queue index {} is invalid {} for setting vring call",
+                queue_idx,
+                client.max_queue_num
+            );
+        }
+
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetVringCall as u32,
+            0,
+            size_of::<usize>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&queue_idx), payload_opt, &[fd.as_raw_fd()])
+            .chain_err(|| "Failed to send msg for setting vring call")?;
+
         Ok(())
     }
 
     fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        if queue_idx as u64 > client.max_queue_num {
+            bail!(
+                "The queue index {} is invaild {} for setting vring kick",
+                queue_idx,
+                client.max_queue_num
+            );
+        }
+
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetVringKick as u32,
+            0,
+            size_of::<usize>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&queue_idx), payload_opt, &[fd.as_raw_fd()])
+            .chain_err(|| "Failed to send msg for setting vring kick")?;
+
         Ok(())
     }
 
     fn set_vring_enable(&self, queue_idx: usize, status: bool) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        if queue_idx as u64 > client.max_queue_num {
+            bail!(
+                "The queue index {} is invaild {} for setting vring enable",
+                queue_idx,
+                client.max_queue_num
+            );
+        }
+
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetVringEnable as u32,
+            0,
+            size_of::<VhostUserVringState>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        let vring_state = VhostUserVringState::new(queue_idx as u32, status as u32);
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
+            .chain_err(|| "Failed to send msg for setting vring enable")?;
+
         Ok(())
     }
 
