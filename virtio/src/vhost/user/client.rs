@@ -102,6 +102,128 @@ impl EventNotifierHelper for ClientInternal {
     }
 }
 
+#[derive(Clone)]
+struct RegionInfo {
+    region: RegionMemInfo,
+    file_back: FileBackend,
+}
+
+#[derive(Clone)]
+struct VhostUserMemInfo {
+    regions: Arc<Mutex<Vec<RegionInfo>>>,
+}
+
+#[allow(dead_code)]
+impl VhostUserMemInfo {
+    fn new() -> Self {
+        VhostUserMemInfo {
+            regions: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn addr_to_host(&self, addr: GuestAddress) -> Option<u64> {
+        let addr = addr.raw_value();
+        for reg_info in self.regions.lock().unwrap().iter() {
+            if addr >= reg_info.region.guest_phys_addr
+                && addr < reg_info.region.guest_phys_addr + reg_info.region.memory_size
+            {
+                let offset = addr - reg_info.region.guest_phys_addr;
+                return Some(reg_info.region.userspace_addr + offset);
+            }
+        }
+        None
+    }
+
+    fn add_mem_range(&self, fr: &FlatRange) -> address_space::errors::Result<()> {
+        if fr.owner.region_type() != address_space::RegionType::Ram {
+            return Ok(());
+        }
+
+        let guest_phys_addr = fr.addr_range.base.raw_value();
+        let memory_size = fr.addr_range.size;
+        let host_address = match fr.owner.get_host_address() {
+            Some(addr) => addr,
+            None => bail!("Failed to get host address to add mem range for vhost user device"),
+        };
+        let file_back = match fr.owner.get_file_backend() {
+            Some(file_back_) => file_back_,
+            _ => {
+                info!("It is not share memory for vhost user device");
+                return Ok(());
+            }
+        };
+
+        let region = RegionMemInfo {
+            guest_phys_addr,
+            memory_size,
+            userspace_addr: host_address + fr.offset_in_region,
+            mmap_offset: file_back.offset + fr.offset_in_region,
+        };
+        let region_info = RegionInfo { region, file_back };
+        self.regions.lock().unwrap().push(region_info);
+
+        Ok(())
+    }
+
+    fn delete_mem_range(&self, fr: &FlatRange) -> address_space::errors::Result<()> {
+        if fr.owner.region_type() != address_space::RegionType::Ram {
+            return Ok(());
+        }
+
+        let file_back = fr.owner.get_file_backend().unwrap();
+        let mut mem_regions = self.regions.lock().unwrap();
+        let host_address = match fr.owner.get_host_address() {
+            Some(addr) => addr,
+            None => bail!("Failed to get host address to del mem range for vhost user device"),
+        };
+        let target = RegionMemInfo {
+            guest_phys_addr: fr.addr_range.base.raw_value(),
+            memory_size: fr.addr_range.size,
+            userspace_addr: host_address + fr.offset_in_region,
+            mmap_offset: file_back.offset + fr.offset_in_region,
+        };
+
+        for (index, region_info) in mem_regions.iter().enumerate() {
+            let mr = &region_info.region;
+            if *mr == target && region_info.file_back.file.as_raw_fd() == file_back.file.as_raw_fd()
+            {
+                mem_regions.remove(index);
+                return Ok(());
+            }
+        }
+        warn!(
+            "Vhost user: deleting mem region {:?} failed: not matched",
+            target
+        );
+
+        Ok(())
+    }
+}
+
+impl Listener for VhostUserMemInfo {
+    fn priority(&self) -> i32 {
+        0
+    }
+
+    fn handle_request(
+        &self,
+        range: Option<&FlatRange>,
+        _evtfd: Option<&RegionIoEventFd>,
+        req_type: ListenerReqType,
+    ) -> std::result::Result<(), address_space::errors::Error> {
+        match req_type {
+            ListenerReqType::AddRegion => {
+                self.add_mem_range(range.unwrap())?;
+            }
+            ListenerReqType::DeleteRegion => {
+                self.delete_mem_range(range.unwrap())?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 /// Struct for communication with the vhost user backend in userspace
 #[derive(Clone)]
 pub struct VhostUserClient {
