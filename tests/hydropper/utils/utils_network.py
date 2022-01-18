@@ -13,6 +13,7 @@
 
 import random
 import socket
+from subprocess import CalledProcessError
 from subprocess import run
 
 def generate_random_name():
@@ -40,7 +41,7 @@ def generate_random_mac():
                       shell=True, capture_output=True, check=False).stdout.strip()
         first_mac = hostmac.split(":")[0]
         second_mac, third_mac, fourth_mac = hostmac.split(":")[1:3]
-    except (TypeError, KeyError, IndexError):
+    except (TypeError, KeyError, IndexError, CalledProcessError):
         first_mac, second_mac, third_mac = "00", "00", "00"
         fourth_mac = hex(random.randint(0x00, 0xff))[2:].zfill(2)
 
