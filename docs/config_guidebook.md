@@ -501,6 +501,17 @@ One property can be set:
 -trace events=<file>
 ```
 
+### 2.14 Global config
+Users can set the global configuration using the -global parameter.
+
+One property can be set:
+
+* pcie-root-port.fast-unplug: the fast unplug feature switch, only Kata is supported.
+
+```shell
+-global pcie-root-port.fast-unplug=1
+```
+
 ## 3. StratoVirt Management
 
 StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)

@@ -363,6 +363,15 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("specify the file lists trace events to enable")
             .takes_value(true),
         )
+        .arg(
+            Arg::with_name("global")
+            .multiple(true)
+            .long("global")
+            .value_name("[key=value]")
+            .help("set global config")
+            .takes_values(true)
+            .required(false),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -409,6 +418,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_netdev);
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_chardev);
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_devices);
+    add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
 
     if let Some(s) = args.value_of("trace") {

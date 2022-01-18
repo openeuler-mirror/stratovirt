@@ -128,6 +128,7 @@ use machine_manager::config::{
     get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id, parse_net,
     parse_rng_dev, parse_root_port, parse_vfio, parse_virtconsole, parse_virtio_serial,
     parse_vsock, MachineMemConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
+    FAST_UNPLUG_ON,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -658,6 +659,21 @@ pub trait MachineOps {
                 .chain_err(|| "Failed to reset bus"),
             None => bail!("Failed to found device"),
         }
+    }
+
+    /// Init vm global config.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM Configuration.
+    fn init_global_config(&mut self, vm_config: &mut VmConfig) -> Result<()> {
+        let fast_unplug = vm_config
+            .global_config
+            .get("pcie-root-port.fast-unplug")
+            .map_or(false, |val| val == FAST_UNPLUG_ON);
+
+        RootPort::set_fast_unplug_feature(fast_unplug);
+        Ok(())
     }
 
     /// Add peripheral devices.
