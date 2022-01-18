@@ -11,4 +11,5 @@
 // See the Mulan PSL v2 for more details.
 
 mod client;
+mod message;
 mod sock;

@@ -139,3 +139,53 @@ impl VhostUserClient {
         Ok(())
     }
 }
+
+impl VhostOps for VhostUserClient {
+    fn set_owner(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_features(&self) -> Result<u64> {
+        Ok(0)
+    }
+
+    fn set_features(&self, features: u64) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_mem_table(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_vring_num(&self, queue_idx: usize, num: u16) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_vring_addr(&self, queue: &QueueConfig, index: usize, flags: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_vring_base(&self, queue_idx: usize, last_avail_idx: u16) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_vring_enable(&self, queue_idx: usize, status: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn reset_owner(&self) -> Result<()> {
+        bail!("Does not support for resetting owner")
+    }
+
+    fn get_vring_base(&self, _queue_idx: usize) -> Result<u16> {
+        bail!("Does not support for getting vring base")
+    }
+}
