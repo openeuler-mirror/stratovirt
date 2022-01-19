@@ -11,14 +11,12 @@
 // See the Mulan PSL v2 for more details.
 
 use std::mem::size_of;
-use std::ops::Add;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
-use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use pci::config::{
     RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
@@ -991,15 +989,6 @@ impl PciDevOps for VirtioPciDevice {
 
         let bus = self.parent_bus.upgrade().unwrap();
         self.config.unregister_bars(&bus)?;
-
-        // QMP send device removal event
-        if QmpChannel::is_connected() {
-            let device_del = schema::DeviceDeleted {
-                device: Some(self.name.clone()),
-                path: "/machine/peripheral/".to_string().add(&self.name),
-            };
-            event!(DeviceDeleted; device_del);
-        }
         Ok(())
     }
 
