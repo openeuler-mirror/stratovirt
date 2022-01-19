@@ -65,7 +65,7 @@ struct ConsoleHandler {
     input_queue: Arc<Mutex<Queue>>,
     output_queue: Arc<Mutex<Queue>>,
     output_queue_evt: EventFd,
-    reset_evt: RawFd,
+    deactivate_evt: RawFd,
     mem_space: Arc<AddressSpace>,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
@@ -203,12 +203,12 @@ impl ConsoleHandler {
         }
     }
 
-    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+    fn deactivate_evt_handler(&self) -> Vec<EventNotifier> {
         let locked_chardev = self.chardev.lock().unwrap();
         let mut notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.reset_evt,
+                self.deactivate_evt,
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -271,11 +271,11 @@ impl EventNotifierHelper for ConsoleHandler {
         let cloned_cls = console_handler.clone();
         let handler = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            Some(cloned_cls.lock().unwrap().reset_evt_handler())
+            Some(cloned_cls.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            console_handler.lock().unwrap().reset_evt,
+            console_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],
@@ -302,8 +302,8 @@ pub struct VirtioConsoleState {
 pub struct Console {
     /// Status of console device.
     state: VirtioConsoleState,
-    /// EventFd for device reset.
-    reset_evt: EventFd,
+    /// EventFd for device deactivate.
+    deactivate_evt: EventFd,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
 }
@@ -321,7 +321,7 @@ impl Console {
                 driver_features: 0_u64,
                 config_space: VirtioConsoleConfig::new(),
             },
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             chardev: Arc::new(Mutex::new(Chardev::new(console_cfg.chardev))),
         }
     }
@@ -408,7 +408,7 @@ impl VirtioDevice for Console {
             mem_space,
             interrupt_cb,
             driver_features: self.state.driver_features,
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             chardev: self.chardev.clone(),
         };
 
@@ -423,8 +423,8 @@ impl VirtioDevice for Console {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        self.reset_evt
+    fn deactivate(&mut self) -> Result<()> {
+        self.deactivate_evt
             .write(1)
             .chain_err(|| ErrorKind::EventFdWrite)
     }

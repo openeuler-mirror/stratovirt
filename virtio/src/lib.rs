@@ -287,12 +287,18 @@ pub trait VirtioDevice: Send {
         queue_evts: Vec<EventFd>,
     ) -> Result<()>;
 
-    /// Reset virtio device.
-    fn reset(&mut self) -> Result<()> {
+    /// Deactivate virtio device, this function remove event fd
+    /// of device out of the event loop.
+    fn deactivate(&mut self) -> Result<()> {
         bail!(
             "Reset this device is not supported, virtio dev type is {}",
             self.device_type()
         );
+    }
+
+    /// Reset virtio device.
+    fn reset(&mut self) -> Result<()> {
+        Ok(())
     }
 
     /// Update the low level config of MMIO device,

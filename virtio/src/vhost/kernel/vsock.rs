@@ -93,8 +93,8 @@ pub struct Vsock {
     event_queue: Option<Arc<Mutex<Queue>>>,
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    /// EventFd for device reset.
-    reset_evt: EventFd,
+    /// EventFd for device deactivate.
+    deactivate_evt: EventFd,
 }
 
 impl Vsock {
@@ -106,7 +106,7 @@ impl Vsock {
             mem_space: mem_space.clone(),
             event_queue: None,
             interrupt_cb: None,
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -297,7 +297,7 @@ impl VirtioDevice for Vsock {
         let handler = VhostIoHandler {
             interrupt_cb,
             host_notifies,
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
@@ -308,13 +308,13 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
+    fn deactivate(&mut self) -> Result<()> {
         if let Some(backend) = &self.backend {
             backend
                 .reset_owner()
                 .chain_err(|| "Failed to reset owner for vhost-vsock")?;
 
-            self.reset_evt
+            self.deactivate_evt
                 .write(1)
                 .chain_err(|| ErrorKind::EventFdWrite)?;
         } else {

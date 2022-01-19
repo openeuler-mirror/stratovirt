@@ -54,7 +54,7 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
 struct RngHandler {
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    reset_evt: RawFd,
+    deactivate_evt: RawFd,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
@@ -129,11 +129,11 @@ impl RngHandler {
         Ok(())
     }
 
-    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+    fn deactivate_evt_handler(&self) -> Vec<EventNotifier> {
         let mut notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.reset_evt,
+                self.deactivate_evt,
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -186,15 +186,15 @@ impl EventNotifierHelper for RngHandler {
             vec![Arc::new(Mutex::new(handler))],
         ));
 
-        // Register event notifier for reset_evt
+        // Register event notifier for deactivate_evt
         let rng_handler_clone = rng_handler.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            Some(rng_handler_clone.lock().unwrap().reset_evt_handler())
+            Some(rng_handler_clone.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            rng_handler.lock().unwrap().reset_evt,
+            rng_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],
@@ -252,8 +252,8 @@ pub struct Rng {
     random_file: Option<File>,
     /// The state of Rng device.
     state: RngState,
-    /// Eventfd for device reset
-    reset_evt: EventFd,
+    /// Eventfd for device deactivate
+    deactivate_evt: EventFd,
 }
 
 impl Rng {
@@ -265,7 +265,7 @@ impl Rng {
                 device_features: 0,
                 driver_features: 0,
             },
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -361,7 +361,7 @@ impl VirtioDevice for Rng {
         let handler = RngHandler {
             queue: queues[0].clone(),
             queue_evt: queue_evts.remove(0),
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             interrupt_cb,
             driver_features: self.state.driver_features,
             mem_space,
@@ -382,8 +382,8 @@ impl VirtioDevice for Rng {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        self.reset_evt
+    fn deactivate(&mut self) -> Result<()> {
+        self.deactivate_evt
             .write(1)
             .chain_err(|| ErrorKind::EventFdWrite)
     }
@@ -601,7 +601,7 @@ mod tests {
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            reset_evt: reset_event.as_raw_fd(),
+            deactivate_evt: reset_event.as_raw_fd(),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
@@ -684,7 +684,7 @@ mod tests {
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            reset_evt: reset_event.as_raw_fd(),
+            deactivate_evt: reset_event.as_raw_fd(),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
