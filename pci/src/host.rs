@@ -24,6 +24,7 @@ use acpi::{
     AmlToUuid,
 };
 use address_space::{AddressSpace, GuestAddress, RegionOps};
+use error_chain::ChainedError;
 use sysbus::SysBusDevOps;
 
 use crate::{bus::PciBus, PciDevOps};

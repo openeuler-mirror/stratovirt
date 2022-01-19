@@ -954,6 +954,14 @@ impl PciDevOps for VfioPciDevice {
     fn name(&self) -> String {
         self.name.clone()
     }
+
+    fn reset(&mut self, _reset_child_device: bool) -> PciResult<()> {
+        use pci::errors::ResultExt as PciResultExt;
+
+        PciResultExt::chain_err(self.vfio_device.lock().unwrap().reset(), || {
+            "Fail to reset vfio dev"
+        })
+    }
 }
 
 fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute]) -> Vec<RawFd> {

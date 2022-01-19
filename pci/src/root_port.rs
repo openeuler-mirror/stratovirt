@@ -383,24 +383,32 @@ impl PciDevOps for RootPort {
     }
 
     /// Only set slot status to on, and no other device reset actions are implemented.
-    fn reset(&mut self) -> Result<()> {
-        let cap_offset = self.config.ext_cap_offset;
-        le_write_u16(
-            &mut self.config.config,
-            (cap_offset + PCI_EXP_SLTSTA) as usize,
-            PCI_EXP_SLTSTA_PDS,
-        )?;
-        le_write_u16(
-            &mut self.config.config,
-            (cap_offset + PCI_EXP_SLTCTL) as usize,
-            !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
-        )?;
-        le_write_u16(
-            &mut self.config.config,
-            (cap_offset + PCI_EXP_LNKSTA) as usize,
-            PCI_EXP_LNKSTA_DLLLA,
-        )?;
-        Ok(())
+    fn reset(&mut self, reset_child_device: bool) -> Result<()> {
+        if reset_child_device {
+            self.sec_bus
+                .lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Fail to reset sec_bus in root port")
+        } else {
+            let cap_offset = self.config.ext_cap_offset;
+            le_write_u16(
+                &mut self.config.config,
+                (cap_offset + PCI_EXP_SLTSTA) as usize,
+                PCI_EXP_SLTSTA_PDS,
+            )?;
+            le_write_u16(
+                &mut self.config.config,
+                (cap_offset + PCI_EXP_SLTCTL) as usize,
+                !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
+            )?;
+            le_write_u16(
+                &mut self.config.config,
+                (cap_offset + PCI_EXP_LNKSTA) as usize,
+                PCI_EXP_LNKSTA_DLLLA,
+            )?;
+            Ok(())
+        }
     }
 }
 

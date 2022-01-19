@@ -654,7 +654,7 @@ pub trait MachineOps {
             Some(dev) => dev
                 .lock()
                 .unwrap()
-                .reset()
+                .reset(false)
                 .chain_err(|| "Failed to reset bus"),
             None => bail!("Failed to found device"),
         }
