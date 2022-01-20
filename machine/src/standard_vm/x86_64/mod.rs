@@ -45,7 +45,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::{SysBus, SysBusDevOps};
+use sysbus::SysBus;
 use syscall::syscall_whitelist;
 use util::byte_code::ByteCode;
 use util::loop_context::EventLoopManager;
@@ -166,7 +166,7 @@ impl StdMachine {
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
         use crate::errors::ResultExt as MachineResultExt;
 
-        let locked_vm = vm.lock().unwrap();
+        let mut locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             MachineResultExt::chain_err(cpu.kick(), || {
@@ -176,13 +176,11 @@ impl StdMachine {
             cpu.set_to_boot_state();
         }
 
-        for dev in locked_vm.sysbus.devices.iter() {
-            MachineResultExt::chain_err(dev.lock().unwrap().reset(), || {
-                "Fail to reset sysbus device"
-            })?;
-        }
-        MachineResultExt::chain_err(locked_vm.pci_host.lock().unwrap().reset(), || {
-            "Fail to reset pci host"
+        MachineResultExt::chain_err(locked_vm.reset_all_devices(), || {
+            "Fail to reset all devices"
+        })?;
+        MachineResultExt::chain_err(locked_vm.reset_fwcfg_boot_order(), || {
+            "Fail to update boot order imformation to FwCfg device"
         })?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
