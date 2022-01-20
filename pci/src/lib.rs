@@ -52,7 +52,7 @@ pub use root_port::RootPort;
 
 use std::{
     mem::size_of,
-    sync::{Mutex, Weak},
+    sync::{Arc, Mutex, Weak},
 };
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -200,6 +200,51 @@ pub trait PciDevOps: Send {
 
     /// Get device devfn
     fn devfn(&self) -> Option<u8> {
+        None
+    }
+
+    /// Get the path of the PCI bus where the device resides.
+    fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<PciBus>>) -> String {
+        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_dev_path = if locked_parent_bus.name.eq("pcie.0") {
+            String::from("/pci@ffffffffffffffff")
+        } else {
+            // This else branch will not be executed currently,
+            // which is mainly to be compatible with new PCI bridge devices.
+            // unwrap is safe because pci bus under root port will not return null.
+            locked_parent_bus
+                .parent_bridge
+                .as_ref()
+                .unwrap()
+                .upgrade()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .get_dev_path()
+                .unwrap()
+        };
+        parent_dev_path
+    }
+
+    /// Fill the device patch accroding to parent device patch and device function.
+    fn populate_dev_path(&self, parent_dev_path: String, devfn: u8, dev_type: &str) -> String {
+        let mut dev_path = parent_dev_path;
+        dev_path.push_str(dev_type);
+
+        let slot = pci_slot(devfn);
+        dev_path.push_str(&slot.to_string());
+
+        let function = pci_func(devfn);
+        if function != 0 {
+            dev_path.push(',');
+            dev_path.push_str(&function.to_string());
+        }
+
+        dev_path
+    }
+
+    /// Get firmware device path.
+    fn get_dev_path(&self) -> Option<String> {
         None
     }
 }

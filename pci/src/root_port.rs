@@ -427,6 +427,13 @@ impl PciDevOps for RootPort {
             Ok(())
         }
     }
+
+    fn get_dev_path(&self) -> Option<String> {
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let parent_dev_path = self.get_parent_dev_path(parent_bus);
+        let dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/pci-bridge@");
+        Some(dev_path)
+    }
 }
 
 impl HotplugOps for RootPort {
