@@ -1123,6 +1123,21 @@ impl PciDevOps for VirtioPciDevice {
             .reset()
             .chain_err(|| "Fail to reset virtio device")
     }
+
+    fn get_dev_path(&self) -> Option<String> {
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        match self.device.lock().unwrap().device_type() {
+            VIRTIO_TYPE_BLOCK => {
+                // The virtio blk device is identified as a single-channel SCSI device,
+                // so add scsi controler indetification without channel, scsi-id and lun.
+                let parent_dev_path = self.get_parent_dev_path(parent_bus);
+                let mut dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/scsi@");
+                dev_path.push_str("/disk@0,0");
+                Some(dev_path)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl StateTransfer for VirtioPciDevice {
