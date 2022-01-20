@@ -459,6 +459,10 @@ impl MachineOps for StdMachine {
             (None, None)
         };
 
+        locked_vm
+            .reset_fwcfg_boot_order()
+            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
+
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,

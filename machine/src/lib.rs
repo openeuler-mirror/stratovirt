@@ -494,6 +494,73 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn reset_fwcfg_boot_order(&mut self) -> Result<()> {
+        let boot_order_vec = self.get_boot_order_list().unwrap();
+        let mut locked_boot_order_vec = boot_order_vec.lock().unwrap().clone();
+        locked_boot_order_vec.sort_by(|x, y| x.boot_index.cmp(&y.boot_index));
+        let mut fwcfg_boot_order_string = String::new();
+        for item in &locked_boot_order_vec {
+            fwcfg_boot_order_string.push_str(&item.dev_path);
+            fwcfg_boot_order_string.push('\n');
+        }
+        fwcfg_boot_order_string.push('\0');
+
+        let fwcfg = self.get_fwcfg_dev()?;
+        fwcfg
+            .lock()
+            .unwrap()
+            .modify_file_entry("bootorder", fwcfg_boot_order_string.as_bytes().to_vec())
+            .chain_err(|| "Fail to add bootorder entry for standard VM.")?;
+        Ok(())
+    }
+
+    /// Add boot index of device.
+    ///
+    /// # Arguments
+    ///
+    /// * `bootindex` - The boot index of the device.
+    /// * `dev_path` - The firmware device path of the device.
+    /// * `dev_id` - The id of the device.
+    fn add_bootindex_devices(
+        &mut self,
+        boot_index: u8,
+        dev_path: &str,
+        dev_id: &str,
+    ) -> Result<()> {
+        // Unwrap is safe because StdMachine will overwrite this function,
+        // which ensure boot_order_list is not None.
+        let boot_order_list = self.get_boot_order_list().unwrap();
+        if boot_order_list
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|item| item.boot_index == boot_index)
+        {
+            bail!("Failed to add duplicated bootindex {}.", boot_index);
+        }
+
+        boot_order_list.lock().unwrap().push(BootIndexInfo {
+            boot_index,
+            id: dev_id.to_string(),
+            dev_path: dev_path.to_string(),
+        });
+
+        Ok(())
+    }
+
+    /// Delete boot index of device.
+    ///
+    /// # Arguments
+    ///
+    /// * `dev_id` - The id of the device.
+    fn del_bootindex_devices(&self, dev_id: &str) {
+        // Unwrap is safe because StdMachine will overwrite this function,
+        // which ensure boot_order_list is not None.
+        let boot_order_list = self.get_boot_order_list().unwrap();
+        let mut locked_boot_order_list = boot_order_list.lock().unwrap();
+        locked_boot_order_list.retain(|item| item.id != dev_id);
+    }
+
     fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
