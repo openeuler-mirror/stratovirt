@@ -506,6 +506,42 @@ impl FwCfgCommon {
         Ok(())
     }
 
+    fn modify_file_callback(
+        &mut self,
+        filename: &str,
+        data: Vec<u8>,
+        select_cb: Option<FwCfgCallbackType>,
+        write_cb: Option<FwCfgWriteCallbackType>,
+        allow_write: bool,
+    ) -> Result<()> {
+        if self.files.len() >= self.file_slots as usize {
+            return Err(ErrorKind::FileSlotsNotAvailable(filename.to_owned()).into());
+        }
+
+        let file_name_bytes = filename.to_string().as_bytes().to_vec();
+        // Make sure file entry is existed.
+        let index = self
+            .files
+            .iter()
+            .position(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
+            .ok_or_else(|| ErrorKind::EntryNotFound(filename.to_owned()))?;
+        self.files[index].size = data.len() as u32;
+
+        // Update FileDir entry
+        let mut bytes = Vec::new();
+        let file_length_be = BigEndian::read_u32((self.files.len() as u32).as_bytes());
+        bytes.append(&mut file_length_be.as_bytes().to_vec());
+        for value in self.files.iter() {
+            bytes.append(&mut value.as_be_bytes());
+        }
+        self.update_entry_data(FwCfgEntryType::FileDir as u16, bytes)?;
+
+        // Update File entry
+        self.entries[FW_CFG_FILE_FIRST as usize + index] =
+            FwCfgEntry::new(data, select_cb, write_cb, allow_write);
+        Ok(())
+    }
+
     // Fetch FwCfgDma request from guest and handle it
     fn handle_dma_request(&mut self) -> Result<()> {
         let dma_addr = self.dma_addr;
@@ -1194,6 +1230,17 @@ pub trait FwCfgOps {
     fn add_file_entry(&mut self, filename: &str, data: Vec<u8>) -> Result<()> {
         self.fw_cfg_common()
             .add_file_callback(filename, data, None, None, true)
+    }
+
+    /// Modify a file entry to FwCfg device, without callbacks, write-allow.
+    ///
+    /// # Arguments
+    ///
+    /// * `filename` - Name of the file
+    /// * `data` - Raw data bytes of the file to be modified
+    fn modify_file_entry(&mut self, filename: &str, data: Vec<u8>) -> Result<()> {
+        self.fw_cfg_common()
+            .modify_file_callback(filename, data, None, None, true)
     }
 }
 
