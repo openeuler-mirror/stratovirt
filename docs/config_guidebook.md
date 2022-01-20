@@ -7,7 +7,7 @@ StratoVirt can only be launched via cmdline arguments.
 ### 1.1 Machine Config
 
 General configuration of machine, including
-* type: The type of machine, three types of machine are available: "none", "microvm", 
+* type: The type of machine, three types of machine are available: "none", "microvm",
 "q35"(x86_64 platform) and "virt" (aarch64 platform).
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
 * mem-share: Guest memory is sharable with other processes or not.
@@ -33,9 +33,9 @@ Four properties are supported for `smp`.
 * sockets: the number of socket. (optional). If not set, default is the value of `cpus`.
 * cores: the number of core. (optional). If not set, default is one.
 * threads: the number of thread. (optional). If not set, default is one.
-NB: the arguments of cpu topology is used to interconnect with libvirt, but the cpu topology of StratoVirt 
-is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads). 
-If it is configured, the sockets number should equals to the number of cpu, `cores` should be `1` 
+NB: the arguments of cpu topology is used to interconnect with libvirt, but the cpu topology of StratoVirt
+is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads).
+If it is configured, the sockets number should equals to the number of cpu, `cores` should be `1`
 and `threads` should be `1`.
 
 
@@ -64,7 +64,7 @@ Default VM memory size is 256M. The supported VM memory size is among [256M, 512
 ```
 
 #### 1.3.2 Memory Prealloc
-Memory prealloc is supported by StratoVirt, users can use the following cmdline to configure 
+Memory prealloc is supported by StratoVirt, users can use the following cmdline to configure
 memory prealloc.
 
 ```shell
@@ -252,6 +252,9 @@ Nine properties are supported for virtio block device.
 If not set, default is raw.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. If not set,
 the default block queue number is 1.
+* bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
+The number ranges from 1 to 255, the smaller the number, the higher the priority.
+It determines the order of bootable devices which firmware will use for booting the guest OS.
 
 For virtio-blk-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -267,7 +270,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 -device virtio-blk-device,drive=drive_id,id=blkid[,iothread=iothread1,serial=serial_num]
 # virtio pci block device.
 -drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num,num-queues=N]
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num,num-queues=N,bootindex=1]
 ```
 
 ### 2.3 Virtio-net
@@ -278,10 +281,10 @@ Six properties are supported for netdev.
 * tap/vhost-user: the type of net device. NB: currently only tap and vhost-user is supported.
 * id: unique netdev id.
 * ifname: name of tap device in host.
-* fd: the file descriptor of opened tap device. 
+* fd: the file descriptor of opened tap device.
 * fds: file descriptors of opened tap device.
 * queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or vhost-net device.
-NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given, 
+NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given,
 the tap device would be created according to `ifname`.
 
 Eight properties are supported for virtio-net-device or virtio-net-pci.
@@ -298,7 +301,7 @@ It has no effect when vhost is set.
 Two more properties are supported for virtio pci net device.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
-of device and the second one represents function number of it. For virtio pci net device, it 
+of device and the second one represents function number of it. For virtio pci net device, it
 is a single function device, the function number should be set to zero.
 
 ```shell
@@ -310,10 +313,10 @@ is a single function device, the function number should be set to zero.
 -device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
 ```
 
-StratoVirt also supports vhost-net to get a higher performance in network. It can be set by 
+StratoVirt also supports vhost-net to get a higher performance in network. It can be set by
 giving `vhost` property, and one more property is supported for vhost-net device.
 
-* vhostfd: fd for vhost-net device, it could be configured when `vhost=on`. If this argument is not 
+* vhostfd: fd for vhost-net device, it could be configured when `vhost=on`. If this argument is not
 given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatically.
 
 ```shell
@@ -549,7 +552,7 @@ Four parameters are supported for pcie root port.
 * addr: including slot number and function number.
 * id: the name of secondary bus.
 * chassis: the number of chassis. Interconnect with libvirt only.(optional).
-* multifunction: whether to open multi function for pcie root port.(optional). 
+* multifunction: whether to open multi function for pcie root port.(optional).
 If not set, default value is false.
 
 ```shell
@@ -672,9 +675,9 @@ $ ./stratovirt \
 * incoming: the path of the template.
 
 See [Snapshot and Restore](./snapshot.md) for details.
- 
+
 ## 6. Ozone
-Ozone is a lightweight secure sandbox for StratoVirt, it provides secure environment for StratoVirt 
+Ozone is a lightweight secure sandbox for StratoVirt, it provides secure environment for StratoVirt
 by limiting resources of StratoVirt using 'namespace'. Please run ozone with root permission.
 
 ### 6.1 Usage
@@ -711,7 +714,7 @@ About the arguments:
 ### 6.2 Example
 As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.
 
-On top of that, the path-related arguments are different. They are all in the current(`./`) directory. 
+On top of that, the path-related arguments are different. They are all in the current(`./`) directory.
 
 For net name space, it can be created by the following command with name "mynet":
 ```shell
