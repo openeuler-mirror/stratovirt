@@ -98,7 +98,7 @@ mod standard_vm;
 pub use micro_vm::LightMachine;
 use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
-use sysbus::SysBus;
+use sysbus::{SysBus, SysBusDevOps};
 use virtio::{
     BlockState, RngState, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioState,
     VirtioNetState,
@@ -480,6 +480,26 @@ pub trait MachineOps {
         None
     }
 
+    fn reset_all_devices(&mut self) -> Result<()> {
+        let sysbus = self.get_sys_bus();
+        for dev in sysbus.devices.iter() {
+            dev.lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Fail to reset sysbus device")?;
+        }
+
+        if let Ok(pci_host) = self.get_pci_host() {
+            pci_host
+                .lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Fail to reset pci host")?;
+        }
+
+        Ok(())
+    }
+
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
         // If there is no pci bus, skip the id check, such as micro vm.
         if let Ok(pci_host) = self.get_pci_host() {
@@ -495,6 +515,7 @@ pub trait MachineOps {
     }
 
     fn reset_fwcfg_boot_order(&mut self) -> Result<()> {
+        // unwrap is safe because stand machine always make sure it not return null.
         let boot_order_vec = self.get_boot_order_list().unwrap();
         let mut locked_boot_order_vec = boot_order_vec.lock().unwrap().clone();
         locked_boot_order_vec.sort_by(|x, y| x.boot_index.cmp(&y.boot_index));
