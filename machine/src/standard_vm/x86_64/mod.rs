@@ -485,6 +485,10 @@ impl MachineOps for StdMachine {
         StdMachine::arch_init()?;
         locked_vm.register_power_event(&locked_vm.power_button)?;
 
+        locked_vm
+            .reset_fwcfg_boot_order()
+            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
+
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }
