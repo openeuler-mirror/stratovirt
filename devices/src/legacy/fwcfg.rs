@@ -1424,6 +1424,38 @@ mod test {
         let entry = fwcfg_common.get_entry_mut().unwrap();
         assert_eq!(entry.data, file_data);
 
+        let file_data = Vec::new();
+        assert_eq!(
+            fwcfg_common
+                .add_file_callback("bootorder", file_data.clone(), None, None, false)
+                .is_ok(),
+            true
+        );
+        let id = fwcfg_common.files[0].select;
+        fwcfg_common.select_entry(id);
+        let entry = fwcfg_common.get_entry_mut().unwrap();
+        assert_eq!(entry.data, file_data);
+
+        let modify_file_data = "/pci@ffffffffffffffff/pci-bridge@3/scsi@0,1/disk@0,0"
+            .as_bytes()
+            .to_vec();
+        assert_eq!(
+            fwcfg_common
+                .modify_file_callback("bootorder", modify_file_data.clone(), None, None, true)
+                .is_ok(),
+            true
+        );
+        let id = fwcfg_common.files[0].select;
+        fwcfg_common.select_entry(id);
+        let entry = fwcfg_common.get_entry_mut().unwrap();
+        assert_eq!(entry.data, modify_file_data);
+
+        assert_eq!(
+            fwcfg_common
+                .modify_file_callback("abc", modify_file_data.clone(), None, None, true)
+                .is_err(),
+            true
+        );
         let file_data = vec![0x33; 500];
         assert_eq!(
             fwcfg_common
