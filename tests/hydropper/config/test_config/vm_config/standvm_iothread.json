@@ -10,12 +10,14 @@
           "drive_id": "rootfs",
           "path_on_host": "${ROOTFS}",
           "direct": true,
-          "read_only": false
+          "read_only": false,
+          "iops": "200"
         }
       ],
       "device": [
         {
-          "drive_id": "rootfs"
+          "drive_id": "rootfs",
+          "iothread": "iothread2"
         }
       ]
     }
