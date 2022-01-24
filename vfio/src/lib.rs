@@ -24,6 +24,7 @@ pub mod errors {
         links {
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
         }
         errors {
             AddRegBar(id: usize) {
@@ -39,14 +40,19 @@ pub mod errors {
 mod vfio_dev;
 mod vfio_pci;
 
-pub use vfio_dev::{VfioContainer, VfioDevice};
+pub use vfio_dev::{
+    VfioContainer, VfioDevice, VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO,
+    VFIO_DEVICE_GET_IRQ_INFO, VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET, VFIO_DEVICE_SET_IRQS,
+    VFIO_GET_API_VERSION, VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS,
+    VFIO_GROUP_SET_CONTAINER, VFIO_IOMMU_MAP_DMA, VFIO_IOMMU_UNMAP_DMA, VFIO_SET_IOMMU,
+};
 pub use vfio_pci::VfioPciDevice;
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use kvm_ioctls::DeviceFd;
 use vfio_dev::VfioGroup;
@@ -55,7 +61,7 @@ lazy_static! {
     static ref KVM_DEVICE_FD: Option<DeviceFd> = create_kvm_vfio_device();
     static ref CONTAINERS: Mutex<HashMap<RawFd, Arc<Mutex<VfioContainer>>>> =
         Mutex::new(HashMap::new());
-    static ref GROUPS: Mutex<HashMap<u32, Arc<Mutex<VfioGroup>>>> = Mutex::new(HashMap::new());
+    static ref GROUPS: Mutex<HashMap<u32, Arc<VfioGroup>>> = Mutex::new(HashMap::new());
 }
 
 fn create_kvm_vfio_device() -> Option<DeviceFd> {

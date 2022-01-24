@@ -75,7 +75,7 @@ use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
 use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::parse_blk;

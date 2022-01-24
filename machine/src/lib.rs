@@ -16,6 +16,7 @@ extern crate error_chain;
 extern crate log;
 #[macro_use]
 extern crate machine_manager;
+#[cfg(target_arch = "x86_64")]
 #[macro_use]
 extern crate vmm_sys_util;
 
@@ -121,7 +122,7 @@ use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
     get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id, parse_net,
@@ -139,6 +140,7 @@ use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use errors::{ErrorKind, Result, ResultExt};
+use standard_vm::errors::Result as StdResult;
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -170,10 +172,10 @@ pub trait MachineOps {
         is_migrate: bool,
         nr_cpus: u8,
     ) -> Result<()> {
-        // Init guest-memory
-        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time.
-        // The system call registers some notifier functions in the KVM, which are frequently triggered when doing memory prealloc.
-        // To avoid affecting memory prealloc performance, create_host_mmaps needs to be invoked first.
+        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time. The system
+        // call registers some notifier functions in the KVM, which are frequently triggered when
+        // doing memory prealloc.To avoid affecting memory prealloc performance, create_host_mmaps
+        // needs to be invoked first.
         let mut mem_mappings = Vec::new();
         if !is_migrate {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
@@ -182,13 +184,13 @@ pub trait MachineOps {
         }
 
         sys_mem
-            .register_listener(Box::new(KvmMemoryListener::new(
+            .register_listener(Arc::new(Mutex::new(KvmMemoryListener::new(
                 KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
-            )))
+            ))))
             .chain_err(|| "Failed to register KVM listener for memory space.")?;
         #[cfg(target_arch = "x86_64")]
         sys_io
-            .register_listener(Box::new(KvmIoListener::default()))
+            .register_listener(Arc::new(Mutex::new(KvmIoListener::default())))
             .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
 
         if !is_migrate {
@@ -459,7 +461,7 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
+    fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
         bail!("No pci host found");
     }
 
@@ -525,20 +527,39 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_vfio_device(&mut self, cfg_args: &str) -> Result<()> {
-        let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
-        let path = "/sys/bus/pci/devices/".to_string() + &device_cfg.host;
-        let bdf = get_pci_bdf(cfg_args)?;
-        let multi_func = get_multi_function(cfg_args)?;
+    fn create_vfio_pci_device(
+        &mut self,
+        id: &str,
+        bdf: &PciBdf,
+        host: &str,
+        multifunc: bool,
+    ) -> Result<()> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let path = format!("/sys/bus/pci/devices/{}", host);
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
-            .chain_err(|| "Failed to create pci device")?;
-        let vfio_pci_dev = VfioPciDevice::new(device, devfn, device_cfg.id, parent_bus, multi_func);
-        VfioPciDevice::realize(vfio_pci_dev).chain_err(|| "Failed to realize vfio pci device")?;
+            .chain_err(|| "Failed to create vfio device.")?;
+        let vfio_pci = VfioPciDevice::new(
+            device,
+            devfn,
+            id.to_string(),
+            parent_bus,
+            multifunc,
+            self.get_sys_mem().clone(),
+        );
+        VfioPciDevice::realize(vfio_pci).chain_err(|| "Failed to realize vfio-pci device.")?;
         Ok(())
     }
 
-    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> Result<(u8, Weak<Mutex<PciBus>>)> {
+    fn add_vfio_device(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
+        let bdf = get_pci_bdf(cfg_args)?;
+        let multifunc = get_multi_function(cfg_args)?;
+        self.create_vfio_pci_device(&device_cfg.id, &bdf, &device_cfg.host, multifunc)?;
+        self.reset_bus(&device_cfg.id)?;
+        Ok(())
+    }
+
+    fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> StdResult<(u8, Weak<Mutex<PciBus>>)> {
         let pci_host = self.get_pci_host()?;
         let bus = pci_host.lock().unwrap().root_bus.clone();
         let pci_bus = PciBus::find_bus_by_name(&bus, &bdf.bus);

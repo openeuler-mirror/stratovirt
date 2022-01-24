@@ -36,6 +36,4 @@ pub mod errors {
     }
 }
 
-mod kvm;
-
-pub use kvm::*;
+pub mod kvm;

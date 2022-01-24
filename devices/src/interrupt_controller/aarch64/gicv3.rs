@@ -19,7 +19,7 @@ use super::{
     GICConfig, GICDevice, UtilResult,
 };
 use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use migration::MigrationManager;
 use util::device_tree::{self, FdtBuilder};
@@ -551,7 +551,7 @@ impl GICv3Its {
 
 #[cfg(test)]
 mod tests {
-    use hypervisor::KVMFds;
+    use hypervisor::kvm::KVMFds;
     use serial_test::serial;
 
     use super::super::GICConfig;

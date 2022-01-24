@@ -19,7 +19,7 @@ use acpi::{
     AmlResourceUsage, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
@@ -373,18 +373,10 @@ impl SysBusDevOps for Serial {
     }
 
     fn set_irq(&mut self, _sysbus: &mut SysBus) -> SysBusResult<i32> {
-        use sysbus::errors::ResultExt;
-
         let mut irq: i32 = -1;
         if let Some(e) = self.interrupt_evt() {
             irq = 4;
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .register_irqfd(e, irq as u32)
-                .chain_err(|| "Failed to register irqfd.")?;
+            KVM_FDS.load().register_irqfd(e, irq as u32)?;
         }
         Ok(irq)
     }

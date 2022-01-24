@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{GuestAddress, Region, RegionOps};
-use hypervisor::{MsiVector, KVM_FDS};
+use hypervisor::kvm::{MsiVector, KVM_FDS};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::{byte_code::ByteCode, num_ops::round_up};
 
