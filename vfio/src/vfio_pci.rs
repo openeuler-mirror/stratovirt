@@ -690,6 +690,10 @@ impl VfioPciDevice {
             .unwrap()
             .disable_irqs()
             .chain_err(|| "Failed disable irqfds in kvm")?;
+        Ok(())
+    }
+
+    fn vfio_unregister_all_irqfd(&mut self) -> Result<()> {
         let routes = self.gsi_msi_routes.lock().unwrap();
         for route in routes.iter() {
             if let Some(fd) = &route.irq_fd.as_ref() {
@@ -707,6 +711,7 @@ impl VfioPciDevice {
 
     fn unrealize(&mut self) -> Result<()> {
         self.vfio_disable_msix()?;
+        self.vfio_unregister_all_irqfd()?;
         self.unregister_bars()?;
 
         let locked_dev = self.vfio_device.lock().unwrap();
