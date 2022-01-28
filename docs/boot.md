@@ -60,6 +60,8 @@ Rootfs image is a file system image.  An EXT4-format image with `/sbin/init` can
 
 ## Standard_vm boot process
 
+Standard VMs can boot in two modes. The first mode is kernel + rootfs.The other is to use the raw image that has been preinstalled with the guest OS.
+
 ### 1. Build kernel
 
 The standard_vm machine type of StratoVirt supports bzImage format kernel image on x86_64 platform; and supports PE format kernel image on aarch64 platform. Kernel image can be built with:
@@ -158,9 +160,25 @@ After compiling edk2, on x86_64 platform, `OVMF_CODE.fd` and `OVMF_VARS.fd` loca
 
 The building of rootfs for standard_vm is exactly the same with microvm. You can check [Appendix](#2Appendix) for more detailed information.
 
-### 4. Boot command line sample
+
+### 4. Get raw image
+
+You can download the installed [qcow2 image](https://repo.openeuler.org/openEuler-21.03/virtual_machine_img/x86_64/openEuler-21.03-x86_64.qcow2.xz) from the OpenEuler official website.
+
+After downloading the file, run the qemu-img command to convert the file. Next, take the qcow2 image of openeuler-21.03 as an example to give the specific commands:
+
+```shell
+$ xz -d openEuler-21.03-x86_64.qcow2.xz
+$ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-x86_64.raw
+```
+
+Now the available raw image is obtained.
+
+### 5. Boot command line sample
 
 Note that standard need two PFlash devices which will use two firmware files from EDK II binary. If you don't need to store boot information, data storage file can be omitted whose unit is 1. But code storage file with unit 0 is necessary.
+
+Run the following commands to boot with the kernel and rootfs:
 
 ```shell
 arch=`uname -m`
@@ -186,6 +204,21 @@ fi
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 ```
+
+The command for booting with the raw image is as follows:
+
+```shell
+/usr/bin/stratovirt \
+    -machine standard_vm \
+    -smp 1 \
+    -m 2G \
+    -drive file=/path/to/raw_image,id=raw_image,readonly=off,direct=off \
+    -device virtio-blk-device,drive=raw_image \
+    -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
+    -drive file=/path/to/OVMF_VARS.fd,if=pfalsh,unit=1 \
+    -qmp unix:/path/to/socket,server,nowait \
+    -serial stdio
+```F
 
 ## Appendix
 

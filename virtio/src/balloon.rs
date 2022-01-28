@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 use std::io::Write;
+use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -809,8 +810,14 @@ impl VirtioDevice for Balloon {
         if offset != 0 {
             return Err(ErrorKind::IncorrectOffset(0, offset).into());
         }
-        data.write_all(&new_config.as_bytes()[offset as usize..data.len()])
-            .chain_err(|| "Failed to write data to 'data' while reading balloon config")?;
+        data.write_all(
+            &new_config.as_bytes()[offset as usize
+                ..cmp::min(
+                    offset as usize + data.len(),
+                    size_of::<VirtioBalloonConfig>(),
+                )],
+        )
+        .chain_err(|| "Failed to write data to 'data' while reading balloon config")?;
         Ok(())
     }
 
