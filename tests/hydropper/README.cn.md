@@ -1,5 +1,5 @@
 # Hydropper：
-hydropper是一个基于pytest的轻量级测试框架，在其基础上封装了虚拟化的相关测试原子，用于stratovirt的黑盒测试。当前hydropper已经提供了一些测试用例，可以帮助开发人员发现和定位stratovirt的问题。
+hydropper是一个基于pytest的轻量级测试框架，在其基础上封装了虚拟化的相关测试原子，用于stratovirt的黑盒测试。当前hydropper已经支持轻量级虚拟场景和标准化虚拟场景的一些测试用例，可以帮助开发人员发现和定位stratovirt的问题。
 
 ## 如何开始
 
@@ -72,8 +72,8 @@ $ pytest -k microvm
 # 执行test_microvm_cmdline中的全部用例
 $ pytest testcases/microvm/functional/test_microvm_cmdline.py
 
-# 执行test_microvm_with_json用例
-$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_with_json
+# 执行test_microvm_without_daemonize用例
+$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_without_daemonize
 ```
 
 ### 增加测试用例

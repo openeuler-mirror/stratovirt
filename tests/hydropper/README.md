@@ -1,5 +1,5 @@
 # Hydropper：
-Hydropper is a lightweight test framework based on pytest. It encapsulates virtualization-related test atoms and is used for stratovirt black-box tests.Hydropper has provided some test cases to help Developers find and locate Stratovirt problems.
+Hydropper is a lightweight test framework based on pytest. It encapsulates virtualization-related test atoms and is used for stratovirt black-box tests.Hydropper has provided some testcases for lightweight virtualization and standard virtualization to help Developers find and locate Stratovirt problems.
 
 ## How to start
 
@@ -74,8 +74,8 @@ $ pytest -k microvm
 # Run all cases in test_microvm_cmdline.py
 $ pytest testcases/microvm/functional/test_microvm_cmdline.py
 
-# Run test_microvm_with_json
-$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_with_json
+# Run test_microvm_without_daemonize
+$ pytest testcases/microvm/functional/test_microvm_cmdline.py::test_microvm_without_daemonize
 ```
 
 ### Add new testcases

@@ -16,9 +16,11 @@ import uuid
 import shutil
 import tempfile
 import time
+import platform
 from subprocess import run
 import pytest
 from virt.microvm import MicroVM
+from virt.standvm import StandVM
 from monitor.monitor_thread import MonitorThread
 from utils.config import CONFIG
 
@@ -72,6 +74,21 @@ def init_microvm(root_path, bin_path=CONFIG.stratovirt_microvm_bin, **kwargs):
 
     return testvm
 
+def init_standvm(root_path, bin_path=CONFIG.stratovirt_standvm_bin, **kwargs):
+    """Auxiliary to init a standardvm"""
+    vm_uuid = str(uuid.uuid4())
+    if "aarch" in platform.machine():
+        testvm = StandVM(root_path, "standvm", vm_uuid,
+                         bin_path=bin_path, machine="virt",
+                         **kwargs
+                         )
+    else:
+        testvm = StandVM(root_path, "standvm", vm_uuid,
+                         bin_path=bin_path, machine="q35",
+                         **kwargs
+                         )
+
+    return testvm
 
 def init_microvm_with_json(root_path, vm_config_json, vmtag):
     """Init a microvm from a json file"""
@@ -79,6 +96,18 @@ def init_microvm_with_json(root_path, vm_config_json, vmtag):
     vmname = "microvm" + "_" + vmtag
     testvm = MicroVM(root_path, vmname, vm_uuid, bin_path=CONFIG.stratovirt_microvm_bin,
                      vmconfig=vm_config_json)
+    return testvm
+
+def init_standvm_with_json(root_path, vm_config_json, vmtag):
+    """Init a standvm from a json file"""
+    vm_uuid = str(uuid.uuid4())
+    vmname = "standvm" + "_" + vmtag
+    if "aarch" in platform.platform():
+        testvm = StandVM(root_path, vmname, vm_uuid, bin_path=CONFIG.stratovirt_standvm_bin,
+                         machine="virt", vmconfig=vm_config_json)
+    else:
+        testvm = StandVM(root_path, vmname, vm_uuid, bin_path=CONFIG.stratovirt_standvm_bin,
+                         machine="q35", vmconfig=vm_config_json)
     return testvm
 
 
@@ -134,6 +163,16 @@ def microvm(test_session_root_path):
 
 
 @pytest.fixture()
+def standvm(test_session_root_path):
+    """Instantiate a standardvm"""
+    # pylint: disable=redefined-outer-name
+    # The pytest.fixture triggers a pylint rule.
+    testvm = init_standvm(test_session_root_path)
+    yield testvm
+    testvm.kill()
+
+
+@pytest.fixture()
 def microvm_with_tcp(test_session_root_path):
     """Init a microvm"""
     # pylint: disable=redefined-outer-name
@@ -181,3 +220,19 @@ for capability in CONFIG.list_microvm_tags():
     )
 
     exec(test_microvm_cap_fixture)
+
+TEST_STANDVM_CAP_FIXTURE_TEMPLATE = (
+    "@pytest.fixture()\n"
+    "def test_standvm_with_CAP(test_session_root_path):\n"
+    "    standvm = init_standvm_with_json(test_session_root_path,\n"
+    "                                     CONFIG.get_standvm_by_tag(\"CAP\"), \"CAP\")\n"
+    "    yield standvm\n"
+    "    standvm.kill()"
+)
+
+for capability in CONFIG.list_standvm_tags():
+    test_standvm_cap_fixture = (
+        TEST_STANDVM_CAP_FIXTURE_TEMPLATE.replace('CAP', capability)
+    )
+
+    exec(test_standvm_cap_fixture)
