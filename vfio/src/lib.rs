@@ -16,8 +16,6 @@ extern crate error_chain;
 extern crate log;
 #[macro_use]
 extern crate vmm_sys_util;
-#[macro_use]
-extern crate lazy_static;
 
 pub mod errors {
     error_chain! {
@@ -55,14 +53,14 @@ use std::sync::{Arc, Mutex};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use kvm_ioctls::DeviceFd;
+use once_cell::sync::Lazy;
 use vfio_dev::VfioGroup;
 
-lazy_static! {
-    static ref KVM_DEVICE_FD: Option<DeviceFd> = create_kvm_vfio_device();
-    static ref CONTAINERS: Mutex<HashMap<RawFd, Arc<Mutex<VfioContainer>>>> =
-        Mutex::new(HashMap::new());
-    static ref GROUPS: Mutex<HashMap<u32, Arc<VfioGroup>>> = Mutex::new(HashMap::new());
-}
+pub static KVM_DEVICE_FD: Lazy<Option<DeviceFd>> = Lazy::new(create_kvm_vfio_device);
+pub static CONTAINERS: Lazy<Mutex<HashMap<RawFd, Arc<Mutex<VfioContainer>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+pub static GROUPS: Lazy<Mutex<HashMap<u32, Arc<VfioGroup>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn create_kvm_vfio_device() -> Option<DeviceFd> {
     let mut device = kvm_create_device {
