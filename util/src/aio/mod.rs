@@ -79,14 +79,16 @@ impl<T: Clone + 'static> Aio<T> {
         })
     }
 
-    pub fn handle(&mut self) -> Result<()> {
-        let evts = self.ctx.get_events()?;
-        for e in evts.events.iter().take(evts.nr) {
-            if e.res2 == 0 {
+    pub fn handle(&mut self) -> Result<bool> {
+        let (evts, start, end) = self.ctx.get_events();
+        let mut done = false;
+        for e in start..end {
+            if evts[e as usize].res2 == 0 {
                 unsafe {
-                    let node = e.data as *mut CbNode<T>;
+                    done = true;
+                    let node = evts[e as usize].data as *mut CbNode<T>;
 
-                    (self.complete_func)(&(*node).value, e.res);
+                    (self.complete_func)(&(*node).value, evts[e as usize].res);
                     self.aio_in_flight.unlink(&(*node));
 
                     // free mem
@@ -98,7 +100,7 @@ impl<T: Clone + 'static> Aio<T> {
                 }
             }
         }
-        self.process_list()
+        self.process_list().map(|_v| Ok(done))?
     }
 
     fn process_list(&mut self) -> Result<()> {

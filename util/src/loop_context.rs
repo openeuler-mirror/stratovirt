@@ -20,9 +20,10 @@ use std::time::{Duration, Instant};
 use libc::{c_void, read};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
-use crate::errors::{ErrorKind, Result};
+use crate::errors::{ErrorKind, Result, ResultExt};
 
 const READY_EVENT_MAX: usize = 256;
+const AIO_PRFETCH_CYCLE_TIME: usize = 100;
 
 #[derive(Debug)]
 pub enum NotifierOperation {
@@ -37,6 +38,10 @@ pub enum NotifierOperation {
     /// Delete a file descriptor from the event table, if has one more notifiers,
     /// file descriptor not closed.
     Delete = 8,
+    /// Park a file descriptor from the event table
+    Park = 16,
+    /// Resume a file descriptor from the event table
+    Resume = 32,
 }
 
 enum EventStatus {
@@ -64,6 +69,8 @@ pub struct EventNotifier {
     pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
     /// Event status
     status: EventStatus,
+    /// The flag representing whether pre polling is required
+    pub io_poll: bool,
 }
 
 impl EventNotifier {
@@ -82,6 +89,7 @@ impl EventNotifier {
             event,
             handlers,
             status: EventStatus::Alive,
+            io_poll: false,
         }
     }
 }
@@ -254,6 +262,48 @@ impl EventLoopContext {
         Ok(())
     }
 
+    fn park_event(&mut self, event: &EventNotifier) -> Result<()> {
+        let mut events_map = self.events.write().unwrap();
+        match events_map.get_mut(&event.raw_fd) {
+            Some(notifier) => {
+                self.epoll
+                    .ctl(
+                        ControlOperation::Delete,
+                        notifier.raw_fd,
+                        EpollEvent::default(),
+                    )
+                    .chain_err(|| format!("Failed to park event, event fd:{}", notifier.raw_fd))?;
+                notifier.status = EventStatus::Parked;
+            }
+            _ => {
+                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+            }
+        }
+        Ok(())
+    }
+
+    fn resume_event(&mut self, event: &EventNotifier) -> Result<()> {
+        let mut events_map = self.events.write().unwrap();
+        match events_map.get_mut(&event.raw_fd) {
+            Some(notifier) => {
+                self.epoll
+                    .ctl(
+                        ControlOperation::Add,
+                        notifier.raw_fd,
+                        EpollEvent::new(notifier.event, &**notifier as *const _ as u64),
+                    )
+                    .chain_err(|| {
+                        format!("Failed to resume event, event fd: {}", notifier.raw_fd)
+                    })?;
+                notifier.status = EventStatus::Alive;
+            }
+            _ => {
+                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+            }
+        }
+        Ok(())
+    }
+
     /// update fds registered to `EventLoop` according to the operation type.
     ///
     /// # Arguments
@@ -267,6 +317,12 @@ impl EventLoopContext {
                 }
                 NotifierOperation::Delete => {
                     self.rm_event(&en)?;
+                }
+                NotifierOperation::Park => {
+                    self.park_event(&en)?;
+                }
+                NotifierOperation::Resume => {
+                    self.resume_event(&en)?;
                 }
                 _ => {
                     return Err(ErrorKind::UnExpectedOperationType.into());
@@ -286,42 +342,37 @@ impl EventLoopContext {
             }
         }
 
-        let ev_count = match self.epoll.wait(
-            READY_EVENT_MAX,
-            self.timers_min_timeout(),
-            &mut self.ready_events[..],
-        ) {
-            Ok(ev_count) => ev_count,
-            Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
-            Err(e) => return Err(ErrorKind::EpollWait(e).into()),
-        };
+        self.epoll_wait_manager(self.timers_min_timeout())
+    }
 
-        for i in 0..ev_count {
-            // It`s safe because elements in self.events_map never get released in other functions
-            let event = unsafe {
-                let event_ptr = self.ready_events[i].data() as *const EventNotifier;
-                &*event_ptr as &EventNotifier
-            };
-            if let EventStatus::Alive = event.status {
-                let mut notifiers = Vec::new();
-                for i in 0..event.handlers.len() {
-                    let handle = event.handlers[i].lock().unwrap();
-                    match handle(self.ready_events[i].event_set(), event.raw_fd) {
-                        None => {}
-                        Some(mut notifier) => {
-                            notifiers.append(&mut notifier);
+    pub fn iothread_run(&mut self) -> Result<bool> {
+        if let Some(manager) = &self.manager {
+            if manager.lock().unwrap().loop_should_exit() {
+                manager.lock().unwrap().loop_cleanup()?;
+                return Ok(false);
+            }
+        }
+        let timeout = self.timers_min_timeout();
+
+        if timeout == -1 {
+            for _i in 0..AIO_PRFETCH_CYCLE_TIME {
+                for (_fd, notifer) in self.events.read().unwrap().iter() {
+                    if notifer.io_poll {
+                        if let EventStatus::Alive = notifer.status {
+                            let handle = notifer.handlers[1].lock().unwrap();
+                            match handle(self.ready_events[1].event_set(), notifer.raw_fd) {
+                                None => {}
+                                Some(_) => {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-                self.update_events(notifiers)?;
             }
         }
 
-        self.run_timers();
-
-        self.clear_gc();
-
-        Ok(true)
+        self.epoll_wait_manager(timeout)
     }
 
     /// Call the function given by `func` after `nsec` nanoseconds.
@@ -378,6 +429,42 @@ impl EventLoopContext {
         }
 
         self.timers.drain(0..expired_nr);
+    }
+
+    fn epoll_wait_manager(&mut self, time_out: i32) -> Result<bool> {
+        let ev_count = match self
+            .epoll
+            .wait(READY_EVENT_MAX, time_out, &mut self.ready_events[..])
+        {
+            Ok(ev_count) => ev_count,
+            Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
+            Err(e) => return Err(ErrorKind::EpollWait(e).into()),
+        };
+
+        for i in 0..ev_count {
+            // It`s safe because elements in self.events_map never get released in other functions
+            let event = unsafe {
+                let event_ptr = self.ready_events[i].data() as *const EventNotifier;
+                &*event_ptr as &EventNotifier
+            };
+            if let EventStatus::Alive = event.status {
+                let mut notifiers = Vec::new();
+                for i in 0..event.handlers.len() {
+                    let handle = event.handlers[i].lock().unwrap();
+                    match handle(self.ready_events[i].event_set(), event.raw_fd) {
+                        None => {}
+                        Some(mut notifier) => {
+                            notifiers.append(&mut notifier);
+                        }
+                    }
+                }
+                self.update_events(notifiers)?;
+            }
+        }
+
+        self.run_timers();
+        self.clear_gc();
+        Ok(true)
     }
 }
 

@@ -20,7 +20,7 @@ If you want to deploy rust environment, the following link will help you:
 With glibc, StratoVirt is linked dynamically. It's the default target to build StratoVirt.
 
 ```shell
-# Add musl rust tool-chain, if installed, skip
+# Add gnu rust tool-chain, if installed, skip
 $ arch=`uname -m`
 $ rustup target add ${arch}-unknown-linux-gnu
 
@@ -36,7 +36,7 @@ StratoVirt can also be built using musl-libc toolchains. By this way, StratoVirt
 and has no library dependencies.
 
 ```shell
-# Add gnu rust tool-chain, if installed, skip
+# Add musl rust tool-chain, if installed, skip
 $ arch=`uname -m`
 $ rustup target add ${arch}-unknown-linux-musl
 

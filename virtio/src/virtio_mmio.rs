@@ -397,9 +397,19 @@ impl VirtioMmioDevice {
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(&mut self) -> Result<()> {
         let queues_config =
-            &self.state.config_space.queues_config[0..self.state.config_space.queue_num];
-        for queue_config in queues_config {
-            let queue = Queue::new(*queue_config, self.state.config_space.queue_type)?;
+            &mut self.state.config_space.queues_config[0..self.state.config_space.queue_num];
+        let cloned_mem_space = self.mem_space.clone();
+        for q_config in queues_config.iter_mut() {
+            q_config.addr_cache.desc_table_host = cloned_mem_space
+                .get_host_address(q_config.desc_table)
+                .unwrap_or(0);
+            q_config.addr_cache.avail_ring_host = cloned_mem_space
+                .get_host_address(q_config.avail_ring)
+                .unwrap_or(0);
+            q_config.addr_cache.used_ring_host = cloned_mem_space
+                .get_host_address(q_config.used_ring)
+                .unwrap_or(0);
+            let queue = Queue::new(*q_config, self.state.config_space.queue_type)?;
             if !queue.is_valid(&self.mem_space) {
                 bail!("Invalid queue");
             }
@@ -630,9 +640,21 @@ impl StateTransfer for VirtioMmioDevice {
     fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
         self.state = *VirtioMmioState::from_bytes(state)
             .ok_or(migration::errors::ErrorKind::FromBytesError("MMIO_DEVICE"))?;
-        self.queues = self.state.config_space.queues_config[0..self.state.config_space.queue_num]
-            .iter()
+        let cloned_mem_space = self.mem_space.clone();
+        let mut queue_states =
+            self.state.config_space.queues_config[0..self.state.config_space.queue_num].to_vec();
+        self.queues = queue_states
+            .iter_mut()
             .map(|queue_state| {
+                queue_state.addr_cache.desc_table_host = cloned_mem_space
+                    .get_host_address(queue_state.desc_table)
+                    .unwrap_or(0);
+                queue_state.addr_cache.avail_ring_host = cloned_mem_space
+                    .get_host_address(queue_state.avail_ring)
+                    .unwrap_or(0);
+                queue_state.addr_cache.used_ring_host = cloned_mem_space
+                    .get_host_address(queue_state.used_ring)
+                    .unwrap_or(0);
                 Arc::new(Mutex::new(
                     Queue::new(*queue_state, self.state.config_space.queue_type).unwrap(),
                 ))

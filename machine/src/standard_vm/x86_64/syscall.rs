@@ -84,7 +84,9 @@ ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
         BpfRule::new(libc::SYS_read),
+        BpfRule::new(libc::SYS_readv),
         BpfRule::new(libc::SYS_write),
+        BpfRule::new(libc::SYS_writev),
         ioctl_allow_list(),
         #[cfg(not(target_env = "gnu"))]
         BpfRule::new(libc::SYS_epoll_pwait),

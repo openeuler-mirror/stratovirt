@@ -49,14 +49,18 @@ def test_standvm_quickstart(standvm):
     start_time = 0
     startover_time = 0
     with open(temp_log_path, 'r') as logfile:
+        start_vcpu = 0
         pattern = r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{9})'
         for line in logfile.readlines():
+            if ":INFO: Vcpu" in line:
+                start_vcpu += 1
             if ":INFO: VmConfig" in line:
                 start_match = re.match(pattern, line)
                 assert start_match is not None
                 LOG.debug("start time is %s", start_match.group(0))
                 start_time = get_timestamp(start_match.group(0))
-            if "qmp_capabilities" in line:
+            # waiting for the last vcpu started.
+            if start_vcpu == test_vm.vcpus:
                 end_match = re.match(pattern, line)
                 assert end_match is not None
                 LOG.debug("startover time is %s", end_match.group(0))
@@ -65,6 +69,6 @@ def test_standvm_quickstart(standvm):
     assert startover_time != start_time != 0
     quickstart_time = startover_time - start_time
     LOG.debug("quickstart_time is %s", quickstart_time)
-    assert quickstart_time < 2
+    assert quickstart_time < 0.05
 
     test_vm.shutdown()

@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::Result;
+use kvm_bindings::__IncompleteArrayField;
 
 pub const IOCB_FLAG_RESFD: u32 = 1;
 pub const IOCB_FLAG_IOPRIO: u32 = 1 << 1;
@@ -75,6 +76,22 @@ pub struct LibaioContext {
     pub max_size: i32,
 }
 
+#[repr(C)]
+#[derive(Default)]
+pub struct AioRing {
+    id: u32,
+    nr: u32,
+    head: u32,
+    tail: u32,
+
+    magic: u32,
+    compat_features: u32,
+    incompat_features: u32,
+    header_length: u32,
+
+    io_events: __IncompleteArrayField<IoEvent>,
+}
+
 impl LibaioContext {
     pub fn new(max_size: i32) -> Result<Self> {
         let mut ctx = std::ptr::null_mut();
@@ -97,26 +114,20 @@ impl LibaioContext {
     }
 
     #[allow(clippy::zero_ptr)]
-    pub fn get_events(&self) -> Result<EventResult> {
-        let mut events: Vec<_> = (0..self.max_size).map(|_| IoEvent::default()).collect();
-
-        let evt_cnt = unsafe {
-            libc::syscall(
-                libc::SYS_io_getevents,
-                self.ctx,
-                0,
-                i64::from(self.max_size),
-                events.as_mut_ptr(),
-                0 as *mut libc::timespec,
-            )
+    pub fn get_events(&self) -> (&[IoEvent], u32, u32) {
+        let ring = self.ctx as *mut AioRing;
+        let head = unsafe { (*ring).head };
+        let tail = unsafe { (*ring).tail };
+        let ring_nr = unsafe { (*ring).nr };
+        let nr = if tail >= head {
+            tail - head
+        } else {
+            ring_nr - head
         };
-        if evt_cnt < 0 {
-            bail!("Failed to get aio events, return {}.", evt_cnt);
-        }
+        unsafe { (*ring).head = (head + nr) % ring_nr };
 
-        Ok(EventResult {
-            events,
-            nr: evt_cnt as usize,
-        })
+        let io_events: &[IoEvent] = unsafe { (*ring).io_events.as_slice(ring_nr as usize) };
+
+        (io_events, head, head + nr)
     }
 }
