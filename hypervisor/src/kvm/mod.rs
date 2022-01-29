@@ -22,6 +22,8 @@ use arc_swap::ArcSwap;
 use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
 use kvm_bindings::*;
 use kvm_ioctls::{Kvm, VmFd};
+use once_cell::sync::Lazy;
+
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::errors::{Result, ResultExt};
@@ -144,6 +146,4 @@ impl KVMFds {
     }
 }
 
-lazy_static! {
-    pub static ref KVM_FDS: ArcSwap<KVMFds> = ArcSwap::from(Arc::new(KVMFds::new()));
-}
+pub static KVM_FDS: Lazy<ArcSwap<KVMFds>> = Lazy::new(|| ArcSwap::from(Arc::new(KVMFds::new())));

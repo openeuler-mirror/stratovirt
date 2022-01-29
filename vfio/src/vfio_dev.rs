@@ -427,7 +427,7 @@ impl VfioGroup {
     }
 
     fn connect_container(&mut self, mem_as: &Arc<AddressSpace>) -> Result<()> {
-        for (_fd, container) in (*CONTAINERS).lock().unwrap().iter() {
+        for (_fd, container) in CONTAINERS.lock().unwrap().iter() {
             if self.set_container(container).is_ok() {
                 self.add_to_kvm_device()?;
                 return Ok(());
@@ -546,7 +546,7 @@ impl VfioDevice {
             group_id = n.parse::<u32>().chain_err(|| "Invalid iommu group id")?;
         }
 
-        if let Some(g) = (*GROUPS).lock().unwrap().get(&group_id) {
+        if let Some(g) = GROUPS.lock().unwrap().get(&group_id) {
             return Ok(g.clone());
         }
         let mut group = VfioGroup::new(group_id)?;
@@ -555,7 +555,7 @@ impl VfioDevice {
             return Err(e);
         }
         let group = Arc::new(group);
-        (*GROUPS).lock().unwrap().insert(group_id, group.clone());
+        GROUPS.lock().unwrap().insert(group_id, group.clone());
         group
             .container
             .upgrade()
