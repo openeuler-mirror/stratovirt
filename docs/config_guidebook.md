@@ -447,7 +447,7 @@ modprobe vfio-pci
 ```
 Binding this device to the vfio-pci driver, it will create the VFIO group character devices for this group.
 ```shell
-# cmdline 
+# cmdline
 echo 0000:1a:00.3 > /sys/bus/pci/devices/0000:1a:00.3/driver/unbind
 echo `lspci -ns 0000:1a:00.3 | awk -F':| ' '{print $5" "$6}'` > /sys/bus/pci/drivers/vfio-pci/new_id
 ```
@@ -478,6 +478,17 @@ Five properties can be set for chardev.
 -chardev pty,id=chardev_id
 -chardev socket,id=chardev_id,path=socket_path,server,nowait
 -chardev file,id=chardev_id,path=file_path
+```
+
+### 2.13 Trace
+Users can specify the configuration file which lists events to trace.
+
+One property can be set:
+
+* events: file lists events to trace.
+
+```shell
+-trace events=<file>
 ```
 
 ## 3. StratoVirt Management
@@ -686,15 +697,15 @@ in StratoVirt process by default. It will make a slight influence on performance
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      41       |       41       |
-|        q35         |      46       |       43       |
+|      microvm       |      43       |       43       |
+|        q35         |      48       |       45       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      39       |       40       |
-|        virt        |      43       |       42       |
+|      microvm       |      41       |       42       |
+|        virt        |      45       |       44       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell
@@ -828,6 +839,7 @@ $ ./ozone \
     -exec_file /path/to/stratovirt \
     -gid 100 \
     -uid 100 \
+    -capability [CAP_*] \
     -netns /path/to/network_name_space \
     -source /path/to/source_files \
     -numa numa_node \
@@ -842,6 +854,7 @@ About the arguments:
 * `exec_file` : path to the StratoVirt binary file. NB: it should be a statically linked binary file.
 * `uid` : the user id.
 * `gid` : the group id.
+* `capability` : set the ozone environment capabilities. If not set, forbid any capability.
 * `netns` : path to a existed network namespace.
 * `source` : path to the source file, such as `rootfs` and `vmlinux`.
 * `clean-resource` : a flag to clean resource.
@@ -868,6 +881,7 @@ $ ./ozone \
     -exec_file /path/to/stratovirt \
     -gid 100 \
     -uid 100 \
+    -capability CAP_CHOWN \
     -netns /var/run/netns/mynet \
     -source /path/to/vmlinux.bin /path/to/rootfs \
     -numa 0 \

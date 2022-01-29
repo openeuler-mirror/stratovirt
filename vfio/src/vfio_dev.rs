@@ -17,18 +17,18 @@ use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::prelude::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
+use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
 use kvm_bindings::{kvm_device_attr, KVM_DEV_VFIO_GROUP, KVM_DEV_VFIO_GROUP_ADD};
-use kvm_ioctls::DeviceFd;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::ioctl::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
 };
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
+use super::{CONTAINERS, GROUPS, KVM_DEVICE_FD};
 
 /// Refer to VFIO in https://github.com/torvalds/linux/blob/master/include/uapi/linux/vfio.h
 const IOMMU_GROUP: &str = "iommu_group";
@@ -195,9 +195,8 @@ pub struct VfioContainer {
     // `/dev/vfio/vfio` file fd, empowered by the attached groups.
     container: File,
     // A set of groups in the same container.
-    groups: Mutex<HashMap<u32, Arc<VfioGroup>>>,
-    // The fd for kvm device, which type is VFIO.
-    kvm_device: Arc<DeviceFd>,
+    #[allow(dead_code)]
+    groups: HashMap<u32, Arc<VfioGroup>>,
     // Guest memory regions information.
     pub vfio_mem_info: VfioMemInfo,
 }
@@ -207,7 +206,6 @@ impl VfioContainer {
     ///
     /// # Arguments
     ///
-    /// * `kvm_device` - The fd of kvm device.
     /// * `mem_space` - Memory address space.
     ///
     /// Return Error if
@@ -215,7 +213,7 @@ impl VfioContainer {
     /// * Fail to match container api version or extension.
     /// * Only support api version type1v2 IOMMU.
     /// * Fail to register flat_view into vfio region info.
-    pub fn new(kvm_device: Arc<DeviceFd>, mem_space: &Arc<AddressSpace>) -> Result<Self> {
+    pub fn new(mem_space: &Arc<AddressSpace>) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -247,8 +245,7 @@ impl VfioContainer {
 
         let container = VfioContainer {
             container: file,
-            kvm_device,
-            groups: Mutex::new(HashMap::new()),
+            groups: HashMap::new(),
             vfio_mem_info,
         };
 
@@ -265,33 +262,11 @@ impl VfioContainer {
     /// * Fail to match IOMMU type.
     /// * Fail to set container IOMMU.
     fn set_iommu(&self, val: u32) -> Result<()> {
-        if val != vfio::VFIO_TYPE1_IOMMU && val != vfio::VFIO_TYPE1v2_IOMMU {
-            bail!("Unsupported IOMMU type val.");
-        }
-
         // Ioctl is safe. Called container file is `/dev/vfio/vfio` fd and we check the return.
         let ret = unsafe { ioctl_with_val(&self.container, VFIO_SET_IOMMU(), val.into()) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl("VFIO_SET_IOMMU".to_string(), ret).into());
         }
-
-        Ok(())
-    }
-
-    /// Add group to kvm VFIO device.
-    /// Return Error if
-    /// * Fail to set group to container kvm device.
-    fn kvm_device_add_group(&self, group_fd: &RawFd) -> Result<()> {
-        let attr = kvm_device_attr {
-            flags: 0,
-            group: KVM_DEV_VFIO_GROUP,
-            attr: u64::from(KVM_DEV_VFIO_GROUP_ADD),
-            addr: group_fd as *const i32 as u64,
-        };
-        self.kvm_device
-            .set_device_attr(&attr)
-            .chain_err(|| "Failed to add group to kvm device")?;
-
         Ok(())
     }
 
@@ -327,11 +302,11 @@ impl VfioContainer {
 /// other devices in the system.
 /// A vfio group can be created by opening `/dev/vfio/$group_id`, where $group_id represents the
 /// IOMMU group number.
-struct VfioGroup {
-    // `/dev/vfio/group_id` file fd.
+pub struct VfioGroup {
+    // `/dev/vfio/$group_id` file fd.
     group: File,
-    #[allow(dead_code)]
-    group_id: u32,
+    container: Option<Weak<Mutex<VfioContainer>>>,
+    devices: HashMap<RawFd, Arc<VfioDevice>>,
 }
 
 impl VfioGroup {
@@ -366,37 +341,76 @@ impl VfioGroup {
 
         Ok(VfioGroup {
             group: file,
-            group_id,
+            container: None,
+            devices: HashMap::new(),
         })
     }
 
-    fn connect_container(&self, container: &VfioContainer) -> Result<()> {
-        let raw_fd = container.container.as_raw_fd();
+    /// Add group to kvm VFIO device.
+    /// Return Error if
+    /// * Fail to set group to kvm device.
+    fn add_to_kvm_device(&self) -> Result<()> {
+        let attr = kvm_device_attr {
+            flags: 0,
+            group: KVM_DEV_VFIO_GROUP,
+            attr: u64::from(KVM_DEV_VFIO_GROUP_ADD),
+            addr: &self.group.as_raw_fd() as *const i32 as u64,
+        };
+        match KVM_DEVICE_FD.as_ref() {
+            Some(fd) => fd
+                .set_device_attr(&attr)
+                .chain_err(|| "Failed to add group to kvm device.")?,
+            None => bail!("Failed to create kvm device."),
+        }
+        Ok(())
+    }
+
+    fn set_container(&mut self, container: &Arc<Mutex<VfioContainer>>) -> Result<()> {
+        let fd = &container.lock().unwrap().container.as_raw_fd();
         // Safe as group is the owner of file, and we check the return.
-        let ret = unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_SET_CONTAINER(), &raw_fd) };
+        let ret = unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_SET_CONTAINER(), fd) };
         if ret < 0 {
             return Err(ErrorKind::VfioIoctl("VFIO_GROUP_SET_CONTAINER".to_string(), ret).into());
         }
+        self.container = Some(Arc::downgrade(container));
+        Ok(())
+    }
 
-        if container.groups.lock().unwrap().is_empty() {
-            if let Err(e) = container.set_iommu(vfio::VFIO_TYPE1v2_IOMMU) {
-                unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &raw_fd) };
-                return Err(e).chain_err(|| "Failed to set IOMMU");
+    fn unset_container(&mut self) {
+        let container = self.container.as_ref().unwrap().upgrade().unwrap();
+        let fd = container.lock().unwrap().container.as_raw_fd();
+        unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &fd) };
+        self.container = None;
+    }
+
+    fn connect_container(&mut self, mem_as: &Arc<AddressSpace>) -> Result<()> {
+        for (_fd, container) in (*CONTAINERS).lock().unwrap().iter() {
+            if self.set_container(container).is_ok() {
+                break;
             }
         }
-
-        if let Err(e) = container.kvm_device_add_group(&self.group.as_raw_fd()) {
-            unsafe { ioctl_with_ref(&self.group, VFIO_GROUP_UNSET_CONTAINER(), &raw_fd) };
-            return Err(e).chain_err(|| "Failed to add group to kvm device");
+        if self.container.is_none() {
+            let new = Arc::new(Mutex::new(VfioContainer::new(mem_as)?));
+            self.set_container(&new)?;
+            if let Err(e) = new.lock().unwrap().set_iommu(vfio::VFIO_TYPE1v2_IOMMU) {
+                self.unset_container();
+                return Err(e).chain_err(|| "Failed to set IOMMU");
+            }
+            let fd = new.lock().unwrap().container.as_raw_fd();
+            CONTAINERS.lock().unwrap().insert(fd, new);
         }
 
+        if let Err(e) = self.add_to_kvm_device() {
+            self.unset_container();
+            return Err(e);
+        }
         Ok(())
     }
 }
 
 pub struct VfioDevInfo {
     pub num_irqs: u32,
-    pub flags: u32,
+    flags: u32,
 }
 
 /// Vfio device includes the group and container it belongs to, I/O regions and interrupt
@@ -404,8 +418,8 @@ pub struct VfioDevInfo {
 pub struct VfioDevice {
     pub device: File,
     #[allow(dead_code)]
-    group: Arc<VfioGroup>,
-    pub container: Arc<VfioContainer>,
+    group: Weak<Mutex<VfioGroup>>,
+    pub container: Weak<Mutex<VfioContainer>>,
     pub dev_info: VfioDevInfo,
 }
 
@@ -443,25 +457,33 @@ pub struct VfioIrq {
 }
 
 impl VfioDevice {
-    pub fn new(container: Arc<VfioContainer>, path: &Path) -> Result<Self> {
+    pub fn new(path: &Path, mem_as: &Arc<AddressSpace>) -> Result<Arc<Self>> {
         if !path.exists() {
             bail!("No provided host PCI device, use -device vfio-pci,host=DDDD:BB:DD.F");
         }
-        let group =
-            Self::vfio_get_group(&container, &path).chain_err(|| "Fail to get iommu group")?;
-        let device =
-            Self::vfio_get_device(&group, &path).chain_err(|| "Fail to get vfio device")?;
-        let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
+        let group = Self::vfio_get_group(&path, mem_as).chain_err(|| "Fail to get iommu group")?;
+        let mut locked_group = group.lock().unwrap();
+        let container = locked_group.container.as_ref().unwrap().clone();
 
-        Ok(VfioDevice {
+        let device =
+            Self::vfio_get_device(&locked_group, &path).chain_err(|| "Fail to get vfio device")?;
+        let dev_info = Self::get_dev_info(&device).chain_err(|| "Fail to get device info")?;
+        let vfio_dev = Arc::new(VfioDevice {
             device,
-            group,
+            group: Arc::downgrade(&group),
             container,
             dev_info,
-        })
+        });
+        locked_group
+            .devices
+            .insert(vfio_dev.device.as_raw_fd(), vfio_dev.clone());
+        Ok(vfio_dev)
     }
 
-    fn vfio_get_group(container: &Arc<VfioContainer>, dev_path: &Path) -> Result<Arc<VfioGroup>> {
+    fn vfio_get_group(
+        dev_path: &Path,
+        mem_as: &Arc<AddressSpace>,
+    ) -> Result<Arc<Mutex<VfioGroup>>> {
         let iommu_group: PathBuf = [dev_path, Path::new(IOMMU_GROUP)]
             .iter()
             .collect::<PathBuf>()
@@ -475,19 +497,13 @@ impl VfioDevice {
             group_id = n.parse::<u32>().chain_err(|| "Invalid iommu group id")?;
         }
 
-        if let Some(g) = container.groups.lock().unwrap().get(&group_id) {
+        if let Some(g) = (*GROUPS).lock().unwrap().get(&group_id) {
             return Ok(g.clone());
         }
-        let group = Arc::new(VfioGroup::new(group_id)?);
-        group
-            .connect_container(&container)
-            .chain_err(|| "Fail to connect container")?;
-        container
-            .groups
-            .lock()
-            .unwrap()
-            .insert(group_id, group.clone());
-
+        let mut group = VfioGroup::new(group_id)?;
+        group.connect_container(mem_as)?;
+        let group = Arc::new(Mutex::new(group));
+        (*GROUPS).lock().unwrap().insert(group_id, group.clone());
         Ok(group)
     }
 

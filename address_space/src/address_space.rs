@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
@@ -35,6 +36,24 @@ impl FlatView {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct RegionCache {
+    pub reg_type: RegionType,
+    pub host_base: u64,
+    pub start: u64,
+    pub end: u64,
+}
+
+impl Default for RegionCache {
+    fn default() -> Self {
+        RegionCache {
+            reg_type: RegionType::Ram,
+            host_base: 0,
+            start: 0,
+            end: 0,
+        }
+    }
+}
 /// Address Space of memory.
 #[derive(Clone)]
 pub struct AddressSpace {
@@ -307,6 +326,24 @@ impl AddressSpace {
         })
     }
 
+    pub fn get_region_cache(&self, addr: GuestAddress) -> Option<RegionCache> {
+        let view = &self.flat_view.load();
+        if let Some(range) = view.find_flatrange(addr) {
+            let reg_type = range.owner.region_type();
+            let start = range.addr_range.base.0;
+            let end = range.addr_range.end_addr().0;
+            let host_base = self.get_host_address(GuestAddress(start)).unwrap_or(0);
+            let cache = RegionCache {
+                reg_type,
+                host_base,
+                start,
+                end,
+            };
+            return Some(cache);
+        }
+        None
+    }
+
     /// Return the end address of memory  according to all Ram regions in AddressSpace.
     pub fn memory_end_address(&self) -> GuestAddress {
         self.flat_view
@@ -396,6 +433,23 @@ impl AddressSpace {
             .chain_err(|| "Failed to write object")
     }
 
+    /// Write an object to memory via host address.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The object that will be written to the memory.
+    /// * `host_addr` - The start host address where the object will be written to.
+    ///
+    /// # Note
+    /// To use this method, it is necessary to implement `ByteCode` trait for your object.
+    pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
+        let mut dst = unsafe {
+            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>() as usize)
+        };
+        dst.write_all(data.as_bytes())
+            .chain_err(|| "Failed to write object via host address")
+    }
+
     /// Read some data from memory to form an object.
     ///
     /// # Arguments
@@ -412,6 +466,26 @@ impl AddressSpace {
             std::mem::size_of::<T>() as u64,
         )
         .chain_err(|| "Failed to read object")?;
+        Ok(obj)
+    }
+
+    /// Read some data from memory to form an object via host address.
+    ///
+    /// # Arguments
+    ///
+    /// * `hoat_addr` - The start host address where the data will be read from.
+    ///
+    /// # Note
+    /// To use this method, it is necessary to implement `ByteCode` trait for your object.
+    pub fn read_object_direct<T: ByteCode>(&self, host_addr: u64) -> Result<T> {
+        let mut obj = T::default();
+        let mut dst = obj.as_mut_bytes();
+        let src = unsafe {
+            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>() as usize)
+        };
+        dst.write_all(src)
+            .chain_err(|| "Failed to read object via host address")?;
+
         Ok(obj)
     }
 

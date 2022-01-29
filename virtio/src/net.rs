@@ -32,18 +32,16 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VIRTIO_F_VERSION_1,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
-    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_TYPE_NET,
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM,
+    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
+    VIRTIO_NET_F_MAC, VIRTIO_TYPE_NET,
 };
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
 /// Size of each virtqueue.
 const QUEUE_SIZE_NET: u16 = 256;
-/// The maximum buffer size when segmentation offload is enabled.
-/// This includes a 12-byte virtio net header, refer to Virtio Spec.
-const FRAME_BUF_SIZE: usize = 65562;
 
 type SenderConfig = Option<Tap>;
 
@@ -71,37 +69,28 @@ impl ByteCode for VirtioNetConfig {}
 struct TxVirtio {
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    frame_buf: [u8; FRAME_BUF_SIZE],
 }
 
 impl TxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
-        TxVirtio {
-            queue,
-            queue_evt,
-            frame_buf: [0u8; FRAME_BUF_SIZE],
-        }
+        TxVirtio { queue, queue_evt }
     }
 }
 
 struct RxVirtio {
-    unfinished_frame: bool,
+    queue_full: bool,
     need_irqs: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    bytes_read: usize,
-    frame_buf: [u8; FRAME_BUF_SIZE],
 }
 
 impl RxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
         RxVirtio {
-            unfinished_frame: false,
+            queue_full: false,
             need_irqs: false,
             queue,
             queue_evt,
-            bytes_read: 0,
-            frame_buf: [0u8; FRAME_BUF_SIZE],
         }
     }
 }
@@ -117,121 +106,68 @@ struct NetIoHandler {
     receiver: Receiver<SenderConfig>,
     update_evt: RawFd,
     reset_evt: RawFd,
+    is_listening: bool,
 }
 
 impl NetIoHandler {
-    #[allow(clippy::useless_asref)]
-    fn handle_frame_rx(&mut self) -> Result<()> {
-        let elem = self
-            .rx
-            .queue
-            .lock()
-            .unwrap()
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-            .chain_err(|| "Failed to pop avail ring for net rx")?;
-
-        let mut write_count = 0;
-        for elem_iov in elem.in_iovec.iter() {
-            let allow_write_count =
-                cmp::min(write_count + elem_iov.len as usize, self.rx.bytes_read);
-
-            let source_slice = &self.rx.frame_buf[write_count..allow_write_count];
-            match self.mem_space.write(
-                &mut source_slice.as_ref(),
-                elem_iov.addr,
-                source_slice.len() as u64,
-            ) {
-                Ok(_) => {
-                    write_count = allow_write_count;
-                }
-                Err(ref e) => {
-                    error!(
-                        "Failed to write slice for net rx: {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
-                    break;
-                }
-            }
-
-            if write_count >= self.rx.bytes_read {
+    fn handle_rx(&mut self) -> Result<()> {
+        let mut queue = self.rx.queue.lock().unwrap();
+        while let Some(tap) = self.tap.as_mut() {
+            if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
+                self.rx.queue_full = true;
                 break;
             }
-        }
-
-        self.rx
-            .queue
-            .lock()
-            .unwrap()
-            .vring
-            .add_used(&self.mem_space, elem.index, write_count as u32)
-            .chain_err(|| {
-                format!(
-                    "Failed to add used ring for net rx, index: {}, len: {}",
-                    elem.index, write_count
-                )
-            })?;
-        self.rx.need_irqs = true;
-
-        if write_count < self.rx.bytes_read {
-            bail!(
-                "The length {} which is written is less than the length {} of buffer which is read for net rx",
-                write_count,
-                self.rx.bytes_read
-            );
-        }
-
-        Ok(())
-    }
-
-    fn handle_last_frame_rx(&mut self) -> Result<()> {
-        if self.handle_frame_rx().is_ok() {
-            self.rx.unfinished_frame = false;
-            self.handle_rx()?;
-        } else if self.rx.need_irqs {
-            self.rx.need_irqs = false;
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.rx.queue.lock().unwrap()),
-            )
-            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
-        }
-
-        Ok(())
-    }
-
-    fn handle_rx(&mut self) -> Result<()> {
-        while let Some(tap) = self.tap.as_mut() {
-            match tap.read(&mut self.rx.frame_buf) {
-                Ok(count) => {
-                    self.rx.bytes_read = count;
-                    if self.handle_frame_rx().is_err() {
-                        self.rx.unfinished_frame = true;
-                        break;
-                    }
-                }
-                Err(e) => {
-                    match e.raw_os_error() {
-                        Some(err) if err == libc::EAGAIN => (),
-                        Some(err) => {
-                            bail!("Net rx: Failed to read tap, os error: {}", err);
-                        }
-                        _ => {
-                            bail!("Net rx: Failed to read tap and can't get os error code");
-                        }
+            let elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .chain_err(|| "Failed to pop avail ring for net rx")?;
+            let mut iovecs = Vec::new();
+            for elem_iov in elem.in_iovec.iter() {
+                let host_addr = queue
+                    .vring
+                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                if host_addr != 0 {
+                    let iovec = libc::iovec {
+                        iov_base: host_addr as *mut libc::c_void,
+                        iov_len: elem_iov.len as libc::size_t,
                     };
-                    break;
+                    iovecs.push(iovec);
+                } else {
+                    error!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
+            let write_count = unsafe {
+                libc::readv(
+                    tap.as_raw_fd() as libc::c_int,
+                    iovecs.as_ptr() as *const libc::iovec,
+                    iovecs.len() as libc::c_int,
+                )
+            };
+            if write_count < 0 {
+                let e = std::io::Error::last_os_error();
+                queue.vring.push_back();
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    break;
+                }
+                bail!("Failed to call readv for net handle_rx: {}", e);
+            }
+
+            queue
+                .vring
+                .add_used(&self.mem_space, elem.index, write_count as u32)
+                .chain_err(|| {
+                    format!(
+                        "Failed to add used ring for net rx, index: {}, len: {}",
+                        elem.index, write_count
+                    )
+                })?;
+            self.rx.need_irqs = true;
         }
 
         if self.rx.need_irqs {
             self.rx.need_irqs = false;
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.rx.queue.lock().unwrap()),
-            )
-            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
+                .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -242,25 +178,36 @@ impl NetIoHandler {
         let mut need_irq = false;
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
-            let mut read_count = 0;
+            let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
-                let alloc_read_count =
-                    cmp::min(read_count + elem_iov.len as usize, self.tx.frame_buf.len());
-
-                let mut slice = &mut self.tx.frame_buf[read_count..alloc_read_count as usize];
-                self.mem_space
-                    .read(
-                        &mut slice,
-                        elem_iov.addr,
-                        (alloc_read_count - read_count) as u64,
-                    )
-                    .chain_err(|| "Net tx: Failed to read buffer for transmit")?;
-
-                read_count = alloc_read_count;
+                let host_addr = queue
+                    .vring
+                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                if host_addr != 0 {
+                    let iovec = libc::iovec {
+                        iov_base: host_addr as *mut libc::c_void,
+                        iov_len: elem_iov.len as libc::size_t,
+                    };
+                    iovecs.push(iovec);
+                } else {
+                    error!("Failed to get host address for {}", elem_iov.addr.0);
+                }
             }
+            let mut read_len = 0;
             if let Some(tap) = self.tap.as_mut() {
-                tap.write(&self.tx.frame_buf[..read_count as usize])
-                    .chain_err(|| "Net: tx: failed to write to tap")?;
+                if !iovecs.is_empty() {
+                    read_len = unsafe {
+                        libc::writev(
+                            tap.as_raw_fd() as libc::c_int,
+                            iovecs.as_ptr() as *const libc::iovec,
+                            iovecs.len() as libc::c_int,
+                        )
+                    };
+                }
+            };
+            if read_len < 0 {
+                let e = std::io::Error::last_os_error();
+                bail!("Failed to call writev for net handle_tx: {}", e);
             }
 
             queue
@@ -272,11 +219,8 @@ impl NetIoHandler {
         }
 
         if need_irq {
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.rx.queue.lock().unwrap()),
-            )
-            .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
+                .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
         }
 
         Ok(())
@@ -426,12 +370,17 @@ impl EventNotifierHelper for NetIoHandler {
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             let mut locked_net_io = cloned_net_io.lock().unwrap();
             read_fd(fd);
-            if locked_net_io.rx.unfinished_frame {
-                if let Err(ref e) = locked_net_io.handle_last_frame_rx() {
-                    error!(
-                        "Failed to handle last frame(rx event) for net, {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
+            if let Some(tap) = locked_net_io.tap.as_ref() {
+                if !locked_net_io.is_listening {
+                    let notifier = vec![EventNotifier::new(
+                        NotifierOperation::Resume,
+                        tap.as_raw_fd(),
+                        None,
+                        EventSet::IN,
+                        Vec::new(),
+                    )];
+                    locked_net_io.is_listening = true;
+                    return Some(notifier);
                 }
             }
             None
@@ -469,20 +418,27 @@ impl EventNotifierHelper for NetIoHandler {
         if let Some(tap) = locked_net_io.tap.as_ref() {
             let handler: Box<NotifierCallback> = Box::new(move |_, _| {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
-                if locked_net_io.rx.unfinished_frame {
-                    if let Err(ref e) = locked_net_io.handle_last_frame_rx() {
-                        error!(
-                            "Failed to handle last frame(tap event), {}",
-                            error_chain::ChainedError::display_chain(e)
-                        );
-                    }
-                } else if let Err(ref e) = locked_net_io.handle_rx() {
+                if let Err(ref e) = locked_net_io.handle_rx() {
                     error!(
                         "Failed to handle rx(tap event), {}",
                         error_chain::ChainedError::display_chain(e)
                     );
                 }
 
+                if let Some(tap) = locked_net_io.tap.as_ref() {
+                    if locked_net_io.rx.queue_full {
+                        let notifier = vec![EventNotifier::new(
+                            NotifierOperation::Park,
+                            tap.as_raw_fd(),
+                            None,
+                            EventSet::IN,
+                            Vec::new(),
+                        )];
+                        locked_net_io.is_listening = false;
+                        locked_net_io.rx.queue_full = false;
+                        return Some(notifier);
+                    }
+                }
                 None
             });
             let tap_fd = tap.as_raw_fd();
@@ -490,7 +446,7 @@ impl EventNotifierHelper for NetIoHandler {
                 tap_fd,
                 Some(handler),
                 NotifierOperation::AddShared,
-                EventSet::IN | EventSet::EDGE_TRIGGERED,
+                EventSet::IN,
             ));
         }
 
@@ -628,7 +584,8 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_GUEST_TSO4
             | 1 << VIRTIO_NET_F_GUEST_UFO
             | 1 << VIRTIO_NET_F_HOST_TSO4
-            | 1 << VIRTIO_NET_F_HOST_UFO;
+            | 1 << VIRTIO_NET_F_HOST_UFO
+            | 1 << VIRTIO_F_RING_EVENT_IDX;
 
         if let Some(mac) = &self.net_cfg.mac {
             self.state.device_features |=
@@ -756,6 +713,7 @@ impl VirtioDevice for Net {
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
             reset_evt: self.reset_evt.as_raw_fd(),
+            is_listening: true,
         };
 
         EventLoop::update_event(

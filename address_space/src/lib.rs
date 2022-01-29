@@ -91,7 +91,7 @@ mod listener;
 mod region;
 mod state;
 
-pub use crate::address_space::AddressSpace;
+pub use crate::address_space::{AddressSpace, RegionCache};
 pub use address::{AddressRange, GuestAddress};
 pub use host_mmap::{create_host_mmaps, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]
