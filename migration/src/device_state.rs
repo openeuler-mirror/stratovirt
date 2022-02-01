@@ -202,6 +202,12 @@ pub mod tests {
         state: DeviceV4State,
     }
 
+    #[derive(Default)]
+    // A simple device version 4.
+    pub struct DeviceV5 {
+        state: DeviceV5State,
+    }
+
     #[derive(Copy, Clone, Desc, ByteCode)]
     #[desc_version(current_version = "1.0.0", compat_version = "1.0.0")]
     // Statement for DeviceV1.
@@ -301,6 +307,29 @@ pub mod tests {
 
         fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
             self.state = *DeviceV4State::from_bytes(state).unwrap();
+            Ok(())
+        }
+
+        fn get_device_alias(&self) -> u64 {
+            0
+        }
+    }
+
+    #[derive(Copy, Clone, Desc, ByteCode)]
+    #[desc_version(current_version = "5.0.0", compat_version = "2.0.0")]
+    // Statement for DeviceV4
+    pub struct DeviceV5State {
+        #[alias(iir)]
+        rii: u64,
+    }
+
+    impl StateTransfer for DeviceV5 {
+        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+            Ok(self.state.as_bytes().to_vec())
+        }
+
+        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+            self.state = *DeviceV5State::from_bytes(state).unwrap();
             Ok(())
         }
 
@@ -446,5 +475,90 @@ pub mod tests {
         assert_eq!(device_v4.state.rii, device_v3.state.iir);
         assert_eq!(device_v4.state.rcl, device_v3.state.lcr);
         assert_eq!(device_v4.state.rcm, device_v3.state.mcr);
+    }
+
+    #[test]
+    fn test_desc_field_delete_padding() {
+        /*
+         * This test makes two version of a device.
+         * Those devices's difference is appending all fields name changed from
+         * u8 to u64.
+         * Add_padding can solve this change in descriptor of device state.
+         * Test can verify this function works.
+         */
+        let mut device_v4 = DeviceV4 {
+            state: DeviceV4State::default(),
+        };
+
+        device_v4.state.rei = 1;
+        device_v4.state.rii = 2;
+        device_v4.state.rcl = 3;
+        device_v4.state.rcm = 255;
+
+        let state_4_desc = DeviceV4State::descriptor();
+        let state_5_desc = DeviceV5State::descriptor();
+
+        assert_eq!(
+            state_5_desc.check_version(&state_4_desc),
+            VersionCheck::Compat
+        );
+
+        let mut current_slice = device_v4.get_state_vec().unwrap();
+        assert_eq!(
+            state_5_desc
+                .add_padding(&state_4_desc, &mut current_slice)
+                .is_ok(),
+            true
+        );
+
+        let mut device_v5 = DeviceV5 {
+            state: DeviceV5State::default(),
+        };
+        device_v5.set_state_mut(&current_slice).unwrap();
+        assert!(state_5_desc.current_version > state_4_desc.current_version);
+
+        assert_eq!(device_v5.state.rii, device_v4.state.rii);
+    }
+
+    #[test]
+    fn test_desc_jump_version_padding() {
+        /*
+         * This test makes two version of a device.
+         * Those devices jump from v2 to v5 once.
+         * Add_padding can solve this change in descriptor of device state.
+         * Test can verify this function works.
+         */
+        let mut device_v2 = DeviceV2 {
+            state: DeviceV2State::default(),
+        };
+
+        device_v2.state.ier = 1;
+        device_v2.state.iir = 2;
+        device_v2.state.lcr = 3;
+        device_v2.state.mcr = 255;
+
+        let state_2_desc = DeviceV2State::descriptor();
+        let state_5_desc = DeviceV5State::descriptor();
+
+        assert_eq!(
+            state_5_desc.check_version(&state_2_desc),
+            VersionCheck::Compat
+        );
+
+        let mut current_slice = device_v2.get_state_vec().unwrap();
+        assert_eq!(
+            state_5_desc
+                .add_padding(&state_2_desc, &mut current_slice)
+                .is_ok(),
+            true
+        );
+
+        let mut device_v5 = DeviceV5 {
+            state: DeviceV5State::default(),
+        };
+        device_v5.set_state_mut(&current_slice).unwrap();
+        assert!(state_5_desc.current_version > state_2_desc.current_version);
+
+        assert_eq!(device_v5.state.rii, device_v2.state.iir as u64);
     }
 }
