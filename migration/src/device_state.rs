@@ -190,8 +190,20 @@ pub mod tests {
         state: DeviceV2State,
     }
 
+    #[derive(Default)]
+    // A simple device version 3.
+    pub struct DeviceV3 {
+        state: DeviceV3State,
+    }
+
+    #[derive(Default)]
+    // A simple device version 4.
+    pub struct DeviceV4 {
+        state: DeviceV4State,
+    }
+
     #[derive(Copy, Clone, Desc, ByteCode)]
-    #[desc_version(current_version = "1.0.0", compat_version = "0.1.0")]
+    #[desc_version(current_version = "1.0.0", compat_version = "1.0.0")]
     // Statement for DeviceV1.
     pub struct DeviceV1State {
         ier: u8,
@@ -200,7 +212,7 @@ pub mod tests {
     }
 
     #[derive(Copy, Clone, Desc, ByteCode)]
-    #[desc_version(current_version = "2.0.0", compat_version = "0.1.0")]
+    #[desc_version(current_version = "2.0.0", compat_version = "1.0.0")]
     // Statement for DeviceV2.
     pub struct DeviceV2State {
         ier: u8,
@@ -243,8 +255,62 @@ pub mod tests {
         }
     }
 
+    #[derive(Copy, Clone, Desc, ByteCode)]
+    #[desc_version(current_version = "3.0.0", compat_version = "2.0.0")]
+    // Statement for DeviceV3
+    pub struct DeviceV3State {
+        ier: u64,
+        iir: u64,
+        lcr: u64,
+        mcr: u64,
+    }
+
+    impl StateTransfer for DeviceV3 {
+        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+            Ok(self.state.as_bytes().to_vec())
+        }
+
+        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+            self.state = *DeviceV3State::from_bytes(state).unwrap();
+            Ok(())
+        }
+
+        fn get_device_alias(&self) -> u64 {
+            0
+        }
+    }
+
+    #[derive(Copy, Clone, Desc, ByteCode)]
+    #[desc_version(current_version = "4.0.0", compat_version = "2.0.0")]
+    // Statement for DeviceV4
+    pub struct DeviceV4State {
+        #[alias(ier)]
+        rei: u64,
+        #[alias(iir)]
+        rii: u64,
+        #[alias(lcr)]
+        rcl: u64,
+        #[alias(mcr)]
+        rcm: u64,
+    }
+
+    impl StateTransfer for DeviceV4 {
+        fn get_state_vec(&self) -> super::Result<Vec<u8>> {
+            Ok(self.state.as_bytes().to_vec())
+        }
+
+        fn set_state_mut(&mut self, state: &[u8]) -> super::Result<()> {
+            self.state = *DeviceV4State::from_bytes(state).unwrap();
+            Ok(())
+        }
+
+        fn get_device_alias(&self) -> u64 {
+            0
+        }
+    }
+
     #[test]
-    fn test_desc_padding() {
+    fn test_desc_basic_padding() {
         /*
          * This test makes two version of a device.
          * Those devices's difference is appending a new field `mcr` in
@@ -288,5 +354,97 @@ pub mod tests {
         assert_eq!(device_v2.state.iir, device_v1.state.iir);
         assert_eq!(device_v2.state.lcr, device_v1.state.lcr);
         assert_eq!(device_v2.state.mcr, 255_u8);
+    }
+
+    #[test]
+    fn test_desc_data_type_padding() {
+        /*
+         * This test makes two version of a device.
+         * Those devices's difference is appending all fields data value changed from
+         * u8 to u64.
+         * Add_padding can solve this change in descriptor of device state.
+         * Test can verify this function works.
+         */
+        let mut device_v2 = DeviceV2 {
+            state: DeviceV2State::default(),
+        };
+
+        device_v2.state.ier = 1;
+        device_v2.state.iir = 2;
+        device_v2.state.lcr = 3;
+        device_v2.state.mcr = 255;
+
+        let state_2_desc = DeviceV2State::descriptor();
+        let state_3_desc = DeviceV3State::descriptor();
+
+        assert_eq!(
+            state_3_desc.check_version(&state_2_desc),
+            VersionCheck::Compat
+        );
+
+        let mut current_slice = device_v2.get_state_vec().unwrap();
+        assert_eq!(
+            state_3_desc
+                .add_padding(&state_2_desc, &mut current_slice)
+                .is_ok(),
+            true
+        );
+
+        let mut device_v3 = DeviceV3 {
+            state: DeviceV3State::default(),
+        };
+        device_v3.set_state_mut(&current_slice).unwrap();
+        assert!(state_3_desc.current_version > state_2_desc.current_version);
+
+        assert_eq!(device_v3.state.ier, device_v2.state.ier as u64);
+        assert_eq!(device_v3.state.iir, device_v2.state.iir as u64);
+        assert_eq!(device_v3.state.lcr, device_v2.state.lcr as u64);
+        assert_eq!(device_v3.state.mcr, device_v2.state.mcr as u64);
+    }
+
+    #[test]
+    fn test_desc_field_name_padding() {
+        /*
+         * This test makes two version of a device.
+         * Those devices's difference is appending all fields name changed from
+         * u8 to u64.
+         * Add_padding can solve this change in descriptor of device state.
+         * Test can verify this function works.
+         */
+        let mut device_v3 = DeviceV3 {
+            state: DeviceV3State::default(),
+        };
+
+        device_v3.state.ier = 1;
+        device_v3.state.iir = 2;
+        device_v3.state.lcr = 3;
+        device_v3.state.mcr = 255;
+
+        let state_3_desc = DeviceV3State::descriptor();
+        let state_4_desc = DeviceV4State::descriptor();
+
+        assert_eq!(
+            state_4_desc.check_version(&state_3_desc),
+            VersionCheck::Compat
+        );
+
+        let mut current_slice = device_v3.get_state_vec().unwrap();
+        assert_eq!(
+            state_4_desc
+                .add_padding(&state_3_desc, &mut current_slice)
+                .is_ok(),
+            true
+        );
+
+        let mut device_v4 = DeviceV4 {
+            state: DeviceV4State::default(),
+        };
+        device_v4.set_state_mut(&current_slice).unwrap();
+        assert!(state_4_desc.current_version > state_3_desc.current_version);
+
+        assert_eq!(device_v4.state.rei, device_v3.state.ier);
+        assert_eq!(device_v4.state.rii, device_v3.state.iir);
+        assert_eq!(device_v4.state.rcl, device_v3.state.lcr);
+        assert_eq!(device_v4.state.rcm, device_v3.state.mcr);
     }
 }
