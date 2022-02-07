@@ -9,6 +9,7 @@ description = "acpi module"
 [dependencies]
 error-chain = "0.12.4"
 log = "0.4.8"
+byteorder = "1.3.4"
 
 address_space = { path = "../address_space" }
 util = {path = "../util"}

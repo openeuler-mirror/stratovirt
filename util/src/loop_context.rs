@@ -216,14 +216,14 @@ impl EventLoopContext {
     }
 
     fn rm_event(&mut self, event: &EventNotifier) -> Result<()> {
-        // If there is one same parked event, return Error.
+        // If there is one same parked event, return Ok.
         // If there is no event in the map, return Error.
         // If there is one same alive event monitored, put the event in gc and reactivate the parked event.
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
                 if let EventStatus::Parked = notifier.status {
-                    return Err(ErrorKind::RemoveParked(event.raw_fd).into());
+                    return Ok(());
                 }
 
                 if let Err(error) = self.epoll.ctl(
@@ -729,7 +729,7 @@ mod test {
             EventSet::OUT,
             Vec::new(),
         );
-        assert!(mainloop.update_events(vec![event1]).is_err());
+        assert!(mainloop.update_events(vec![event1]).is_ok());
     }
 
     #[test]

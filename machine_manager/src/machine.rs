@@ -96,6 +96,11 @@ pub trait MachineLifecycle {
         self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
     }
 
+    /// Reset VM, stop running and restart a new VM.
+    fn reset(&mut self) -> bool {
+        self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
+    }
+
     /// When VM or Device life state changed, notify concerned entry.
     ///
     /// # Arguments

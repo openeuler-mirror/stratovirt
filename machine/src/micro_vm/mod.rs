@@ -216,8 +216,8 @@ impl LightMachine {
 
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
-        let power_button =
-            EventFd::new(libc::EFD_NONBLOCK).chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
+        let power_button = EventFd::new(libc::EFD_NONBLOCK)
+            .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?;
 
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             error!("{}", e);
@@ -764,7 +764,7 @@ impl MachineOps for LightMachine {
         }
         locked_vm
             .register_power_event(&locked_vm.power_button)
-            .chain_err(|| MachineErrorKind::InitPwrBtnErr)?;
+            .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?;
         Ok(())
     }
 

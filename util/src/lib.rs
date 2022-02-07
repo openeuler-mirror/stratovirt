@@ -115,10 +115,6 @@ pub mod errors {
                 description("Found no parked fd in registered.")
                 display("Found no parked fd {}.", t)
             }
-            RemoveParked(t: i32) {
-                description("Remove parked event.")
-                display("Remove parked event whose fd is {}.", t)
-            }
             BadNotifierOperation {
                 description("Bad Notifier Operation.")
                 display("Notifier Operation non allowed.")

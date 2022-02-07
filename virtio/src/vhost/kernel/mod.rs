@@ -419,11 +419,11 @@ impl VhostOps for VhostBackend {
 pub struct VhostIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
-    reset_evt: RawFd,
+    deactivate_evt: RawFd,
 }
 
 impl VhostIoHandler {
-    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
         for host_notify in self.host_notifies.iter() {
             notifiers.push(EventNotifier::new(
@@ -434,6 +434,14 @@ impl VhostIoHandler {
                 Vec::new(),
             ));
         }
+
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Delete,
+            self.deactivate_evt,
+            None,
+            EventSet::IN,
+            Vec::new(),
+        ));
 
         notifiers
     }
@@ -476,15 +484,15 @@ impl EventNotifierHelper for VhostIoHandler {
             ));
         }
 
-        // Register event notifier for reset_evt.
+        // Register event notifier for deactivate_evt.
         let vhost = vhost_handler.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            Some(vhost.lock().unwrap().reset_evt_handler())
+            Some(vhost.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            vhost_handler.lock().unwrap().reset_evt,
+            vhost_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],

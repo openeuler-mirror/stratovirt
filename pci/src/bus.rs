@@ -200,4 +200,24 @@ impl PciBus {
 
         Ok(())
     }
+
+    pub fn reset(&mut self) -> Result<()> {
+        for (_id, pci_dev) in self.devices.iter() {
+            pci_dev
+                .lock()
+                .unwrap()
+                .reset(false)
+                .chain_err(|| "Fail to reset pci dev")?;
+        }
+
+        for child_bus in self.child_buses.iter_mut() {
+            child_bus
+                .lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Fail to reset child bus")?;
+        }
+
+        Ok(())
+    }
 }

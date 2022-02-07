@@ -188,8 +188,8 @@ pub trait PciDevOps: Send {
     fn name(&self) -> String;
 
     /// Reset device
-    fn reset(&mut self) -> Result<()> {
-        bail!("Reset of the pci device is not implemented");
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Ok(())
     }
 
     /// Get device devfn

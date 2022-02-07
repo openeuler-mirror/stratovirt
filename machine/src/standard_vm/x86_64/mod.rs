@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod ich9_lpc;
+pub(crate) mod ich9_lpc;
 mod mch;
 mod syscall;
 
@@ -21,14 +21,15 @@ use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
 use acpi::{
-    AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
-    AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
-    TABLE_CHECKSUM_OFFSET,
+    AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl,
+    AmlPackage, AmlScope, AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE,
+    IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR, TABLE_CHECKSUM_OFFSET,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
+use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
@@ -39,11 +40,13 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::SysBus;
+use sysbus::{SysBus, SysBusDevOps};
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use vmm_sys_util::eventfd::EventFd;
+
+use self::ich9_lpc::SLEEP_CTRL_OFFSET;
 
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
@@ -140,9 +143,57 @@ impl StdMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             power_button: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| MachineErrorKind::InitPwrBtnErr)?,
+                .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
         })
+    }
+
+    pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
+        use crate::errors::ResultExt as MachineResultExt;
+
+        let locked_vm = vm.lock().unwrap();
+
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            MachineResultExt::chain_err(cpu.kick(), || {
+                format!("Failed to kick vcpu{}", cpu_index)
+            })?;
+
+            cpu.set_to_boot_state();
+        }
+
+        for dev in locked_vm.sysbus.devices.iter() {
+            MachineResultExt::chain_err(dev.lock().unwrap().reset(), || {
+                "Fail to reset sysbus device"
+            })?;
+        }
+        MachineResultExt::chain_err(locked_vm.pci_host.lock().unwrap().reset(), || {
+            "Fail to reset pci host"
+        })?;
+
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            MachineResultExt::chain_err(cpu.reset(), || {
+                format!("Failed to reset vcpu{}", cpu_index)
+            })?;
+        }
+
+        Ok(())
+    }
+
+    pub fn handle_shutdown_request(vm: &Arc<Mutex<Self>>) -> bool {
+        let locked_vm = vm.lock().unwrap();
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            if let Err(e) = cpu.destroy() {
+                error!(
+                    "Failed to destroy vcpu{}, error is {}",
+                    cpu_index,
+                    e.display_chain()
+                );
+            }
+        }
+
+        let mut vmstate = locked_vm.vm_state.0.lock().unwrap();
+        *vmstate = KvmVmState::Shutdown;
+        true
     }
 
     fn arch_init() -> MachineResult<()> {
@@ -174,6 +225,20 @@ impl StdMachine {
         vm_fd
             .create_pit2(pit_config)
             .chain_err(|| MachineErrorKind::CrtPitErr)?;
+        Ok(())
+    }
+
+    fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
+        use super::errors::ResultExt;
+
+        let clone_vm = vm.clone();
+        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
+        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
+        self.register_reset_event(&ich.reset_req, vm)
+            .chain_err(|| "Fail to register reset event in LPC")?;
+        self.register_acpi_shutdown_event(&ich.shutdown_req, clone_vm)
+            .chain_err(|| "Fail to register shutdown event in LPC")?;
+        PciDevOps::realize(ich)?;
         Ok(())
     }
 }
@@ -209,11 +274,8 @@ impl StdMachineOps for StdMachine {
             .add_subregion(pio_data_region, 0xcfc)
             .chain_err(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
-        let mch = Mch::new(root_bus.clone(), mmconfig_region, mmconfig_region_ops);
+        let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
         PciDevOps::realize(mch)?;
-
-        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
-        PciDevOps::realize(ich)?;
         Ok(())
     }
 
@@ -353,6 +415,7 @@ impl MachineOps for StdMachine {
     ) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
+        let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
@@ -374,6 +437,9 @@ impl MachineOps for StdMachine {
         locked_vm
             .init_pci_host()
             .chain_err(|| ErrorKind::InitPCIeHostErr)?;
+        locked_vm
+            .init_ich9_lpc(clone_vm)
+            .chain_err(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
 
         let (boot_config, fwcfg) = if !is_migrate {
@@ -507,6 +573,14 @@ impl AcpiBuilder for StdMachine {
 
         // 3. Info of devices attached to system bus.
         dsdt.append_child(self.sysbus.aml_bytes().as_slice());
+
+        // 4. Add _S5 sleep state.
+        let mut package = AmlPackage::new(4);
+        package.append_child(AmlInteger(5));
+        package.append_child(AmlInteger(0));
+        package.append_child(AmlInteger(0));
+        package.append_child(AmlInteger(0));
+        dsdt.append_child(AmlNameDecl::new("_S5", package).aml_bytes().as_slice());
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let dsdt_begin = locked_acpi_data.len() as u32;
@@ -645,6 +719,11 @@ impl MachineAddressInterface for StdMachine {
 
     fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
         let count = data.len() as u64;
+        if addr == SLEEP_CTRL_OFFSET as u64 {
+            if let Err(e) = self.cpus[0].pause() {
+                error!("Fail to pause bsp, {}", e.display_chain());
+            }
+        }
         self.sys_io
             .write(&mut data, GuestAddress(addr), count)
             .is_ok()
@@ -667,7 +746,6 @@ impl MachineAddressInterface for StdMachine {
 
 impl MigrateInterface for StdMachine {
     fn migrate(&self, uri: String) -> Response {
-        use crate::error_chain::ChainedError;
         use util::unix::{parse_uri, UnixPath};
 
         match parse_uri(&uri) {

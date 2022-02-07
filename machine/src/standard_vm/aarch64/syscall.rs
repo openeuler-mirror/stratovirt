@@ -90,6 +90,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_accept4),
         BpfRule::new(libc::SYS_lseek),
         BpfRule::new(libc::SYS_futex)
+            .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT)
             .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_PRIVATE)
             .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
             .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
@@ -143,6 +144,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_VRING_KICK() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_OWNER() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_FEATURES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_GET_FEATURES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_MEM_TABLE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_NET_SET_BACKEND() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
@@ -170,4 +172,5 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_ONE_REG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
 }
