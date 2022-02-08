@@ -607,6 +607,10 @@ impl MachineOps for LightMachine {
         &self.sys_mem
     }
 
+    fn get_sys_bus(&mut self) -> &SysBus {
+        &self.sysbus
+    }
+
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self) -> MachineResult<()> {
         use crate::errors::ResultExt;

@@ -34,7 +34,7 @@ use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use log::error;
 use machine_manager::config::{
-    BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+    BootIndexInfo, BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -113,6 +113,10 @@ pub struct StdMachine {
     vm_config: Mutex<VmConfig>,
     /// List of guest NUMA nodes information.
     numa_nodes: Option<NumaNodes>,
+    /// List contains the boot order of boot devices.
+    boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// FwCfg device.
+    fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
 }
 
 impl StdMachine {
@@ -154,6 +158,8 @@ impl StdMachine {
                 .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
             numa_nodes: None,
+            boot_order_list: Arc::new(Mutex::new(Vec::new())),
+            fwcfg_dev: None,
         })
     }
 
@@ -299,6 +305,7 @@ impl StdMachineOps for StdMachine {
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
             .chain_err(|| "Failed to realize fwcfg device")?;
+        self.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(fwcfg_dev)
     }
@@ -561,6 +568,19 @@ impl MachineOps for StdMachine {
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
+    }
+
+    fn get_sys_bus(&mut self) -> &SysBus {
+        &self.sysbus
+    }
+
+    fn get_fwcfg_dev(&mut self) -> MachineResult<Arc<Mutex<dyn FwCfgOps>>> {
+        // Unwrap is safe. Because after standard machine realize, this will not be None.F
+        Ok(self.fwcfg_dev.clone().unwrap())
+    }
+
+    fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
+        Some(self.boot_order_list.clone())
     }
 }
 
