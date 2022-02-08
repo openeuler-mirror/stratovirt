@@ -98,6 +98,7 @@ mod standard_vm;
 pub use micro_vm::LightMachine;
 use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
+use sysbus::SysBus;
 use virtio::{
     BlockState, RngState, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioState,
     VirtioNetState,
@@ -123,9 +124,9 @@ use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
     check_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
-    parse_virtconsole, parse_virtio_serial, parse_vsock, MachineMemConfig, NumaConfig,
-    NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
-    VmConfig, FAST_UNPLUG_ON,
+    parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, MachineMemConfig,
+    NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig,
+    VfioConfig, VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -467,6 +468,16 @@ pub trait MachineOps {
 
     fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
         bail!("No pci host found");
+    }
+
+    fn get_sys_bus(&mut self) -> &SysBus;
+
+    fn get_fwcfg_dev(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
+        bail!("No FwCfg deivce found");
+    }
+
+    fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
+        None
     }
 
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
