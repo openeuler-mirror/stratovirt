@@ -20,7 +20,7 @@ use super::{
     pci_args_check,
 };
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_STRING_LENGTH};
-use crate::qmp::qmp_schema;
+use crate::qmp::{qmp_schema, QmpChannel};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
 
@@ -222,17 +222,32 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         tap_fd: None,
         vhost_type: None,
         vhost_fd: None,
-        ifname: args.if_name.unwrap_or_else(String::new),
+        ifname: String::new(),
     };
 
-    if let Some(fd) = args.fds {
-        match fd.parse::<i32>() {
-            Ok(fd) => config.tap_fd = Some(fd),
-            Err(_e) => {
-                bail!("Failed to get fd: {}", fd);
-            }
+    if let Some(fds) = args.fds {
+        let netdev_fd = if fds.contains(':') {
+            let col: Vec<_> = fds.split(':').collect();
+            String::from(col[col.len() - 1])
+        } else {
+            String::from(&fds)
         };
+        if let Some(fd_num) = QmpChannel::get_fd(&netdev_fd) {
+            config.tap_fd = Some(fd_num);
+        } else {
+            // try to convert string to RawFd
+            let fd_num = match netdev_fd.parse::<i32>() {
+                Ok(fd) => fd,
+                _ => {
+                    bail!("Failed to parse fd: {}", netdev_fd);
+                }
+            };
+            config.tap_fd = Some(fd_num);
+        }
+    } else if let Some(if_name) = args.if_name {
+        config.ifname = if_name;
     }
+
     if let Some(vhost) = args.vhost {
         match vhost.parse::<ExBool>() {
             Ok(vhost) => {
