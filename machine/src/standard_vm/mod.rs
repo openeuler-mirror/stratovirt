@@ -764,6 +764,7 @@ impl StdMachine {
                 iothread: args.iothread.clone(),
                 iops: conf.iops,
                 queues: args.queues.unwrap_or(1),
+                boot_index: args.boot_index,
             };
             dev.check()?;
             dev
