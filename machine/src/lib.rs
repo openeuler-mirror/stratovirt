@@ -566,7 +566,15 @@ pub trait MachineOps {
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
-        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)?;
+        let pci_dev = self
+            .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
+            .chain_err(|| "Failed to add virtio pci device")?;
+        if let Some(bootindex) = device_cfg.boot_index {
+            if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
+                self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id)
+                    .chain_err(|| "Fail to add boot index")?;
+            }
+        }
         MigrationManager::register_device_instance_mutex_with_id(
             BlockState::descriptor(),
             device,
@@ -681,7 +689,7 @@ pub trait MachineOps {
         device: Arc<Mutex<dyn VirtioDevice>>,
         multi_func: bool,
         need_irqfd: bool,
-    ) -> Result<()> {
+    ) -> Result<Arc<Mutex<dyn PciDevOps>>> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let sys_mem = self.get_sys_mem();
         let mut pcidev = VirtioPciDevice::new(
@@ -695,10 +703,11 @@ pub trait MachineOps {
         if need_irqfd {
             pcidev.enable_need_irqfd();
         }
+        let clone_pcidev = Arc::new(Mutex::new(pcidev.clone()));
         pcidev
             .realize()
             .chain_err(|| "Failed to add virtio pci device")?;
-        Ok(())
+        Ok(clone_pcidev)
     }
 
     /// Set the parent bus slot on when device attached
