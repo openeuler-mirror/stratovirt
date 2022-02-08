@@ -774,8 +774,16 @@ impl StdMachine {
 
         let blk_id = blk.id.clone();
         let blk = Arc::new(Mutex::new(Block::new(blk)));
-        self.add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
+        let pci_dev = self
+            .add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
             .chain_err(|| "Failed to add virtio pci block device")?;
+
+        if let Some(bootindex) = args.boot_index {
+            if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
+                self.add_bootindex_devices(bootindex, &dev_path, &args.id)
+                    .chain_err(|| "Fail to add boot index")?;
+            }
+        }
 
         MigrationManager::register_device_instance_mutex_with_id(
             BlockState::descriptor(),
@@ -831,6 +839,7 @@ impl StdMachine {
                 &net_id,
             );
         }
+
         Ok(())
     }
 
@@ -1036,7 +1045,13 @@ impl DeviceInterface for StdMachine {
         let locked_pci_host = pci_host.lock().unwrap();
         if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
             match handle_unplug_request(&bus, &dev) {
-                Ok(()) => Response::create_empty_response(),
+                Ok(()) => {
+                    let locked_dev = dev.lock().unwrap();
+                    let dev_id = locked_dev.name();
+                    drop(locked_pci_host);
+                    self.del_bootindex_devices(&dev_id);
+                    Response::create_empty_response()
+                }
                 Err(e) => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
