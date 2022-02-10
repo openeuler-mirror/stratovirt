@@ -14,7 +14,7 @@ StratoVirt的核心架构如下图所示，从上到下分为三层：
   - microvm：为了提高性能和减少攻击面，StratoVirt最小化了用户态设备的模拟。模拟实现了KVM仿真设备和半虚拟化设备，如GIC、串行、RTC和virtio-mmio设备。
   - 标准机型：提供ACPI表实现UEFI启动，支持添加virtio-pci以及VFIO直通设备等，极大提高虚拟机的I/O性能。
 
- ![image](images/StratoVirt-arch.png)
+ ![image](images/StratoVirt-arch.jpg)
 
 ## 特性
 
@@ -25,7 +25,7 @@ StratoVirt的核心架构如下图所示，从上到下分为三层：
 - OCI兼容性：StratoVirt与isula和kata容器配合使用，可以完美融入Kubernetes生态系统；
 - 多平台支持：全面支持Intel和ARM平台；
 - 可扩展性：StratoVirt保留接口和设计，用于导入更多特性，甚至扩展到标准虚拟化支持；
-- 安全性：运行时系统调用数小于48；
+- 安全性：运行时系统调用数小于47；
 
 ## 实现
 

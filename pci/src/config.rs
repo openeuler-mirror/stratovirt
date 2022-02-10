@@ -18,7 +18,8 @@ use address_space::Region;
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::msix::Msix;
 use crate::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, BDF_FUNC_SHIFT,
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+    BDF_FUNC_SHIFT,
 };
 
 /// Size in bytes of the configuration space of legacy PCI device.
@@ -84,6 +85,42 @@ pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
 
 /// The vendor ID for PCI devices other than virtio.
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
+
+/// PCI Express capability registers, same as kernel defines
+/// Link Training
+pub const PCI_EXP_LNKSTA: u16 = 18;
+/// Data Link Layer Link Active
+pub const PCI_EXP_LNKSTA_DLLLA: u16 = 0x2000;
+/// Negotiated Link Width
+pub const PCI_EXP_LNKSTA_NLW: u16 = 0x03f0;
+/// Slot Control
+pub const PCI_EXP_SLTCTL: u16 = 24;
+/// Power Controller Control
+pub const PCI_EXP_SLTCTL_PCC: u16 = 0x0400;
+/// Attention Button Pressed Enable
+pub const PCI_EXP_SLTCTL_ABPE: u16 = 0x0001;
+/// Presence Detect Changed Enable
+pub const PCI_EXP_SLTCTL_PDCE: u16 = 0x0008;
+/// Command Completed Interrupt Enable
+pub const PCI_EXP_SLTCTL_CCIE: u16 = 0x0010;
+/// Power Indicator off
+pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
+/// Power Indicator on
+pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
+/// Slot Status
+pub const PCI_EXP_SLTSTA: u16 = 26;
+/// Presence Detect Changed
+pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
+/// Presence Detect State
+pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
+
+/// Hot plug event
+/// Presence detect changed
+pub const PCI_EXP_HP_EV_PDC: u16 = PCI_EXP_SLTCTL_PDCE;
+/// Attention button pressed
+pub const PCI_EXP_HP_EV_ABP: u16 = PCI_EXP_SLTCTL_ABPE;
+/// Command completed
+pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
 
 const PCI_CONFIG_HEAD_END: u8 = 64;
 const NEXT_CAP_OFFSET: u8 = 0x01;
@@ -157,8 +194,6 @@ const PCIE_CAP_PORT_NUM_SHIFT: u8 = 24;
 const PCIE_CAP_CLS_X1: u16 = 0x0001;
 // Negotiated link width.
 const PCIE_CAP_NLW_2_5GT: u16 = 0x0010;
-// Data link layer link active
-const PCIE_CAP_LINK_DLLLA: u16 = 0x2000;
 // Attention button present.
 const PCIE_CAP_SLOTCAP_ABP: u32 = 0x0000_0001;
 // Power controller present.
@@ -213,6 +248,9 @@ const PCIE_CAP_LINK_SLSV_8GT: u32 = 0x08;
 const PCIE_CAP_LINK_SLSV_16GT: u32 = 0x10;
 // Target Link Speed.
 const PCIE_CAP_LINK_TLS_16GT: u16 = 0x0004;
+// PCIe type flag
+const PCI_EXP_FLAGS_TYPE_SHIFT: u16 = 4;
+const PCI_EXP_FLAGS_TYPE: u16 = 0x00f0;
 
 /// Type of bar region.
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -287,6 +325,8 @@ pub struct PciConfig {
     pub last_ext_cap_end: u16,
     /// MSI-X information.
     pub msix: Option<Arc<Mutex<Msix>>>,
+    /// Offset of the PCIe extended capability.
+    pub ext_cap_offset: u16,
 }
 
 impl PciConfig {
@@ -316,6 +356,7 @@ impl PciConfig {
             last_ext_cap_offset: 0,
             last_ext_cap_end: PCI_CONFIG_SPACE_SIZE as u16,
             msix: None,
+            ext_cap_offset: PCI_CONFIG_HEAD_END as u16,
         }
     }
 
@@ -520,6 +561,39 @@ impl PciConfig {
         self.bars[id].region = Some(region);
     }
 
+    /// Unregister region in PciConfig::bars.
+    ///
+    /// # Arguments
+    ///
+    /// * `bus` - The bus which region registered.
+    pub fn unregister_bars(&mut self, bus: &Arc<Mutex<PciBus>>) -> Result<()> {
+        let locked_bus = bus.lock().unwrap();
+        for bar in self.bars.iter_mut() {
+            match bar.region_type {
+                RegionType::Io =>
+                {
+                    #[cfg(target_arch = "x86_64")]
+                    if let Some(region) = bar.region.as_ref() {
+                        locked_bus
+                            .io_region
+                            .delete_subregion(region)
+                            .chain_err(|| "Failed to unregister io bar")?;
+                    }
+                }
+                _ => {
+                    if let Some(region) = bar.region.as_ref() {
+                        locked_bus
+                            .mem_region
+                            .delete_subregion(region)
+                            .chain_err(|| "Failed to unregister mem bar")?;
+                    }
+                }
+            }
+            bar.region = None;
+        }
+        Ok(())
+    }
+
     /// Update bar space mapping once the base address is updated by the guest.
     ///
     /// # Arguments
@@ -652,11 +726,13 @@ impl PciConfig {
     /// * `dev_type` - Device type.
     pub fn add_pcie_cap(&mut self, devfn: u8, port_num: u8, dev_type: u8) -> Result<usize> {
         let cap_offset: usize = self.add_pci_cap(CapId::Pcie as u8, PCIE_CAP_SIZE as usize)?;
+        self.ext_cap_offset = cap_offset as u16;
         let mut offset: usize = cap_offset + PcieCap::CapReg as usize;
+        let pci_type = (dev_type << PCI_EXP_FLAGS_TYPE_SHIFT) as u16 & PCI_EXP_FLAGS_TYPE;
         le_write_u16(
             &mut self.config,
             offset,
-            dev_type as u16 | PCIE_CAP_VERSION_2 | PCIE_CAP_SLOT_IMPLEMENTED,
+            pci_type | PCIE_CAP_VERSION_2 | PCIE_CAP_SLOT_IMPLEMENTED,
         )?;
 
         offset = cap_offset + PcieCap::DevCap as usize;
@@ -682,7 +758,7 @@ impl PciConfig {
         le_write_u16(
             &mut self.config,
             offset,
-            PCIE_CAP_CLS_X1 | PCIE_CAP_NLW_2_5GT | PCIE_CAP_LINK_DLLLA,
+            PCIE_CAP_CLS_X1 | PCIE_CAP_NLW_2_5GT,
         )?;
 
         let slot: u8 = devfn >> BDF_FUNC_SHIFT;

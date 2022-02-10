@@ -174,7 +174,7 @@ class StandVM(BaseVM):
             # It doesn't need to create it first.
             self._remove_files.append(self._console_address)
             self.bus_slot[1] = 'console'
-            _temp_console_args = "virtio-serial-pci,bus=pcie.0,addr=0x1.0x0"
+            _temp_console_args = "virtio-serial-pci,bus=pcie.0,addr=0x1.0x0,id=serial-0"
             if self.multifunction["console"]:
                 _temp_console_args += ",multifunction=on"
             self.add_args('-device', _temp_console_args, '-chardev',
@@ -230,18 +230,18 @@ class StandVM(BaseVM):
                 if self.pcie_root_port_remain <= 0:
                     raise PcierootportError
                 if self.max_bytes == 0:
-                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.%s,addr=0x9.0x0'\
-                        % (self.pcie_root_port_remain + 4)
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.%s,addr=0x9.0x0,id=rng-%s'\
+                        % (self.pcie_root_port_remain + 4, self.pcie_root_port_remain + 4)
                 else:
-                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.%s,addr=0x9.0x0'\
-                        % (self.max_bytes, self.pcie_root_port_remain + 4)
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.%s,addr=0x9.0x0,id=rng-%s'\
+                        % (self.max_bytes, self.pcie_root_port_remain + 4, self.pcie_root_port_remain + 4)
                 self.pcie_root_port_remain -= 1
                 self.pcie_root_port["rng"] = False
             else:
                 if self.max_bytes == 0:
-                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x9.0x0'
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.0,addr=0x9.0x0,id=rng-0'
                 else:
-                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.0,addr=0x9.0x0'\
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.0,addr=0x9.0x0,id=rng-0'\
                         % self.max_bytes
             if self.multifunction["rng"]:
                 _temp_device_args += ",multifunction=on"
@@ -276,11 +276,11 @@ class StandVM(BaseVM):
             if self.pcie_root_port["balloon"]:
                 if self.pcie_root_port_remain <= 0:
                     raise PcierootportError
-                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.%s,addr=0x2.0x0" % (self.pcie_root_port_remain + 4)
+                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.%s,addr=0x2.0x0,id=balloon-%s" % (self.pcie_root_port_remain + 4, self.pcie_root_port_remain + 4)
                 self.pcie_root_port_remain -= 1
                 self.pcie_root_port["balloon"] = False
             else:
-                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.0,addr=0x2.0x0"
+                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.0,addr=0x2.0x0,id=ballon-0"
             if self.deflate_on_oom:
                 _temp_balloon_args += ',deflate-on-oom=true'
             else:
@@ -418,13 +418,13 @@ class StandVM(BaseVM):
                     # only one device is supported(pcie root port)
                     if self.pcie_root_port_remain <= 0:
                         raise PcierootportError
-                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.%s,addr=%s.0x0"\
-                        % (device["drive_id"], self.pcie_root_port_remain + 4, hex(i))
+                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.%s,addr=%s.0x0,id=%s"\
+                        % (device["drive_id"], self.pcie_root_port_remain + 4, hex(i), device["drive_id"])
                     self.pcie_root_port_remain -= 1
                     self.pcie_root_port["block"] = False
                 else:
-                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.0,addr=%s.0x0"\
-                        % (device["drive_id"], hex(i))
+                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.0,addr=%s.0x0,id=%s"\
+                        % (device["drive_id"], hex(i), device["drive_id"])
 
                 if "iothread" in device:
                     _temp_device_args += ",iothread=%s" % device["iothread"]

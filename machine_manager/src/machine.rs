@@ -18,9 +18,9 @@ use std::sync::{Arc, Mutex};
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    CacheOptions, ChardevInfo, Cmd, CmdLine, DeviceProps, Events, FileOptions, GicCap,
-    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, PropList, QmpCommand, QmpEvent,
-    Target, TypeLists,
+    CacheOptions, ChardevInfo, Cmd, CmdLine, DeviceAddArgument, DeviceProps, Events, FileOptions,
+    GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, PropList, QmpCommand,
+    QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -146,16 +146,10 @@ pub trait DeviceInterface {
     fn query_hotpluggable_cpus(&self) -> Response;
 
     /// Add a device with configuration.
-    fn device_add(
-        &self,
-        device_id: String,
-        driver: String,
-        addr: Option<String>,
-        lun: Option<usize>,
-    ) -> Response;
+    fn device_add(&mut self, args: Box<DeviceAddArgument>) -> Response;
 
     /// Delete a device with device id.
-    fn device_del(&self, device_id: String) -> Response;
+    fn device_del(&mut self, device_id: String) -> Response;
 
     /// Creates a new block device.
     fn blockdev_add(
@@ -164,7 +158,11 @@ pub trait DeviceInterface {
         file: FileOptions,
         cache: Option<CacheOptions>,
         read_only: Option<bool>,
+        iops: Option<u64>,
     ) -> Response;
+
+    /// Delete a block device.
+    fn blockdev_del(&self, node_name: String) -> Response;
 
     /// Create a new network device.
     fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response;

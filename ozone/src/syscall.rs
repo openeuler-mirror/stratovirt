@@ -16,7 +16,7 @@ use std::io::Result;
 use std::os::raw::c_int;
 use std::ptr::null;
 
-use crate::capability::{CapUserData, CapUserHeader, CAPGET, PR_CAPBSET_DROP};
+use crate::capability::{CapUserData, CapUserHeader};
 
 /// Wrapper to syscall exit codes and transfer them into "io::Result"
 pub struct SyscallResult {
@@ -235,14 +235,14 @@ pub fn mknod(node_path: &str, mode: libc::mode_t, dev: libc::dev_t) -> Result<()
 
 pub fn capget(hdr: &mut CapUserHeader, data: &mut CapUserData) -> Result<()> {
     SyscallResult {
-        ret: unsafe { libc::syscall(CAPGET, hdr, data) as i32 },
+        ret: unsafe { libc::syscall(libc::SYS_capget, hdr, data) as i32 },
     }
     .into()
 }
 
 pub fn drop_bounding_caps(cap: u8) -> Result<()> {
     SyscallResult {
-        ret: unsafe { libc::prctl(PR_CAPBSET_DROP, libc::c_uint::from(cap), 0, 0) },
+        ret: unsafe { libc::prctl(libc::PR_CAPBSET_DROP, libc::c_uint::from(cap), 0, 0) },
     }
     .into()
 }

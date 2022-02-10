@@ -42,39 +42,46 @@ pub mod errors {
             OpenFileErr(path: String) {
                 display("Failed to open file: {}.", path)
             }
+            InitPflashErr {
+                display("Failed to init pflash device.")
+            }
+            RlzPflashErr {
+                display("Failed to realize pflash device.")
+            }
         }
     }
 }
 
-use std::sync::{Arc, Mutex};
-use std::{fs::File, mem::size_of};
+use std::mem::size_of;
+use std::ops::Deref;
+use std::os::unix::io::RawFd;
+use std::sync::{Arc, Condvar, Mutex};
 
+use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
 use acpi::{
     AcpiRsdp, AcpiTable, AmlBuilder, TableLoader, ACPI_RSDP_FILE, ACPI_TABLE_FILE,
     ACPI_TABLE_LOADER_FILE, TABLE_CHECKSUM_OFFSET,
 };
+use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
+use error_chain::ChainedError;
 use errors::{Result, ResultExt};
+use machine_manager::config::{
+    get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, PciBdf, VmConfig,
+};
+use machine_manager::machine::{DeviceInterface, KvmVmState};
+use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use pci::hotplug::{handle_plug, handle_unplug_request};
+use pci::PciBus;
 use util::byte_code::ByteCode;
+use virtio::{qmp_balloon, qmp_query_balloon, Block};
 
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
-
-fn open_pflash_file(file_name: &str, unit: usize) -> Result<File> {
-    let fd = if unit == 0 {
-        std::fs::OpenOptions::new().read(true).open(file_name)?
-    } else {
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(file_name)?
-    };
-    Ok(fd)
-}
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
@@ -133,6 +140,14 @@ trait StdMachineOps: AcpiBuilder {
     fn add_fwcfg_device(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
         bail!("Not implemented");
     }
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
+
+    fn get_cpu_topo(&self) -> &CpuTopology;
+
+    fn get_cpus(&self) -> &Vec<Arc<CPU>>;
+
+    fn get_vm_config(&self) -> &Mutex<VmConfig>;
 }
 
 /// Trait that helps to build ACPI tables.
@@ -352,5 +367,302 @@ trait AcpiBuilder {
         fw_cfg.add_file_entry(ACPI_RSDP_FILE, rsdp_data.lock().unwrap().to_vec())?;
 
         Ok(())
+    }
+}
+
+fn get_device_bdf(bus: Option<String>, addr: Option<String>) -> Result<PciBdf> {
+    let mut pci_bdf = PciBdf {
+        bus: bus.unwrap_or_else(|| String::from("pcie.0")),
+        addr: (0, 0),
+    };
+    let addr = addr.unwrap_or_else(|| String::from("0x0"));
+    pci_bdf.addr = get_pci_df(&addr).chain_err(|| "Failed to get device num or function num")?;
+    Ok(pci_bdf)
+}
+
+impl StdMachine {
+    fn plug_virtio_pci_blk(
+        &mut self,
+        pci_bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        let multifunction = args.multifunction.unwrap_or(false);
+        let drive = if let Some(drv) = &args.drive {
+            drv
+        } else {
+            bail!("Drive not set");
+        };
+
+        let blk = if let Some(conf) = self.get_vm_config().lock().unwrap().drives.get(drive) {
+            let dev = BlkDevConfig {
+                id: conf.id.clone(),
+                path_on_host: conf.path_on_host.clone(),
+                read_only: conf.read_only,
+                direct: conf.direct,
+                serial_num: args.serial_num.clone(),
+                iothread: args.iothread.clone(),
+                iops: conf.iops,
+            };
+            dev.check()?;
+            Arc::new(Mutex::new(Block::new(dev)))
+        } else {
+            bail!("Drive not found");
+        };
+
+        self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction)
+            .chain_err(|| "Failed to add virtio pci device")
+    }
+}
+
+impl DeviceInterface for StdMachine {
+    fn query_status(&self) -> Response {
+        let vm_state = self.get_vm_state();
+        let vmstate = vm_state.deref().0.lock().unwrap();
+        let qmp_state = match *vmstate {
+            KvmVmState::Running => qmp_schema::StatusInfo {
+                singlestep: false,
+                running: true,
+                status: qmp_schema::RunState::running,
+            },
+            KvmVmState::Paused => qmp_schema::StatusInfo {
+                singlestep: false,
+                running: true,
+                status: qmp_schema::RunState::paused,
+            },
+            _ => Default::default(),
+        };
+
+        Response::create_response(serde_json::to_value(&qmp_state).unwrap(), None)
+    }
+
+    fn query_cpus(&self) -> Response {
+        let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
+        let cpu_topo = self.get_cpu_topo();
+        let cpus = self.get_cpus();
+        for cpu_index in 0..cpu_topo.max_cpus {
+            if cpu_topo.get_mask(cpu_index as usize) == 1 {
+                let thread_id = cpus[cpu_index as usize].tid();
+                let (socketid, coreid, threadid) = cpu_topo.get_topo(cpu_index as usize);
+                let cpu_instance = qmp_schema::CpuInstanceProperties {
+                    node_id: None,
+                    socket_id: Some(socketid as isize),
+                    core_id: Some(coreid as isize),
+                    thread_id: Some(threadid as isize),
+                };
+                let cpu_info = qmp_schema::CpuInfo::x86 {
+                    current: true,
+                    qom_path: String::from("/machine/unattached/device[")
+                        + &cpu_index.to_string()
+                        + &"]".to_string(),
+                    halted: false,
+                    props: Some(cpu_instance),
+                    CPU: cpu_index as isize,
+                    thread_id: thread_id as isize,
+                    x86: qmp_schema::CpuInfoX86 {},
+                };
+                cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+            }
+        }
+        Response::create_response(cpu_vec.into(), None)
+    }
+
+    fn query_hotpluggable_cpus(&self) -> Response {
+        Response::create_empty_response()
+    }
+
+    fn balloon(&self, value: u64) -> Response {
+        if qmp_balloon(value) {
+            return Response::create_empty_response();
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::DeviceNotActive(
+                "No balloon device has been activated".to_string(),
+            ),
+            None,
+        )
+    }
+
+    fn query_balloon(&self) -> Response {
+        if let Some(actual) = qmp_query_balloon() {
+            let ret = qmp_schema::BalloonInfo { actual };
+            return Response::create_response(serde_json::to_value(&ret).unwrap(), None);
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::DeviceNotActive(
+                "No balloon device has been activated".to_string(),
+            ),
+            None,
+        )
+    }
+
+    fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
+        if let Err(e) = self.check_device_id_existed(&args.id) {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+
+        // Use args.bus.clone() and args.addr.clone() because args borrowed in the following process.
+        let pci_bdf = match get_device_bdf(args.bus.clone(), args.addr.clone()) {
+            Ok(bdf) => bdf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        };
+
+        let driver = args.driver.as_str();
+        match driver {
+            "virtio-blk-pci" => {
+                if let Err(e) = self.plug_virtio_pci_blk(&pci_bdf, args.as_ref()) {
+                    let err_str = format!("Failed to add virtio pci blk: {}", e.to_string());
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            _ => {
+                let err_str = format!("Failed to add device: Driver {} is not support", driver);
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(err_str),
+                    None,
+                );
+            }
+        }
+
+        // It's safe to call get_pci_host().unwrap() because it has been checked before.
+        let locked_pci_host = self.get_pci_host().unwrap().lock().unwrap();
+        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &args.id) {
+            match handle_plug(&bus, &dev) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => {
+                    if let Err(e) = PciBus::detach_device(&bus, &dev) {
+                        error!("{}", e.display_chain());
+                        error!("Failed to detach device");
+                    }
+                    let err_str = format!("Failed to plug device: {}", e.to_string());
+                    Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    )
+                }
+            }
+        } else {
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(
+                    "Failed to add device: Bus not found".to_string(),
+                ),
+                None,
+            )
+        }
+    }
+
+    fn device_del(&mut self, device_id: String) -> Response {
+        let pci_host = match self.get_pci_host() {
+            Ok(host) => host,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        };
+
+        let locked_pci_host = pci_host.lock().unwrap();
+        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
+            match handle_unplug_request(&bus, &dev) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            }
+        } else {
+            let err_str = format!("Failed to remove device: id {} not found", &device_id);
+            Response::create_error_response(qmp_schema::QmpErrorClass::GenericError(err_str), None)
+        }
+    }
+
+    fn blockdev_add(
+        &self,
+        node_name: String,
+        file: qmp_schema::FileOptions,
+        cache: Option<qmp_schema::CacheOptions>,
+        read_only: Option<bool>,
+        iops: Option<u64>,
+    ) -> Response {
+        let read_only = read_only.unwrap_or(false);
+        let direct = if let Some(cache) = cache {
+            cache.direct.unwrap_or(true)
+        } else {
+            true
+        };
+        let config = DriveConfig {
+            id: node_name,
+            path_on_host: file.filename,
+            read_only,
+            direct,
+            iops,
+        };
+
+        if let Err(e) = config.check() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+        // Check whether path is valid after configuration check
+        if let Err(e) = config.check_path() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_drive_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn blockdev_del(&self, node_name: String) -> Response {
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .del_drive_by_id(&node_name)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn netdev_add(&self, _id: String, _if_name: Option<String>, _fds: Option<String>) -> Response {
+        Response::create_empty_response()
+    }
+
+    fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
+        if let Some(fd) = if_fd {
+            QmpChannel::set_fd(fd_name, fd);
+            Response::create_empty_response()
+        } else {
+            let err_resp =
+                qmp_schema::QmpErrorClass::GenericError("Invalid SCM message".to_string());
+            Response::create_error_response(err_resp, None)
+        }
     }
 }

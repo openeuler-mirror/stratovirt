@@ -966,6 +966,10 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
+    fn unrealize(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_BLOCK

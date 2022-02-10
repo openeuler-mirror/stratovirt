@@ -106,7 +106,8 @@ pub use micro_vm::LightMachine;
 use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
 use virtio::{
-    BlockState, RngState, VhostKern, VirtioConsoleState, VirtioMmioState, VirtioNetState,
+    BlockState, RngState, VhostKern, VirtioConsoleState, VirtioDevice, VirtioMmioState,
+    VirtioNetState,
 };
 
 use std::os::unix::io::AsRawFd;
@@ -123,9 +124,9 @@ use devices::InterruptController;
 use hypervisor::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_net, parse_rng_dev,
-    parse_root_port, parse_vfio, parse_virtconsole, parse_virtio_serial, parse_vsock,
-    MachineMemConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
+    get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id, parse_net,
+    parse_rng_dev, parse_root_port, parse_vfio, parse_virtconsole, parse_virtio_serial,
+    parse_vsock, MachineMemConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -167,7 +168,19 @@ pub trait MachineOps {
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
         is_migrate: bool,
+        nr_cpus: u8,
     ) -> Result<()> {
+        // Init guest-memory
+        // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time.
+        // The system call registers some notifier functions in the KVM, which are frequently triggered when doing memory prealloc.
+        // To avoid affecting memory prealloc performance, create_host_mmaps needs to be invoked first.
+        let mut mem_mappings = Vec::new();
+        if !is_migrate {
+            let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
+            mem_mappings = create_host_mmaps(&ram_ranges, &mem_config, nr_cpus)
+                .chain_err(|| "Failed to mmap guest ram.")?;
+        }
+
         sys_mem
             .register_listener(Box::new(KvmMemoryListener::new(
                 KVM_FDS.load().fd.as_ref().unwrap().get_nr_memslots() as u32,
@@ -178,12 +191,7 @@ pub trait MachineOps {
             .register_listener(Box::new(KvmIoListener::default()))
             .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
 
-        // Init guest-memory
-        // Define ram-region ranges according to architectures
         if !is_migrate {
-            let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
-            let mem_mappings = create_host_mmaps(&ram_ranges, &mem_config)
-                .chain_err(|| "Failed to mmap guest ram.")?;
             for mmap in mem_mappings.iter() {
                 let base = mmap.start_address().raw_value();
                 let size = mmap.size();
@@ -455,25 +463,28 @@ pub trait MachineOps {
         bail!("No pci host found");
     }
 
+    fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
+        // If there is no pci bus, skip the id check, such as micro vm.
+        if let Ok(pci_host) = self.get_pci_host() {
+            // Because device_del needs an id when removing a device, it's necessary to ensure that the id is unique.
+            if name.is_empty() {
+                bail!("Device id is empty");
+            }
+            if PciBus::find_attached_bus(&pci_host.lock().unwrap().root_bus, name).is_some() {
+                bail!("Device id {} existed", name);
+            }
+        }
+        Ok(())
+    }
+
     fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let sys_mem = self.get_sys_mem();
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
-        let pcidev = VirtioPciDevice::new(
-            device_cfg.id,
-            devfn,
-            sys_mem.clone(),
-            device.clone(),
-            parent_bus,
-            multi_func,
-        );
-        pcidev
-            .realize()
-            .chain_err(|| "Failed to add virtio pci blk device")?;
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func)?;
         MigrationManager::register_device_instance_mutex(BlockState::descriptor(), device);
+        self.reset_bus(&device_cfg.id)?;
         Ok(())
     }
 
@@ -514,8 +525,8 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_vfio_device(&mut self, vm_config: &VmConfig, cfg_args: &str) -> Result<()> {
-        let device_cfg: VfioConfig = parse_vfio(vm_config, cfg_args)?;
+    fn add_vfio_device(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
         let path = "/sys/bus/pci/devices/".to_string() + &device_cfg.host;
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -561,6 +572,73 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_virtio_pci_device(
+        &mut self,
+        id: &str,
+        bdf: &PciBdf,
+        device: Arc<Mutex<dyn VirtioDevice>>,
+        multi_func: bool,
+    ) -> Result<()> {
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let sys_mem = self.get_sys_mem();
+        let pcidev = VirtioPciDevice::new(
+            id.to_string(),
+            devfn,
+            sys_mem.clone(),
+            device,
+            parent_bus,
+            multi_func,
+        );
+        pcidev
+            .realize()
+            .chain_err(|| "Failed to add virtio pci device")?;
+        Ok(())
+    }
+
+    /// Set the parent bus slot on when device attached
+    fn reset_bus(&mut self, dev_id: &str) -> Result<()> {
+        let pci_host = self.get_pci_host()?;
+        let locked_pci_host = pci_host.lock().unwrap();
+        let bus =
+            if let Some((bus, _)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &dev_id) {
+                bus
+            } else {
+                bail!("Bus not found, dev id {}", dev_id);
+            };
+        let locked_bus = bus.lock().unwrap();
+        if locked_bus.name == "pcie.0" {
+            // No need to reset root bus
+            return Ok(());
+        }
+        let parent_bridge = if let Some(bridge) = locked_bus.parent_bridge.as_ref() {
+            bridge
+        } else {
+            bail!("Parent bridge does not exist, dev id {}", dev_id);
+        };
+        let dev = parent_bridge.upgrade().unwrap();
+        let locked_dev = dev.lock().unwrap();
+        let name = locked_dev.name();
+        drop(locked_dev);
+        let mut devfn = None;
+        let locked_bus = locked_pci_host.root_bus.lock().unwrap();
+        for (id, dev) in &locked_bus.devices {
+            if dev.lock().unwrap().name() == name {
+                devfn = Some(*id);
+                break;
+            }
+        }
+        drop(locked_bus);
+        // It's safe to call devfn.unwrap(), because the bus exists.
+        match locked_pci_host.find_device(0, devfn.unwrap()) {
+            Some(dev) => dev
+                .lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Failed to reset bus"),
+            None => bail!("Failed to found device"),
+        }
+    }
+
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -586,6 +664,9 @@ pub trait MachineOps {
 
         for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
+            // Check whether the device id exists to ensure device uniqueness.
+            let id = parse_device_id(cfg_args)?;
+            self.check_device_id_existed(&id)?;
             match dev.0.as_str() {
                 "virtio-blk-device" => {
                     self.add_virtio_mmio_block(vm_config, cfg_args)?;
@@ -618,7 +699,7 @@ pub trait MachineOps {
                     self.add_virtio_rng(vm_config, cfg_args)?;
                 }
                 "vfio-pci" => {
-                    self.add_vfio_device(&vm_config, cfg_args)?;
+                    self.add_vfio_device(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
@@ -629,7 +710,6 @@ pub trait MachineOps {
         Ok(())
     }
 
-    /// Add pflash device.
     fn add_pflash_device(&mut self, _configs: &[PFlashConfig]) -> Result<()> {
         bail!("Pflash device is not supported!");
     }

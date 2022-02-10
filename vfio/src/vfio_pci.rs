@@ -144,7 +144,11 @@ impl VfioPciDevice {
             )
         };
         if ret < 0 {
-            return Err(ErrorKind::VfioIoctl("VFIO_GET_PCI_CONFIG_INFO".to_string(), ret).into());
+            return Err(ErrorKind::VfioIoctl(
+                "VFIO_GET_PCI_CONFIG_INFO".to_string(),
+                std::io::Error::last_os_error(),
+            )
+            .into());
         }
 
         self.config_size = info.size;

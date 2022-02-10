@@ -243,6 +243,11 @@ pub trait VirtioDevice: Send {
     /// Realize low level device.
     fn realize(&mut self) -> Result<()>;
 
+    /// Unrealize low level device
+    fn unrealize(&mut self) -> Result<()> {
+        bail!("Unrealize of the virtio device is not implemented");
+    }
+
     /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32;
 

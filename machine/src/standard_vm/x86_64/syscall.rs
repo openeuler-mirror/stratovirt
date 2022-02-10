@@ -78,8 +78,8 @@ ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 46 syscalls
-/// * x86_64-unknown-musl: 43 syscalls
+/// * x86_64-unknown-gnu: 45 syscalls
+/// * x86_64-unknown-musl: 45 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -129,6 +129,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_rt_sigreturn),
         #[cfg(target_env = "musl")]
         BpfRule::new(libc::SYS_tkill),
+        #[cfg(target_env = "musl")]
+        BpfRule::new(libc::SYS_stat),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_tgkill),
         BpfRule::new(libc::SYS_gettid),
@@ -145,6 +147,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32),
+        BpfRule::new(libc::SYS_msync),
     ]
 }
 
