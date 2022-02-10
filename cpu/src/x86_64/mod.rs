@@ -472,7 +472,7 @@ impl MigrationHook for CPU {}
 #[cfg(test)]
 mod test {
     use super::*;
-    use hypervisor::{KVMFds, KVM_FDS};
+    use hypervisor::kvm::{KVMFds, KVM_FDS};
     use kvm_bindings::kvm_segment;
     use serial_test::serial;
     use std::sync::Arc;

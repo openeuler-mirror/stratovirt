@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use error_chain::ChainedError;
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
 
@@ -40,6 +40,17 @@ pub enum ListenerReqType {
 pub trait Listener: Send + Sync {
     /// Get priority.
     fn priority(&self) -> i32;
+
+    /// Is this listener enabled to call.
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    /// Enable listener for address space.
+    fn enable(&mut self) {}
+
+    /// Disable listener for address space.
+    fn disable(&mut self) {}
 
     /// Function that handle request according to request-type.
     ///
@@ -568,7 +579,7 @@ impl Listener for KvmIoListener {
 
 #[cfg(test)]
 mod test {
-    use hypervisor::KVMFds;
+    use hypervisor::kvm::KVMFds;
     use libc::EFD_NONBLOCK;
     use serial_test::serial;
     use vmm_sys_util::eventfd::EventFd;

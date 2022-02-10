@@ -205,8 +205,8 @@ class StandVM(BaseVM):
                     # only one device is supported(pcie root port)
                     if self.pcie_root_port_remain <= 0:
                         raise PcierootportError
-                    _temp_device_args = "virtio-net-pci,netdev=%s,id=%s,bus=pcie.%s,addr=%s.0x0"\
-                        % (tapname, tapname, self.pcie_root_port_remain + 4, hex(i))
+                    _temp_device_args = "virtio-net-pci,netdev=%s,id=%s,bus=pcie.%s,addr=0x0"\
+                        % (tapname, tapname, self.pcie_root_port_remain + 4)
                     self.pcie_root_port_remain -= 1
                     self.pcie_root_port["net"] = False
                 else:
@@ -230,10 +230,10 @@ class StandVM(BaseVM):
                 if self.pcie_root_port_remain <= 0:
                     raise PcierootportError
                 if self.max_bytes == 0:
-                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.%s,addr=0x9.0x0,id=rng-%s'\
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,bus=pcie.%s,addr=0x0,id=rng-%s'\
                         % (self.pcie_root_port_remain + 4, self.pcie_root_port_remain + 4)
                 else:
-                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.%s,addr=0x9.0x0,id=rng-%s'\
+                    _temp_device_args = 'virtio-rng-pci,rng=objrng0,max-bytes=%s,period=1000,bus=pcie.%s,addr=0x0,id=rng-%s'\
                         % (self.max_bytes, self.pcie_root_port_remain + 4, self.pcie_root_port_remain + 4)
                 self.pcie_root_port_remain -= 1
                 self.pcie_root_port["rng"] = False
@@ -258,7 +258,7 @@ class StandVM(BaseVM):
                     if self.pcie_root_port["vsock"]:
                         if self.pcie_root_port_remain <= 0:
                             raise PcierootportError
-                        _temp_vsock_args = "vhost-vsock-pci,id=vsock-%s,guest-cid=%s,bus=pcie.%s,addr=0x3.0x0"\
+                        _temp_vsock_args = "vhost-vsock-pci,id=vsock-%s,guest-cid=%s,bus=pcie.%s,addr=0x0"\
                         % (sockcid, sockcid, self.pcie_root_port_remain + 4)
                         self.pcie_root_port_remain -= 1
                         self.pcie_root_port["vsock"] = False
@@ -276,7 +276,7 @@ class StandVM(BaseVM):
             if self.pcie_root_port["balloon"]:
                 if self.pcie_root_port_remain <= 0:
                     raise PcierootportError
-                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.%s,addr=0x2.0x0,id=balloon-%s" % (self.pcie_root_port_remain + 4, self.pcie_root_port_remain + 4)
+                _temp_balloon_args = "virtio-balloon-pci,bus=pcie.%s,addr=0x0,id=balloon-%s" % (self.pcie_root_port_remain + 4, self.pcie_root_port_remain + 4)
                 self.pcie_root_port_remain -= 1
                 self.pcie_root_port["balloon"] = False
             else:
@@ -311,7 +311,7 @@ class StandVM(BaseVM):
             if self.pcie_root_port["vfio"]:
                 if self.pcie_root_port_remain <= 0:
                     raise PcierootportError
-                _temp_vfio_args = "vfio-pci,host=%s,id=net,bus=pcie.%s,addr=0x04.0x0"\
+                _temp_vfio_args = "vfio-pci,host=%s,id=net,bus=pcie.%s,addr=0x0"\
                     % (self.bdf, self.pcie_root_port_remain + 4)
                 self.pcie_root_port_remain -= 1
                 self.pcie_root_port["vfio"] = False
@@ -418,8 +418,8 @@ class StandVM(BaseVM):
                     # only one device is supported(pcie root port)
                     if self.pcie_root_port_remain <= 0:
                         raise PcierootportError
-                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.%s,addr=%s.0x0,id=%s"\
-                        % (device["drive_id"], self.pcie_root_port_remain + 4, hex(i), device["drive_id"])
+                    _temp_device_args = "virtio-blk-pci,drive=%s,bus=pcie.%s,addr=0x0,id=%s"\
+                        % (device["drive_id"], self.pcie_root_port_remain + 4, device["drive_id"])
                     self.pcie_root_port_remain -= 1
                     self.pcie_root_port["block"] = False
                 else:

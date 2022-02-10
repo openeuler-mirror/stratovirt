@@ -17,8 +17,6 @@ extern crate error_chain;
 extern crate vmm_sys_util;
 #[macro_use]
 extern crate log;
-#[macro_use]
-extern crate lazy_static;
 
 pub mod aio;
 pub mod arg_parser;
@@ -162,12 +160,11 @@ pub mod errors {
 }
 
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
-use std::sync::{Arc, Mutex};
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
 use vmm_sys_util::terminal::Terminal;
 
-lazy_static! {
-    pub static ref TERMINAL_MODE: Arc<Mutex<Option<termios>>> = Arc::new(Mutex::new(None));
-}
+pub static TERMINAL_MODE: Lazy<Mutex<Option<termios>>> = Lazy::new(|| Mutex::new(None));
 
 pub fn set_termi_raw_mode() -> std::io::Result<()> {
     let tty_fd = std::io::stdin().lock().tty_fd();

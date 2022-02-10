@@ -12,27 +12,24 @@
 
 use std::mem::size_of;
 
+use hypervisor::kvm::{KVM_GET_ONE_REG, KVM_SET_ONE_REG};
 use kvm_bindings::{
-    kvm_one_reg, kvm_regs, user_fpsimd_state, user_pt_regs, KVMIO, KVM_NR_SPSR, KVM_REG_ARM64,
+    kvm_one_reg, kvm_regs, user_fpsimd_state, user_pt_regs, KVM_NR_SPSR, KVM_REG_ARM64,
     KVM_REG_ARM_CORE, KVM_REG_SIZE_MASK, KVM_REG_SIZE_SHIFT, KVM_REG_SIZE_U128, KVM_REG_SIZE_U32,
     KVM_REG_SIZE_U64,
 };
 use kvm_ioctls::VcpuFd;
+use util::byte_code::ByteCode;
 use vmm_sys_util::{
     errno,
     ioctl::{ioctl_with_mut_ref, ioctl_with_ref},
-    ioctl_iow_nr,
 };
-
-use util::byte_code::ByteCode;
 
 pub type Result<T> = std::result::Result<T, errno::Error>;
 
 const KVM_REG_MAX_SIZE: u64 = 256;
 const KVM_NR_REGS: u64 = 31;
 const KVM_NR_FP_REGS: u64 = 32;
-ioctl_iow_nr!(KVM_GET_ONE_REG, KVMIO, 0xab, kvm_one_reg);
-ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
 
 /// AArch64 cpu core register.
 /// See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/kvm.h#L50

@@ -5,13 +5,13 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use once_cell::sync::Lazy;
 
 use crate::errors::{Result, ResultExt};
 
-lazy_static! {
-    static ref TRACE_MARKER_FD: Option<File> = open_trace_marker();
-    static ref TRACE_EVENTS: ArcSwap<HashSet<String>> = ArcSwap::new(Arc::new(HashSet::new()));
-}
+static TRACE_MARKER_FD: Lazy<Option<File>> = Lazy::new(open_trace_marker);
+static TRACE_EVENTS: Lazy<ArcSwap<HashSet<String>>> =
+    Lazy::new(|| ArcSwap::new(Arc::new(HashSet::new())));
 
 fn open_trace_marker() -> Option<File> {
     let file = "/proc/mounts";
@@ -74,7 +74,7 @@ pub fn write_trace_marker(event: &str, msg: &str) {
     }
 
     let msg = format!("[{}] {}", event, msg);
-    if let Err(e) = (*TRACE_MARKER_FD).as_ref().unwrap().write(msg.as_bytes()) {
+    if let Err(e) = TRACE_MARKER_FD.as_ref().unwrap().write(msg.as_bytes()) {
         error!("Write trace_marker error: {}", e);
     }
 }
@@ -107,16 +107,16 @@ pub fn enable_trace_events(file: &str) -> Result<()> {
             return Ok(());
         }
 
-        let mut trace_events = (*TRACE_EVENTS).load().deref().deref().clone();
+        let mut trace_events = TRACE_EVENTS.load().deref().deref().clone();
         trace_events.insert(buf.trim().to_string());
-        (*TRACE_EVENTS).store(Arc::new(trace_events));
+        TRACE_EVENTS.store(Arc::new(trace_events));
     }
 }
 
 pub fn is_trace_event_enabled(event: &str) -> bool {
-    if (*TRACE_EVENTS).load().is_empty() {
+    if TRACE_EVENTS.load().is_empty() {
         return false;
     }
 
-    (*TRACE_EVENTS).load().contains(event)
+    TRACE_EVENTS.load().contains(event)
 }

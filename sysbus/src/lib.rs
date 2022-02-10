@@ -17,6 +17,7 @@ pub mod errors {
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
+            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
         }
         foreign_links {
             KvmIoctl(kvm_ioctls::Error);
@@ -28,7 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
 
 use errors::{Result, ResultExt};
@@ -208,16 +209,11 @@ pub trait SysBusDevOps: Send + AmlBuilder {
         if irq > sysbus.free_irqs.1 {
             bail!("IRQ number exhausted.");
         }
+
         match self.interrupt_evt() {
             None => Ok(-1_i32),
             Some(evt) => {
-                KVM_FDS
-                    .load()
-                    .vm_fd
-                    .as_ref()
-                    .unwrap()
-                    .register_irqfd(evt, irq as u32)
-                    .chain_err(|| "Failed to register irqfd")?;
+                KVM_FDS.load().register_irqfd(evt, irq as u32)?;
                 sysbus.min_free_irq = irq + 1;
                 Ok(irq)
             }

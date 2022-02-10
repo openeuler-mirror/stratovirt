@@ -10,17 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::raw::c_uint;
-
-#[cfg(target_arch = "x86_64")]
-use kvm_bindings::{
-    kvm_clock_data, kvm_debugregs, kvm_fpu, kvm_irqchip, kvm_lapic_state, kvm_msrs, kvm_pit_state2,
-    kvm_regs, kvm_sregs, kvm_xcrs, kvm_xsave,
-};
-#[cfg(target_arch = "aarch64")]
-use kvm_bindings::{kvm_device_attr, kvm_one_reg, kvm_reg_list};
-use kvm_bindings::{kvm_mp_state, kvm_vcpu_events};
-
+use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
 use virtio::VhostKern::*;
@@ -51,42 +41,6 @@ const TIOCGWINSZ: u32 = 0x5413;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
-
-// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
-const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
-
-const KVMIO: c_uint = 0xAE;
-ioctl_io_nr!(KVM_GET_API_VERSION, KVMIO, 0x00);
-ioctl_ior_nr!(KVM_GET_MP_STATE, KVMIO, 0x98, kvm_mp_state);
-ioctl_ior_nr!(KVM_GET_VCPU_EVENTS, KVMIO, 0x9f, kvm_vcpu_events);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_PIT2, KVMIO, 0x9f, kvm_pit_state2);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_CLOCK, KVMIO, 0x7c, kvm_clock_data);
-#[cfg(target_arch = "x86_64")]
-ioctl_iowr_nr!(KVM_GET_IRQCHIP, KVMIO, 0x62, kvm_irqchip);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_REGS, KVMIO, 0x81, kvm_regs);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_SREGS, KVMIO, 0x83, kvm_sregs);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_XSAVE, KVMIO, 0xa4, kvm_xsave);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_FPU, KVMIO, 0x8c, kvm_fpu);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_XCRS, KVMIO, 0xa6, kvm_xcrs);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_DEBUGREGS, KVMIO, 0xa1, kvm_debugregs);
-#[cfg(target_arch = "x86_64")]
-ioctl_ior_nr!(KVM_GET_LAPIC, KVMIO, 0x8e, kvm_lapic_state);
-#[cfg(target_arch = "x86_64")]
-ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
-#[cfg(target_arch = "aarch64")]
-ioctl_iow_nr!(KVM_GET_ONE_REG, KVMIO, 0xab, kvm_one_reg);
-#[cfg(target_arch = "aarch64")]
-ioctl_iow_nr!(KVM_GET_DEVICE_ATTR, KVMIO, 0xe2, kvm_device_attr);
-#[cfg(target_arch = "aarch64")]
-ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 
 /// Create a syscall whitelist for seccomp.
 ///

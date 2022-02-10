@@ -15,8 +15,6 @@
 #[macro_use]
 extern crate error_chain;
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate log;
 #[macro_use]
 extern crate vmm_sys_util;
@@ -36,6 +34,4 @@ pub mod errors {
     }
 }
 
-mod kvm;
-
-pub use kvm::*;
+pub mod kvm;

@@ -10,15 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use kvm_bindings::{
-    kvm_clock_data, kvm_debugregs, kvm_fpu, kvm_irq_routing, kvm_irqchip, kvm_irqfd,
-    kvm_lapic_state, kvm_mp_state, kvm_msrs, kvm_pit_state2, kvm_regs, kvm_sregs, kvm_vcpu_events,
-    kvm_xcrs, kvm_xsave, KVMIO,
-};
-use vfio_bindings::bindings::vfio::{VFIO_BASE, VFIO_TYPE};
-
+use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
 use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
+use vfio::{
+    VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO, VFIO_DEVICE_GET_IRQ_INFO,
+    VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET, VFIO_DEVICE_SET_IRQS, VFIO_GET_API_VERSION,
+    VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS, VFIO_GROUP_SET_CONTAINER, VFIO_IOMMU_MAP_DMA,
+    VFIO_IOMMU_UNMAP_DMA, VFIO_SET_IOMMU,
+};
 use virtio::VhostKern::*;
 
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/futex.h
@@ -48,38 +48,12 @@ const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
 
-// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
-const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
-const KVM_SET_USER_MEMORY_REGION: u32 = 0x4020_ae46;
-const KVM_IOEVENTFD: u32 = 0x4040_ae79;
-const KVM_SIGNAL_MSI: u32 = 0x4020_aea5;
-
-// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
-ioctl_iow_nr!(KVM_SET_GSI_ROUTING, KVMIO, 0x6a, kvm_irq_routing);
-ioctl_iow_nr!(KVM_IRQFD, KVMIO, 0x76, kvm_irqfd);
-// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/vfio.h
-ioctl_io_nr!(VFIO_DEVICE_SET_IRQS, VFIO_TYPE, VFIO_BASE + 0x0a);
-ioctl_io_nr!(KVM_GET_API_VERSION, KVMIO, 0x00);
-ioctl_ior_nr!(KVM_GET_MP_STATE, KVMIO, 0x98, kvm_mp_state);
-ioctl_ior_nr!(KVM_GET_VCPU_EVENTS, KVMIO, 0x9f, kvm_vcpu_events);
-ioctl_ior_nr!(KVM_GET_PIT2, KVMIO, 0x9f, kvm_pit_state2);
-ioctl_ior_nr!(KVM_GET_CLOCK, KVMIO, 0x7c, kvm_clock_data);
-ioctl_iowr_nr!(KVM_GET_IRQCHIP, KVMIO, 0x62, kvm_irqchip);
-ioctl_ior_nr!(KVM_GET_REGS, KVMIO, 0x81, kvm_regs);
-ioctl_ior_nr!(KVM_GET_SREGS, KVMIO, 0x83, kvm_sregs);
-ioctl_ior_nr!(KVM_GET_XSAVE, KVMIO, 0xa4, kvm_xsave);
-ioctl_ior_nr!(KVM_GET_FPU, KVMIO, 0x8c, kvm_fpu);
-ioctl_ior_nr!(KVM_GET_XCRS, KVMIO, 0xa6, kvm_xcrs);
-ioctl_ior_nr!(KVM_GET_DEBUGREGS, KVMIO, 0xa1, kvm_debugregs);
-ioctl_ior_nr!(KVM_GET_LAPIC, KVMIO, 0x8e, kvm_lapic_state);
-ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
-
 /// Create a syscall whitelist for seccomp.
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 45 syscalls
-/// * x86_64-unknown-musl: 45 syscalls
+/// * x86_64-unknown-gnu: 46 syscalls
+/// * x86_64-unknown-musl: 47 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -136,7 +110,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_gettid),
         BpfRule::new(libc::SYS_getpid),
         BpfRule::new(libc::SYS_fstat),
-        #[cfg(all(target_env = "gnu"))]
         BpfRule::new(libc::SYS_newfstatat),
         BpfRule::new(libc::SYS_pread64),
         BpfRule::new(libc::SYS_pwrite64),
@@ -148,6 +121,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
             .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32),
         BpfRule::new(libc::SYS_msync),
+        BpfRule::new(libc::SYS_readlinkat),
     ]
 }
 
@@ -182,6 +156,19 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQFD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_SET_IRQS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_GET_STATUS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GET_API_VERSION() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_CHECK_EXTENSION() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_SET_CONTAINER() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_SET_IOMMU() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_CREATE_DEVICE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_IOMMU_MAP_DMA() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_IOMMU_UNMAP_DMA() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_GET_DEVICE_FD() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_INFO() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_RESET() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_REGION_INFO() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_IRQ_INFO() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)

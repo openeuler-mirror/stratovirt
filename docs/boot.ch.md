@@ -59,6 +59,8 @@ Rootfs镜像是一种文件系统镜像。在StratoVirt启动时可以挂载带�
 
 ## 标准虚拟机启动过程
 
+标准虚拟机有两种启动方式，第一种使用kernel+rootfs；另一种是使用预先安装好guest 操作系统的raw格式镜像。
+
 ### 1. 构建内核镜像
 
 StratoVirt的标准虚拟机机型支持x86_64平台的bzImage格式内核镜像和aarch64平台的PE格式内核镜像。内核镜像构建如下：
@@ -157,9 +159,25 @@ fi
 
 为标准虚拟机构建rootfs镜像实际上与微虚拟机相同。你可以通过[附录](#2附录)查看更多的详细信息。
 
-### 4. 启动命令行样例
+
+### 4. 获取 raw 格式镜像
+
+你可以从 openEuler 官网下载已经安装好的 [qcow2 镜像](https://repo.openeuler.org/openEuler-21.03/virtual_machine_img/x86_64/openEuler-21.03-x86_64.qcow2.xz)。
+
+下载之后，可以利用 qemu-img 命令进行转换。接下来以 openEuler-21.03 版本的 qcow2 镜像为例给出具体命令：
+
+```shell
+$ xz -d openEuler-21.03-x86_64.qcow2.xz
+$ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-x86_64.raw
+```
+
+至此就获得了可以使用的 raw 格式镜像。
+
+### 5. 启动命令行样例
 
 请注意，标准虚拟机需要两个PFlash设备，它们将使用来自与EDK2二进制的两个固件文件。如果你不需要保持启动信息，单元序列为1的数据存储文件可以被省略。但是单元序号为0的代码存储文件是必须的。
+
+首先给出 kernel + rootfs 的启动命令，具体如下：
 
 ```shell
 arch=`uname -m`
@@ -172,6 +190,23 @@ else
     exit 1
 fi
 
+/usr/bin/stratovirt \
+    -machine standard_vm \
+    -kernel /path/to/kernel \
+    -smp 1 \
+    -m 2G \
+    -append "console=${con} reboot=k panic=1 root=/dev/vda" \
+    -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
+    -device virtio-blk-device,drive=rootfs \
+    -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
+    -drive file=/path/to/OVMF_VARS.fd,if=pfalsh,unit=1 \
+    -qmp unix:/path/to/socket,server,nowait \
+    -serial stdio
+```
+
+最后给出 raw 格式镜像的启动命令，具体如下:
+
+```shell
 /usr/bin/stratovirt \
     -machine standard_vm \
     -kernel /path/to/kernel \

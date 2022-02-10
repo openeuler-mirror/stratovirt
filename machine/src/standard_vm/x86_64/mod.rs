@@ -29,7 +29,7 @@ use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
-use hypervisor::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::machine::{
@@ -90,7 +90,7 @@ pub struct StdMachine {
     /// IO address space.
     sys_io: Arc<AddressSpace>,
     /// Memory address space.
-    sys_mem: Arc<AddressSpace>,
+    pub sys_mem: Arc<AddressSpace>,
     /// System bus.
     sysbus: SysBus,
     /// PCI/PCIe host bridge.
@@ -278,10 +278,7 @@ impl MachineOps for StdMachine {
             .lock()
             .unwrap()
             .init_irq_route_table();
-        KVM_FDS
-            .load()
-            .commit_irq_routing()
-            .chain_err(|| "Failed to commit irq routing for kvm irqchip")?;
+        KVM_FDS.load().commit_irq_routing()?;
         Ok(())
     }
 
@@ -481,7 +478,7 @@ impl MachineOps for StdMachine {
         &self.sys_mem
     }
 
-    fn get_pci_host(&mut self) -> MachineResult<&Arc<Mutex<PciHost>>> {
+    fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
     }
 }

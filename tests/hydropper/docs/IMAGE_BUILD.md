@@ -43,7 +43,7 @@
 	```shell
 	cd /mnt
 	chroot .
-	yum -y install openSSH
+	yum -y install openssh
 	```
 
 - 离开当前目录后，使用umount命令卸载镜像。

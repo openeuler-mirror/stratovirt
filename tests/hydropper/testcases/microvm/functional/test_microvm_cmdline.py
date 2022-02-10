@@ -48,7 +48,7 @@ def _get_corefilesize(vm_pid, dump_guestcore):
         (status, output) = getstatusoutput("cat /proc/sys/kernel/core_pattern")
         assert status == 0
         coredirectory = os.path.dirname(str(output))
-        (status, output) = getstatusoutput("ls -s %s | awk '/-%s-/' | awk '{print $1}'" % (coredirectory, vm_pid))
+        (status, output) = getstatusoutput("ls -s %s | awk '/_%s_/' | awk '{print $1}'" % (coredirectory, vm_pid))
         assert status == 0
     return  output
 
@@ -158,52 +158,6 @@ def test_microvm_with_dump_guestcore(microvm, dump_guestcore):
     logging.debug("coredump size is %s", output)
     assert (int(output) < 102400 or dump_guestcore)
 
-
-@pytest.mark.acceptance
-@pytest.mark.parametrize("with_seccomp", [True, False])
-@pytest.mark.skipif(
-    platform.machine() != "x86_64",
-    reason="psyscall tools fail to run on aarch64."
-)
-def test_microvm_with_seccomp(microvm, with_seccomp):
-    """
-    Test microvm with seccomp:
-
-    1) Set seccomp up.
-    2) Launch to test_vm.
-    3) Excute some system call that not in seccomp.
-    4) seccomp will shutdown VM
-
-    Args:
-        with_seccomp: secure computing mode
-    """
-    test_vm = microvm
-    test_vm.basic_config(seccomp=with_seccomp)
-    test_vm.launch()
-    vm_pid = test_vm.pid
-
-    # Get psyscall
-    try:
-        path = os.path.realpath(os.path.dirname(__file__))
-        psyscall_path = "{}/{}".format(path, "psyscall")
-        run(
-            "git clone https://gitee.com/EulerRobot/psyscall.git %s"
-            % psyscall_path,
-            shell=True,
-            check=True
-            )
-        run("cd %s && make" % psyscall_path, shell=True, check=True)
-
-        # bad syscall
-        _cmd = "%s/psyscall %s dup2 3 4" % (psyscall_path, vm_pid)
-        logging.debug("execute command %s", _cmd)
-        status, output = getstatusoutput(_cmd)
-        logging.debug("bad syscall output: %s", output)
-        assert status == 0
-        if with_seccomp:
-            test_vm.wait_pid_exit()
-    finally:
-        utils.utils_common.remove_existing_dir(psyscall_path)
 
 @pytest.mark.acceptance
 @pytest.mark.parametrize("mem_size", [2 * 1024])

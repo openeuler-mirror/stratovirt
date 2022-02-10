@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 use std::io::Write;
+use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -196,7 +197,7 @@ impl Request {
         &self,
         req_type: bool,
         address_space: &Arc<AddressSpace>,
-        mem: &BlnMemInfo,
+        mem: &Arc<Mutex<BlnMemInfo>>,
     ) {
         let advice = if req_type {
             libc::MADV_DONTNEED
@@ -214,7 +215,7 @@ impl Request {
             while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
                 offset += std::mem::size_of::<u32>() as u64;
                 let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
-                let hva = match mem.get_host_address(gpa) {
+                let hva = match mem.lock().unwrap().get_host_address(gpa) {
                     Some(addr) => addr,
                     None => {
                         error!("Can not get host address, gpa: {}", gpa.raw_value());
@@ -309,15 +310,14 @@ struct BlnMemoryRegion {
     reg_page_size: Option<u64>,
 }
 
-#[derive(Clone)]
 struct BlnMemInfo {
-    regions: Arc<Mutex<Vec<BlnMemoryRegion>>>,
+    regions: Mutex<Vec<BlnMemoryRegion>>,
 }
 
 impl BlnMemInfo {
     fn new() -> BlnMemInfo {
         BlnMemInfo {
-            regions: Arc::new(Mutex::new(Vec::new())),
+            regions: Mutex::new(Vec::new()),
         }
     }
 
@@ -453,7 +453,7 @@ struct BalloonIoHandler {
     /// The interrupt call back function.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Balloon Memory information.
-    mem_info: BlnMemInfo,
+    mem_info: Arc<Mutex<BlnMemInfo>>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
     /// Actual balloon size
@@ -481,7 +481,7 @@ impl BalloonIoHandler {
         {
             match Request::parse(&elem) {
                 Ok(req) => {
-                    if !self.mem_info.has_huge_page() {
+                    if !self.mem_info.lock().unwrap().has_huge_page() {
                         req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
                     }
                     locked_queue
@@ -506,7 +506,7 @@ impl BalloonIoHandler {
 
     /// Send balloon changed event.
     fn send_balloon_changed_event(&self) {
-        let ram_size = self.mem_info.get_ram_size();
+        let ram_size = self.mem_info.lock().unwrap().get_ram_size();
         let balloon_size = self.get_balloon_memory_size();
         let msg = BalloonInfo {
             actual: ram_size - balloon_size,
@@ -658,7 +658,7 @@ pub struct Balloon {
     /// Interrupt callback function.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Balloon memory information.
-    mem_info: BlnMemInfo,
+    mem_info: Arc<Mutex<BlnMemInfo>>,
     /// Memory space
     mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
@@ -685,7 +685,7 @@ impl Balloon {
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
-            mem_info: BlnMemInfo::new(),
+            mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
             reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -721,11 +721,12 @@ impl Balloon {
     /// * `size` - Target momery size.
     pub fn set_guest_memory_size(&mut self, size: u64) -> Result<()> {
         let host_page_size = host_page_size();
-        if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.has_huge_page() {
+        if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.lock().unwrap().has_huge_page() {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
         }
         let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let current_ram_size = (self.mem_info.get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
+        let current_ram_size =
+            (self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
         let vm_target = cmp::min(target, current_ram_size);
         self.num_pages = current_ram_size - vm_target;
         self.signal_config_change().chain_err(|| {
@@ -745,17 +746,16 @@ impl Balloon {
 
     /// Get the actual memory size of guest.
     pub fn get_guest_memory_size(&self) -> u64 {
-        self.mem_info.get_ram_size() - self.get_balloon_memory_size()
+        self.mem_info.lock().unwrap().get_ram_size() - self.get_balloon_memory_size()
     }
 }
 
 impl VirtioDevice for Balloon {
     /// Realize a balloon device.
     fn realize(&mut self) -> Result<()> {
-        let bln_mem_info = BlnMemInfo::new();
-        self.mem_info = bln_mem_info.clone();
+        self.mem_info = Arc::new(Mutex::new(BlnMemInfo::new()));
         self.mem_space
-            .register_listener(Box::new(bln_mem_info))
+            .register_listener(self.mem_info.clone())
             .chain_err(|| "Failed to register memory listener defined by balloon device.")?;
         Ok(())
     }
@@ -810,8 +810,14 @@ impl VirtioDevice for Balloon {
         if offset != 0 {
             return Err(ErrorKind::IncorrectOffset(0, offset).into());
         }
-        data.write_all(&new_config.as_bytes()[offset as usize..data.len()])
-            .chain_err(|| "Failed to write data to 'data' while reading balloon config")?;
+        data.write_all(
+            &new_config.as_bytes()[offset as usize
+                ..cmp::min(
+                    offset as usize + data.len(),
+                    size_of::<VirtioBalloonConfig>(),
+                )],
+        )
+        .chain_err(|| "Failed to write data to 'data' while reading balloon config")?;
         Ok(())
     }
 
@@ -1033,7 +1039,7 @@ mod tests {
         assert_eq!(bln.queue_num(), 2);
         assert_eq!(bln.queue_size(), QUEUE_SIZE);
         // Test methods of balloon.
-        let ram_size = bln.mem_info.get_ram_size();
+        let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
 
         assert!(bln.reset().is_ok());
@@ -1088,7 +1094,7 @@ mod tests {
         assert!(blninfo
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_ok());
-        bln.mem_info = blninfo;
+        bln.mem_info = Arc::new(Mutex::new(blninfo));
 
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
