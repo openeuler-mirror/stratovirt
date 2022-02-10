@@ -218,7 +218,7 @@ impl Listener for VhostMemInfo {
 
 pub struct VhostBackend {
     fd: File,
-    mem_info: VhostMemInfo,
+    mem_info: Arc<Mutex<VhostMemInfo>>,
 }
 
 impl VhostBackend {
@@ -236,8 +236,8 @@ impl VhostBackend {
                 .open(path)
                 .chain_err(|| format!("Failed to open {} for vhost backend.", path))?,
         };
-        let mem_info = VhostMemInfo::new();
-        mem_space.register_listener(Box::new(mem_info.clone()))?;
+        let mem_info = Arc::new(Mutex::new(VhostMemInfo::new()));
+        mem_space.register_listener(mem_info.clone())?;
 
         Ok(VhostBackend { fd, mem_info })
     }
@@ -284,7 +284,7 @@ impl VhostOps for VhostBackend {
     }
 
     fn set_mem_table(&self) -> Result<()> {
-        let regions = self.mem_info.regions.lock().unwrap().len();
+        let regions = self.mem_info.lock().unwrap().regions.lock().unwrap().len();
         let vm_size = std::mem::size_of::<VhostMemory>();
         let vmr_size = std::mem::size_of::<VhostMemoryRegion>();
         let mut bytes: Vec<u8> = vec![0; vm_size + regions * vmr_size];
@@ -297,7 +297,9 @@ impl VhostOps for VhostBackend {
             .as_bytes(),
         );
 
-        for (index, region) in self.mem_info.regions.lock().unwrap().iter().enumerate() {
+        let locked_mem_info = self.mem_info.lock().unwrap();
+        let locked_regions = locked_mem_info.regions.lock().unwrap();
+        for (index, region) in locked_regions.iter().enumerate() {
             bytes[(vm_size + index * vmr_size)..(vm_size + (index + 1) * vmr_size)]
                 .copy_from_slice(region.as_bytes());
         }
@@ -322,8 +324,8 @@ impl VhostOps for VhostBackend {
     }
 
     fn set_vring_addr(&self, queue_config: &QueueConfig, index: usize, flags: u32) -> Result<()> {
-        let desc_user_addr = self
-            .mem_info
+        let locked_mem_info = self.mem_info.lock().unwrap();
+        let desc_user_addr = locked_mem_info
             .addr_to_host(queue_config.desc_table)
             .ok_or_else(|| {
                 ErrorKind::Msg(format!(
@@ -331,9 +333,7 @@ impl VhostOps for VhostBackend {
                     queue_config.desc_table.0
                 ))
             })?;
-
-        let used_user_addr = self
-            .mem_info
+        let used_user_addr = locked_mem_info
             .addr_to_host(queue_config.used_ring)
             .ok_or_else(|| {
                 ErrorKind::Msg(format!(
@@ -341,9 +341,7 @@ impl VhostOps for VhostBackend {
                     queue_config.used_ring.0
                 ))
             })?;
-
-        let avail_user_addr = self
-            .mem_info
+        let avail_user_addr = locked_mem_info
             .addr_to_host(queue_config.avail_ring)
             .ok_or_else(|| {
                 ErrorKind::Msg(format!(

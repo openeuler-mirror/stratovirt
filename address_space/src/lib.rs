@@ -145,6 +145,9 @@ pub mod errors {
             KvmSlotOverlap(add: (u64, u64), exist: (u64, u64)) {
                 display("Added KVM mem range (0x{:X}, 0x{:X}) overlaps with exist one (0x{:X}, 0x{:X})", add.0, add.1, exist.0, exist.1)
             }
+            InvalidOffset(offset: u64, count: u64, region_size: u64) {
+                display("Invalid offset: offset 0x{:X}, data length 0x{:X}, region size 0x{:X}", offset, count, region_size)
+            }
         }
     }
 }

@@ -486,6 +486,7 @@ pub struct device_add {
     pub serial_num: Option<String>,
     pub iothread: Option<String>,
     pub multifunction: Option<bool>,
+    pub host: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;

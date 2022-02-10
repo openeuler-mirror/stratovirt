@@ -203,10 +203,10 @@ dependencies = [
  "error-chain",
  "kvm-bindings",
  "kvm-ioctls",
- "lazy_static",
  "log",
  "migration",
  "migration_derive",
+ "once_cell",
  "util",
  "vmm-sys-util",
 ]
@@ -309,9 +309,9 @@ name = "machine_manager"
 version = "2.0.0"
 dependencies = [
  "error-chain",
- "lazy_static",
  "libc",
  "log",
+ "once_cell",
  "serde",
  "serde_json",
  "strum",
@@ -326,8 +326,8 @@ version = "2.0.0"
 dependencies = [
  "error-chain",
  "kvm-ioctls",
- "lazy_static",
  "migration_derive",
+ "once_cell",
  "serde",
  "serde_json",
  "util",
@@ -359,6 +359,12 @@ name = "object"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a5b3dd1c072ee7963717671d1ca129f1048fda25edea6b752bfc71ac8854170"
+
+[[package]]
+name = "once_cell"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da32515d9f6e6e489d7bc9d84c71b060db7247dc035bbe44eac88cf87486d8d5"
 
 [[package]]
 name = "ozone"
@@ -581,9 +587,9 @@ dependencies = [
  "error-chain",
  "kvm-bindings",
  "kvm-ioctls",
- "lazy_static",
  "libc",
  "log",
+ "once_cell",
  "vmm-sys-util",
 ]
 
@@ -603,9 +609,9 @@ dependencies = [
  "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
- "lazy_static",
  "libc",
  "log",
+ "once_cell",
  "pci",
  "util",
  "vfio-bindings",

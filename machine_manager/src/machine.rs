@@ -13,8 +13,9 @@
 extern crate util;
 
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
+use once_cell::sync::Lazy;
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
@@ -421,7 +422,5 @@ pub trait MachineInterface: MachineLifecycle + MachineAddressInterface {}
 /// Machine interface which is exposed to outer hypervisor.
 pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface + MigrateInterface {}
 
-lazy_static! {
-    pub static ref PTY_PATH: Arc<Mutex<Vec<PathInfo>>> = Arc::new(Mutex::new(Vec::new()));
-    pub static ref IOTHREADS: Arc<Mutex<Vec<IothreadInfo>>> = Arc::new(Mutex::new(Vec::new()));
-}
+pub static PTY_PATH: Lazy<Mutex<Vec<PathInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
+pub static IOTHREADS: Lazy<Mutex<Vec<IothreadInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));

@@ -18,16 +18,15 @@ use std::sync::{Arc, Mutex, RwLock};
 use super::device_state::{DeviceStateDesc, StateTransfer};
 use super::errors::{Result, ResultExt};
 use super::status::MigrationStatus;
+use once_cell::sync::Lazy;
 use util::byte_code::ByteCode;
 
-lazy_static! {
-    /// Glocal MigrationManager to manage all migration combined interface.
-    pub(crate) static ref MIGRATION_MANAGER: Arc<MigrationManager> = Arc::new(MigrationManager {
-        entry: Arc::new(RwLock::new(BTreeMap::<u64, MigrationEntry>::new())),
-        desc_db: Arc::new(RwLock::new(HashMap::<String, DeviceStateDesc>::new())),
-        status: Arc::new(RwLock::new(MigrationStatus::None)),
-    });
-}
+/// Glocal MigrationManager to manage all migration combined interface.
+pub(crate) static MIGRATION_MANAGER: Lazy<MigrationManager> = Lazy::new(|| MigrationManager {
+    entry: Arc::new(RwLock::new(BTreeMap::<u64, MigrationEntry>::new())),
+    desc_db: Arc::new(RwLock::new(HashMap::<String, DeviceStateDesc>::new())),
+    status: Arc::new(RwLock::new(MigrationStatus::None)),
+});
 
 /// A hook for `Device` to save device state to `Write` object and load device
 /// from `[u8]` slice.

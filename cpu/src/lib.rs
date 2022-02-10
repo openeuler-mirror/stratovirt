@@ -39,9 +39,6 @@ extern crate util;
 #[macro_use]
 extern crate migration_derive;
 #[cfg(target_arch = "aarch64")]
-#[macro_use]
-extern crate vmm_sys_util;
-
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -751,7 +748,7 @@ impl CpuTopology {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use hypervisor::{KVMFds, KVM_FDS};
+    use hypervisor::kvm::{KVMFds, KVM_FDS};
     use machine_manager::machine::{
         KvmVmState, MachineAddressInterface, MachineInterface, MachineLifecycle,
     };

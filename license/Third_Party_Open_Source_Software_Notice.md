@@ -365,12 +365,6 @@ Copyright (c) 2017 arc-swap developers
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: lazy_static 1.4.0
-Copyright notice:
-Copyright (c) 2010 The Rust Project Developers
-License: MIT or Apache License Version 2.0
-Please see above.
-
 Software: serial_test 0.5.1
 Copyright notice:
 Copyright (c) 2018 Tom Parker-Shemilt
@@ -412,4 +406,10 @@ Software: vfio-bindings 0.2.0
 Copyright notice:
 Copyright (c) 2019 Intel Corporation. All Rights Reserved.
 License: Apache License Version 2.0 or BSD 3-Clause License
+Please see above.
+
+Software: once_cell 1.9.0
+Copyright notice:
+Copyright (c) Aleksey Kladov <aleksey.kladov@gmail.com>
+License: MIT OR Apache-2.0
 Please see above.

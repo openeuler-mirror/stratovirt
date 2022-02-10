@@ -694,19 +694,13 @@ impl VirtioDevice for Net {
         let (sender, receiver) = channel();
         self.sender = Some(sender);
 
-        let tap_fd = if let Some(tap) = &self.tap {
-            tap.as_raw_fd()
-        } else {
-            -1
-        };
-
-        let handler = NetIoHandler {
+        let mut handler = NetIoHandler {
             rx: RxVirtio::new(rx_queue, rx_queue_evt),
             tx: TxVirtio::new(tx_queue, tx_queue_evt),
             tap: self.tap.as_ref().map(|t| Tap {
                 file: t.file.try_clone().unwrap(),
             }),
-            tap_fd,
+            tap_fd: -1,
             mem_space,
             interrupt_cb,
             driver_features: self.state.driver_features,
@@ -715,6 +709,9 @@ impl VirtioDevice for Net {
             reset_evt: self.reset_evt.as_raw_fd(),
             is_listening: true,
         };
+        if let Some(tap) = &handler.tap {
+            handler.tap_fd = tap.as_raw_fd();
+        }
 
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),

@@ -19,6 +19,7 @@ import time
 import platform
 from subprocess import run
 import pytest
+from virt.container import KataContainer
 from virt.microvm import MicroVM
 from virt.standvm import StandVM
 from monitor.monitor_thread import MonitorThread
@@ -157,6 +158,25 @@ def nc_vsock_path(test_session_root_path):
     )
     yield nc_vsock_bin_path
 
+@pytest.fixture(autouse=True, scope='session')
+def container():
+    """Instantiate a container"""
+    # pylint: disable=redefined-outer-name
+    # The pytest.fixture triggers a pylint rule.
+    kata_container = KataContainer()
+    backup_cmd = "cp %s/configuration.toml %s/configuration.toml-bak" % \
+                (CONFIG.kata_config_path, CONFIG.kata_config_path)
+    run(backup_cmd, shell=True, check=True)
+
+    cmd = "cp %s/configuration-hydropper.toml %s/configuration.toml" % \
+         (CONFIG.kata_config_path, CONFIG.kata_config_path)
+    run(cmd, shell=True, check=True)
+
+    yield kata_container
+
+    resume_cmd = "cp %s/configuration.toml-bak %s/configuration.toml" % \
+                (CONFIG.kata_config_path, CONFIG.kata_config_path)
+    run(resume_cmd, shell=True, check=True)
 
 @pytest.fixture()
 def microvm(test_session_root_path):

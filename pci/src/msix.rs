@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{GuestAddress, Region, RegionOps};
-use hypervisor::{MsiVector, KVM_FDS};
+use hypervisor::kvm::{MsiVector, KVM_FDS};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use util::{byte_code::ByteCode, num_ops::round_up};
+use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 
 use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};
 use crate::errors::{Result, ResultExt};
@@ -162,8 +162,16 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let table_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
+            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+                error!(
+                    "Fail to read msi table, illegal data length {}, offset {}",
+                    data.len(),
+                    offset
+                );
+                return false;
+            }
             let offset = offset as usize;
-            data.copy_from_slice(&cloned_msix.lock().unwrap().table[offset..(offset + 4)]);
+            data.copy_from_slice(&cloned_msix.lock().unwrap().table[offset..(offset + data.len())]);
             true
         };
         let cloned_msix = msix.clone();
@@ -193,8 +201,16 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let pba_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
+            if offset as usize + data.len() > cloned_msix.lock().unwrap().pba.len() {
+                error!(
+                    "Fail to read msi pba, illegal data length {}, offset {}",
+                    data.len(),
+                    offset
+                );
+                return false;
+            }
             let offset = offset as usize;
-            data.copy_from_slice(&cloned_msix.lock().unwrap().pba[offset..(offset + 4)]);
+            data.copy_from_slice(&cloned_msix.lock().unwrap().pba[offset..(offset + data.len())]);
             true
         };
         let pba_write = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool { true };
@@ -415,7 +431,8 @@ pub fn init_msix(
         msix_cap_offset as u16,
         dev_id.load(Ordering::Acquire),
     )));
-    let bar_size = ((table_size + pba_size) as u64).next_power_of_two();
+    let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
+    bar_size = round_up(bar_size, host_page_size()).unwrap();
     let region = Region::init_container_region(bar_size);
     Msix::register_memory_region(msix.clone(), &region, dev_id)?;
     config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);

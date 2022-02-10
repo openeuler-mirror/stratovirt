@@ -174,7 +174,12 @@ pub fn load_linux(
     let boot_pc = if fwcfg.is_some() { 0 } else { kernel_start };
 
     if config.kernel.is_none() {
-        bail!("Failed to load linux: Booting from disk in UEFI booting mode is not supported");
+        return Ok(AArch64BootLoader {
+            boot_pc,
+            initrd_start: 0,
+            initrd_size: 0,
+            dtb_start: dtb_addr,
+        });
     }
 
     let kernel_end = load_kernel(

@@ -768,6 +768,35 @@ impl FwCfgCommon {
     }
 }
 
+fn get_io_count(data_len: usize) -> usize {
+    if data_len % 8 == 0 {
+        8
+    } else if data_len % 4 == 0 {
+        4
+    } else if data_len % 2 == 0 {
+        2
+    } else {
+        1
+    }
+}
+
+fn common_read(
+    #[cfg(target_arch = "aarch64")] fwcfg_arch: &mut FwCfgMem,
+    #[cfg(target_arch = "x86_64")] fwcfg_arch: &mut FwCfgIO,
+    data: &mut [u8],
+    base: GuestAddress,
+    offset: u64,
+) -> bool {
+    let data_len = data.len();
+    let io_count = get_io_count(data_len);
+    for i in (0..data_len).step_by(io_count) {
+        if !read_bytes(fwcfg_arch, &mut data[i..i + io_count], base, offset) {
+            return false;
+        }
+    }
+    true
+}
+
 /// FwCfg MMIO Device use for AArch64 platform
 #[cfg(target_arch = "aarch64")]
 pub struct FwCfgMem {
@@ -804,6 +833,63 @@ impl FwCfgMem {
 }
 
 #[cfg(target_arch = "aarch64")]
+fn read_bytes(
+    fwcfg_arch: &mut FwCfgMem,
+    data: &mut [u8],
+    _base: GuestAddress,
+    offset: u64,
+) -> bool {
+    let value = match offset {
+        0..=7 => match fwcfg_arch.fwcfg.read_data_reg(offset, data.len() as u32) {
+            Ok(val) => val,
+            Err(e) => {
+                error!(
+                    "Failed to read from FwCfg data register, error is {}",
+                    e.display_chain()
+                );
+                return false;
+            }
+        },
+        8..=15 => {
+            error!("Read from FwCfg control register is not supported.");
+            0
+        }
+        16..=23 => {
+            if (offset + data.len() as u64) > 0x18 {
+                error!(
+                    "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
+                    offset - 0x10,
+                    data.len()
+                );
+            }
+            match fwcfg_arch
+                .fwcfg
+                .dma_mem_read(offset - 0x10, data.len() as u32)
+            {
+                Ok(val) => val,
+                Err(e) => {
+                    error!("Failed to handle FwCfg DMA-read, error is {}", e);
+                    return false;
+                }
+            }
+        }
+        _ => {
+            error!("Failed to read FwCfg, offset 0x{:x} is invalid", offset);
+            return false;
+        }
+    };
+
+    match data.len() {
+        1 => data[0] = value as u8,
+        2 => BigEndian::write_u16(data, value as u16),
+        4 => BigEndian::write_u32(data, value as u32),
+        8 => BigEndian::write_u64(data, value as u64),
+        _ => {}
+    }
+    true
+}
+
+#[cfg(target_arch = "aarch64")]
 impl FwCfgOps for FwCfgMem {
     fn fw_cfg_common(&mut self) -> &mut FwCfgCommon {
         &mut self.fwcfg
@@ -812,52 +898,8 @@ impl FwCfgOps for FwCfgMem {
 
 #[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
-    fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
-        let value = match offset {
-            0..=7 => match self.fwcfg.read_data_reg(offset, data.len() as u32) {
-                Ok(val) => val,
-                Err(e) => {
-                    error!(
-                        "Failed to read from FwCfg data register, error is {}",
-                        e.display_chain()
-                    );
-                    return false;
-                }
-            },
-            8..=15 => {
-                error!("Read from FwCfg control register is not supported.");
-                0
-            }
-            16..=23 => {
-                if (offset + data.len() as u64) > 0x18 {
-                    error!(
-                        "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
-                        offset - 0x10,
-                        data.len()
-                    );
-                }
-                match self.fwcfg.dma_mem_read(offset - 0x10, data.len() as u32) {
-                    Ok(val) => val,
-                    Err(e) => {
-                        error!("Failed to handle FwCfg DMA-read, error is {}", e);
-                        return false;
-                    }
-                }
-            }
-            _ => {
-                error!("Failed to read FwCfg, offset 0x{:x} is invalid", offset);
-                return false;
-            }
-        };
-
-        match data.len() {
-            1 => data[0] = value as u8,
-            2 => BigEndian::write_u16(data, value as u16),
-            4 => BigEndian::write_u32(data, value as u32),
-            8 => BigEndian::write_u64(data, value as u64),
-            _ => {}
-        }
-        true
+    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
+        common_read(self, data, base, offset)
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
@@ -954,6 +996,61 @@ impl FwCfgIO {
 }
 
 #[cfg(target_arch = "x86_64")]
+fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
+    let value: u64 = match offset {
+        0..=1 => match fwcfg_arch.fwcfg.read_data_reg(offset, data.len() as u32) {
+            Err(e) => {
+                error!(
+                    "Failed to read from FwCfg data register, error is {}",
+                    e.display_chain()
+                );
+                return false;
+            }
+            Ok(val) => val,
+        },
+        4..=11 => {
+            if (offset + data.len() as u64) > 0x14 {
+                error!(
+                    "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
+                    offset - 0x10,
+                    data.len()
+                );
+            }
+            match fwcfg_arch.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
+                Err(e) => {
+                    error!("Failed to handle FwCfg DMA-read, error is {}", e);
+                    return false;
+                }
+                Ok(val) => val,
+            }
+        }
+        _ => {
+            // This should never happen
+            error!(
+                "Failed to read FwCfg, ioport 0x{:x} is invalid",
+                base.0 + offset
+            );
+            return false;
+        }
+    };
+
+    match data.len() {
+        1 => data[0] = value as u8,
+        2 => BigEndian::write_u16(data, value as u16),
+        4 => BigEndian::write_u32(data, value as u32),
+        8 => BigEndian::write_u64(data, value as u64),
+        _ => {
+            warn!(
+                "Failed to read from FwCfg data register, data length {} is invalid",
+                data.len()
+            );
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(target_arch = "x86_64")]
 impl FwCfgOps for FwCfgIO {
     fn fw_cfg_common(&mut self) -> &mut FwCfgCommon {
         &mut self.fwcfg
@@ -963,57 +1060,7 @@ impl FwCfgOps for FwCfgIO {
 #[cfg(target_arch = "x86_64")]
 impl SysBusDevOps for FwCfgIO {
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
-        let value: u64 = match offset {
-            0..=1 => match self.fwcfg.read_data_reg(offset, data.len() as u32) {
-                Err(e) => {
-                    error!(
-                        "Failed to read from FwCfg data register, error is {}",
-                        e.display_chain()
-                    );
-                    return false;
-                }
-                Ok(val) => val,
-            },
-            4..=11 => {
-                if (offset + data.len() as u64) > 0x14 {
-                    error!(
-                        "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
-                        offset - 0x10,
-                        data.len()
-                    );
-                }
-                match self.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
-                    Err(e) => {
-                        error!("Failed to handle FwCfg DMA-read, error is {}", e);
-                        return false;
-                    }
-                    Ok(val) => val,
-                }
-            }
-            _ => {
-                // This should never happen
-                error!(
-                    "Failed to read FwCfg, ioport 0x{:x} is invalid",
-                    base.0 + offset
-                );
-                return false;
-            }
-        };
-
-        match data.len() {
-            1 => data[0] = value as u8,
-            2 => BigEndian::write_u16(data, value as u16),
-            4 => BigEndian::write_u32(data, value as u32),
-            8 => BigEndian::write_u64(data, value as u64),
-            _ => {
-                warn!(
-                    "Failed to read from FwCfg data register, data length {} is invalid",
-                    data.len()
-                );
-                return false;
-            }
-        }
-        true
+        common_read(self, data, base, offset)
     }
 
     fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool {

@@ -213,6 +213,10 @@ impl InputReceiver for PL011 {
 
 impl SysBusDevOps for PL011 {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        if data.len() > 4 {
+            error!("Fail to read PL011, illegal data length {}", data.len());
+            return false;
+        }
         let ret;
 
         match offset >> 2 {

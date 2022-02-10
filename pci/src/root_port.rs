@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
 use error_chain::ChainedError;
+use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 
@@ -151,22 +152,26 @@ impl RootPort {
         Ok(())
     }
 
-    /// Remove all devices attached on the sec bus.
+    /// Remove all devices attached on the secondary bus.
     fn remove_devices(&mut self) {
         // Store device in a temp vector and unlock the bus.
         // If the device unrealize called when the bus is locked, a deadlock occurs.
         // This is because the device unrealize also requires the bus lock.
-        let locked_bus = self.sec_bus.lock().unwrap();
-        let mut devs = Vec::new();
-        for dev in locked_bus.devices.values() {
-            devs.push(dev.clone());
-        }
-        drop(locked_bus);
-        for dev in devs {
+        let devices = self.sec_bus.lock().unwrap().devices.clone();
+        for dev in devices.values() {
             let mut locked_dev = dev.lock().unwrap();
             if let Err(e) = locked_dev.unrealize() {
                 error!("{}", e.display_chain());
-                error!("Failed to unrealize device: name {}", locked_dev.name());
+                error!("Failed to unrealize device {}.", locked_dev.name());
+            }
+
+            // Send QMP event for successful hot unplugging.
+            if QmpChannel::is_connected() {
+                let device_del = schema::DeviceDeleted {
+                    device: Some(locked_dev.name()),
+                    path: format!("/machine/peripheral/{}", &locked_dev.name()),
+                };
+                event!(DeviceDeleted; device_del);
             }
         }
         self.sec_bus.lock().unwrap().devices.clear();

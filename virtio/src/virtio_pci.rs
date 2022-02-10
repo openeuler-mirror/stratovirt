@@ -11,14 +11,12 @@
 // See the Mulan PSL v2 for more details.
 
 use std::mem::size_of;
-use std::ops::Add;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::ChainedError;
-use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use pci::config::{
     RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
@@ -31,7 +29,7 @@ use pci::{
     config::PciConfig, init_msix, init_multifunction, le_write_u16, ranges_overlap, PciBus,
     PciDevOps,
 };
-use util::byte_code::ByteCode;
+use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
@@ -740,16 +738,18 @@ impl VirtioPciDevice {
             {
                 let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
                 locked_queues.clear();
-                cloned_pci_device
-                    .device_activated
-                    .store(false, Ordering::Release);
-                let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
-                cloned_msix.lock().unwrap().reset();
-                if let Err(e) = cloned_pci_device.device.lock().unwrap().reset() {
-                    error!(
-                        "Failed to reset virtio device, error is {}",
-                        e.display_chain()
-                    );
+                if cloned_pci_device.device_activated.load(Ordering::Acquire) {
+                    cloned_pci_device
+                        .device_activated
+                        .store(false, Ordering::Release);
+                    let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
+                    cloned_msix.lock().unwrap().reset();
+                    if let Err(e) = cloned_pci_device.device.lock().unwrap().reset() {
+                        error!(
+                            "Failed to reset virtio device, error is {}",
+                            e.display_chain()
+                        );
+                    }
                 }
                 update_dev_id(
                     &cloned_pci_device.parent_bus,
@@ -943,9 +943,10 @@ impl PciDevOps for VirtioPciDevice {
 
         self.assign_interrupt_cb();
 
-        let mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
+        let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
             as u64)
             .next_power_of_two();
+        mem_region_size = round_up(mem_region_size, host_page_size()).unwrap();
         let modern_mem_region = Region::init_container_region(mem_region_size);
         self.modern_mem_region_init(&modern_mem_region)?;
 
@@ -991,15 +992,6 @@ impl PciDevOps for VirtioPciDevice {
 
         let bus = self.parent_bus.upgrade().unwrap();
         self.config.unregister_bars(&bus)?;
-
-        // QMP send device removal event
-        if QmpChannel::is_connected() {
-            let device_del = schema::DeviceDeleted {
-                device: Some(self.name.clone()),
-                path: "/machine/peripheral/".to_string().add(&self.name),
-            };
-            event!(DeviceDeleted; device_del);
-        }
         Ok(())
     }
 
