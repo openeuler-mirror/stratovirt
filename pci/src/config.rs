@@ -18,8 +18,8 @@ use address_space::Region;
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::msix::Msix;
 use crate::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
-    BDF_FUNC_SHIFT,
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
+    pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
 };
 
 /// Size in bytes of the configuration space of legacy PCI device.
@@ -683,7 +683,7 @@ impl PciConfig {
     /// * `id` - Capability ID.
     /// * `size` - Size of the capability.
     /// * `version` - Capability version.
-    pub fn add_pcie_ext_cap(&mut self, id: u8, size: usize, version: u32) -> Result<usize> {
+    pub fn add_pcie_ext_cap(&mut self, id: u16, size: usize, version: u32) -> Result<usize> {
         let offset = self.last_ext_cap_end as usize;
         if offset + size > PCIE_CONFIG_SPACE_SIZE {
             return Err(ErrorKind::AddPcieExtCap(id, size).into());
@@ -833,6 +833,26 @@ impl PciConfig {
         le_write_u16(&mut self.write_mask, offset, PCIE_CAP_LINK_TLS_16GT)?;
 
         Ok(cap_offset)
+    }
+
+    /// Calculate the next extended cap size from pci config space.
+    ///
+    /// # Arguments
+    ///
+    /// * `pos` - next extended capability offset.
+    pub fn get_ext_cap_size(&self, pos: usize) -> usize {
+        let mut cap_offset = PCI_CONFIG_SPACE_SIZE;
+        let mut end_pos = PCIE_CONFIG_SPACE_SIZE;
+
+        while (PCI_CONFIG_SPACE_SIZE..PCIE_CONFIG_SPACE_SIZE).contains(&cap_offset) {
+            let header = le_read_u32(&self.config, cap_offset).unwrap();
+            cap_offset = pci_ext_cap_next(header);
+            if cap_offset > pos && cap_offset < end_pos {
+                end_pos = cap_offset;
+            }
+        }
+
+        end_pos - pos
     }
 }
 
@@ -1066,5 +1086,18 @@ mod tests {
             pci_config.last_ext_cap_end,
             PCI_CONFIG_SPACE_SIZE as u16 + 12
         );
+    }
+
+    #[test]
+    fn test_get_ext_cap_size() {
+        let mut pcie_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 3);
+        let offset1 = pcie_config.add_pcie_ext_cap(1, 0x10, 1).unwrap();
+        let offset2 = pcie_config.add_pcie_ext_cap(1, 0x40, 1).unwrap();
+        pcie_config.add_pcie_ext_cap(1, 0x20, 1).unwrap();
+
+        let size1 = pcie_config.get_ext_cap_size(offset1);
+        let size2 = pcie_config.get_ext_cap_size(offset2);
+        assert_eq!(size1, 0x10);
+        assert_eq!(size2, 0x40);
     }
 }

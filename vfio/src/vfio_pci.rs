@@ -25,7 +25,8 @@ use pci::config::SECONDARY_BUS_NUM;
 use pci::config::{
     PciConfig, RegionType, BAR_0, BAR_5, BAR_IO_SPACE, BAR_MEM_64BIT, BAR_SPACE_UNMAPPED, COMMAND,
     COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
-    HEADER_TYPE, IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE, REG_SIZE,
+    HEADER_TYPE, IO_BASE_ADDR_MASK, MEM_BASE_ADDR_MASK, PCIE_CONFIG_SPACE_SIZE,
+    PCI_CONFIG_SPACE_SIZE, REG_SIZE,
 };
 use pci::errors::Result as PciResult;
 use pci::msix::{
@@ -34,8 +35,8 @@ use pci::msix::{
     MSIX_TABLE_OFFSET, MSIX_TABLE_SIZE_MAX,
 };
 use pci::{
-    init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, ranges_overlap,
-    PciBus, PciDevOps,
+    init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
+    pci_ext_cap_next, pci_ext_cap_ver, ranges_overlap, PciBus, PciDevOps,
 };
 use util::unix::host_page_size;
 use vfio_bindings::bindings::vfio;
@@ -155,7 +156,41 @@ impl VfioPciDevice {
         self.config_offset = info.offset;
         let mut config_data = vec![0_u8; self.config_size as usize];
         locked_dev.read_region(config_data.as_mut_slice(), self.config_offset, 0)?;
-        self.pci_config.config = config_data;
+        self.pci_config.config[..PCI_CONFIG_SPACE_SIZE]
+            .copy_from_slice(&config_data[..PCI_CONFIG_SPACE_SIZE]);
+
+        // If guest OS can not see extended caps, just ignore them.
+        if self.config_size == PCI_CONFIG_SPACE_SIZE as u64 {
+            return Ok(());
+        }
+
+        // Cache the pci config space to avoid overwriting the original config space. Because we will
+        // parse the chain of extended caps in cache config and insert them into original config space.
+        let mut config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS);
+        config.config = config_data;
+        let mut next = PCI_CONFIG_SPACE_SIZE;
+        while (PCI_CONFIG_SPACE_SIZE..PCIE_CONFIG_SPACE_SIZE).contains(&next) {
+            let header = le_read_u32(&config.config, next)?;
+            let cap_id = pci_ext_cap_id(header);
+            let cap_version = pci_ext_cap_ver(header);
+            // Get the actual size of extended capability.
+            let size = config.get_ext_cap_size(next);
+            let old_next = next;
+            next = pci_ext_cap_next(header);
+
+            // Drop the following extended caps:
+            // * Alternate Routing ID(0x0e): Needs next function virtualization;
+            // * Single Root I/O Virtualization(0x10): Read-only VF BARs confuse OVMF;
+            // * Resizable BAR(0x15): Can't export read-only;
+            if cap_id == 0x0e || cap_id == 0x10 || cap_id == 0x15 {
+                continue;
+            }
+            let offset = self
+                .pci_config
+                .add_pcie_ext_cap(cap_id, size, cap_version)?;
+            self.pci_config.config[offset..offset + size]
+                .copy_from_slice(&config.config[old_next..old_next + size]);
+        }
 
         Ok(())
     }
@@ -835,7 +870,7 @@ impl PciDevOps for VfioPciDevice {
             return;
         }
 
-        // BAR and header_type are always controlled by StratoVirt.
+        // BAR, header_type and extended caps are always controlled by StratoVirt.
         if ranges_overlap(offset, end, BAR_0 as usize, (BAR_5 as usize) + REG_SIZE)
             || ranges_overlap(
                 offset,
@@ -843,6 +878,7 @@ impl PciDevOps for VfioPciDevice {
                 HEADER_TYPE as usize,
                 (HEADER_TYPE as usize) + 2,
             )
+            || ranges_overlap(offset, end, PCI_CONFIG_SPACE_SIZE, PCIE_CONFIG_SPACE_SIZE)
         {
             self.pci_config.read(offset, data);
             return;
