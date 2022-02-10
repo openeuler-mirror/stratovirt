@@ -47,8 +47,8 @@ macro_rules! add_args_to_config {
         }
     };
     ( $x:tt, $z:expr, $s:tt, bool ) => {
-        if $x {
-            $z.$s()
+        if ($x) {
+            $z.$s();
         }
     };
 }
@@ -351,9 +351,9 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("mem-prealloc")
             .long("mem-prealloc")
-            .hidden(true)
-            .can_no_value(true)
-            .takes_value(true),
+            .help("Prealloc memory for VM")
+            .takes_value(false)
+            .required(false),
         )
         .arg(
             Arg::with_name("trace")
@@ -392,6 +392,12 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
+    add_args_to_config!(
+        (args.is_present("mem-prealloc")),
+        vm_cfg,
+        enable_mem_prealloc,
+        bool
+    );
     add_args_to_config!(
         (args.values_of("kernel-cmdline")),
         vm_cfg,

@@ -92,10 +92,10 @@ ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 41 syscalls
-/// * x86_64-unknown-musl: 41 syscalls
-/// * aarch64-unknown-gnu: 39 syscalls
-/// * aarch64-unknown-musl: 40 syscalls
+/// * x86_64-unknown-gnu: 43 syscalls
+/// * x86_64-unknown-musl: 43 syscalls
+/// * aarch64-unknown-gnu: 41 syscalls
+/// * aarch64-unknown-musl: 42 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![

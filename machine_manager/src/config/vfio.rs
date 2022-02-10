@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::errors::{ErrorKind, Result};
-use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
+use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
 pub struct VfioConfig {
     pub host: String,
@@ -43,7 +43,7 @@ impl ConfigCheck for VfioConfig {
     }
 }
 
-pub fn parse_vfio(_vm_config: &VmConfig, vfio_config: &str) -> Result<VfioConfig> {
+pub fn parse_vfio(vfio_config: &str) -> Result<VfioConfig> {
     let mut cmd_parser = CmdParser::new("vfio-pci");
     cmd_parser
         .push("")
@@ -75,12 +75,8 @@ mod tests {
 
     #[test]
     fn test_check_vfio_config() {
-        let mut vm_config = VmConfig::default();
-        let mut vfio_config = parse_vfio(
-            &mut vm_config,
-            "vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x1.0x2",
-        )
-        .unwrap();
+        let mut vfio_config =
+            parse_vfio("vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x1.0x2").unwrap();
         assert!(vfio_config.check().is_ok());
 
         vfio_config.host = "IYqUdAMXggoUMU28eBJCxQGUirYYSyW1cfGJI3ZpZAzMFCKnVPA5e7gnurLtXjCm\
@@ -100,8 +96,7 @@ mod tests {
 
     #[test]
     fn test_vfio_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-        let vfio_cfg = parse_vfio(&mut vm_config, "vfio-pci,host=0000:1a:00.3,id=net");
+        let vfio_cfg = parse_vfio("vfio-pci,host=0000:1a:00.3,id=net");
         assert!(vfio_cfg.is_ok());
         let vfio_config = vfio_cfg.unwrap();
         assert_eq!(vfio_config.host, "0000:1a:00.3");
@@ -110,15 +105,14 @@ mod tests {
 
     #[test]
     fn test_pci_vfio_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
         let vfio_cfg1 = "vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x1.0x2";
-        let config1 = parse_vfio(&mut vm_config, vfio_cfg1);
+        let config1 = parse_vfio(vfio_cfg1);
         assert!(config1.is_ok());
         let vfio_cfg2 = "vfio-pci,host=0000:1a:00.3,bus=pcie.0,addr=0x1.0x2";
-        let config2 = parse_vfio(&mut vm_config, vfio_cfg2);
+        let config2 = parse_vfio(vfio_cfg2);
         assert!(config2.is_ok());
         let vfio_cfg3 = "vfio-pci,id=net,bus=pcie.0,addr=0x1.0x2";
-        let config3 = parse_vfio(&mut vm_config, vfio_cfg3);
+        let config3 = parse_vfio(vfio_cfg3);
         assert!(config3.is_err());
 
         let pci_bdf = get_pci_bdf(vfio_cfg1);
@@ -127,9 +121,8 @@ mod tests {
         assert_eq!(pci.bus, "pcie.0".to_string());
         assert_eq!(pci.addr, (1, 2));
 
-        let mut vm_config = VmConfig::default();
         let vfio_cfg1 =
             "vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x1.0x2,multifunction=on";
-        assert!(parse_vfio(&mut vm_config, vfio_cfg1).is_ok());
+        assert!(parse_vfio(vfio_cfg1).is_ok());
     }
 }

@@ -16,7 +16,11 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::Region;
 
 use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
+use super::hotplug::HotplugOps;
 use super::PciDevOps;
+use crate::errors::{Result, ResultExt};
+
+type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
 
 /// PCI bus structure.
 pub struct PciBus {
@@ -33,6 +37,8 @@ pub struct PciBus {
     pub io_region: Region,
     /// Memory region which the parent bridge manages.
     pub mem_region: Region,
+    /// Hot Plug controller for obtaining hot plug ops.
+    pub hotplug_controller: Option<Weak<Mutex<dyn HotplugOps>>>,
 }
 
 impl PciBus {
@@ -56,6 +62,7 @@ impl PciBus {
             #[cfg(target_arch = "x86_64")]
             io_region,
             mem_region,
+            hotplug_controller: None,
         }
     }
 
@@ -143,5 +150,54 @@ impl PciBus {
             }
         }
         None
+    }
+
+    /// Find the bus to which the device is attached.
+    ///
+    /// # Arguments
+    ///
+    /// * `pci_bus` - On which bus to find.
+    /// * `name` - Device name.
+    pub fn find_attached_bus(pci_bus: &Arc<Mutex<PciBus>>, name: &str) -> Option<DeviceBusInfo> {
+        // Device is attached in pci_bus.
+        let locked_bus = pci_bus.lock().unwrap();
+        for dev in locked_bus.devices.values() {
+            if dev.lock().unwrap().name() == name {
+                return Some((pci_bus.clone(), dev.clone()));
+            }
+        }
+        // Find in child bus.
+        for bus in &locked_bus.child_buses {
+            if let Some(found) = PciBus::find_attached_bus(bus, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Detach device from the bus.
+    ///
+    /// # Arguments
+    ///
+    /// * `bus` - Bus to detach from.
+    /// * `dev` - Device attached to the bus.
+    pub fn detach_device(bus: &Arc<Mutex<Self>>, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+        let mut dev_locked = dev.lock().unwrap();
+        dev_locked
+            .unrealize()
+            .chain_err(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
+
+        let devfn = dev_locked
+            .devfn()
+            .chain_err(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
+
+        let mut locked_bus = bus.lock().unwrap();
+        if locked_bus.devices.get(&devfn).is_some() {
+            locked_bus.devices.remove(&devfn);
+        } else {
+            bail!("Device {} not found in the bus", dev_locked.name());
+        }
+
+        Ok(())
     }
 }

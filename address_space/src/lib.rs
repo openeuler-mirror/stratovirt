@@ -102,6 +102,9 @@ pub use region::{FlatRange, Region, RegionIoEventFd, RegionType};
 
 pub mod errors {
     error_chain! {
+        links {
+            Util(util::errors::Error, util::errors::ErrorKind);
+        }
         foreign_links {
             Io(std::io::Error);
         }

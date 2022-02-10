@@ -13,6 +13,10 @@
 extern crate serde;
 extern crate serde_json;
 
+use std::fs::metadata;
+use std::os::linux::fs::MetadataExt;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -72,6 +76,67 @@ impl Default for DriveConfig {
             direct: true,
             iops: None,
         }
+    }
+}
+
+impl DriveConfig {
+    /// Check whether the drive file path on the host is valid.
+    pub fn check_path(&self) -> Result<()> {
+        let blk = Path::new(&self.path_on_host);
+        match metadata(blk) {
+            Ok(meta) => {
+                if ((meta.st_mode() & libc::S_IFREG) != libc::S_IFREG)
+                    && ((meta.st_mode() & libc::S_IFBLK) != libc::S_IFBLK)
+                {
+                    return Err(ErrorKind::UnRegularFile("Drive File".to_string()).into());
+                }
+            }
+            Err(e) => {
+                error!("Failed to check the drive metadata: {}", e);
+                return Err(ErrorKind::UnRegularFile("Drive File".to_string()).into());
+            }
+        }
+        if let Some(file_name) = blk.file_name() {
+            if file_name.len() > MAX_STRING_LENGTH {
+                return Err(ErrorKind::StringLengthTooLong(
+                    "File name".to_string(),
+                    MAX_STRING_LENGTH,
+                )
+                .into());
+            }
+        } else {
+            error!("Failed to check the drive file name");
+            return Err(ErrorKind::UnRegularFile("Drive File".to_string()).into());
+        }
+        Ok(())
+    }
+}
+
+impl ConfigCheck for DriveConfig {
+    fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(
+                ErrorKind::StringLengthTooLong("Drive id".to_string(), MAX_STRING_LENGTH).into(),
+            );
+        }
+        if self.path_on_host.len() > MAX_PATH_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong(
+                "Drive device path".to_string(),
+                MAX_PATH_LENGTH,
+            )
+            .into());
+        }
+        if self.iops.is_some() && self.iops.unwrap() > MAX_IOPS {
+            return Err(ErrorKind::IllegalValue(
+                "iops of block device".to_string(),
+                0,
+                true,
+                MAX_IOPS,
+                true,
+            )
+            .into());
+        }
+        Ok(())
     }
 }
 
@@ -282,12 +347,34 @@ impl VmConfig {
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;
+        self.add_drive_with_config(drive_cfg)
+    }
 
-        let drive_id = drive_cfg.id.clone();
+    /// Add drive config to vm config.
+    ///
+    /// # Arguments
+    ///
+    /// * `drive_conf` - The drive config to be added to the vm.
+    pub fn add_drive_with_config(&mut self, drive_conf: DriveConfig) -> Result<()> {
+        let drive_id = drive_conf.id.clone();
         if self.drives.get(&drive_id).is_none() {
-            self.drives.insert(drive_id, drive_cfg);
+            self.drives.insert(drive_id, drive_conf);
         } else {
-            bail!("Drive {:?} has been added", drive_id);
+            bail!("Drive {} has been added", drive_id);
+        }
+        Ok(())
+    }
+
+    /// Delete drive config in vm config by id.
+    ///
+    /// # Arguments
+    ///
+    /// * `drive_id` - Drive id.
+    pub fn del_drive_by_id(&mut self, drive_id: &str) -> Result<()> {
+        if self.drives.get(drive_id).is_some() {
+            self.drives.remove(drive_id);
+        } else {
+            bail!("Drive {} not found", drive_id);
         }
         Ok(())
     }

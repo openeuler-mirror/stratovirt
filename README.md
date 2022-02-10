@@ -56,11 +56,11 @@ $ ./target/release/stratovirt \
 $ ./target/release/stratovirt \
     -machine standard_vm \
     -kernel /path/to/kernel \
-    -append "console=ttys0 root=/dev/vda reboot=k panic=1" \
+    -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/firmware,if=pflash,unit=0,readonly=true \
     -device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.1 \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -device virtio-blk-pci,drive=rootfs,bus=pcie.1,addr=0x0.0x0 \
+    -device virtio-blk-pci,drive=rootfs,bus=pcie.1,addr=0x0.0x0,id=blk-0 \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 ```

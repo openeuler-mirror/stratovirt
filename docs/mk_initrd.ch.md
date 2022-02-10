@@ -1,35 +1,35 @@
-# How to make a initrdfs use BusyBox
+# 如何使用BusyBox制作initrdfs
 
-## 1. Download BusyBox, then decompression
+## 1. 下载Busybox源码，然后解压
 
 ``` shell
 wget https://busybox.net/downloads/busybox-1.31.1.tar.bz2
 tar -xjf busybox-1.31.1.tar.bz2
 ```
 
-## 2. Compile BusyBox
+## 2. 编译BusyBox
 
 ``` shell
 make defconfig
 make menuconfig
 ```
 
-**Notice**：Check Build static binary, can build binary without dependence library.
+**注意**：选中构建静态库二进制， 在没有依赖库的情况下可以构建二进制。
 
 ```text
 Settings  --->
     [*] Build static binary (no shared libs)
 ```
 
-## 3. Install BusyBox
+## 3. 安装BusyBox
 
-Install the compiled BusyBox to default path: `_install`.
+将已编译的BusyBox安装到默认路径: `_install`.
 
 ``` shell
 make install
 ```
 
-## 4. Config BusyBox
+## 4. 配置BusyBox
 
 ```shell
 cd _install
@@ -46,14 +46,14 @@ EOF
 chmod +x etc/init.d/rcS
 ```
 
-## 5. Make initrd image
+## 5. 制作initrd镜像
 
 ```shell
 cd _install
 find . | cpio -o --format=newc > /tmp/StratoVirt-initrd
 ```
 
-## 6. Run StratoVirt with initrd
+## 6. 使用initrd运行StratoVirt
 
 ```shell
 $ ./stratovirt \

@@ -39,10 +39,12 @@ pub mod errors {
     }
 }
 
-mod bus;
 pub mod config;
-mod host;
+pub mod hotplug;
 pub mod msix;
+
+mod bus;
+mod host;
 mod root_port;
 
 pub use bus::PciBus;
@@ -109,6 +111,16 @@ le_read!(le_read_u16, read_u16, u16);
 le_read!(le_read_u32, read_u32, u32);
 le_read!(le_read_u64, read_u64, u64);
 
+fn le_write_set_value_u16(buf: &mut [u8], offset: usize, data: u16) -> Result<()> {
+    let val = le_read_u16(buf, offset)?;
+    le_write_u16(buf, offset, val | data)
+}
+
+fn le_write_clear_value_u16(buf: &mut [u8], offset: usize, data: u16) -> Result<()> {
+    let val = le_read_u16(buf, offset)?;
+    le_write_u16(buf, offset, val & !data)
+}
+
 pub fn pci_devfn(slot: u8, func: u8) -> u8 {
     ((slot & 0x1f) << 3) | (func & 0x07)
 }
@@ -130,6 +142,11 @@ pub trait PciDevOps: Send {
 
     /// Realize PCI/PCIe device.
     fn realize(self) -> Result<()>;
+
+    /// Unrealize PCI/PCIe device.
+    fn unrealize(&mut self) -> Result<()> {
+        bail!("Unrealize of the pci device is not implemented");
+    }
 
     /// Configuration space read.
     ///
@@ -164,6 +181,16 @@ pub trait PciDevOps: Send {
 
     /// Get device name.
     fn name(&self) -> String;
+
+    /// Reset device
+    fn reset(&mut self) -> Result<()> {
+        bail!("Reset of the pci device is not implemented");
+    }
+
+    /// Get device devfn
+    fn devfn(&self) -> Option<u8> {
+        None
+    }
 }
 
 /// Init multifunction for pci devices.

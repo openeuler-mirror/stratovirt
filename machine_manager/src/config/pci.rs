@@ -71,6 +71,35 @@ impl Default for RootPortConfig {
     }
 }
 
+pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
+    let addr_vec: Vec<&str> = addr.split('.').collect();
+    if addr_vec.len() > 2 {
+        bail!(
+            "The number of args for addr is supported to be no more than two, find :{}",
+            addr_vec.len()
+        );
+    }
+    let slot = addr_vec.get(0).unwrap();
+    let without_prefix = slot.trim_start_matches("0x");
+    let slot = u8::from_str_radix(without_prefix, 16)
+        .chain_err(|| format!("Invalid slot num: {}", slot))?;
+    if slot > 31 {
+        bail!("Invalid slot num: {}", slot);
+    }
+    let func = if addr_vec.get(1).is_some() {
+        let function = addr_vec.get(1).unwrap();
+        let without_prefix = function.trim_start_matches("0x");
+        u8::from_str_radix(without_prefix, 16)
+            .chain_err(|| format!("Invalid function num: {}", function))?
+    } else {
+        0
+    };
+    if func > 7 {
+        bail!("Invalid function num: {}", func);
+    }
+    Ok((slot, func))
+}
+
 pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
     let mut cmd_parser = CmdParser::new("bdf");
     cmd_parser.push("").push("bus").push("addr");
@@ -83,32 +112,7 @@ pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
         bail!("Bus not specified for pci device");
     }
     if let Some(addr) = cmd_parser.get_value::<String>("addr")? {
-        let addr_vec: Vec<&str> = addr.split('.').collect();
-        if addr_vec.len() > 2 {
-            bail!(
-                "The number of args for addr is supported to be no more than two, find :{}",
-                addr_vec.len()
-            );
-        }
-        let slot = addr_vec.get(0).unwrap();
-        let without_prefix = slot.trim_start_matches("0x");
-        let slot = u8::from_str_radix(without_prefix, 16)
-            .chain_err(|| format!("Invalid slot num: {}", slot))?;
-        if slot > 31 {
-            bail!("Invalid slot num: {}", slot);
-        }
-        let func = if addr_vec.get(1).is_some() {
-            let function = addr_vec.get(1).unwrap();
-            let without_prefix = function.trim_start_matches("0x");
-            u8::from_str_radix(without_prefix, 16)
-                .chain_err(|| format!("Invalid function num: {}", function))?
-        } else {
-            0
-        };
-        if func > 7 {
-            bail!("Invalid function num: {}", func);
-        }
-        pci_bdf.addr = (slot, func);
+        pci_bdf.addr = get_pci_df(&addr).chain_err(|| "Failed to get addr")?;
     } else {
         bail!("No addr found for pci device");
     }
