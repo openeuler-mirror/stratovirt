@@ -261,6 +261,11 @@ impl CPU {
         &self.fd
     }
 
+    /// Get this `CPU`'s state.
+    pub fn state(&self) -> &(Mutex<CpuLifecycleState>, Condvar) {
+        self.state.as_ref()
+    }
+
     /// Get this `CPU`'s architecture-special property.
     pub fn arch(&self) -> &Arc<Mutex<ArchCPU>> {
         &self.arch_cpu

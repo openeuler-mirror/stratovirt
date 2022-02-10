@@ -66,7 +66,7 @@ use std::vec::Vec;
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CpuLifecycleState, CpuTopology, CPU};
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
@@ -804,6 +804,16 @@ impl MachineLifecycle for LightMachine {
 
         self.power_button.write(1).unwrap();
         true
+    }
+
+    fn reset(&mut self) -> bool {
+        // For micro vm, the reboot command is equivalent to the shutdown command.
+        for cpu in self.cpus.iter() {
+            let (cpu_state, _) = cpu.state();
+            *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+        }
+
+        self.destroy()
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
