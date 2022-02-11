@@ -135,7 +135,7 @@ pub enum QmpCommand {
     },
     #[serde(rename = "blockdev-add")]
     blockdev_add {
-        arguments: blockdev_add,
+        arguments: Box<blockdev_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
@@ -554,6 +554,8 @@ pub struct blockdev_add {
     pub iops: Option<u64>,
 }
 
+pub type BlockDevAddArgument = blockdev_add;
+
 impl Command for blockdev_add {
     type Res = Empty;
 
@@ -596,6 +598,8 @@ pub struct netdev_add {
     pub script: Option<String>,
     pub queues: Option<String>,
 }
+
+pub type NetDevAddArgument = netdev_add;
 
 impl Command for netdev_add {
     type Res = Empty;

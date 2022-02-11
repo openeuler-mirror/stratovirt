@@ -221,3 +221,158 @@ impl PciBus {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use address_space::{AddressSpace, Region};
+
+    use super::*;
+    use crate::bus::PciBus;
+    use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
+    use crate::errors::Result;
+    use crate::root_port::RootPort;
+    use crate::PciHost;
+
+    #[derive(Clone)]
+    struct PciDevice {
+        name: String,
+        devfn: u8,
+        config: PciConfig,
+        parent_bus: Weak<Mutex<PciBus>>,
+    }
+
+    impl PciDevOps for PciDevice {
+        fn init_write_mask(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn init_write_clear_mask(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn read_config(&self, offset: usize, data: &mut [u8]) {
+            self.config.read(offset, data);
+        }
+
+        fn write_config(&mut self, offset: usize, data: &[u8]) {
+            self.config.write(offset, data, 0);
+        }
+
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+
+        fn realize(mut self) -> Result<()> {
+            let devfn = self.devfn;
+            self.init_write_mask()?;
+            self.init_write_clear_mask()?;
+
+            let dev = Arc::new(Mutex::new(self));
+            dev.lock()
+                .unwrap()
+                .parent_bus
+                .upgrade()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .devices
+                .insert(devfn, dev.clone());
+            Ok(())
+        }
+
+        fn unrealize(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn devfn(&self) -> Option<u8> {
+            Some(0)
+        }
+    }
+
+    pub fn create_pci_host() -> Arc<Mutex<PciHost>> {
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
+        let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
+        Arc::new(Mutex::new(PciHost::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            (0xB000_0000, 0x1000_0000),
+            (0xC000_0000, 0x3000_0000),
+        )))
+    }
+
+    #[test]
+    fn test_find_attached_bus() {
+        let pci_host = create_pci_host();
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone(), false);
+        root_port.realize().unwrap();
+
+        // Test device is attached to the root bus.
+        let pci_dev = PciDevice {
+            name: String::from("test1"),
+            devfn: 10,
+            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+            parent_bus: root_bus.clone(),
+        };
+        pci_dev.realize().unwrap();
+
+        // Test device is attached to the root port.
+        let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
+        let pci_dev = PciDevice {
+            name: String::from("test2"),
+            devfn: 12,
+            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+            parent_bus: Arc::downgrade(&bus),
+        };
+        pci_dev.realize().unwrap();
+
+        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test0");
+        assert!(info.is_none());
+
+        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test1");
+        assert!(info.is_some());
+        let (bus, dev) = info.unwrap();
+        assert_eq!(bus.lock().unwrap().name, "pcie.0");
+        assert_eq!(dev.lock().unwrap().name(), "test1");
+
+        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test2");
+        assert!(info.is_some());
+        let (bus, dev) = info.unwrap();
+        assert_eq!(bus.lock().unwrap().name, "pcie.1");
+        assert_eq!(dev.lock().unwrap().name(), "test2");
+    }
+
+    #[test]
+    fn test_detach_device() {
+        let pci_host = create_pci_host();
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.root_bus);
+
+        let root_port = RootPort::new("pcie.1".to_string(), 8, 0, root_bus.clone(), false);
+        root_port.realize().unwrap();
+
+        let bus = PciBus::find_bus_by_name(&locked_pci_host.root_bus, "pcie.1").unwrap();
+        let pci_dev = PciDevice {
+            name: String::from("test1"),
+            devfn: 0,
+            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+            parent_bus: Arc::downgrade(&bus),
+        };
+        let dev = Arc::new(Mutex::new(pci_dev.clone()));
+        let dev_ops: Arc<Mutex<dyn PciDevOps>> = dev;
+        pci_dev.realize().unwrap();
+
+        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test1");
+        assert!(info.is_some());
+
+        let res = PciBus::detach_device(&bus, &dev_ops);
+        assert!(res.is_ok());
+
+        let info = PciBus::find_attached_bus(&locked_pci_host.root_bus, "test1");
+        assert!(info.is_none());
+    }
+}

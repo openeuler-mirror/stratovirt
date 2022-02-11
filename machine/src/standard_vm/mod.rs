@@ -75,14 +75,15 @@ use devices::legacy::FwCfgOps;
 use error_chain::ChainedError;
 use errors::{Result, ResultExt};
 use machine_manager::config::{
-    get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, PciBdf, VmConfig,
+    get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,
+    PciBdf, VmConfig,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::hotplug::{handle_plug, handle_unplug_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
-use virtio::{qmp_balloon, qmp_query_balloon, Block};
+use virtio::{qmp_balloon, qmp_query_balloon, Block, VhostKern, VirtioDevice};
 
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
@@ -520,7 +521,45 @@ impl StdMachine {
         };
 
         self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction)
-            .chain_err(|| "Failed to add virtio pci device")
+            .chain_err(|| "Failed to add virtio pci block device")
+    }
+
+    fn plug_virtio_pci_net(
+        &mut self,
+        pci_bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        let multifunction = args.multifunction.unwrap_or(false);
+        let netdev = if let Some(dev) = &args.netdev {
+            dev
+        } else {
+            bail!("Netdev not set");
+        };
+
+        let dev = if let Some(conf) = self.get_vm_config().lock().unwrap().netdevs.get(netdev) {
+            let dev = NetworkInterfaceConfig {
+                id: conf.id.clone(),
+                host_dev_name: conf.ifname.clone(),
+                mac: args.mac.clone(),
+                tap_fd: conf.tap_fd,
+                vhost_type: conf.vhost_type.clone(),
+                vhost_fd: conf.vhost_fd,
+                iothread: args.iothread.clone(),
+            };
+            dev.check()?;
+            dev
+        } else {
+            bail!("Netdev not found");
+        };
+
+        let net: Arc<Mutex<dyn VirtioDevice>> = if dev.vhost_type.is_some() {
+            Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())))
+        } else {
+            Arc::new(Mutex::new(virtio::Net::new(dev)))
+        };
+
+        self.add_virtio_pci_device(&args.id, &pci_bdf, net, multifunction)
+            .chain_err(|| "Failed to add virtio pci net device")
     }
 
     fn plug_vfio_pci_device(
@@ -649,7 +688,18 @@ impl DeviceInterface for StdMachine {
         match driver {
             "virtio-blk-pci" => {
                 if let Err(e) = self.plug_virtio_pci_blk(&pci_bdf, args.as_ref()) {
+                    error!("{}", e.display_chain());
                     let err_str = format!("Failed to add virtio pci blk: {}", e.to_string());
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            "virtio-net-pci" => {
+                if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
+                    error!("{}", e.display_chain());
+                    let err_str = format!("Failed to add virtio pci net: {}", e.to_string());
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
                         None,
@@ -726,26 +776,19 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn blockdev_add(
-        &self,
-        node_name: String,
-        file: qmp_schema::FileOptions,
-        cache: Option<qmp_schema::CacheOptions>,
-        read_only: Option<bool>,
-        iops: Option<u64>,
-    ) -> Response {
-        let read_only = read_only.unwrap_or(false);
-        let direct = if let Some(cache) = cache {
+    fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
+        let read_only = args.read_only.unwrap_or(false);
+        let direct = if let Some(cache) = args.cache {
             cache.direct.unwrap_or(true)
         } else {
             true
         };
         let config = DriveConfig {
-            id: node_name,
-            path_on_host: file.filename,
+            id: args.node_name,
+            path_on_host: args.file.filename,
             read_only,
             direct,
-            iops,
+            iops: args.iops,
         };
 
         if let Err(e) = config.check() {
@@ -790,8 +833,46 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn netdev_add(&self, _id: String, _if_name: Option<String>, _fds: Option<String>) -> Response {
-        Response::create_empty_response()
+    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
+        let config = match get_netdev_config(args) {
+            Ok(conf) => conf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        };
+
+        if let Err(e) = config.check() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_netdev_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn netdev_del(&mut self, id: String) -> Response {
+        match self.get_vm_config().lock().unwrap().del_netdev_by_id(&id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
     }
 
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {

@@ -1054,18 +1054,11 @@ impl DeviceInterface for LightMachine {
         }
     }
 
-    fn blockdev_add(
-        &self,
-        node_name: String,
-        file: qmp_schema::FileOptions,
-        cache: Option<qmp_schema::CacheOptions>,
-        read_only: Option<bool>,
-        _iops: Option<u64>,
-    ) -> Response {
+    fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
         const MAX_STRING_LENGTH: usize = 255;
-        let read_only = if let Some(ro) = read_only { ro } else { false };
+        let read_only = args.read_only.unwrap_or(false);
 
-        let direct = if let Some(cache) = cache {
+        let direct = if let Some(cache) = args.cache {
             match cache.direct {
                 Some(direct) => direct,
                 _ => true,
@@ -1074,7 +1067,7 @@ impl DeviceInterface for LightMachine {
             true
         };
 
-        let blk = Path::new(&file.filename);
+        let blk = Path::new(&args.file.filename);
         match metadata(blk) {
             Ok(meta) => {
                 if (meta.st_mode() & libc::S_IFREG != libc::S_IFREG)
@@ -1115,15 +1108,15 @@ impl DeviceInterface for LightMachine {
         }
 
         let config = BlkDevConfig {
-            id: node_name.clone(),
-            path_on_host: file.filename,
+            id: args.node_name.clone(),
+            path_on_host: args.file.filename,
             read_only,
             direct,
             serial_num: None,
             iothread: None,
             iops: None,
         };
-        match self.add_replaceable_config(&node_name, Arc::new(config)) {
+        match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{}", e.display_chain());
@@ -1142,9 +1135,9 @@ impl DeviceInterface for LightMachine {
         )
     }
 
-    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response {
+    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
         let mut config = NetworkInterfaceConfig {
-            id: id.clone(),
+            id: args.id.clone(),
             host_dev_name: "".to_string(),
             mac: None,
             tap_fd: None,
@@ -1153,7 +1146,7 @@ impl DeviceInterface for LightMachine {
             iothread: None,
         };
 
-        if let Some(fds) = fds {
+        if let Some(fds) = args.fds {
             let netdev_fd = if fds.contains(':') {
                 let col: Vec<_> = fds.split(':').collect();
                 String::from(col[col.len() - 1])
@@ -1182,7 +1175,7 @@ impl DeviceInterface for LightMachine {
                 };
                 config.tap_fd = Some(fd_num);
             }
-        } else if let Some(if_name) = if_name {
+        } else if let Some(if_name) = args.if_name {
             config.host_dev_name = if_name.clone();
             if create_tap(None, Some(&if_name)).is_err() {
                 return Response::create_error_response(
@@ -1194,7 +1187,7 @@ impl DeviceInterface for LightMachine {
             }
         }
 
-        match self.add_replaceable_config(&id, Arc::new(config)) {
+        match self.add_replaceable_config(&args.id, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{}", e.display_chain());
@@ -1204,6 +1197,13 @@ impl DeviceInterface for LightMachine {
                 )
             }
         }
+    }
+
+    fn netdev_del(&mut self, _node_name: String) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError("netdev_del not support yet".to_string()),
+            None,
+        )
     }
 
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
