@@ -570,8 +570,10 @@ impl PciConfig {
         let locked_bus = bus.lock().unwrap();
         for bar in self.bars.iter_mut() {
             match bar.region_type {
-                RegionType::Io =>
-                {
+                RegionType::Io => {
+                    if bar.address == BAR_SPACE_UNMAPPED || bar.size == 0 {
+                        continue;
+                    }
                     #[cfg(target_arch = "x86_64")]
                     if let Some(region) = bar.region.as_ref() {
                         locked_bus
