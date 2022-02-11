@@ -417,6 +417,7 @@ dependencies = [
  "machine_manager",
  "migration",
  "migration_derive",
+ "once_cell",
  "sysbus",
  "util",
  "vmm-sys-util",
