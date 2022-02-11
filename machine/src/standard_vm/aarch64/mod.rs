@@ -395,6 +395,7 @@ impl MachineOps for StdMachine {
 
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
+        locked_vm.init_global_config(vm_config)?;
         locked_vm
             .register_reset_event(&locked_vm.reset_req, clone_vm)
             .chain_err(|| "Fail to register reset event")?;

@@ -417,6 +417,7 @@ impl MachineOps for StdMachine {
 
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
+        locked_vm.init_global_config(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
