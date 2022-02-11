@@ -256,8 +256,13 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         blkdevcfg.serial_num = Some(serial);
     }
 
+    if let Some(id) = cmd_parser.get_value::<String>("id")? {
+        blkdevcfg.id = id;
+    } else {
+        bail!("No id configured for blk device");
+    }
+
     if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
-        blkdevcfg.id = drive_arg.id.clone();
         blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
         blkdevcfg.read_only = drive_arg.read_only;
         blkdevcfg.direct = drive_arg.direct;
@@ -452,7 +457,7 @@ mod tests {
             .is_ok());
         let blk_cfg_res = parse_blk(
             &mut vm_config,
-            "virtio-blk-device,drive=rootfs,iothread=iothread1,serial=111111",
+            "virtio-blk-device,drive=rootfs,id=rootfs,iothread=iothread1,serial=111111",
         );
         assert!(blk_cfg_res.is_ok());
         let blk_device_config = blk_cfg_res.unwrap();
@@ -468,7 +473,7 @@ mod tests {
             .is_ok());
         let blk_cfg_res = parse_blk(
             &mut vm_config,
-            "virtio-blk-device,drive=rootfs1,iothread=iothread1,iops=200,serial=111111",
+            "virtio-blk-device,drive=rootfs1,id=rootfs1,iothread=iothread1,iops=200,serial=111111",
         );
         assert!(blk_cfg_res.is_err()); // Can not find drive named "rootfs1".
     }
@@ -479,7 +484,7 @@ mod tests {
         assert!(vm_config
             .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
-        let blk_cfg = "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111";
+        let blk_cfg = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111";
         let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
         assert!(blk_cfg_res.is_ok());
         let drive_configs = blk_cfg_res.unwrap();
@@ -555,5 +560,81 @@ mod tests {
         assert_eq!(pflash_cfg.unit, 1);
         assert_eq!(pflash_cfg.path_on_host, "flash1.fd".to_string());
         assert_eq!(pflash_cfg.read_only, false);
+    }
+
+    #[test]
+    fn test_drive_config_check() {
+        let mut drive_conf = DriveConfig::default();
+        for _ in 0..MAX_STRING_LENGTH {
+            drive_conf.id += "A";
+        }
+        assert!(drive_conf.check().is_ok());
+
+        // Overflow
+        drive_conf.id += "A";
+        assert!(drive_conf.check().is_err());
+
+        let mut drive_conf = DriveConfig::default();
+        for _ in 0..MAX_PATH_LENGTH {
+            drive_conf.path_on_host += "A";
+        }
+        assert!(drive_conf.check().is_ok());
+
+        // Overflow
+        drive_conf.path_on_host += "A";
+        assert!(drive_conf.check().is_err());
+
+        let mut drive_conf = DriveConfig::default();
+        drive_conf.iops = Some(MAX_IOPS);
+        assert!(drive_conf.check().is_ok());
+
+        let mut drive_conf = DriveConfig::default();
+        drive_conf.iops = None;
+        assert!(drive_conf.check().is_ok());
+
+        // Overflow
+        drive_conf.iops = Some(MAX_IOPS + 1);
+        assert!(drive_conf.check().is_err());
+    }
+
+    #[test]
+    fn test_add_drive_with_config() {
+        let mut vm_config = VmConfig::default();
+
+        let drive_list = ["drive-0", "drive-1", "drive-2"];
+        for id in drive_list.iter() {
+            let mut drive_conf = DriveConfig::default();
+            drive_conf.id = String::from(*id);
+            assert!(vm_config.add_drive_with_config(drive_conf).is_ok());
+
+            let drive = vm_config.drives.get(*id).unwrap();
+            assert_eq!(*id, drive.id);
+        }
+
+        let mut drive_conf = DriveConfig::default();
+        drive_conf.id = String::from("drive-0");
+        assert!(vm_config.add_drive_with_config(drive_conf).is_err());
+    }
+
+    #[test]
+    fn test_del_drive_by_id() {
+        let mut vm_config = VmConfig::default();
+
+        assert!(vm_config.del_drive_by_id("drive-0").is_err());
+
+        let drive_list = ["drive-0", "drive-1", "drive-2"];
+        for id in drive_list.iter() {
+            let mut drive_conf = DriveConfig::default();
+            drive_conf.id = String::from(*id);
+            assert!(vm_config.add_drive_with_config(drive_conf).is_ok());
+        }
+
+        for id in drive_list.iter() {
+            let mut drive_conf = DriveConfig::default();
+            drive_conf.id = String::from(*id);
+            assert!(vm_config.drives.get(*id).is_some());
+            assert!(vm_config.del_drive_by_id(*id).is_ok());
+            assert!(vm_config.drives.get(*id).is_none());
+        }
     }
 }

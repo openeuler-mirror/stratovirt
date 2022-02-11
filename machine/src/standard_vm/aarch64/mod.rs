@@ -19,7 +19,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
 };
@@ -34,7 +34,7 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::{SysBus, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
@@ -111,6 +111,10 @@ pub struct StdMachine {
     /// VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
     vm_config: Mutex<VmConfig>,
+    /// Reset request, handle VM `Reset` event.
+    reset_req: EventFd,
+    /// Device Tree Blob.
+    dtb_vec: Vec<u8>,
 }
 
 impl StdMachine {
@@ -143,8 +147,11 @@ impl StdMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
             power_button: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| ErrorKind::InitPwrBtnErr)?,
+                .chain_err(|| ErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
+            reset_req: EventFd::new(libc::EFD_NONBLOCK)
+                .chain_err(|| ErrorKind::InitEventFdErr("reset_req".to_string()))?,
+            dtb_vec: Vec::new(),
         })
     }
 
@@ -155,6 +162,55 @@ impl StdMachine {
     /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
     pub fn run(&self, paused: bool) -> Result<()> {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+    }
+
+    pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
+        use crate::errors::ResultExt;
+
+        let locked_vm = vm.lock().unwrap();
+        let mut fdt_addr: u64 = 0;
+
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            cpu.pause()
+                .chain_err(|| format!("Failed to pause vcpu{}", cpu_index))?;
+
+            cpu.set_to_boot_state();
+            if cpu_index == 0 {
+                fdt_addr = cpu.arch().lock().unwrap().core_regs().regs.regs[0];
+            }
+            cpu.fd()
+                .vcpu_init(&cpu.arch().lock().unwrap().kvi())
+                .chain_err(|| "Failed to init vcpu fd")?;
+        }
+
+        locked_vm
+            .sys_mem
+            .write(
+                &mut locked_vm.dtb_vec.as_slice(),
+                GuestAddress(fdt_addr as u64),
+                locked_vm.dtb_vec.len() as u64,
+            )
+            .chain_err(|| "Fail to write dtb into sysmem")?;
+
+        for dev in locked_vm.sysbus.devices.iter() {
+            dev.lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Fail to reset sysbus device")?;
+        }
+        locked_vm
+            .pci_host
+            .lock()
+            .unwrap()
+            .reset()
+            .chain_err(|| "Fail to reset pci host")?;
+
+        for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
+            cpu.resume()
+                .chain_err(|| format!("Failed to resume vcpu{}", cpu_index))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -337,7 +393,12 @@ impl MachineOps for StdMachine {
         use super::errors::ErrorKind as StdErrorKind;
         use crate::errors::ResultExt;
 
+        let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
+        locked_vm.init_global_config(vm_config)?;
+        locked_vm
+            .register_reset_event(&locked_vm.reset_req, clone_vm)
+            .chain_err(|| "Fail to register reset event")?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_mem,
@@ -389,6 +450,7 @@ impl MachineOps for StdMachine {
                 .generate_fdt_node(&mut fdt_helper)
                 .chain_err(|| ErrorKind::GenFdtErr)?;
             let fdt_vec = fdt_helper.finish()?;
+            locked_vm.dtb_vec = fdt_vec.clone();
             locked_vm
                 .sys_mem
                 .write(
@@ -482,6 +544,11 @@ impl MachineLifecycle for StdMachine {
         if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
             return false;
         }
+        true
+    }
+
+    fn reset(&mut self) -> bool {
+        self.reset_req.write(1).unwrap();
         true
     }
 

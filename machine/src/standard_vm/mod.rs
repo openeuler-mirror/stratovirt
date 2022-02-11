@@ -18,6 +18,10 @@ mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
+use machine_manager::event_loop::EventLoop;
+use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
@@ -55,8 +59,10 @@ pub mod errors {
 use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
+use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::errors::Result as MachineResult;
 use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
@@ -69,19 +75,23 @@ use devices::legacy::FwCfgOps;
 use error_chain::ChainedError;
 use errors::{Result, ResultExt};
 use machine_manager::config::{
-    get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, PciBdf, VmConfig,
+    get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,
+    PciBdf, VmConfig,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use pci::hotplug::{handle_plug, handle_unplug_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
-use virtio::{qmp_balloon, qmp_query_balloon, Block};
+use virtio::{qmp_balloon, qmp_query_balloon, Block, VhostKern, VirtioDevice};
 
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use x86_64::{LayoutEntryType, MEM_LAYOUT};
+
+#[cfg(target_arch = "x86_64")]
+use self::x86_64::ich9_lpc::{PM_CTRL_OFFSET, PM_EVENT_OFFSET, RST_CTRL_OFFSET, SLEEP_CTRL_OFFSET};
 
 trait StdMachineOps: AcpiBuilder {
     fn init_pci_host(&self) -> Result<()>;
@@ -148,6 +158,76 @@ trait StdMachineOps: AcpiBuilder {
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
 
     fn get_vm_config(&self) -> &Mutex<VmConfig>;
+
+    /// Register event notifier for reset of standard machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `reset_req` - Eventfd of the reset request.
+    /// * `clone_vm` - Reference of the StdMachine.
+    fn register_reset_event(
+        &self,
+        reset_req: &EventFd,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let reset_req = reset_req.try_clone().unwrap();
+        let reset_req_fd = reset_req.as_raw_fd();
+        let reset_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
+            Arc::new(Mutex::new(Box::new(move |_, _| {
+                let _ret = reset_req.read().unwrap();
+                if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
+                    error!(
+                        "Fail to reboot standard VM, {}",
+                        error_chain::ChainedError::display_chain(&e)
+                    );
+                }
+
+                None
+            })));
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            reset_req_fd,
+            None,
+            EventSet::IN,
+            vec![reset_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .chain_err(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn register_acpi_shutdown_event(
+        &self,
+        shutdown_req: &EventFd,
+        clone_vm: Arc<Mutex<StdMachine>>,
+    ) -> MachineResult<()> {
+        let shutdown_req = shutdown_req.try_clone().unwrap();
+        let shutdown_req_fd = shutdown_req.as_raw_fd();
+        let shutdown_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
+            Arc::new(Mutex::new(Box::new(move |_, _| {
+                let _ret = shutdown_req.read().unwrap();
+                StdMachine::handle_shutdown_request(&clone_vm);
+                let notifiers = vec![EventNotifier::new(
+                    NotifierOperation::Delete,
+                    shutdown_req_fd,
+                    None,
+                    EventSet::IN,
+                    Vec::new(),
+                )];
+                Some(notifiers)
+            })));
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            shutdown_req_fd,
+            None,
+            EventSet::IN,
+            vec![shutdown_req_handler],
+        );
+        EventLoop::update_event(vec![notifier], None)
+            .chain_err(|| "Failed to register event notifier.")?;
+        Ok(())
+    }
 }
 
 /// Trait that helps to build ACPI tables.
@@ -242,11 +322,17 @@ trait AcpiBuilder {
         let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFSCP", 1);
 
         fadt.set_table_len(208_usize);
+        // PM1A_EVENT bit, offset is 56.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(56, 0x600);
+        // PM1A_CONTROL bit, offset is 64.
+        #[cfg(target_arch = "x86_64")]
+        fadt.set_field(64, 0x604);
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
         fadt.set_field(76, 0x608);
-        // FADT flag: HW_REDUCED_ACPI bit.
-        fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+        // FADT flag: disable HW_REDUCED_ACPI bit.
+        fadt.set_field(112, 1 << 10 | 1 << 8);
         // FADT minor revision
         fadt.set_field(131, 3);
         // X_PM_TMR_BLK bit, offset is 208.
@@ -254,6 +340,31 @@ trait AcpiBuilder {
         fadt.append_child(&AcpiGenericAddress::new_io_address(0x608_u32).aml_bytes());
         // FADT table size is fixed.
         fadt.set_table_len(276_usize);
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            // Reset Register bit, offset is 116.
+            fadt.set_field(116, 0x01_u8);
+            fadt.set_field(117, 0x08_u8);
+            fadt.set_field(120, RST_CTRL_OFFSET as u64);
+            fadt.set_field(128, 0x0F_u8);
+            // PM1a event register bit, offset is 148.
+            fadt.set_field(148, 0x01_u8);
+            fadt.set_field(149, 0x20_u8);
+            fadt.set_field(152, PM_EVENT_OFFSET as u64);
+            // PM1a contol register bit, offset is 172.
+            fadt.set_field(172, 0x01_u8);
+            fadt.set_field(173, 0x10_u8);
+            fadt.set_field(176, PM_CTRL_OFFSET as u64);
+            // Sleep control register, offset is 244.
+            fadt.set_field(244, 0x01_u8);
+            fadt.set_field(245, 0x08_u8);
+            fadt.set_field(248, SLEEP_CTRL_OFFSET as u64);
+            // Sleep status tegister, offset is 256.
+            fadt.set_field(256, 0x01_u8);
+            fadt.set_field(257, 0x08_u8);
+            fadt.set_field(260, SLEEP_CTRL_OFFSET as u64);
+        }
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let fadt_begin = locked_acpi_data.len() as u32;
@@ -410,7 +521,45 @@ impl StdMachine {
         };
 
         self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction)
-            .chain_err(|| "Failed to add virtio pci device")
+            .chain_err(|| "Failed to add virtio pci block device")
+    }
+
+    fn plug_virtio_pci_net(
+        &mut self,
+        pci_bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        let multifunction = args.multifunction.unwrap_or(false);
+        let netdev = if let Some(dev) = &args.netdev {
+            dev
+        } else {
+            bail!("Netdev not set");
+        };
+
+        let dev = if let Some(conf) = self.get_vm_config().lock().unwrap().netdevs.get(netdev) {
+            let dev = NetworkInterfaceConfig {
+                id: conf.id.clone(),
+                host_dev_name: conf.ifname.clone(),
+                mac: args.mac.clone(),
+                tap_fd: conf.tap_fd,
+                vhost_type: conf.vhost_type.clone(),
+                vhost_fd: conf.vhost_fd,
+                iothread: args.iothread.clone(),
+            };
+            dev.check()?;
+            dev
+        } else {
+            bail!("Netdev not found");
+        };
+
+        let net: Arc<Mutex<dyn VirtioDevice>> = if dev.vhost_type.is_some() {
+            Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())))
+        } else {
+            Arc::new(Mutex::new(virtio::Net::new(dev)))
+        };
+
+        self.add_virtio_pci_device(&args.id, &pci_bdf, net, multifunction)
+            .chain_err(|| "Failed to add virtio pci net device")
     }
 
     fn plug_vfio_pci_device(
@@ -539,7 +688,18 @@ impl DeviceInterface for StdMachine {
         match driver {
             "virtio-blk-pci" => {
                 if let Err(e) = self.plug_virtio_pci_blk(&pci_bdf, args.as_ref()) {
+                    error!("{}", e.display_chain());
                     let err_str = format!("Failed to add virtio pci blk: {}", e.to_string());
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            "virtio-net-pci" => {
+                if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
+                    error!("{}", e.display_chain());
+                    let err_str = format!("Failed to add virtio pci net: {}", e.to_string());
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
                         None,
@@ -616,26 +776,19 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn blockdev_add(
-        &self,
-        node_name: String,
-        file: qmp_schema::FileOptions,
-        cache: Option<qmp_schema::CacheOptions>,
-        read_only: Option<bool>,
-        iops: Option<u64>,
-    ) -> Response {
-        let read_only = read_only.unwrap_or(false);
-        let direct = if let Some(cache) = cache {
+    fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
+        let read_only = args.read_only.unwrap_or(false);
+        let direct = if let Some(cache) = args.cache {
             cache.direct.unwrap_or(true)
         } else {
             true
         };
         let config = DriveConfig {
-            id: node_name,
-            path_on_host: file.filename,
+            id: args.node_name,
+            path_on_host: args.file.filename,
             read_only,
             direct,
-            iops,
+            iops: args.iops,
         };
 
         if let Err(e) = config.check() {
@@ -680,8 +833,46 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn netdev_add(&self, _id: String, _if_name: Option<String>, _fds: Option<String>) -> Response {
-        Response::create_empty_response()
+    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
+        let config = match get_netdev_config(args) {
+            Ok(conf) => conf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        };
+
+        if let Err(e) = config.check() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_netdev_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn netdev_del(&mut self, id: String) -> Response {
+        match self.get_vm_config().lock().unwrap().del_netdev_by_id(&id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
     }
 
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {

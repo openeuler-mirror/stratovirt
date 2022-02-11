@@ -37,7 +37,7 @@ You can get kernel and rootfs image from the following link:
 
 https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
 
-For standard_vm, firmware file of EDK2 which follows UEFI is required.
+For standard VM, firmware file of EDK2 which follows UEFI is required.
 
 ```shell
 # If the socket of qmp exists, remove it first.
@@ -48,13 +48,13 @@ $ ./target/release/stratovirt \
     -kernel /path/to/kernel \
     -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 
-# Start standard_vm
+# Start standard VM on x86_64
 $ ./target/release/stratovirt \
-    -machine standard_vm \
+    -machine q35 \
     -kernel /path/to/kernel \
     -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/firmware,if=pflash,unit=0,readonly=true \

@@ -37,6 +37,7 @@ const FUTEX_WAIT_BITSET_PRIVATE: u32 = FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG;
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/fcntl.h
 const F_GETFD: u32 = 1;
 const F_SETFD: u32 = 2;
+const F_SETFL: u32 = 4;
 const F_LINUX_SPECIFIC_BASE: u32 = 1024;
 const F_DUPFD_CLOEXEC: u32 = F_LINUX_SPECIFIC_BASE + 6;
 
@@ -79,7 +80,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_fcntl)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_DUPFD_CLOEXEC)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFD)
-            .add_constraint(SeccompCmpOpt::Eq, 1, F_GETFD),
+            .add_constraint(SeccompCmpOpt::Eq, 1, F_GETFD)
+            .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFL),
         BpfRule::new(libc::SYS_rt_sigprocmask),
         BpfRule::new(libc::SYS_openat),
         BpfRule::new(libc::SYS_sigaltstack),
@@ -90,6 +92,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_accept4),
         BpfRule::new(libc::SYS_lseek),
         BpfRule::new(libc::SYS_futex)
+            .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT)
             .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_PRIVATE)
             .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
             .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
@@ -143,8 +146,11 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_VRING_KICK() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_OWNER() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_FEATURES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_GET_FEATURES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_MEM_TABLE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_NET_SET_BACKEND() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_GET_FEATURES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_RESET_OWNER() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
@@ -170,4 +176,5 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_ONE_REG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
 }

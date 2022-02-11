@@ -357,8 +357,8 @@ struct BlockIoHandler {
     receiver: Receiver<SenderConfig>,
     /// Eventfd for config space update.
     update_evt: RawFd,
-    /// Eventfd for device reset.
-    reset_evt: RawFd,
+    /// Eventfd for device deactivate.
+    deactivate_evt: RawFd,
     /// Callback to trigger an interrupt.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// thread name of io handler
@@ -627,7 +627,7 @@ impl BlockIoHandler {
         }
     }
 
-    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
         let mut notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
@@ -638,7 +638,7 @@ impl BlockIoHandler {
             ),
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.reset_evt,
+                self.deactivate_evt,
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -698,13 +698,13 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(handler_raw.update_evt, h));
 
-        // Register event notifier for reset_evt.
+        // Register event notifier for deactivate_evt.
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            Some(h_clone.lock().unwrap().reset_evt_handler())
+            Some(h_clone.lock().unwrap().deactivate_evt_handler())
         });
-        notifiers.push(build_event_notifier(handler_raw.reset_evt, h));
+        notifiers.push(build_event_notifier(handler_raw.deactivate_evt, h));
 
         // Register event notifier for queue_evt.
         let h_clone = handler.clone();
@@ -848,8 +848,8 @@ pub struct Block {
     sender: Option<Sender<SenderConfig>>,
     /// Eventfd for config space update.
     update_evt: EventFd,
-    /// Eventfd for device reset.
-    reset_evt: EventFd,
+    /// Eventfd for device deactivate.
+    deactivate_evt: EventFd,
 }
 
 impl Default for Block {
@@ -862,7 +862,7 @@ impl Default for Block {
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -877,7 +877,7 @@ impl Block {
             interrupt_cb: None,
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -1054,7 +1054,7 @@ impl VirtioDevice for Block {
             driver_features: self.state.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             interrupt_cb,
             iothread: self.blk_cfg.iothread.clone(),
             leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
@@ -1070,8 +1070,8 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        self.reset_evt
+    fn deactivate(&mut self) -> Result<()> {
+        self.deactivate_evt
             .write(1)
             .chain_err(|| ErrorKind::EventFdWrite)
     }

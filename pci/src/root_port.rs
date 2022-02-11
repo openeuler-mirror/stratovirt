@@ -13,6 +13,8 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use once_cell::sync::OnceCell;
+
 use address_space::Region;
 use error_chain::ChainedError;
 use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
@@ -39,6 +41,8 @@ use crate::{
 };
 
 const DEVICE_ID_RP: u16 = 0x000c;
+
+static FAST_UNPLUG_FEATURE: OnceCell<bool> = OnceCell::new();
 
 /// Device state root port.
 #[repr(C)]
@@ -245,6 +249,12 @@ impl RootPort {
         self.hotplug_command_completed();
         self.hotplug_event_notify();
     }
+
+    pub fn set_fast_unplug_feature(v: bool) {
+        if let Err(v) = FAST_UNPLUG_FEATURE.set(v) {
+            error!("Failed to set fast unplug feature: {}", v);
+        }
+    }
 }
 
 impl PciDevOps for RootPort {
@@ -383,24 +393,32 @@ impl PciDevOps for RootPort {
     }
 
     /// Only set slot status to on, and no other device reset actions are implemented.
-    fn reset(&mut self) -> Result<()> {
-        let cap_offset = self.config.ext_cap_offset;
-        le_write_u16(
-            &mut self.config.config,
-            (cap_offset + PCI_EXP_SLTSTA) as usize,
-            PCI_EXP_SLTSTA_PDS,
-        )?;
-        le_write_u16(
-            &mut self.config.config,
-            (cap_offset + PCI_EXP_SLTCTL) as usize,
-            !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
-        )?;
-        le_write_u16(
-            &mut self.config.config,
-            (cap_offset + PCI_EXP_LNKSTA) as usize,
-            PCI_EXP_LNKSTA_DLLLA,
-        )?;
-        Ok(())
+    fn reset(&mut self, reset_child_device: bool) -> Result<()> {
+        if reset_child_device {
+            self.sec_bus
+                .lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Fail to reset sec_bus in root port")
+        } else {
+            let cap_offset = self.config.ext_cap_offset;
+            le_write_u16(
+                &mut self.config.config,
+                (cap_offset + PCI_EXP_SLTSTA) as usize,
+                PCI_EXP_SLTSTA_PDS,
+            )?;
+            le_write_u16(
+                &mut self.config.config,
+                (cap_offset + PCI_EXP_SLTCTL) as usize,
+                !PCI_EXP_SLTCTL_PCC | PCI_EXP_SLTCTL_PWR_IND_ON,
+            )?;
+            le_write_u16(
+                &mut self.config.config,
+                (cap_offset + PCI_EXP_LNKSTA) as usize,
+                PCI_EXP_LNKSTA_DLLLA,
+            )?;
+            Ok(())
+        }
     }
 }
 
@@ -445,10 +463,15 @@ impl HotplugOps for RootPort {
             (offset + PCI_EXP_LNKSTA) as usize,
             PCI_EXP_LNKSTA_DLLLA,
         )?;
+
+        let mut slot_status = PCI_EXP_HP_EV_ABP;
+        if let Some(&true) = FAST_UNPLUG_FEATURE.get() {
+            slot_status |= PCI_EXP_HP_EV_PDC;
+        }
         le_write_set_value_u16(
             &mut self.config.config,
             (offset + PCI_EXP_SLTSTA) as usize,
-            PCI_EXP_HP_EV_ABP,
+            slot_status,
         )?;
         self.hotplug_event_notify();
         Ok(())

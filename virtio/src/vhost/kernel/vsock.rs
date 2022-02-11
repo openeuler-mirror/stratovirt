@@ -93,8 +93,8 @@ pub struct Vsock {
     event_queue: Option<Arc<Mutex<Queue>>>,
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    /// EventFd for device reset.
-    reset_evt: EventFd,
+    /// EventFd for device deactivate.
+    deactivate_evt: EventFd,
 }
 
 impl Vsock {
@@ -106,7 +106,7 @@ impl Vsock {
             mem_space: mem_space.clone(),
             event_queue: None,
             interrupt_cb: None,
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -150,7 +150,9 @@ impl VirtioDevice for Vsock {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
         let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
             .chain_err(|| "Failed to create backend for vsock")?;
-
+        backend
+            .set_owner()
+            .chain_err(|| "Failed to set owner for vsock")?;
         self.state.device_features = backend
             .get_features()
             .chain_err(|| "Failed to get features for vsock")?;
@@ -242,9 +244,6 @@ impl VirtioDevice for Vsock {
             Some(backend_) => backend_,
         };
         backend
-            .set_owner()
-            .chain_err(|| "Failed to set owner for vsock")?;
-        backend
             .set_features(self.state.driver_features)
             .chain_err(|| "Failed to set features for vsock")?;
         backend
@@ -297,7 +296,7 @@ impl VirtioDevice for Vsock {
         let handler = VhostIoHandler {
             interrupt_cb,
             host_notifies,
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
@@ -308,19 +307,23 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        if let Some(backend) = &self.backend {
-            backend
-                .reset_owner()
-                .chain_err(|| "Failed to reset owner for vhost-vsock")?;
+    fn deactivate(&mut self) -> Result<()> {
+        self.deactivate_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)?;
 
-            self.reset_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
-        } else {
-            bail!("Failed to get backend for vhost-vsock");
-        }
         Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // No need to close fd manually, because rust will
+        // automatically cleans up variables at the end of the lifecycle.
+        self.backend = None;
+        self.state = VsockState::default();
+        self.event_queue = None;
+        self.interrupt_cb = None;
+
+        self.realize()
     }
 }
 

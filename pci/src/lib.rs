@@ -28,7 +28,7 @@ pub mod errors {
             AddPciCap(id: u8, size: usize) {
                 display("Failed to add PCI capability: id 0x{:x}, size: 0x{:x}.", id, size)
             }
-            AddPcieExtCap(id: u8, size: usize) {
+            AddPcieExtCap(id: u16, size: usize) {
                 display("Failed to add PCIe extended capability: id 0x{:x}, size: 0x{:x}.", id, size)
             }
             UnregMemBar(id: usize) {
@@ -138,6 +138,18 @@ pub fn pci_func(devfn: u8) -> u8 {
     devfn & 0x07
 }
 
+pub fn pci_ext_cap_id(header: u32) -> u16 {
+    (header & 0xffff) as u16
+}
+
+pub fn pci_ext_cap_ver(header: u32) -> u32 {
+    (header >> 16) & 0xf
+}
+
+pub fn pci_ext_cap_next(header: u32) -> usize {
+    ((header >> 20) & 0xffc) as usize
+}
+
 pub trait PciDevOps: Send {
     /// Init writable bit mask.
     fn init_write_mask(&mut self) -> Result<()>;
@@ -188,8 +200,8 @@ pub trait PciDevOps: Send {
     fn name(&self) -> String;
 
     /// Reset device
-    fn reset(&mut self) -> Result<()> {
-        bail!("Reset of the pci device is not implemented");
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Ok(())
     }
 
     /// Get device devfn

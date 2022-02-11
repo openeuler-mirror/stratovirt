@@ -241,7 +241,7 @@ impl VfioContainer {
         };
         let userspace_addr = hva + fr.offset_in_region;
         address_space::errors::ResultExt::chain_err(
-            self.vfio_dma_map(guest_phys_addr, memory_size, hva),
+            self.vfio_dma_map(guest_phys_addr, memory_size, userspace_addr),
             || {
                 format!(
                     "Failed to do dma map: gpa 0x{:x}, size 0x{:x}, hva 0x{:x}",

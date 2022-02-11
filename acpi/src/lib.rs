@@ -23,7 +23,7 @@ pub(crate) mod aml_compiler;
 #[allow(dead_code)]
 mod table_loader;
 
-pub use acpi_device::AcpiPMTimer;
+pub use acpi_device::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 pub use acpi_table::madt_subtable::*;
 pub use acpi_table::*;
 pub use aml_compiler::*;

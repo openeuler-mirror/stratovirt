@@ -13,7 +13,7 @@
 pub mod caps;
 mod cpuid;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use kvm_bindings::{
     kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry, kvm_regs, kvm_segment,
@@ -43,6 +43,7 @@ const MSR_LIST: &[u32] = &[
     0xc000_0102, // MSR_KERNEL_GS_BASE, SwapGS GS shadow
     0x0010,      // MSR_IA32_TSC,
     0x01a0,      // MSR_IA32_MISC_ENABLE,
+    0x2ff,       // MSR_MTRRdefType
 ];
 
 const MSR_IA32_MISC_ENABLE: u32 = 0x01a0;
@@ -50,7 +51,7 @@ const MSR_IA32_MISC_ENABLE_FAST_STRING: u64 = 0x1;
 
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct X86CPUBootConfig {
     pub prot64_mode: bool,
     /// Register %rip value
@@ -115,6 +116,23 @@ impl X86CPUState {
         }
     }
 
+    pub fn set(&mut self, cpu_state: &Arc<Mutex<X86CPUState>>) {
+        let locked_cpu_state = cpu_state.lock().unwrap();
+        self.nr_vcpus = locked_cpu_state.nr_vcpus;
+        self.apic_id = locked_cpu_state.apic_id;
+        self.regs = locked_cpu_state.regs;
+        self.sregs = locked_cpu_state.sregs;
+        self.fpu = locked_cpu_state.fpu;
+        self.mp_state = locked_cpu_state.mp_state;
+        self.lapic = locked_cpu_state.lapic;
+        self.msr_len = locked_cpu_state.msr_len;
+        self.msr_list = locked_cpu_state.msr_list;
+        self.cpu_events = locked_cpu_state.cpu_events;
+        self.xsave = locked_cpu_state.xsave;
+        self.xcrs = locked_cpu_state.xcrs;
+        self.debugregs = locked_cpu_state.debugregs;
+    }
+
     /// Set register value in `X86CPUState` according to `boot_config`.
     ///
     /// # Arguments
@@ -146,9 +164,6 @@ impl X86CPUState {
             .chain_err(|| format!("Failed to set cpuid for CPU {}", self.apic_id))?;
 
         vcpu_fd
-            .set_lapic(&self.lapic)
-            .chain_err(|| format!("Failed to set lapic for CPU {}", self.apic_id))?;
-        vcpu_fd
             .set_mp_state(self.mp_state)
             .chain_err(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
         vcpu_fd
@@ -175,6 +190,9 @@ impl X86CPUState {
             .set_debug_regs(&self.debugregs)
             .chain_err(|| format!("Failed to set debug register for CPU {}", self.apic_id))?;
         vcpu_fd
+            .set_lapic(&self.lapic)
+            .chain_err(|| format!("Failed to set lapic for CPU {}", self.apic_id))?;
+        vcpu_fd
             .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len]))
             .chain_err(|| format!("Failed to set msrs for CPU {}", self.apic_id))?;
         vcpu_fd
@@ -192,6 +210,7 @@ impl X86CPUState {
         const APIC_LVT1: usize = 0x360;
         const APIC_MODE_NMI: u32 = 0x4;
         const APIC_MODE_EXTINT: u32 = 0x7;
+        const APIC_ID: usize = 0x20;
 
         self.lapic = vcpu_fd
             .get_lapic()
@@ -208,6 +227,9 @@ impl X86CPUState {
             let apic_lvt_lint1 = &mut self.lapic.regs[APIC_LVT1..] as *mut [i8] as *mut u32;
             *apic_lvt_lint1 &= !0x700;
             *apic_lvt_lint1 |= APIC_MODE_NMI << 8;
+
+            let apic_id = &mut self.lapic.regs[APIC_ID..] as *mut [i8] as *mut u32;
+            *apic_id = self.apic_id << 24;
         }
 
         Ok(())

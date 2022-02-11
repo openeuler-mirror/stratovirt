@@ -39,13 +39,13 @@ $ ./target/release/stratovirt \
     -kernel /path/to/kernel \
     -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 
-# 启动standard_vm机型
+# x86_64上启动标准机型
 $ ./target/release/stratovirt \
-    -machine standard_vm \
+    -machine q35 \
     -kernel /path/to/kernel \
     -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/firmware,if=pflash,unit=0,readonly=true \

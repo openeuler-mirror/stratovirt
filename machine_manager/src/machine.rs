@@ -19,9 +19,9 @@ use once_cell::sync::Lazy;
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    CacheOptions, ChardevInfo, Cmd, CmdLine, DeviceAddArgument, DeviceProps, Events, FileOptions,
-    GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, PropList, QmpCommand,
-    QmpEvent, Target, TypeLists,
+    BlockDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument, DeviceProps, Events, GicCap,
+    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList,
+    QmpCommand, QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -96,6 +96,11 @@ pub trait MachineLifecycle {
         self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
     }
 
+    /// Reset VM, stop running and restart a new VM.
+    fn reset(&mut self) -> bool {
+        self.notify_lifecycle(KvmVmState::Running, KvmVmState::Shutdown)
+    }
+
     /// When VM or Device life state changed, notify concerned entry.
     ///
     /// # Arguments
@@ -153,20 +158,15 @@ pub trait DeviceInterface {
     fn device_del(&mut self, device_id: String) -> Response;
 
     /// Creates a new block device.
-    fn blockdev_add(
-        &self,
-        node_name: String,
-        file: FileOptions,
-        cache: Option<CacheOptions>,
-        read_only: Option<bool>,
-        iops: Option<u64>,
-    ) -> Response;
+    fn blockdev_add(&self, args: Box<BlockDevAddArgument>) -> Response;
 
     /// Delete a block device.
     fn blockdev_del(&self, node_name: String) -> Response;
 
     /// Create a new network device.
-    fn netdev_add(&self, id: String, if_name: Option<String>, fds: Option<String>) -> Response;
+    fn netdev_add(&mut self, args: Box<NetDevAddArgument>) -> Response;
+
+    fn netdev_del(&mut self, id: String) -> Response;
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;
