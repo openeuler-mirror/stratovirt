@@ -182,7 +182,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 ```shell
 # virtio mmio block device.
 -drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-device,drive=drive_id[,iothread=iothread1,serial=serial_num]
+-device virtio-blk-device,drive=drive_id,id=blkid[,iothread=iothread1,serial=serial_num]
 # virtio pci block device.
 -drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
 -device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num]
@@ -426,6 +426,8 @@ If not set, default value is false.
 -device pcie-root-port,port=0x1,addr=0x1,bus=pcie.0,id=pcie.1[,multifunction=on]
 ```
 
+**The slot number of the device attached to the root port must be 0**
+
 ### 2.10 PFlash
 PFlash is a virtualized flash device, it provides code storage and data storage for EDK2 during standard boot.
 
@@ -501,187 +503,20 @@ One property can be set:
 -trace events=<file>
 ```
 
-## 3. StratoVirt Management
+### 2.14 Global config
+Users can set the global configuration using the -global parameter.
 
-StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
- in current version.
+One property can be set:
 
-### 3.1 qmp Creation
-
-When running StratoVirt, you must create qmp in cmdline arguments as a management interface.
-
-StratoVirt supports UnixSocket-type qmp, you can set it by:
+* pcie-root-port.fast-unplug: the fast unplug feature switch, only Kata is supported.
 
 ```shell
-# cmdline
--qmp unix:/path/to/api/socket,server,nowait
-```
-Where, the information about 'server' and 'nowait' can be found in [section 2.12 Chardev](#212-chardev)
-
-On top of that, monitor can be used to create qmp connection as well.
-The following commands can be used to create a monitor.
-
-Three properties can be set for monitor.
-
-* id: unique device id.
-* chardev: char device of monitor.
-* mode: the model of monitor. NB: currently only "control" is supported.
-
-
-```shell
-# cmdline
--chardev socket,path=/path/to/monitor/sock,id=chardev_id,server,nowait
--mon chardev=chardev_id,id=monitor_id,mode=control
+-global pcie-root-port.fast-unplug=1
 ```
 
-### 3.2 qmp Connection
+## 3. Other Features
 
-After StratoVirt started, you can connect to StratoVirt's qmp and manage it by QMP.
-
-Several steps to connect qmp are showed as following:
-
-```shell
-# Start with UnixSocket
-$ ncat -U /path/to/api/socket
-```
-
-Once connection is built, you will receive a `greeting` message from StratoVirt.
-
-```json
-{"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
-```
-
-Now you can input QMP command to control StratoVirt.
-
-### 3.3 Lifecycle Management
-
-With QMP, you can control VM's lifecycle by command `stop`, `cont`, `quit` and check VM state by
- `query-status`.
-
-#### 3.3.1 Command `stop`
-
-Stop all guest VCPUs execution.
-
-```json
-<- {"execute":"stop"}
--> {"event":"STOP","data":{},"timestamp":{"seconds":1583908726,"microseconds":162739}}
--> {"return":{}}
-```
-
-#### 3.3.2 Command `cont`
-
-Resume all guest VCPUs execution.
-
-```json
-<- {"execute":"cont"}
--> {"event":"RESUME","data":{},"timestamp":{"seconds":1583908853,"microseconds":411394}}
--> {"return":{}}
-```
-
-#### 3.3.3 Command `quit`
-
-This command will cause StratoVirt process to exit gracefully.
-
-```json
-<- {"execute":"quit"}
--> {"return":{}}
--> {"event":"SHUTDOWN","data":{"guest":false,"reason":"host-qmp-quit"},"timestamp":{"ds":1590563776,"microseconds":519808}}
-```
-
-#### 3.3.4 Command `query-status`
-
-Query the running status of all VCPUs.
-
-```json
-<- { "execute": "query-status" }
--> { "return": { "running": true,"singlestep": false,"status": "running" } }
-```
-
-#### 3.3.5 Command `getfd`
-
-Receive a file descriptor via SCM rights and assign it a name.
-
-```json
-<- { "execute": "getfd", "arguments": { "fdname": "fd1" } }
--> { "return": {} }
-```
-
-### 3.4 Device Hot-replace
-
-StratoVirt supports hot-replacing virtio-blk and virtio-net devices with QMP.
-
-#### 3.4.1 Hot-replace Virtio-blk
-
-```json
-<- {"execute": "blockdev-add", "arguments": {"node-name": "drive-0", "file": {"driver": "file", "filename": "/path/to/block"}, "cache": {"direct": true}, "read-only": false}}
--> {"return": {}}
-<- {"execute": "device_add", "arguments": {"id": "drive-0", "driver": "virtio-blk-mmio", "addr": "0x1"}}
--> {"return": {}}
-```
-
-**`node-name` in `blockdev-add` should be same as `id` in `device_add`.**
-
-For `addr`, it start at `0x0` mapping in guest with `vda` on x86_64 platform, and start at `0x1`
- mapping in guest with `vdb` on aarch64 platform.
-
-You can also remove the replaceable block device by:
-
-```json
-<- {"execute": "device_del", "arguments": {"id": "drive-0"}}
--> {"event": "DEVICE_DELETED", "data":{"device": "drive-0", "path": "/path/to/block"}}
--> {"return": {}}
-```
-
-#### 3.4.2 Hot-replace Virtio-net
-
-```json
-<- {"execute":"netdev_add", "arguments":{"id":"net-0", "ifname":"tap0"}}
--> {"return": {}}
-<- {"execute":"device_add", "arguments":{"id":"net-0", "driver":"virtio-net-mmio", "addr":"0x0"}}
--> {"return": {}}
-```
-
-**`id` in `netdev_add` should be same as `id` in `device_add`.**
-
-For `addr`, it start at `0x0` mapping in guest with `eth0`.
-
-You can also remove the replaceable net device by:
-
-```json
-<- {"execute": "device_del", "arguments": {"id": "net-0"}}
--> {"event":"DEVICE_DELETED","data":{"device":"net-0","path":"net-0"},"timestamp":{"seconds":1614310541,"microseconds":554250}}
--> {"return": {}}
-```
-
-### 3.5 Balloon
-
-With QMP command you can set target memory size of guest and get memory size of guest.
-#### 3.5.1 command 'balloon'
-Set target memory size of guest.
-```json
-<- { "execute": "balloon", "arguments": { "value": 2147483648 } }
--> {"return":{}}
-```
-#### 3.5.2 command 'query-balloon'
-Get memory size of guest.
-```json
-<- { "execute": "query-balloon" }
--> {"return":{"actual":2147483648}}
-```
-
-### 3.6 Event Notification
-
-When some events happen, connected client will receive QMP events.
-
-Now StratoVirt supports four events: `SHUTDOWN`, `STOP`, `RESUME`, `DEVICE_DELETED`.
-
-### 3.7 Flow control
-
-QMP use `leak bucket` to control QMP command flow. Now QMP server accept 100 commands per second.
-
-## 4. Other Features
-
-### 4.1 Daemonize
+### 3.1 Daemonize
 
 StratoVirt supports to run as a daemon.
 
@@ -699,7 +534,7 @@ And you can also restore StratoVirt's **pid number** to a file by:
 -pidfile /path/to/pidfile
 ```
 
-### 4.2 Seccomp
+### 3.2 Seccomp
 
 StratoVirt use [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html) to limit the syscalls
 in StratoVirt process by default. It will make a slight influence on performance to StratoVirt.
@@ -723,7 +558,7 @@ If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 -disable-seccomp
 ```
 
-### 4.3 Logging
+### 3.3 Logging
 
 StratoVirt supports to output log to stderr and log file.
 
@@ -739,49 +574,11 @@ You can enable StratoVirt's logging by:
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
 StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
 
-### 4.4 Snapshot and Restore
+### 3.4 Snapshot and Restore
 
 StratoVirt supports to take a snapshot of a paused VM as VM template. This template can be used to warm start a new VM. Warm start skips the kernel boot stage and userspace initialization stage to boot VM in a very short time.
 
-#### 4.4.1 Create VM template
-
-First, we create a StratoVirt VM:
-```shell
-$ ./stratovirt \
-    -machine microvm \
-    -kernel path/to/vmlinux.bin \
-    -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
-    -drive file=path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
-    -qmp unix:path/to/socket,server,nowait \
-    -serial stdio
-```
-
-After the VM boot up, pause the VM with QMP:
-```shell
-$ ncat -U path/to/socket
-{"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
-{"execute":"stop"}
-{"event":"STOP","data":{},"timestamp":{"seconds":1583908726,"microseconds":162739}}
-{"return":{}}
-```
-
-When VM is in paused state, is's safe to take a snapshot of the VM into the specified directory with QMP.
-```shell
-$ ncat -U path/to/socket
-{"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
-{"execute":"migrate", "arguments":{"uri":"file:path/to/template"}}
-{"return":{}}
-```
-
-Two files will be created in given directory on the system.
-```shell
-$ ls path/to/template
-memory  state
-```
-File `state` contains the device state data of VM devices. File `memory` contains guest memory data of VM memory. The file size is explained by the size of VM guest memory.
-
-#### 4.4.2 Restore from VM template
+#### 3.4.1 Restore from VM template
 
 Restore from VM template with below command:
 ```shell
@@ -790,58 +587,21 @@ $ ./stratovirt \
     -kernel path/to/vmlinux.bin \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:path/to/socket,server,nowait \
     -serial stdio \
     -incoming file:path/to/template
 ```
 
-The device configuration must be the same with template VM. Its cpu number, guest memory size, device number and type can be changed. For drive file, only support previous file or its backups. After that, the VM is created from template successfully.
+* incoming: the path of the template.
 
-#### 4.4.3 Snapshot state check
-
-Use qmp command `query-migrate` to check snapshot state:
-```shell
-$ ncat -U path/to/socket
-{"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
-{"execute":"query-migrate"}
-{"return":{"status":"completed"}}
-```
-
-Now there are 5 states during snapshot:
-- `None`: Resource is not prepared all.
-- `Setup`: Resource is setup, ready to do snapshot.
-- `Active`: In snapshot.
-- `Completed`: Snapshot succeed.
-- `Failed`: Snapshot failed.
-
-#### 4.4.4 Limitations
-
-Snapshot-restore support machine type:
-- `microvm`
-- `q35` (on x86_64 platform)
-- `virt` (on aarch64 platform)
-
-Some devices and feature don't support to be snapshot yet:
-- `vhost-net`
-- `vfio` devices
-- `balloon`
-- `hugepage`,`mem-shared`,`backend file of memory`
-
-Some device attributes can't be changed:
-- `virtio-net`: mac
-- `virtio-blk`: file(only ordinary file or copy file), serial_num
-- `device`: bus, addr
-- `smp`
-- `m`
-
-For machine type `microvm`, if use `hot-replace` before snapshot, add newly replaced device to restore command. 
-
-## 5. Ozone
+See [Snapshot and Restore](./snapshot.md) for details.
+ 
+## 4. Ozone
 Ozone is a lightweight secure sandbox for StratoVirt, it provides secure environment for StratoVirt 
 by limiting resources of StratoVirt using 'namespace'. Please run ozone with root permission.
 
-### 5.1 Usage
+### 4.1 Usage
 Ozone can be launched by the following commands:
 ```shell
 $ ./ozone \
@@ -872,7 +632,7 @@ About the arguments:
 * `cgroup` : set cgroup controller value. supported controller: `cpuset.cpus` and `memory.limit_in_bytes`.
 * `--` : these two dashes are used to splite args, the args followed are used to launched StratoVirt.
 
-### 5.2 Example
+### 4.2 Example
 As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.
 
 On top of that, the path-related arguments are different. They are all in the current(`./`) directory. 
@@ -900,7 +660,7 @@ $ ./ozone \
     -kernel ./vmlinux.bin \
     -append console=ttyS0 root=/dev/vda reboot=k panic=1 rw \
     -drive file=./rootfs,id=rootfs,readonly=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:./stratovirt.socket,server,nowait \
     -serial stdio
 ```
@@ -917,7 +677,7 @@ $ ./ozone \
     -clean-resource
 ```
 
-## 6. Libvirt
+## 5. Libvirt
 Libvirt launches StratoVirt by creating cmdlines. But some of these commands
 such as: cpu, overcommit, uuid, no-user-config, nodefaults, sandbox, msg, rtc, no-shutdown,
 nographic, realtime, display, usb, mem-prealloc and boot, are not supported by StratoVirt.

@@ -17,7 +17,7 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
-use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::Result;
@@ -101,6 +101,10 @@ pub struct RTC {
     interrupt_evt: EventFd,
     /// Resource of RTC.
     res: SysRes,
+    /// Guest memory size.
+    mem_size: u64,
+    /// The start address of gap.
+    gap_start: u64,
 }
 
 impl RTC {
@@ -115,6 +119,8 @@ impl RTC {
                 region_size: 8,
                 irq: RTC_IRQ as i32,
             },
+            mem_size: 0,
+            gap_start: 0,
         };
 
         // Set VRT bit in Register-D, indicates that RAM and time are valid.
@@ -131,6 +137,8 @@ impl RTC {
     /// * `gap_start` - The start address of gap on x86_64 platform.
     ///                 This value can be found in memory layout.
     pub fn set_memory(&mut self, mem_size: u64, gap_start: u64) {
+        self.mem_size = mem_size;
+        self.gap_start = gap_start;
         let (mem_below_4g, mem_above_4g) = if mem_size > gap_start {
             (gap_start, mem_size - gap_start)
         } else {
@@ -266,6 +274,13 @@ impl SysBusDevOps for RTC {
 
     fn get_type(&self) -> SysBusDevType {
         SysBusDevType::Rtc
+    }
+
+    fn reset(&mut self) -> SysBusResult<()> {
+        self.cmos_data.fill(0);
+        self.cmos_data[RTC_REG_D as usize] = 0x80;
+        self.set_memory(self.mem_size, self.gap_start);
+        Ok(())
     }
 }
 

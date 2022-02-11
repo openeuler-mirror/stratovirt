@@ -13,10 +13,12 @@
 use std::time::Instant;
 
 use address_space::GuestAddress;
+use byteorder::{ByteOrder, LittleEndian};
 
 // Frequency of PM Timer in HZ.
 const PM_TIMER_FREQUENCY: u128 = 3_579_545;
 const NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
+pub const ACPI_BITMASK_SLEEP_ENABLE: u16 = 0x2000;
 
 /// ACPI Power Management Timer
 #[allow(clippy::upper_case_acronyms)]
@@ -50,5 +52,129 @@ impl AcpiPMTimer {
 
         data.copy_from_slice(&((counter & 0xFFFF_FFFF) as u32).to_le_bytes());
         true
+    }
+}
+
+#[derive(Default)]
+pub struct AcpiPmEvent {
+    // PM1 Status Registers, location: PM1a_EVT_BLK.
+    status: u16,
+    // PM1Enable Registers, location: PM1a_EVT_BLK + PM1_EVT_LEN / 2.
+    enable: u16,
+}
+
+impl AcpiPmEvent {
+    pub fn new() -> AcpiPmEvent {
+        AcpiPmEvent {
+            status: 0,
+            enable: 0,
+        }
+    }
+
+    pub fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        match offset {
+            0 => match data.len() {
+                1 => data[0] = self.status as u8,
+                2 => LittleEndian::write_u16(data, self.status),
+                n => {
+                    error!(
+                        "Invalid data length {} for reading PM status register, offset is {}",
+                        n, offset
+                    );
+                    return false;
+                }
+            },
+            2 => match data.len() {
+                1 => data[0] = self.enable as u8,
+                2 => LittleEndian::write_u16(data, self.enable),
+                n => {
+                    error!(
+                        "Invalid data length {} for reading PM enable register, offset is {}",
+                        n, offset
+                    );
+                    return false;
+                }
+            },
+            _ => {
+                error!("Invalid offset");
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
+        match offset {
+            0 => {
+                let value: u16 = match data.len() {
+                    1 => data[0] as u16,
+                    2 => LittleEndian::read_u16(data),
+                    n => {
+                        error!(
+                            "Invalid data length {} for writing PM status register, offset is {}",
+                            n, offset
+                        );
+                        return false;
+                    }
+                };
+                self.status &= !value;
+            }
+            2 => {
+                let value: u16 = match data.len() {
+                    1 => data[0] as u16,
+                    2 => LittleEndian::read_u16(data),
+                    n => {
+                        error!(
+                            "Invalid data length {} for writing PM enable register, offset is {}",
+                            n, offset
+                        );
+                        return false;
+                    }
+                };
+                self.enable = value;
+            }
+            _ => {
+                error!("Invalid offset");
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[derive(Default)]
+pub struct AcpiPmCtrl {
+    control: u16,
+}
+
+impl AcpiPmCtrl {
+    pub fn new() -> AcpiPmCtrl {
+        AcpiPmCtrl { control: 0 }
+    }
+
+    pub fn read(&mut self, data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
+        match data.len() {
+            1 => data[0] = self.control as u8,
+            2 => LittleEndian::write_u16(data, self.control),
+            n => {
+                error!("Invalid data length {} for reading PM control register", n);
+                return false;
+            }
+        }
+        true
+    }
+
+    // Return true when guest want poweroff.
+    pub fn write(&mut self, data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
+        let value: u16 = match data.len() {
+            1 => data[0] as u16,
+            2 => LittleEndian::read_u16(data),
+            n => {
+                error!("Invalid data length {} for writing PM control register", n);
+                return false;
+            }
+        };
+        self.control = value & !ACPI_BITMASK_SLEEP_ENABLE;
+        value & ACPI_BITMASK_SLEEP_ENABLE != 0
     }
 }

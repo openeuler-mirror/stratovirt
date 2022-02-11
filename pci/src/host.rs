@@ -24,7 +24,7 @@ use acpi::{
     AmlToUuid,
 };
 use address_space::{AddressSpace, GuestAddress, RegionOps};
-use sysbus::SysBusDevOps;
+use sysbus::{errors::Result as SysBusResult, SysBusDevOps};
 
 use crate::{bus::PciBus, PciDevOps};
 #[cfg(target_arch = "x86_64")]
@@ -242,6 +242,18 @@ impl SysBusDevOps for PciHost {
             }
             None => true,
         }
+    }
+
+    fn reset(&mut self) -> SysBusResult<()> {
+        use sysbus::errors::ResultExt as SysBusResultExt;
+
+        for (_id, pci_dev) in self.root_bus.lock().unwrap().devices.iter_mut() {
+            SysBusResultExt::chain_err(pci_dev.lock().unwrap().reset(true), || {
+                "Fail to reset pci device under pci host"
+            })?;
+        }
+
+        Ok(())
     }
 }
 

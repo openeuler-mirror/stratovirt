@@ -278,7 +278,7 @@ class MicroVM(BaseVM):
             # make block device cmdline
             for device in block.get("device", []):
                 _temp_device_args = ""
-                _temp_device_args = "virtio-blk-device,drive=%s" % device["drive_id"]
+                _temp_device_args = "virtio-blk-device,drive=%s,id=%s" % (device["drive_id"], device["drive_id"])
                 if "iothread" in device:
                     _temp_device_args += ",iothread=%s" % device["iothread"]
                     self.iothreads += 1

@@ -111,6 +111,8 @@ use util::trace::enable_trace_events;
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
+pub const FAST_UNPLUG_ON: &str = "1";
+pub const FAST_UNPLUG_OFF: &str = "0";
 
 #[derive(Debug, Clone)]
 pub enum ObjConfig {
@@ -153,6 +155,7 @@ pub struct VmConfig {
     pub object: HashMap<String, ObjConfig>,
     pub pflashs: Option<Vec<PFlashConfig>>,
     pub dev_name: HashMap<String, u8>,
+    pub global_config: HashMap<String, String>,
 }
 
 impl VmConfig {
@@ -244,6 +247,33 @@ impl VmConfig {
             }
         }
 
+        Ok(())
+    }
+
+    /// Add argument `global` to `VmConfig`.
+    ///
+    /// # Arguments
+    ///
+    /// * `global_config` - The args of global config.
+    pub fn add_global_config(&mut self, global_config: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("global");
+        cmd_parser.push("pcie-root-port.fast-unplug");
+        cmd_parser.parse(global_config)?;
+
+        if let Some(fast_unplug_value) =
+            cmd_parser.get_value::<String>("pcie-root-port.fast-unplug")?
+        {
+            if fast_unplug_value != FAST_UNPLUG_ON && fast_unplug_value != FAST_UNPLUG_OFF {
+                bail!("The value of fast-unplug is invalid: {}", fast_unplug_value);
+            }
+            let fast_unplug_key = String::from("pcie-root-port.fast-unplug");
+            if self.global_config.get(&fast_unplug_key).is_none() {
+                self.global_config
+                    .insert(fast_unplug_key, fast_unplug_value);
+            } else {
+                bail!("Global config {} has been added", fast_unplug_key);
+            }
+        }
         Ok(())
     }
 }
@@ -572,5 +602,38 @@ mod tests {
 
         assert!(is_trace_event_enabled(event));
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn test_add_global_config() {
+        let mut vm_config = VmConfig::default();
+        vm_config
+            .add_global_config("pcie-root-port.fast-unplug=1")
+            .unwrap();
+        let fast_unplug = vm_config.global_config.get("pcie-root-port.fast-unplug");
+        assert!(fast_unplug.is_some());
+        assert_eq!(fast_unplug.unwrap(), FAST_UNPLUG_ON);
+
+        let mut vm_config = VmConfig::default();
+        vm_config
+            .add_global_config("pcie-root-port.fast-unplug=0")
+            .unwrap();
+        let fast_unplug = vm_config.global_config.get("pcie-root-port.fast-unplug");
+        assert!(fast_unplug.is_some());
+        assert_eq!(fast_unplug.unwrap(), FAST_UNPLUG_OFF);
+
+        let mut vm_config = VmConfig::default();
+        let res = vm_config.add_global_config("pcie-root-port.fast-unplug");
+        assert!(res.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let res = vm_config.add_global_config("pcie-root-port.fast-unplug=2");
+        assert!(res.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let res = vm_config.add_global_config("pcie-root-port.fast-unplug=0");
+        assert!(res.is_ok());
+        let res = vm_config.add_global_config("pcie-root-port.fast-unplug=1");
+        assert!(res.is_err());
     }
 }

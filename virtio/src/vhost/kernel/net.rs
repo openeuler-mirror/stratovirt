@@ -88,8 +88,8 @@ pub struct Net {
     device_config: VirtioNetConfig,
     /// System address space.
     mem_space: Arc<AddressSpace>,
-    /// EventFd for device reset.
-    reset_evt: EventFd,
+    /// EventFd for device deactivate.
+    deactivate_evt: EventFd,
 }
 
 impl Net {
@@ -103,7 +103,7 @@ impl Net {
             vhost_features: 0_u64,
             device_config: VirtioNetConfig::default(),
             mem_space: mem_space.clone(),
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -147,6 +147,10 @@ impl VirtioDevice for Net {
         self.device_features = device_features;
         self.vhost_features = vhost_features;
 
+        Ok(())
+    }
+
+    fn unrealize(&mut self) -> Result<()> {
         Ok(())
     }
 
@@ -302,7 +306,7 @@ impl VirtioDevice for Net {
         let handler = VhostIoHandler {
             interrupt_cb,
             host_notifies,
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
         };
 
         EventLoop::update_event(
@@ -313,20 +317,25 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        if let Some(backend) = &self.backend {
-            backend
-                .reset_owner()
-                .chain_err(|| "Failed to reset owner for vhost-net")?;
-
-            self.reset_evt
-                .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
-        } else {
-            bail!("Failed to get backend for vhost-net");
-        }
+    fn deactivate(&mut self) -> Result<()> {
+        self.deactivate_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)?;
 
         Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // No need to close fd manually, because rust will
+        // automatically cleans up variables at the end of the lifecycle.
+        self.backend = None;
+        self.tap = None;
+        self.device_features = 0_u64;
+        self.driver_features = 0_u64;
+        self.vhost_features = 0_u64;
+        self.device_config = VirtioNetConfig::default();
+
+        self.realize()
     }
 }
 

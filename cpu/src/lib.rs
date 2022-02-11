@@ -63,6 +63,9 @@ pub mod errors {
             StopVcpu(err_info: String) {
                 display("Failed to stopping kvm vcpu: {}!", err_info)
             }
+            KickVcpu(err_info: String) {
+                display("Failed to kick kvm vcpu: {}!", err_info)
+            }
             DestroyVcpu(err_info: String) {
                 display("Failed to destroy kvm vcpu: {}!", err_info)
             }
@@ -74,6 +77,9 @@ pub mod errors {
             }
             UnhandledKvmExit(cpu_id: u8) {
                 display("CPU {}/KVM received an unhandled kvm exit event!", cpu_id)
+            }
+            VcpuLocalThreadNotPresent {
+                display("Vcpu not present in local thread.")
             }
             NoMachineInterface {
                 display("No Machine Interface saved in CPU")
@@ -106,6 +112,8 @@ pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 pub use x86_64::X86CPUState as ArchCPU;
 
 use std::cell::RefCell;
+use std::sync::atomic::fence;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
@@ -118,25 +126,16 @@ use vmm_sys_util::signal::{register_signal_handler, Killable};
 
 use errors::{ErrorKind, Result, ResultExt};
 
-// Used to sync cpu state.
-const SYNC_READ_CPU_STATE: u64 = 1;
-const SYNC_WRITE_CPU_STATE: u64 = 2;
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
 #[cfg(not(target_env = "musl"))]
-const VCPU_EXIT_SIGNAL: i32 = 34;
+const VCPU_TASK_SIGNAL: i32 = 34;
 #[cfg(target_env = "musl")]
-const VCPU_EXIT_SIGNAL: i32 = 35;
+const VCPU_TASK_SIGNAL: i32 = 35;
 #[cfg(not(target_env = "musl"))]
-const VCPU_PAUSE_SIGNAL: i32 = 35;
+const VCPU_RESET_SIGNAL: i32 = 35;
 #[cfg(target_env = "musl")]
-const VCPU_PAUSE_SIGNAL: i32 = 36;
-#[cfg(not(target_env = "musl"))]
-const VCPU_TASK_SIGNAL: i32 = 36;
-#[cfg(target_env = "musl")]
-const VCPU_TASK_SIGNAL: i32 = 37;
-
-const UNINITIALIZED_VCPU_ID: u32 = 9999;
+const VCPU_RESET_SIGNAL: i32 = 36;
 
 /// State for `CPU` lifecycle.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -155,27 +154,13 @@ pub enum CpuLifecycleState {
     Stopped = 5,
 }
 
-// Record vcpu information
-struct ThreadVcpu {
-    dirty_stamps: u64,
-    vcpu_id: u32,
-}
-
-thread_local! {
-    static LOCAL_THREAD_VCPU: RefCell<ThreadVcpu> = RefCell::new(
-       ThreadVcpu {
-           dirty_stamps: 0,
-           vcpu_id: UNINITIALIZED_VCPU_ID,
-       }
-    )
-}
-
 /// Trait to handle `CPU` lifetime.
 #[allow(clippy::upper_case_acronyms)]
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
     fn realize(&self, boot: &CPUBootConfig) -> Result<()>;
 
+    /// Start `CPU` thread and run virtual CPU in kvm.
     ///
     /// # Arguments
     ///
@@ -185,6 +170,9 @@ pub trait CPUInterface {
     fn start(cpu: Arc<Self>, thread_barrier: Arc<Barrier>, paused: bool) -> Result<()>
     where
         Self: std::marker::Sized;
+
+    /// Kick `CPU` to exit kvm emulation.
+    fn kick(&self) -> Result<()>;
 
     /// Make `CPU` lifecycle from `Running` to `Paused`.
     fn pause(&self) -> Result<()>;
@@ -201,6 +189,9 @@ pub trait CPUInterface {
     /// Make `CPU` destroy because of guest inner shutdown.
     fn guest_shutdown(&self) -> Result<()>;
 
+    /// Make `CPU` destroy because of guest inner reset.
+    fn guest_reset(&self) -> Result<()>;
+
     /// Handle vcpu event from `kvm`.
     fn kvm_vcpu_exec(&self) -> Result<bool>;
 }
@@ -216,8 +207,6 @@ pub struct CPU {
     arch_cpu: Arc<Mutex<ArchCPU>>,
     /// LifeCycle state of kvm-based VCPU.
     state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
-    /// Works need to handled by this VCPU.
-    work_queue: Arc<(Mutex<u64>, Condvar)>,
     /// The thread handler of this virtual CPU.
     task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
     /// The thread tid of this VCPU.
@@ -226,6 +215,8 @@ pub struct CPU {
     vm: Weak<Mutex<dyn MachineInterface + Send + Sync>>,
     /// The capability of VCPU.
     caps: CPUCaps,
+    /// The state backup of architecture CPU right before boot.
+    boot_state: Arc<Mutex<ArchCPU>>,
 }
 
 impl CPU {
@@ -248,12 +239,16 @@ impl CPU {
             fd: vcpu_fd,
             arch_cpu,
             state: Arc::new((Mutex::new(CpuLifecycleState::Created), Condvar::new())),
-            work_queue: Arc::new((Mutex::new(0), Condvar::new())),
             task: Arc::new(Mutex::new(None)),
             tid: Arc::new(Mutex::new(None)),
             vm: Arc::downgrade(&vm),
             caps: CPUCaps::init_capabilities(),
+            boot_state: Arc::new(Mutex::new(ArchCPU::default())),
         }
+    }
+
+    pub fn set_to_boot_state(&self) {
+        self.arch_cpu.lock().unwrap().set(&self.boot_state);
     }
 
     /// Get this `CPU`'s ID.
@@ -262,13 +257,16 @@ impl CPU {
     }
 
     /// Get this `CPU`'s file descriptor.
-    #[cfg(target_arch = "aarch64")]
     pub fn fd(&self) -> &Arc<VcpuFd> {
         &self.fd
     }
 
+    /// Get this `CPU`'s state.
+    pub fn state(&self) -> &(Mutex<CpuLifecycleState>, Condvar) {
+        self.state.as_ref()
+    }
+
     /// Get this `CPU`'s architecture-special property.
-    #[cfg(target_arch = "aarch64")]
     pub fn arch(&self) -> &Arc<Mutex<ArchCPU>> {
         &self.arch_cpu
     }
@@ -305,7 +303,7 @@ impl CPUInterface for CPU {
             .unwrap()
             .set_boot_config(&self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
-
+        self.boot_state.lock().unwrap().set(&self.arch_cpu);
         Ok(())
     }
 
@@ -353,12 +351,29 @@ impl CPUInterface for CPU {
     }
 
     fn reset(&self) -> Result<()> {
-        self.arch_cpu.lock().unwrap().reset_vcpu(
-            &self.fd,
-            #[cfg(target_arch = "x86_64")]
-            &self.caps,
-        )?;
-        Ok(())
+        let task = self.task.lock().unwrap();
+        match task.as_ref() {
+            Some(thread) => thread
+                .kill(VCPU_RESET_SIGNAL)
+                .chain_err(|| ErrorKind::KickVcpu("Fail to reset vcpu".to_string())),
+            None => {
+                warn!("VCPU thread not started, no need to reset");
+                Ok(())
+            }
+        }
+    }
+
+    fn kick(&self) -> Result<()> {
+        let task = self.task.lock().unwrap();
+        match task.as_ref() {
+            Some(thread) => thread
+                .kill(VCPU_TASK_SIGNAL)
+                .chain_err(|| ErrorKind::KickVcpu("Fail to kick vcpu".to_string())),
+            None => {
+                warn!("VCPU thread not started, no need to kick");
+                Ok(())
+            }
+        }
     }
 
     fn pause(&self) -> Result<()> {
@@ -370,8 +385,8 @@ impl CPUInterface for CPU {
             cvar.notify_one()
         }
 
-        match &(*task) {
-            Some(thread) => match thread.kill(VCPU_PAUSE_SIGNAL) {
+        match task.as_ref() {
+            Some(thread) => match thread.kill(VCPU_TASK_SIGNAL) {
                 Ok(_) => Ok(()),
                 Err(e) => Err(ErrorKind::StopVcpu(format!("{}", e)).into()),
             },
@@ -383,7 +398,6 @@ impl CPUInterface for CPU {
     }
 
     fn destroy(&self) -> Result<()> {
-        let task = self.task.lock().unwrap();
         let (cpu_state, cvar) = &*self.state;
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Stopping;
@@ -391,24 +405,8 @@ impl CPUInterface for CPU {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
         }
 
-        self.fd.set_kvm_immediate_exit(0);
-        match &(*task) {
-            Some(thread) => match thread.kill(VCPU_EXIT_SIGNAL) {
-                Ok(_) => {}
-                Err(e) => {
-                    error!(
-                        "killing VCPU{} thread({}) failed: {}",
-                        self.id(),
-                        self.tid(),
-                        e
-                    );
-                }
-            },
-            None => {}
-        }
-        cvar.notify_all();
+        self.kick()?;
         let mut cpu_state = cpu_state.lock().unwrap();
-
         cpu_state = cvar
             .wait_timeout(cpu_state, Duration::from_millis(32))
             .unwrap()
@@ -438,6 +436,21 @@ impl CPUInterface for CPU {
                 reason: "guest-shutdown".to_string(),
             };
             event!(Shutdown; shutdown_msg);
+        }
+
+        Ok(())
+    }
+
+    fn guest_reset(&self) -> Result<()> {
+        if let Some(vm) = self.vm.upgrade() {
+            vm.lock().unwrap().reset();
+        } else {
+            return Err(ErrorKind::NoMachineInterface.into());
+        }
+
+        if QmpChannel::is_connected() {
+            let reset_msg = schema::Reset { guest: true };
+            event!(Reset; reset_msg);
         }
 
         Ok(())
@@ -480,15 +493,21 @@ impl CPUInterface for CPU {
                 }
                 #[cfg(target_arch = "aarch64")]
                 VcpuExit::SystemEvent(event, flags) => {
-                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN
-                        || event == kvm_bindings::KVM_SYSTEM_EVENT_RESET
-                    {
+                    if event == kvm_bindings::KVM_SYSTEM_EVENT_SHUTDOWN {
                         info!(
                             "Vcpu{} received an KVM_SYSTEM_EVENT_SHUTDOWN signal",
                             self.id()
                         );
                         self.guest_shutdown()
                             .chain_err(|| "Some error occurred in guest shutdown")?;
+                    } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
+                        info!(
+                            "Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal",
+                            self.id()
+                        );
+                        self.guest_reset()
+                            .chain_err(|| "Some error occurred in guest reset")?;
+                        return Ok(true);
                     } else {
                         error!(
                             "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
@@ -535,6 +554,8 @@ struct CPUThreadWorker {
 }
 
 impl CPUThreadWorker {
+    thread_local!(static LOCAL_THREAD_VCPU: RefCell<Option<CPUThreadWorker>> = RefCell::new(None));
+
     /// Allocates a new `CPUThreadWorker`.
     fn new(thread_cpu: Arc<CPU>) -> Self {
         CPUThreadWorker { thread_cpu }
@@ -542,10 +563,24 @@ impl CPUThreadWorker {
 
     /// Init vcpu thread static variable.
     fn init_local_thread_vcpu(&self) {
-        LOCAL_THREAD_VCPU.with(|thread_vcpu| {
-            let mut vcpu_signal = thread_vcpu.borrow_mut();
-            vcpu_signal.vcpu_id = u32::from(self.thread_cpu.id());
-            vcpu_signal.dirty_stamps = 0;
+        Self::LOCAL_THREAD_VCPU.with(|thread_vcpu| {
+            *thread_vcpu.borrow_mut() = Some(CPUThreadWorker {
+                thread_cpu: self.thread_cpu.clone(),
+            });
+        })
+    }
+
+    fn run_on_local_thread_vcpu<F>(func: F) -> Result<()>
+    where
+        F: FnOnce(&CPU),
+    {
+        Self::LOCAL_THREAD_VCPU.with(|thread_vcpu| {
+            if let Some(local_thread_vcpu) = thread_vcpu.borrow().as_ref() {
+                func(&local_thread_vcpu.thread_cpu);
+                Ok(())
+            } else {
+                Err(ErrorKind::VcpuLocalThreadNotPresent.into())
+            }
         })
     }
 
@@ -553,49 +588,34 @@ impl CPUThreadWorker {
     fn init_signals() -> Result<()> {
         extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
             match signum {
-                VCPU_EXIT_SIGNAL => LOCAL_THREAD_VCPU.with(|thread_vcpu| {
-                    let mut vcpu_signal = thread_vcpu.borrow_mut();
-                    vcpu_signal.dirty_stamps = VCPU_EXIT_SIGNAL as u64;
-                }),
-                VCPU_PAUSE_SIGNAL => LOCAL_THREAD_VCPU.with(|thread_vcpu| {
-                    let mut vcpu_signal = thread_vcpu.borrow_mut();
-                    vcpu_signal.dirty_stamps = VCPU_PAUSE_SIGNAL as u64;
-                }),
+                VCPU_TASK_SIGNAL => {
+                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
+                        vcpu.fd().set_kvm_immediate_exit(1);
+                        fence(Ordering::Release)
+                    });
+                }
+                VCPU_RESET_SIGNAL => {
+                    let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
+                        if let Err(e) = vcpu.arch_cpu.lock().unwrap().reset_vcpu(
+                            &vcpu.fd,
+                            #[cfg(target_arch = "x86_64")]
+                            &vcpu.caps,
+                        ) {
+                            error!("Failed to reset vcpu state: {}", e.to_string())
+                        }
+                        fence(Ordering::Release)
+                    });
+                }
                 _ => {}
             }
         }
 
-        register_signal_handler(VCPU_EXIT_SIGNAL, handle_signal)
-            .chain_err(|| "Failed to register VCPU_EXIT_SIGNAL signal.")?;
-        register_signal_handler(VCPU_PAUSE_SIGNAL, handle_signal)
-            .chain_err(|| "Failed to register VCPU_PAUSE_SIGNAL signal.")?;
         register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
+            .chain_err(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
+        register_signal_handler(VCPU_RESET_SIGNAL, handle_signal)
             .chain_err(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
 
         Ok(())
-    }
-
-    /// Handle workqueue event in thread vcpu.
-    fn handle_workqueue(&self) {
-        LOCAL_THREAD_VCPU.with(|thread_vcpu| {
-            let mut vcpu_signal = thread_vcpu.borrow_mut();
-            if vcpu_signal.dirty_stamps != 0 {
-                vcpu_signal.dirty_stamps = 0;
-                drop(vcpu_signal);
-
-                let (work_queue_locked, cvar) = &*self.thread_cpu.work_queue;
-                let mut work_queue = work_queue_locked.lock().unwrap();
-                if *work_queue & SYNC_READ_CPU_STATE == SYNC_READ_CPU_STATE {
-                    *work_queue &= !SYNC_READ_CPU_STATE;
-                    cvar.notify_all();
-                }
-
-                if *work_queue & SYNC_WRITE_CPU_STATE == SYNC_WRITE_CPU_STATE {
-                    *work_queue &= !SYNC_WRITE_CPU_STATE;
-                    cvar.notify_all();
-                }
-            }
-        });
     }
 
     /// Judge whether the kvm vcpu is ready to emulate.
@@ -605,8 +625,6 @@ impl CPUThreadWorker {
         let mut cpu_state = cpu_state_locked.lock().unwrap();
 
         loop {
-            self.handle_workqueue();
-
             match *cpu_state {
                 CpuLifecycleState::Paused => {
                     if flag == 0 {
@@ -620,7 +638,6 @@ impl CPUThreadWorker {
                 }
                 CpuLifecycleState::Stopping | CpuLifecycleState::Stopped => {
                     info!("Vcpu{} shutdown", self.thread_cpu.id);
-                    cvar.notify_all();
                     return Ok(false);
                 }
                 _ => {
@@ -747,6 +764,7 @@ impl CpuTopology {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use hypervisor::kvm::{KVMFds, KVM_FDS};
     use machine_manager::machine::{

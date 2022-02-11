@@ -448,8 +448,8 @@ struct BalloonIoHandler {
     def_queue: Arc<Mutex<Queue>>,
     /// Deflate EventFd.
     def_evt: EventFd,
-    /// EventFd for device reset
-    reset_evt: RawFd,
+    /// EventFd for device deactivate
+    deactivate_evt: RawFd,
     /// The interrupt call back function.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Balloon Memory information.
@@ -519,11 +519,11 @@ impl BalloonIoHandler {
         (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
     }
 
-    fn reset_evt_handler(&self) -> Vec<EventNotifier> {
+    fn deactivate_evt_handler(&self) -> Vec<EventNotifier> {
         let notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.reset_evt,
+                self.deactivate_evt,
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -617,9 +617,12 @@ impl EventNotifierHelper for BalloonIoHandler {
         let cloned_balloon_io = balloon_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            Some(cloned_balloon_io.lock().unwrap().reset_evt_handler())
+            Some(cloned_balloon_io.lock().unwrap().deactivate_evt_handler())
         });
-        notifiers.push(build_event_notifier(locked_balloon_io.reset_evt, handler));
+        notifiers.push(build_event_notifier(
+            locked_balloon_io.deactivate_evt,
+            handler,
+        ));
 
         // register event notifier for timer event.
         let cloned_balloon_io = balloon_io.clone();
@@ -663,8 +666,8 @@ pub struct Balloon {
     mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
-    /// EventFd for device reset.
-    reset_evt: EventFd,
+    /// EventFd for device deactivate.
+    deactivate_evt: EventFd,
 }
 
 impl Balloon {
@@ -688,7 +691,7 @@ impl Balloon {
             mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 
@@ -884,7 +887,7 @@ impl VirtioDevice for Balloon {
             inf_evt: inf_queue_evt,
             def_queue,
             def_evt: def_queue_evt,
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
@@ -900,8 +903,8 @@ impl VirtioDevice for Balloon {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        self.reset_evt
+    fn deactivate(&mut self) -> Result<()> {
+        self.deactivate_evt
             .write(1)
             .chain_err(|| ErrorKind::EventFdWrite)
     }
@@ -1042,7 +1045,7 @@ mod tests {
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
 
-        assert!(bln.reset().is_ok());
+        assert!(bln.deactivate().is_ok());
         assert!(bln.update_config(None).is_err());
     }
 
@@ -1149,7 +1152,7 @@ mod tests {
 
         let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let event_def = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let event_reset = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let event_deactivate = EventFd::new(libc::EFD_NONBLOCK).unwrap();
 
         let mut handler = BalloonIoHandler {
             driver_features: bln.driver_features,
@@ -1158,7 +1161,7 @@ mod tests {
             inf_evt: event_inf.try_clone().unwrap(),
             def_queue: queue2,
             def_evt: event_def,
-            reset_evt: event_reset.as_raw_fd(),
+            deactivate_evt: event_deactivate.as_raw_fd(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),

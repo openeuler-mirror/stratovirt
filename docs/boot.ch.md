@@ -6,7 +6,8 @@ StratoVirt提供了微虚拟机和标准虚拟机两种机型。两种机型的�
 
 ### 1. 构建内核镜像
 
-StratoVirt的微虚拟机机型在x86_64和aarch64平台都支持PE格式或是bzImage格式（仅x86_64平台支持）的内核镜像。通过以下步骤来构建内核镜像：
+StratoVirt的微虚拟机机型在x86_64和aarch64平台都支持PE格式或是bzImage格式
+（仅x86_64平台支持）的内核镜像。通过以下步骤来构建内核镜像：
 
 1. 首先，获取openEuler内核源码:
 
@@ -15,13 +16,15 @@ StratoVirt的微虚拟机机型在x86_64和aarch64平台都支持PE格式或是b
    $ cd kernel
    ```
    如果你安装我们openEuler的21.03版本，也可以通过使用yum源的方式来获取内核源码：
-   
+
    ```shell
    $ sudo yum install kernel-source
    $ cd /usr/src/linux-5.10.0-0.0.0.7.oe1.$(uname -m)/
    ```
 
-2. 配置linux内核信息。你可以使用 [我们提供的微虚拟机内核配置文件](./kernel_config/micro_vm) 并且将配置文件重命名为`.config`拷贝至`kernel`路径下。 当然你也可以通过命令修改内核编译选项:
+2. 配置linux内核信息。你可以使用 [我们提供的微虚拟机内核配置文件](./kernel_config/micro_vm)
+并且将配置文件重命名为`.config`拷贝至`kernel`路径下。 当然你也可以通过命令修改内
+核编译选项:
 
    ```shell
    $ make menuconfig
@@ -40,7 +43,8 @@ StratoVirt的微虚拟机机型在x86_64和aarch64平台都支持PE格式或是b
 
 ### 2. 构建rootfs镜像
 
-Rootfs镜像是一种文件系统镜像。在StratoVirt启动时可以挂载带有`/sbin/init`的EXT4格式镜像。你可以查看[附录](#2附录)。
+Rootfs镜像是一种文件系统镜像。在StratoVirt启动时可以挂载带有`/sbin/init`的EXT4格
+式镜像。你可以查看[附录](#2附录)。
 
 ### 3. 启动命令样例
 
@@ -52,18 +56,20 @@ Rootfs镜像是一种文件系统镜像。在StratoVirt启动时可以挂载带�
     -m 1024m \
     -append "console=ttyS0 pci=off reboot=k quiet panic=1 root=/dev/vda" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 ```
 
 ## 标准虚拟机启动过程
 
-标准虚拟机有两种启动方式，第一种使用kernel+rootfs；另一种是使用预先安装好guest 操作系统的raw格式镜像。
+标准虚拟机有两种启动方式，第一种使用kernel+rootfs；另一种是使用预先安装好guest 操
+作系统的raw格式镜像。
 
 ### 1. 构建内核镜像
 
-StratoVirt的标准虚拟机机型支持x86_64平台的bzImage格式内核镜像和aarch64平台的PE格式内核镜像。内核镜像构建如下：
+StratoVirt的标准虚拟机机型支持x86_64平台的bzImage格式内核镜像和aarch64平台的PE格
+式内核镜像。内核镜像构建如下：
 
 1. 首先，获取openEuler内核源码:
 
@@ -72,9 +78,10 @@ StratoVirt的标准虚拟机机型支持x86_64平台的bzImage格式内核镜像
    $ cd kernel
    ```
 
-2. 配置linux内核信息。你可以使用 [我们提供的标准虚拟机内核配置文件](./kernel_config/standard_vm) 并且将配置文件重命名为`.config`拷贝至`kernel`路径下。
+2. 配置linux内核信息。你可以使用 [我们提供的标准虚拟机内核配置文件](./kernel_config/standard_vm)
+ 并且将配置文件重命名为`.config`拷贝至`kernel`路径下。
 
-3. 构建内核镜像 
+3. 构建内核镜像
 
    ```shell
    # 在aarch64平台，将内核镜像转换为PE格式。
@@ -87,11 +94,14 @@ StratoVirt的标准虚拟机机型支持x86_64平台的bzImage格式内核镜像
 
 ### 2. 获取标准启动固件
 
-标准启动需要启动固件。Stratovirt仅支持在x86_64和aarch64平台上从UEFI（统一可扩展固件接口）启动。
+标准启动需要启动固件。Stratovirt仅支持在x86_64和aarch64平台上从UEFI（统一可扩展
+固件接口）启动。
 
-EDK2是一个实现了UEFI规范的开源项目。我们使用EDK2作为固件启动虚拟机，因此我们必须获得相应的EDK2二进制文件.
+EDK2是一个实现了UEFI规范的开源项目。我们使用EDK2作为固件启动虚拟机，因此我们必须
+获得相应的EDK2二进制文件.
 
-有两种方法可以获取EDK2二进制文件，通过yum源直接安装或从源代码编译。具体步骤如下。请注意，EDK2二进制文件包含两个文件，一个用于存储可执行代码，另一个用于存储引导数据。
+有两种方法可以获取EDK2二进制文件，通过yum源直接安装或从源代码编译。具体步骤如下。
+请注意，EDK2二进制文件包含两个文件，一个用于存储可执行代码，另一个用于存储引导数据。
 
 #### 2.1 直接安装EDK2
 
@@ -107,7 +117,9 @@ $ sudo yum install -y edk2-ovmf
 $ sudo yum install -y edk2-aarch64
 ```
 
-安装edk2之后，在x86_64平台, `OVMF_CODE.fd` 和 `OVMF_VARS.fd` 文件存在于 `/usr/share/edk2/ovmf` 目录下。 在aarch64平台， `QEMU_EFI-pflash.raw` 和 `vars-template-pflash.raw` 文件会存在于`/usr/share/edk2/aarch64` 目录下。
+安装edk2之后，在x86_64平台, `OVMF_CODE.fd` 和 `OVMF_VARS.fd` 文件存在于
+`/usr/share/edk2/ovmf` 目录下。 在aarch64平台， `QEMU_EFI-pflash.raw` 和
+`vars-template-pflash.raw` 文件会存在于`/usr/share/edk2/aarch64` 目录下。
 
 #### 2.2 从源代码编译
 
@@ -153,18 +165,22 @@ elif [ ${arch} = "aarch64" ]; then
 fi
 ```
 
-编译edk2之后，在x86_64平台， `OVMF_CODE.fd` 和 `OVMF_VARS.fd` 文件会位于 `/home` 目录下。在aarch64平台， `STRATOVIRT_EFI.raw` 和 `STRATOVIRT_VAR.raw` 文件会位于 `/home` 目录下.
+编译edk2之后，在x86_64平台， `OVMF_CODE.fd` 和 `OVMF_VARS.fd` 文件会位于 `/home`
+目录下。在aarch64平台， `STRATOVIRT_EFI.raw` 和 `STRATOVIRT_VAR.raw` 文件会位于
+`/home` 目录下.
 
 ### 3. 构建rootfs镜像
 
-为标准虚拟机构建rootfs镜像实际上与微虚拟机相同。你可以通过[附录](#2附录)查看更多的详细信息。
+为标准虚拟机构建rootfs镜像实际上与微虚拟机相同。你可以通过[附录](#2附录)查看更多
+的详细信息。
 
 
 ### 4. 获取 raw 格式镜像
 
 你可以从 openEuler 官网下载已经安装好的 [qcow2 镜像](https://repo.openeuler.org/openEuler-21.03/virtual_machine_img/x86_64/openEuler-21.03-x86_64.qcow2.xz)。
 
-下载之后，可以利用 qemu-img 命令进行转换。接下来以 openEuler-21.03 版本的 qcow2 镜像为例给出具体命令：
+下载之后，可以利用 qemu-img 命令进行转换。接下来以 openEuler-21.03 版本的 qcow2
+镜像为例给出具体命令：
 
 ```shell
 $ xz -d openEuler-21.03-x86_64.qcow2.xz
@@ -175,7 +191,9 @@ $ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-
 
 ### 5. 启动命令行样例
 
-请注意，标准虚拟机需要两个PFlash设备，它们将使用来自与EDK2二进制的两个固件文件。如果你不需要保持启动信息，单元序列为1的数据存储文件可以被省略。但是单元序号为0的代码存储文件是必须的。
+请注意，标准虚拟机需要两个PFlash设备，它们将使用来自与EDK2二进制的两个固件文件。
+如果你不需要保持启动信息，单元序列为1的数据存储文件可以被省略。但是单元序号为0的
+代码存储文件是必须的。
 
 首先给出 kernel + rootfs 的启动命令，具体如下：
 
@@ -183,21 +201,23 @@ $ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-
 arch=`uname -m`
 if [ ${arch} = "x86_64" ]; then
     con=ttyS0
+    machine="q35"
 elif [ ${arch} = "aarch64" ]; then
     con=ttyAMA0
+    machine="virt"
 else
     echo "${arch} architecture not supported."
     exit 1
 fi
 
 /usr/bin/stratovirt \
-    -machine standard_vm \
+    -machine ${machine} \
     -kernel /path/to/kernel \
     -smp 1 \
     -m 2G \
     -append "console=${con} reboot=k panic=1 root=/dev/vda" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs \
+    -device virtio-blk-device,drive=rootfs,id=rootfs \
     -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
     -drive file=/path/to/OVMF_VARS.fd,if=pfalsh,unit=1 \
     -qmp unix:/path/to/socket,server,nowait \
@@ -208,7 +228,7 @@ fi
 
 ```shell
 /usr/bin/stratovirt \
-    -machine standard_vm \
+    -machine ${machine} \
     -kernel /path/to/kernel \
     -smp 1 \
     -m 2G \

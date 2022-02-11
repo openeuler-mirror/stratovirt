@@ -195,6 +195,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_get_pci_df() {
+        let addr = "0x7";
+        let df = get_pci_df(addr);
+        assert!(df.is_ok());
+        assert_eq!(df.unwrap(), (7, 0));
+
+        let addr = "0x10.0x4";
+        let df = get_pci_df(addr);
+        assert!(df.is_ok());
+        assert_eq!(df.unwrap(), (16, 4));
+
+        let addr = "8.2";
+        let df = get_pci_df(addr);
+        assert!(df.is_ok());
+        assert_eq!(df.unwrap(), (8, 2));
+
+        let addr = ".0x5";
+        let df = get_pci_df(addr);
+        assert!(df.is_err());
+
+        let addr = "0x111";
+        let df = get_pci_df(addr);
+        assert!(df.is_err());
+    }
+
+    #[test]
     fn test_get_pci_bdf_01() {
         let pci_bdf = get_pci_bdf("virtio-blk-device,bus=pcie.0,addr=0x1.0x2");
         assert!(pci_bdf.is_ok());

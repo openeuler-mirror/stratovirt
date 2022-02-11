@@ -744,9 +744,9 @@ impl VirtioPciDevice {
                         .store(false, Ordering::Release);
                     let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
                     cloned_msix.lock().unwrap().reset();
-                    if let Err(e) = cloned_pci_device.device.lock().unwrap().reset() {
+                    if let Err(e) = cloned_pci_device.device.lock().unwrap().deactivate() {
                         error!(
-                            "Failed to reset virtio device, error is {}",
+                            "Failed to deactivate virtio device, error is {}",
                             e.display_chain()
                         );
                     }
@@ -1047,6 +1047,14 @@ impl PciDevOps for VirtioPciDevice {
 
     fn devfn(&self) -> Option<u8> {
         Some(self.devfn)
+    }
+
+    fn reset(&mut self, _reset_child_device: bool) -> PciResult<()> {
+        self.device
+            .lock()
+            .unwrap()
+            .reset()
+            .chain_err(|| "Fail to reset virtio device")
     }
 }
 

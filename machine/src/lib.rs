@@ -55,8 +55,8 @@ pub mod errors {
             RegMemRegionErr(base: u64, size: u64) {
                 display("Failed to register region in memory space: base={},size={}", base, size)
             }
-            InitPwrBtnErr {
-                display("Failed to init power button.")
+            InitEventFdErr(fd: String) {
+                display("Failed to init eventfd {}.", fd)
             }
             RlzVirtioMmioErr {
                 display("Failed to realize virtio mmio.")
@@ -128,6 +128,7 @@ use machine_manager::config::{
     get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id, parse_net,
     parse_rng_dev, parse_root_port, parse_vfio, parse_virtconsole, parse_virtio_serial,
     parse_vsock, MachineMemConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
+    FAST_UNPLUG_ON,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -493,37 +494,22 @@ pub trait MachineOps {
     fn add_virtio_pci_net(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let sys_mem = self.get_sys_mem();
         let device_cfg = parse_net(vm_config, cfg_args)?;
-        let virtio_pci_device = if device_cfg.vhost_type.is_some() {
-            let device = Arc::new(Mutex::new(VhostKern::Net::new(&device_cfg, &sys_mem)));
-            VirtioPciDevice::new(
-                device_cfg.id,
-                devfn,
-                sys_mem.clone(),
-                device,
-                parent_bus,
-                multi_func,
-            )
+        let device: Arc<Mutex<dyn VirtioDevice>> = if device_cfg.vhost_type.is_some() {
+            Arc::new(Mutex::new(VhostKern::Net::new(
+                &device_cfg,
+                self.get_sys_mem(),
+            )))
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
             MigrationManager::register_device_instance_mutex(
                 VirtioNetState::descriptor(),
                 device.clone(),
             );
-            VirtioPciDevice::new(
-                device_cfg.id,
-                devfn,
-                sys_mem.clone(),
-                device,
-                parent_bus,
-                multi_func,
-            )
+            device
         };
-        virtio_pci_device
-            .realize()
-            .chain_err(|| "Failed to add virtio pci net device")?;
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func)?;
+        self.reset_bus(&device_cfg.id)?;
         Ok(())
     }
 
@@ -654,10 +640,25 @@ pub trait MachineOps {
             Some(dev) => dev
                 .lock()
                 .unwrap()
-                .reset()
+                .reset(false)
                 .chain_err(|| "Failed to reset bus"),
             None => bail!("Failed to found device"),
         }
+    }
+
+    /// Init vm global config.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM Configuration.
+    fn init_global_config(&mut self, vm_config: &mut VmConfig) -> Result<()> {
+        let fast_unplug = vm_config
+            .global_config
+            .get("pcie-root-port.fast-unplug")
+            .map_or(false, |val| val == FAST_UNPLUG_ON);
+
+        RootPort::set_fast_unplug_feature(fast_unplug);
+        Ok(())
     }
 
     /// Add peripheral devices.
@@ -687,7 +688,8 @@ pub trait MachineOps {
             let cfg_args = dev.1.as_str();
             // Check whether the device id exists to ensure device uniqueness.
             let id = parse_device_id(cfg_args)?;
-            self.check_device_id_existed(&id)?;
+            self.check_device_id_existed(&id)
+                .chain_err(|| format!("Failed to check device id: config {}", cfg_args))?;
             match dev.0.as_str() {
                 "virtio-blk-device" => {
                     self.add_virtio_mmio_block(vm_config, cfg_args)?;

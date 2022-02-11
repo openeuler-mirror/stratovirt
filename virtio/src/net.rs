@@ -105,7 +105,7 @@ struct NetIoHandler {
     driver_features: u64,
     receiver: Receiver<SenderConfig>,
     update_evt: RawFd,
-    reset_evt: RawFd,
+    deactivate_evt: RawFd,
     is_listening: bool,
 }
 
@@ -275,7 +275,7 @@ impl NetIoHandler {
         notifiers
     }
 
-    fn reset_evt_handler(&mut self) -> Vec<EventNotifier> {
+    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
         let mut notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
@@ -286,7 +286,7 @@ impl NetIoHandler {
             ),
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.reset_evt,
+                self.deactivate_evt,
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -352,14 +352,14 @@ impl EventNotifierHelper for NetIoHandler {
             EventSet::IN,
         ));
 
-        // Register event notifier for reset_evt.
+        // Register event notifier for deactivate_evt.
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            Some(cloned_net_io.lock().unwrap().reset_evt_handler())
+            Some(cloned_net_io.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(build_event_notifier(
-            locked_net_io.reset_evt,
+            locked_net_io.deactivate_evt,
             Some(handler),
             NotifierOperation::AddShared,
             EventSet::IN,
@@ -479,8 +479,8 @@ pub struct Net {
     sender: Option<Sender<SenderConfig>>,
     /// Eventfd for config space update.
     update_evt: EventFd,
-    /// Eventfd for device reset.
-    reset_evt: EventFd,
+    /// Eventfd for device deactivate.
+    deactivate_evt: EventFd,
 }
 
 impl Default for Net {
@@ -491,7 +491,7 @@ impl Default for Net {
             state: VirtioNetState::default(),
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -504,7 +504,7 @@ impl Net {
             state: VirtioNetState::default(),
             sender: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            reset_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -619,6 +619,10 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
+    fn unrealize(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_NET
@@ -706,7 +710,7 @@ impl VirtioDevice for Net {
             driver_features: self.state.driver_features,
             receiver,
             update_evt: self.update_evt.as_raw_fd(),
-            reset_evt: self.reset_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             is_listening: true,
         };
         if let Some(tap) = &handler.tap {
@@ -747,8 +751,8 @@ impl VirtioDevice for Net {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        self.reset_evt
+    fn deactivate(&mut self) -> Result<()> {
+        self.deactivate_evt
             .write(1)
             .chain_err(|| ErrorKind::EventFdWrite)
     }
