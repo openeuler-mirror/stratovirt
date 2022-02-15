@@ -75,7 +75,7 @@ socket_path=`pwd`"/stratovirt.sock"
 kernel_path=`pwd`"/vmlinux.bin"
 rootfs_path=`pwd`"/rootfs.ext4"
 
-# Make sure qmp can be created.
+# Make sure QMP can be created.
 rm -f ${socket_path}
 
 # Start linux VM with machine type "microvm" by StratoVirt.

@@ -59,7 +59,7 @@ The device configuration must be the same with template VM. Its cpu number, gues
 
 ## Snapshot state check
 
-Use qmp command `query-migrate` to check snapshot state:
+Use QMP command `query-migrate` to check snapshot state:
 ```shell
 $ ncat -U path/to/socket
 {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
