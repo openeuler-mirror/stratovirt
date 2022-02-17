@@ -688,7 +688,7 @@ impl FwCfgCommon {
     /// Return the value of the register
     ///
     fn read_data_reg(&mut self, _addr: u64, mut size: u32) -> Result<u64> {
-        if size == 0 || size >= std::mem::size_of::<u64>() as u32 {
+        if size == 0 || size > std::mem::size_of::<u64>() as u32 {
             bail!(
                 "Failed to read from FWcfg data register, size {} overflows",
                 size
