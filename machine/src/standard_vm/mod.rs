@@ -111,6 +111,13 @@ trait StdMachineOps: AcpiBuilder {
 
         let mut xsdt_entries = Vec::new();
 
+        #[cfg(target_arch = "x86_64")]
+        {
+            let facs_addr = Self::build_facs_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI FACS table")?;
+            xsdt_entries.push(facs_addr);
+        }
+
         let dsdt_addr = self
             .build_dsdt_table(&acpi_tables, &mut loader)
             .chain_err(|| "Failed to build ACPI DSDT table")?;
@@ -392,6 +399,42 @@ trait AcpiBuilder {
         )?;
 
         Ok(fadt_begin as u64)
+    }
+
+    /// Build ACPI FACS table, returns the offset of ACPI FACS table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "x86_64")]
+    fn build_facs_table(acpi_data: &Arc<Mutex<Vec<u8>>>, loader: &mut TableLoader) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        let mut facs_data = vec![0_u8; 0x40];
+        // FACS table signature.
+        facs_data[0] = b'F';
+        facs_data[1] = b'A';
+        facs_data[2] = b'C';
+        facs_data[3] = b'S';
+        // FACS table length.
+        facs_data[4] = 0x40;
+
+        let mut locked_acpi_data = acpi_data.lock().unwrap();
+        let facs_begin = locked_acpi_data.len() as u32;
+        locked_acpi_data.extend(facs_data);
+        let facs_end = locked_acpi_data.len() as u32;
+        drop(locked_acpi_data);
+
+        loader.add_cksum_entry(
+            ACPI_TABLE_FILE,
+            facs_begin + TABLE_CHECKSUM_OFFSET,
+            facs_begin,
+            facs_end - facs_begin,
+        )?;
+
+        Ok(facs_begin as u64)
     }
 
     /// Build ACPI XSDT table, returns the offset of ACPI XSDT table in `acpi_data`.
