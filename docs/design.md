@@ -38,7 +38,7 @@ in Kubernetes ecosystem perfectly;
 - Multi-platform support: Fully support for Intel and Arm platform;
 - Expansibility: StratoVirt reserves interface and design for importing more features,
 even expand to standard virtualization support;
-- Security: less than 51 syscalls while running;
+- Security: less than 52 syscalls while running;
 
 ## Implementation
 
