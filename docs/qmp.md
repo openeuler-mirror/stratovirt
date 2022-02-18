@@ -3,13 +3,13 @@
 ## Introduction
 
 StratoVirt controls VM's lifecycle and external api interface with [QMP](https://wiki.qemu.org/Documentation/QMP)
- in current version.
+ in the current version.
 
-## qmp Creation
+## QMP Creation
 
-When running StratoVirt, you must create qmp in cmdline arguments as a management interface.
+When running StratoVirt, you must create QMP in cmdline arguments as a management interface.
 
-StratoVirt supports UnixSocket-type qmp, you can set it by:
+StratoVirt supports UnixSocket-type QMP, you can set it by:
 
 ```shell
 # cmdline
@@ -17,7 +17,7 @@ StratoVirt supports UnixSocket-type qmp, you can set it by:
 ```
 Where, the information about 'server' and 'nowait' can be found in [section 2.12 Chardev](#212-chardev)
 
-On top of that, monitor can be used to create qmp connection as well.
+On top of that, monitor can be used to create QMP connection as well.
 The following commands can be used to create a monitor.
 
 Three properties can be set for monitor.
@@ -33,11 +33,11 @@ Three properties can be set for monitor.
 -mon chardev=chardev_id,id=monitor_id,mode=control
 ```
 
-## qmp Connection
+## QMP Connection
 
-After StratoVirt started, you can connect to StratoVirt's qmp and manage it by QMP.
+After StratoVirt started, you can connect to StratoVirt's QMP and manage it by QMP.
 
-Several steps to connect qmp are showed as following:
+Several steps to connect QMP are showed as following:
 
 ```shell
 # Start with UnixSocket
