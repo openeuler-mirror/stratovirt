@@ -4,11 +4,11 @@
 ## 1. 检查Rust构建环境
 
 为了构建StratoVirt，需保证已经安装了Rust语言环境和Cargo软件。
-rustc的推荐版本为1.45.2及其之后的版本。
+rustc的推荐版本为1.51.0及其之后的版本, 否则编译可能失败。
 
 ```shell
 $ rustc --version
-rustc 1.45.2
+rustc 1.51.0
 ```
 
 如果你想部署rust环境，下面的链接可以帮助你：

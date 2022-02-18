@@ -72,7 +72,7 @@ socket_path=`pwd`"/stratovirt.sock"
 kernel_path=`pwd`"/vmlinux.bin"
 rootfs_path=`pwd`"/rootfs.ext4"
 
-# 保证qmp通信socket文件路径可以被创建。
+# 保证QMP通信socket文件路径可以被创建。
 rm -f ${socket_path}
 
 # 通过StratoVirt启动轻量化机型的Linux客户机。
