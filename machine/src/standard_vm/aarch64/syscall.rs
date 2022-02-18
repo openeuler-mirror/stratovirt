@@ -114,10 +114,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_statx),
         BpfRule::new(libc::SYS_mkdirat),
         BpfRule::new(libc::SYS_unlinkat),
-        BpfRule::new(libc::SYS_madvise)
-            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
-            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
-            .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32),
+        madvise_rule(),
         BpfRule::new(libc::SYS_msync),
         BpfRule::new(libc::SYS_readlinkat),
     ]
@@ -177,4 +174,18 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
+}
+
+fn madvise_rule() -> BpfRule {
+    #[cfg(target_env = "musl")]
+    return BpfRule::new(libc::SYS_madvise)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_FREE as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32);
+    #[cfg(target_env = "gnu")]
+    return BpfRule::new(libc::SYS_madvise)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32);
 }

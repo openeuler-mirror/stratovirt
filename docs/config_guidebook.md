@@ -543,7 +543,7 @@ in StratoVirt process by default. It will make a slight influence on performance
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      46       |       46       |
-|        q35         |      49       |       50       |
+|        q35         |      49       |       51       |
 
 * aarch64
 
