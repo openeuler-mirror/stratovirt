@@ -1,6 +1,6 @@
 #  libvirt
 Libvirt is one of manager for StratoVirt, it manages StratoVirt by creating cmdlines to launch StratoVirt 
-and giving commands via qmp. Currently, five virsh commands are supported to manage StratoVirt: 
+and giving commands via QMP. Currently, five virsh commands are supported to manage StratoVirt: 
 `virsh create`, `virsh destroy`, `virsh suspend`, `virsh resume` and `virsh console`.
 
 
