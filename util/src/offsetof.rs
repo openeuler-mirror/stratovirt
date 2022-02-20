@@ -13,9 +13,17 @@
 /// Macro: Calculate offset of specified field in a type.
 #[macro_export]
 macro_rules! __offset_of {
-    ($type_name:ty, $field:ident) => {
-        unsafe { &(*(std::ptr::null::<$type_name>())).$field as *const _ as usize }
-    };
+    ($type_name:ty, $field:ident) => {{
+        let tmp = core::mem::MaybeUninit::<$type_name>::uninit();
+        let outer = tmp.as_ptr();
+        // Safe because the pointer is valid and aligned, just not initialised; `addr_of` ensures that
+        // we don't actually read from `outer` (which would be UB) nor create an intermediate reference.
+        let inner = unsafe { core::ptr::addr_of!((*outer).$field) } as *const u8;
+        // Safe because the two pointers are within the same allocation block.
+        unsafe {
+            inner.offset_from(outer as *const u8) as usize
+        }
+    }};
 }
 
 /// Macro: Calculate offset of a field in a recursive type.
