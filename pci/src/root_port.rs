@@ -168,6 +168,7 @@ impl RootPort {
                 error!("{}", e.display_chain());
                 error!("Failed to unrealize device {}.", locked_dev.name());
             }
+            info!("Device {} unplug from {}", locked_dev.name(), self.name);
 
             // Send QMP event for successful hot unplugging.
             if QmpChannel::is_connected() {
@@ -237,7 +238,6 @@ impl RootPort {
             && (old_ctl & PCI_EXP_SLTCTL_PCC != PCI_EXP_SLTCTL_PCC
                 || old_ctl & PCI_EXP_SLTCTL_PWR_IND_OFF != PCI_EXP_SLTCTL_PWR_IND_OFF)
         {
-            info!("Device {} unplug", self.name());
             self.remove_devices();
 
             if let Err(e) = self.update_register_status() {
