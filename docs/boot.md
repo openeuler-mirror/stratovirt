@@ -7,9 +7,9 @@ boot process of these two machines are as follows.
 
 ### 1. Build kernel
 
-The microvm machine type of StratoVirt supports PE or bzImage (only x86_64) format
-kernel images on both x86_64 and aarch64 platforms. Kernel image can be built with
-following steps:
+The microvm machine type of StratoVirt supports PE or bzImage format kernel images
+on x86_64 platforms, and supports PE format kernel images on aarch64 platforms.
+Kernel image can be built with following steps:
 
 1. Firstly, get the openEuler kernel source code with:
 
@@ -35,12 +35,12 @@ and copy it to `kernel` path as `.config`. You can also modify config options by
 3. Build and transform kernel image to PE format.
 
    ```shell
-   $ make -j vmlinux && objcopy -O binary vmlinux vmlinux.bin
+   $ make -j$(nproc) vmlinux && objcopy -O binary vmlinux vmlinux.bin
    ```
 
 4. If you want to compile bzImage format kernel in x86_64.
    ```shell
-   $ make -j bzImage
+   $ make -j$(nproc) bzImage
    ```
 
 ### 2. Build rootfs
@@ -68,34 +68,10 @@ be mounted at boot time in StratoVirt. You can check [Appendix](#2Appendix).
 Standard VMs can boot in two modes. The first mode is kernel + rootfs.The other
 is to use the raw image that has been preinstalled with the guest OS.
 
-### 1. Build kernel
+The preceding two boot modes both require standard boot firmware. So we first
+describe how to obtain the standard boot firmware.
 
-The standard_ machine in StratoVirt supports bzImage format kernel image
-on x86_64 platform; and supports PE format kernel image on aarch64 platform.
-Kernel image can be built with:
-
-1. Firstly, get the openEuler kernel source code with:
-
-   ```shell
-   $ git clone -b kernel-5.10 --depth=1 https://gitee.com/openeuler/kernel
-   $ cd kernel
-   ```
-
-2. Configure your linux kernel. You should use [our recommended standard_vm config]
-(./kernel_config/standard_vm) and copy it to `kernel` path as `.config`.
-
-3. Build kernel image
-
-   ```shell
-   # on aarch64 platform, transform kernel image to PE format.
-   $ make -j vmlinux && objcopy -O binary vmlinux vmlinux.bin
-
-   # on x86_64 platform, get bzImage format kernel image.
-   $ make -j bzImage
-   ```
-
-
-### 2. Get firmware for standard boot
+### 1. Get firmware for standard boot
 
 Standard boot needs firmware. Stratovirt only supports booting from UEFI (Unified
 Extensible Firmware Interface) on x86_64 and aarch64 platform.
@@ -108,7 +84,7 @@ or compiling from source code. The specific steps are as follows. Notes that EDK
 binary contains two files, one for executable code storage and the other for boot
 data storage.
 
-#### 2.1 Directly install EDK II
+#### 1.1 Directly install EDK II
 
 On x86_64 platform, run
 
@@ -126,7 +102,7 @@ After installing edk2, on x86_64 platform, `OVMF_CODE.fd` and `OVMF_VARS.fd` are
 located in `/usr/share/edk2/ovmf` directory. On aarch64 platform, `QEMU_EFI-pflash.raw`
 and `vars-template-pflash.raw` are located in `/usr/share/edk2/aarch64` directory.
 
-#### 2.2 Compile from source code
+#### 1.2 Compile from source code
 
 ```shell
 # Install necessary packages to compile edk2.
@@ -174,13 +150,44 @@ After compiling edk2, on x86_64 platform, `OVMF_CODE.fd` and `OVMF_VARS.fd` loca
 underneath `/home` directory. On aarch64 platform, `STRATOVIRT_EFI.raw` and
 `STRATOVIRT_VAR.raw` locates underneath `/home` directory.
 
-### 3. Build rootfs
+### 2. Boot with kernel and rootfs
+#### 2.1 Build kernel
+
+The standard_ machine in StratoVirt supports bzImage format kernel image
+on x86_64 platform; and supports PE format kernel image on aarch64 platform.
+Kernel image can be built with:
+
+1. Firstly, get the openEuler kernel source code with:
+
+   ```shell
+   $ git clone -b kernel-5.10 --depth=1 https://gitee.com/openeuler/kernel
+   $ cd kernel
+   ```
+
+2. Configure your linux kernel. You should use [our recommended standard_vm config]
+(./kernel_config/standard_vm) and copy it to `kernel` path as `.config`.
+
+3. Build kernel image
+
+   ```shell
+   # on aarch64 platform, transform kernel image to PE format.
+   $ make -j$(nproc) vmlinux && objcopy -O binary vmlinux vmlinux.bin
+
+   # on x86_64 platform, get bzImage format kernel image.
+   $ make -j$(nproc) bzImage
+   ```
+In addition to manually building the kernel image, you can also download the 
+[kernel image](https://repo.openeuler.org/openEuler-21.09/stratovirt_img/x86_64/std-vmlinuxz) 
+from the openEuler official website.
+
+#### 2.2 Build rootfs
 
 The building of rootfs for standard VM is exactly the same with microvm. You can
 check [Appendix](#2Appendix) for more detailed information.
 
 
-### 4. Get raw image
+### 3. Boot with raw image
+#### 3.1 Get raw image
 
 You can download the installed [qcow2 image](https://repo.openeuler.org/openEuler-21.03/virtual_machine_img/x86_64/openEuler-21.03-x86_64.qcow2.xz)
 from the OpenEuler official website.
@@ -195,7 +202,7 @@ $ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-
 
 Now the available raw image is obtained.
 
-### 5. Boot command line sample
+### 4. Boot command line sample
 
 Note that standard need two PFlash devices which will use two firmware files from
 EDK II binary. If you don't need to store boot information, data storage file can
@@ -221,11 +228,11 @@ fi
     -kernel /path/to/kernel \
     -smp 1 \
     -m 2G \
-    -append "console=${con} reboot=k panic=1 root=/dev/vda" \
+    -append "console=${con} reboot=k panic=1 root=/dev/vda rw" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
     -device virtio-blk-device,drive=rootfs,id=rootfs \
     -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
-    -drive file=/path/to/OVMF_VARS.fd,if=pfalsh,unit=1 \
+    -drive file=/path/to/OVMF_VARS.fd,if=pflash,unit=1 \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 ```
@@ -240,10 +247,10 @@ The command for booting with the raw image is as follows:
     -drive file=/path/to/raw_image,id=raw_image,readonly=off,direct=off \
     -device virtio-blk-device,drive=raw_image \
     -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
-    -drive file=/path/to/OVMF_VARS.fd,if=pfalsh,unit=1 \
+    -drive file=/path/to/OVMF_VARS.fd,if=pflash,unit=1 \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
-```F
+```
 
 ## Appendix
 
