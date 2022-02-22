@@ -149,6 +149,18 @@ impl NetIoHandler {
                 if e.kind() == std::io::ErrorKind::WouldBlock {
                     break;
                 }
+
+                // If the backend tap device is removed, readv returns less than 0.
+                // At this time, the content in the tap needs to be cleaned up.
+                // Here, read is called to process, otherwise handle_rx may be triggered all the time.
+                let mut buf = [0; 1024];
+                match tap.read(&mut buf) {
+                    Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
+                    Err(e) => {
+                        // When the backend tap device is abnormally removed, read return EBADFD.
+                        error!("Failed to read tap: {}", e);
+                    }
+                }
                 bail!("Failed to call readv for net handle_rx: {}", e);
             }
 
@@ -446,7 +458,7 @@ impl EventNotifierHelper for NetIoHandler {
                 tap_fd,
                 Some(handler),
                 NotifierOperation::AddShared,
-                EventSet::IN,
+                EventSet::IN | EventSet::EDGE_TRIGGERED,
             ));
         }
 
