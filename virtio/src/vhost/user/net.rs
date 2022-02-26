@@ -268,4 +268,26 @@ impl VirtioDevice for Net {
 
         Ok(())
     }
+
+    fn deactivate(&mut self) -> Result<()> {
+        self.call_events.clear();
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.device_features = 0_u64;
+        self.driver_features = 0_u64;
+        self.device_config = VirtioNetConfig::default();
+
+        let client = match &self.client {
+            None => return Err("Failed to get client when reseting vhost-user net".into()),
+            Some(client_) => client_,
+        };
+        client
+            .delete_event()
+            .chain_err(|| "Failed to delete vhost-user net event")?;
+        self.client = None;
+
+        self.realize()
+    }
 }
