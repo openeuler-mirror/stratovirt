@@ -24,7 +24,7 @@ use pci::config::{
     VENDOR_ID,
 };
 use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
-use pci::msix::update_dev_id;
+use pci::msix::{update_dev_id, MsixState};
 use pci::{
     config::PciConfig, init_msix, init_multifunction, le_write_u16, ranges_overlap, PciBus,
     PciDevOps,
@@ -939,6 +939,7 @@ impl PciDevOps for VirtioPciDevice {
             nvectors as u32,
             &mut self.config,
             self.dev_id.clone(),
+            &self.name,
         )?;
 
         self.assign_interrupt_cb();
@@ -964,6 +965,7 @@ impl PciDevOps for VirtioPciDevice {
             .realize()
             .chain_err(|| "Failed to realize virtio device")?;
 
+        let name = self.name.clone();
         let devfn = self.devfn;
         let dev = Arc::new(Mutex::new(self));
         let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
@@ -978,7 +980,11 @@ impl PciDevOps for VirtioPciDevice {
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
-        MigrationManager::register_device_instance_mutex(VirtioPciState::descriptor(), dev);
+        MigrationManager::register_device_instance_mutex_with_id(
+            VirtioPciState::descriptor(),
+            dev,
+            &name,
+        );
 
         Ok(())
     }
@@ -992,6 +998,15 @@ impl PciDevOps for VirtioPciDevice {
 
         let bus = self.parent_bus.upgrade().unwrap();
         self.config.unregister_bars(&bus)?;
+
+        MigrationManager::unregister_device_instance_mutex_by_id(
+            MsixState::descriptor(),
+            &self.name,
+        );
+        MigrationManager::unregister_device_instance_mutex_by_id(
+            VirtioPciState::descriptor(),
+            &self.name,
+        );
         Ok(())
     }
 
@@ -1491,6 +1506,7 @@ mod tests {
             virtio_pci.device.lock().unwrap().queue_num() as u32 + 1,
             &mut virtio_pci.config,
             virtio_pci.dev_id.clone(),
+            &virtio_pci.name,
         )
         .unwrap();
         // Prepare valid queue config

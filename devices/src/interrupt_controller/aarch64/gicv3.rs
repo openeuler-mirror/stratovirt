@@ -21,7 +21,7 @@ use super::{
 use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use migration::MigrationManager;
+use migration::{MigrationManager, MigrationRestoreOrder};
 use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
@@ -393,10 +393,14 @@ impl GICDevice for GICv3 {
             MigrationManager::register_device_instance(
                 GICv3ItsState::descriptor(),
                 gicv3.its_dev.as_ref().unwrap().clone(),
-                true,
+                MigrationRestoreOrder::Gicv3Its,
             );
         }
-        MigrationManager::register_device_instance(GICv3State::descriptor(), gicv3.clone(), true);
+        MigrationManager::register_device_instance(
+            GICv3State::descriptor(),
+            gicv3.clone(),
+            MigrationRestoreOrder::Gicv3,
+        );
 
         Ok(gicv3)
     }

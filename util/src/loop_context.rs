@@ -222,20 +222,20 @@ impl EventLoopContext {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
-                if let EventStatus::Parked = notifier.status {
-                    return Ok(());
-                }
-
-                if let Err(error) = self.epoll.ctl(
-                    ControlOperation::Delete,
-                    notifier.raw_fd,
-                    EpollEvent::default(),
-                ) {
-                    let error_num = error.raw_os_error().unwrap();
-                    if error_num != libc::EBADF && error_num != libc::ENOENT {
-                        return Err(ErrorKind::BadSyscall(error).into());
+                if let EventStatus::Alive = notifier.status {
+                    // No need to delete fd if status is Parked, it's done in park_event.
+                    if let Err(error) = self.epoll.ctl(
+                        ControlOperation::Delete,
+                        notifier.raw_fd,
+                        EpollEvent::default(),
+                    ) {
+                        let error_num = error.raw_os_error().unwrap();
+                        if error_num != libc::EBADF && error_num != libc::ENOENT {
+                            return Err(ErrorKind::BadSyscall(error).into());
+                        }
                     }
                 }
+
                 notifier.status = EventStatus::Removed;
 
                 if let Some(parked_fd) = notifier.parked_fd {

@@ -327,6 +327,7 @@ version = "2.1.0"
 dependencies = [
  "error-chain",
  "kvm-ioctls",
+ "log",
  "migration_derive",
  "once_cell",
  "serde",

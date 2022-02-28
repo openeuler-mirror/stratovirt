@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use migration::errors::{ErrorKind, Result, ResultExt};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, StateTransfer};
 use util::byte_code::ByteCode;
 use util::unix::host_page_size;
 
@@ -76,7 +76,7 @@ impl StateTransfer for AddressSpace {
 }
 
 impl MigrationHook for AddressSpace {
-    fn pre_save(&self, _id: u64, writer: &mut dyn Write) -> Result<()> {
+    fn pre_save(&self, _id: &str, writer: &mut dyn Write) -> Result<()> {
         let ram_state = self.get_state_vec()?;
         writer.write_all(&ram_state)?;
         let padding_buffer =
