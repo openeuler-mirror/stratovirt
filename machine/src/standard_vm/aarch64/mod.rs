@@ -36,7 +36,7 @@ use devices::legacy::{
 use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
-use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
+use machine_manager::config::{BootSource, NumaNodes, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface,
@@ -125,6 +125,8 @@ pub struct StdMachine {
     reset_req: EventFd,
     /// Device Tree Blob.
     dtb_vec: Vec<u8>,
+    /// List of guest NUMA nodes information.
+    numa_nodes: Option<NumaNodes>,
 }
 
 impl StdMachine {
@@ -163,6 +165,7 @@ impl StdMachine {
             reset_req: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| ErrorKind::InitEventFdErr("reset_req".to_string()))?,
             dtb_vec: Vec::new(),
+            numa_nodes: None,
         })
     }
 
@@ -401,6 +404,7 @@ impl MachineOps for StdMachine {
         locked_vm
             .register_reset_event(&locked_vm.reset_req, clone_vm)
             .chain_err(|| "Fail to register reset event")?;
+        locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_mem,
@@ -1039,6 +1043,8 @@ trait CompileFDTHelper {
     fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
     /// Function that helps to generate the chosen node.
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    /// Function that helps to generate numa node distances.
+    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
 }
 
 impl CompileFDTHelper for StdMachine {
@@ -1123,14 +1129,31 @@ impl CompileFDTHelper for StdMachine {
     }
 
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
-        let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        let mem_size = self.sys_mem.memory_end_address().raw_value()
-            - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        let node = "memory";
-        let memory_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("device_type", "memory")?;
-        fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
-        fdt.end_node(memory_node_dep)?;
+        if self.numa_nodes.is_none() {
+            let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+            let mem_size = self.sys_mem.memory_end_address().raw_value()
+                - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+            let node = "memory";
+            let memory_node_dep = fdt.begin_node(node)?;
+            fdt.set_property_string("device_type", "memory")?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+            fdt.end_node(memory_node_dep)?;
+
+            return Ok(());
+        }
+
+        // Set NUMA node information.
+        let mut mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        for (id, node) in self.numa_nodes.as_ref().unwrap().iter().enumerate() {
+            let mem_size = node.1.size;
+            let node = format!("memory@{:x}", mem_base);
+            let memory_node_dep = fdt.begin_node(&node)?;
+            fdt.set_property_string("device_type", "memory")?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+            fdt.set_property_u32("numa-node-id", id as u32)?;
+            fdt.end_node(memory_node_dep)?;
+            mem_base += mem_size;
+        }
 
         Ok(())
     }
@@ -1216,6 +1239,39 @@ impl CompileFDTHelper for StdMachine {
 
         Ok(())
     }
+
+    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+        if self.numa_nodes.is_none() {
+            return Ok(());
+        }
+
+        let distance_node_dep = fdt.begin_node("distance-map")?;
+        fdt.set_property_string("compatible", "numa-distance-map-v1")?;
+
+        let mut matrix = Vec::new();
+        let numa_nodes = self.numa_nodes.as_ref().unwrap();
+        let existing_nodes: Vec<u32> = numa_nodes.keys().cloned().collect();
+        for (id, node) in numa_nodes.iter().enumerate() {
+            let distances = &node.1.distances;
+            for i in existing_nodes.iter() {
+                matrix.push(id as u32);
+                matrix.push(*i as u32);
+                let dist: u32 = if id as u32 == *i {
+                    10
+                } else if let Some(distance) = distances.get(i) {
+                    *distance as u32
+                } else {
+                    20
+                };
+                matrix.push(dist);
+            }
+        }
+
+        fdt.set_property_array_u32("distance-matrix", matrix.as_ref())?;
+        fdt.end_node(distance_node_dep)?;
+
+        Ok(())
+    }
 }
 
 impl device_tree::CompileFDT for StdMachine {
@@ -1232,7 +1288,7 @@ impl device_tree::CompileFDT for StdMachine {
         self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
         self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
-
+        self.generate_distance_node(fdt)?;
         fdt.end_node(node_dep)?;
 
         Ok(())
