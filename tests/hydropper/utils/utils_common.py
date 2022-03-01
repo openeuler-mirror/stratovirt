@@ -14,6 +14,8 @@ import os
 import errno
 import ctypes
 import shutil
+from subprocess import run
+from subprocess import PIPE
 from utils.utils_logging import TestLog
 
 LOG = TestLog.get_global_log()
@@ -58,3 +60,30 @@ def get_timestamp(timestamp):
     second = int(datetime.split(':')[2])
 
     return float(str(second + minute * 60 + hour * 60 * 24) + '.' + mill)
+
+
+def config_host_vfio(net_type, number, bdf):
+    """configure vf in host"""
+    ret = run("lspci -v | grep 'Eth' | grep %s" % net_type, shell=True, check=True).stdout
+    LOG.debug(ret)
+    ret = run("echo %s > /sys/bus/pci/devices/%s/sriov_numvfs" % (number, bdf), shell=True, check=True)
+
+def rebind_vfio_pci(bdf):
+    """unbind old driver and bind a new one"""
+    run("echo %s > /sys/bus/pci/devices/%s/driver/unbind" % (bdf, bdf), shell=True, check=True)    
+    run("echo `lspci -ns %s | awk -F':| ' '{print $5\" \"$6}'` > /sys/bus/pci/drivers/vfio-pci/new_id"\
+        %bdf, shell=True, check=True)
+
+def check_vf(pf_name):
+    """check whether vf is enabled"""
+    run("ip link show %s | grep vf" % pf_name, shell=True, check=True)
+
+def clean_vf(bdf):
+    """clean host vf"""
+    ret = run("echo 0 > /sys/bus/pci/devices/%s/sriov_numvfs" % bdf, shell=True, check=True)
+
+def get_iommu_group(bdf):
+    """get iommu group id"""
+    read_cmd = "readlink /sys/bus/pci/devices/%s/iommu_group" % bdf
+    return run(read_cmd, shell=True, check=True, stdout=PIPE) \
+               .stdout.decode('utf-8').splitlines()[0].split('/')[-1]
