@@ -423,8 +423,6 @@ impl SplitVringDesc {
     fn get_indirect_desc(
         &self,
         sys_mem: &Arc<AddressSpace>,
-        desc_table: GuestAddress,
-        desc_table_host: u64,
         index: u16,
         cache: &mut Option<RegionCache>,
         elem: &mut Element,
@@ -434,13 +432,15 @@ impl SplitVringDesc {
         }
 
         let desc_num = self.get_desc_num();
-        let desc_hva = desc_table_host + self.addr.0 - desc_table.0;
-        let desc_table = self.addr;
+        let desc_hva = match sys_mem.get_host_address(self.addr) {
+            Some(addr) => addr,
+            None => bail!("Failed to get descriptor table entry host address"),
+        };
         let desc = Self::next_desc(sys_mem, desc_hva, desc_num, 0, cache)?;
         Self::get_element(sys_mem, desc_hva, desc_num, index, desc, cache, elem)
             .chain_err(||
-                format!("Failed to get element from indirect descriptor chain {}, table addr: 0x{:X}, size: {}",
-                    index, desc_table.raw_value(), desc_num)
+                format!("Failed to get element from indirect descriptor chain {}, table entry addr: 0x{:X}, size: {}",
+                    index, self.addr.0, desc_num)
             )
     }
 
@@ -765,19 +765,12 @@ impl SplitVring {
                 bail!("Unexpected descriptor for writing only for popping avail ring");
             }
 
-            desc.get_indirect_desc(
-                sys_mem,
-                self.desc_table,
-                self.addr_cache.desc_table_host,
-                desc_index,
-                &mut self.cache,
-                elem,
-            )
-            .map(|elem| {
-                self.next_avail += Wrapping(1);
-                elem
-            })
-            .chain_err(|| "Failed to get indirect desc for popping avail ring")?
+            desc.get_indirect_desc(sys_mem, desc_index, &mut self.cache, elem)
+                .map(|elem| {
+                    self.next_avail += Wrapping(1);
+                    elem
+                })
+                .chain_err(|| "Failed to get indirect desc for popping avail ring")?
         } else {
             desc.get_nonindirect_desc(
                 sys_mem,

@@ -27,6 +27,8 @@ use once_cell::sync::Lazy;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::errors::{Result, ResultExt};
+#[cfg(target_arch = "x86_64")]
+use migration::{MigrationManager, MigrationRestoreOrder};
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
@@ -124,10 +126,10 @@ impl KVMFds {
         };
 
         #[cfg(target_arch = "x86_64")]
-        migration::MigrationManager::register_device_instance(
+        MigrationManager::register_device_instance(
             state::KvmDeviceState::descriptor(),
             Arc::new(state::KvmDevice {}),
-            false,
+            MigrationRestoreOrder::Default,
         );
 
         kvm_fds

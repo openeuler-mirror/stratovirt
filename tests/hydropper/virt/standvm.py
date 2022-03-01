@@ -205,13 +205,13 @@ class StandVM(BaseVM):
                     # only one device is supported(pcie root port)
                     if self.pcie_root_port_remain <= 0:
                         raise PcierootportError
-                    _temp_device_args = "virtio-net-pci,netdev=%s,id=%s,bus=pcie.%s,addr=0x0"\
-                        % (tapname, tapname, self.pcie_root_port_remain + 4)
+                    _temp_device_args = "virtio-net-pci,netdev=%s,id=net-%s,bus=pcie.%s,addr=0x0"\
+                        % (tapname, i, self.pcie_root_port_remain + 4)
                     self.pcie_root_port_remain -= 1
                     self.pcie_root_port["net"] = False
                 else:
-                    _temp_device_args = "virtio-net-pci,netdev=%s,id=%s,bus=pcie.0,addr=%s.0x0"\
-                        % (tapname, tapname, hex(i))
+                    _temp_device_args = "virtio-net-pci,netdev=%s,id=net-%s,bus=pcie.0,addr=%s.0x0"\
+                        % (tapname, i, hex(i))
                 if self.multifunction["net"]:
                     _temp_device_args += ",multifunction=on"
                 if self.net_iothread:
