@@ -405,6 +405,7 @@ pub fn init_msix(
     vector_nr: u32,
     config: &mut PciConfig,
     dev_id: Arc<AtomicU16>,
+    id: &str,
 ) -> Result<()> {
     if vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
         bail!("Too many msix vectors.");
@@ -439,7 +440,7 @@ pub fn init_msix(
     config.msix = Some(msix.clone());
 
     #[cfg(not(test))]
-    MigrationManager::register_device_instance_mutex(MsixState::descriptor(), msix);
+    MigrationManager::register_device_instance_mutex_with_id(MsixState::descriptor(), msix, id);
 
     Ok(())
 }
@@ -469,11 +470,12 @@ mod tests {
             0,
             MSIX_TABLE_SIZE_MAX as u32 + 2,
             &mut pci_config,
-            Arc::new(AtomicU16::new(0))
+            Arc::new(AtomicU16::new(0)),
+            "msix"
         )
         .is_err());
 
-        init_msix(1, 2, &mut pci_config, Arc::new(AtomicU16::new(0))).unwrap();
+        init_msix(1, 2, &mut pci_config, Arc::new(AtomicU16::new(0)), "msix").unwrap();
         let msix_cap_start = 64_u8;
         assert_eq!(pci_config.last_cap_end, 64 + MSIX_CAP_SIZE as u16);
         // Capabilities pointer
@@ -538,7 +540,7 @@ mod tests {
     #[test]
     fn test_write_config() {
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
-        init_msix(0, 2, &mut pci_config, Arc::new(AtomicU16::new(0))).unwrap();
+        init_msix(0, 2, &mut pci_config, Arc::new(AtomicU16::new(0)), "msix").unwrap();
         let msix = pci_config.msix.as_ref().unwrap();
         let mut locked_msix = msix.lock().unwrap();
         locked_msix.enabled = false;

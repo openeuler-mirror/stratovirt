@@ -19,6 +19,8 @@ extern crate error_chain;
 #[cfg(test)]
 #[macro_use]
 extern crate migration_derive;
+#[macro_use]
+extern crate log;
 
 mod device_state;
 mod header;
@@ -27,7 +29,7 @@ mod snapshot;
 mod status;
 
 pub use device_state::{DeviceStateDesc, FieldDesc, StateTransfer};
-pub use manager::{MigrationHook, MigrationManager};
+pub use manager::{MigrationHook, MigrationManager, MigrationRestoreOrder};
 pub use status::MigrationStatus;
 
 pub mod errors {

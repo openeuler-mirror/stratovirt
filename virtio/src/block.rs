@@ -967,6 +967,10 @@ impl VirtioDevice for Block {
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        MigrationManager::unregister_device_instance_mutex_by_id(
+            BlockState::descriptor(),
+            &self.blk_cfg.id,
+        );
         Ok(())
     }
 

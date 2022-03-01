@@ -171,13 +171,6 @@ pub mod tests {
     use super::{DeviceStateDesc, FieldDesc, StateTransfer, VersionCheck};
     use util::byte_code::ByteCode;
 
-    struct MigrationManager {}
-    impl MigrationManager {
-        fn desc_db_len() -> u64 {
-            0
-        }
-    }
-
     #[derive(Default)]
     // A simple device version 1.
     pub struct DeviceV1 {

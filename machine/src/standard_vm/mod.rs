@@ -80,10 +80,11 @@ use machine_manager::config::{
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use migration::MigrationManager;
 use pci::hotplug::{handle_plug, handle_unplug_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
-use virtio::{qmp_balloon, qmp_query_balloon, Block, VhostKern, VirtioDevice};
+use virtio::{qmp_balloon, qmp_query_balloon, Block, BlockState, VhostKern, VirtioNetState};
 
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
@@ -549,7 +550,7 @@ impl StdMachine {
 
         let blk = if let Some(conf) = self.get_vm_config().lock().unwrap().drives.get(drive) {
             let dev = BlkDevConfig {
-                id: conf.id.clone(),
+                id: args.id.clone(),
                 path_on_host: conf.path_on_host.clone(),
                 read_only: conf.read_only,
                 direct: conf.direct,
@@ -558,13 +559,22 @@ impl StdMachine {
                 iops: conf.iops,
             };
             dev.check()?;
-            Arc::new(Mutex::new(Block::new(dev)))
+            dev
         } else {
             bail!("Drive not found");
         };
 
-        self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction)
-            .chain_err(|| "Failed to add virtio pci block device")
+        let blk_id = blk.id.clone();
+        let blk = Arc::new(Mutex::new(Block::new(blk)));
+        self.add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction)
+            .chain_err(|| "Failed to add virtio pci block device")?;
+
+        MigrationManager::register_device_instance_mutex_with_id(
+            BlockState::descriptor(),
+            blk,
+            &blk_id,
+        );
+        Ok(())
     }
 
     fn plug_virtio_pci_net(
@@ -581,7 +591,7 @@ impl StdMachine {
 
         let dev = if let Some(conf) = self.get_vm_config().lock().unwrap().netdevs.get(netdev) {
             let dev = NetworkInterfaceConfig {
-                id: conf.id.clone(),
+                id: args.id.clone(),
                 host_dev_name: conf.ifname.clone(),
                 mac: args.mac.clone(),
                 tap_fd: conf.tap_fd,
@@ -595,14 +605,22 @@ impl StdMachine {
             bail!("Netdev not found");
         };
 
-        let net: Arc<Mutex<dyn VirtioDevice>> = if dev.vhost_type.is_some() {
-            Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())))
+        if dev.vhost_type.is_some() {
+            let net = Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())));
+            self.add_virtio_pci_device(&args.id, &pci_bdf, net, multifunction)
+                .chain_err(|| "Failed to add virtio net device")?;
         } else {
-            Arc::new(Mutex::new(virtio::Net::new(dev)))
-        };
-
-        self.add_virtio_pci_device(&args.id, &pci_bdf, net, multifunction)
-            .chain_err(|| "Failed to add virtio pci net device")
+            let net_id = dev.id.clone();
+            let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
+            self.add_virtio_pci_device(&args.id, &pci_bdf, net.clone(), multifunction)
+                .chain_err(|| "Failed to add virtio net device")?;
+            MigrationManager::register_device_instance_mutex_with_id(
+                VirtioNetState::descriptor(),
+                net,
+                &net_id,
+            );
+        }
+        Ok(())
     }
 
     fn plug_vfio_pci_device(

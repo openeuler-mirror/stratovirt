@@ -26,10 +26,19 @@ pub fn parse_struct(
 
     let fields = parse_fields(&input.fields, ident);
 
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let id_remap = |s: &str| -> u64 {
+        let mut hash = DefaultHasher::new();
+        s.hash(&mut hash);
+        hash.finish()
+    };
+    let alias = id_remap(&name);
     quote! {
         #struct_ident {
             name: #name.to_string(),
-            alias: MigrationManager::desc_db_len(),
+            alias: #alias,
             size: std::mem::size_of::<#ident>() as u32,
             current_version: #current_version,
             compat_version: #compat_version,

@@ -23,7 +23,7 @@ use util::unix::host_page_size;
 use crate::device_state::{DeviceStateDesc, VersionCheck};
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::header::{FileFormat, MigrationHeader};
-use crate::manager::{InstanceId, MigrationEntry, MigrationManager, MIGRATION_MANAGER};
+use crate::manager::{id_remap, InstanceId, MigrationEntry, MigrationManager, MIGRATION_MANAGER};
 use crate::status::MigrationStatus;
 
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
@@ -187,10 +187,13 @@ impl MigrationManager {
     ///
     /// * `writer` - The `Write` trait object.
     fn save_memory(writer: &mut dyn Write) -> Result<()> {
-        for (id, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
-            if let MigrationEntry::Memory(i) = entry {
-                i.pre_save(*id, writer)
-                    .chain_err(|| "Failed to save vm memory")?;
+        let entry = MIGRATION_MANAGER.entry.read().unwrap();
+        for item in entry.iter() {
+            for (id, entry) in item.iter() {
+                if let MigrationEntry::Memory(i) = entry {
+                    i.pre_save(id, writer)
+                        .chain_err(|| "Failed to save vm memory")?;
+                }
             }
         }
 
@@ -205,10 +208,13 @@ impl MigrationManager {
     fn load_memory(file: &mut File) -> Result<()> {
         let mut state_bytes = [0_u8].repeat((host_page_size() as usize) * 2 - HEADER_LENGTH);
         file.read_exact(&mut state_bytes)?;
-        for (_, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
-            if let MigrationEntry::Memory(i) = entry {
-                i.pre_load(&state_bytes, Some(file))
-                    .chain_err(|| "Failed to load vm memory")?;
+        let entry = MIGRATION_MANAGER.entry.read().unwrap();
+        for item in entry.iter() {
+            for (_, entry) in item.iter() {
+                if let MigrationEntry::Memory(i) = entry {
+                    i.pre_load(&state_bytes, Some(file))
+                        .chain_err(|| "Failed to load vm memory")?;
+                }
             }
         }
 
@@ -221,11 +227,14 @@ impl MigrationManager {
     ///
     /// * `writer` - The `Write` trait object.
     fn save_device_state(writer: &mut dyn Write) -> Result<()> {
-        for (device_id, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
-            match entry {
-                MigrationEntry::Safe(i) => i.pre_save(*device_id, writer)?,
-                MigrationEntry::Mutex(i) => i.lock().unwrap().pre_save(*device_id, writer)?,
-                _ => {}
+        let entry = MIGRATION_MANAGER.entry.read().unwrap();
+        for item in entry.iter() {
+            for (id, entry) in item.iter() {
+                match entry {
+                    MigrationEntry::Safe(i) => i.pre_save(id, writer)?,
+                    MigrationEntry::Mutex(i) => i.lock().unwrap().pre_save(id, writer)?,
+                    _ => {}
+                }
             }
         }
 
@@ -275,10 +284,19 @@ impl MigrationManager {
                 }
             }
 
-            match device_entry.get(&instance_id.object_id).unwrap() {
-                MigrationEntry::Safe(i) => i.pre_load(&state_data, None)?,
-                MigrationEntry::Mutex(i) => i.lock().unwrap().pre_load_mut(&state_data, None)?,
-                _ => {}
+            for item in device_entry.iter() {
+                for (key, state) in item {
+                    if id_remap(key) == instance_id.object_id {
+                        info!("Load VM state: key {}", key);
+                        match state {
+                            MigrationEntry::Safe(i) => i.pre_load(&state_data, None)?,
+                            MigrationEntry::Mutex(i) => {
+                                i.lock().unwrap().pre_load_mut(&state_data, None)?
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
 
@@ -288,9 +306,12 @@ impl MigrationManager {
     /// Resume recovered device.
     /// This function will be called after restore device state.
     fn resume() -> Result<()> {
-        for (_, entry) in MIGRATION_MANAGER.entry.read().unwrap().iter() {
-            if let MigrationEntry::Mutex(i) = entry {
-                i.lock().unwrap().resume()?
+        let entry = MIGRATION_MANAGER.entry.read().unwrap();
+        for item in entry.iter() {
+            for (_, state) in item {
+                if let MigrationEntry::Mutex(i) = state {
+                    i.lock().unwrap().resume()?
+                }
             }
         }
         Ok(())
