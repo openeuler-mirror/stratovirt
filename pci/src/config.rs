@@ -569,11 +569,12 @@ impl PciConfig {
     pub fn unregister_bars(&mut self, bus: &Arc<Mutex<PciBus>>) -> Result<()> {
         let locked_bus = bus.lock().unwrap();
         for bar in self.bars.iter_mut() {
+            if bar.address == BAR_SPACE_UNMAPPED || bar.size == 0 {
+                continue;
+            }
             match bar.region_type {
-                RegionType::Io => {
-                    if bar.address == BAR_SPACE_UNMAPPED || bar.size == 0 {
-                        continue;
-                    }
+                RegionType::Io =>
+                {
                     #[cfg(target_arch = "x86_64")]
                     if let Some(region) = bar.region.as_ref() {
                         locked_bus
@@ -1101,5 +1102,71 @@ mod tests {
         let size2 = pcie_config.get_ext_cap_size(offset2);
         assert_eq!(size1, 0x10);
         assert_eq!(size2, 0x40);
+    }
+
+    #[test]
+    fn test_unregister_bars() {
+        let read_ops = move |_data: &mut [u8], _addr: GuestAddress, _offset: u64| -> bool { true };
+        let write_ops = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool { true };
+        let region_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+        let region = Region::init_io_region(2048, region_ops);
+        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+
+        // bar is unmapped
+        #[cfg(target_arch = "x86_64")]
+        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
+        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
+        pci_config.register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048);
+
+        #[cfg(target_arch = "x86_64")]
+        let io_region = Region::init_container_region(1 << 16);
+        let mem_region = Region::init_container_region(u64::max_value());
+        let bus = Arc::new(Mutex::new(PciBus::new(
+            String::from("bus"),
+            #[cfg(target_arch = "x86_64")]
+            io_region.clone(),
+            mem_region.clone(),
+        )));
+
+        assert!(pci_config.unregister_bars(&bus).is_ok());
+
+        // bar is mapped
+        #[cfg(target_arch = "x86_64")]
+        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
+        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
+        pci_config.register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048);
+
+        #[cfg(target_arch = "x86_64")]
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize,
+            2048 | BAR_IO_SPACE as u32,
+        )
+        .unwrap();
+        le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 2048).unwrap();
+        le_write_u32(
+            &mut pci_config.config,
+            BAR_0 as usize + 2 * REG_SIZE,
+            2048 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+        )
+        .unwrap();
+        le_write_u16(
+            &mut pci_config.config,
+            COMMAND as usize,
+            COMMAND_IO_SPACE | COMMAND_MEMORY_SPACE,
+        )
+        .unwrap();
+        pci_config
+            .update_bar_mapping(
+                #[cfg(target_arch = "x86_64")]
+                &io_region,
+                &mem_region,
+            )
+            .unwrap();
+
+        assert!(pci_config.unregister_bars(&bus).is_ok());
     }
 }
