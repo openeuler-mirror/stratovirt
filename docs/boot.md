@@ -230,7 +230,7 @@ fi
     -m 2G \
     -append "console=${con} reboot=k panic=1 root=/dev/vda rw" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
-    -device virtio-blk-device,drive=rootfs,id=rootfs \
+    -device virtio-blk-pci,drive=rootfs,id=blk1,bus=pcie.0,addr=0x2 \
     -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
     -drive file=/path/to/OVMF_VARS.fd,if=pflash,unit=1 \
     -qmp unix:/path/to/socket,server,nowait \
@@ -245,7 +245,7 @@ The command for booting with the raw image is as follows:
     -smp 1 \
     -m 2G \
     -drive file=/path/to/raw_image,id=raw_image,readonly=off,direct=off \
-    -device virtio-blk-device,drive=raw_image \
+    -device virtio-blk-pci,drive=raw_image,id=blk1,bus=pcie.0,addr=0x2 \
     -drive file=/path/to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
     -drive file=/path/to/OVMF_VARS.fd,if=pflash,unit=1 \
     -qmp unix:/path/to/socket,server,nowait \
