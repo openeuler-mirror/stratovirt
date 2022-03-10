@@ -153,6 +153,7 @@ impl StdMachine {
                 &sys_mem,
                 MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize],
                 MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize],
+                MEM_LAYOUT[LayoutEntryType::PciePio as usize],
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),

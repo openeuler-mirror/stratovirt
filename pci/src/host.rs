@@ -14,14 +14,13 @@ use std::sync::{Arc, Mutex};
 
 use acpi::{
     AmlAddressSpaceDecode, AmlBuilder, AmlByte, AmlCacheable, AmlDWord, AmlDWordDesc, AmlDevice,
-    AmlEisaId, AmlNameDecl, AmlPackage, AmlReadAndWrite, AmlResTemplate, AmlScopeBuilder,
-    AmlWordDesc, AmlZero,
+    AmlEisaId, AmlISARanges, AmlNameDecl, AmlPackage, AmlReadAndWrite, AmlResTemplate,
+    AmlScopeBuilder, AmlWordDesc, AmlZero,
 };
 #[cfg(target_arch = "x86_64")]
 use acpi::{
-    AmlAnd, AmlArg, AmlCreateDWordField, AmlElse, AmlEqual, AmlISARanges, AmlIf, AmlInteger,
-    AmlIoDecode, AmlIoResource, AmlLNot, AmlLocal, AmlMethod, AmlName, AmlOr, AmlReturn, AmlStore,
-    AmlToUuid,
+    AmlAnd, AmlArg, AmlCreateDWordField, AmlElse, AmlEqual, AmlIf, AmlInteger, AmlIoDecode,
+    AmlIoResource, AmlLNot, AmlLocal, AmlMethod, AmlName, AmlOr, AmlReturn, AmlStore, AmlToUuid,
 };
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use sysbus::{errors::Result as SysBusResult, SysBusDevOps};
@@ -57,6 +56,8 @@ pub struct PciHost {
     config_addr: u32,
     pcie_ecam_range: (u64, u64),
     pcie_mmio_range: (u64, u64),
+    #[cfg(target_arch = "aarch64")]
+    pcie_pio_range: (u64, u64),
 }
 
 impl PciHost {
@@ -71,6 +72,7 @@ impl PciHost {
         sys_mem: &Arc<AddressSpace>,
         pcie_ecam_range: (u64, u64),
         pcie_mmio_range: (u64, u64),
+        #[cfg(target_arch = "aarch64")] pcie_pio_range: (u64, u64),
     ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = sys_io.root().clone();
@@ -88,6 +90,8 @@ impl PciHost {
             config_addr: 0,
             pcie_ecam_range,
             pcie_mmio_range,
+            #[cfg(target_arch = "aarch64")]
+            pcie_pio_range,
         }
     }
 
@@ -336,6 +340,19 @@ impl AmlBuilder for PciHost {
                 0xf300,
             ));
         }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let pcie_pio = self.pcie_pio_range;
+            crs.append_child(AmlDWordDesc::new_io(
+                AmlAddressSpaceDecode::Positive,
+                AmlISARanges::EntireRange,
+                0,
+                pcie_pio.0 as u32,
+                (pcie_pio.0 + pcie_pio.1) as u32 - 1,
+                0,
+                pcie_pio.1 as u32,
+            ));
+        }
         crs.append_child(AmlDWordDesc::new_memory(
             AmlAddressSpaceDecode::Positive,
             AmlCacheable::NonCacheable,
@@ -443,6 +460,8 @@ pub mod tests {
             &sys_mem,
             (0xB000_0000, 0x1000_0000),
             (0xC000_0000, 0x3000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (0xF000_0000, 0x1000_0000),
         )))
     }
 
