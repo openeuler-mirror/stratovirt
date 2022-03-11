@@ -464,6 +464,8 @@ pub struct VfioDevInfo {
 pub struct VfioDevice {
     /// File descriptor for a VFIO device instance.
     pub fd: File,
+    /// Identify the unique VFIO device.
+    pub name: String,
     /// Vfio group the device belongs to.
     pub group: Weak<VfioGroup>,
     /// Vfio container the device belongs to.
@@ -515,10 +517,12 @@ impl VfioDevice {
 
         let group =
             Self::vfio_get_group(&path, mem_as).chain_err(|| "Failed to get iommu group")?;
-        let fd = Self::vfio_get_device(&group, &path).chain_err(|| "Failed to get vfio device")?;
+        let (name, fd) =
+            Self::vfio_get_device(&group, &path).chain_err(|| "Failed to get vfio device")?;
         let dev_info = Self::get_dev_info(&fd).chain_err(|| "Failed to get device info")?;
         let vfio_dev = Arc::new(Mutex::new(VfioDevice {
             fd,
+            name,
             group: Arc::downgrade(&group),
             container: group.container.clone(),
             dev_info,
@@ -569,11 +573,18 @@ impl VfioDevice {
         Ok(group)
     }
 
-    fn vfio_get_device(group: &VfioGroup, name: &Path) -> Result<File> {
+    fn vfio_get_device(group: &VfioGroup, name: &Path) -> Result<(String, File)> {
         let mut dev_name: &str = "";
         if let Some(n) = name.file_name() {
             dev_name = n.to_str().chain_err(|| "Invalid device path")?;
         }
+
+        for device in group.devices.lock().unwrap().iter() {
+            if device.1.lock().unwrap().name == dev_name {
+                bail!("Device {} is already attached", dev_name);
+            }
+        }
+
         let path: CString = CString::new(dev_name.as_bytes())
             .chain_err(|| "Failed to convert device name to CString type of data")?;
         let ptr = path.as_ptr();
@@ -589,7 +600,7 @@ impl VfioDevice {
 
         // Safe as we have verified that fd is a valid FD.
         let device = unsafe { File::from_raw_fd(fd) };
-        Ok(device)
+        Ok((String::from(dev_name), device))
     }
 
     fn get_dev_info(device: &File) -> Result<VfioDevInfo> {
