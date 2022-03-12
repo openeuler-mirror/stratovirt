@@ -31,8 +31,6 @@
 //! sent to the process group.
 //! 8. Handle any `SIGCLD` signals.
 
-extern crate libc;
-
 use std::cmp::Ordering;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;

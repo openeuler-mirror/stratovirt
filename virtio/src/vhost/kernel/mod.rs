@@ -200,14 +200,14 @@ impl Listener for VhostMemInfo {
     ) -> std::result::Result<(), address_space::errors::Error> {
         match req_type {
             ListenerReqType::AddRegion => {
-                if Self::check_vhost_mem_range(&range.unwrap()) {
+                if Self::check_vhost_mem_range(range.unwrap()) {
                     self.add_mem_range(range.unwrap());
                 }
             }
             ListenerReqType::DeleteRegion => {
                 let fr = range.unwrap();
                 if fr.owner.region_type() == RegionType::Ram {
-                    self.delete_mem_range(&fr);
+                    self.delete_mem_range(fr);
                 }
             }
             _ => {}

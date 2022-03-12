@@ -25,8 +25,6 @@
 //! 3. Qmp's message structure base is transformed by scripts from Qemu's
 //! `qmp-schema.json`. It's can be compatible by Qemu's zoology. Those
 //! transformed structures can be found in `machine_manager/src/qmp/qmp_schema.rs`
-extern crate serde;
-extern crate serde_json;
 
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]

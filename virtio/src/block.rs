@@ -303,7 +303,7 @@ impl Request {
             }
             VIRTIO_BLK_T_GET_ID => {
                 if let Some(serial) = serial_num {
-                    let serial_vec = get_serial_num_config(&serial);
+                    let serial_vec = get_serial_num_config(serial);
 
                     for iov in self.iovec.iter() {
                         if (iov.iov_len as usize) < serial_vec.len() {

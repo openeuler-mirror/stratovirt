@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate libc;
-extern crate log;
-
 use std::io::prelude::*;
 use std::sync::Mutex;
 

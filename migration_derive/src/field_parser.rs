@@ -21,7 +21,7 @@ pub fn parse_fields(input: &syn::Fields, ident: &syn::Ident) -> Vec<proc_macro2:
     match input {
         syn::Fields::Named(ref name_fields) => {
             let pairs = name_fields.named.pairs();
-            for field in pairs.into_iter() {
+            for field in pairs {
                 fields.push(parse_field(field, ident));
             }
         }
@@ -51,11 +51,7 @@ fn parse_field(
     let ty = input.value().ty.clone();
     let (ty_ident, len, is_array) = parse_ty(ty);
     let type_name = if is_array {
-        format!(
-            "[{};{}]",
-            ty_ident.path.get_ident().unwrap().to_string(),
-            len
-        )
+        format!("[{};{}]", ty_ident.path.get_ident().unwrap(), len)
     } else {
         ty_ident.path.get_ident().unwrap().to_string()
     };
@@ -113,7 +109,7 @@ pub fn parse_fields_default(input: &syn::Fields) -> Vec<proc_macro2::TokenStream
     match input {
         syn::Fields::Named(ref name_fields) => {
             let pairs = name_fields.named.pairs();
-            for field in pairs.into_iter() {
+            for field in pairs {
                 fields.push(parse_field_default(field));
             }
         }

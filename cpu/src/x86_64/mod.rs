@@ -22,9 +22,9 @@ use kvm_bindings::{
 };
 use kvm_ioctls::{Kvm, VcpuFd};
 
+use self::cpuid::host_cpuid;
 use crate::errors::{Result, ResultExt};
 use crate::CPU;
-use cpuid::host_cpuid;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 
@@ -145,8 +145,8 @@ impl X86CPUState {
         boot_config: &X86CPUBootConfig,
     ) -> Result<()> {
         self.setup_lapic(vcpu_fd)?;
-        self.setup_regs(&boot_config);
-        self.setup_sregs(vcpu_fd, &boot_config)?;
+        self.setup_regs(boot_config);
+        self.setup_sregs(vcpu_fd, boot_config)?;
         self.setup_fpu();
         self.setup_msrs();
 

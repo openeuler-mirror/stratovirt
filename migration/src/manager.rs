@@ -71,11 +71,11 @@ pub trait MigrationHook: StateTransfer {
         let device_alias = self.get_device_alias();
         let instance_id = InstanceId {
             object_type: device_alias,
-            object_id: id_remap(&id),
+            object_id: id_remap(id),
         };
 
         writer
-            .write_all(&instance_id.as_bytes())
+            .write_all(instance_id.as_bytes())
             .chain_err(|| "Failed to write instance id.")?;
         writer
             .write_all(&state_data)

@@ -155,15 +155,6 @@ impl StdMachine {
         })
     }
 
-    /// Run `LightMachine` with `paused` flag.
-    ///
-    /// # Arguments
-    ///
-    /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
-    pub fn run(&self, paused: bool) -> Result<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
-    }
-
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
         use crate::errors::ResultExt;
 

@@ -14,11 +14,11 @@ use super::errors::Result;
 use super::{CmdParser, VmConfig};
 
 impl VmConfig {
-    pub fn add_devices(&mut self, device_config: &str) -> Result<()> {
+    pub fn add_device(&mut self, device_config: &str) -> Result<()> {
         let mut cmd_params = CmdParser::new("device");
         cmd_params.push("");
 
-        cmd_params.get_parameters(&device_config)?;
+        cmd_params.get_parameters(device_config)?;
         if let Some(device_type) = cmd_params.get_value::<String>("")? {
             self.devices.push((device_type, device_config.to_string()));
         }

@@ -297,7 +297,6 @@ impl PciDevOps for LPCBridge {
         ) {
             if let Err(e) = self.update_pm_base() {
                 error!("Failed to update PM base addr: {}", e.display_chain());
-                return;
             }
         }
     }
