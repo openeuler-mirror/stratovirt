@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate util;
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::{process, thread};

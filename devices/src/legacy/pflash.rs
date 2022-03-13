@@ -251,24 +251,19 @@ impl PFlash {
     }
 
     fn query_devid(&mut self, offset: u64) -> Result<u32> {
-        let mut resp: u32;
         let index: u64 = offset
             >> (self.bank_width.trailing_zeros() + self.max_device_width.trailing_zeros()
                 - self.device_width.trailing_zeros());
 
         // Mask off upper bits, the rest (ident[2] and ident[3]) is not emulated.
-        match index & 0xFF {
-            0 => {
-                resp = self.ident[0];
-            }
-            1 => {
-                resp = self.ident[1];
-            }
+        let mut resp: u32 = match index & 0xFF {
+            0 => self.ident[0],
+            1 => self.ident[1],
             _ => {
                 debug!("Device ID 2 and 3 are not supported");
                 return Ok(0);
             }
-        }
+        };
 
         if self.device_width < self.bank_width {
             let mut i: u32 = self.device_width;
@@ -283,7 +278,6 @@ impl PFlash {
     }
 
     fn query_cfi(&mut self, offset: u64) -> Result<u32> {
-        let mut resp: u32;
         // Adjust index for expected device-width addressing.
         let index: u64 = offset
             >> (self.bank_width.trailing_zeros() + self.max_device_width.trailing_zeros()
@@ -293,7 +287,7 @@ impl PFlash {
             return Err(ErrorKind::PFlashIndexOverflow(index, self.cfi_table.len()).into());
         }
 
-        resp = self.cfi_table[index as usize].into();
+        let mut resp: u32 = self.cfi_table[index as usize].into();
         if self.device_width != self.max_device_width {
             if self.device_width != 1 || self.bank_width > 4 {
                 return Err(
@@ -359,7 +353,7 @@ impl PFlash {
             std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len() as usize)
         };
         data.as_mut()
-            .write_all(&src)
+            .write_all(src)
             .chain_err(|| "Failed to read data from PFlash Rom")?;
 
         Ok(())
@@ -378,7 +372,7 @@ impl PFlash {
         let mut dst = unsafe {
             std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len() as usize)
         };
-        dst.write_all(&data)
+        dst.write_all(data)
             .chain_err(|| "Failed to write data to PFlash Rom")?;
 
         Ok(())
@@ -476,7 +470,7 @@ impl PFlash {
         match self.cmd {
             0x10 | 0x40 => {
                 if !self.read_only {
-                    if let Err(e) = self.write_data(&data, offset) {
+                    if let Err(e) = self.write_data(data, offset) {
                         error!("Failed to write to PFlash device: {}.", e.display_chain());
                     }
                     if let Err(e) = self.update_content(offset, data_len.into()) {
@@ -592,7 +586,7 @@ impl PFlash {
         match self.cmd {
             0xe8 => {
                 if !self.read_only {
-                    if let Err(e) = self.write_data(&data, offset) {
+                    if let Err(e) = self.write_data(data, offset) {
                         error!("Failed to write to PFlash device: {}.", e.display_chain());
                     }
                 } else {

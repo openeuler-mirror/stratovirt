@@ -125,7 +125,7 @@ impl PciBus {
         }
         if locked_bus.in_range(bus_num) {
             for sub_bus in &locked_bus.child_buses {
-                if let Some(b) = PciBus::find_bus_by_num(&sub_bus, bus_num) {
+                if let Some(b) = PciBus::find_bus_by_num(sub_bus, bus_num) {
                     return Some(b);
                 }
             }
@@ -145,7 +145,7 @@ impl PciBus {
             return Some((*bus).clone());
         }
         for sub_bus in &locked_bus.child_buses {
-            if let Some(b) = PciBus::find_bus_by_name(&sub_bus, bus_name) {
+            if let Some(b) = PciBus::find_bus_by_name(sub_bus, bus_name) {
                 return Some(b);
             }
         }

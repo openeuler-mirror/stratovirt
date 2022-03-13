@@ -479,7 +479,7 @@ impl VfioPciDevice {
         let write = move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
             let mut locked_msix = msix.lock().unwrap();
             locked_msix.table[offset as usize..(offset as usize + data.len())]
-                .copy_from_slice(&data);
+                .copy_from_slice(data);
             let vector = offset / MSIX_TABLE_ENTRY_SIZE as u64;
             if locked_msix.is_vector_masked(vector as u16) {
                 return true;
@@ -955,7 +955,6 @@ impl PciDevOps for VfioPciDevice {
 
                 if let Err(e) = self.setup_bars_mmap() {
                     error!("Failed to map bar regions, error is {}", e.display_chain());
-                    return;
                 }
             }
         } else if ranges_overlap(offset, end, BAR_0 as usize, (BAR_5 as usize) + REG_SIZE) {
@@ -971,7 +970,6 @@ impl PciDevOps for VfioPciDevice {
                     &locked_parent_bus.mem_region,
                 ) {
                     error!("Failed to update bar, error is {}", e.display_chain());
-                    return;
                 }
             }
         } else if ranges_overlap(offset, end, cap_offset, cap_offset + MSIX_CAP_SIZE as usize) {
@@ -983,12 +981,10 @@ impl PciDevOps for VfioPciDevice {
             if !was_enable && is_enable {
                 if let Err(e) = self.vfio_enable_msix() {
                     error!("{}\nFailed to enable MSI-X.", e.display_chain());
-                    return;
                 }
             } else if was_enable && !is_enable {
                 if let Err(e) = self.vfio_disable_msix() {
                     error!("{}\nFailed to disable MSI-X.", e.display_chain());
-                    return;
                 }
             }
         } else {

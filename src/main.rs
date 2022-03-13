@@ -135,12 +135,12 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     EventLoop::object_init(&vm_config.iothreads)?;
     register_kill_signal();
 
-    let listeners = check_api_channel(&cmd_args, vm_config)?;
+    let listeners = check_api_channel(cmd_args, vm_config)?;
     let mut sockets = Vec::new();
     let vm: Arc<Mutex<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
         MachineType::MicroVm => {
             let vm = Arc::new(Mutex::new(
-                LightMachine::new(&vm_config).chain_err(|| "Failed to init MicroVM")?,
+                LightMachine::new(vm_config).chain_err(|| "Failed to init MicroVM")?,
             ));
             MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
                 .chain_err(|| "Failed to realize micro VM.")?;
@@ -153,7 +153,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
         MachineType::StandardVm => {
             let vm = Arc::new(Mutex::new(
-                StdMachine::new(&vm_config).chain_err(|| "Failed to init StandardVM")?,
+                StdMachine::new(vm_config).chain_err(|| "Failed to init StandardVM")?,
             ));
             MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
                 .chain_err(|| "Failed to realize standard VM.")?;
@@ -166,7 +166,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
         MachineType::None => {
             let vm = Arc::new(Mutex::new(
-                StdMachine::new(&vm_config).chain_err(|| "Failed to init NoneVM")?,
+                StdMachine::new(vm_config).chain_err(|| "Failed to init NoneVM")?,
             ));
             EventLoop::set_manager(vm.clone(), None);
             for listener in listeners {

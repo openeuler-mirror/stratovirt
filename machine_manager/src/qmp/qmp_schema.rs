@@ -10,11 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-extern crate strum;
-extern crate strum_macros;
-
 use serde::{Deserialize, Serialize};
 pub use serde_json::Value as Any;
 use strum_macros::{EnumIter, EnumString, EnumVariantNames};
@@ -1741,8 +1736,6 @@ impl Command for query_iothreads {
 
 #[cfg(test)]
 mod tests {
-    extern crate serde;
-    extern crate serde_json;
     use super::*;
 
     #[test]

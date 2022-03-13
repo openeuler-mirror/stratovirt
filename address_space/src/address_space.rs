@@ -112,7 +112,7 @@ impl AddressSpace {
     pub fn register_listener(&self, listener: ListenerObj) -> Result<()> {
         let mut locked_listener = listener.lock().unwrap();
         for fr in self.flat_view.load().0.iter() {
-            locked_listener.handle_request(Some(&fr), None, ListenerReqType::AddRegion)?;
+            locked_listener.handle_request(Some(fr), None, ListenerReqType::AddRegion)?;
         }
         locked_listener.enable();
 
@@ -141,7 +141,7 @@ impl AddressSpace {
     pub fn unregister_listener(&self, listener: ListenerObj) -> Result<()> {
         let mut locked_listener = listener.lock().unwrap();
         for fr in self.flat_view.load().0.iter() {
-            locked_listener.handle_request(Some(&fr), None, ListenerReqType::DeleteRegion)?;
+            locked_listener.handle_request(Some(fr), None, ListenerReqType::DeleteRegion)?;
         }
         locked_listener.disable();
         drop(locked_listener);

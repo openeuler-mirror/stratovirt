@@ -316,7 +316,7 @@ impl SplitVringDesc {
         }
 
         if miss_cached {
-            if let Err(ref e) = checked_offset_mem(&sys_mem, self.addr, u64::from(self.len)) {
+            if let Err(ref e) = checked_offset_mem(sys_mem, self.addr, u64::from(self.len)) {
                 error!(
                     "The memory of descriptor is invalid, {} ",
                     error_chain::ChainedError::display_chain(e),
@@ -653,7 +653,7 @@ impl SplitVring {
 
     fn is_invalid_memory(&self, sys_mem: &Arc<AddressSpace>, actual_size: u64) -> bool {
         let desc_table_end =
-            match checked_offset_mem(&sys_mem, self.desc_table, DESCRIPTOR_LEN * actual_size) {
+            match checked_offset_mem(sys_mem, self.desc_table, DESCRIPTOR_LEN * actual_size) {
                 Ok(addr) => addr,
                 Err(ref e) => {
                     error!(
@@ -667,7 +667,7 @@ impl SplitVring {
             };
 
         let desc_avail_end = match checked_offset_mem(
-            &sys_mem,
+            sys_mem,
             self.avail_ring,
             VRING_AVAIL_LEN_EXCEPT_AVAILELEM + AVAILELEM_LEN * actual_size,
         ) {
@@ -684,7 +684,7 @@ impl SplitVring {
         };
 
         if let Err(ref e) = checked_offset_mem(
-            &sys_mem,
+            sys_mem,
             self.used_ring,
             VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * actual_size,
         ) {

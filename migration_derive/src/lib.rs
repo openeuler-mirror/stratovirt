@@ -50,7 +50,6 @@
 
 #[macro_use]
 extern crate syn;
-extern crate quote;
 
 use proc_macro::TokenStream;
 use quote::quote;

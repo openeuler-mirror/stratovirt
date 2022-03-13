@@ -112,8 +112,8 @@ fn get_base_location(controller: &str, exec_file: &str, name: &str) -> Result<Pa
 }
 
 pub fn set_numa_node(node: &str, exec_file: &str, name: &str) -> Result<()> {
-    let write_path = get_base_location("cpuset", &exec_file, &name)?;
-    write_cgroup_value(&write_path, "cpuset.mems", &node)
+    let write_path = get_base_location("cpuset", exec_file, name)?;
+    write_cgroup_value(&write_path, "cpuset.mems", node)
         .chain_err(|| ErrorKind::WriteError("cpuset.mems".to_string(), node.to_string()))?;
 
     let mut upper_path = write_path.clone();

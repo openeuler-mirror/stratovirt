@@ -234,14 +234,6 @@ impl ConsoleHandler {
                 }
             }
             ChardevType::Socket(_) => {
-                let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
-                notifiers.push(EventNotifier::new(
-                    NotifierOperation::Delete,
-                    listener_fd,
-                    None,
-                    EventSet::IN,
-                    Vec::new(),
-                ));
                 if let Some(stream_fd) = locked_chardev.stream_fd {
                     notifiers.push(EventNotifier::new(
                         NotifierOperation::Delete,
@@ -251,6 +243,14 @@ impl ConsoleHandler {
                         Vec::new(),
                     ));
                 }
+                let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
+                notifiers.push(EventNotifier::new(
+                    NotifierOperation::Delete,
+                    listener_fd,
+                    None,
+                    EventSet::IN,
+                    Vec::new(),
+                ));
             }
             _ => (),
         }

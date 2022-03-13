@@ -141,8 +141,8 @@ impl StdMachine {
             sysbus,
             pci_host: Arc::new(Mutex::new(PciHost::new(
                 &sys_mem,
-                MEM_LAYOUT[LayoutEntryType::PcieEcam as usize],
-                MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
+                MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize],
+                MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize],
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
@@ -153,15 +153,6 @@ impl StdMachine {
                 .chain_err(|| ErrorKind::InitEventFdErr("reset_req".to_string()))?,
             dtb_vec: Vec::new(),
         })
-    }
-
-    /// Run `LightMachine` with `paused` flag.
-    ///
-    /// # Arguments
-    ///
-    /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
-    pub fn run(&self, paused: bool) -> Result<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
@@ -221,14 +212,14 @@ impl StdMachineOps for StdMachine {
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
-            MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1,
+            MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1,
             mmconfig_region_ops,
         );
         self.sys_mem
             .root()
             .add_subregion(
                 mmconfig_region,
-                MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0,
+                MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0,
             )
             .chain_err(|| "Failed to register ECAM in memory space.")?;
 
@@ -645,9 +636,9 @@ impl EventLoopManager for StdMachine {
 //
 // * `fdt` - Flatted device-tree blob where node will be filled into.
 fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::errors::Result<()> {
-    let pcie_ecam_base = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
-    let pcie_ecam_size = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1;
-    let pcie_buses_num = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20;
+    let pcie_ecam_base = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
+    let pcie_ecam_size = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1;
+    let pcie_buses_num = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20;
     let node = format!("pcie@{:x}", pcie_ecam_base);
     let pci_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "pci-host-ecam-generic")?;
