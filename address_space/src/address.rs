@@ -143,7 +143,7 @@ impl PartialOrd for AddressRange {
 /// Implement Ord trait for AddressRange.
 impl Ord for AddressRange {
     fn cmp(&self, other: &AddressRange) -> Ordering {
-        self.partial_cmp(&other).unwrap()
+        self.partial_cmp(other).unwrap()
     }
 }
 

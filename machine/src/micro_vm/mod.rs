@@ -906,7 +906,7 @@ impl DeviceInterface for LightMachine {
                         current: true,
                         qom_path: String::from("/machine/unattached/device[")
                             + &cpu_index.to_string()
-                            + &"]".to_string(),
+                            + "]",
                         halted: false,
                         props: Some(cpu_instance),
                         CPU: cpu_index as isize,
@@ -971,9 +971,7 @@ impl DeviceInterface for LightMachine {
                     vcpus_count: 1,
                     props: cpu_instance,
                     qom_path: Some(
-                        String::from("/machine/unattached/device[")
-                            + &cpu_index.to_string()
-                            + &"]".to_string(),
+                        String::from("/machine/unattached/device[") + &cpu_index.to_string() + "]",
                     ),
                 };
                 hotplug_vec.push(serde_json::to_value(hotpluggable_cpu).unwrap());

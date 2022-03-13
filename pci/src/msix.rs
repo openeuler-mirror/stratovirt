@@ -364,7 +364,7 @@ impl MigrationHook for Msix {
 
 pub fn is_msix_enabled(msix_cap_offset: usize, config: &[u8]) -> bool {
     let offset: usize = msix_cap_offset + MSIX_CAP_CONTROL as usize;
-    let msix_ctl = le_read_u16(&config, offset).unwrap();
+    let msix_ctl = le_read_u16(config, offset).unwrap();
     if msix_ctl & MSIX_CAP_ENABLE > 0 {
         return true;
     }
@@ -373,7 +373,7 @@ pub fn is_msix_enabled(msix_cap_offset: usize, config: &[u8]) -> bool {
 
 fn is_msix_func_masked(msix_cap_offset: usize, config: &[u8]) -> bool {
     let offset: usize = msix_cap_offset + MSIX_CAP_CONTROL as usize;
-    let msix_ctl = le_read_u16(&config, offset).unwrap();
+    let msix_ctl = le_read_u16(config, offset).unwrap();
     if msix_ctl & MSIX_CAP_FUNC_MASK > 0 {
         return true;
     }
@@ -405,7 +405,7 @@ pub fn init_msix(
     vector_nr: u32,
     config: &mut PciConfig,
     dev_id: Arc<AtomicU16>,
-    id: &str,
+    _id: &str,
 ) -> Result<()> {
     if vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
         bail!("Too many msix vectors.");
@@ -440,7 +440,7 @@ pub fn init_msix(
     config.msix = Some(msix.clone());
 
     #[cfg(not(test))]
-    MigrationManager::register_device_instance_mutex_with_id(MsixState::descriptor(), msix, id);
+    MigrationManager::register_device_instance_mutex_with_id(MsixState::descriptor(), msix, _id);
 
     Ok(())
 }

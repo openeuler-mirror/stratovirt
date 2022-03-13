@@ -180,7 +180,7 @@ pub trait MachineOps {
         let mut mem_mappings = Vec::new();
         if !is_migrate {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
-            mem_mappings = create_host_mmaps(&ram_ranges, &mem_config, nr_cpus)
+            mem_mappings = create_host_mmaps(&ram_ranges, mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
         }
 
@@ -253,7 +253,7 @@ pub trait MachineOps {
         if let Some(boot_config) = boot_cfg {
             for cpu_index in 0..nr_cpus as usize {
                 cpus[cpu_index as usize]
-                    .realize(&boot_config)
+                    .realize(boot_config)
                     .chain_err(|| {
                         format!(
                             "Failed to realize arch cpu register for CPU {}/KVM",
@@ -529,7 +529,7 @@ pub trait MachineOps {
         host: &str,
         multifunc: bool,
     ) -> Result<()> {
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let path = format!("/sys/bus/pci/devices/{}", host);
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
             .chain_err(|| "Failed to create vfio device.")?;
@@ -595,7 +595,7 @@ pub trait MachineOps {
         device: Arc<Mutex<dyn VirtioDevice>>,
         multi_func: bool,
     ) -> Result<()> {
-        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let sys_mem = self.get_sys_mem();
         let pcidev = VirtioPciDevice::new(
             id.to_string(),
@@ -616,7 +616,7 @@ pub trait MachineOps {
         let pci_host = self.get_pci_host()?;
         let locked_pci_host = pci_host.lock().unwrap();
         let bus =
-            if let Some((bus, _)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &dev_id) {
+            if let Some((bus, _)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, dev_id) {
                 bus
             } else {
                 bail!("Bus not found, dev id {}", dev_id);

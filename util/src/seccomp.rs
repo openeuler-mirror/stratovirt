@@ -77,8 +77,6 @@
 //! ```
 //! This programe will be trapped.
 
-extern crate libc;
-
 use crate::errors::Result;
 use crate::offset_of;
 

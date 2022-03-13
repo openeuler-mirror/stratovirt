@@ -515,10 +515,9 @@ impl VfioDevice {
             bail!("No provided host PCI device, use -device vfio-pci,host=DDDD:BB:DD.F");
         }
 
-        let group =
-            Self::vfio_get_group(&path, mem_as).chain_err(|| "Failed to get iommu group")?;
+        let group = Self::vfio_get_group(path, mem_as).chain_err(|| "Failed to get iommu group")?;
         let (name, fd) =
-            Self::vfio_get_device(&group, &path).chain_err(|| "Failed to get vfio device")?;
+            Self::vfio_get_device(&group, path).chain_err(|| "Failed to get vfio device")?;
         let dev_info = Self::get_dev_info(&fd).chain_err(|| "Failed to get device info")?;
         let vfio_dev = Arc::new(Mutex::new(VfioDevice {
             fd,
@@ -813,12 +812,12 @@ impl VfioDevice {
         irq_set[0].count = irq_fds.len() as u32;
 
         // It is safe as enough memory space to save irq_set data.
-        let mut data: &mut [u8] = unsafe {
+        let data: &mut [u8] = unsafe {
             irq_set[0]
                 .data
                 .as_mut_slice(irq_fds.len() * size_of::<RawFd>())
         };
-        LittleEndian::write_i32_into(irq_fds.as_slice(), &mut data);
+        LittleEndian::write_i32_into(irq_fds.as_slice(), data);
         // Safe as device is the owner of file, and we will verify the result is valid.
         let ret = unsafe { ioctl_with_ref(&self.fd, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
         if ret < 0 {

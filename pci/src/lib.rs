@@ -225,7 +225,7 @@ pub fn init_multifunction(
     parent_bus: Weak<Mutex<PciBus>>,
 ) -> Result<()> {
     let mut header_type =
-        le_read_u16(&config, HEADER_TYPE as usize)? & (!HEADER_TYPE_MULTIFUNC as u16);
+        le_read_u16(config, HEADER_TYPE as usize)? & (!HEADER_TYPE_MULTIFUNC as u16);
     if multifunction {
         header_type |= HEADER_TYPE_MULTIFUNC as u16;
     }

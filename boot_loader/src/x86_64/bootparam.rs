@@ -267,22 +267,22 @@ mod test {
         boot_params.setup_e820_entries(&config, &space);
         assert_eq!(boot_params.e820_entries, 4);
 
-        unsafe {
-            assert_eq!(boot_params.e820_table[0].addr, 0);
-            assert_eq!(boot_params.e820_table[0].size, 0x0009_FC00);
-            assert_eq!(boot_params.e820_table[0].type_, 1);
+        assert!(boot_params.e820_table[0].addr == 0);
 
-            assert_eq!(boot_params.e820_table[1].addr, 0x0009_FC00);
-            assert_eq!(boot_params.e820_table[1].size, 0x400);
-            assert_eq!(boot_params.e820_table[1].type_, 2);
+        assert!(boot_params.e820_table[0].addr == 0);
+        assert!(boot_params.e820_table[0].size == 0x0009_FC00);
+        assert!(boot_params.e820_table[0].type_ == 1);
 
-            assert_eq!(boot_params.e820_table[2].addr, 0x000F_0000);
-            assert_eq!(boot_params.e820_table[2].size, 0);
-            assert_eq!(boot_params.e820_table[2].type_, 2);
+        assert!(boot_params.e820_table[1].addr == 0x0009_FC00);
+        assert!(boot_params.e820_table[1].size == 0x400);
+        assert!(boot_params.e820_table[1].type_ == 2);
 
-            assert_eq!(boot_params.e820_table[3].addr, 0x0010_0000);
-            assert_eq!(boot_params.e820_table[3].size, 0x0ff0_0000);
-            assert_eq!(boot_params.e820_table[3].type_, 1);
-        }
+        assert!(boot_params.e820_table[2].addr == 0x000F_0000);
+        assert!(boot_params.e820_table[2].size == 0);
+        assert!(boot_params.e820_table[2].type_ == 2);
+
+        assert!(boot_params.e820_table[3].addr == 0x0010_0000);
+        assert!(boot_params.e820_table[3].size == 0x0ff0_0000);
+        assert!(boot_params.e820_table[3].type_ == 1);
     }
 }

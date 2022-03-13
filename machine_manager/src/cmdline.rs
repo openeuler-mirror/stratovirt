@@ -401,6 +401,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
+    add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!(
         (args.is_present("mem-prealloc")),
         vm_cfg,
@@ -417,9 +418,8 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("object")), vm_cfg, add_object);
     add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_netdev);
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_chardev);
-    add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_devices);
+    add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_device);
     add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
-    add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
 
     if let Some(s) = args.value_of("trace") {
         add_trace_events(&s)?;

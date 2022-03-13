@@ -55,7 +55,7 @@ pub fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
 
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
     kernel_image
-        .read_exact(&mut boot_hdr.as_mut_bytes())
+        .read_exact(boot_hdr.as_mut_bytes())
         .chain_err(|| "Failed to read boot_hdr from bzImage kernel")?;
     boot_hdr.type_of_loader = UNDEFINED_ID;
 
@@ -115,7 +115,7 @@ fn load_kernel_image(
         )
     };
 
-    load_image(&mut kernel_image, vmlinux_start, &sys_mem).chain_err(|| "Failed to load image")?;
+    load_image(&mut kernel_image, vmlinux_start, sys_mem).chain_err(|| "Failed to load image")?;
 
     boot_layout.boot_ip = kernel_start;
 
@@ -142,7 +142,7 @@ fn load_initrd(
     let initrd_size = initrd_image.metadata().unwrap().len() as u64;
     let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
 
-    load_image(&mut initrd_image, initrd_addr, &sys_mem).chain_err(|| "Failed to load image")?;
+    load_image(&mut initrd_image, initrd_addr, sys_mem).chain_err(|| "Failed to load image")?;
 
     header.set_ramdisk(initrd_addr as u32, initrd_size as u32);
 
@@ -186,7 +186,7 @@ fn setup_boot_params(
     boot_hdr: &RealModeKernelHeader,
 ) -> Result<()> {
     let mut boot_params = BootParams::new(*boot_hdr);
-    boot_params.setup_e820_entries(&config, sys_mem);
+    boot_params.setup_e820_entries(config, sys_mem);
     sys_mem
         .write_object(&boot_params, GuestAddress(ZERO_PAGE_START))
         .chain_err(|| format!("Failed to load zero page to 0x{:x}", ZERO_PAGE_START))?;
@@ -244,7 +244,7 @@ pub fn load_linux(
         ..Default::default()
     };
     let mut boot_header = load_kernel_image(
-        &config.kernel.as_ref().unwrap(),
+        config.kernel.as_ref().unwrap(),
         sys_mem,
         &mut boot_loader_layout,
     )?;
@@ -252,7 +252,7 @@ pub fn load_linux(
     load_initrd(config, sys_mem, &mut boot_header)
         .chain_err(|| "Failed to load initrd to vm memory")?;
 
-    setup_kernel_cmdline(&config, sys_mem, &mut boot_header)
+    setup_kernel_cmdline(config, sys_mem, &mut boot_header)
         .chain_err(|| "Failed to setup kernel cmdline")?;
 
     setup_boot_params(config, sys_mem, &boot_header).chain_err(|| "Failed to setup boot params")?;

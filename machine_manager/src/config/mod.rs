@@ -123,7 +123,7 @@ fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
     let mut cmd_params = CmdParser::new("rng-object");
     cmd_params.push("").push("id").push("filename");
 
-    cmd_params.parse(&object_args)?;
+    cmd_params.parse(object_args)?;
     let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
         obj_id
     } else {
@@ -221,7 +221,7 @@ impl VmConfig {
         let mut cmd_params = CmdParser::new("object");
         cmd_params.push("");
 
-        cmd_params.get_parameters(&object_args)?;
+        cmd_params.get_parameters(object_args)?;
         let obj_type = cmd_params.get_value::<String>("")?;
         if obj_type.is_none() {
             bail!("Object type not specified");
@@ -229,11 +229,11 @@ impl VmConfig {
         let device_type = obj_type.unwrap();
         match device_type.as_str() {
             "iothread" => {
-                self.add_iothread(&object_args)
+                self.add_iothread(object_args)
                     .chain_err(|| "Failed to add iothread")?;
             }
             "rng-random" => {
-                let rng_cfg = parse_rng_obj(&object_args)?;
+                let rng_cfg = parse_rng_obj(object_args)?;
                 let id = rng_cfg.id.clone();
                 let object_config = ObjConfig::Rng(rng_cfg);
                 if self.object.get(&id).is_none() {

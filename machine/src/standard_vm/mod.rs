@@ -607,12 +607,12 @@ impl StdMachine {
 
         if dev.vhost_type.is_some() {
             let net = Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())));
-            self.add_virtio_pci_device(&args.id, &pci_bdf, net, multifunction)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction)
                 .chain_err(|| "Failed to add virtio net device")?;
         } else {
             let net_id = dev.id.clone();
             let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
-            self.add_virtio_pci_device(&args.id, &pci_bdf, net.clone(), multifunction)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction)
                 .chain_err(|| "Failed to add virtio net device")?;
             MigrationManager::register_device_instance_mutex_with_id(
                 VirtioNetState::descriptor(),
@@ -684,7 +684,7 @@ impl DeviceInterface for StdMachine {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
                         + &cpu_index.to_string()
-                        + &"]".to_string(),
+                        + "]",
                     halted: false,
                     props: Some(cpu_instance),
                     CPU: cpu_index as isize,
@@ -750,7 +750,7 @@ impl DeviceInterface for StdMachine {
             "virtio-blk-pci" => {
                 if let Err(e) = self.plug_virtio_pci_blk(&pci_bdf, args.as_ref()) {
                     error!("{}", e.display_chain());
-                    let err_str = format!("Failed to add virtio pci blk: {}", e.to_string());
+                    let err_str = format!("Failed to add virtio pci blk: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
                         None,
@@ -760,7 +760,7 @@ impl DeviceInterface for StdMachine {
             "virtio-net-pci" => {
                 if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
                     error!("{}", e.display_chain());
-                    let err_str = format!("Failed to add virtio pci net: {}", e.to_string());
+                    let err_str = format!("Failed to add virtio pci net: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
                         None,
@@ -794,7 +794,7 @@ impl DeviceInterface for StdMachine {
                         error!("{}", e.display_chain());
                         error!("Failed to detach device");
                     }
-                    let err_str = format!("Failed to plug device: {}", e.to_string());
+                    let err_str = format!("Failed to plug device: {}", e);
                     Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
                         None,

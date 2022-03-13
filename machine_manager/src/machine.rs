@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate util;
-
 use std::os::unix::io::RawFd;
 use std::sync::Mutex;
 
@@ -351,8 +349,8 @@ pub trait DeviceInterface {
             let chardev_label = &path.label;
             let info = ChardevInfo {
                 open: true,
-                filename: chardev_path.to_string().replace("\"", ""),
-                label: chardev_label.to_string().replace("\"", ""),
+                filename: chardev_path.to_string().replace('\"', ""),
+                label: chardev_label.to_string().replace('\"', ""),
             };
             vec_chardev_info.push(info);
         }
