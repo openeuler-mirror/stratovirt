@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
 use serde::{Deserialize, Serialize};
 
 use super::{

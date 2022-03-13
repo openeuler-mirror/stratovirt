@@ -67,8 +67,10 @@ struct Iovec {
 #[derive(Copy, Clone, Default)]
 struct VirtioBalloonConfig {
     /// Number of pages host wants Guest to give up.
+    #[allow(dead_code)]
     pub num_pages: u32,
     /// Number of pages we've actually got in balloon.
+    #[allow(dead_code)]
     pub actual: u32,
 }
 
@@ -419,13 +421,13 @@ impl Listener for BlnMemInfo {
             ListenerReqType::AddRegion => {
                 let fr = range.unwrap();
                 if fr.owner.region_type() == RegionType::Ram {
-                    self.add_mem_range(&fr);
+                    self.add_mem_range(fr);
                 }
             }
             ListenerReqType::DeleteRegion => {
                 let fr = range.unwrap();
                 if fr.owner.region_type() == RegionType::Ram {
-                    self.delete_mem_range(&fr);
+                    self.delete_mem_range(fr);
                 }
             }
             _ => {}

@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
 use std::fs::metadata;
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
@@ -276,22 +273,12 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
 
 /// Config struct for `pflash`.
 /// Contains pflash device's attr.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PFlashConfig {
     pub path_on_host: String,
     pub read_only: bool,
     pub unit: usize,
-}
-
-impl Default for PFlashConfig {
-    fn default() -> Self {
-        PFlashConfig {
-            path_on_host: String::new(),
-            read_only: false,
-            unit: 0_usize,
-        }
-    }
 }
 
 impl ConfigCheck for PFlashConfig {
@@ -325,10 +312,10 @@ impl VmConfig {
         };
         match drive_type.as_str() {
             "none" => {
-                self.add_block_drive(&drive_config)?;
+                self.add_block_drive(drive_config)?;
             }
             "pflash" => {
-                self.add_pflash(&drive_config)?;
+                self.add_pflash(drive_config)?;
             }
             _ => {
                 bail!("Unknow 'if' argument: {:?}", drive_type.as_str());

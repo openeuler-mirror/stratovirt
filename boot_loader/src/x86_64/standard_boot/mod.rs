@@ -21,13 +21,13 @@ use address_space::AddressSpace;
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
 
+use self::elf::load_elf_kernel;
 use super::bootparam::RealModeKernelHeader;
 use super::X86BootLoaderConfig;
 use super::{BOOT_HDR_START, CMDLINE_START};
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::x86_64::bootparam::{E820Entry, E820_RAM, E820_RESERVED, UEFI_OVMF_ID};
 use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
-use elf::load_elf_kernel;
 
 fn load_image(
     image: &mut File,
@@ -219,7 +219,7 @@ pub fn load_linux(
     if let Err(e) = boot_header.check_valid_kernel() {
         match e.kind() {
             ErrorKind::ElfKernel => {
-                load_elf_kernel(&mut kernel_image, &sys_mem, fwcfg)?;
+                load_elf_kernel(&mut kernel_image, sys_mem, fwcfg)?;
                 return Ok(());
             }
             _ => return Err(e),

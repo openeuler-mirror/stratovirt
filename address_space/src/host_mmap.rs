@@ -220,7 +220,7 @@ pub fn create_host_mmaps(
     if let Some(path) = &mem_config.mem_path {
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
         f_back = Some(
-            FileBackend::new_mem(&path, file_len)
+            FileBackend::new_mem(path, file_len)
                 .chain_err(|| "Failed to create file that backs memory")?,
         );
     } else if mem_config.mem_share {

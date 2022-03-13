@@ -80,6 +80,7 @@ pub struct MigrationHeader {
     /// Magic number for migration file/stream.
     magic_num: [u8; 16],
     /// Current version of migration.
+    #[allow(dead_code)]
     current_version: u32,
     /// Compatible version of migration.
     compat_version: u32,
@@ -88,6 +89,7 @@ pub struct MigrationHeader {
     /// Endianness of byte order.
     byte_order: EndianType,
     /// The type of hypervisor.
+    #[allow(dead_code)]
     hypervisor_type: [u8; 8],
     /// The version of hypervisor.
     hypervisor_version: u32,

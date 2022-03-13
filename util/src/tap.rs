@@ -106,7 +106,7 @@ impl Tap {
     }
 
     pub fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        self.file.write(&buf)
+        self.file.write(buf)
     }
 
     pub fn as_raw_fd(&self) -> RawFd {

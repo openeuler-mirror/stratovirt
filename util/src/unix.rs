@@ -10,8 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate libc;
-
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 

@@ -13,18 +13,10 @@
 use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
+#[derive(Default)]
 pub struct VfioConfig {
     pub host: String,
     pub id: String,
-}
-
-impl Default for VfioConfig {
-    fn default() -> Self {
-        VfioConfig {
-            host: String::new(),
-            id: String::new(),
-        }
-    }
 }
 
 impl ConfigCheck for VfioConfig {

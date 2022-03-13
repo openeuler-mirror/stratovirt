@@ -358,7 +358,7 @@ impl Region {
     ///
     /// * `space` - The AddressSpace that the region belongs to.
     pub(crate) fn set_belonged_address_space(&self, space: &Arc<AddressSpace>) {
-        *self.space.write().unwrap() = Arc::downgrade(&space);
+        *self.space.write().unwrap() = Arc::downgrade(space);
     }
 
     /// Release the address space this region belongs to,

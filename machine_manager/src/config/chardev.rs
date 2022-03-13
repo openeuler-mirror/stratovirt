@@ -221,7 +221,7 @@ impl VmConfig {
                 }
             }
             _ => {
-                let chardev_config = serial_config.to_string() + &",id=serial_chardev".to_string();
+                let chardev_config = serial_config.to_string() + ",id=serial_chardev";
                 self.add_chardev(&chardev_config)
                     .chain_err(|| "Failed to add chardev")?;
                 "serial_chardev"

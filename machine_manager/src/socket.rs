@@ -197,7 +197,7 @@ impl Socket {
                     let performer = &socket_mutexed.performer.as_ref().unwrap();
                     if let Err(e) = crate::qmp::handle_qmp(
                         stream_fd,
-                        &performer,
+                        performer,
                         &mut shared_leak_bucket.lock().unwrap(),
                     ) {
                         error!("{}", e);
@@ -297,6 +297,7 @@ struct SocketStream {
     /// `RawFd` for socket
     socket_fd: RawFd,
     /// Make `UnixStream` persistent without `drop`
+    #[allow(dead_code)]
     persistent: Option<UnixStream>,
 }
 

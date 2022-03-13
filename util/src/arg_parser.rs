@@ -579,7 +579,7 @@ impl<'a> ArgMatches<'a> {
         if let Some(index) = args.iter().position(|arg| arg == ARG_SEPARATOR) {
             return (&args[..index], &args[index + 1..]);
         }
-        (&args, &[])
+        (args, &[])
     }
 
     pub fn extra_args(&self) -> Vec<String> {
@@ -592,14 +592,14 @@ fn parse_cmdline(
     cmd_args: &[String],
     allow_list: &[String],
 ) -> Result<(ArgsMap, Vec<String>, Vec<String>)> {
-    let (cmd_args, sub_args) = ArgMatches::split_arg(&cmd_args);
+    let (cmd_args, sub_args) = ArgMatches::split_arg(cmd_args);
     let mut arg_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut multi_vec: Vec<String> = Vec::new();
 
     let mut i = (0, "");
     let mut j = 1;
     for cmd_arg in &cmd_args[1..] {
-        if !allow_list.contains(&cmd_arg) && cmd_arg.starts_with(PREFIX_CHARS_SHORT) {
+        if !allow_list.contains(cmd_arg) && cmd_arg.starts_with(PREFIX_CHARS_SHORT) {
             return Err(ErrorKind::UnexpectedArguments(cmd_arg.to_string()).into());
         }
 

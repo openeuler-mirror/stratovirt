@@ -40,13 +40,7 @@ impl X86CPUCaps {
         X86CPUCaps {
             has_xsave: kvm.check_extension(Cap::Xsave),
             has_xcrs: kvm.check_extension(Cap::Xcrs),
-            supported_msrs: kvm
-                .get_msr_index_list()
-                .unwrap()
-                .as_slice()
-                .iter()
-                .copied()
-                .collect(),
+            supported_msrs: kvm.get_msr_index_list().unwrap().as_slice().to_vec(),
         }
     }
 

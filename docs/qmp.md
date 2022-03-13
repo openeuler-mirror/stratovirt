@@ -166,6 +166,8 @@ Add a device.
 
 * Guest kernel config: CONFIG_HOTPLUG_PCI_PCIE=y
 
+* You are not advised to hot plug/unplug devices during VM startup, shutdown or suspension, or when the VM is under high pressure. In this case, the driver in the VM may not respond to requests, causing VM exceptions.
+
 #### Example
 
 ```json

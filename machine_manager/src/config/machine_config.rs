@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate serde;
-extern crate serde_json;
-
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -238,7 +235,7 @@ impl VmConfig {
     }
 
     pub fn add_mem_path(&mut self, mem_path: &str) -> Result<()> {
-        self.machine_config.mem_config.mem_path = Some(mem_path.replace("\"", ""));
+        self.machine_config.mem_config.mem_path = Some(mem_path.replace('\"', ""));
         Ok(())
     }
 
@@ -251,8 +248,8 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
     if (origin_value.ends_with('M') | origin_value.ends_with('m'))
         && (origin_value.contains('M') ^ origin_value.contains('m'))
     {
-        let value = origin_value.replacen("M", "", 1);
-        let value = value.replacen("m", "", 1);
+        let value = origin_value.replacen('M', "", 1);
+        let value = value.replacen('m', "", 1);
         get_inner(
             value
                 .parse::<u64>()
@@ -264,8 +261,8 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
     } else if (origin_value.ends_with('G') | origin_value.ends_with('g'))
         && (origin_value.contains('G') ^ origin_value.contains('g'))
     {
-        let value = origin_value.replacen("G", "", 1);
-        let value = value.replacen("g", "", 1);
+        let value = origin_value.replacen('G', "", 1);
+        let value = value.replacen('g', "", 1);
         get_inner(
             value
                 .parse::<u64>()

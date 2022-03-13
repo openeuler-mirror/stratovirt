@@ -140,7 +140,7 @@ pub fn set_capability_for_ozone(capability: &str) -> Result<()> {
     }
 
     for item in all_caps.iter() {
-        if cap_add_arr.contains(&item.0) {
+        if cap_add_arr.contains(item.0) {
             continue;
         }
         if has_cap(item.1 .0).chain_err(|| ErrorKind::CapsError("CAPGET"))? {

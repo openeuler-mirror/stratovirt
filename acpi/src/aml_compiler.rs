@@ -153,7 +153,7 @@ fn build_name_string(name: &str) -> Vec<u8> {
         2 => {
             bytes.push(0x2E);
             bytes.append(&mut build_name_seg(&remain_first));
-            bytes.append(&mut build_name_seg(&strs[1].to_string()));
+            bytes.append(&mut build_name_seg(strs[1]));
         }
         _ => {
             bytes.push(0x2F);
@@ -161,7 +161,7 @@ fn build_name_string(name: &str) -> Vec<u8> {
             bytes.append(&mut build_name_seg(&remain_first));
 
             strs.iter().skip(1).for_each(|s| {
-                bytes.extend(build_name_seg(&s.to_string()));
+                bytes.extend(build_name_seg(s));
             })
         }
     }
@@ -604,7 +604,7 @@ impl AmlBuilder for AmlFieldUnit {
         let mut bytes = self
             .name
             .as_ref()
-            .map(|str| build_name_seg(&str))
+            .map(|str| build_name_seg(str))
             .unwrap_or_else(|| vec![0x0_u8]);
         bytes.extend(build_pkg_length(self.length as usize, false));
         bytes
