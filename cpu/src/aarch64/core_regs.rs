@@ -194,15 +194,15 @@ pub fn get_core_regs(vcpu_fd: &VcpuFd) -> Result<kvm_regs> {
 
     for i in 0..KVM_NR_FP_REGS as usize {
         let register_value_vec =
-            get_one_reg_vec(&vcpu_fd, Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
+            get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
         core_regs.fp_regs.vregs[i][0] = *u64::from_bytes(&register_value_vec[0..8]).unwrap();
         core_regs.fp_regs.vregs[i][1] = *u64::from_bytes(&register_value_vec[8..16]).unwrap();
     }
 
-    let register_value_vec = get_one_reg_vec(&vcpu_fd, Arm64CoreRegs::UserFPSIMDStateFpsr.into())?;
+    let register_value_vec = get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateFpsr.into())?;
     core_regs.fp_regs.fpsr = *u32::from_bytes(&register_value_vec[0..4]).unwrap();
 
-    let register_value_vec = get_one_reg_vec(&vcpu_fd, Arm64CoreRegs::UserFPSIMDStateFpcr.into())?;
+    let register_value_vec = get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateFpcr.into())?;
     core_regs.fp_regs.fpcr = *u32::from_bytes(&register_value_vec[0..4]).unwrap();
 
     Ok(core_regs)
@@ -239,20 +239,20 @@ pub fn set_core_regs(vcpu_fd: &VcpuFd, core_regs: kvm_regs) -> Result<()> {
         data.append(&mut core_regs.fp_regs.vregs[i][0].as_bytes().to_vec());
         data.append(&mut core_regs.fp_regs.vregs[i][1].as_bytes().to_vec());
         set_one_reg_vec(
-            &vcpu_fd,
+            vcpu_fd,
             Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),
             &data,
         )?;
     }
 
     set_one_reg_vec(
-        &vcpu_fd,
+        vcpu_fd,
         Arm64CoreRegs::UserFPSIMDStateFpsr.into(),
         &core_regs.fp_regs.fpsr.as_bytes().to_vec(),
     )?;
 
     set_one_reg_vec(
-        &vcpu_fd,
+        vcpu_fd,
         Arm64CoreRegs::UserFPSIMDStateFpcr.into(),
         &core_regs.fp_regs.fpcr.as_bytes().to_vec(),
     )?;

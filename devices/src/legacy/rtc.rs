@@ -59,7 +59,7 @@ const CMOS_MEM_BELOW_4GB: (u8, u8) = (0x34, 0x35);
 const CMOS_MEM_ABOVE_4GB: (u8, u8, u8) = (0x5B, 0x5C, 0x5D);
 
 fn get_utc_time() -> libc::tm {
-    let time_val: libc::time_t = 0_i64;
+    let time_val = 0_i64;
 
     // Safe because `libc::time` only get time.
     unsafe { libc::time(time_val as *mut i64) };
