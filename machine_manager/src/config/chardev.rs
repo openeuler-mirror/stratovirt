@@ -26,7 +26,11 @@ const MIN_GUEST_CID: u64 = 3;
 pub enum ChardevType {
     Stdio,
     Pty,
-    Socket(String),
+    Socket {
+        path: String,
+        server: bool,
+        nowait: bool,
+    },
     File(String),
 }
 
@@ -54,15 +58,17 @@ impl ConfigCheck for ChardevConfig {
             .into());
         }
 
-        if let ChardevType::Socket(path) | ChardevType::File(path) = &self.backend {
-            if path.len() > MAX_PATH_LENGTH {
-                return Err(ErrorKind::StringLengthTooLong(
-                    "socket path".to_string(),
-                    MAX_PATH_LENGTH,
-                )
-                .into());
-            }
+        let len = match &self.backend {
+            ChardevType::Socket { path, .. } => path.len(),
+            ChardevType::File(path) => path.len(),
+            _ => 0,
+        };
+        if len > MAX_PATH_LENGTH {
+            return Err(
+                ErrorKind::StringLengthTooLong("socket path".to_string(), MAX_PATH_LENGTH).into(),
+            );
         }
+
         Ok(())
     }
 }
@@ -92,15 +98,11 @@ fn check_chardev_args(cmd_parser: CmdParser) -> Result<()> {
                     if server.ne("") {
                         bail!("No parameter needed for server");
                     }
-                } else {
-                    bail!("Argument \'server\' is needed for socket-type chardev.");
                 }
                 if let Some(nowait) = nowait {
                     if nowait.ne("") {
                         bail!("No parameter needed for nowait");
                     }
-                } else {
-                    bail!("Argument \'nowait\' is needed for socket-type chardev.");
                 }
             }
             _ => (),
@@ -117,6 +119,22 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
     };
     let backend = cmd_parser.get_value::<String>("")?;
     let path = cmd_parser.get_value::<String>("path")?;
+    let server = if let Some(server) = cmd_parser.get_value::<String>("server")? {
+        if server.ne("") {
+            bail!("No parameter needed for server");
+        }
+        true
+    } else {
+        false
+    };
+    let nowait = if let Some(nowait) = cmd_parser.get_value::<String>("nowait")? {
+        if nowait.ne("") {
+            bail!("No parameter needed for nowait");
+        }
+        true
+    } else {
+        false
+    };
     check_chardev_args(cmd_parser)?;
     let chardev_type = if let Some(backend) = backend {
         match backend.as_str() {
@@ -124,7 +142,11 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
             "pty" => ChardevType::Pty,
             "socket" => {
                 if let Some(path) = path {
-                    ChardevType::Socket(path)
+                    ChardevType::Socket {
+                        path,
+                        server,
+                        nowait,
+                    }
                 } else {
                     return Err(ErrorKind::FieldIsMissing("path", "socket-type chardev").into());
                 }
@@ -386,7 +408,11 @@ mod tests {
         assert_eq!(console_cfg.id, "console1");
         assert_eq!(
             console_cfg.chardev.backend,
-            ChardevType::Socket("/path/to/socket".to_string())
+            ChardevType::Socket {
+                path: "/path/to/socket".to_string(),
+                server: true,
+                nowait: true,
+            }
         );
 
         let mut vm_config = VmConfig::default();
@@ -436,7 +462,11 @@ mod tests {
         assert_eq!(bdf.addr, (1, 2));
         assert_eq!(
             console_cfg.chardev.backend,
-            ChardevType::Socket("/path/to/socket".to_string())
+            ChardevType::Socket {
+                path: "/path/to/socket".to_string(),
+                server: true,
+                nowait: true,
+            }
         );
 
         let mut vm_config = VmConfig::default();
