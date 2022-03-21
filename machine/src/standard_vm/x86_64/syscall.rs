@@ -55,8 +55,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 46 syscalls
-/// * x86_64-unknown-musl: 48 syscalls
+/// * x86_64-unknown-gnu: 48 syscalls
+/// * x86_64-unknown-musl: 50 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -120,6 +120,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_readlinkat),
         #[cfg(target_env = "musl")]
         BpfRule::new(libc::SYS_readlink),
+        BpfRule::new(libc::SYS_socket),
+        BpfRule::new(libc::SYS_connect),
     ]
 }
 
