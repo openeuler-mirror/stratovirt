@@ -485,7 +485,18 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
         }
 
         if let Some(cfg) = vm_config.chardev.remove(&chardev) {
-            if let ChardevType::Socket(path) = cfg.backend {
+            if let ChardevType::Socket {
+                path,
+                server,
+                nowait,
+            } = cfg.backend
+            {
+                if !server || !nowait {
+                    bail!(
+                        "Argument \'server\' and \'nowait\' is need for chardev \'{}\'",
+                        path
+                    );
+                }
                 sock_paths.push(path);
             } else {
                 bail!("Only socket-type of chardev can be used for monitor");
