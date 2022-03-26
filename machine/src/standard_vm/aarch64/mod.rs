@@ -152,7 +152,7 @@ impl StdMachine {
             pci_host: Arc::new(Mutex::new(PciHost::new(
                 &sys_mem,
                 MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize],
-                MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize],
+                MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
                 MEM_LAYOUT[LayoutEntryType::PciePio as usize],
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),

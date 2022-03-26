@@ -383,10 +383,21 @@ trait AcpiBuilder {
         Self: Sized,
     {
         let mut mcfg = AcpiTable::new(*b"MCFG", 1, *b"STRATO", *b"VIRTMCFG", 1);
-        let ecam_addr: u64 = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
         // Bits 20~28 (totally 9 bits) in PCIE ECAM represents bus number.
         let bus_number_mask = (1 << 9) - 1;
-        let max_nr_bus = (MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20) & bus_number_mask;
+        let ecam_addr: u64;
+        let max_nr_bus: u64;
+        #[cfg(target_arch = "x86_64")]
+        {
+            ecam_addr = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
+            max_nr_bus = (MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20) & bus_number_mask;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            ecam_addr = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
+            max_nr_bus =
+                (MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20) & bus_number_mask;
+        }
 
         // Reserved
         mcfg.append_child(&[0_u8; 8]);
