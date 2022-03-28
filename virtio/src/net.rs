@@ -12,9 +12,10 @@
 
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::{cmp, mem};
+use std::{cmp, fs, mem};
 
 use address_space::AddressSpace;
 use machine_manager::{
@@ -27,15 +28,18 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::num_ops::{read_u32, write_u32};
-use util::tap::{Tap, TUN_F_VIRTIO};
+use util::tap::{Tap, IFF_MULTI_QUEUE, TUN_F_VIRTIO};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MAC, VIRTIO_TYPE_NET,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 
 /// Number of virtqueues.
@@ -65,6 +69,136 @@ pub struct VirtioNetConfig {
 }
 
 impl ByteCode for VirtioNetConfig {}
+
+/// The control queue is used to verify the multi queue feature.
+pub struct CtrlVirtio {
+    queue: Arc<Mutex<Queue>>,
+    queue_evt: EventFd,
+}
+
+impl CtrlVirtio {
+    pub fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
+        Self { queue, queue_evt }
+    }
+}
+
+/// Handle the frontend and the backend control channel virtio queue events and data.
+pub struct NetCtrlHandler {
+    /// The control virtio queue.
+    pub ctrl: CtrlVirtio,
+    /// Memory space.
+    pub mem_space: Arc<AddressSpace>,
+    /// The interrupt call back function.
+    pub interrupt_cb: Arc<VirtioInterrupt>,
+    // Bit mask of features negotiated by the backend and the frontend.
+    pub driver_features: u64,
+}
+
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, Default)]
+struct CrtlHdr {
+    class: u8,
+    cmd: u8,
+}
+
+impl ByteCode for CrtlHdr {}
+
+impl NetCtrlHandler {
+    fn handle_ctrl(&mut self) -> Result<()> {
+        let elem = self
+            .ctrl
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .pop_avail(&self.mem_space, self.driver_features)
+            .chain_err(|| "Failed to pop avail ring for net control queue")?;
+
+        let mut used_len = 0;
+        if let Some(ctrl_desc) = elem.out_iovec.get(0) {
+            used_len += ctrl_desc.len;
+            let ctrl_hdr = self
+                .mem_space
+                .read_object::<CrtlHdr>(ctrl_desc.addr)
+                .chain_err(|| "Failed to get control queue descriptor")?;
+            match ctrl_hdr.class as u16 {
+                VIRTIO_NET_CTRL_MQ => {
+                    if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
+                        bail!(
+                            "Control queue header command can't match {}",
+                            VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
+                        );
+                    }
+                    if let Some(mq_desc) = elem.out_iovec.get(0) {
+                        used_len += mq_desc.len;
+                        let queue_pairs = self
+                            .mem_space
+                            .read_object::<u16>(mq_desc.addr)
+                            .chain_err(|| "Failed to read multi queue descriptor")?;
+                        if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                            .contains(&queue_pairs)
+                        {
+                            bail!("Invalid queue pairs {}", queue_pairs);
+                        }
+                    }
+                }
+                _ => {
+                    bail!(
+                        "Control queue header class can't match {}",
+                        VIRTIO_NET_CTRL_MQ
+                    );
+                }
+            }
+        }
+        if let Some(status) = elem.in_iovec.get(0) {
+            used_len += status.len;
+            let data = VIRTIO_NET_OK;
+            self.mem_space.write_object::<u8>(&data, status.addr)?;
+        }
+
+        self.ctrl
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .add_used(&self.mem_space, elem.index, used_len)
+            .chain_err(|| format!("Failed to add used ring {}", elem.index))?;
+
+        (self.interrupt_cb)(
+            &VirtioInterruptType::Vring,
+            Some(&self.ctrl.queue.lock().unwrap()),
+        )
+        .chain_err(|| ErrorKind::InterruptTrigger("ctrl", VirtioInterruptType::Vring))?;
+
+        Ok(())
+    }
+}
+
+impl EventNotifierHelper for NetCtrlHandler {
+    fn internal_notifiers(net_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let locked_net_io = net_io.lock().unwrap();
+        let cloned_net_io = net_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            cloned_net_io
+                .lock()
+                .unwrap()
+                .handle_ctrl()
+                .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
+            None
+        });
+        let mut notifiers = Vec::new();
+        let ctrl_fd = locked_net_io.ctrl.queue_evt.as_raw_fd();
+        notifiers.push(build_event_notifier(
+            ctrl_fd,
+            Some(handler),
+            NotifierOperation::AddShared,
+            EventSet::IN,
+        ));
+
+        notifiers
+    }
+}
 
 struct TxVirtio {
     queue: Arc<Mutex<Queue>>,
@@ -484,11 +618,11 @@ pub struct Net {
     /// Configuration of the network device.
     net_cfg: NetworkInterfaceConfig,
     /// Tap device opened.
-    tap: Option<Tap>,
+    taps: Option<Vec<Tap>>,
     /// The status of net device.
     state: VirtioNetState,
     /// The send half of Rust's channel to send tap information.
-    sender: Option<Sender<SenderConfig>>,
+    senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
     update_evt: EventFd,
     /// Eventfd for device deactivate.
@@ -499,9 +633,9 @@ impl Default for Net {
     fn default() -> Self {
         Self {
             net_cfg: Default::default(),
-            tap: None,
+            taps: None,
             state: VirtioNetState::default(),
-            sender: None,
+            senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
@@ -512,9 +646,9 @@ impl Net {
     pub fn new(net_cfg: NetworkInterfaceConfig) -> Self {
         Self {
             net_cfg,
-            tap: None,
+            taps: None,
             state: VirtioNetState::default(),
-            sender: None,
+            senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
@@ -544,37 +678,89 @@ pub fn build_device_config_space(device_config: &mut VirtioNetConfig, mac: &str)
     config_features
 }
 
+/// Check that tap flag supports multi queue feature.
+///
+/// # Arguments
+///
+/// * `dev_name` - The name of tap device on host.
+/// * `queue_pairs` - The number of virtio queue pairs.
+pub fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
+    let path = format!("/sys/class/net/{}/tun_flags", dev_name);
+    let tap_path = Path::new(&path);
+    if !tap_path.exists() {
+        bail!("Tap path doesn't exist");
+    }
+
+    let is_mq = queue_pair > 1;
+    let ifr_flag =
+        fs::read_to_string(tap_path).chain_err(|| "Failed to read content from tun_flags file")?;
+    let flags = u16::from_str_radix(ifr_flag.trim().trim_start_matches("0x"), 16)
+        .chain_err(|| "Failed to parse tap ifr flag")?;
+    if (flags & IFF_MULTI_QUEUE != 0) && !is_mq {
+        bail!(format!(
+            "Tap device supports mq, but command set queue pairs {}.",
+            queue_pair
+        ));
+    } else if (flags & IFF_MULTI_QUEUE == 0) && is_mq {
+        bail!(format!(
+            "Tap device doesn't support mq, but command set queue pairs {}.",
+            queue_pair
+        ));
+    }
+
+    Ok(())
+}
+
 /// Open tap device if no fd provided, configure and return it.
 ///
 /// # Arguments
 ///
 /// * `net_fd` - Fd of tap device opened.
 /// * `host_dev_name` - Path of tap device on host.
-pub fn create_tap(net_fd: Option<i32>, host_dev_name: Option<&str>) -> Result<Option<Tap>> {
-    if net_fd.is_none() && host_dev_name.is_none() {
+/// * `queue_pairs` - The number of virtio queue pairs.
+pub fn create_tap(
+    net_fds: Option<&Vec<i32>>,
+    host_dev_name: Option<&str>,
+    queue_pairs: u16,
+) -> Result<Option<Vec<Tap>>> {
+    if net_fds.is_none() && host_dev_name.is_none() {
         return Ok(None);
     }
-    if net_fd.is_some() && host_dev_name.is_some() {
+    if net_fds.is_some() && host_dev_name.is_some() {
         error!("Create tap: fd and file_path exist meanwhile (use fd by default)");
     }
 
-    let tap = if let Some(fd) = net_fd {
-        Tap::new(None, Some(fd)).chain_err(|| "Failed to create tap")?
-    } else {
-        // `unwrap()` won't fail because the arguments have been checked
-        let dev_name = host_dev_name.unwrap();
-        Tap::new(Some(dev_name), None)
-            .chain_err(|| format!("Failed to create tap with name {}", dev_name))?
-    };
+    let mut taps = Vec::with_capacity(queue_pairs as usize);
+    for index in 0..queue_pairs {
+        let tap = if let Some(fds) = net_fds {
+            let fd = fds
+                .get(index as usize)
+                .chain_err(|| format!("Failed to get fd from index {}", index))?;
+            Tap::new(None, Some(*fd), queue_pairs)
+                .chain_err(|| format!("Failed to create tap, index is {}", index))?
+        } else {
+            // `unwrap()` won't fail because the arguments have been checked
+            let dev_name = host_dev_name.unwrap();
+            check_mq(dev_name, queue_pairs)?;
+            Tap::new(Some(dev_name), None, queue_pairs).chain_err(|| {
+                format!(
+                    "Failed to create tap with name {}, index is {}",
+                    dev_name, index
+                )
+            })?
+        };
 
-    tap.set_offload(TUN_F_VIRTIO)
-        .chain_err(|| "Failed to set tap offload")?;
+        tap.set_offload(TUN_F_VIRTIO)
+            .chain_err(|| "Failed to set tap offload")?;
 
-    let vnet_hdr_size = mem::size_of::<VirtioNetHdr>() as u32;
-    tap.set_hdr_size(vnet_hdr_size)
-        .chain_err(|| "Failed to set tap hdr size")?;
+        let vnet_hdr_size = mem::size_of::<VirtioNetHdr>() as u32;
+        tap.set_hdr_size(vnet_hdr_size)
+            .chain_err(|| "Failed to set tap hdr size")?;
 
-    Ok(Some(tap))
+        taps.push(tap);
+    }
+
+    Ok(Some(taps))
 }
 
 impl VirtioDevice for Net {
@@ -599,28 +785,36 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_F_RING_EVENT_IDX;
 
-        if let Some(mac) = &self.net_cfg.mac {
-            self.state.device_features |=
-                build_device_config_space(&mut self.state.config_space, mac);
+        let queue_pairs = self.net_cfg.queues / 2;
+        if self.net_cfg.mq
+            && queue_pairs >= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN
+            && queue_pairs <= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX
+        {
+            self.state.device_features |= 1 << VIRTIO_NET_F_MQ;
+            self.state.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
+            self.state.config_space.max_virtqueue_pairs = queue_pairs;
         }
 
         if !self.net_cfg.host_dev_name.is_empty() {
-            self.tap = None;
-            self.tap = create_tap(None, Some(&self.net_cfg.host_dev_name))
+            self.taps = None;
+            self.taps = create_tap(None, Some(&self.net_cfg.host_dev_name), queue_pairs)
                 .chain_err(|| "Failed to open tap with file path")?;
-        } else if let Some(fd) = self.net_cfg.tap_fd {
-            let mut need_create = true;
-            if let Some(tap) = &self.tap {
-                if fd == tap.as_raw_fd() {
-                    need_create = false;
+        } else if let Some(fds) = self.net_cfg.tap_fds.as_mut() {
+            let mut created_fds = 0;
+            if let Some(taps) = &self.taps {
+                for (index, tap) in taps.iter().enumerate() {
+                    if fds.get(index).map_or(-1, |fd| *fd as RawFd) == tap.as_raw_fd() {
+                        created_fds += 1;
+                    }
                 }
             }
 
-            if need_create {
-                self.tap = create_tap(Some(fd), None).chain_err(|| "Failed to open tap")?;
+            if created_fds != fds.len() {
+                self.taps =
+                    create_tap(Some(fds), None, queue_pairs).chain_err(|| "Failed to open tap")?;
             }
         } else {
-            self.tap = None;
+            self.taps = None;
         }
 
         if let Some(mac) = &self.net_cfg.mac {
@@ -646,7 +840,11 @@ impl VirtioDevice for Net {
 
     /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize {
-        QUEUE_NUM_NET
+        if self.net_cfg.mq {
+            (self.net_cfg.queues + 1) as usize
+        } else {
+            QUEUE_NUM_NET
+        }
     }
 
     /// Get the queue size of virtio device.
@@ -706,37 +904,58 @@ impl VirtioDevice for Net {
         queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
-        let rx_queue = queues[0].clone();
-        let rx_queue_evt = queue_evts.remove(0);
-        let tx_queue = queues[1].clone();
-        let tx_queue_evt = queue_evts.remove(0);
+        let queue_num = queues.len();
+        if (self.state.driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
+            let ctrl_queue = queues[queue_num - 1].clone();
+            let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
 
-        let (sender, receiver) = channel();
-        self.sender = Some(sender);
+            let ctrl_handler = NetCtrlHandler {
+                ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt),
+                mem_space: mem_space.clone(),
+                interrupt_cb: interrupt_cb.clone(),
+                driver_features: self.state.driver_features,
+            };
 
-        let mut handler = NetIoHandler {
-            rx: RxVirtio::new(rx_queue, rx_queue_evt),
-            tx: TxVirtio::new(tx_queue, tx_queue_evt),
-            tap: self.tap.as_ref().map(|t| Tap {
-                file: t.file.try_clone().unwrap(),
-            }),
-            tap_fd: -1,
-            mem_space,
-            interrupt_cb,
-            driver_features: self.state.driver_features,
-            receiver,
-            update_evt: self.update_evt.as_raw_fd(),
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
-            is_listening: true,
-        };
-        if let Some(tap) = &handler.tap {
-            handler.tap_fd = tap.as_raw_fd();
+            EventLoop::update_event(
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
+                self.net_cfg.iothread.as_ref(),
+            )?;
         }
 
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
-            self.net_cfg.iothread.as_ref(),
-        )?;
+        let mut senders = Vec::new();
+        let queue_pairs = queue_num / 2;
+        for index in 0..queue_pairs {
+            let rx_queue = queues[index * 2].clone();
+            let rx_queue_evt = queue_evts.remove(0);
+            let tx_queue = queues[index * 2 + 1].clone();
+            let tx_queue_evt = queue_evts.remove(0);
+
+            let (sender, receiver) = channel();
+            senders.push(sender);
+
+            let mut handler = NetIoHandler {
+                rx: RxVirtio::new(rx_queue, rx_queue_evt),
+                tx: TxVirtio::new(tx_queue, tx_queue_evt),
+                tap: self.taps.as_ref().map(|t| t[index].clone()),
+                tap_fd: -1,
+                mem_space: mem_space.clone(),
+                interrupt_cb: interrupt_cb.clone(),
+                driver_features: self.state.driver_features,
+                receiver,
+                update_evt: self.update_evt.as_raw_fd(),
+                deactivate_evt: self.deactivate_evt.as_raw_fd(),
+                is_listening: true,
+            };
+            if let Some(tap) = &handler.tap {
+                handler.tap_fd = tap.as_raw_fd();
+            }
+
+            EventLoop::update_event(
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+                self.net_cfg.iothread.as_ref(),
+            )?;
+        }
+        self.senders = Some(senders);
 
         Ok(())
     }
@@ -754,11 +973,15 @@ impl VirtioDevice for Net {
 
         self.realize()?;
 
-        if let Some(sender) = &self.sender {
-            sender
-                .send(self.tap.take())
-                .chain_err(|| ErrorKind::ChannelSend("tap fd".to_string()))?;
-
+        if let Some(senders) = &self.senders {
+            if let Some(mut taps) = self.taps.take() {
+                for (index, sender) in senders.iter().enumerate() {
+                    let tap = taps.remove(index);
+                    sender
+                        .send(Some(tap))
+                        .chain_err(|| ErrorKind::ChannelSend("tap fd".to_string()))?;
+                }
+            }
             self.update_evt
                 .write(1)
                 .chain_err(|| ErrorKind::EventFdWrite)?;
@@ -814,12 +1037,12 @@ mod tests {
         assert_eq!(net.state.device_features, 0);
         assert_eq!(net.state.driver_features, 0);
 
-        assert_eq!(net.tap.is_none(), true);
-        assert_eq!(net.sender.is_none(), true);
+        assert_eq!(net.taps.is_none(), true);
+        assert_eq!(net.senders.is_none(), true);
         assert_eq!(net.net_cfg.mac.is_none(), true);
-        assert_eq!(net.net_cfg.tap_fd.is_none(), true);
+        assert_eq!(net.net_cfg.tap_fds.is_none(), true);
         assert_eq!(net.net_cfg.vhost_type.is_none(), true);
-        assert_eq!(net.net_cfg.vhost_fd.is_none(), true);
+        assert_eq!(net.net_cfg.vhost_fds.is_none(), true);
 
         // test net realize method
         net.realize().unwrap();

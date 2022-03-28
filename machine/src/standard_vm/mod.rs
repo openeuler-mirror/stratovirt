@@ -594,10 +594,12 @@ impl StdMachine {
                 id: args.id.clone(),
                 host_dev_name: conf.ifname.clone(),
                 mac: args.mac.clone(),
-                tap_fd: conf.tap_fd,
+                tap_fds: conf.tap_fds.clone(),
                 vhost_type: conf.vhost_type.clone(),
-                vhost_fd: conf.vhost_fd,
+                vhost_fds: conf.vhost_fds.clone(),
                 iothread: args.iothread.clone(),
+                queues: conf.queues,
+                mq: conf.queues > 2,
             };
             dev.check()?;
             dev

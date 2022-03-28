@@ -1138,10 +1138,12 @@ impl DeviceInterface for LightMachine {
             id: args.id.clone(),
             host_dev_name: "".to_string(),
             mac: None,
-            tap_fd: None,
+            tap_fds: None,
             vhost_type: None,
-            vhost_fd: None,
+            vhost_fds: None,
             iothread: None,
+            queues: 2,
+            mq: false,
         };
 
         if let Some(fds) = args.fds {
@@ -1153,7 +1155,7 @@ impl DeviceInterface for LightMachine {
             };
 
             if let Some(fd_num) = QmpChannel::get_fd(&netdev_fd) {
-                config.tap_fd = Some(fd_num);
+                config.tap_fds = Some(vec![fd_num]);
             } else {
                 // try to convert string to RawFd
                 let fd_num = match netdev_fd.parse::<i32>() {
@@ -1171,11 +1173,11 @@ impl DeviceInterface for LightMachine {
                         );
                     }
                 };
-                config.tap_fd = Some(fd_num);
+                config.tap_fds = Some(vec![fd_num]);
             }
         } else if let Some(if_name) = args.if_name {
             config.host_dev_name = if_name.clone();
-            if create_tap(None, Some(&if_name)).is_err() {
+            if create_tap(None, Some(&if_name), 1).is_err() {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(
                         "Tap device already in use".to_string(),

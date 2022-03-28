@@ -16,7 +16,9 @@ use super::{
     errors::{ErrorKind, Result},
     pci_args_check,
 };
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_STRING_LENGTH};
+use crate::config::{
+    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+};
 use crate::qmp::{qmp_schema, QmpChannel};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
@@ -24,20 +26,22 @@ const MAC_ADDRESS_LENGTH: usize = 17;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetDevcfg {
     pub id: String,
-    pub tap_fd: Option<i32>,
+    pub tap_fds: Option<Vec<i32>>,
     pub vhost_type: Option<String>,
-    pub vhost_fd: Option<i32>,
+    pub vhost_fds: Option<Vec<i32>>,
     pub ifname: String,
+    pub queues: u16,
 }
 
 impl Default for NetDevcfg {
     fn default() -> Self {
         NetDevcfg {
             id: "".to_string(),
-            tap_fd: None,
+            tap_fds: None,
             vhost_type: None,
-            vhost_fd: None,
+            vhost_fds: None,
             ifname: "".to_string(),
+            queues: 2,
         }
     }
 }
@@ -72,10 +76,12 @@ pub struct NetworkInterfaceConfig {
     pub id: String,
     pub host_dev_name: String,
     pub mac: Option<String>,
-    pub tap_fd: Option<i32>,
+    pub tap_fds: Option<Vec<i32>>,
     pub vhost_type: Option<String>,
-    pub vhost_fd: Option<i32>,
+    pub vhost_fds: Option<Vec<i32>>,
     pub iothread: Option<String>,
+    pub queues: u16,
+    pub mq: bool,
 }
 
 impl NetworkInterfaceConfig {
@@ -90,10 +96,12 @@ impl Default for NetworkInterfaceConfig {
             id: "".to_string(),
             host_dev_name: "".to_string(),
             mac: None,
-            tap_fd: None,
+            tap_fds: None,
             vhost_type: None,
-            vhost_fd: None,
+            vhost_fds: None,
             iothread: None,
+            queues: 2,
+            mq: false,
         }
     }
 }
@@ -122,6 +130,14 @@ impl ConfigCheck for NetworkInterfaceConfig {
             }
         }
 
+        if self.queues * 2 + 1 > MAX_VIRTIO_QUEUE as u16 {
+            return Err(ErrorKind::StringLengthTooLong(
+                "queues".to_string(),
+                (MAX_VIRTIO_QUEUE - 1) / 2,
+            )
+            .into());
+        }
+
         if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
             return Err(ErrorKind::StringLengthTooLong(
                 "iothread name".to_string(),
@@ -131,6 +147,18 @@ impl ConfigCheck for NetworkInterfaceConfig {
         }
 
         Ok(())
+    }
+}
+
+fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
+    if let Some(fds) = cmd_parser.get_value::<String>(name)? {
+        let mut raw_fds = Vec::new();
+        for fd in fds.split(':').collect::<Vec<&str>>().iter() {
+            raw_fds.push((*fd).parse::<i32>().map_err(|_| "Failed to parse fds")?);
+        }
+        Ok(Some(raw_fds))
+    } else {
+        Ok(None)
     }
 }
 
@@ -152,18 +180,46 @@ pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     if let Some(ifname) = cmd_parser.get_value::<String>("ifname")? {
         net.ifname = ifname;
     }
+    if let Some(queue_pairs) = cmd_parser.get_value::<u16>("queues")? {
+        let queues = queue_pairs * 2;
+        if queues > net.queues {
+            net.queues = queues;
+        }
+    }
+
+    if let Some(tap_fd) = parse_fds(&cmd_parser, "fd")? {
+        net.tap_fds = Some(tap_fd);
+    } else if let Some(tap_fds) = parse_fds(&cmd_parser, "fds")? {
+        net.tap_fds = Some(tap_fds);
+    }
+    if let Some(fds) = &net.tap_fds {
+        let fds_num = (fds.len() * 2) as u16;
+        if fds_num > net.queues {
+            net.queues = fds_num;
+        }
+    }
 
     if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
         if vhost.into() {
             net.vhost_type = Some(String::from("vhost-kernel"));
         }
     }
-    net.tap_fd = cmd_parser.get_value::<i32>("fd")?;
-    net.vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
-    if net.vhost_fd.is_some() && net.vhost_type.is_none() {
+    if let Some(vhost_fd) = parse_fds(&cmd_parser, "vhostfd")? {
+        net.vhost_fds = Some(vhost_fd);
+    } else if let Some(vhost_fds) = parse_fds(&cmd_parser, "vhostfds")? {
+        net.vhost_fds = Some(vhost_fds);
+    }
+    if let Some(fds) = &net.vhost_fds {
+        let fds_num = (fds.len() * 2) as u16;
+        if fds_num > net.queues {
+            net.queues = fds_num;
+        }
+    }
+
+    if net.vhost_fds.is_some() && net.vhost_type.is_none() {
         bail!("Argument \'vhostfd\' is not needed for virtio-net device");
     }
-    if net.tap_fd.is_none() && net.ifname.eq("") {
+    if net.tap_fds.is_none() && net.ifname.eq("") {
         bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
     }
 
@@ -176,6 +232,8 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         .push("")
         .push("id")
         .push("netdev")
+        .push("mq")
+        .push("vectors")
         .push("bus")
         .push("addr")
         .push("multifunction")
@@ -196,15 +254,20 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     } else {
         "".to_string()
     };
+
+    if let Some(mq) = cmd_parser.get_value::<ExBool>("mq")? {
+        netdevinterfacecfg.mq = mq.inner;
+    }
     netdevinterfacecfg.iothread = cmd_parser.get_value::<String>("iothread")?;
     netdevinterfacecfg.mac = cmd_parser.get_value::<String>("mac")?;
 
     if let Some(netcfg) = &vm_config.netdevs.remove(&netdev) {
         netdevinterfacecfg.id = netid;
         netdevinterfacecfg.host_dev_name = netcfg.ifname.clone();
-        netdevinterfacecfg.tap_fd = netcfg.tap_fd;
-        netdevinterfacecfg.vhost_fd = netcfg.vhost_fd;
+        netdevinterfacecfg.tap_fds = netcfg.tap_fds.clone();
+        netdevinterfacecfg.vhost_fds = netcfg.vhost_fds.clone();
         netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
+        netdevinterfacecfg.queues = netcfg.queues;
     } else {
         bail!("Netdev: {:?} not found for net device", &netdev);
     }
@@ -216,10 +279,11 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
 pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<NetDevcfg> {
     let mut config = NetDevcfg {
         id: args.id,
-        tap_fd: None,
+        tap_fds: None,
         vhost_type: None,
-        vhost_fd: None,
+        vhost_fds: None,
         ifname: String::new(),
+        queues: 2,
     };
 
     if let Some(fds) = args.fds {
@@ -230,7 +294,7 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
             String::from(&fds)
         };
         if let Some(fd_num) = QmpChannel::get_fd(&netdev_fd) {
-            config.tap_fd = Some(fd_num);
+            config.tap_fds = Some(vec![fd_num]);
         } else {
             // try to convert string to RawFd
             let fd_num = match netdev_fd.parse::<i32>() {
@@ -239,7 +303,7 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
                     bail!("Failed to parse fd: {}", netdev_fd);
                 }
             };
-            config.tap_fd = Some(fd_num);
+            config.tap_fds = Some(vec![fd_num]);
         }
     } else if let Some(if_name) = args.if_name {
         config.ifname = if_name;
@@ -259,16 +323,16 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
     }
     if let Some(vhostfd) = args.vhostfds {
         match vhostfd.parse::<i32>() {
-            Ok(fd) => config.vhost_fd = Some(fd),
+            Ok(fd) => config.vhost_fds = Some(vec![fd]),
             Err(_e) => {
                 bail!("Failed to get vhost fd: {}", vhostfd);
             }
         };
     }
-    if config.vhost_fd.is_some() && config.vhost_type.is_none() {
+    if config.vhost_fds.is_some() && config.vhost_type.is_none() {
         bail!("Argument \'vhostfd\' is not needed for virtio-net device");
     }
-    if config.tap_fd.is_none() && config.ifname.eq("") {
+    if config.tap_fds.is_none() && config.ifname.eq("") {
         bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
     }
 
@@ -282,9 +346,12 @@ impl VmConfig {
             .push("")
             .push("id")
             .push("fd")
+            .push("fds")
             .push("vhost")
             .push("ifname")
-            .push("vhostfd");
+            .push("vhostfd")
+            .push("vhostfds")
+            .push("queues");
 
         cmd_parser.parse(netdev_config)?;
         let drive_cfg = parse_netdev(cmd_parser)?;
@@ -360,9 +427,9 @@ mod tests {
         assert_eq!(network_configs.host_dev_name, "tap0");
         assert_eq!(network_configs.iothread, Some("iothread0".to_string()));
         assert!(network_configs.mac.is_none());
-        assert!(network_configs.tap_fd.is_none());
+        assert!(network_configs.tap_fds.is_none());
         assert!(network_configs.vhost_type.is_none());
-        assert!(network_configs.vhost_fd.is_none());
+        assert!(network_configs.vhost_fds.is_none());
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
@@ -377,12 +444,12 @@ mod tests {
         assert_eq!(network_configs.id, "net1");
         assert_eq!(network_configs.host_dev_name, "tap1");
         assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
-        assert!(network_configs.tap_fd.is_none());
+        assert!(network_configs.tap_fds.is_none());
         assert_eq!(
             network_configs.vhost_type,
             Some(String::from("vhost-kernel"))
         );
-        assert_eq!(network_configs.vhost_fd, Some(4));
+        assert_eq!(network_configs.vhost_fds, Some(vec![4]));
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
@@ -391,7 +458,7 @@ mod tests {
         let network_configs = net_cfg_res.unwrap();
         assert_eq!(network_configs.id, "net1");
         assert_eq!(network_configs.host_dev_name, "");
-        assert_eq!(network_configs.tap_fd, Some(35));
+        assert_eq!(network_configs.tap_fds, Some(vec![35]));
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
@@ -407,6 +474,48 @@ mod tests {
         assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
         let net_cfg_res = parse_net(&mut vm_config, "virtio-net-device,id=net1,netdev=eth3");
         assert!(net_cfg_res.is_err());
+
+        // multi queue testcases
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_netdev("tap,id=eth0,ifname=tap0,queues=4")
+            .is_ok());
+        let net_cfg_res = parse_net(
+            &mut vm_config,
+            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=on,vectors=6",
+        );
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.queues, 8);
+        assert_eq!(network_configs.mq, true);
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_netdev("tap,id=eth0,fds=34:35:36:37:38")
+            .is_ok());
+        let net_cfg_res = parse_net(
+            &mut vm_config,
+            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=off,vectors=12",
+        );
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.queues, 10);
+        assert_eq!(network_configs.tap_fds, Some(vec![34, 35, 36, 37, 38]));
+        assert_eq!(network_configs.mq, false);
+
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_netdev("tap,id=eth0,fds=34:35:36:37:38,vhost=on,vhostfds=39:40:41:42:43")
+            .is_ok());
+        let net_cfg_res = parse_net(
+            &mut vm_config,
+            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=off,vectors=12",
+        );
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.queues, 10);
+        assert_eq!(network_configs.vhost_fds, Some(vec![39, 40, 41, 42, 43]));
+        assert_eq!(network_configs.mq, false);
     }
 
     #[test]
@@ -424,12 +533,12 @@ mod tests {
         assert_eq!(network_configs.id, "net1");
         assert_eq!(network_configs.host_dev_name, "tap1");
         assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
-        assert!(network_configs.tap_fd.is_none());
+        assert!(network_configs.tap_fds.is_none());
         assert_eq!(
             network_configs.vhost_type,
             Some(String::from("vhost-kernel"))
         );
-        assert_eq!(network_configs.vhost_fd, Some(4));
+        assert_eq!(network_configs.vhost_fds.unwrap()[0], 4);
         let pci_bdf = get_pci_bdf(net_cfg);
         assert!(pci_bdf.is_ok());
         let pci = pci_bdf.unwrap();
@@ -624,6 +733,6 @@ mod tests {
         assert!(net_cfg.is_ok());
         let net_cfg = net_cfg.unwrap();
         assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
-        assert_eq!(net_cfg.vhost_fd.unwrap(), 12);
+        assert_eq!(net_cfg.vhost_fds.unwrap()[0], 12);
     }
 }
