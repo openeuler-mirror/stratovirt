@@ -12,4 +12,7 @@
 
 mod client;
 mod message;
+mod net;
 mod sock;
+
+pub use net::Net;

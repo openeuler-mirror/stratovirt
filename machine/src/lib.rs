@@ -107,7 +107,7 @@ pub use micro_vm::LightMachine;
 use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
 use virtio::{
-    BlockState, RngState, VhostKern, VirtioConsoleState, VirtioDevice, VirtioMmioState,
+    BlockState, RngState, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioState,
     VirtioNetState,
 };
 
@@ -504,10 +504,17 @@ pub trait MachineOps {
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_net(vm_config, cfg_args)?;
         let device: Arc<Mutex<dyn VirtioDevice>> = if device_cfg.vhost_type.is_some() {
-            Arc::new(Mutex::new(VhostKern::Net::new(
-                &device_cfg,
-                self.get_sys_mem(),
-            )))
+            if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
+                Arc::new(Mutex::new(VhostKern::Net::new(
+                    &device_cfg,
+                    self.get_sys_mem(),
+                )))
+            } else {
+                Arc::new(Mutex::new(VhostUser::Net::new(
+                    &device_cfg,
+                    self.get_sys_mem(),
+                )))
+            }
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
             MigrationManager::register_device_instance_mutex_with_id(

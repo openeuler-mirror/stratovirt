@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod kernel;
-mod user;
+pub mod user;
 
 use std::sync::{Arc, Mutex};
 
