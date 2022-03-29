@@ -124,6 +124,7 @@ pub use net::*;
 pub use queue::*;
 pub use rng::{Rng, RngState};
 pub use vhost::kernel as VhostKern;
+pub use vhost::user as VhostUser;
 pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use virtio_pci::VirtioPciDevice;
 
