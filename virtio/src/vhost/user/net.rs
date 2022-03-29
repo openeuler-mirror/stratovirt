@@ -44,6 +44,8 @@ pub struct Net {
     #[allow(dead_code)]
     /// System address space.
     mem_space: Arc<AddressSpace>,
+    /// The notifier events from host.
+    call_events: Vec<EventFd>,
 }
 
 impl Net {
@@ -54,6 +56,7 @@ impl Net {
             driver_features: 0_u64,
             device_config: VirtioNetConfig::default(),
             mem_space: mem_space.clone(),
+            call_events: Vec::<EventFd>::new(),
         }
     }
 }
@@ -135,6 +138,16 @@ impl VirtioDevice for Net {
         _queues: &[Arc<Mutex<Queue>>],
         _queue_evts: Vec<EventFd>,
     ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Set guest notifiers for notifying the guest.
+    fn set_guest_notifiers(&mut self, queue_evts: &[EventFd]) -> Result<()> {
+        for fd in queue_evts.iter() {
+            let cloned_evt_fd = fd.try_clone().unwrap();
+            self.call_events.push(cloned_evt_fd);
+        }
+
         Ok(())
     }
 }

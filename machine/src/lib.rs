@@ -489,7 +489,7 @@ pub trait MachineOps {
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
-        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func)?;
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)?;
         MigrationManager::register_device_instance_mutex_with_id(
             BlockState::descriptor(),
             device,
@@ -503,6 +503,7 @@ pub trait MachineOps {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_net(vm_config, cfg_args)?;
+        let mut need_irqfd = false;
         let device: Arc<Mutex<dyn VirtioDevice>> = if device_cfg.vhost_type.is_some() {
             if device_cfg.vhost_type == Some(String::from("vhost-kernel")) {
                 Arc::new(Mutex::new(VhostKern::Net::new(
@@ -510,6 +511,7 @@ pub trait MachineOps {
                     self.get_sys_mem(),
                 )))
             } else {
+                need_irqfd = true;
                 Arc::new(Mutex::new(VhostUser::Net::new(
                     &device_cfg,
                     self.get_sys_mem(),
@@ -524,7 +526,7 @@ pub trait MachineOps {
             );
             device
         };
-        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func)?;
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, need_irqfd)?;
         self.reset_bus(&device_cfg.id)?;
         Ok(())
     }
@@ -601,10 +603,11 @@ pub trait MachineOps {
         bdf: &PciBdf,
         device: Arc<Mutex<dyn VirtioDevice>>,
         multi_func: bool,
+        need_irqfd: bool,
     ) -> Result<()> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let sys_mem = self.get_sys_mem();
-        let pcidev = VirtioPciDevice::new(
+        let mut pcidev = VirtioPciDevice::new(
             id.to_string(),
             devfn,
             sys_mem.clone(),
@@ -612,6 +615,9 @@ pub trait MachineOps {
             parent_bus,
             multi_func,
         );
+        if need_irqfd {
+            pcidev.enable_need_irqfd();
+        }
         pcidev
             .realize()
             .chain_err(|| "Failed to add virtio pci device")?;
