@@ -325,4 +325,13 @@ pub trait VirtioDevice: Send {
     fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         bail!("Unsupported to update configuration")
     }
+
+    /// Set guest notifiers for notifying the guest.
+    ///
+    /// # Arguments
+    ///
+    /// * `_queue_evts` - The notifier events from host.
+    fn set_guest_notifiers(&mut self, _queue_evts: &[EventFd]) -> Result<()> {
+        Ok(())
+    }
 }
