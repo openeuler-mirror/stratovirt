@@ -826,7 +826,7 @@ impl EventNotifierHelper for BlockIoHandler {
 pub struct BlockState {
     /// Bitmask of features supported by the backend.
     device_features: u64,
-    /// Bit mask of features negotiated byu the backend and the frontend.
+    /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
     /// Config space of the block device.
     config_space: [u8; 16],
