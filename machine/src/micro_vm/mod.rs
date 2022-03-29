@@ -1144,6 +1144,7 @@ impl DeviceInterface for LightMachine {
             iothread: None,
             queues: 2,
             mq: false,
+            socket_path: None,
         };
 
         if let Some(fds) = args.fds {

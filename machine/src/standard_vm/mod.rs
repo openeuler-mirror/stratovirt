@@ -600,6 +600,7 @@ impl StdMachine {
                 iothread: args.iothread.clone(),
                 queues: conf.queues,
                 mq: conf.queues > 2,
+                socket_path: None,
             };
             dev.check()?;
             dev
