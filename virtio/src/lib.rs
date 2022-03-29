@@ -183,6 +183,8 @@ pub const VIRTIO_NET_F_GUEST_UFO: u32 = 10;
 pub const VIRTIO_NET_F_HOST_TSO4: u32 = 11;
 /// Device can receive UFO.
 pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
+/// Device can merge receive buffers.
+pub const VIRTIO_NET_F_MRG_RXBUF: u32 = 15;
 /// Control channel is available.
 pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
 /// Device supports multi queue with automatic receive steering.
