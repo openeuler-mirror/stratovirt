@@ -974,14 +974,23 @@ impl VirtioDevice for Net {
         self.realize()?;
 
         if let Some(senders) = &self.senders {
-            if let Some(mut taps) = self.taps.take() {
-                for (index, sender) in senders.iter().enumerate() {
-                    let tap = taps.remove(index);
-                    sender
-                        .send(Some(tap))
-                        .chain_err(|| ErrorKind::ChannelSend("tap fd".to_string()))?;
+            for (index, sender) in senders.iter().enumerate() {
+                match self.taps.take() {
+                    Some(taps) => {
+                        let tap = taps
+                            .get(index)
+                            .cloned()
+                            .chain_err(|| format!("Failed to get index {} tap", index))?;
+                        sender
+                            .send(Some(tap))
+                            .chain_err(|| ErrorKind::ChannelSend("tap fd".to_string()))?;
+                    }
+                    None => sender
+                        .send(None)
+                        .chain_err(|| "Failed to send status of None to channel".to_string())?,
                 }
             }
+
             self.update_evt
                 .write(1)
                 .chain_err(|| ErrorKind::EventFdWrite)?;
