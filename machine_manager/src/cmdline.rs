@@ -493,7 +493,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
             {
                 if !server || !nowait {
                     bail!(
-                        "Argument \'server\' and \'nowait\' is need for chardev \'{}\'",
+                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
                         path
                     );
                 }

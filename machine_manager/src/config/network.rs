@@ -598,6 +598,25 @@ mod tests {
         let net_cfg =
             "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,multifunction=on";
         assert!(parse_net(&mut vm_config, net_cfg).is_ok());
+
+        // For vhost-user net
+        assert!(vm_config.add_netdev("vhost-user,id=netdevid").is_ok());
+        let net_cfg =
+            "virtio-net-pci,id=netid,netdev=netdevid,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
+        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.id, "netid");
+        assert_eq!(network_configs.vhost_type, Some("vhost-user".to_string()));
+        assert_eq!(network_configs.mac, Some("12:34:56:78:9A:BC".to_string()));
+
+        assert!(vm_config
+            .add_netdev("vhost-user,id=netdevid2,chardev=chardevid2")
+            .is_ok());
+        let net_cfg =
+            "virtio-net-pci,id=netid2,netdev=netdevid2,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
+        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
+        assert!(net_cfg_res.is_err());
     }
 
     #[test]

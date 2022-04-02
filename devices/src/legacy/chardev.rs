@@ -99,7 +99,7 @@ impl Chardev {
             } => {
                 if !*server || !*nowait {
                     bail!(
-                        "Argument \'server\' and \'nowait\' is need for chardev \'{}\'",
+                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
                         path
                     );
                 }

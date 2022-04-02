@@ -497,4 +497,27 @@ mod tests {
         assert_eq!(vsock_config.vhost_fd, Some(4));
         assert!(vsock_config.check().is_ok());
     }
+
+    #[test]
+    fn test_chardev_config_cmdline_parser() {
+        let mut vm_config = VmConfig::default();
+        assert!(vm_config
+            .add_chardev("socket,id=test_id,path=/path/to/socket")
+            .is_ok());
+        assert!(vm_config
+            .add_chardev("socket,id=test_id,path=/path/to/socket")
+            .is_err());
+        if let Some(char_dev) = vm_config.chardev.remove("test_id") {
+            assert_eq!(
+                char_dev.backend,
+                ChardevType::Socket {
+                    path: "/path/to/socket".to_string(),
+                    server: false,
+                    nowait: false,
+                }
+            );
+        } else {
+            assert!(false);
+        }
+    }
 }
