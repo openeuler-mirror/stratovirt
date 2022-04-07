@@ -566,7 +566,7 @@ impl StdMachine {
 
         let blk_id = blk.id.clone();
         let blk = Arc::new(Mutex::new(Block::new(blk)));
-        self.add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction)
+        self.add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
             .chain_err(|| "Failed to add virtio pci block device")?;
 
         MigrationManager::register_device_instance_mutex_with_id(
@@ -600,6 +600,7 @@ impl StdMachine {
                 iothread: args.iothread.clone(),
                 queues: conf.queues,
                 mq: conf.queues > 2,
+                socket_path: None,
             };
             dev.check()?;
             dev
@@ -609,12 +610,12 @@ impl StdMachine {
 
         if dev.vhost_type.is_some() {
             let net = Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())));
-            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, false)
                 .chain_err(|| "Failed to add virtio net device")?;
         } else {
             let net_id = dev.id.clone();
             let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
-            self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction, false)
                 .chain_err(|| "Failed to add virtio net device")?;
             MigrationManager::register_device_instance_mutex_with_id(
                 VirtioNetState::descriptor(),

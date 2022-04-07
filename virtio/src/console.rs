@@ -233,7 +233,7 @@ impl ConsoleHandler {
                     ));
                 }
             }
-            ChardevType::Socket(_) => {
+            ChardevType::Socket { .. } => {
                 if let Some(stream_fd) = locked_chardev.stream_fd {
                     notifiers.push(EventNotifier::new(
                         NotifierOperation::Delete,

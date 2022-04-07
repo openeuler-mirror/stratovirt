@@ -124,6 +124,7 @@ pub use net::*;
 pub use queue::*;
 pub use rng::{Rng, RngState};
 pub use vhost::kernel as VhostKern;
+pub use vhost::user as VhostUser;
 pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use virtio_pci::VirtioPciDevice;
 
@@ -182,6 +183,8 @@ pub const VIRTIO_NET_F_GUEST_UFO: u32 = 10;
 pub const VIRTIO_NET_F_HOST_TSO4: u32 = 11;
 /// Device can receive UFO.
 pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
+/// Device can merge receive buffers.
+pub const VIRTIO_NET_F_MRG_RXBUF: u32 = 15;
 /// Control channel is available.
 pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
 /// Device supports multi queue with automatic receive steering.
@@ -323,5 +326,14 @@ pub trait VirtioDevice: Send {
     /// * `_file_path` - The related backend file path.
     fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         bail!("Unsupported to update configuration")
+    }
+
+    /// Set guest notifiers for notifying the guest.
+    ///
+    /// # Arguments
+    ///
+    /// * `_queue_evts` - The notifier events from host.
+    fn set_guest_notifiers(&mut self, _queue_evts: &[EventFd]) -> Result<()> {
+        Ok(())
     }
 }

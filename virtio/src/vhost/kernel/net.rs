@@ -433,6 +433,7 @@ mod tests {
             iothread: None,
             queues: 2,
             mq: false,
+            socket_path: None,
         };
         let conf = vec![net1];
         let confs = Some(conf);
@@ -453,6 +454,7 @@ mod tests {
             iothread: None,
             queues: 2,
             mq: false,
+            socket_path: None,
         };
         let conf = vec![net1];
         let confs = Some(conf);

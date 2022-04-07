@@ -240,7 +240,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 Virtio-net is a virtual Ethernet card in VM. It can enable the network capability of VM.
 
 Six properties are supported for netdev.
-* tap: the type of net device. NB: currently only tap is supported.
+* tap/vhost-user: the type of net device. NB: currently only tap and vhost-user is supported.
 * id: unique netdev id.
 * ifname: name of tap device in host.
 * fd: the file descriptor of opened tap device. 
@@ -290,6 +290,16 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 -device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
 ```
 
+StratoVirt also supports vhost-user net to get a higher performance by ovs-dpdk. Currently, only
+virtio pci net device support vhost-user net.
+
+```shell
+# virtio pci net device
+-chardev socket,id=chardevid,path=socket_path
+-netdev vhost-user,id=netdevid,chardev=chardevid
+-device virtio-net-pci,netdev=netdevid,id=netid,mac=12:34:56:78:9A:BC,bus=pci.0,addr=0x2.0x0
+```
+
 *How to set a tap device?*
 
 ```shell
@@ -319,6 +329,31 @@ $ ip tuntap add tap1 mode tap multi_queue
 $ brctl addif qbr0 tap1
 $ ifconfig qbr0 up; ifconfig tap1 up
 $ ifconfig qbr0 1.1.1.1
+```
+
+*How to create port by ovs-dpdk?*
+
+```shell
+# Start open vSwitch daemons
+$ ovs-ctl start
+# Initialize database
+$ ovs-vsctl init
+# Dpdk init
+$ ovs-vsctl set Open_vSwitch . other_config:dpdk-init=true
+# Set up dpdk lcore mask
+$ ovs-vsctl set Open_vSwitch . other_config:dpdk-lcore-mask=0xf
+# Set up hugepages for dpdk-socket-mem (2G)
+$ ovs-vsctl set Open_vSwitch . other_config:dpdk-socket-mem=1024
+# Set up PMD(Pull Mode Driver) cpu mask
+$ ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=0xf
+# Add bridge
+$ ovs-vsctl add-br ovs_br -- set bridge ovs_br datapath_type=netdev
+# Add port
+$ ovs-vsctl add-port ovs_br port1 -- set Interface port1 type=dpdkvhostuser
+$ ovs-vsctl add-port ovs_br port2 -- set Interface port2 type=dpdkvhostuser
+# Set num of rxq/txq
+$ ovs-vsctl set Interface port1 options:n_rxq=1,n_txq=1
+$ ovs-vsctl set Interface port2 options:n_rxq=1,n_txq=1
 ```
 
 ### 2.4 Virtio-console
@@ -540,7 +575,7 @@ Five properties can be set for chardev.
 # redirect methods
 -chardev stdio,id=chardev_id
 -chardev pty,id=chardev_id
--chardev socket,id=chardev_id,path=socket_path,server,nowait
+-chardev socket,id=chardev_id,path=socket_path[,server,nowait]
 -chardev file,id=chardev_id,path=file_path
 ```
 
@@ -565,14 +600,14 @@ in StratoVirt process by default. It will make a slight influence on performance
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      46       |       46       |
-|        q35         |      49       |       51       |
+|        q35         |      51       |       53       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      44       |       45       |
-|        virt        |      48       |       47       |
+|        virt        |      50       |       49       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell

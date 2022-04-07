@@ -12,4 +12,8 @@
 
 mod client;
 mod message;
+mod net;
 mod sock;
+
+use client::VhostUserClient;
+pub use net::Net;

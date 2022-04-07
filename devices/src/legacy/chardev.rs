@@ -92,7 +92,17 @@ impl Chardev {
                 self.input = Some(master_arc.clone());
                 self.output = Some(master_arc);
             }
-            ChardevType::Socket(path) => {
+            ChardevType::Socket {
+                path,
+                server,
+                nowait,
+            } => {
+                if !*server || !*nowait {
+                    bail!(
+                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                        path
+                    );
+                }
                 let sock = UnixListener::bind(path.clone())
                     .chain_err(|| format!("Failed to bind socket for chardev, path:{}", path))?;
                 self.listener = Some(sock);
@@ -200,7 +210,7 @@ fn get_notifier_handler(
             }
             None
         }),
-        ChardevType::Socket(_) => Box::new(move |_, _| {
+        ChardevType::Socket { .. } => Box::new(move |_, _| {
             let mut locked_chardev = chardev.lock().unwrap();
             let (stream, _) = locked_chardev.listener.as_ref().unwrap().accept().unwrap();
             let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
@@ -273,7 +283,7 @@ impl EventNotifierHelper for Chardev {
                     ));
                 }
             }
-            ChardevType::Socket(_) => {
+            ChardevType::Socket { .. } => {
                 if let Some(listener) = chardev.lock().unwrap().listener.as_ref() {
                     notifiers.push(EventNotifier::new(
                         NotifierOperation::AddShared,
