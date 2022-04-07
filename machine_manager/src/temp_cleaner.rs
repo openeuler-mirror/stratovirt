@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs;
+use std::io::Write;
 
 static mut GLOBAL_TEMP_CLEANER: Option<TempCleaner> = None;
 
@@ -45,9 +46,20 @@ impl TempCleaner {
             if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
                 while let Some(path) = tmp.paths.pop() {
                     if let Err(ref e) = fs::remove_file(&path) {
-                        error!("Failed to delete console / socket file:{} :{}", &path, e);
+                        write!(
+                            &mut std::io::stderr(),
+                            "Failed to delete console / socket file:{} :{} \r\n",
+                            &path,
+                            e
+                        )
+                        .expect("Failed to write to stderr");
                     } else {
-                        info!("Delete file: {} successfully.", &path);
+                        write!(
+                            &mut std::io::stdout(),
+                            "Delete file: {} successfully.\r\n",
+                            &path
+                        )
+                        .expect("Failed to write to stdout");
                     }
                 }
             }
