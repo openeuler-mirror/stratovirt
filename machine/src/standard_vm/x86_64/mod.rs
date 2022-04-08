@@ -22,8 +22,8 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl,
-    AmlPackage, AmlScope, AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE,
-    IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR, TABLE_CHECKSUM_OFFSET,
+    AmlPackage, AmlScope, AmlScopeBuilder, AmlString, TableLoader, IOAPIC_BASE_ADDR,
+    LAPIC_BASE_ADDR,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -556,6 +556,7 @@ impl AcpiBuilder for StdMachine {
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
     ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
         // 1. CPU info.
@@ -583,21 +584,8 @@ impl AcpiBuilder for StdMachine {
         package.append_child(AmlInteger(0));
         dsdt.append_child(AmlNameDecl::new("_S5", package).aml_bytes().as_slice());
 
-        let mut locked_acpi_data = acpi_data.lock().unwrap();
-        let dsdt_begin = locked_acpi_data.len() as u32;
-        locked_acpi_data.extend(dsdt.aml_bytes());
-        let dsdt_end = locked_acpi_data.len() as u32;
-        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
-        // TableLoader, because TableLoader also needs to acquire this lock.
-        drop(locked_acpi_data);
-
-        loader.add_cksum_entry(
-            ACPI_TABLE_FILE,
-            dsdt_begin + TABLE_CHECKSUM_OFFSET,
-            dsdt_begin,
-            dsdt_end - dsdt_begin,
-        )?;
-
+        let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
+            .chain_err(|| "Fail to add DSTD table to loader")?;
         Ok(dsdt_begin as u64)
     }
 
@@ -606,6 +594,7 @@ impl AcpiBuilder for StdMachine {
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
     ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
         let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
 
         madt.append_child(LAPIC_BASE_ADDR.as_bytes());
@@ -633,21 +622,8 @@ impl AcpiBuilder for StdMachine {
             madt.append_child(&lapic.aml_bytes());
         });
 
-        let mut locked_acpi_data = acpi_data.lock().unwrap();
-        let madt_begin = locked_acpi_data.len() as u32;
-        locked_acpi_data.extend(madt.aml_bytes());
-        let madt_end = locked_acpi_data.len() as u32;
-        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
-        // TableLoader, because TableLoader also needs to acquire this lock.
-        drop(locked_acpi_data);
-
-        loader.add_cksum_entry(
-            ACPI_TABLE_FILE,
-            madt_begin + TABLE_CHECKSUM_OFFSET,
-            madt_begin,
-            madt_end - madt_begin,
-        )?;
-
+        let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
+            .chain_err(|| "Fail to add DSTD table to loader")?;
         Ok(madt_begin as u64)
     }
 }
