@@ -256,6 +256,32 @@ impl AmlBuilder for AcpiSratProcessorAffinity {
     }
 }
 
+/// ACPI SRAT GICC affinity structure.
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct AcpiSratGiccAffinity {
+    /// Type ID.
+    pub type_id: u8,
+    /// The length of this structure.
+    pub length: u8,
+    /// Represents the proximity domain to which the "range of memory" belongs.
+    pub proximity_domain: u32,
+    /// The ACPI processor UID of the associated GICC
+    pub process_uid: u32,
+    /// The GICC affinity flags.
+    pub flags: u32,
+    /// The clock domain to which the processor belongs.
+    pub clock_domain: u32,
+}
+
+impl ByteCode for AcpiSratGiccAffinity {}
+
+impl AmlBuilder for AcpiSratGiccAffinity {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::from(self.as_bytes())
+    }
+}
+
 /// ACPI SRAT memory affinity structure.
 #[repr(C, packed)]
 #[derive(Default, Copy, Clone)]
