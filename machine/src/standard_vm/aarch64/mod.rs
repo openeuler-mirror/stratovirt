@@ -14,18 +14,19 @@ mod pci_host_root;
 mod syscall;
 
 use std::fs::OpenOptions;
+use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
 use acpi::{
-    AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiTable, AmlBuilder,
-    AmlDevice, AmlInteger, AmlNameDecl, AmlScope, AmlScopeBuilder, AmlString, TableLoader,
-    ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ,
-    ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ, ACPI_GTDT_CAP_ALWAYS_ON,
-    ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP, ACPI_IORT_NODE_PCI_ROOT_COMPLEX,
-    ACPI_MADT_GENERIC_CPU_INTERFACE, ACPI_MADT_GENERIC_DISTRIBUTOR,
-    ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR, ARCH_GIC_MAINT_IRQ,
-    INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
+    AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiSratGiccAffinity,
+    AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
+    AmlScopeBuilder, AmlString, TableLoader, ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ,
+    ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ,
+    ACPI_GTDT_CAP_ALWAYS_ON, ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP,
+    ACPI_IORT_NODE_PCI_ROOT_COMPLEX, ACPI_MADT_GENERIC_CPU_INTERFACE,
+    ACPI_MADT_GENERIC_DISTRIBUTOR, ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR,
+    ARCH_GIC_MAINT_IRQ, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -36,7 +37,9 @@ use devices::legacy::{
 use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
-use machine_manager::config::{BootSource, NumaNodes, PFlashConfig, SerialConfig, VmConfig};
+use machine_manager::config::{
+    BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+};
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface,
@@ -300,6 +303,10 @@ impl StdMachineOps for StdMachine {
 
     fn get_vm_config(&self) -> &Mutex<VmConfig> {
         &self.vm_config
+    }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.numa_nodes
     }
 }
 
@@ -731,6 +738,71 @@ impl AcpiBuilder for StdMachine {
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
             .chain_err(|| "Fail to add MADT table to loader")?;
         Ok(madt_begin as u64)
+    }
+
+    fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
+        for cpu in node.cpus.iter() {
+            srat.append_child(
+                &AcpiSratGiccAffinity {
+                    type_id: 3_u8,
+                    length: size_of::<AcpiSratGiccAffinity>() as u8,
+                    proximity_domain,
+                    process_uid: *cpu as u32,
+                    flags: 1,
+                    clock_domain: 0_u32,
+                }
+                .aml_bytes(),
+            );
+        }
+    }
+
+    fn build_srat_mem(
+        &self,
+        base_addr: u64,
+        proximity_domain: u32,
+        node: &NumaNode,
+        srat: &mut AcpiTable,
+    ) -> u64 {
+        srat.append_child(
+            &AcpiSratMemoryAffinity {
+                type_id: 1,
+                length: size_of::<AcpiSratMemoryAffinity>() as u8,
+                proximity_domain,
+                base_addr,
+                range_length: node.size,
+                flags: 1,
+                ..Default::default()
+            }
+            .aml_bytes(),
+        );
+        base_addr + node.size
+    }
+
+    fn build_srat_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        if self.numa_nodes.is_none() {
+            return Ok(0);
+        }
+
+        let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
+        // Reserved
+        srat.append_child(&[1_u8; 4_usize]);
+        // Reserved
+        srat.append_child(&[0_u8; 8_usize]);
+
+        let mut next_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        for (id, node) in self.numa_nodes.as_ref().unwrap().iter() {
+            self.build_srat_cpu(*id, node, &mut srat);
+            next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
+        }
+
+        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
+            .chain_err(|| "Fail to add SRAT table to loader")?;
+        Ok(srat_begin as u64)
     }
 }
 
