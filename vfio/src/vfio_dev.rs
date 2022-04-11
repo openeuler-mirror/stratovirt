@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use log::warn;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
@@ -751,11 +752,11 @@ impl VfioDevice {
             let ret =
                 unsafe { ioctl_with_mut_ref(&self.fd, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
             if ret < 0 {
-                return Err(ErrorKind::VfioIoctl(
-                    "VFIO_DEVICE_GET_IRQ_INFO".to_string(),
-                    std::io::Error::last_os_error(),
-                )
-                .into());
+                warn!(
+                    "VFIO_DEVICE_GET_IRQ_INFO return irq type{} not supported",
+                    index
+                );
+                continue;
             }
 
             let irq = VfioIrq {

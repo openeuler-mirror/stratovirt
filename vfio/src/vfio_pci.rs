@@ -661,10 +661,13 @@ impl VfioPciDevice {
                 .chain_err(|| "Failed to get bar info")?;
             let region = &mut bar.vfio_region;
             // If bar region already setups or does not support mapping, just process the nest.
-            if region.size == 0 || region.mmaps.is_empty() || region.guest_phys_addr == gpa {
+            if region.size == 0 || region.guest_phys_addr == gpa {
                 continue;
-            } else {
-                region.guest_phys_addr = gpa;
+            }
+
+            region.guest_phys_addr = gpa;
+            if region.mmaps.is_empty() {
+                continue;
             }
 
             let mut read_only = true;
