@@ -504,6 +504,7 @@ pub struct device_add {
     #[serde(rename = "num-queues")]
     pub queues: Option<u16>,
     pub boot_index: Option<u8>,
+    pub sysfsdev: Option<String>,
 }
 
 pub type DeviceAddArgument = device_add;

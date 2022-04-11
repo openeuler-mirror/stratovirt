@@ -915,14 +915,34 @@ impl StdMachine {
         bdf: &PciBdf,
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
+        let host;
+        let sysfsdev;
+
         if args.host.is_none() {
-            bail!("Option \"host\" not provided.");
+            host = "";
+        } else {
+            host = args.host.as_ref().unwrap();
+        }
+
+        if args.sysfsdev.is_none() {
+            sysfsdev = "";
+        } else {
+            sysfsdev = args.sysfsdev.as_ref().unwrap();
+        }
+
+        if args.host.is_none() && args.sysfsdev.is_none() {
+            bail!("Neither option \"host\" nor \"sysfsdev\" was not provided.");
+        }
+
+        if args.host.is_some() && args.sysfsdev.is_some() {
+            bail!("Both option \"host\" and \"sysfsdev\" was provided.");
         }
 
         if let Err(e) = self.create_vfio_pci_device(
             &args.id,
             bdf,
-            args.host.as_ref().unwrap(),
+            host,
+            sysfsdev,
             args.multifunction.map_or(false, |m| m),
         ) {
             error!("{}", e.display_chain());

@@ -665,10 +665,16 @@ pub trait MachineOps {
         id: &str,
         bdf: &PciBdf,
         host: &str,
+        sysfsdev: &str,
         multifunc: bool,
     ) -> Result<()> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
-        let path = format!("/sys/bus/pci/devices/{}", host);
+        let path;
+        if !host.is_empty() {
+            path = format!("/sys/bus/pci/devices/{}", host);
+        } else {
+            path = sysfsdev.to_string();
+        }
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
             .chain_err(|| "Failed to create vfio device.")?;
         let vfio_pci = VfioPciDevice::new(
@@ -687,7 +693,13 @@ pub trait MachineOps {
         let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
         let bdf = get_pci_bdf(cfg_args)?;
         let multifunc = get_multi_function(cfg_args)?;
-        self.create_vfio_pci_device(&device_cfg.id, &bdf, &device_cfg.host, multifunc)?;
+        self.create_vfio_pci_device(
+            &device_cfg.id,
+            &bdf,
+            &device_cfg.host,
+            &device_cfg.sysfsdev,
+            multifunc,
+        )?;
         self.reset_bus(&device_cfg.id)?;
         Ok(())
     }
