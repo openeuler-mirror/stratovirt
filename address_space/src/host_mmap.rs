@@ -490,6 +490,7 @@ mod test {
             dump_guest_core: false,
             mem_share: false,
             mem_prealloc: false,
+            mem_zones: None,
         };
 
         let host_mmaps = create_host_mmaps(&addr_ranges, &mem_config, 1).unwrap();
