@@ -118,7 +118,9 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
-use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
+use address_space::{
+    create_host_mmaps, set_host_memory_policy, AddressSpace, KvmMemoryListener, Region,
+};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
@@ -184,6 +186,8 @@ pub trait MachineOps {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
             mem_mappings = create_host_mmaps(&ram_ranges, mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
+            set_host_memory_policy(&mem_mappings, &mem_config.mem_zones)
+                .chain_err(|| "Failed to set host memory NUMA policy.")?;
         }
 
         sys_mem
