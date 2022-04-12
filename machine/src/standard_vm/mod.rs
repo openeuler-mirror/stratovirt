@@ -131,6 +131,24 @@ trait StdMachineOps: AcpiBuilder {
             .chain_err(|| "Failed to build ACPI MADT table")?;
         xsdt_entries.push(madt_addr);
 
+        #[cfg(target_arch = "aarch64")]
+        {
+            let gtdt_addr = self
+                .build_gtdt_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI GTDT table")?;
+            xsdt_entries.push(gtdt_addr);
+
+            let iort_addr = self
+                .build_iort_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI IORT table")?;
+            xsdt_entries.push(iort_addr);
+
+            let spcr_addr = self
+                .build_spcr_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI SPCR table")?;
+            xsdt_entries.push(spcr_addr);
+        }
+
         let mcfg_addr = Self::build_mcfg_table(&acpi_tables, &mut loader)
             .chain_err(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
@@ -242,6 +260,36 @@ trait StdMachineOps: AcpiBuilder {
 /// Standard machine struct should at least implement `build_dsdt_table`, `build_madt_table`
 /// and `build_mcfg_table` function.
 trait AcpiBuilder {
+    /// Add ACPI table to the end of table loader, returns the offset of ACPI table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    /// `table` - ACPI table.
+    fn add_table_to_loader(
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+        table: &AcpiTable,
+    ) -> Result<u64> {
+        let mut locked_acpi_data = acpi_data.lock().unwrap();
+        let table_begin = locked_acpi_data.len() as u32;
+        locked_acpi_data.extend(table.aml_bytes());
+        let table_end = locked_acpi_data.len() as u32;
+        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
+        // TableLoader, because TableLoader also needs to acquire this lock.
+        drop(locked_acpi_data);
+
+        loader.add_cksum_entry(
+            ACPI_TABLE_FILE,
+            table_begin + TABLE_CHECKSUM_OFFSET,
+            table_begin,
+            table_end - table_begin,
+        )?;
+
+        Ok(table_begin as u64)
+    }
+
     /// Build ACPI DSDT table, returns the offset of ACPI DSDT table in `acpi_data`.
     ///
     /// # Arguments
@@ -270,6 +318,60 @@ trait AcpiBuilder {
         bail!("Not implemented");
     }
 
+    /// Build ACPI GTDT table, returns the offset of ACPI GTDT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_gtdt_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI IORT table, returns the offset of ACPI IORT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_iort_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI SPCR table, returns the offset of ACPI SPCR table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_spcr_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
     /// Build ACPI MCFG table, returns the offset of ACPI MCFG table in `acpi_data`.
     ///
     /// # Arguments
@@ -281,10 +383,21 @@ trait AcpiBuilder {
         Self: Sized,
     {
         let mut mcfg = AcpiTable::new(*b"MCFG", 1, *b"STRATO", *b"VIRTMCFG", 1);
-        let ecam_addr: u64 = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
         // Bits 20~28 (totally 9 bits) in PCIE ECAM represents bus number.
         let bus_number_mask = (1 << 9) - 1;
-        let max_nr_bus = (MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20) & bus_number_mask;
+        let ecam_addr: u64;
+        let max_nr_bus: u64;
+        #[cfg(target_arch = "x86_64")]
+        {
+            ecam_addr = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
+            max_nr_bus = (MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20) & bus_number_mask;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            ecam_addr = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
+            max_nr_bus =
+                (MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20) & bus_number_mask;
+        }
 
         // Reserved
         mcfg.append_child(&[0_u8; 8]);
@@ -327,7 +440,7 @@ trait AcpiBuilder {
     where
         Self: Sized,
     {
-        let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFSCP", 1);
+        let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFACP", 1);
 
         fadt.set_table_len(208_usize);
         // PM1A_EVENT bit, offset is 56.
@@ -339,8 +452,13 @@ trait AcpiBuilder {
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
         fadt.set_field(76, 0x608);
-        // FADT flag: disable HW_REDUCED_ACPI bit.
-        fadt.set_field(112, 1 << 10 | 1 << 8);
+        #[cfg(target_arch = "aarch64")]
+        {
+            // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
+            fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+            // ARM Boot Architecture Flags
+            fadt.set_field(129, 0x3_u16);
+        }
         // FADT minor revision
         fadt.set_field(131, 3);
         // X_PM_TMR_BLK bit, offset is 208.
@@ -351,6 +469,8 @@ trait AcpiBuilder {
 
         #[cfg(target_arch = "x86_64")]
         {
+            // FADT flag: disable HW_REDUCED_ACPI bit on x86 plantform.
+            fadt.set_field(112, 1 << 10 | 1 << 8);
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);

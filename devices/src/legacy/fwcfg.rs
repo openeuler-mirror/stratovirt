@@ -12,12 +12,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use acpi::AmlBuilder;
-#[cfg(target_arch = "x86_64")]
 use acpi::{
-    AmlDevice, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
-    AmlScopeBuilder, AmlString,
+    AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlResTemplate, AmlScopeBuilder, AmlString,
 };
+#[cfg(target_arch = "x86_64")]
+use acpi::{AmlIoDecode, AmlIoResource};
+#[cfg(target_arch = "aarch64")]
+use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
 use address_space::{AddressSpace, GuestAddress};
 #[cfg(target_arch = "x86_64")]
 use byteorder::LittleEndian;
@@ -1198,7 +1199,20 @@ pub trait FwCfgOps {
 #[cfg(target_arch = "aarch64")]
 impl AmlBuilder for FwCfgMem {
     fn aml_bytes(&self) -> Vec<u8> {
-        Vec::new()
+        let mut acpi_dev = AmlDevice::new("FWCF");
+        acpi_dev.append_child(AmlNameDecl::new("_HID", AmlString("QEMU0002".to_string())));
+        acpi_dev.append_child(AmlNameDecl::new("_STA", AmlInteger(0xB)));
+        acpi_dev.append_child(AmlNameDecl::new("_CCA", AmlInteger(0x1)));
+
+        let mut res = AmlResTemplate::new();
+        res.append_child(AmlMemory32Fixed::new(
+            AmlReadAndWrite::ReadWrite,
+            self.res.region_base as u32,
+            self.res.region_size as u32,
+        ));
+        acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
+
+        acpi_dev.aml_bytes()
     }
 }
 
