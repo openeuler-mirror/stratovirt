@@ -21,9 +21,9 @@ use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
 use acpi::{
-    AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl,
-    AmlPackage, AmlScope, AmlScopeBuilder, AmlString, TableLoader, IOAPIC_BASE_ADDR,
-    LAPIC_BASE_ADDR,
+    AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
+    AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder,
+    AmlString, TableLoader, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -32,7 +32,9 @@ use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SE
 use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
+use machine_manager::config::{
+    BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+};
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface,
@@ -57,6 +59,8 @@ use syscall::syscall_whitelist;
 use util::byte_code::ByteCode;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
+const HOLE_640K_START: u64 = 0x000A_0000;
+const HOLE_640K_END: u64 = 0x0010_0000;
 
 /// The type of memory layout entry on x86_64
 #[repr(usize)]
@@ -105,6 +109,8 @@ pub struct StdMachine {
     /// VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
     vm_config: Mutex<VmConfig>,
+    /// List of guest NUMA nodes information.
+    numa_nodes: Option<NumaNodes>,
 }
 
 impl StdMachine {
@@ -145,6 +151,7 @@ impl StdMachine {
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
+            numa_nodes: None,
         })
     }
 
@@ -309,6 +316,10 @@ impl StdMachineOps for StdMachine {
     fn get_vm_config(&self) -> &Mutex<VmConfig> {
         &self.vm_config
     }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.numa_nodes
+    }
 }
 
 impl MachineOps for StdMachine {
@@ -418,6 +429,7 @@ impl MachineOps for StdMachine {
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
+        locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
@@ -566,6 +578,7 @@ impl AcpiBuilder for StdMachine {
             let mut dev = AmlDevice::new(format!("C{:03}", cpu_id).as_str());
             dev.append_child(AmlNameDecl::new("_HID", AmlString("ACPI0007".to_string())));
             dev.append_child(AmlNameDecl::new("_UID", AmlInteger(cpu_id)));
+            dev.append_child(AmlNameDecl::new("_PXM", AmlInteger(0)));
             sb_scope.append_child(dev);
         }
 
@@ -625,6 +638,126 @@ impl AcpiBuilder for StdMachine {
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
             .chain_err(|| "Fail to add DSTD table to loader")?;
         Ok(madt_begin as u64)
+    }
+
+    fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
+        for cpu in node.cpus.iter() {
+            srat.append_child(
+                &AcpiSratProcessorAffinity {
+                    length: size_of::<AcpiSratProcessorAffinity>() as u8,
+                    proximity_lo: proximity_domain as u8,
+                    local_apic_id: *cpu,
+                    flags: 1,
+                    ..Default::default()
+                }
+                .aml_bytes(),
+            );
+        }
+    }
+
+    fn build_srat_mem(
+        &self,
+        base_addr: u64,
+        proximity_domain: u32,
+        node: &NumaNode,
+        srat: &mut AcpiTable,
+    ) -> u64 {
+        let mem_below_4g = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        let mem_above_4g = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+
+        let mut mem_base = base_addr;
+        let mut mem_len = node.size;
+        let mut next_base = mem_base + mem_len;
+        // It contains the hole from 604Kb to 1Mb
+        if mem_base <= HOLE_640K_START && next_base > HOLE_640K_START {
+            mem_len -= next_base - HOLE_640K_START;
+            if mem_len > 0 {
+                srat.append_child(
+                    &AcpiSratMemoryAffinity {
+                        type_id: 1,
+                        length: size_of::<AcpiSratMemoryAffinity>() as u8,
+                        proximity_domain,
+                        base_addr: mem_base,
+                        range_length: mem_len,
+                        flags: 1,
+                        ..Default::default()
+                    }
+                    .aml_bytes(),
+                );
+            }
+
+            if next_base <= HOLE_640K_END {
+                next_base = HOLE_640K_END;
+                return next_base;
+            }
+            mem_base = HOLE_640K_END;
+            mem_len = next_base - HOLE_640K_END;
+        }
+
+        // It contains the hole possibly from mem_below_4g(2G) to mem_below_4g(4G).
+        if mem_base <= mem_below_4g && next_base > mem_below_4g {
+            mem_len -= next_base - mem_below_4g;
+            if mem_len > 0 {
+                srat.append_child(
+                    &AcpiSratMemoryAffinity {
+                        type_id: 1,
+                        length: size_of::<AcpiSratMemoryAffinity>() as u8,
+                        proximity_domain,
+                        base_addr: mem_base,
+                        range_length: mem_len,
+                        flags: 1,
+                        ..Default::default()
+                    }
+                    .aml_bytes(),
+                );
+            }
+            mem_base = mem_above_4g;
+            mem_len = next_base - mem_below_4g;
+            next_base = mem_base + mem_len;
+        }
+
+        if mem_len > 0 {
+            srat.append_child(
+                &AcpiSratMemoryAffinity {
+                    type_id: 1,
+                    length: size_of::<AcpiSratMemoryAffinity>() as u8,
+                    proximity_domain,
+                    base_addr: mem_base,
+                    range_length: mem_len,
+                    flags: 1,
+                    ..Default::default()
+                }
+                .aml_bytes(),
+            );
+        }
+
+        next_base
+    }
+
+    fn build_srat_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        if self.numa_nodes.is_none() {
+            return Ok(0);
+        }
+
+        let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
+        srat.append_child(&[1_u8; 4_usize]);
+        srat.append_child(&[0_u8; 8_usize]);
+
+        let mut next_base = 0_u64;
+        for (id, node) in self.numa_nodes.as_ref().unwrap().iter() {
+            self.build_srat_cpu(*id, node, &mut srat);
+            next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
+        }
+
+        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
+            .chain_err(|| "Fail to add SRAT table to loader")?;
+        Ok(srat_begin as u64)
     }
 }
 

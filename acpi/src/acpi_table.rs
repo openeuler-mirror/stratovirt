@@ -226,6 +226,68 @@ impl AmlBuilder for AcpiRsdp {
     }
 }
 
+/// ACPI SRAT processor affinity structure.
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct AcpiSratProcessorAffinity {
+    /// Type ID.
+    pub type_id: u8,
+    /// The length of this structure.
+    pub length: u8,
+    /// Bit [7:0] of the proximity domain to which the processor belongs.
+    pub proximity_lo: u8,
+    /// The processor local APIC ID.
+    pub local_apic_id: u8,
+    /// The processor affinity flags.
+    pub flags: u32,
+    /// The processor local SAPIC EID.
+    pub local_sapic_eid: u8,
+    /// Bit [31:8] of the proximity domain to which the processor belongs.
+    pub proximity_hi: [u8; 3],
+    /// The clock domain to which the processor belongs.
+    pub clock_domain: u32,
+}
+
+impl ByteCode for AcpiSratProcessorAffinity {}
+
+impl AmlBuilder for AcpiSratProcessorAffinity {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::from(self.as_bytes())
+    }
+}
+
+/// ACPI SRAT memory affinity structure.
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct AcpiSratMemoryAffinity {
+    /// Type ID.
+    pub type_id: u8,
+    /// The length of this structure.
+    pub length: u8,
+    /// Represents the proximity domain to which the "range of memory" belongs.
+    pub proximity_domain: u32,
+    /// Reserved field.
+    pub reserved1: u16,
+    /// The base address of the memory range.
+    pub base_addr: u64,
+    /// The length of the memory range.
+    pub range_length: u64,
+    /// Reserved field.
+    pub reserved2: u32,
+    /// Indicates whether memory is enabled and can be hot plugged.
+    pub flags: u32,
+    /// Reserved field.
+    pub reserved3: u64,
+}
+
+impl ByteCode for AcpiSratMemoryAffinity {}
+
+impl AmlBuilder for AcpiSratMemoryAffinity {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::from(self.as_bytes())
+    }
+}
+
 /// This module describes ACPI MADT's sub-tables on x86_64 platform.
 #[cfg(target_arch = "x86_64")]
 pub mod madt_subtable {
