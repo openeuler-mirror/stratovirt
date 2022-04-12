@@ -38,6 +38,7 @@ pub mod unix;
 pub mod logger;
 #[macro_use]
 pub mod offsetof;
+pub mod syscall;
 pub mod trace;
 
 pub mod errors {
