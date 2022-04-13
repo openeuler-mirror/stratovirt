@@ -14,6 +14,8 @@ mod gicv3;
 #[allow(dead_code)]
 mod state;
 
+use kvm_ioctls::DeviceFd;
+
 pub use gicv3::GICv3;
 
 use std::sync::Arc;
@@ -28,6 +30,50 @@ use super::errors::{ErrorKind, Result, ResultExt};
 
 // First 32 are private to each CPU (SGIs and PPIs).
 pub(crate) const GIC_IRQ_INTERNAL: u32 = 32;
+
+/// A wrapper for kvm_based device check and access.
+pub struct KvmDevice;
+
+impl KvmDevice {
+    fn kvm_device_check(fd: &DeviceFd, group: u32, attr: u64) -> Result<()> {
+        let attr = kvm_bindings::kvm_device_attr {
+            group,
+            attr,
+            addr: 0,
+            flags: 0,
+        };
+        fd.has_device_attr(&attr)
+            .chain_err(|| "Failed to check device attributes for GIC.")?;
+        Ok(())
+    }
+
+    fn kvm_device_access(
+        fd: &DeviceFd,
+        group: u32,
+        attr: u64,
+        addr: u64,
+        write: bool,
+    ) -> Result<()> {
+        let attr = kvm_bindings::kvm_device_attr {
+            group,
+            attr,
+            addr,
+            flags: 0,
+        };
+
+        if write {
+            fd.set_device_attr(&attr)
+                .chain_err(|| "Failed to set device attributes for GIC.")?;
+        } else {
+            let mut attr = attr;
+            fd.get_device_attr(&mut attr)
+                .chain_err(|| "Failed to get device attributes for GIC.")?;
+        };
+
+        Ok(())
+    }
+}
+
 
 /// Configure a Interrupt controller.
 pub struct GICConfig {

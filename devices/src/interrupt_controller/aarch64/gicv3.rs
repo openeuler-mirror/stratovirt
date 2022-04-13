@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use super::{
     state::{GICv3ItsState, GICv3State},
     GICConfig, GICDevice, UtilResult,
+    KvmDevice,
 };
 use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
 
@@ -28,49 +29,6 @@ use util::device_tree::{self, FdtBuilder};
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const SZ_64K: u64 = 0x0001_0000;
 const KVM_VGIC_V3_REDIST_SIZE: u64 = 2 * SZ_64K;
-
-/// A wrapper for kvm_based device check and access.
-pub struct KvmDevice;
-
-impl KvmDevice {
-    fn kvm_device_check(fd: &DeviceFd, group: u32, attr: u64) -> Result<()> {
-        let attr = kvm_bindings::kvm_device_attr {
-            group,
-            attr,
-            addr: 0,
-            flags: 0,
-        };
-        fd.has_device_attr(&attr)
-            .chain_err(|| "Failed to check device attributes for GIC.")?;
-        Ok(())
-    }
-
-    fn kvm_device_access(
-        fd: &DeviceFd,
-        group: u32,
-        attr: u64,
-        addr: u64,
-        write: bool,
-    ) -> Result<()> {
-        let attr = kvm_bindings::kvm_device_attr {
-            group,
-            attr,
-            addr,
-            flags: 0,
-        };
-
-        if write {
-            fd.set_device_attr(&attr)
-                .chain_err(|| "Failed to set device attributes for GIC.")?;
-        } else {
-            let mut attr = attr;
-            fd.get_device_attr(&mut attr)
-                .chain_err(|| "Failed to get device attributes for GIC.")?;
-        };
-
-        Ok(())
-    }
-}
 
 /// Access wrapper for GICv3.
 pub trait GICv3Access {
