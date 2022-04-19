@@ -1,6 +1,6 @@
 # 构建测试镜像
 
-1. 请于openEuler官网，下载所需版本的stratovirt_img和vmlinux.bin。(以下以openEuler-21.03-stratovirt-x86_64.img为例)
+1. 请于openEuler官网，下载所需版本的stratovirt_img。(以下以openEuler-22.03-LTS-stratovirt-x86_64.img为例)
 
 - 地址：https://openeuler.org/zh/download/
 
@@ -15,13 +15,13 @@
 - 扩容stratovirt_img
 
 	```shell
-	cat extend.img >> openEuler-21.03-stratovirt-x86_64.img
+	cat extend.img >> openEuler-22.03-LTS-stratovirt-x86_64.img
 	```
 
 - 调整文件系统大小
 
 	```shell
-	e2fsck -f openEuler-21.03-stratovirt-x86_64.img && resize2fs openEuler-21.03-stratovirt-x86_64.img
+	e2fsck -f openEuler-22.03-LTS-stratovirt-x86_64.img && resize2fs openEuler-22.03-LTS-stratovirt-x86_64.img
 	```
 
 3. 添加依赖包
@@ -29,13 +29,13 @@
 - 挂载镜像
 
 	```shell
-	mount openEuler-21.03-stratovirt-x86_64.img /mnt
+	mount openEuler-22.03-LTS-stratovirt-x86_64.img /mnt
 	```
 
-- 配置在线yum源，请参考： [开发环境准备.md](https://gitee.com/openeuler/docs/blob/stable2-21.03/docs/zh/docs/ApplicationDev/开发环境准备.md)。由于stratovirt_img内没有vi等编辑工具，建议先在主机上创建文件openEuler.repo，并配置好yum源，完成后将openEuler.repo拷贝到镜像内。
+- 配置DNS服务配置文件(/etc/resolv.conf)。挂载镜像中的etc/resolv.conf文件为空，需要配置DNS服务才能更新yum源。
 
 	```shell
-	cp ./openEuler.repo /mnt/etc/yum.repos.d
+	cp /etc/resolv.conf /mnt/etc/resolv.conf
 	```
 
 - 进入镜像挂载目录，通过yum命令安装依赖包。
@@ -43,6 +43,7 @@
 	```shell
 	cd /mnt
 	chroot .
+	echo "set enable-bracketed-paste off"  > /root/.inputrc
 	yum -y install openssh
 	```
 
