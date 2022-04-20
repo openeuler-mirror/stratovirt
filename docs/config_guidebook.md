@@ -216,6 +216,8 @@ Nine properties are supported for virtio block device.
 * if: drive type, for block drive, it should be `none`. If not set, default is `none` (optional)
 * format: the format of block image, default value `raw`. NB: currently only `raw` is supported. (optional)
 If not set, default is raw.
+* num-queues: the optional num-queues attribute controls the number of queues to be used for block device. If not set,
+the default block queue number is 1.
 
 For virtio-blk-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -231,8 +233,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 -device virtio-blk-device,drive=drive_id,id=blkid[,iothread=iothread1,serial=serial_num]
 # virtio pci block device.
 -drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num]
-
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num,num-queues=N]
 ```
 
 ### 2.3 Virtio-net

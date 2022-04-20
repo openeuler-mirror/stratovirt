@@ -310,6 +310,13 @@ pub trait DeviceInterface {
             };
             vec_props.push(prop);
         }
+        if typename.contains("virtio-blk") {
+            let prop = DeviceProps {
+                name: "num-queues".to_string(),
+                prop_type: "uint16".to_string(),
+            };
+            vec_props.push(prop);
+        }
         Response::create_response(serde_json::to_value(&vec_props).unwrap(), None)
     }
 
