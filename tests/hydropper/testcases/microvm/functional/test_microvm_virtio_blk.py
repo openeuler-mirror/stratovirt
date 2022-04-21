@@ -11,6 +11,7 @@
 # See the Mulan PSL v2 for more details.
 """Test microvm virtio block"""
 
+import json
 import os
 import logging
 from subprocess import run
@@ -29,14 +30,15 @@ def _get_lsblk_info(test_vm):
     """
     retdict = {}
     if test_vm.ssh_session is not None:
-        _output = test_vm.ssh_session.cmd_output("lsblk")
-        for line in _output.split("\n"):
-            temp = line.split()
-            if len(temp) == 6:
-                name = temp[0]
-                size = temp[3]
-                readonly = temp[4]
-                if name not in retdict:
+        _output = json.loads(test_vm.ssh_session.cmd_output("lsblk -J"))
+        blockdevices = _output.get("blockdevices", [])
+        for dic in blockdevices:
+            mountpoints = dic.get("mountpoints", [])
+            if len(mountpoints) != 0 and None in mountpoints:
+                name = dic.get("name", "")
+                size = dic.get("size", "")
+                readonly = dic.get("ro", None)
+                if size != "0B" and name not in retdict:
                     retdict[name] = {"size": size, "readonly": readonly}
 
     return retdict
