@@ -323,4 +323,86 @@ mod tests {
 
         assert!(machine_config.check().is_ok());
     }
+
+    #[test]
+    fn test_memory_unit_conversion() {
+        let test_string = "6G";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024 * 1024);
+
+        let test_string = "6g";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024 * 1024);
+
+        let test_string = "6M";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024);
+
+        let test_string = "6m";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024);
+
+        // default unit is MiB
+        let test_string = "6";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024);
+
+        let test_string = "G6";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "G6G";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6Gg";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6gG";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "g6G";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "G6g";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "M6";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "M6M";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6Mm";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6mM";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "m6M";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "M6m";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+    }
 }
