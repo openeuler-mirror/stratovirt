@@ -405,4 +405,83 @@ mod tests {
         let ret = memory_unit_conversion(test_string);
         assert!(ret.is_err());
     }
+
+    #[test]
+    fn test_machine_type() {
+        let test_string = "none";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::None);
+
+        let test_string = "None";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::None);
+
+        let test_string = "NONE";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::None);
+
+        let test_string = "no";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_err());
+
+        let test_string = "microvm";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::MicroVm);
+
+        let test_string = "MICROVM";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::MicroVm);
+
+        let test_string = "machine";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_err());
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let test_string = "q35";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "Q35";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "virt";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_err());
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let test_string = "virt";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "VIRT";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "q35";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_err());
+        }
+    }
 }
