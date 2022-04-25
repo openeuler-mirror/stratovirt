@@ -97,6 +97,13 @@ def _check_cpu_topology(test_microvm, expected_cpu_count,
         "Core(s) per socket": str(expected_cores_per_socket),
         "Socket(s)": str(int(expected_cpu_count / expected_cores_per_socket / expected_threads_per_core)),
     }
+    status, output = test_microvm.serial_cmd("lscpu")
+    assert status == 0, str(output)
+    if "Core(s) per cluster" in output and "aarch64" in platform.machine():
+        expected_cpu_topology["Core(s) per cluster"] = expected_cpu_topology["Core(s) per socket"]
+        del expected_cpu_topology["Core(s) per socket"]
+        expected_cpu_topology["Cluster(s)"] = expected_cpu_topology["Socket(s)"]
+        del expected_cpu_topology["Socket(s)"]
 
     _check_guest_cmd_output(test_microvm, "lscpu", None, ':',
                             expected_cpu_topology)
