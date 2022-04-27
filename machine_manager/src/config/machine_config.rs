@@ -565,4 +565,86 @@ mod tests {
             assert!(machine_cfg_ret.is_err());
         }
     }
+
+    #[test]
+    fn test_add_mem_path() {
+        let mut vm_config = VmConfig::default();
+        let memory_path_str = "/path/to/memory-backend";
+        let mem_path = vm_config.machine_config.mem_config.mem_path.clone();
+        // defalut value is none.
+        assert!(mem_path.is_none());
+        let mem_cfg_ret = vm_config.add_mem_path(memory_path_str);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_path = vm_config.machine_config.mem_config.mem_path;
+        assert!(mem_path.is_some());
+        let mem_path = mem_path.unwrap();
+        assert_eq!(mem_path, memory_path_str);
+    }
+
+    #[test]
+    fn test_enable_memory_prealloc() {
+        let mut vm_config = VmConfig::default();
+        let mem_prealloc = vm_config.machine_config.mem_config.mem_prealloc;
+        // default value is false.
+        assert_eq!(mem_prealloc, false);
+        vm_config.enable_mem_prealloc();
+        let mem_prealloc = vm_config.machine_config.mem_config.mem_prealloc;
+        assert_eq!(mem_prealloc, true);
+    }
+
+    #[test]
+    fn test_add_cpu() {
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=8,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_ok());
+        let nr_cpu = vm_config.machine_config.nr_cpus;
+        assert_eq!(nr_cpu, 8);
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=9,sockets=8,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=0,sockets=0,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=254,sockets=254,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_ok());
+        let nr_cpu = vm_config.machine_config.nr_cpus;
+        assert_eq!(nr_cpu, 254);
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=255,sockets=255,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=4,cores=2,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=2,cores=2,threads=2";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=1,cores=4,threads=2";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=1,cores=2,threads=4";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+    }
 }
