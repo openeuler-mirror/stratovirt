@@ -484,4 +484,85 @@ mod tests {
             assert!(machine_type.is_err());
         }
     }
+
+    #[test]
+    fn test_add_memory() {
+        let mut vm_config = VmConfig::default();
+        let memory_cfg = "size=8";
+        let mem_cfg_ret = vm_config.add_memory(memory_cfg);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        assert_eq!(mem_size, 8 * 1024 * 1024);
+
+        let memory_cfg = "size=8m";
+        let mem_cfg_ret = vm_config.add_memory(memory_cfg);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        assert_eq!(mem_size, 8 * 1024 * 1024);
+
+        let memory_cfg = "size=8G";
+        let mem_cfg_ret = vm_config.add_memory(memory_cfg);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        assert_eq!(mem_size, 8 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_add_machine() {
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,dump-guest-core=on,mem-share=on,accel=kvm,usb=off";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.mach_type, MachineType::None);
+        assert_eq!(machine_cfg.mem_config.dump_guest_core, true);
+        assert_eq!(machine_cfg.mem_config.mem_share, true);
+
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.mach_type, MachineType::None);
+        assert_eq!(machine_cfg.mem_config.dump_guest_core, false);
+        assert_eq!(machine_cfg.mem_config.mem_share, false);
+
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,accel=kvm-tcg";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,usb=on";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_err());
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str =
+                "type=none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off,gic-version=3";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_ok());
+            let machine_cfg = vm_config.machine_config;
+            assert_eq!(machine_cfg.mach_type, MachineType::None);
+            assert_eq!(machine_cfg.mem_config.dump_guest_core, false);
+            assert_eq!(machine_cfg.mem_config.mem_share, false);
+
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str = "type=none,gic-version=-1";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_err());
+
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str = "type=none,gic-version=256";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_err());
+
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str = "type=none,gic-version=4";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_err());
+        }
+    }
 }
