@@ -323,4 +323,328 @@ mod tests {
 
         assert!(machine_config.check().is_ok());
     }
+
+    #[test]
+    fn test_memory_unit_conversion() {
+        let test_string = "6G";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024 * 1024);
+
+        let test_string = "6g";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024 * 1024);
+
+        let test_string = "6M";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024);
+
+        let test_string = "6m";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024);
+
+        // default unit is MiB
+        let test_string = "6";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_ok());
+        let ret = ret.unwrap();
+        assert_eq!(ret, 6 * 1024 * 1024);
+
+        let test_string = "G6";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "G6G";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6Gg";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6gG";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "g6G";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "G6g";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "M6";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "M6M";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6Mm";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "6mM";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "m6M";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+
+        let test_string = "M6m";
+        let ret = memory_unit_conversion(test_string);
+        assert!(ret.is_err());
+    }
+
+    #[test]
+    fn test_machine_type() {
+        let test_string = "none";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::None);
+
+        let test_string = "None";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::None);
+
+        let test_string = "NONE";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::None);
+
+        let test_string = "no";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_err());
+
+        let test_string = "microvm";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::MicroVm);
+
+        let test_string = "MICROVM";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_ok());
+        let machine_type = machine_type.unwrap();
+        assert_eq!(machine_type, MachineType::MicroVm);
+
+        let test_string = "machine";
+        let machine_type = MachineType::from_str(test_string);
+        assert!(machine_type.is_err());
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let test_string = "q35";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "Q35";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "virt";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_err());
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let test_string = "virt";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "VIRT";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_ok());
+            let machine_type = machine_type.unwrap();
+            assert_eq!(machine_type, MachineType::StandardVm);
+
+            let test_string = "q35";
+            let machine_type = MachineType::from_str(test_string);
+            assert!(machine_type.is_err());
+        }
+    }
+
+    #[test]
+    fn test_add_memory() {
+        let mut vm_config = VmConfig::default();
+        let memory_cfg = "size=8";
+        let mem_cfg_ret = vm_config.add_memory(memory_cfg);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        assert_eq!(mem_size, 8 * 1024 * 1024);
+
+        let memory_cfg = "size=8m";
+        let mem_cfg_ret = vm_config.add_memory(memory_cfg);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        assert_eq!(mem_size, 8 * 1024 * 1024);
+
+        let memory_cfg = "size=8G";
+        let mem_cfg_ret = vm_config.add_memory(memory_cfg);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        assert_eq!(mem_size, 8 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_add_machine() {
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,dump-guest-core=on,mem-share=on,accel=kvm,usb=off";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.mach_type, MachineType::None);
+        assert_eq!(machine_cfg.mem_config.dump_guest_core, true);
+        assert_eq!(machine_cfg.mem_config.mem_share, true);
+
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_ok());
+        let machine_cfg = vm_config.machine_config;
+        assert_eq!(machine_cfg.mach_type, MachineType::None);
+        assert_eq!(machine_cfg.mem_config.dump_guest_core, false);
+        assert_eq!(machine_cfg.mem_config.mem_share, false);
+
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,accel=kvm-tcg";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let memory_cfg_str = "type=none,usb=on";
+        let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+        assert!(machine_cfg_ret.is_err());
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str =
+                "type=none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off,gic-version=3";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_ok());
+            let machine_cfg = vm_config.machine_config;
+            assert_eq!(machine_cfg.mach_type, MachineType::None);
+            assert_eq!(machine_cfg.mem_config.dump_guest_core, false);
+            assert_eq!(machine_cfg.mem_config.mem_share, false);
+
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str = "type=none,gic-version=-1";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_err());
+
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str = "type=none,gic-version=256";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_err());
+
+            let mut vm_config = VmConfig::default();
+            let memory_cfg_str = "type=none,gic-version=4";
+            let machine_cfg_ret = vm_config.add_machine(memory_cfg_str);
+            assert!(machine_cfg_ret.is_err());
+        }
+    }
+
+    #[test]
+    fn test_add_mem_path() {
+        let mut vm_config = VmConfig::default();
+        let memory_path_str = "/path/to/memory-backend";
+        let mem_path = vm_config.machine_config.mem_config.mem_path.clone();
+        // defalut value is none.
+        assert!(mem_path.is_none());
+        let mem_cfg_ret = vm_config.add_mem_path(memory_path_str);
+        assert!(mem_cfg_ret.is_ok());
+        let mem_path = vm_config.machine_config.mem_config.mem_path;
+        assert!(mem_path.is_some());
+        let mem_path = mem_path.unwrap();
+        assert_eq!(mem_path, memory_path_str);
+    }
+
+    #[test]
+    fn test_enable_memory_prealloc() {
+        let mut vm_config = VmConfig::default();
+        let mem_prealloc = vm_config.machine_config.mem_config.mem_prealloc;
+        // default value is false.
+        assert_eq!(mem_prealloc, false);
+        vm_config.enable_mem_prealloc();
+        let mem_prealloc = vm_config.machine_config.mem_config.mem_prealloc;
+        assert_eq!(mem_prealloc, true);
+    }
+
+    #[test]
+    fn test_add_cpu() {
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=8,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_ok());
+        let nr_cpu = vm_config.machine_config.nr_cpus;
+        assert_eq!(nr_cpu, 8);
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=9,sockets=8,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=0,sockets=0,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=254,sockets=254,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_ok());
+        let nr_cpu = vm_config.machine_config.nr_cpus;
+        assert_eq!(nr_cpu, 254);
+
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=255,sockets=255,cores=1,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=4,cores=2,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=2,cores=2,threads=2";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=1,cores=4,threads=2";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=1,cores=2,threads=4";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
+    }
 }
