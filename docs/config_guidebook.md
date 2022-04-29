@@ -239,22 +239,26 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 
 Virtio-net is a virtual Ethernet card in VM. It can enable the network capability of VM.
 
-Four properties are supported for netdev.
+Six properties are supported for netdev.
 * tap: the type of net device. NB: currently only tap is supported.
 * id: unique netdev id.
 * ifname: name of tap device in host.
-* fd: the fd of opened tap device. 
+* fd: the file descriptor of opened tap device. 
+* fds: file descriptors of opened tap device.
+* queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or vhost-net device.
 NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given, 
 the tap device would be created according to `ifname`.
 
-
-Five properties are supported for virtio-net-device or virtio-net-pci.
+Eight properties are supported for virtio-net-device or virtio-net-pci.
 * id: unique net device id.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used.
 It has no effect when vhost is set.
 * netdev: netdev of net device.
 * vhost: whether to run as a vhost-net device.
+* vhostfd: the file descriptor of opened tap device.
+* vhostfds: file descriptors of opened tap device.
 * mac: set mac address in VM (optional).
+* mq: the optional mq attribute enable device multiple queue feature.
 
 Two more properties are supported for virtio pci net device.
 * bus: name of bus which to attach.
@@ -267,8 +271,8 @@ is a single function device, the function number should be set to zero.
 -netdev tap,id=netdevid,ifname=host_dev_name
 -device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
 # virtio pci net device
--netdev tap,id=netdevid,ifname=host_dev_name
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC]
+-netdev tap,id=netdevid,ifname=host_dev_name[,queues=N]
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by 
@@ -282,8 +286,8 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 -netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2]
 -device virtio-net-device,netdev=netdevid,id=netid[,iothread=iothread1,mac=12:34:56:78:9A:BC]
 # virtio pci net device
--netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2]
--device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC]
+-netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2,queues=N]
+-device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
 ```
 
 *How to set a tap device?*
@@ -305,6 +309,16 @@ $ ip addr add 1.1.1.2/24 dev eth0
 
 # Now network is reachable
 $ ping 1.1.1.1
+```
+
+note: If you want to use multiple queues, create a tap device as follows:
+```shell
+# In host
+$ brctl addbr qbr0
+$ ip tuntap add tap1 mode tap multi_queue
+$ brctl addif qbr0 tap1
+$ ifconfig qbr0 up; ifconfig tap1 up
+$ ifconfig qbr0 1.1.1.1
 ```
 
 ### 2.4 Virtio-console
