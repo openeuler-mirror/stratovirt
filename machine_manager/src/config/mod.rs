@@ -111,6 +111,7 @@ use util::trace::enable_trace_events;
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
+pub const MAX_VIRTIO_QUEUE: usize = 1024;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
 

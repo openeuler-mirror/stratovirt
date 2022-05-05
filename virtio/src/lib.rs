@@ -182,6 +182,10 @@ pub const VIRTIO_NET_F_GUEST_UFO: u32 = 10;
 pub const VIRTIO_NET_F_HOST_TSO4: u32 = 11;
 /// Device can receive UFO.
 pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
+/// Control channel is available.
+pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
+/// Device supports multi queue with automatic receive steering.
+pub const VIRTIO_NET_F_MQ: u32 = 22;
 /// Configuration cols and rows are valid.
 pub const VIRTIO_CONSOLE_F_SIZE: u64 = 0;
 /// Maximum size of any single segment is in size_max.
@@ -192,6 +196,16 @@ pub const VIRTIO_BLK_F_SEG_MAX: u32 = 2;
 pub const VIRTIO_BLK_F_RO: u32 = 5;
 /// Cache flush command support.
 pub const VIRTIO_BLK_F_FLUSH: u32 = 9;
+/// The device sets MQ ok status values to driver.
+pub const VIRTIO_NET_OK: u8 = 0;
+/// Driver configure the class before enabling virtqueue.
+pub const VIRTIO_NET_CTRL_MQ: u16 = 4;
+/// Driver configure the command before enabling virtqueue.
+pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: u16 = 0;
+/// The minimum pairs of multiple queue.
+pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN: u16 = 1;
+/// The maximum pairs of multiple queue.
+pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX: u16 = 0x8000;
 
 /// The IO type of virtio block, refer to Virtio Spec.
 /// Read.

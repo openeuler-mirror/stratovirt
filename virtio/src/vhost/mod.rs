@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod kernel;
+mod user;
 
 use std::sync::{Arc, Mutex};
 
@@ -89,4 +90,13 @@ pub trait VhostOps {
     /// * `queue_idx` - Index of the queue to modify.
     /// * `fd` - EventFd that will be signaled from guest.
     fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()>;
+
+    /// Set the status of ring.
+    ///
+    /// # Arguments
+    /// * `_queue_idx` - Index of the queue to set.
+    /// * `_status` - Status of the virtqueue.
+    fn set_vring_enable(&self, _queue_idx: usize, _status: bool) -> Result<()> {
+        Ok(())
+    }
 }
