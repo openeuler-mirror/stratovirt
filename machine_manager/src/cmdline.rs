@@ -94,7 +94,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("smp")
             .long("smp")
-            .value_name("[cpus=]n")
+            .value_name("[cpus=]n[,maxcpus=cpus][,dies=dies][,sockets=sockets][,cores=cores][,threads=threads]")
             .help("set the number of CPUs to 'n' (default: 1)")
             .takes_value(true),
         )

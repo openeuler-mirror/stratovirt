@@ -66,7 +66,7 @@ use std::vec::Vec;
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CpuLifecycleState, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUTopology, CpuLifecycleState, CpuTopology, CPU};
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
@@ -224,7 +224,14 @@ impl LightMachine {
         }
 
         Ok(LightMachine {
-            cpu_topo: CpuTopology::new(vm_config.machine_config.nr_cpus),
+            cpu_topo: CpuTopology::new(
+                vm_config.machine_config.nr_cpus,
+                vm_config.machine_config.nr_threads,
+                vm_config.machine_config.nr_cores,
+                vm_config.machine_config.nr_dies,
+                vm_config.machine_config.nr_sockets,
+                vm_config.machine_config.max_cpus,
+            ),
             cpus: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             irq_chip: None,
@@ -739,9 +746,15 @@ impl MachineOps for LightMachine {
         } else {
             None
         };
+        let topology = CPUTopology::new().set_topology((
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_dies,
+        ));
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
+            &topology,
             &vcpu_fds,
             &boot_config,
         )?);
