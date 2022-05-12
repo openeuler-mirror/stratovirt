@@ -103,7 +103,41 @@ $ cat /proc/meminfo
 ... -mem-path /path/to/hugepages ...
 ```
 
-### 1.5 Kernel and Kernel Parameters
+### 1.5 NUMA node
+The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.
+The application of NUMA node is that one region of memory can be set as fast memory, another can be set as slow memory.
+
+Each NUMA node is given a list of command lines option, there will be described in detail below. 
+1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
+   It describes the size and id of each memory zone, the policy of binding to host memory node.
+   you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
+   The optional policies are default, preferred, bind, interleave and local.
+2. -numa node,cpus=0-1,memdev=mem0
+   It describes id and cpu set of the NUMA node, and the id belongs to which memory zone.
+3. -numa dist,src=0,dst=0,val=10
+   It describes the distance between source and destination. The default of source to source is 10,
+   source to destination is 20. And if you choose not to set these parameters, the VM will set the default values.
+   
+The following command shows how to set NUMA node:
+
+```shell
+# The number of cpu must be set to be the same as numa node cpu.
+-smp 4
+
+# The memory size must be set to be the same as numa node mem.
+-m 4G
+
+-object memory-backend-ram,size=2G,id=mem0,[host-nodes=0,policy=bind]
+-object memory-backend-ram,size=2G,id=mem1,[host-nodes=1,policy=bind]
+-numa node,nodeid=0,cpus=0-1,memdev=mem0
+-numa node,nodeid=1,cpus=2-3,memdev=mem1
+[-numa dist,src=0,dst=0,val=10]
+[-numa dist,src=0,dst=1,val=20]
+[-numa dist,src=1,dst=0,val=20]
+[-numa dist,src=1,dst=1,val=10]
+```
+
+### 1.6 Kernel and Kernel Parameters
 
 StratoVirt supports to launch PE or bzImage (only x86_64) format linux kernel 4.19 and can also set kernel
  parameters for VM.
@@ -118,7 +152,7 @@ And the given kernel parameters will be actually analyzed by boot loader.
 -append "console=ttyS0 rebook=k panic=1 pci=off tsc=reliable ipv6.disable=1"
 ```
 
-### 1.6 Initrd Configuration
+### 1.7 Initrd Configuration
 
 StratoVirt supports to launch VM by a initrd (boot loader initialized RAM disk) as well.
 
@@ -131,7 +165,7 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 -initrd /path/to/initrd
 ```
 
-### 1.7 Global config
+### 1.8 Global config
 
 Users can set the global configuration using the -global parameter.
 
@@ -143,7 +177,7 @@ One property can be set:
 -global pcie-root-port.fast-unplug=1
 ```
 
-### 1.8 Logging
+### 1.9 Logging
 
 StratoVirt supports to output log to stderr and log file.
 
@@ -159,7 +193,7 @@ You can enable StratoVirt's logging by:
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
 StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
 
-### 1.9 Daemonize
+### 1.10 Daemonize
 
 StratoVirt supports to run as a daemon.
 

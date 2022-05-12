@@ -111,13 +111,16 @@ use virtio::{
     VirtioNetState,
 };
 
+use std::collections::BTreeMap;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Mutex, Weak};
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
-use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
+use address_space::{
+    create_host_mmaps, set_host_memory_policy, AddressSpace, KvmMemoryListener, Region,
+};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
@@ -125,10 +128,11 @@ use devices::InterruptController;
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id, parse_net,
-    parse_rng_dev, parse_root_port, parse_vfio, parse_virtconsole, parse_virtio_serial,
-    parse_vsock, MachineMemConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
-    FAST_UNPLUG_ON,
+    check_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
+    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
+    parse_virtconsole, parse_virtio_serial, parse_vsock, MachineMemConfig, NumaConfig,
+    NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
+    VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -182,6 +186,8 @@ pub trait MachineOps {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
             mem_mappings = create_host_mmaps(&ram_ranges, mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
+            set_host_memory_policy(&mem_mappings, &mem_config.mem_zones)
+                .chain_err(|| "Failed to set host memory NUMA policy.")?;
         }
 
         sys_mem
@@ -681,6 +687,72 @@ pub trait MachineOps {
 
         RootPort::set_fast_unplug_feature(fast_unplug);
         Ok(())
+    }
+
+    /// Add numa nodes information to standard machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM Configuration.
+    fn add_numa_nodes(&mut self, vm_config: &mut VmConfig) -> Result<Option<NumaNodes>> {
+        if vm_config.numa_nodes.is_empty() {
+            return Ok(None);
+        }
+
+        let mut numa_nodes: NumaNodes = BTreeMap::new();
+        vm_config.numa_nodes.sort_by(|p, n| n.0.cmp(&p.0));
+        for numa in vm_config.numa_nodes.iter() {
+            match numa.0.as_str() {
+                "node" => {
+                    let numa_config: NumaConfig = parse_numa_mem(numa.1.as_str())?;
+                    if numa_nodes.contains_key(&numa_config.numa_id) {
+                        bail!("Numa node id is repeated {}", numa_config.numa_id);
+                    }
+                    let mut numa_node = NumaNode {
+                        cpus: numa_config.cpus,
+                        ..Default::default()
+                    };
+
+                    if let Some(object_cfg) = vm_config.object.remove(&numa_config.mem_dev) {
+                        if let ObjConfig::Zone(zone_config) = object_cfg {
+                            numa_node.size = zone_config.size;
+                        }
+                    } else {
+                        bail!(
+                            "Object for memory-backend-ram {} config not found",
+                            numa_config.mem_dev
+                        );
+                    }
+                    numa_nodes.insert(numa_config.numa_id, numa_node);
+                }
+                "dist" => {
+                    let dist: (u32, NumaDistance) = parse_numa_distance(numa.1.as_str())?;
+                    if !numa_nodes.contains_key(&dist.0) {
+                        bail!("Numa node id is not found {}", dist.0);
+                    }
+                    if !numa_nodes.contains_key(&dist.1.destination) {
+                        bail!("Numa node id is not found {}", dist.1.destination);
+                    }
+
+                    if let Some(n) = numa_nodes.get_mut(&dist.0) {
+                        if n.distances.contains_key(&dist.1.destination) {
+                            bail!(
+                                "Numa destination info {} repeat settings",
+                                dist.1.destination
+                            );
+                        }
+                        n.distances.insert(dist.1.destination, dist.1.distance);
+                    }
+                }
+                _ => {
+                    bail!("Unsupported args for NUMA node: {}", numa.0.as_str());
+                }
+            }
+        }
+
+        check_numa_node(&numa_nodes, vm_config)?;
+
+        Ok(Some(numa_nodes))
     }
 
     /// Add peripheral devices.

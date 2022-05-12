@@ -93,7 +93,7 @@ mod state;
 
 pub use crate::address_space::{AddressSpace, RegionCache};
 pub use address::{AddressRange, GuestAddress};
-pub use host_mmap::{create_host_mmaps, FileBackend, HostMemMapping};
+pub use host_mmap::{create_host_mmaps, set_host_memory_policy, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]
 pub use listener::KvmIoListener;
 pub use listener::KvmMemoryListener;
