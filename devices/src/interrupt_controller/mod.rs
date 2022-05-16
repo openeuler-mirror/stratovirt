@@ -34,6 +34,8 @@ pub use aarch64::GICConfig as InterruptControllerConfig;
 pub use aarch64::InterruptController;
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         errors {
             #[cfg(target_arch = "aarch64")]

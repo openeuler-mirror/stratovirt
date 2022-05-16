@@ -48,12 +48,9 @@
 //! 2. The `ByteCode` derive to auto add `ByteCode` trait and its relying trait for
 //! struct, such as `Default`, `Sync`, `Send`.
 
-#[macro_use]
-extern crate syn;
-
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::DeriveInput;
+use syn::{parse_macro_input, DeriveInput};
 
 mod attr_parser;
 mod field_parser;

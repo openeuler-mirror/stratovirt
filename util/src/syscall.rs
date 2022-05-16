@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use error_chain::bail;
 use libc::{c_void, syscall, SYS_mbind};
 
 use super::errors::Result;

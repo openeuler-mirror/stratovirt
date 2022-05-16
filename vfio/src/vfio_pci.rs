@@ -18,8 +18,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
+use log::error;
 #[cfg(target_arch = "aarch64")]
 use pci::config::SECONDARY_BUS_NUM;
 use pci::config::{
@@ -306,7 +307,7 @@ impl VfioPciDevice {
         Ok(vfio_bars)
     }
 
-    fn fixup_msix_region(&self, vfio_bars: &mut Vec<VfioBar>) -> Result<()> {
+    fn fixup_msix_region(&self, vfio_bars: &mut [VfioBar]) -> Result<()> {
         let msix_info = self
             .msix_info
             .as_ref()

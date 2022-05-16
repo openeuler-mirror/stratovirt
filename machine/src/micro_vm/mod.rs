@@ -29,6 +29,8 @@
 //! - `aarch64`
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);
@@ -104,11 +106,15 @@ use virtio::{
 };
 use vmm_sys_util::eventfd::EventFd;
 
+use self::errors::{ErrorKind, Result};
 use super::{
     errors::{ErrorKind as MachineErrorKind, Result as MachineResult},
     MachineOps,
 };
-use errors::{ErrorKind, Result};
+
+use error_chain::bail;
+use log::error;
+use machine_manager::event;
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use syscall::syscall_whitelist;
 
@@ -921,7 +927,7 @@ impl DeviceInterface for LightMachine {
                         current: true,
                         qom_path: String::from("/machine/unattached/device[")
                             + &cpu_index.to_string()
-                            + &"]".to_string(),
+                            + "]",
                         halted: false,
                         props: Some(cpu_instance),
                         CPU: cpu_index as isize,

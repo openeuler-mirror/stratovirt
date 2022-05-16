@@ -22,9 +22,11 @@ use std::{
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
+use log::{error, warn};
 use machine_manager::{
-    config::BalloonConfig, event_loop::EventLoop, qmp::qmp_schema::BalloonInfo, qmp::QmpChannel,
+    config::BalloonConfig, event, event_loop::EventLoop, qmp::qmp_schema::BalloonInfo,
+    qmp::QmpChannel,
 };
 use util::{
     bitmap::Bitmap,

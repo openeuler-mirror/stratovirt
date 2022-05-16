@@ -10,17 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate machine_manager;
-#[cfg(target_arch = "x86_64")]
-#[macro_use]
-extern crate vmm_sys_util;
-
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
@@ -125,6 +117,7 @@ use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
+use error_chain::bail;
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{

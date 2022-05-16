@@ -12,6 +12,7 @@
 
 use std::str::FromStr;
 
+use error_chain::bail;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result, ResultExt};

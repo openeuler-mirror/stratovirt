@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use address_space::{
     AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
 };
+use error_chain::bail;
+use log::{info, warn};
 use machine_manager::event_loop::EventLoop;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,

@@ -16,8 +16,10 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
+
 use migration::errors::{ErrorKind, Result, ResultExt};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, StateTransfer};
+use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::unix::host_page_size;
 

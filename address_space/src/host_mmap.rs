@@ -16,14 +16,16 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 
+use error_chain::bail;
+use log::{error, info};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
-
-use crate::errors::{Result, ResultExt};
-use crate::{AddressRange, GuestAddress};
 use util::{
     syscall::mbind,
     unix::{do_mmap, host_page_size},
 };
+
+use crate::errors::{Result, ResultExt};
+use crate::{AddressRange, GuestAddress};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
 /// Verify existing pages in the mapping.

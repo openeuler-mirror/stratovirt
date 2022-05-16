@@ -10,9 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::BTreeMap;
+
+use error_chain::bail;
+
 use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, IntegerList, VmConfig, MAX_NODES};
-use std::collections::BTreeMap;
 
 const MIN_NUMA_DISTANCE: u8 = 10;
 

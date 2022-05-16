@@ -17,6 +17,7 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
+use log::{debug, error, warn};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 

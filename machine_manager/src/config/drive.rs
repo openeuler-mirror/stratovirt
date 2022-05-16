@@ -14,6 +14,8 @@ use std::fs::metadata;
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
 
+use error_chain::bail;
+use log::error;
 use serde::{Deserialize, Serialize};
 
 use super::{

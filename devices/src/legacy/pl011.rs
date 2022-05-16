@@ -19,11 +19,13 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
+use log::{debug, error};
 use machine_manager::{
     config::{BootSource, Param, SerialConfig},
     event_loop::EventLoop,
 };
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;

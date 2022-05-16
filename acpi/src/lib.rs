@@ -10,11 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-
 mod acpi_device;
 #[allow(dead_code)]
 pub mod acpi_table;
@@ -37,6 +32,8 @@ pub const ACPI_TABLE_LOADER_FILE: &str = "etc/table-loader";
 pub const ACPI_RSDP_FILE: &str = "etc/acpi/rsdp";
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         errors {
             FileEntryExist(name: String) {
