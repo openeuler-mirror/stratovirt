@@ -77,13 +77,6 @@
 //! }
 //! ```
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate migration_derive;
-
 mod address;
 mod address_space;
 mod host_mmap;
@@ -101,6 +94,8 @@ pub use listener::{Listener, ListenerReqType};
 pub use region::{FlatRange, Region, RegionIoEventFd, RegionType};
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);

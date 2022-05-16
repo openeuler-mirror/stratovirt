@@ -35,11 +35,13 @@ use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
 };
 use devices::{InterruptController, InterruptControllerConfig};
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
 use hypervisor::kvm::KVM_FDS;
+use log::error;
 use machine_manager::config::{
     BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
+use machine_manager::event;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface,

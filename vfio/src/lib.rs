@@ -10,14 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate vmm_sys_util;
-
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             PciErr(pci::errors::Error, pci::errors::ErrorKind);
@@ -53,6 +48,7 @@ use std::sync::{Arc, Mutex};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use kvm_ioctls::DeviceFd;
+use log::error;
 use once_cell::sync::Lazy;
 use vfio_dev::VfioGroup;
 

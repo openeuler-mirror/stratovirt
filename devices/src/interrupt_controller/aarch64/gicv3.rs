@@ -12,14 +12,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use kvm_ioctls::DeviceFd;
-
 use super::{
     state::{GICv3ItsState, GICv3State},
     GICConfig, GICDevice, UtilResult,
 };
 use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
+
 use hypervisor::kvm::KVM_FDS;
+use kvm_ioctls::DeviceFd;
+use log::error;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use migration::{MigrationManager, MigrationRestoreOrder};
 use util::device_tree::{self, FdtBuilder};

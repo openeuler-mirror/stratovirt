@@ -23,7 +23,8 @@ use address_space::{AddressSpace, GuestAddress};
 #[cfg(target_arch = "x86_64")]
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
+use log::{error, warn};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;

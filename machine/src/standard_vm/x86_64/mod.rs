@@ -29,34 +29,36 @@ use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
+use log::error;
 use machine_manager::config::{
     BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
+use machine_manager::event;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use sysbus::{SysBus, SysBusDevOps};
+use syscall::syscall_whitelist;
+use util::byte_code::ByteCode;
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::{ioctl_expr, ioctl_ioc_nr, ioctl_iow_nr};
 
 use self::ich9_lpc::SLEEP_CTRL_OFFSET;
-
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
-use mch::Mch;
-use syscall::syscall_whitelist;
-use util::byte_code::ByteCode;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;

@@ -10,14 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-extern crate libc;
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate vmm_sys_util;
-#[macro_use]
-extern crate log;
-
 pub mod aio;
 pub mod arg_parser;
 pub mod bitmap;
@@ -28,20 +20,20 @@ pub mod daemonize;
 pub mod device_tree;
 pub mod leak_bucket;
 mod link_list;
+pub mod logger;
 pub mod loop_context;
 pub mod num_ops;
+pub mod offsetof;
 pub mod reader;
 pub mod seccomp;
-pub mod tap;
-pub mod unix;
-#[macro_use]
-pub mod logger;
-#[macro_use]
-pub mod offsetof;
 pub mod syscall;
+pub mod tap;
 pub mod trace;
+pub mod unix;
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         foreign_links {
             KvmIoctl(kvm_ioctls::Error);
@@ -157,6 +149,7 @@ pub mod errors {
 }
 
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
+use log::debug;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use vmm_sys_util::terminal::Terminal;

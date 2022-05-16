@@ -11,6 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);
@@ -107,6 +109,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use error_chain::bail;
+use log::error;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 use util::trace::enable_trace_events;

@@ -13,6 +13,9 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
+use error_chain::bail;
+use log::{debug, warn};
+
 use crate::address_space::FlatView;
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, AddressSpace, FileBackend, GuestAddress, HostMemMapping, RegionOps};
