@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use error_chain::bail;
+
 use super::errors::{ErrorKind, Result};
 use super::{pci_args_check, ObjConfig};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH};

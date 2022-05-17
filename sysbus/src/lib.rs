@@ -10,10 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[macro_use]
-extern crate error_chain;
-
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
@@ -29,10 +28,11 @@ use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use error_chain::bail;
 use hypervisor::kvm::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
 
-use errors::{Result, ResultExt};
+use crate::errors::{Result, ResultExt};
 
 pub struct SysBus {
     #[cfg(target_arch = "x86_64")]

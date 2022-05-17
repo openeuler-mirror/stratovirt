@@ -18,6 +18,7 @@ mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
+use log::error;
 use machine_manager::event_loop::EventLoop;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
@@ -27,6 +28,8 @@ pub use x86_64::StdMachine;
 
 #[allow(clippy::upper_case_acronyms)]
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
@@ -72,7 +75,7 @@ use acpi::{
 };
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
 use errors::{Result, ResultExt};
 use machine_manager::config::{
     get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,

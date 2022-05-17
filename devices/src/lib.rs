@@ -16,13 +16,6 @@
 //! - interrupt controller (aarch64)
 //! - legacy devices, such as serial devices
 
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate migration_derive;
-
 mod interrupt_controller;
 pub mod legacy;
 

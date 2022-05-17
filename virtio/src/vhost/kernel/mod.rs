@@ -24,6 +24,8 @@ use std::sync::{Arc, Mutex};
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
+use error_chain::ChainedError;
+use log::{debug, error};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -31,11 +33,13 @@ use util::loop_context::{
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
+use vmm_sys_util::{
+    ioctl_expr, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
+};
 
 use super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::{QueueConfig, VirtioInterrupt, VirtioInterruptType};
 use super::{VhostNotify, VhostOps};
-use crate::error_chain::ChainedError;
 
 /// Refer to VHOST_VIRTIO in
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.

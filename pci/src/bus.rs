@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
+use error_chain::bail;
+use log::debug;
 
 use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
 use super::hotplug::HotplugOps;
