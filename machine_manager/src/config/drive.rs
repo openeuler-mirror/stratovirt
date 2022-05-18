@@ -41,6 +41,14 @@ pub struct BlkDevConfig {
     pub iothread: Option<String>,
     pub iops: Option<u64>,
     pub queues: u16,
+    pub boot_index: Option<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootIndexInfo {
+    pub boot_index: u8,
+    pub id: String,
+    pub dev_path: String,
 }
 
 impl Default for BlkDevConfig {
@@ -54,6 +62,7 @@ impl Default for BlkDevConfig {
             iothread: None,
             iops: None,
             queues: 1,
+            boot_index: None,
         }
     }
 }
@@ -252,11 +261,11 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
 
     pci_args_check(&cmd_parser)?;
 
-    if let Err(ref e) = cmd_parser.get_value::<u8>("bootindex") {
-        bail!("Failed to parse \'bootindex\': {:?}", &e);
+    let mut blkdevcfg = BlkDevConfig::default();
+    if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
+        blkdevcfg.boot_index = Some(boot_index);
     }
 
-    let mut blkdevcfg = BlkDevConfig::default();
     let blkdrive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
         drive
     } else {

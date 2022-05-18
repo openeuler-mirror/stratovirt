@@ -34,7 +34,7 @@ use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use log::error;
 use machine_manager::config::{
-    BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+    BootIndexInfo, BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -45,7 +45,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::{SysBus, SysBusDevOps};
+use sysbus::SysBus;
 use syscall::syscall_whitelist;
 use util::byte_code::ByteCode;
 use util::loop_context::EventLoopManager;
@@ -113,6 +113,10 @@ pub struct StdMachine {
     vm_config: Mutex<VmConfig>,
     /// List of guest NUMA nodes information.
     numa_nodes: Option<NumaNodes>,
+    /// List contains the boot order of boot devices.
+    boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// FwCfg device.
+    fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
 }
 
 impl StdMachine {
@@ -154,13 +158,15 @@ impl StdMachine {
                 .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
             numa_nodes: None,
+            boot_order_list: Arc::new(Mutex::new(Vec::new())),
+            fwcfg_dev: None,
         })
     }
 
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
         use crate::errors::ResultExt as MachineResultExt;
 
-        let locked_vm = vm.lock().unwrap();
+        let mut locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             MachineResultExt::chain_err(cpu.kick(), || {
@@ -170,13 +176,11 @@ impl StdMachine {
             cpu.set_to_boot_state();
         }
 
-        for dev in locked_vm.sysbus.devices.iter() {
-            MachineResultExt::chain_err(dev.lock().unwrap().reset(), || {
-                "Fail to reset sysbus device"
-            })?;
-        }
-        MachineResultExt::chain_err(locked_vm.pci_host.lock().unwrap().reset(), || {
-            "Fail to reset pci host"
+        MachineResultExt::chain_err(locked_vm.reset_all_devices(), || {
+            "Fail to reset all devices"
+        })?;
+        MachineResultExt::chain_err(locked_vm.reset_fwcfg_boot_order(), || {
+            "Fail to update boot order imformation to FwCfg device"
         })?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
@@ -299,6 +303,7 @@ impl StdMachineOps for StdMachine {
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
             .chain_err(|| "Failed to realize fwcfg device")?;
+        self.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(fwcfg_dev)
     }
@@ -478,6 +483,10 @@ impl MachineOps for StdMachine {
         StdMachine::arch_init()?;
         locked_vm.register_power_event(&locked_vm.power_button)?;
 
+        locked_vm
+            .reset_fwcfg_boot_order()
+            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
+
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }
@@ -561,6 +570,19 @@ impl MachineOps for StdMachine {
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
+    }
+
+    fn get_sys_bus(&mut self) -> &SysBus {
+        &self.sysbus
+    }
+
+    fn get_fwcfg_dev(&mut self) -> MachineResult<Arc<Mutex<dyn FwCfgOps>>> {
+        // Unwrap is safe. Because after standard machine realize, this will not be None.F
+        Ok(self.fwcfg_dev.clone().unwrap())
+    }
+
+    fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
+        Some(self.boot_order_list.clone())
     }
 }
 

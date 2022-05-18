@@ -607,6 +607,10 @@ impl MachineOps for LightMachine {
         &self.sys_mem
     }
 
+    fn get_sys_bus(&mut self) -> &SysBus {
+        &self.sysbus
+    }
+
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self) -> MachineResult<()> {
         use crate::errors::ResultExt;
@@ -1120,6 +1124,7 @@ impl DeviceInterface for LightMachine {
             iothread: None,
             iops: None,
             queues: 1,
+            boot_index: None,
         };
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
