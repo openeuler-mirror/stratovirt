@@ -28,7 +28,10 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
-use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
+use devices::legacy::{
+    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
+    SERIAL_ADDR,
+};
 use error_chain::{bail, ChainedError};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
@@ -180,7 +183,7 @@ impl StdMachine {
             "Fail to reset all devices"
         })?;
         MachineResultExt::chain_err(locked_vm.reset_fwcfg_boot_order(), || {
-            "Fail to update boot order imformation to FwCfg device"
+            "Fail to update boot order information to FwCfg device"
         })?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
@@ -300,6 +303,11 @@ impl StdMachineOps for StdMachine {
         fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, ncpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
+
+        let boot_order = Vec::<u8>::new();
+        fwcfg
+            .add_file_entry("bootorder", boot_order)
+            .chain_err(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
             .chain_err(|| "Failed to realize fwcfg device")?;
