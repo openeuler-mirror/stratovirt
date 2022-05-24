@@ -111,7 +111,7 @@ Each NUMA node is given a list of command lines option, there will be described 
 1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
    It describes the size and id of each memory zone, the policy of binding to host memory node.
    you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
-   The optional policies are default, preferred, bind, interleave and local.
+   The optional policies are default, preferred, bind and interleave.
 2. -numa node,cpus=0-1,memdev=mem0
    It describes id and cpu set of the NUMA node, and the id belongs to which memory zone.
 3. -numa dist,src=0,dst=0,val=10

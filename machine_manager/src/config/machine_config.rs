@@ -57,8 +57,7 @@ pub enum HostMemPolicy {
     Preferred = 1,
     Bind = 2,
     Interleave = 3,
-    Local = 4,
-    NotSupported = 5,
+    NotSupported = 4,
 }
 
 impl From<String> for HostMemPolicy {
@@ -68,7 +67,6 @@ impl From<String> for HostMemPolicy {
             "preferred" => HostMemPolicy::Preferred,
             "bind" => HostMemPolicy::Bind,
             "interleave" => HostMemPolicy::Interleave,
-            "local" => HostMemPolicy::Local,
             _ => HostMemPolicy::NotSupported,
         }
     }
