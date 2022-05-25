@@ -34,7 +34,7 @@ use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
 };
-use devices::{InterruptController, InterruptControllerConfig};
+use devices::{ICGICConfig, ICGICv3Config, InterruptController};
 use error_chain::{bail, ChainedError};
 use hypervisor::kvm::KVM_FDS;
 use log::error;
@@ -319,10 +319,7 @@ impl MachineOps for StdMachine {
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
-        let intc_conf = InterruptControllerConfig {
-            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
-            vcpu_count,
-            max_irq: 192,
+        let v3 = ICGICv3Config {
             msi: true,
             dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
             redist_region_ranges: vec![
@@ -330,6 +327,13 @@ impl MachineOps for StdMachine {
                 MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize],
             ],
             its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
+        };
+        let intc_conf = ICGICConfig {
+            version: None,
+            vcpu_count,
+            max_irq: 192,
+            v2: None,
+            v3: Some(v3),
         };
         let irq_chip = InterruptController::new(&intc_conf)?;
         self.irq_chip = Some(Arc::new(irq_chip));
