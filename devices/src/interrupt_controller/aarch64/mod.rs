@@ -10,13 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod gicv2;
 mod gicv3;
 #[allow(dead_code)]
 mod state;
 
 use kvm_ioctls::DeviceFd;
 
-pub use gicv3::GICv3;
+pub use gicv2::{GICv2, GICv2Config};
+pub use gicv3::{GICv3, GICv3Config};
 
 use std::sync::Arc;
 
@@ -30,6 +32,12 @@ use super::errors::{ErrorKind, Result, ResultExt};
 
 // First 32 are private to each CPU (SGIs and PPIs).
 pub(crate) const GIC_IRQ_INTERNAL: u32 = 32;
+
+/// GIC version type.
+pub enum GICVersion {
+    GICv2,
+    GICv3,
+}
 
 /// A wrapper for kvm_based device check and access.
 pub struct KvmDevice;
@@ -74,43 +82,26 @@ impl KvmDevice {
     }
 }
 
-
-/// Configure a Interrupt controller.
 pub struct GICConfig {
     /// Config GIC version
-    pub version: u32,
+    pub version: Option<GICVersion>,
     /// Config number of CPUs handled by the device
     pub vcpu_count: u64,
     /// Config maximum number of irqs handled by the device
     pub max_irq: u32,
-    /// Config msi support
-    pub msi: bool,
-    /// GIC distributor address range.
-    pub dist_range: (u64, u64),
-    /// GIC redistributor address range, support multiple redistributor regions.
-    pub redist_region_ranges: Vec<(u64, u64)>,
-    /// GIC ITS address ranges.
-    pub its_range: Option<(u64, u64)>,
+    /// v2 config.
+    pub v2: Option<GICv2Config>,
+    /// v3 config.
+    pub v3: Option<GICv3Config>,
 }
 
 impl GICConfig {
     fn check_sanity(&self) -> Result<()> {
-        if self.version != kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3 {
-            return Err(ErrorKind::InvalidConfig("GIC only support GICv3".to_string()).into());
-        };
-
-        if self.vcpu_count > 256 || self.vcpu_count == 0 {
-            return Err(
-                ErrorKind::InvalidConfig("GIC only support maximum 256 vcpus".to_string()).into(),
-            );
-        }
-
         if self.max_irq <= GIC_IRQ_INTERNAL {
             return Err(
                 ErrorKind::InvalidConfig("GIC irq numbers need above 32".to_string()).into(),
             );
         }
-
         Ok(())
     }
 }
@@ -152,9 +143,17 @@ impl InterruptController {
     ///
     /// * `gic_conf` - Configuration for `GIC`.
     pub fn new(gic_conf: &GICConfig) -> Result<InterruptController> {
-        Ok(InterruptController {
-            gic: GICv3::create_device(gic_conf).chain_err(|| "Failed to realize GIC")?,
-        })
+        gic_conf.check_sanity()?;
+        let gic = match &gic_conf.version {
+            Some(GICVersion::GICv3) => GICv3::create_device(gic_conf),
+            Some(GICVersion::GICv2) => GICv2::create_device(gic_conf),
+            // Try v3 first if no version specified.
+            None => GICv3::create_device(gic_conf).or_else(|_| GICv2::create_device(gic_conf)),
+        };
+        let intc = InterruptController {
+            gic: gic.chain_err(|| "Failed to realize GIC")?,
+        };
+        Ok(intc)
     }
 
     pub fn realize(&self) -> Result<()> {
@@ -183,30 +182,14 @@ mod tests {
     #[test]
     fn test_gic_config() {
         let mut gic_conf = GICConfig {
-            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
+            version: Some(GICVersion::GICv3),
             vcpu_count: 4,
             max_irq: 192,
-            msi: false,
-            dist_range: (0x0800_0000, 0x0001_0000),
-            redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
-            its_range: None,
+            v2: None,
+            v3: None,
         };
 
         assert!(gic_conf.check_sanity().is_ok());
-        gic_conf.version = 3;
-        assert!(gic_conf.check_sanity().is_err());
-        gic_conf.version = kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into();
-        assert!(gic_conf.check_sanity().is_ok());
-
-        gic_conf.vcpu_count = 257;
-        assert!(gic_conf.check_sanity().is_err());
-        gic_conf.vcpu_count = 0;
-        assert!(gic_conf.check_sanity().is_err());
-        gic_conf.vcpu_count = 24;
-        assert!(gic_conf.check_sanity().is_ok());
-
-        assert!(gic_conf.check_sanity().is_ok());
-
         gic_conf.max_irq = 32;
         assert!(gic_conf.check_sanity().is_err());
     }
