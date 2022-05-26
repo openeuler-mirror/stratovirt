@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     state::{GICv3ItsState, GICv3State},
-    GICConfig, GICDevice, UtilResult,
+    GICConfig, GICDevice, KvmDevice, UtilResult,
 };
 use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
 
@@ -29,47 +29,16 @@ use util::device_tree::{self, FdtBuilder};
 const SZ_64K: u64 = 0x0001_0000;
 const KVM_VGIC_V3_REDIST_SIZE: u64 = 2 * SZ_64K;
 
-/// A wrapper for kvm_based device check and access.
-pub struct KvmDevice;
-
-impl KvmDevice {
-    fn kvm_device_check(fd: &DeviceFd, group: u32, attr: u64) -> Result<()> {
-        let attr = kvm_bindings::kvm_device_attr {
-            group,
-            attr,
-            addr: 0,
-            flags: 0,
-        };
-        fd.has_device_attr(&attr)
-            .chain_err(|| "Failed to check device attributes for GIC.")?;
-        Ok(())
-    }
-
-    fn kvm_device_access(
-        fd: &DeviceFd,
-        group: u32,
-        attr: u64,
-        addr: u64,
-        write: bool,
-    ) -> Result<()> {
-        let attr = kvm_bindings::kvm_device_attr {
-            group,
-            attr,
-            addr,
-            flags: 0,
-        };
-
-        if write {
-            fd.set_device_attr(&attr)
-                .chain_err(|| "Failed to set device attributes for GIC.")?;
-        } else {
-            let mut attr = attr;
-            fd.get_device_attr(&mut attr)
-                .chain_err(|| "Failed to get device attributes for GIC.")?;
-        };
-
-        Ok(())
-    }
+/// Configure a v3 Interrupt controller.
+pub struct GICv3Config {
+    /// Config msi support
+    pub msi: bool,
+    /// GIC distributor address range.
+    pub dist_range: (u64, u64),
+    /// GIC redistributor address range, support multiple redistributor regions.
+    pub redist_region_ranges: Vec<(u64, u64)>,
+    /// GIC ITS address ranges.
+    pub its_range: Option<(u64, u64)>,
 }
 
 /// Access wrapper for GICv3.
@@ -130,8 +99,10 @@ pub struct GICv3 {
 
 impl GICv3 {
     fn new(config: &GICConfig) -> Result<Self> {
-        config.check_sanity()?;
-
+        let v3config = match config.v3.as_ref() {
+            Some(v3) => v3,
+            None => return Err(ErrorKind::InvalidConfig("no v3 config found".to_string()).into()),
+        };
         let mut gic_device = kvm_bindings::kvm_create_device {
             type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
             fd: 0,
@@ -150,8 +121,8 @@ impl GICv3 {
         };
 
         // Calculate GIC redistributor regions' address range according to vcpu count.
-        let base = config.redist_region_ranges[0].0;
-        let size = config.redist_region_ranges[0].1;
+        let base = v3config.redist_region_ranges[0].0;
+        let size = v3config.redist_region_ranges[0].1;
         let redist_capability = size / KVM_VGIC_V3_REDIST_SIZE;
         let redist_region_count = std::cmp::min(config.vcpu_count, redist_capability);
         let mut redist_regions = vec![GicRedistRegion {
@@ -161,7 +132,7 @@ impl GICv3 {
         }];
 
         if config.vcpu_count > redist_capability {
-            let high_redist_base = config.redist_region_ranges[1].0;
+            let high_redist_base = v3config.redist_region_ranges[1].0;
             let high_redist_region_count = config.vcpu_count - redist_capability;
             let high_redist_attr = (high_redist_region_count << 52) | high_redist_base | 0x1;
 
@@ -178,12 +149,12 @@ impl GICv3 {
             nr_irqs: config.max_irq,
             its_dev: None,
             redist_regions,
-            dist_base: config.dist_range.0,
-            dist_size: config.dist_range.1,
+            dist_base: v3config.dist_range.0,
+            dist_size: v3config.dist_range.1,
             state: Arc::new(Mutex::new(KvmVmState::Created)),
         };
 
-        if let Some(its_range) = config.its_range {
+        if let Some(its_range) = v3config.its_range {
             gicv3.its_dev = Some(Arc::new(
                 GICv3Its::new(&its_range).chain_err(|| "Failed to create ITS")?,
             ));
@@ -559,7 +530,8 @@ mod tests {
     use hypervisor::kvm::KVMFds;
     use serial_test::serial;
 
-    use super::super::GICConfig;
+    use super::super::GICVersion;
+    use super::super::GICv3Config;
     use super::*;
 
     #[test]
@@ -572,13 +544,16 @@ mod tests {
         KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_conf = GICConfig {
-            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3.into(),
+            version: Some(GICVersion::GICv3),
             vcpu_count: 4,
             max_irq: 192,
-            msi: false,
-            dist_range: (0x0800_0000, 0x0001_0000),
-            redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
-            its_range: None,
+            v2: None,
+            v3: Some(GICv3Config {
+                msi: false,
+                dist_range: (0x0800_0000, 0x0001_0000),
+                redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
+                its_range: None,
+            }),
         };
         assert!(GICv3::new(&gic_conf).is_ok());
     }
@@ -593,13 +568,16 @@ mod tests {
         KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_config = GICConfig {
-            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+            version: Some(GICVersion::GICv3),
             vcpu_count: 4_u64,
             max_irq: 192_u32,
-            msi: false,
-            dist_range: (0x0800_0000, 0x0001_0000),
-            redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
-            its_range: None,
+            v2: None,
+            v3: Some(GICv3Config {
+                msi: false,
+                dist_range: (0x0800_0000, 0x0001_0000),
+                redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000)],
+                its_range: None,
+            }),
         };
         let gic = GICv3::new(&gic_config).unwrap();
         assert!(gic.its_dev.is_none());
@@ -616,13 +594,16 @@ mod tests {
         KVM_FDS.store(Arc::new(kvm_fds));
 
         let gic_config = GICConfig {
-            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+            version: Some(GICVersion::GICv3),
             vcpu_count: 210_u64,
             max_irq: 192_u32,
-            msi: true,
-            dist_range: (0x0800_0000, 0x0001_0000),
-            redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000), (256 << 30, 0x200_0000)],
-            its_range: Some((0x0808_0000, 0x0002_0000)),
+            v3: Some(GICv3Config {
+                msi: true,
+                dist_range: (0x0800_0000, 0x0001_0000),
+                redist_region_ranges: vec![(0x080A_0000, 0x00F6_0000), (256 << 30, 0x200_0000)],
+                its_range: Some((0x0808_0000, 0x0002_0000)),
+            }),
+            v2: None,
         };
         let gic = GICv3::new(&gic_config).unwrap();
 

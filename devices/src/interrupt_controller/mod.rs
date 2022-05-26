@@ -29,7 +29,11 @@
 mod aarch64;
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::GICConfig as InterruptControllerConfig;
+pub use aarch64::GICConfig as ICGICConfig;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::GICv2Config as ICGICv2Config;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::GICv3Config as ICGICv3Config;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::InterruptController;
 
