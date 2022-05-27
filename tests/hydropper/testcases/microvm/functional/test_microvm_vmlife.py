@@ -78,14 +78,6 @@ def test_microvm_destroy(microvm, destroy_value):
     test_vm.destroy(signal=destroy_value)
 
 
-@pytest.mark.system
-def test_microvm_inshutdown(microvm):
-    """Test a normal microvm inshutdown"""
-    test_vm = microvm
-    test_vm.launch()
-    test_vm.inshutdown()
-
-
 @pytest.mark.acceptance
 def test_microvm_pause_resume(microvm):
     """Test a normal microvm pause"""

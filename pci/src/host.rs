@@ -12,17 +12,17 @@
 
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_arch = "aarch64")]
+use acpi::AmlOne;
 use acpi::{
-    AmlAddressSpaceDecode, AmlBuilder, AmlByte, AmlCacheable, AmlDWord, AmlDWordDesc, AmlDevice,
-    AmlEisaId, AmlNameDecl, AmlPackage, AmlReadAndWrite, AmlResTemplate, AmlScopeBuilder,
-    AmlWordDesc, AmlZero,
+    AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlByte, AmlCacheable, AmlCreateDWordField,
+    AmlDWord, AmlDWordDesc, AmlDevice, AmlEisaId, AmlElse, AmlEqual, AmlISARanges, AmlIf,
+    AmlInteger, AmlLNot, AmlLocal, AmlMethod, AmlName, AmlNameDecl, AmlOr, AmlPackage,
+    AmlReadAndWrite, AmlResTemplate, AmlReturn, AmlScopeBuilder, AmlStore, AmlToUuid, AmlWordDesc,
+    AmlZero,
 };
 #[cfg(target_arch = "x86_64")]
-use acpi::{
-    AmlAnd, AmlArg, AmlCreateDWordField, AmlElse, AmlEqual, AmlISARanges, AmlIf, AmlInteger,
-    AmlIoDecode, AmlIoResource, AmlLNot, AmlLocal, AmlMethod, AmlName, AmlOr, AmlReturn, AmlStore,
-    AmlToUuid,
-};
+use acpi::{AmlIoDecode, AmlIoResource};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use sysbus::{errors::Result as SysBusResult, SysBusDevOps};
 
@@ -57,6 +57,8 @@ pub struct PciHost {
     config_addr: u32,
     pcie_ecam_range: (u64, u64),
     pcie_mmio_range: (u64, u64),
+    #[cfg(target_arch = "aarch64")]
+    pcie_pio_range: (u64, u64),
 }
 
 impl PciHost {
@@ -71,6 +73,7 @@ impl PciHost {
         sys_mem: &Arc<AddressSpace>,
         pcie_ecam_range: (u64, u64),
         pcie_mmio_range: (u64, u64),
+        #[cfg(target_arch = "aarch64")] pcie_pio_range: (u64, u64),
     ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = sys_io.root().clone();
@@ -88,6 +91,8 @@ impl PciHost {
             config_addr: 0,
             pcie_ecam_range,
             pcie_mmio_range,
+            #[cfg(target_arch = "aarch64")]
+            pcie_pio_range,
         }
     }
 
@@ -258,6 +263,98 @@ impl SysBusDevOps for PciHost {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+fn build_osc_for_aml(pci_host_bridge: &mut AmlDevice) {
+    let mut method = AmlMethod::new("_OSC", 4, false);
+    method.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(0), "CDW1"));
+    let mut if_obj_0 = AmlIf::new(AmlEqual::new(
+        AmlArg(0),
+        AmlToUuid::new("33db4d5b-1ff7-401c-9657-7441c03dd766"),
+    ));
+    if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(4), "CDW2"));
+    if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(8), "CDW3"));
+    let cdw3 = AmlName("CDW3".to_string());
+    if_obj_0.append_child(AmlStore::new(cdw3.clone(), AmlLocal(0)));
+    if_obj_0.append_child(AmlAnd::new(AmlLocal(0), AmlInteger(0x1f), AmlLocal(0)));
+    let mut if_obj_1 = AmlIf::new(AmlLNot::new(AmlEqual::new(AmlArg(1), AmlInteger(1))));
+    let cdw1 = AmlName("CDW1".to_string());
+    if_obj_1.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x08), cdw1.clone()));
+    if_obj_0.append_child(if_obj_1);
+    let mut if_obj_2 = AmlIf::new(AmlLNot::new(AmlEqual::new(cdw3.clone(), AmlLocal(0))));
+    if_obj_2.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x10), cdw1.clone()));
+    if_obj_0.append_child(if_obj_2);
+    if_obj_0.append_child(AmlStore::new(AmlLocal(0), cdw3));
+    method.append_child(if_obj_0);
+    let mut else_obj_0 = AmlElse::new();
+    else_obj_0.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x04), cdw1));
+    method.append_child(else_obj_0);
+    method.append_child(AmlReturn::with_value(AmlArg(3)));
+    pci_host_bridge.append_child(method);
+}
+
+#[cfg(target_arch = "aarch64")]
+fn build_osc_for_aml(pci_host_bridge: &mut AmlDevice) {
+    // _OSC means Operating System Capabilities.
+    pci_host_bridge.append_child(AmlNameDecl::new("SUPP", AmlInteger(0)));
+    pci_host_bridge.append_child(AmlNameDecl::new("CTRL", AmlInteger(0)));
+    let mut method = AmlMethod::new("_OSC", 4, false);
+    method.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(0), "CDW1"));
+    // The id is for PCI Host Bridge Device.
+    let mut if_obj_0 = AmlIf::new(AmlEqual::new(
+        AmlArg(0),
+        AmlToUuid::new("33db4d5b-1ff7-401c-9657-7441c03dd766"),
+    ));
+    // Get value from argument for SUPP and CTRL.
+    if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(4), "CDW2"));
+    if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(8), "CDW3"));
+    if_obj_0.append_child(AmlStore::new(
+        AmlName("CDW2".to_string()),
+        AmlName("SUPP".to_string()),
+    ));
+    if_obj_0.append_child(AmlStore::new(
+        AmlName("CDW3".to_string()),
+        AmlName("CTRL".to_string()),
+    ));
+    if_obj_0.append_child(AmlStore::new(
+        AmlAnd::new(AmlName("CTRL".to_string()), AmlInteger(0x1d), AmlLocal(0)),
+        AmlName("CTRL".to_string()),
+    ));
+    let mut if_obj_1 = AmlIf::new(AmlLNot::new(AmlEqual::new(AmlArg(1), AmlInteger(1))));
+    if_obj_1.append_child(AmlAnd::new(
+        AmlName("CDW1".to_string()),
+        AmlInteger(0x08),
+        AmlName("CDW1".to_string()),
+    ));
+    if_obj_0.append_child(if_obj_1);
+    let mut if_obj_2 = AmlIf::new(AmlLNot::new(AmlEqual::new(
+        AmlName("CDW3".to_string()),
+        AmlName("CTRL".to_string()),
+    )));
+    if_obj_2.append_child(AmlOr::new(
+        AmlName("CDW1".to_string()),
+        AmlInteger(0x10),
+        AmlName("CDW1".to_string()),
+    ));
+    if_obj_0.append_child(if_obj_2);
+    if_obj_0.append_child(AmlStore::new(
+        AmlName("CTRL".to_string()),
+        AmlName("CDW3".to_string()),
+    ));
+    // For pci host, kernel will use _OSC return value to determine
+    // whether native_pcie_hotplug is enabled or not.
+    if_obj_0.append_child(AmlReturn::with_value(AmlArg(3)));
+    method.append_child(if_obj_0);
+    let mut else_obj_0 = AmlElse::new();
+    else_obj_0.append_child(AmlOr::new(
+        AmlName("CDW1".to_string()),
+        AmlInteger(0x04),
+        AmlName("CDW1".to_string()),
+    ));
+    else_obj_0.append_child(AmlReturn::with_value(AmlArg(3)));
+    method.append_child(else_obj_0);
+    pci_host_bridge.append_child(method);
+}
+
 impl AmlBuilder for PciHost {
     fn aml_bytes(&self) -> Vec<u8> {
         let mut pci_host_bridge = AmlDevice::new("PCI0");
@@ -265,35 +362,14 @@ impl AmlBuilder for PciHost {
         pci_host_bridge.append_child(AmlNameDecl::new("_CID", AmlEisaId::new("PNP0A03")));
         pci_host_bridge.append_child(AmlNameDecl::new("_ADR", AmlZero));
         pci_host_bridge.append_child(AmlNameDecl::new("_UID", AmlZero));
-
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(target_arch = "aarch64")]
         {
-            let mut method = AmlMethod::new("_OSC", 4, false);
-            method.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(0), "CDW1"));
-            let mut if_obj_0 = AmlIf::new(AmlEqual::new(
-                AmlArg(0),
-                AmlToUuid::new("33db4d5b-1ff7-401c-9657-7441c03dd766"),
-            ));
-            if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(4), "CDW2"));
-            if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(8), "CDW3"));
-            let cdw3 = AmlName("CDW3".to_string());
-            if_obj_0.append_child(AmlStore::new(cdw3.clone(), AmlLocal(0)));
-            if_obj_0.append_child(AmlAnd::new(AmlLocal(0), AmlInteger(0x1f), AmlLocal(0)));
-            let mut if_obj_1 = AmlIf::new(AmlLNot::new(AmlEqual::new(AmlArg(1), AmlInteger(1))));
-            let cdw1 = AmlName("CDW1".to_string());
-            if_obj_1.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x08), cdw1.clone()));
-            if_obj_0.append_child(if_obj_1);
-            let mut if_obj_2 = AmlIf::new(AmlLNot::new(AmlEqual::new(cdw3.clone(), AmlLocal(0))));
-            if_obj_2.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x10), cdw1.clone()));
-            if_obj_0.append_child(if_obj_2);
-            if_obj_0.append_child(AmlStore::new(AmlLocal(0), cdw3));
-            method.append_child(if_obj_0);
-            let mut else_obj_0 = AmlElse::new();
-            else_obj_0.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x04), cdw1));
-            method.append_child(else_obj_0);
-            method.append_child(AmlReturn::with_value(AmlArg(3)));
-            pci_host_bridge.append_child(method);
+            // CCA: Cache Coherency Attribute, which determines whether
+            // guest supports DMA features in pci host on aarch64 platform.
+            pci_host_bridge.append_child(AmlNameDecl::new("_CCA", AmlOne));
         }
+
+        build_osc_for_aml(&mut pci_host_bridge);
 
         let pcie_ecam = self.pcie_ecam_range;
         let pcie_mmio = self.pcie_mmio_range;
@@ -334,6 +410,19 @@ impl AmlBuilder for PciHost {
                 0xffff,
                 0,
                 0xf300,
+            ));
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let pcie_pio = self.pcie_pio_range;
+            crs.append_child(AmlDWordDesc::new_io(
+                AmlAddressSpaceDecode::Positive,
+                AmlISARanges::EntireRange,
+                0,
+                pcie_pio.0 as u32,
+                (pcie_pio.0 + pcie_pio.1) as u32 - 1,
+                0,
+                pcie_pio.1 as u32,
             ));
         }
         crs.append_child(AmlDWordDesc::new_memory(
@@ -443,6 +532,8 @@ pub mod tests {
             &sys_mem,
             (0xB000_0000, 0x1000_0000),
             (0xC000_0000, 0x3000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (0xF000_0000, 0x1000_0000),
         )))
     }
 

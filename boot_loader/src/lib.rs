@@ -73,11 +73,6 @@
 //! }
 //! ```
 
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate error_chain;
-
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -99,6 +94,8 @@ pub use x86_64::X86BootLoader as BootLoader;
 pub use x86_64::X86BootLoaderConfig as BootLoaderConfig;
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         foreign_links {
             Io(std::io::Error);

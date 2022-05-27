@@ -372,6 +372,16 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_values(true)
             .required(false),
         )
+        .arg(
+            Arg::with_name("numa")
+            .multiple(true)
+            .long("numa")
+            .value_name("node,nodeid=0,cpus=0-1,memdev=mem0> \
+            -numa <dist,src=0,dst=1,val=20> \
+            -object <memory-backend-ram,size=2G,id=mem0,[host-nodes=0,policy=bind]")
+            .help("numa describes the memory read/write latency, bandwidth between Initiator Proximity Domains and Target Proximity Domains(Memory)")
+            .takes_values(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -420,6 +430,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_chardev);
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_device);
     add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
+    add_args_to_config_multi!((args.values_of("numa")), vm_cfg, add_numa);
 
     if let Some(s) = args.value_of("trace") {
         add_trace_events(&s)?;
@@ -485,7 +496,18 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
         }
 
         if let Some(cfg) = vm_config.chardev.remove(&chardev) {
-            if let ChardevType::Socket(path) = cfg.backend {
+            if let ChardevType::Socket {
+                path,
+                server,
+                nowait,
+            } = cfg.backend
+            {
+                if !server || !nowait {
+                    bail!(
+                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                        path
+                    );
+                }
                 sock_paths.push(path);
             } else {
                 bail!("Only socket-type of chardev can be used for monitor");

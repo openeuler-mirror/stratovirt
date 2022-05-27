@@ -18,11 +18,14 @@ use std::sync::{Arc, Mutex};
 use std::{cmp, fs, mem};
 
 use address_space::AddressSpace;
+use error_chain::bail;
+use log::{error, warn};
 use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
     event_loop::EventLoop,
 };
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -974,14 +977,23 @@ impl VirtioDevice for Net {
         self.realize()?;
 
         if let Some(senders) = &self.senders {
-            if let Some(mut taps) = self.taps.take() {
-                for (index, sender) in senders.iter().enumerate() {
-                    let tap = taps.remove(index);
-                    sender
-                        .send(Some(tap))
-                        .chain_err(|| ErrorKind::ChannelSend("tap fd".to_string()))?;
+            for (index, sender) in senders.iter().enumerate() {
+                match self.taps.take() {
+                    Some(taps) => {
+                        let tap = taps
+                            .get(index)
+                            .cloned()
+                            .chain_err(|| format!("Failed to get index {} tap", index))?;
+                        sender
+                            .send(Some(tap))
+                            .chain_err(|| ErrorKind::ChannelSend("tap fd".to_string()))?;
+                    }
+                    None => sender
+                        .send(None)
+                        .chain_err(|| "Failed to send status of None to channel".to_string())?,
                 }
             }
+
             self.update_evt
                 .write(1)
                 .chain_err(|| ErrorKind::EventFdWrite)?;

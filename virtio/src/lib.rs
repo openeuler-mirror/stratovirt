@@ -25,18 +25,9 @@
 //! - `x86_64`
 //! - `aarch64`
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate machine_manager;
-#[macro_use]
-extern crate vmm_sys_util;
-#[macro_use]
-extern crate migration_derive;
-
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         foreign_links {
             Io(std::io::Error);
@@ -124,12 +115,14 @@ pub use net::*;
 pub use queue::*;
 pub use rng::{Rng, RngState};
 pub use vhost::kernel as VhostKern;
+pub use vhost::user as VhostUser;
 pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use virtio_pci::VirtioPciDevice;
 
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
+use error_chain::bail;
 use machine_manager::config::ConfigCheck;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -182,6 +175,8 @@ pub const VIRTIO_NET_F_GUEST_UFO: u32 = 10;
 pub const VIRTIO_NET_F_HOST_TSO4: u32 = 11;
 /// Device can receive UFO.
 pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
+/// Device can merge receive buffers.
+pub const VIRTIO_NET_F_MRG_RXBUF: u32 = 15;
 /// Control channel is available.
 pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
 /// Device supports multi queue with automatic receive steering.
@@ -206,6 +201,8 @@ pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: u16 = 0;
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN: u16 = 1;
 /// The maximum pairs of multiple queue.
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX: u16 = 0x8000;
+/// Support more than one virtqueue.
+pub const VIRTIO_BLK_F_MQ: u32 = 12;
 
 /// The IO type of virtio block, refer to Virtio Spec.
 /// Read.
@@ -323,5 +320,14 @@ pub trait VirtioDevice: Send {
     /// * `_file_path` - The related backend file path.
     fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         bail!("Unsupported to update configuration")
+    }
+
+    /// Set guest notifiers for notifying the guest.
+    ///
+    /// # Arguments
+    ///
+    /// * `_queue_evts` - The notifier events from host.
+    fn set_guest_notifiers(&mut self, _queue_evts: &[EventFd]) -> Result<()> {
+        Ok(())
     }
 }

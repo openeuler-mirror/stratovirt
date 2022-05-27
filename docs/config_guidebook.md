@@ -7,7 +7,7 @@ StratoVirt can only be launched via cmdline arguments.
 ### 1.1 Machine Config
 
 General configuration of machine, including
-* type: The type of machine, three types of machine are available: "none", "microvm", 
+* type: The type of machine, three types of machine are available: "none", "microvm",
 "q35"(x86_64 platform) and "virt" (aarch64 platform).
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
 * mem-share: Guest memory is sharable with other processes or not.
@@ -33,9 +33,9 @@ Four properties are supported for `smp`.
 * sockets: the number of socket. (optional). If not set, default is the value of `cpus`.
 * cores: the number of core. (optional). If not set, default is one.
 * threads: the number of thread. (optional). If not set, default is one.
-NB: the arguments of cpu topology is used to interconnect with libvirt, but the cpu topology of StratoVirt 
-is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads). 
-If it is configured, the sockets number should equals to the number of cpu, `cores` should be `1` 
+NB: the arguments of cpu topology is used to interconnect with libvirt, but the cpu topology of StratoVirt
+is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads).
+If it is configured, the sockets number should equals to the number of cpu, `cores` should be `1`
 and `threads` should be `1`.
 
 
@@ -64,7 +64,7 @@ Default VM memory size is 256M. The supported VM memory size is among [256M, 512
 ```
 
 #### 1.3.2 Memory Prealloc
-Memory prealloc is supported by StratoVirt, users can use the following cmdline to configure 
+Memory prealloc is supported by StratoVirt, users can use the following cmdline to configure
 memory prealloc.
 
 ```shell
@@ -103,7 +103,41 @@ $ cat /proc/meminfo
 ... -mem-path /path/to/hugepages ...
 ```
 
-### 1.5 Kernel and Kernel Parameters
+### 1.5 NUMA node
+The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.
+The application of NUMA node is that one region of memory can be set as fast memory, another can be set as slow memory.
+
+Each NUMA node is given a list of command lines option, there will be described in detail below. 
+1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
+   It describes the size and id of each memory zone, the policy of binding to host memory node.
+   you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
+   The optional policies are default, preferred, bind, interleave and local.
+2. -numa node,cpus=0-1,memdev=mem0
+   It describes id and cpu set of the NUMA node, and the id belongs to which memory zone.
+3. -numa dist,src=0,dst=0,val=10
+   It describes the distance between source and destination. The default of source to source is 10,
+   source to destination is 20. And if you choose not to set these parameters, the VM will set the default values.
+   
+The following command shows how to set NUMA node:
+
+```shell
+# The number of cpu must be set to be the same as numa node cpu.
+-smp 4
+
+# The memory size must be set to be the same as numa node mem.
+-m 4G
+
+-object memory-backend-ram,size=2G,id=mem0,[host-nodes=0,policy=bind]
+-object memory-backend-ram,size=2G,id=mem1,[host-nodes=1,policy=bind]
+-numa node,nodeid=0,cpus=0-1,memdev=mem0
+-numa node,nodeid=1,cpus=2-3,memdev=mem1
+[-numa dist,src=0,dst=0,val=10]
+[-numa dist,src=0,dst=1,val=20]
+[-numa dist,src=1,dst=0,val=20]
+[-numa dist,src=1,dst=1,val=10]
+```
+
+### 1.6 Kernel and Kernel Parameters
 
 StratoVirt supports to launch PE or bzImage (only x86_64) format linux kernel 4.19 and can also set kernel
  parameters for VM.
@@ -118,7 +152,7 @@ And the given kernel parameters will be actually analyzed by boot loader.
 -append "console=ttyS0 rebook=k panic=1 pci=off tsc=reliable ipv6.disable=1"
 ```
 
-### 1.6 Initrd Configuration
+### 1.7 Initrd Configuration
 
 StratoVirt supports to launch VM by a initrd (boot loader initialized RAM disk) as well.
 
@@ -131,7 +165,7 @@ If you want to use initrd as rootfs, `root=/dev/ram` and `rdinit=/bin/sh` must b
 -initrd /path/to/initrd
 ```
 
-### 1.7 Global config
+### 1.8 Global config
 
 Users can set the global configuration using the -global parameter.
 
@@ -143,7 +177,7 @@ One property can be set:
 -global pcie-root-port.fast-unplug=1
 ```
 
-### 1.8 Logging
+### 1.9 Logging
 
 StratoVirt supports to output log to stderr and log file.
 
@@ -159,7 +193,7 @@ You can enable StratoVirt's logging by:
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
 StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
 
-### 1.9 Daemonize
+### 1.10 Daemonize
 
 StratoVirt supports to run as a daemon.
 
@@ -216,6 +250,11 @@ Nine properties are supported for virtio block device.
 * if: drive type, for block drive, it should be `none`. If not set, default is `none` (optional)
 * format: the format of block image, default value `raw`. NB: currently only `raw` is supported. (optional)
 If not set, default is raw.
+* num-queues: the optional num-queues attribute controls the number of queues to be used for block device. If not set,
+the default block queue number is 1.
+* bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
+The number ranges from 1 to 255, the smaller the number, the higher the priority.
+It determines the order of bootable devices which firmware will use for booting the guest OS.
 
 For virtio-blk-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -231,8 +270,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 -device virtio-blk-device,drive=drive_id,id=blkid[,iothread=iothread1,serial=serial_num]
 # virtio pci block device.
 -drive id=drive_id,file=path_on_host[,readonly=off,direct=off,throttling.iops-total=200]
--device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num]
-
+-device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num,num-queues=N,bootindex=1]
 ```
 
 ### 2.3 Virtio-net
@@ -240,13 +278,13 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 Virtio-net is a virtual Ethernet card in VM. It can enable the network capability of VM.
 
 Six properties are supported for netdev.
-* tap: the type of net device. NB: currently only tap is supported.
+* tap/vhost-user: the type of net device. NB: currently only tap and vhost-user is supported.
 * id: unique netdev id.
 * ifname: name of tap device in host.
-* fd: the file descriptor of opened tap device. 
+* fd: the file descriptor of opened tap device.
 * fds: file descriptors of opened tap device.
 * queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or vhost-net device.
-NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given, 
+NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given,
 the tap device would be created according to `ifname`.
 
 Eight properties are supported for virtio-net-device or virtio-net-pci.
@@ -263,7 +301,7 @@ It has no effect when vhost is set.
 Two more properties are supported for virtio pci net device.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
-of device and the second one represents function number of it. For virtio pci net device, it 
+of device and the second one represents function number of it. For virtio pci net device, it
 is a single function device, the function number should be set to zero.
 
 ```shell
@@ -275,10 +313,10 @@ is a single function device, the function number should be set to zero.
 -device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
 ```
 
-StratoVirt also supports vhost-net to get a higher performance in network. It can be set by 
+StratoVirt also supports vhost-net to get a higher performance in network. It can be set by
 giving `vhost` property, and one more property is supported for vhost-net device.
 
-* vhostfd: fd for vhost-net device, it could be configured when `vhost=on`. If this argument is not 
+* vhostfd: fd for vhost-net device, it could be configured when `vhost=on`. If this argument is not
 given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatically.
 
 ```shell
@@ -288,6 +326,16 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 # virtio pci net device
 -netdev tap,id=netdevid,ifname=host_dev_name,vhost=on[,vhostfd=2,queues=N]
 -device virtio-net-pci,netdev=netdevid,id=netid,bus=pcie.0,addr=0x2.0x0[,multifunction=on,iothread=iothread1,mac=12:34:56:78:9A:BC,mq=on]
+```
+
+StratoVirt also supports vhost-user net to get a higher performance by ovs-dpdk. Currently, only
+virtio pci net device support vhost-user net.
+
+```shell
+# virtio pci net device
+-chardev socket,id=chardevid,path=socket_path
+-netdev vhost-user,id=netdevid,chardev=chardevid
+-device virtio-net-pci,netdev=netdevid,id=netid,mac=12:34:56:78:9A:BC,bus=pci.0,addr=0x2.0x0
 ```
 
 *How to set a tap device?*
@@ -319,6 +367,31 @@ $ ip tuntap add tap1 mode tap multi_queue
 $ brctl addif qbr0 tap1
 $ ifconfig qbr0 up; ifconfig tap1 up
 $ ifconfig qbr0 1.1.1.1
+```
+
+*How to create port by ovs-dpdk?*
+
+```shell
+# Start open vSwitch daemons
+$ ovs-ctl start
+# Initialize database
+$ ovs-vsctl init
+# Dpdk init
+$ ovs-vsctl set Open_vSwitch . other_config:dpdk-init=true
+# Set up dpdk lcore mask
+$ ovs-vsctl set Open_vSwitch . other_config:dpdk-lcore-mask=0xf
+# Set up hugepages for dpdk-socket-mem (2G)
+$ ovs-vsctl set Open_vSwitch . other_config:dpdk-socket-mem=1024
+# Set up PMD(Pull Mode Driver) cpu mask
+$ ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=0xf
+# Add bridge
+$ ovs-vsctl add-br ovs_br -- set bridge ovs_br datapath_type=netdev
+# Add port
+$ ovs-vsctl add-port ovs_br port1 -- set Interface port1 type=dpdkvhostuser
+$ ovs-vsctl add-port ovs_br port2 -- set Interface port2 type=dpdkvhostuser
+# Set num of rxq/txq
+$ ovs-vsctl set Interface port1 options:n_rxq=1,n_txq=1
+$ ovs-vsctl set Interface port2 options:n_rxq=1,n_txq=1
 ```
 
 ### 2.4 Virtio-console
@@ -479,7 +552,7 @@ Four parameters are supported for pcie root port.
 * addr: including slot number and function number.
 * id: the name of secondary bus.
 * chassis: the number of chassis. Interconnect with libvirt only.(optional).
-* multifunction: whether to open multi function for pcie root port.(optional). 
+* multifunction: whether to open multi function for pcie root port.(optional).
 If not set, default value is false.
 
 ```shell
@@ -540,7 +613,7 @@ Five properties can be set for chardev.
 # redirect methods
 -chardev stdio,id=chardev_id
 -chardev pty,id=chardev_id
--chardev socket,id=chardev_id,path=socket_path,server,nowait
+-chardev socket,id=chardev_id,path=socket_path[,server,nowait]
 -chardev file,id=chardev_id,path=file_path
 ```
 
@@ -565,14 +638,14 @@ in StratoVirt process by default. It will make a slight influence on performance
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      46       |       46       |
-|        q35         |      49       |       51       |
+|        q35         |      52       |       54       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      44       |       45       |
-|        virt        |      48       |       47       |
+|        virt        |      51       |       50       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell
@@ -602,9 +675,9 @@ $ ./stratovirt \
 * incoming: the path of the template.
 
 See [Snapshot and Restore](./snapshot.md) for details.
- 
+
 ## 6. Ozone
-Ozone is a lightweight secure sandbox for StratoVirt, it provides secure environment for StratoVirt 
+Ozone is a lightweight secure sandbox for StratoVirt, it provides secure environment for StratoVirt
 by limiting resources of StratoVirt using 'namespace'. Please run ozone with root permission.
 
 ### 6.1 Usage
@@ -641,7 +714,7 @@ About the arguments:
 ### 6.2 Example
 As ozone uses a directory to mount as a root directory, after ozone is launched, the directory "/srv/zozne/{exec_file}/{name}" will be created. (Where, `exec_file` is the executable binary file, usually it is `stratovirt`, while `name` is the name of ozone, it is given by users, but the length of it should be no more than 255 bytes.) In order to run ozone normally, please make sure that the directory "/srv/zozne/{exec_file}/{name}" does not exists before launching ozone.
 
-On top of that, the path-related arguments are different. They are all in the current(`./`) directory. 
+On top of that, the path-related arguments are different. They are all in the current(`./`) directory.
 
 For net name space, it can be created by the following command with name "mynet":
 ```shell

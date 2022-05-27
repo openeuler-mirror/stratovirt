@@ -17,12 +17,14 @@ use std::{cmp, usize};
 
 use address_space::AddressSpace;
 use devices::legacy::{Chardev, InputReceiver};
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
+use log::{debug, error, warn};
 use machine_manager::{
     config::{ChardevType, VirtioConsole},
     event_loop::EventLoop,
 };
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::num_ops::{read_u32, write_u32};
@@ -233,7 +235,7 @@ impl ConsoleHandler {
                     ));
                 }
             }
-            ChardevType::Socket(_) => {
+            ChardevType::Socket { .. } => {
                 if let Some(stream_fd) = locked_chardev.stream_fd {
                     notifiers.push(EventNotifier::new(
                         NotifierOperation::Delete,

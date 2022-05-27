@@ -12,7 +12,7 @@
 
 use hypervisor::kvm::*;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
-use util::tap::{TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
+use util::tap::{TUNGETFEATURES, TUNSETIFF, TUNSETOFFLOAD, TUNSETVNETHDRSZ};
 use vfio::{
     VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO, VFIO_DEVICE_GET_IRQ_INFO,
     VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET, VFIO_DEVICE_SET_IRQS, VFIO_GET_API_VERSION,
@@ -55,8 +55,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 46 syscalls
-/// * x86_64-unknown-musl: 48 syscalls
+/// * x86_64-unknown-gnu: 49 syscalls
+/// * x86_64-unknown-musl: 51 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -120,6 +120,9 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_readlinkat),
         #[cfg(target_env = "musl")]
         BpfRule::new(libc::SYS_readlink),
+        BpfRule::new(libc::SYS_socket),
+        BpfRule::new(libc::SYS_connect),
+        BpfRule::new(libc::SYS_getcwd),
     ]
 }
 
@@ -151,6 +154,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_NET_SET_BACKEND() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_GET_FEATURES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_RESET_OWNER() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, TUNGETFEATURES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETIFF() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)

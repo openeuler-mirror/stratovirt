@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
+use error_chain::bail;
+use log::debug;
 
 use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
 use super::hotplug::HotplugOps;
@@ -299,6 +301,8 @@ mod tests {
             &sys_mem,
             (0xB000_0000, 0x1000_0000),
             (0xC000_0000, 0x3000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (0xF000_0000, 0x1000_0000),
         )))
     }
 

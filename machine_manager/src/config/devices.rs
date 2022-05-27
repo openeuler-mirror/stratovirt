@@ -38,3 +38,23 @@ pub fn parse_device_id(device_config: &str) -> Result<String> {
         Ok(String::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_device_id() {
+        let test_conf = "virtio-blk-device,drive=rootfs,id=blkid";
+        let ret = parse_device_id(test_conf);
+        assert!(ret.is_ok());
+        let id = ret.unwrap();
+        assert_eq!("blkid", id);
+
+        let test_conf = "virtio-blk-device,drive=rootfs";
+        let ret = parse_device_id(test_conf);
+        assert!(ret.is_ok());
+        let id = ret.unwrap();
+        assert_eq!("", id);
+    }
+}

@@ -20,6 +20,7 @@ use kvm_bindings::{
 };
 use kvm_ioctls::VcpuFd;
 use util::byte_code::ByteCode;
+use util::offset_of;
 use vmm_sys_util::{
     errno,
     ioctl::{ioctl_with_mut_ref, ioctl_with_ref},
@@ -248,13 +249,13 @@ pub fn set_core_regs(vcpu_fd: &VcpuFd, core_regs: kvm_regs) -> Result<()> {
     set_one_reg_vec(
         vcpu_fd,
         Arm64CoreRegs::UserFPSIMDStateFpsr.into(),
-        &core_regs.fp_regs.fpsr.as_bytes().to_vec(),
+        core_regs.fp_regs.fpsr.as_bytes(),
     )?;
 
     set_one_reg_vec(
         vcpu_fd,
         Arm64CoreRegs::UserFPSIMDStateFpcr.into(),
-        &core_regs.fp_regs.fpcr.as_bytes().to_vec(),
+        core_regs.fp_regs.fpcr.as_bytes(),
     )?;
 
     Ok(())

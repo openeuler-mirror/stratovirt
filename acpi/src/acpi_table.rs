@@ -16,6 +16,23 @@ use super::aml_compiler::AmlBuilder;
 
 /// Offset of checksum field in ACPI table.
 pub const TABLE_CHECKSUM_OFFSET: u32 = 9;
+pub const INTERRUPT_PPIS_COUNT: u32 = 16;
+pub const INTERRUPT_SGIS_COUNT: u32 = 16;
+/// GTDT irq number for timer.
+pub const ACPI_GTDT_ARCH_TIMER_VIRT_IRQ: u32 = 11;
+pub const ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ: u32 = 13;
+pub const ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ: u32 = 14;
+pub const ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ: u32 = 10;
+pub const ACPI_GTDT_INTERRUPT_MODE_LEVEL: u32 = 0;
+pub const ACPI_GTDT_CAP_ALWAYS_ON: u32 = 4;
+/// IORT node types, reference: ARM Document number: ARM DEN 0049B, October 2015.
+pub const ACPI_IORT_NODE_ITS_GROUP: u8 = 0x00;
+pub const ACPI_IORT_NODE_PCI_ROOT_COMPLEX: u8 = 0x02;
+/// Interrupt controller structure types for MADT.
+pub const ACPI_MADT_GENERIC_CPU_INTERFACE: u8 = 11;
+pub const ACPI_MADT_GENERIC_DISTRIBUTOR: u8 = 12;
+pub const ACPI_MADT_GENERIC_REDISTRIBUTOR: u8 = 14;
+pub const ACPI_MADT_GENERIC_TRANSLATOR: u8 = 15;
 
 #[repr(C, packed)]
 #[derive(Default, Copy, Clone)]
@@ -206,6 +223,94 @@ impl ByteCode for AcpiRsdp {}
 impl AmlBuilder for AcpiRsdp {
     fn aml_bytes(&self) -> Vec<u8> {
         self.as_bytes().to_vec()
+    }
+}
+
+/// ACPI SRAT processor affinity structure.
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct AcpiSratProcessorAffinity {
+    /// Type ID.
+    pub type_id: u8,
+    /// The length of this structure.
+    pub length: u8,
+    /// Bit [7:0] of the proximity domain to which the processor belongs.
+    pub proximity_lo: u8,
+    /// The processor local APIC ID.
+    pub local_apic_id: u8,
+    /// The processor affinity flags.
+    pub flags: u32,
+    /// The processor local SAPIC EID.
+    pub local_sapic_eid: u8,
+    /// Bit [31:8] of the proximity domain to which the processor belongs.
+    pub proximity_hi: [u8; 3],
+    /// The clock domain to which the processor belongs.
+    pub clock_domain: u32,
+}
+
+impl ByteCode for AcpiSratProcessorAffinity {}
+
+impl AmlBuilder for AcpiSratProcessorAffinity {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::from(self.as_bytes())
+    }
+}
+
+/// ACPI SRAT GICC affinity structure.
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct AcpiSratGiccAffinity {
+    /// Type ID.
+    pub type_id: u8,
+    /// The length of this structure.
+    pub length: u8,
+    /// Represents the proximity domain to which the "range of memory" belongs.
+    pub proximity_domain: u32,
+    /// The ACPI processor UID of the associated GICC
+    pub process_uid: u32,
+    /// The GICC affinity flags.
+    pub flags: u32,
+    /// The clock domain to which the processor belongs.
+    pub clock_domain: u32,
+}
+
+impl ByteCode for AcpiSratGiccAffinity {}
+
+impl AmlBuilder for AcpiSratGiccAffinity {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::from(self.as_bytes())
+    }
+}
+
+/// ACPI SRAT memory affinity structure.
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct AcpiSratMemoryAffinity {
+    /// Type ID.
+    pub type_id: u8,
+    /// The length of this structure.
+    pub length: u8,
+    /// Represents the proximity domain to which the "range of memory" belongs.
+    pub proximity_domain: u32,
+    /// Reserved field.
+    pub reserved1: u16,
+    /// The base address of the memory range.
+    pub base_addr: u64,
+    /// The length of the memory range.
+    pub range_length: u64,
+    /// Reserved field.
+    pub reserved2: u32,
+    /// Indicates whether memory is enabled and can be hot plugged.
+    pub flags: u32,
+    /// Reserved field.
+    pub reserved3: u64,
+}
+
+impl ByteCode for AcpiSratMemoryAffinity {}
+
+impl AmlBuilder for AcpiSratMemoryAffinity {
+    fn aml_bytes(&self) -> Vec<u8> {
+        Vec::from(self.as_bytes())
     }
 }
 

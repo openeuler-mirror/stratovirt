@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use error_chain::bail;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -17,7 +18,8 @@ use super::{
     pci_args_check,
 };
 use crate::config::{
-    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    ChardevType, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH,
+    MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::{qmp_schema, QmpChannel};
 
@@ -31,6 +33,7 @@ pub struct NetDevcfg {
     pub vhost_fds: Option<Vec<i32>>,
     pub ifname: String,
     pub queues: u16,
+    pub chardev: Option<String>,
 }
 
 impl Default for NetDevcfg {
@@ -42,6 +45,7 @@ impl Default for NetDevcfg {
             vhost_fds: None,
             ifname: "".to_string(),
             queues: 2,
+            chardev: None,
         }
     }
 }
@@ -82,6 +86,7 @@ pub struct NetworkInterfaceConfig {
     pub iothread: Option<String>,
     pub queues: u16,
     pub mq: bool,
+    pub socket_path: Option<String>,
 }
 
 impl NetworkInterfaceConfig {
@@ -102,6 +107,7 @@ impl Default for NetworkInterfaceConfig {
             iothread: None,
             queues: 2,
             mq: false,
+            socket_path: None,
         }
     }
 }
@@ -125,7 +131,7 @@ impl ConfigCheck for NetworkInterfaceConfig {
         }
 
         if let Some(vhost_type) = self.vhost_type.as_ref() {
-            if vhost_type != "vhost-kernel" {
+            if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
                 return Err(ErrorKind::UnknownVhostType.into());
             }
         }
@@ -144,6 +150,13 @@ impl ConfigCheck for NetworkInterfaceConfig {
                 MAX_STRING_LENGTH,
             )
             .into());
+        }
+
+        if self.socket_path.is_some() && self.socket_path.as_ref().unwrap().len() > MAX_PATH_LENGTH
+        {
+            return Err(
+                ErrorKind::StringLengthTooLong("socket path".to_string(), MAX_PATH_LENGTH).into(),
+            );
         }
 
         Ok(())
@@ -169,7 +182,7 @@ pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     } else {
         "".to_string()
     };
-    if netdev_type.ne("tap") {
+    if netdev_type.ne("tap") && netdev_type.ne("vhost-user") {
         bail!("Unsupported netdev type: {:?}", &netdev_type);
     }
     if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
@@ -203,6 +216,11 @@ pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         if vhost.into() {
             net.vhost_type = Some(String::from("vhost-kernel"));
         }
+    } else if netdev_type.eq("vhost-user") {
+        net.vhost_type = Some(String::from("vhost-user"));
+    }
+    if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
+        net.chardev = Some(chardev);
     }
     if let Some(vhost_fd) = parse_fds(&cmd_parser, "vhostfd")? {
         net.vhost_fds = Some(vhost_fd);
@@ -219,7 +237,7 @@ pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     if net.vhost_fds.is_some() && net.vhost_type.is_none() {
         bail!("Argument \'vhostfd\' is not needed for virtio-net device");
     }
-    if net.tap_fds.is_none() && net.ifname.eq("") {
+    if net.tap_fds.is_none() && net.ifname.eq("") && netdev_type.ne("vhost-user") {
         bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
     }
 
@@ -268,6 +286,30 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         netdevinterfacecfg.vhost_fds = netcfg.vhost_fds.clone();
         netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
         netdevinterfacecfg.queues = netcfg.queues;
+        if let Some(chardev) = &netcfg.chardev {
+            if let Some(char_dev) = vm_config.chardev.remove(chardev) {
+                match &char_dev.backend {
+                    ChardevType::Socket {
+                        path,
+                        server,
+                        nowait,
+                    } => {
+                        if *server || *nowait {
+                            bail!(
+                                "Argument \'server\' or \'nowait\' is not need for chardev \'{}\'",
+                                path
+                            );
+                        }
+                        netdevinterfacecfg.socket_path = Some(path.clone());
+                    }
+                    _ => {
+                        bail!("Chardev {:?} backend should be socket type.", &chardev);
+                    }
+                }
+            } else {
+                bail!("Chardev: {:?} not found for character device", &chardev);
+            }
+        }
     } else {
         bail!("Netdev: {:?} not found for net device", &netdev);
     }
@@ -284,6 +326,7 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         vhost_fds: None,
         ifname: String::new(),
         queues: 2,
+        chardev: None,
     };
 
     if let Some(fds) = args.fds {
@@ -351,7 +394,8 @@ impl VmConfig {
             .push("ifname")
             .push("vhostfd")
             .push("vhostfds")
-            .push("queues");
+            .push("queues")
+            .push("chardev");
 
         cmd_parser.parse(netdev_config)?;
         let drive_cfg = parse_netdev(cmd_parser)?;
@@ -555,6 +599,25 @@ mod tests {
         let net_cfg =
             "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,multifunction=on";
         assert!(parse_net(&mut vm_config, net_cfg).is_ok());
+
+        // For vhost-user net
+        assert!(vm_config.add_netdev("vhost-user,id=netdevid").is_ok());
+        let net_cfg =
+            "virtio-net-pci,id=netid,netdev=netdevid,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
+        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
+        assert!(net_cfg_res.is_ok());
+        let network_configs = net_cfg_res.unwrap();
+        assert_eq!(network_configs.id, "netid");
+        assert_eq!(network_configs.vhost_type, Some("vhost-user".to_string()));
+        assert_eq!(network_configs.mac, Some("12:34:56:78:9A:BC".to_string()));
+
+        assert!(vm_config
+            .add_netdev("vhost-user,id=netdevid2,chardev=chardevid2")
+            .is_ok());
+        let net_cfg =
+            "virtio-net-pci,id=netid2,netdev=netdevid2,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
+        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
+        assert!(net_cfg_res.is_err());
     }
 
     #[test]

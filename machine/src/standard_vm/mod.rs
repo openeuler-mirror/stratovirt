@@ -18,6 +18,7 @@ mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
+use log::error;
 use machine_manager::event_loop::EventLoop;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
@@ -27,6 +28,8 @@ pub use x86_64::StdMachine;
 
 #[allow(clippy::upper_case_acronyms)]
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
@@ -72,11 +75,11 @@ use acpi::{
 };
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
 use errors::{Result, ResultExt};
 use machine_manager::config::{
     get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,
-    PciBdf, VmConfig,
+    NumaNode, NumaNodes, PciBdf, VmConfig,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -131,9 +134,38 @@ trait StdMachineOps: AcpiBuilder {
             .chain_err(|| "Failed to build ACPI MADT table")?;
         xsdt_entries.push(madt_addr);
 
+        #[cfg(target_arch = "aarch64")]
+        {
+            let gtdt_addr = self
+                .build_gtdt_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI GTDT table")?;
+            xsdt_entries.push(gtdt_addr);
+
+            let iort_addr = self
+                .build_iort_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI IORT table")?;
+            xsdt_entries.push(iort_addr);
+
+            let spcr_addr = self
+                .build_spcr_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI SPCR table")?;
+            xsdt_entries.push(spcr_addr);
+        }
+
         let mcfg_addr = Self::build_mcfg_table(&acpi_tables, &mut loader)
             .chain_err(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
+
+        let srat_addr = self
+            .build_srat_table(&acpi_tables, &mut loader)
+            .chain_err(|| "Failed to build ACPI SRAT table")?;
+        xsdt_entries.push(srat_addr);
+
+        if let Some(numa_nodes) = self.get_numa_nodes() {
+            let slit_addr = Self::build_slit_table(numa_nodes, &acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI SLIT table")?;
+            xsdt_entries.push(slit_addr);
+        }
 
         let xsdt_addr = Self::build_xsdt_table(&acpi_tables, &mut loader, xsdt_entries)?;
 
@@ -166,6 +198,8 @@ trait StdMachineOps: AcpiBuilder {
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
 
     fn get_vm_config(&self) -> &Mutex<VmConfig>;
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes>;
 
     /// Register event notifier for reset of standard machine.
     ///
@@ -242,6 +276,36 @@ trait StdMachineOps: AcpiBuilder {
 /// Standard machine struct should at least implement `build_dsdt_table`, `build_madt_table`
 /// and `build_mcfg_table` function.
 trait AcpiBuilder {
+    /// Add ACPI table to the end of table loader, returns the offset of ACPI table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    /// `table` - ACPI table.
+    fn add_table_to_loader(
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+        table: &AcpiTable,
+    ) -> Result<u64> {
+        let mut locked_acpi_data = acpi_data.lock().unwrap();
+        let table_begin = locked_acpi_data.len() as u32;
+        locked_acpi_data.extend(table.aml_bytes());
+        let table_end = locked_acpi_data.len() as u32;
+        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
+        // TableLoader, because TableLoader also needs to acquire this lock.
+        drop(locked_acpi_data);
+
+        loader.add_cksum_entry(
+            ACPI_TABLE_FILE,
+            table_begin + TABLE_CHECKSUM_OFFSET,
+            table_begin,
+            table_end - table_begin,
+        )?;
+
+        Ok(table_begin as u64)
+    }
+
     /// Build ACPI DSDT table, returns the offset of ACPI DSDT table in `acpi_data`.
     ///
     /// # Arguments
@@ -270,6 +334,60 @@ trait AcpiBuilder {
         bail!("Not implemented");
     }
 
+    /// Build ACPI GTDT table, returns the offset of ACPI GTDT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_gtdt_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI IORT table, returns the offset of ACPI IORT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_iort_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI SPCR table, returns the offset of ACPI SPCR table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_spcr_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
     /// Build ACPI MCFG table, returns the offset of ACPI MCFG table in `acpi_data`.
     ///
     /// # Arguments
@@ -281,10 +399,21 @@ trait AcpiBuilder {
         Self: Sized,
     {
         let mut mcfg = AcpiTable::new(*b"MCFG", 1, *b"STRATO", *b"VIRTMCFG", 1);
-        let ecam_addr: u64 = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
         // Bits 20~28 (totally 9 bits) in PCIE ECAM represents bus number.
         let bus_number_mask = (1 << 9) - 1;
-        let max_nr_bus = (MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20) & bus_number_mask;
+        let ecam_addr: u64;
+        let max_nr_bus: u64;
+        #[cfg(target_arch = "x86_64")]
+        {
+            ecam_addr = MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0;
+            max_nr_bus = (MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].1 >> 20) & bus_number_mask;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            ecam_addr = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
+            max_nr_bus =
+                (MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20) & bus_number_mask;
+        }
 
         // Reserved
         mcfg.append_child(&[0_u8; 8]);
@@ -327,7 +456,7 @@ trait AcpiBuilder {
     where
         Self: Sized,
     {
-        let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFSCP", 1);
+        let mut fadt = AcpiTable::new(*b"FACP", 6, *b"STRATO", *b"VIRTFACP", 1);
 
         fadt.set_table_len(208_usize);
         // PM1A_EVENT bit, offset is 56.
@@ -339,8 +468,13 @@ trait AcpiBuilder {
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
         fadt.set_field(76, 0x608);
-        // FADT flag: disable HW_REDUCED_ACPI bit.
-        fadt.set_field(112, 1 << 10 | 1 << 8);
+        #[cfg(target_arch = "aarch64")]
+        {
+            // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
+            fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+            // ARM Boot Architecture Flags
+            fadt.set_field(129, 0x3_u16);
+        }
         // FADT minor revision
         fadt.set_field(131, 3);
         // X_PM_TMR_BLK bit, offset is 208.
@@ -351,6 +485,8 @@ trait AcpiBuilder {
 
         #[cfg(target_arch = "x86_64")]
         {
+            // FADT flag: disable HW_REDUCED_ACPI bit on x86 plantform.
+            fadt.set_field(112, 1 << 10 | 1 << 8);
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);
@@ -436,6 +572,76 @@ trait AcpiBuilder {
         )?;
 
         Ok(facs_begin as u64)
+    }
+
+    /// Build ACPI SRAT CPU table.
+    ///  # Arguments
+    ///
+    /// `proximity_domain` - The proximity domain.
+    /// `node` - The NUMA node.
+    /// `srat` - The SRAT table.
+    fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable);
+
+    /// Build ACPI SRAT memory table.
+    ///  # Arguments
+    ///
+    /// `base_addr` - The base address of the memory range.
+    /// `proximity_domain` - The proximity domain.
+    /// `node` - The NUMA node.
+    /// `srat` - The SRAT table.
+    fn build_srat_mem(
+        &self,
+        base_addr: u64,
+        proximity_domain: u32,
+        node: &NumaNode,
+        srat: &mut AcpiTable,
+    ) -> u64;
+
+    /// Build ACPI SRAT table, returns the offset of ACPI SRAT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    fn build_srat_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> Result<u64>;
+
+    /// Build ACPI SLIT table, returns the offset of ACPI SLIT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `numa_nodes` - The information of NUMA nodes.
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    fn build_slit_table(
+        numa_nodes: &NumaNodes,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> Result<u64> {
+        let mut slit = AcpiTable::new(*b"SLIT", 1, *b"STRATO", *b"VIRTSLIT", 1);
+        slit.append_child((numa_nodes.len() as u64).as_bytes());
+
+        let existing_nodes: Vec<u32> = numa_nodes.keys().cloned().collect();
+        for (id, node) in numa_nodes.iter().enumerate() {
+            let distances = &node.1.distances;
+            for i in existing_nodes.iter() {
+                let dist: u8 = if id as u32 == *i {
+                    10
+                } else if let Some(distance) = distances.get(i) {
+                    *distance
+                } else {
+                    20
+                };
+                slit.append_child(dist.as_bytes());
+            }
+        }
+
+        let slit_begin = StdMachine::add_table_to_loader(acpi_data, loader, &slit)
+            .chain_err(|| "Fail to add SLIT table to loader")?;
+        Ok(slit_begin as u64)
     }
 
     /// Build ACPI XSDT table, returns the offset of ACPI XSDT table in `acpi_data`.
@@ -557,6 +763,8 @@ impl StdMachine {
                 serial_num: args.serial_num.clone(),
                 iothread: args.iothread.clone(),
                 iops: conf.iops,
+                queues: args.queues.unwrap_or(1),
+                boot_index: args.boot_index,
             };
             dev.check()?;
             dev
@@ -566,8 +774,16 @@ impl StdMachine {
 
         let blk_id = blk.id.clone();
         let blk = Arc::new(Mutex::new(Block::new(blk)));
-        self.add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction)
+        let pci_dev = self
+            .add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
             .chain_err(|| "Failed to add virtio pci block device")?;
+
+        if let Some(bootindex) = args.boot_index {
+            if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
+                self.add_bootindex_devices(bootindex, &dev_path, &args.id)
+                    .chain_err(|| "Fail to add boot index")?;
+            }
+        }
 
         MigrationManager::register_device_instance_mutex_with_id(
             BlockState::descriptor(),
@@ -600,6 +816,7 @@ impl StdMachine {
                 iothread: args.iothread.clone(),
                 queues: conf.queues,
                 mq: conf.queues > 2,
+                socket_path: None,
             };
             dev.check()?;
             dev
@@ -609,12 +826,12 @@ impl StdMachine {
 
         if dev.vhost_type.is_some() {
             let net = Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())));
-            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, false)
                 .chain_err(|| "Failed to add virtio net device")?;
         } else {
             let net_id = dev.id.clone();
             let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
-            self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction)
+            self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction, false)
                 .chain_err(|| "Failed to add virtio net device")?;
             MigrationManager::register_device_instance_mutex_with_id(
                 VirtioNetState::descriptor(),
@@ -622,6 +839,7 @@ impl StdMachine {
                 &net_id,
             );
         }
+
         Ok(())
     }
 
@@ -827,7 +1045,13 @@ impl DeviceInterface for StdMachine {
         let locked_pci_host = pci_host.lock().unwrap();
         if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
             match handle_unplug_request(&bus, &dev) {
-                Ok(()) => Response::create_empty_response(),
+                Ok(()) => {
+                    let locked_dev = dev.lock().unwrap();
+                    let dev_id = locked_dev.name();
+                    drop(locked_pci_host);
+                    self.del_bootindex_devices(&dev_id);
+                    Response::create_empty_response()
+                }
                 Err(e) => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,

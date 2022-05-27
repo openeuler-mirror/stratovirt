@@ -482,6 +482,9 @@ pub struct device_add {
     pub iothread: Option<String>,
     pub multifunction: Option<bool>,
     pub host: Option<String>,
+    #[serde(rename = "num-queues")]
+    pub queues: Option<u16>,
+    pub boot_index: Option<u8>,
 }
 
 pub type DeviceAddArgument = device_add;
@@ -1742,7 +1745,7 @@ mod tests {
     fn test_qmp_unexpected_arguments() {
         // qmp: quit.
         let json_msg = r#"
-        { 
+        {
             "execute": "quit"
         }
         "#;
@@ -1755,8 +1758,8 @@ mod tests {
 
         // unexpected arguments for quit.
         let json_msg = r#"
-        { 
-            "execute": "quit" , 
+        {
+            "execute": "quit" ,
             "arguments": "isdf"
         }
         "#;
@@ -1769,7 +1772,7 @@ mod tests {
 
         // qmp: stop.
         let json_msg = r#"
-        { 
+        {
             "execute": "stop"
         }
         "#;
@@ -1782,8 +1785,8 @@ mod tests {
 
         // unexpected arguments for stop.
         let json_msg = r#"
-        { 
-            "execute": "stop" , 
+        {
+            "execute": "stop" ,
             "arguments": "isdf"
         }
         "#;
@@ -1796,7 +1799,7 @@ mod tests {
 
         // qmp: cont.
         let json_msg = r#"
-        { 
+        {
             "execute": "cont"
         }
         "#;
@@ -1809,8 +1812,8 @@ mod tests {
 
         // unexpected arguments for count.
         let json_msg = r#"
-        { 
-            "execute": "cont" , 
+        {
+            "execute": "cont" ,
             "arguments": "isdf"
         }
         "#;
@@ -1823,7 +1826,7 @@ mod tests {
 
         // qmp: query-hotpluggable-cpus.
         let json_msg = r#"
-        { 
+        {
             "execute": "query-hotpluggable-cpus"
         }
         "#;
@@ -1836,8 +1839,8 @@ mod tests {
 
         // unexpected arguments for query-hotpluggable-cpus.
         let json_msg = r#"
-        { 
-            "execute": "query-hotpluggable-cpus" , 
+        {
+            "execute": "query-hotpluggable-cpus" ,
             "arguments": "isdf"
         }
         "#;
@@ -1850,7 +1853,7 @@ mod tests {
 
         // qmp: query-cpus.
         let json_msg = r#"
-        { 
+        {
             "execute": "query-cpus"
         }
         "#;
@@ -1863,8 +1866,8 @@ mod tests {
 
         // unexpected arguments for query-cpus.
         let json_msg = r#"
-        { 
-            "execute": "query-cpus" , 
+        {
+            "execute": "query-cpus" ,
             "arguments": "isdf"
         }
         "#;
@@ -1877,7 +1880,7 @@ mod tests {
 
         // qmp: query-ststus.
         let json_msg = r#"
-        { 
+        {
             "execute": "query-status"
         }
         "#;
@@ -1890,8 +1893,8 @@ mod tests {
 
         // unexpected arguments for query-status.
         let json_msg = r#"
-        { 
-            "execute": "query-status" , 
+        {
+            "execute": "query-status" ,
             "arguments": "isdf"
         }
         "#;
@@ -1907,11 +1910,11 @@ mod tests {
     fn test_wrong_qmp_arguments() {
         // right arguments for device_add.
         let json_msg = r#"
-        { 
-            "execute": "device_add" , 
+        {
+            "execute": "device_add" ,
             "arguments": {
-                "id":"net-0", 
-                "driver":"virtio-net-mmio", 
+                "id":"net-0",
+                "driver":"virtio-net-mmio",
                 "addr":"0x0"
             }
         }
@@ -1925,11 +1928,11 @@ mod tests {
 
         // unknow arguments for device_add.
         let json_msg = r#"
-        { 
-            "execute": "device_add" , 
+        {
+            "execute": "device_add" ,
             "arguments": {
-                "id":"net-0", 
-                "driver":"virtio-net-mmio", 
+                "id":"net-0",
+                "driver":"virtio-net-mmio",
                 "addr":"0x0",
                 "UnknowArg": "should go to error"
             }
@@ -1944,11 +1947,11 @@ mod tests {
 
         // wrong spelling arguments for device_add.
         let json_msg = r#"
-        { 
-            "execute": "device_add" , 
+        {
+            "execute": "device_add" ,
             "arguments": {
-                "id":"net-0", 
-                "driv":"virtio-net-mmio", 
+                "id":"net-0",
+                "driv":"virtio-net-mmio",
                 "addr":"0x0"
             }
         }
@@ -1962,8 +1965,8 @@ mod tests {
 
         // right arguments for device_del.
         let json_msg = r#"
-        { 
-            "execute": "device_del" , 
+        {
+            "execute": "device_del" ,
             "arguments": {
                 "id": "net-1"
             }
@@ -1978,8 +1981,8 @@ mod tests {
 
         // wrong arguments for device_del.
         let json_msg = r#"
-        { 
-            "execute": "device_del" , 
+        {
+            "execute": "device_del" ,
             "arguments": {
                 "value": "h8i"
             }
@@ -1996,7 +1999,7 @@ mod tests {
 
         // missing arguments for getfd.
         let json_msg = r#"
-        { 
+        {
             "execute": "getfd"
         }
         "#;
@@ -2009,8 +2012,8 @@ mod tests {
 
         // unexpected arguments for getfd.
         let json_msg = r#"
-        { 
-            "execute": "getfd" , 
+        {
+            "execute": "getfd" ,
             "arguments": "isdf"
         }
         "#;
@@ -2023,10 +2026,10 @@ mod tests {
 
         // right arguments for getfd.
         let json_msg = r#"
-        { 
+        {
             "execute": "getfd",
-            "arguments": { 
-                "fdname": "fd1" 
+            "arguments": {
+                "fdname": "fd1"
             }
         }
         "#;
@@ -2039,17 +2042,17 @@ mod tests {
 
         // right arguments for blockdev-add.
         let json_msg = r#"
-        { 
+        {
             "execute": "blockdev-add",
             "arguments": {
-                "node-name": "drive-0", 
+                "node-name": "drive-0",
                 "file": {
-                    "driver": "file", 
+                    "driver": "file",
                     "filename": "/path/to/block"
-                }, 
+                },
                 "cache": {
                     "direct": true
-                }, 
+                },
                 "read-only": false
             }
         }
@@ -2063,11 +2066,11 @@ mod tests {
 
         // right arguments for device-add.
         let json_msg = r#"
-        { 
+        {
             "execute": "device_add",
             "arguments": {
-                "id": "drive-0", 
-                "driver": "virtio-blk-mmio", 
+                "id": "drive-0",
+                "driver": "virtio-blk-mmio",
                 "addr": "0x1"
             }
         }
@@ -2081,10 +2084,10 @@ mod tests {
 
         // right arguments for netdev-add.
         let json_msg = r#"
-        { 
+        {
             "execute": "netdev_add",
             "arguments": {
-                "id": "net-0", 
+                "id": "net-0",
                 "ifname":"tap0"
             }
         }
@@ -2101,8 +2104,8 @@ mod tests {
     fn test_unsupported_commands() {
         // unsupported qmp command.
         let json_msg = r#"
-        { 
-            "execute": "hello-world" , 
+        {
+            "execute": "hello-world" ,
         }
         "#;
         let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
@@ -2114,8 +2117,8 @@ mod tests {
 
         // unsupported qmp command, and unknow field.
         let json_msg = r#"
-        { 
-            "execute": "hello-world" , 
+        {
+            "execute": "hello-world" ,
             "arguments": {
                 "msg": "hello",
             }
@@ -2133,8 +2136,8 @@ mod tests {
     fn test_qmp_commands() {
         // query-version
         let json_msg = r#"
-        { 
-            "execute": "query-version" 
+        {
+            "execute": "query-version"
         }
         "#;
         let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
@@ -2146,8 +2149,8 @@ mod tests {
 
         // query-target
         let json_msg = r#"
-        { 
-            "execute": "query-target" 
+        {
+            "execute": "query-target"
         }
         "#;
         let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
@@ -2159,8 +2162,8 @@ mod tests {
 
         // query-commands
         let json_msg = r#"
-        { 
-            "execute": "query-commands" 
+        {
+            "execute": "query-commands"
         }
         "#;
         let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {

@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-//! This module implements some operations of Rust primitive types.
+use log::error;
+// This module implements some operations of Rust primitive types.
 
 /// Calculate the aligned-up u64 value.
 ///

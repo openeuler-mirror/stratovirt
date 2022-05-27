@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::Result;
+use error_chain::bail;
 use kvm_bindings::__IncompleteArrayField;
 
 pub const IOCB_FLAG_RESFD: u32 = 1;
@@ -104,7 +105,7 @@ impl LibaioContext {
         Ok(LibaioContext { ctx, max_size })
     }
 
-    pub fn submit(&self, nr: i64, iocbp: &mut Vec<*mut IoCb>) -> Result<()> {
+    pub fn submit(&self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()> {
         let ret = unsafe { libc::syscall(libc::SYS_io_submit, self.ctx, nr, iocbp.as_ptr()) };
         if ret < 0 {
             bail!("Failed to submit aio, return {}.", ret);
