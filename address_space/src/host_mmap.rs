@@ -303,7 +303,7 @@ pub fn set_host_memory_policy(
 
     let mut host_addr_start = mem_mappings.get(0).map(|m| m.host_address()).unwrap();
     for zone in mem_zones.as_ref().unwrap() {
-        let node_id = if let Some(id) = zone.host_numa_node {
+        let mut node_id = if let Some(id) = zone.host_numa_node {
             id as usize
         } else {
             0_usize
@@ -312,15 +312,17 @@ pub fn set_host_memory_policy(
         let mut nmask = vec![0_u64; node_id / 64 + 1];
         nmask[node_id / 64] |= 1_u64 << (node_id % 64);
         let policy = HostMemPolicy::from(zone.policy.clone());
-        if policy == HostMemPolicy::Default {
-            bail!("Failed to set default host policy");
+        if policy != HostMemPolicy::Default {
+            // We need to pass node_id + 1 as mbind() max_node argument.
+            // It is kind of linux bug or feature which will cut off the last node.
+            node_id += 1;
         }
         mbind(
             host_addr_start,
             zone.size,
             policy as u32,
             nmask,
-            node_id as u64 + 1,
+            node_id as u64,
             MPOL_MF_STRICT | MPOL_MF_MOVE,
         )
         .chain_err(|| "Failed to call mbind")?;
