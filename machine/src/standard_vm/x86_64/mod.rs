@@ -469,12 +469,12 @@ impl MachineOps for StdMachine {
             .init_ich9_lpc(clone_vm)
             .chain_err(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
+        let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let (boot_config, fwcfg) = if !is_migrate {
-            let fwcfg = locked_vm.add_fwcfg_device()?;
-            (Some(locked_vm.load_boot_source(Some(&fwcfg))?), Some(fwcfg))
+        let boot_config = if !is_migrate {
+            Some(locked_vm.load_boot_source(Some(&fwcfg))?)
         } else {
-            (None, None)
+            None
         };
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
@@ -483,11 +483,12 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        if let Some(fwcfg) = fwcfg {
+        if !is_migrate {
             locked_vm
                 .build_acpi_tables(&fwcfg)
                 .chain_err(|| "Failed to create ACPI tables")?;
         }
+
         StdMachine::arch_init()?;
         locked_vm.register_power_event(&locked_vm.power_button)?;
 
