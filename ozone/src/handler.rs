@@ -332,10 +332,9 @@ fn disinfect_process() -> Result<()> {
     let fd_entries = read_dir(SELF_FD).chain_err(|| "Failed to open process fd proc")?;
     for entry in fd_entries {
         if entry.is_err() {
-            continue;
+            break;
         }
-        let entry = entry?;
-        let file_name = entry.file_name();
+        let file_name = entry.unwrap().file_name();
         let file_name = file_name.to_str().unwrap_or("0");
         let fd = file_name.parse::<libc::c_int>().unwrap_or(0);
 
