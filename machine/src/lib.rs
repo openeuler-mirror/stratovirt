@@ -535,19 +535,12 @@ pub trait MachineOps {
         Ok(())
     }
 
-    /// Add boot index of device.
+    /// Check the boot index of device is duplicated or not.
     ///
     /// # Arguments
     ///
     /// * `bootindex` - The boot index of the device.
-    /// * `dev_path` - The firmware device path of the device.
-    /// * `dev_id` - The id of the device.
-    fn add_bootindex_devices(
-        &mut self,
-        boot_index: u8,
-        dev_path: &str,
-        dev_id: &str,
-    ) -> Result<()> {
+    fn check_bootindex(&mut self, boot_index: u8) -> Result<()> {
         // Unwrap is safe because StdMachine will overwrite this function,
         // which ensure boot_order_list is not None.
         let boot_order_list = self.get_boot_order_list().unwrap();
@@ -560,13 +553,23 @@ pub trait MachineOps {
             bail!("Failed to add duplicated bootindex {}.", boot_index);
         }
 
+        Ok(())
+    }
+
+    /// Add boot index of device.
+    ///
+    /// # Arguments
+    ///
+    /// * `bootindex` - The boot index of the device.
+    /// * `dev_path` - The firmware device path of the device.
+    /// * `dev_id` - The id of the device.
+    fn add_bootindex_devices(&mut self, boot_index: u8, dev_path: &str, dev_id: &str) {
+        let boot_order_list = self.get_boot_order_list().unwrap();
         boot_order_list.lock().unwrap().push(BootIndexInfo {
             boot_index,
             id: dev_id.to_string(),
             dev_path: dev_path.to_string(),
         });
-
-        Ok(())
     }
 
     /// Delete boot index of device.
@@ -586,14 +589,17 @@ pub trait MachineOps {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_blk(vm_config, cfg_args)?;
+        if let Some(bootindex) = device_cfg.boot_index {
+            self.check_bootindex(bootindex)
+                .chain_err(|| "Fail to add virtio pci blk device for invalid bootindex")?;
+        }
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .chain_err(|| "Failed to add virtio pci device")?;
         if let Some(bootindex) = device_cfg.boot_index {
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
-                self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id)
-                    .chain_err(|| "Fail to add boot index")?;
+                self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
             }
         }
         MigrationManager::register_device_instance_mutex_with_id(
