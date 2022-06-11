@@ -95,12 +95,16 @@ pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 pub use aarch64::ArmCPUCaps as CPUCaps;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUState as ArchCPU;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::ArmCPUTopology as CPUTopology;
 #[cfg(target_arch = "x86_64")]
 use x86_64::caps::X86CPUCaps as CPUCaps;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUState as ArchCPU;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::X86CPUTopology as CPUTopology;
 
 use std::cell::RefCell;
 use std::sync::atomic::fence;
@@ -151,7 +155,7 @@ pub enum CpuLifecycleState {
 #[allow(clippy::upper_case_acronyms)]
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
-    fn realize(&self, boot: &CPUBootConfig) -> Result<()>;
+    fn realize(&self, boot: &CPUBootConfig, topology: &CPUTopology) -> Result<()>;
 
     /// Start `CPU` thread and run virtual CPU in kvm.
     ///
@@ -283,7 +287,7 @@ impl CPU {
 }
 
 impl CPUInterface for CPU {
-    fn realize(&self, boot: &CPUBootConfig) -> Result<()> {
+    fn realize(&self, boot: &CPUBootConfig, topology: &CPUTopology) -> Result<()> {
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
             return Err(
@@ -296,6 +300,14 @@ impl CPUInterface for CPU {
             .unwrap()
             .set_boot_config(&self.fd, boot)
             .chain_err(|| "Failed to realize arch cpu")?;
+
+        #[cfg(target_arch = "x86_64")]
+        self.arch_cpu
+            .lock()
+            .unwrap()
+            .set_cpu_topology(topology)
+            .chain_err(|| "Failed to realize arch cpu")?;
+
         self.boot_state.lock().unwrap().set(&self.arch_cpu);
         Ok(())
     }
@@ -693,6 +705,8 @@ impl CPUThreadWorker {
 pub struct CpuTopology {
     /// Number of sockets in VM.
     pub sockets: u8,
+    /// Number of dies on one socket.
+    pub dies: u8,
     /// Number of cores in VM.
     pub cores: u8,
     /// Number of threads in VM.
@@ -710,15 +724,26 @@ impl CpuTopology {
     ///
     /// # Arguments
     ///
-    /// * `nr_cpus`: Number of vcpus.
-    pub fn new(nr_cpus: u8) -> Self {
+    /// * `nr_cpus`: Number of vcpus in one VM.
+    /// * `nr_threads`: Number of threads on one core.
+    /// * `nr_cores`: Number of cores on one socket
+    /// * `nr_sockets`: Number of sockets on in one VM.
+    pub fn new(
+        nr_cpus: u8,
+        nr_threads: u8,
+        nr_cores: u8,
+        nr_dies: u8,
+        nr_sockets: u8,
+        max_cpus: u8,
+    ) -> Self {
         let mask: Vec<u8> = vec![1; nr_cpus as usize];
         Self {
-            sockets: nr_cpus,
-            cores: 1,
-            threads: 1,
+            sockets: nr_sockets,
+            dies: nr_dies,
+            cores: nr_cores,
+            threads: nr_threads,
             nrcpus: nr_cpus,
-            max_cpus: nr_cpus,
+            max_cpus,
             online_mask: Arc::new(Mutex::new(mask)),
         }
     }
@@ -745,11 +770,9 @@ impl CpuTopology {
     ///
     /// * `vcpu_id` - ID of vcpu.
     pub fn get_topo(&self, vcpu_id: usize) -> (u8, u8, u8) {
-        let cpu_per_socket = self.cores * self.threads;
-        let cpu_per_core = self.threads;
-        let socketid: u8 = vcpu_id as u8 / cpu_per_socket;
-        let coreid: u8 = (vcpu_id as u8 % cpu_per_socket) / cpu_per_core;
-        let threadid: u8 = (vcpu_id as u8 % cpu_per_socket) % cpu_per_core;
+        let socketid: u8 = vcpu_id as u8 / (self.dies * self.cores * self.threads);
+        let coreid: u8 = (vcpu_id as u8 / self.threads) % self.cores;
+        let threadid: u8 = vcpu_id as u8 % self.threads;
         (socketid, coreid, threadid)
     }
 }
@@ -922,6 +945,7 @@ mod tests {
 
         let microvm_cpu_topo = CpuTopology {
             sockets: test_nr_cpus,
+            dies: 1,
             cores: 1,
             threads: 1,
             nrcpus: test_nr_cpus,
@@ -934,10 +958,27 @@ mod tests {
         assert_eq!(microvm_cpu_topo.get_topo(8), (8, 0, 0));
         assert_eq!(microvm_cpu_topo.get_topo(15), (15, 0, 0));
 
+        let mask = Vec::with_capacity(test_nr_cpus as usize);
+        let microvm_cpu_topo1 = CpuTopology {
+            sockets: 1,
+            dies: 2,
+            cores: 4,
+            threads: 2,
+            nrcpus: test_nr_cpus,
+            max_cpus: test_nr_cpus,
+            online_mask: Arc::new(Mutex::new(mask)),
+        };
+
+        assert_eq!(microvm_cpu_topo1.get_topo(0), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo1.get_topo(4), (0, 2, 0));
+        assert_eq!(microvm_cpu_topo1.get_topo(8), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo1.get_topo(15), (0, 3, 1));
+
         let test_nr_cpus: u8 = 32;
         let mask = Vec::with_capacity(test_nr_cpus as usize);
         let test_cpu_topo = CpuTopology {
             sockets: 2,
+            dies: 1,
             cores: 4,
             threads: 2,
             nrcpus: test_nr_cpus,
