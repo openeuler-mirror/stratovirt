@@ -22,9 +22,12 @@ use arc_swap::ArcSwap;
 use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
 use kvm_bindings::*;
 use kvm_ioctls::{Kvm, VmFd};
+use log::error;
 use once_cell::sync::Lazy;
-
 use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::{
+    ioctl_expr, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
+};
 
 use crate::errors::{Result, ResultExt};
 #[cfg(target_arch = "x86_64")]

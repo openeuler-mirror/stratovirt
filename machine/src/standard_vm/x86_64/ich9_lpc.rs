@@ -18,6 +18,8 @@ use std::sync::{
 use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use error_chain::ChainedError;
+use log::{debug, error};
+use pci::config::CLASS_CODE_ISA_BRIDGE;
 use pci::config::{
     PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, HEADER_TYPE_MULTIFUNC,
     PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
@@ -29,7 +31,6 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::VENDOR_ID_INTEL;
 use crate::standard_vm::errors::Result;
-use pci::config::CLASS_CODE_ISA_BRIDGE;
 
 const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
 

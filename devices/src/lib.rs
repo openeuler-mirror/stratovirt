@@ -16,18 +16,11 @@
 //! - interrupt controller (aarch64)
 //! - legacy devices, such as serial devices
 
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate migration_derive;
-
 mod interrupt_controller;
 pub mod legacy;
 
 #[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{
-    errors as IntCtrlErrs, InterruptController, InterruptControllerConfig,
+    errors as IntCtrlErrs, ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController,
 };
 pub use legacy::errors as LegacyErrs;

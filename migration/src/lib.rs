@@ -14,14 +14,6 @@
 //!
 //! Offer snapshot and migration interface for VM.
 
-#[macro_use]
-extern crate error_chain;
-#[cfg(test)]
-#[macro_use]
-extern crate migration_derive;
-#[macro_use]
-extern crate log;
-
 mod device_state;
 mod header;
 mod manager;
@@ -33,6 +25,8 @@ pub use manager::{MigrationHook, MigrationManager, MigrationRestoreOrder};
 pub use status::MigrationStatus;
 
 pub mod errors {
+    use error_chain::error_chain;
+
     use super::status::MigrationStatus;
 
     error_chain! {

@@ -21,42 +21,51 @@ use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
 use acpi::{
-    AcpiIoApic, AcpiLocalApic, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl,
-    AmlPackage, AmlScope, AmlScopeBuilder, AmlString, TableLoader, ACPI_TABLE_FILE,
-    IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR, TABLE_CHECKSUM_OFFSET,
+    AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
+    AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder,
+    AmlString, TableLoader, IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
-use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
-use error_chain::ChainedError;
+use devices::legacy::{
+    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
+    SERIAL_ADDR,
+};
+use error_chain::{bail, ChainedError};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
+use log::error;
+use machine_manager::config::{
+    BootIndexInfo, BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+};
+use machine_manager::event;
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface,
 };
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
+use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::{SysBus, SysBusDevOps};
+use sysbus::SysBus;
+use syscall::syscall_whitelist;
+use util::byte_code::ByteCode;
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
 use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::{ioctl_expr, ioctl_ioc_nr, ioctl_iow_nr};
 
 use self::ich9_lpc::SLEEP_CTRL_OFFSET;
-
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::MachineOps;
-use mch::Mch;
-use syscall::syscall_whitelist;
-use util::byte_code::ByteCode;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
+const HOLE_640K_START: u64 = 0x000A_0000;
+const HOLE_640K_END: u64 = 0x0010_0000;
 
 /// The type of memory layout entry on x86_64
 #[repr(usize)]
@@ -105,6 +114,12 @@ pub struct StdMachine {
     /// VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
     vm_config: Mutex<VmConfig>,
+    /// List of guest NUMA nodes information.
+    numa_nodes: Option<NumaNodes>,
+    /// List contains the boot order of boot devices.
+    boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// FwCfg device.
+    fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
 }
 
 impl StdMachine {
@@ -152,13 +167,16 @@ impl StdMachine {
             power_button: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?,
             vm_config: Mutex::new(vm_config.clone()),
+            numa_nodes: None,
+            boot_order_list: Arc::new(Mutex::new(Vec::new())),
+            fwcfg_dev: None,
         })
     }
 
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
         use crate::errors::ResultExt as MachineResultExt;
 
-        let locked_vm = vm.lock().unwrap();
+        let mut locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             MachineResultExt::chain_err(cpu.kick(), || {
@@ -168,13 +186,11 @@ impl StdMachine {
             cpu.set_to_boot_state();
         }
 
-        for dev in locked_vm.sysbus.devices.iter() {
-            MachineResultExt::chain_err(dev.lock().unwrap().reset(), || {
-                "Fail to reset sysbus device"
-            })?;
-        }
-        MachineResultExt::chain_err(locked_vm.pci_host.lock().unwrap().reset(), || {
-            "Fail to reset pci host"
+        MachineResultExt::chain_err(locked_vm.reset_all_devices(), || {
+            "Fail to reset all devices"
+        })?;
+        MachineResultExt::chain_err(locked_vm.reset_fwcfg_boot_order(), || {
+            "Fail to update boot order information to FwCfg device"
         })?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
@@ -295,8 +311,14 @@ impl StdMachineOps for StdMachine {
         fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, ncpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
 
+        let boot_order = Vec::<u8>::new();
+        fwcfg
+            .add_file_entry("bootorder", boot_order)
+            .chain_err(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
+
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
             .chain_err(|| "Failed to realize fwcfg device")?;
+        self.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(fwcfg_dev)
     }
@@ -315,6 +337,10 @@ impl StdMachineOps for StdMachine {
 
     fn get_vm_config(&self) -> &Mutex<VmConfig> {
         &self.vm_config
+    }
+
+    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
+        &self.numa_nodes
     }
 }
 
@@ -425,6 +451,7 @@ impl MachineOps for StdMachine {
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
+        locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
@@ -476,6 +503,10 @@ impl MachineOps for StdMachine {
         }
         StdMachine::arch_init()?;
         locked_vm.register_power_event(&locked_vm.power_button)?;
+
+        locked_vm
+            .reset_fwcfg_boot_order()
+            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
 
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
@@ -561,6 +592,19 @@ impl MachineOps for StdMachine {
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
     }
+
+    fn get_sys_bus(&mut self) -> &SysBus {
+        &self.sysbus
+    }
+
+    fn get_fwcfg_dev(&mut self) -> MachineResult<Arc<Mutex<dyn FwCfgOps>>> {
+        // Unwrap is safe. Because after standard machine realize, this will not be None.F
+        Ok(self.fwcfg_dev.clone().unwrap())
+    }
+
+    fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
+        Some(self.boot_order_list.clone())
+    }
 }
 
 impl AcpiBuilder for StdMachine {
@@ -569,6 +613,7 @@ impl AcpiBuilder for StdMachine {
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
     ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
         // 1. CPU info.
@@ -578,6 +623,7 @@ impl AcpiBuilder for StdMachine {
             let mut dev = AmlDevice::new(format!("C{:03}", cpu_id).as_str());
             dev.append_child(AmlNameDecl::new("_HID", AmlString("ACPI0007".to_string())));
             dev.append_child(AmlNameDecl::new("_UID", AmlInteger(cpu_id)));
+            dev.append_child(AmlNameDecl::new("_PXM", AmlInteger(0)));
             sb_scope.append_child(dev);
         }
 
@@ -596,21 +642,8 @@ impl AcpiBuilder for StdMachine {
         package.append_child(AmlInteger(0));
         dsdt.append_child(AmlNameDecl::new("_S5", package).aml_bytes().as_slice());
 
-        let mut locked_acpi_data = acpi_data.lock().unwrap();
-        let dsdt_begin = locked_acpi_data.len() as u32;
-        locked_acpi_data.extend(dsdt.aml_bytes());
-        let dsdt_end = locked_acpi_data.len() as u32;
-        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
-        // TableLoader, because TableLoader also needs to acquire this lock.
-        drop(locked_acpi_data);
-
-        loader.add_cksum_entry(
-            ACPI_TABLE_FILE,
-            dsdt_begin + TABLE_CHECKSUM_OFFSET,
-            dsdt_begin,
-            dsdt_end - dsdt_begin,
-        )?;
-
+        let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
+            .chain_err(|| "Fail to add DSTD table to loader")?;
         Ok(dsdt_begin as u64)
     }
 
@@ -619,6 +652,7 @@ impl AcpiBuilder for StdMachine {
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
     ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
         let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
 
         madt.append_child(LAPIC_BASE_ADDR.as_bytes());
@@ -646,22 +680,129 @@ impl AcpiBuilder for StdMachine {
             madt.append_child(&lapic.aml_bytes());
         });
 
-        let mut locked_acpi_data = acpi_data.lock().unwrap();
-        let madt_begin = locked_acpi_data.len() as u32;
-        locked_acpi_data.extend(madt.aml_bytes());
-        let madt_end = locked_acpi_data.len() as u32;
-        // Drop the lock of acpi_data to avoid dead-lock when adding entry to
-        // TableLoader, because TableLoader also needs to acquire this lock.
-        drop(locked_acpi_data);
-
-        loader.add_cksum_entry(
-            ACPI_TABLE_FILE,
-            madt_begin + TABLE_CHECKSUM_OFFSET,
-            madt_begin,
-            madt_end - madt_begin,
-        )?;
-
+        let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
+            .chain_err(|| "Fail to add DSTD table to loader")?;
         Ok(madt_begin as u64)
+    }
+
+    fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
+        for cpu in node.cpus.iter() {
+            srat.append_child(
+                &AcpiSratProcessorAffinity {
+                    length: size_of::<AcpiSratProcessorAffinity>() as u8,
+                    proximity_lo: proximity_domain as u8,
+                    local_apic_id: *cpu,
+                    flags: 1,
+                    ..Default::default()
+                }
+                .aml_bytes(),
+            );
+        }
+    }
+
+    fn build_srat_mem(
+        &self,
+        base_addr: u64,
+        proximity_domain: u32,
+        node: &NumaNode,
+        srat: &mut AcpiTable,
+    ) -> u64 {
+        let mem_below_4g = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        let mem_above_4g = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+
+        let mut mem_base = base_addr;
+        let mut mem_len = node.size;
+        let mut next_base = mem_base + mem_len;
+        // It contains the hole from 604Kb to 1Mb
+        if mem_base <= HOLE_640K_START && next_base > HOLE_640K_START {
+            mem_len -= next_base - HOLE_640K_START;
+            if mem_len > 0 {
+                srat.append_child(
+                    &AcpiSratMemoryAffinity {
+                        type_id: 1,
+                        length: size_of::<AcpiSratMemoryAffinity>() as u8,
+                        proximity_domain,
+                        base_addr: mem_base,
+                        range_length: mem_len,
+                        flags: 1,
+                        ..Default::default()
+                    }
+                    .aml_bytes(),
+                );
+            }
+
+            if next_base <= HOLE_640K_END {
+                next_base = HOLE_640K_END;
+                return next_base;
+            }
+            mem_base = HOLE_640K_END;
+            mem_len = next_base - HOLE_640K_END;
+        }
+
+        // It contains the hole possibly from mem_below_4g(2G) to mem_below_4g(4G).
+        if mem_base <= mem_below_4g && next_base > mem_below_4g {
+            mem_len -= next_base - mem_below_4g;
+            if mem_len > 0 {
+                srat.append_child(
+                    &AcpiSratMemoryAffinity {
+                        type_id: 1,
+                        length: size_of::<AcpiSratMemoryAffinity>() as u8,
+                        proximity_domain,
+                        base_addr: mem_base,
+                        range_length: mem_len,
+                        flags: 1,
+                        ..Default::default()
+                    }
+                    .aml_bytes(),
+                );
+            }
+            mem_base = mem_above_4g;
+            mem_len = next_base - mem_below_4g;
+            next_base = mem_base + mem_len;
+        }
+
+        if mem_len > 0 {
+            srat.append_child(
+                &AcpiSratMemoryAffinity {
+                    type_id: 1,
+                    length: size_of::<AcpiSratMemoryAffinity>() as u8,
+                    proximity_domain,
+                    base_addr: mem_base,
+                    range_length: mem_len,
+                    flags: 1,
+                    ..Default::default()
+                }
+                .aml_bytes(),
+            );
+        }
+
+        next_base
+    }
+
+    fn build_srat_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        if self.numa_nodes.is_none() {
+            return Ok(0);
+        }
+
+        let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
+        srat.append_child(&[1_u8; 4_usize]);
+        srat.append_child(&[0_u8; 8_usize]);
+
+        let mut next_base = 0_u64;
+        for (id, node) in self.numa_nodes.as_ref().unwrap().iter() {
+            self.build_srat_cpu(*id, node, &mut srat);
+            next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
+        }
+
+        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
+            .chain_err(|| "Fail to add SRAT table to loader")?;
+        Ok(srat_begin as u64)
     }
 }
 

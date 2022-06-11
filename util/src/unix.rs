@@ -16,10 +16,12 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
+use error_chain::bail;
 use libc::{
     c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, CMSG_LEN, CMSG_SPACE, MSG_NOSIGNAL,
     MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
 };
+use log::error;
 
 use super::errors::{ErrorKind, Result, ResultExt};
 

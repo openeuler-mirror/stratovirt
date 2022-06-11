@@ -13,7 +13,8 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{Region, RegionOps};
-use error_chain::ChainedError;
+use error_chain::{bail, ChainedError};
+use log::{debug, error};
 use pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,

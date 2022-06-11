@@ -12,10 +12,11 @@
 
 use std::str::FromStr;
 
+use error_chain::bail;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_NODES, MAX_STRING_LENGTH};
 
 const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_THREADS: u8 = 1;
@@ -54,6 +55,47 @@ impl FromStr for MachineType {
     }
 }
 
+#[repr(u32)]
+#[derive(PartialEq, Eq)]
+pub enum HostMemPolicy {
+    Default = 0,
+    Preferred = 1,
+    Bind = 2,
+    Interleave = 3,
+    NotSupported = 4,
+}
+
+impl From<String> for HostMemPolicy {
+    fn from(str: String) -> HostMemPolicy {
+        match str.to_lowercase().as_str() {
+            "default" => HostMemPolicy::Default,
+            "preferred" => HostMemPolicy::Preferred,
+            "bind" => HostMemPolicy::Bind,
+            "interleave" => HostMemPolicy::Interleave,
+            _ => HostMemPolicy::NotSupported,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemZoneConfig {
+    pub id: String,
+    pub size: u64,
+    pub host_numa_node: Option<u32>,
+    pub policy: String,
+}
+
+impl Default for MemZoneConfig {
+    fn default() -> Self {
+        MemZoneConfig {
+            id: String::new(),
+            size: 0,
+            host_numa_node: None,
+            policy: String::from("bind"),
+        }
+    }
+}
+
 /// Config that contains machine's memory information config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineMemConfig {
@@ -62,6 +104,7 @@ pub struct MachineMemConfig {
     pub dump_guest_core: bool,
     pub mem_share: bool,
     pub mem_prealloc: bool,
+    pub mem_zones: Option<Vec<MemZoneConfig>>,
 }
 
 impl Default for MachineMemConfig {
@@ -72,6 +115,7 @@ impl Default for MachineMemConfig {
             dump_guest_core: true,
             mem_share: false,
             mem_prealloc: false,
+            mem_zones: None,
         }
     }
 }
@@ -286,6 +330,66 @@ impl VmConfig {
     pub fn enable_mem_prealloc(&mut self) {
         self.machine_config.mem_config.mem_prealloc = true;
     }
+
+    pub fn add_mem_zone(&mut self, mem_zone: &str) -> Result<MemZoneConfig> {
+        let mut cmd_parser = CmdParser::new("mem_zone");
+        cmd_parser
+            .push("")
+            .push("id")
+            .push("size")
+            .push("host-nodes")
+            .push("policy");
+        cmd_parser.parse(mem_zone)?;
+
+        let mut zone_config = MemZoneConfig::default();
+        if let Some(id) = cmd_parser.get_value::<String>("id")? {
+            if id.len() > MAX_STRING_LENGTH {
+                return Err(
+                    ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into(),
+                );
+            }
+            zone_config.id = id;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("id", "memory-backend-ram").into());
+        }
+        if let Some(mem) = cmd_parser.get_value::<String>("size")? {
+            zone_config.size = memory_unit_conversion(&mem)?;
+        } else {
+            return Err(ErrorKind::FieldIsMissing("size", "memory-backend-ram").into());
+        }
+        if let Some(host_nodes) = cmd_parser.get_value::<u32>("host-nodes")? {
+            if host_nodes >= MAX_NODES {
+                return Err(ErrorKind::IllegalValue(
+                    "host_nodes".to_string(),
+                    0,
+                    true,
+                    MAX_NODES as u64,
+                    false,
+                )
+                .into());
+            }
+            zone_config.host_numa_node = Some(host_nodes);
+        }
+        if let Some(policy) = cmd_parser.get_value::<String>("policy")? {
+            if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
+                return Err(ErrorKind::InvalidParam("policy".to_string(), policy).into());
+            }
+            zone_config.policy = policy;
+        }
+
+        if self.machine_config.mem_config.mem_zones.is_some() {
+            self.machine_config
+                .mem_config
+                .mem_zones
+                .as_mut()
+                .unwrap()
+                .push(zone_config.clone());
+        } else {
+            self.machine_config.mem_config.mem_zones = Some(vec![zone_config.clone()]);
+        }
+
+        Ok(zone_config)
+    }
 }
 
 fn adjust_topology(
@@ -326,7 +430,12 @@ fn adjust_topology(
     (max_cpus, sockets, cores, threads)
 }
 
-fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
+/// Convert memory units from GiB, Mib to Byte.
+///
+/// # Arguments
+///
+/// * `origin_value` - The origin memory value from user.
+pub fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
     if (origin_value.ends_with('M') | origin_value.ends_with('m'))
         && (origin_value.contains('M') ^ origin_value.contains('m'))
     {
@@ -384,6 +493,7 @@ mod tests {
             mem_share: false,
             dump_guest_core: false,
             mem_prealloc: false,
+            mem_zones: None,
         };
         let mut machine_config = MachineConfig {
             mach_type: MachineType::MicroVm,
@@ -709,5 +819,42 @@ mod tests {
         let cpu_cfg_str = "cpus=255,sockets=255,cores=1,threads=1";
         let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
         assert!(cpu_cfg_ret.is_err());
+    }
+
+    #[test]
+    fn test_add_mem_zone() {
+        let mut vm_config = VmConfig::default();
+        let zone_config_1 = vm_config
+            .add_mem_zone("-object memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind")
+            .unwrap();
+        assert_eq!(zone_config_1.id, "mem1");
+        assert_eq!(zone_config_1.size, 2147483648);
+        assert_eq!(zone_config_1.host_numa_node, Some(1));
+        assert_eq!(zone_config_1.policy, "bind");
+
+        let zone_config_2 = vm_config
+            .add_mem_zone("-object memory-backend-ram,size=2G,id=mem1")
+            .unwrap();
+        assert_eq!(zone_config_2.host_numa_node, None);
+        assert_eq!(zone_config_2.policy, "bind");
+
+        assert!(vm_config
+            .add_mem_zone("-object memory-backend-ram,size=2G")
+            .is_err());
+        assert!(vm_config
+            .add_mem_zone("-object memory-backend-ram,id=mem1")
+            .is_err());
+    }
+
+    #[test]
+    fn test_host_mem_policy() {
+        let policy = HostMemPolicy::from(String::from("default"));
+        assert!(policy == HostMemPolicy::Default);
+
+        let policy = HostMemPolicy::from(String::from("interleave"));
+        assert!(policy == HostMemPolicy::Interleave);
+
+        let policy = HostMemPolicy::from(String::from("error"));
+        assert!(policy == HostMemPolicy::NotSupported);
     }
 }
