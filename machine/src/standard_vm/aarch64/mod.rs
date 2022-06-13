@@ -30,7 +30,7 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
 };
@@ -142,7 +142,14 @@ impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
         use crate::errors::ResultExt;
 
-        let cpu_topo = CpuTopology::new(vm_config.machine_config.nr_cpus);
+        let cpu_topo = CpuTopology::new(
+            vm_config.machine_config.nr_cpus,
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_dies,
+            vm_config.machine_config.nr_sockets,
+            vm_config.machine_config.max_cpus,
+        );
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
             .chain_err(|| ErrorKind::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
@@ -467,6 +474,7 @@ impl MachineOps for StdMachine {
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
+            &CPUTopology::new(),
             &vcpu_fds,
             &boot_config,
         )?);
