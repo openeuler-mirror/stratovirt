@@ -15,12 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::bail;
-use log::{error, warn};
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;

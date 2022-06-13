@@ -17,9 +17,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use error_chain::bail;
 use libc::{cfmakeraw, tcgetattr, tcsetattr, termios};
-use log::{error, info};
 use machine_manager::machine::{PathInfo, PTY_PATH};
 use machine_manager::{
     config::{ChardevConfig, ChardevType},

@@ -12,10 +12,18 @@
 
 //! This crate offers interfaces for different kinds of hypervisors, such as KVM.
 
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate vmm_sys_util;
+#[cfg(target_arch = "x86_64")]
+#[macro_use]
+extern crate migration_derive;
+
 #[allow(clippy::upper_case_acronyms)]
 pub mod errors {
-    use error_chain::error_chain;
-
     error_chain! {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);

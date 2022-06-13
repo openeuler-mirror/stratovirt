@@ -27,9 +27,6 @@ use util::loop_context::{
 };
 use util::num_ops::{read_u32, write_u32};
 
-use error_chain::bail;
-use log::{error, warn};
-use migration_derive::{ByteCode, Desc};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 

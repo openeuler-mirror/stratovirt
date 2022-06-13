@@ -17,8 +17,6 @@ use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use error_chain::bail;
-use log::warn;
 use machine_manager::{config::NetworkInterfaceConfig, event_loop::EventLoop};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;

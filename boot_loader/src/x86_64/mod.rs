@@ -62,7 +62,6 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use devices::legacy::FwCfgOps;
-use error_chain::bail;
 use kvm_bindings::kvm_segment;
 
 use crate::errors::Result;

@@ -12,7 +12,6 @@
 
 use std::cmp::Ordering;
 
-use error_chain::bail;
 use serde::{Deserialize, Serialize};
 
 use super::errors::Result;
@@ -170,7 +169,6 @@ impl DeviceStateDesc {
 #[cfg(test)]
 pub mod tests {
     use super::{DeviceStateDesc, FieldDesc, StateTransfer, VersionCheck};
-    use migration_derive::{ByteCode, Desc};
     use util::byte_code::ByteCode;
 
     #[derive(Default)]

@@ -25,9 +25,18 @@
 //! - `x86_64`
 //! - `aarch64`
 
-pub mod errors {
-    use error_chain::error_chain;
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate machine_manager;
+#[macro_use]
+extern crate vmm_sys_util;
+#[macro_use]
+extern crate migration_derive;
 
+pub mod errors {
     error_chain! {
         foreign_links {
             Io(std::io::Error);
@@ -122,7 +131,6 @@ pub use virtio_pci::VirtioPciDevice;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use error_chain::bail;
 use machine_manager::config::ConfigCheck;
 use vmm_sys_util::eventfd::EventFd;
 

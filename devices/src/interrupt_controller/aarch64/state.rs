@@ -12,13 +12,12 @@
 
 use std::mem::size_of;
 
+use libc::c_uint;
+
 use super::gicv3::{GICv3, GICv3Access, GICv3Its};
 use super::GIC_IRQ_INTERNAL;
 use crate::interrupt_controller::errors::Result;
-
-use libc::c_uint;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
 /// Register data length can be get by `get_device_attr/set_device_attr` in kvm once.

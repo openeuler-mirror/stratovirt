@@ -21,7 +21,6 @@ use std::{
     process::Stdio,
 };
 
-use error_chain::bail;
 use util::arg_parser::ArgMatches;
 
 const BASE_OZONE_PATH: &str = "/srv/ozone";

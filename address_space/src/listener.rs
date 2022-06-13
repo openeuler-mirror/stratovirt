@@ -13,15 +13,14 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use error_chain::{bail, ChainedError};
+use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
-use log::{debug, warn};
-use util::{num_ops::round_down, unix::host_page_size};
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, FlatRange, RegionIoEventFd, RegionType};
+use util::{num_ops::round_down, unix::host_page_size};
 
 const MEM_READ_ONLY: u32 = 1 << 1;
 

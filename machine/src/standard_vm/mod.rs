@@ -18,7 +18,6 @@ mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
-use log::error;
 use machine_manager::event_loop::EventLoop;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
@@ -28,8 +27,6 @@ pub use x86_64::StdMachine;
 
 #[allow(clippy::upper_case_acronyms)]
 pub mod errors {
-    use error_chain::error_chain;
-
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
@@ -75,11 +72,11 @@ use acpi::{
 };
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
-use error_chain::{bail, ChainedError};
+use error_chain::ChainedError;
 use errors::{Result, ResultExt};
 use machine_manager::config::{
     get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,
-    NumaNode, NumaNodes, PciBdf, VmConfig,
+    PciBdf, VmConfig,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -156,17 +153,6 @@ trait StdMachineOps: AcpiBuilder {
             .chain_err(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
 
-        let srat_addr = self
-            .build_srat_table(&acpi_tables, &mut loader)
-            .chain_err(|| "Failed to build ACPI SRAT table")?;
-        xsdt_entries.push(srat_addr);
-
-        if let Some(numa_nodes) = self.get_numa_nodes() {
-            let slit_addr = Self::build_slit_table(numa_nodes, &acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI SLIT table")?;
-            xsdt_entries.push(slit_addr);
-        }
-
         let xsdt_addr = Self::build_xsdt_table(&acpi_tables, &mut loader, xsdt_entries)?;
 
         let mut locked_fw_cfg = fw_cfg.lock().unwrap();
@@ -198,8 +184,6 @@ trait StdMachineOps: AcpiBuilder {
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
 
     fn get_vm_config(&self) -> &Mutex<VmConfig>;
-
-    fn get_numa_nodes(&self) -> &Option<NumaNodes>;
 
     /// Register event notifier for reset of standard machine.
     ///
@@ -574,76 +558,6 @@ trait AcpiBuilder {
         Ok(facs_begin as u64)
     }
 
-    /// Build ACPI SRAT CPU table.
-    ///  # Arguments
-    ///
-    /// `proximity_domain` - The proximity domain.
-    /// `node` - The NUMA node.
-    /// `srat` - The SRAT table.
-    fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable);
-
-    /// Build ACPI SRAT memory table.
-    ///  # Arguments
-    ///
-    /// `base_addr` - The base address of the memory range.
-    /// `proximity_domain` - The proximity domain.
-    /// `node` - The NUMA node.
-    /// `srat` - The SRAT table.
-    fn build_srat_mem(
-        &self,
-        base_addr: u64,
-        proximity_domain: u32,
-        node: &NumaNode,
-        srat: &mut AcpiTable,
-    ) -> u64;
-
-    /// Build ACPI SRAT table, returns the offset of ACPI SRAT table in `acpi_data`.
-    ///
-    /// # Arguments
-    ///
-    /// `acpi_data` - Bytes streams that ACPI tables converts to.
-    /// `loader` - ACPI table loader.
-    fn build_srat_table(
-        &self,
-        acpi_data: &Arc<Mutex<Vec<u8>>>,
-        loader: &mut TableLoader,
-    ) -> Result<u64>;
-
-    /// Build ACPI SLIT table, returns the offset of ACPI SLIT table in `acpi_data`.
-    ///
-    /// # Arguments
-    ///
-    /// `numa_nodes` - The information of NUMA nodes.
-    /// `acpi_data` - Bytes streams that ACPI tables converts to.
-    /// `loader` - ACPI table loader.
-    fn build_slit_table(
-        numa_nodes: &NumaNodes,
-        acpi_data: &Arc<Mutex<Vec<u8>>>,
-        loader: &mut TableLoader,
-    ) -> Result<u64> {
-        let mut slit = AcpiTable::new(*b"SLIT", 1, *b"STRATO", *b"VIRTSLIT", 1);
-        slit.append_child((numa_nodes.len() as u64).as_bytes());
-
-        let existing_nodes: Vec<u32> = numa_nodes.keys().cloned().collect();
-        for (id, node) in numa_nodes.iter().enumerate() {
-            let distances = &node.1.distances;
-            for i in existing_nodes.iter() {
-                let dist: u8 = if id as u32 == *i {
-                    10
-                } else if let Some(distance) = distances.get(i) {
-                    *distance
-                } else {
-                    20
-                };
-                slit.append_child(dist.as_bytes());
-            }
-        }
-
-        let slit_begin = StdMachine::add_table_to_loader(acpi_data, loader, &slit)
-            .chain_err(|| "Fail to add SLIT table to loader")?;
-        Ok(slit_begin as u64)
-    }
-
     /// Build ACPI XSDT table, returns the offset of ACPI XSDT table in `acpi_data`.
     ///
     /// # Arguments
@@ -764,7 +678,6 @@ impl StdMachine {
                 iothread: args.iothread.clone(),
                 iops: conf.iops,
                 queues: args.queues.unwrap_or(1),
-                boot_index: args.boot_index,
             };
             dev.check()?;
             dev
@@ -774,16 +687,8 @@ impl StdMachine {
 
         let blk_id = blk.id.clone();
         let blk = Arc::new(Mutex::new(Block::new(blk)));
-        let pci_dev = self
-            .add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
+        self.add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
             .chain_err(|| "Failed to add virtio pci block device")?;
-
-        if let Some(bootindex) = args.boot_index {
-            if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
-                self.add_bootindex_devices(bootindex, &dev_path, &args.id)
-                    .chain_err(|| "Fail to add boot index")?;
-            }
-        }
 
         MigrationManager::register_device_instance_mutex_with_id(
             BlockState::descriptor(),
@@ -839,7 +744,6 @@ impl StdMachine {
                 &net_id,
             );
         }
-
         Ok(())
     }
 
@@ -1045,13 +949,7 @@ impl DeviceInterface for StdMachine {
         let locked_pci_host = pci_host.lock().unwrap();
         if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
             match handle_unplug_request(&bus, &dev) {
-                Ok(()) => {
-                    let locked_dev = dev.lock().unwrap();
-                    let dev_id = locked_dev.name();
-                    drop(locked_pci_host);
-                    self.del_bootindex_devices(&dev_id);
-                    Response::create_empty_response()
-                }
+                Ok(()) => Response::create_empty_response(),
                 Err(e) => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,

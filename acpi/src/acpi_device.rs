@@ -14,7 +14,6 @@ use std::time::Instant;
 
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
-use log::error;
 
 // Frequency of PM Timer in HZ.
 const PM_TIMER_FREQUENCY: u128 = 3_579_545;

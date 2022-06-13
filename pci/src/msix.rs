@@ -14,11 +14,8 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{GuestAddress, Region, RegionOps};
-use error_chain::bail;
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
 use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 
 use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};

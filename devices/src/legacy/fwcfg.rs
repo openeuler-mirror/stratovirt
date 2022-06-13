@@ -23,8 +23,7 @@ use address_space::{AddressSpace, GuestAddress};
 #[cfg(target_arch = "x86_64")]
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
-use error_chain::{bail, ChainedError};
-use log::{error, warn};
+use error_chain::ChainedError;
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
@@ -503,42 +502,6 @@ impl FwCfgCommon {
             FW_CFG_FILE_FIRST as usize + index,
             FwCfgEntry::new(data, select_cb, write_cb, allow_write),
         );
-        Ok(())
-    }
-
-    fn modify_file_callback(
-        &mut self,
-        filename: &str,
-        data: Vec<u8>,
-        select_cb: Option<FwCfgCallbackType>,
-        write_cb: Option<FwCfgWriteCallbackType>,
-        allow_write: bool,
-    ) -> Result<()> {
-        if self.files.len() >= self.file_slots as usize {
-            return Err(ErrorKind::FileSlotsNotAvailable(filename.to_owned()).into());
-        }
-
-        let file_name_bytes = filename.to_string().as_bytes().to_vec();
-        // Make sure file entry is existed.
-        let index = self
-            .files
-            .iter()
-            .position(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
-            .ok_or_else(|| ErrorKind::EntryNotFound(filename.to_owned()))?;
-        self.files[index].size = data.len() as u32;
-
-        // Update FileDir entry
-        let mut bytes = Vec::new();
-        let file_length_be = BigEndian::read_u32((self.files.len() as u32).as_bytes());
-        bytes.append(&mut file_length_be.as_bytes().to_vec());
-        for value in self.files.iter() {
-            bytes.append(&mut value.as_be_bytes());
-        }
-        self.update_entry_data(FwCfgEntryType::FileDir as u16, bytes)?;
-
-        // Update File entry
-        self.entries[FW_CFG_FILE_FIRST as usize + index] =
-            FwCfgEntry::new(data, select_cb, write_cb, allow_write);
         Ok(())
     }
 
@@ -1231,17 +1194,6 @@ pub trait FwCfgOps {
         self.fw_cfg_common()
             .add_file_callback(filename, data, None, None, true)
     }
-
-    /// Modify a file entry to FwCfg device, without callbacks, write-allow.
-    ///
-    /// # Arguments
-    ///
-    /// * `filename` - Name of the file
-    /// * `data` - Raw data bytes of the file to be modified
-    fn modify_file_entry(&mut self, filename: &str, data: Vec<u8>) -> Result<()> {
-        self.fw_cfg_common()
-            .modify_file_callback(filename, data, None, None, true)
-    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -1424,38 +1376,6 @@ mod test {
         let entry = fwcfg_common.get_entry_mut().unwrap();
         assert_eq!(entry.data, file_data);
 
-        let file_data = Vec::new();
-        assert_eq!(
-            fwcfg_common
-                .add_file_callback("bootorder", file_data.clone(), None, None, false)
-                .is_ok(),
-            true
-        );
-        let id = fwcfg_common.files[0].select;
-        fwcfg_common.select_entry(id);
-        let entry = fwcfg_common.get_entry_mut().unwrap();
-        assert_eq!(entry.data, file_data);
-
-        let modify_file_data = "/pci@ffffffffffffffff/pci-bridge@3/scsi@0,1/disk@0,0"
-            .as_bytes()
-            .to_vec();
-        assert_eq!(
-            fwcfg_common
-                .modify_file_callback("bootorder", modify_file_data.clone(), None, None, true)
-                .is_ok(),
-            true
-        );
-        let id = fwcfg_common.files[0].select;
-        fwcfg_common.select_entry(id);
-        let entry = fwcfg_common.get_entry_mut().unwrap();
-        assert_eq!(entry.data, modify_file_data);
-
-        assert_eq!(
-            fwcfg_common
-                .modify_file_callback("abc", modify_file_data.clone(), None, None, true)
-                .is_err(),
-            true
-        );
         let file_data = vec![0x33; 500];
         assert_eq!(
             fwcfg_common

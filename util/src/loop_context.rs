@@ -10,13 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+extern crate vmm_sys_util;
+
 use std::collections::BTreeMap;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use libc::{c_void, read};
-use log::{error, warn};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
 use crate::errors::{ErrorKind, Result, ResultExt};

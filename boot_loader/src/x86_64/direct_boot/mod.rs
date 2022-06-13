@@ -18,12 +18,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress};
-use error_chain::bail;
-use log::info;
 use util::byte_code::ByteCode;
 
-use self::gdt::setup_gdt;
-use self::mptable::setup_isa_mptable;
 use super::bootparam::{BootParams, RealModeKernelHeader, UNDEFINED_ID};
 use super::{X86BootLoader, X86BootLoaderConfig};
 use super::{
@@ -31,6 +27,8 @@ use super::{
     INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
 };
 use crate::errors::{ErrorKind, Result, ResultExt};
+use gdt::setup_gdt;
+use mptable::setup_isa_mptable;
 
 /// Load bzImage linux kernel to Guest Memory.
 ///

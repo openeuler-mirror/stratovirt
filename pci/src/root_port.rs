@@ -13,14 +13,12 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use once_cell::sync::OnceCell;
+
 use address_space::Region;
-use error_chain::{bail, ChainedError};
-use log::{error, info};
-use machine_manager::event;
+use error_chain::ChainedError;
 use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-use once_cell::sync::OnceCell;
 use util::byte_code::ByteCode;
 
 use super::config::{
@@ -426,13 +424,6 @@ impl PciDevOps for RootPort {
             )?;
             Ok(())
         }
-    }
-
-    fn get_dev_path(&self) -> Option<String> {
-        let parent_bus = self.parent_bus.upgrade().unwrap();
-        let parent_dev_path = self.get_parent_dev_path(parent_bus);
-        let dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/pci-bridge@");
-        Some(dev_path)
     }
 }
 

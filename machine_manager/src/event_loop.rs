@@ -14,12 +14,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
-use super::config::IothreadConfig;
 use crate::machine::IOTHREADS;
 use crate::qmp::qmp_schema::IothreadInfo;
 
-use error_chain::bail;
-use log::info;
+use super::config::IothreadConfig;
 use util::loop_context::{EventLoopContext, EventLoopManager, EventNotifier};
 
 /// This struct used to manage all events occur during VM lifetime.

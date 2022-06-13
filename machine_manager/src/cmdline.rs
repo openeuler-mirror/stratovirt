@@ -94,7 +94,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("smp")
             .long("smp")
-            .value_name("[cpus=]n[,maxcpus=cpus][,dies=dies][,sockets=sockets][,cores=cores][,threads=threads]")
+            .value_name("[cpus=]n")
             .help("set the number of CPUs to 'n' (default: 1)")
             .takes_value(true),
         )
@@ -372,16 +372,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_values(true)
             .required(false),
         )
-        .arg(
-            Arg::with_name("numa")
-            .multiple(true)
-            .long("numa")
-            .value_name("node,nodeid=0,cpus=0-1,memdev=mem0> \
-            -numa <dist,src=0,dst=1,val=20> \
-            -object <memory-backend-ram,size=2G,id=mem0,[host-nodes=0,policy=bind]")
-            .help("numa describes the memory read/write latency, bandwidth between Initiator Proximity Domains and Target Proximity Domains(Memory)")
-            .takes_values(true),
-        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -430,7 +420,6 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("chardev")), vm_cfg, add_chardev);
     add_args_to_config_multi!((args.values_of("device")), vm_cfg, add_device);
     add_args_to_config_multi!((args.values_of("global")), vm_cfg, add_global_config);
-    add_args_to_config_multi!((args.values_of("numa")), vm_cfg, add_numa);
 
     if let Some(s) = args.value_of("trace") {
         add_trace_events(&s)?;

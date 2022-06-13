@@ -12,18 +12,12 @@
 
 use std::str::FromStr;
 
-use error_chain::bail;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_NODES, MAX_STRING_LENGTH};
+use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig};
 
 const DEFAULT_CPUS: u8 = 1;
-const DEFAULT_THREADS: u8 = 1;
-const DEFAULT_CORES: u8 = 1;
-const DEFAULT_DIES: u8 = 1;
-const DEFAULT_SOCKETS: u8 = 1;
-const DEFAULT_MAX_CPUS: u8 = 1;
 const DEFAULT_MEMSIZE: u64 = 256;
 const MAX_NR_CPUS: u64 = 254;
 const MIN_NR_CPUS: u64 = 1;
@@ -55,47 +49,6 @@ impl FromStr for MachineType {
     }
 }
 
-#[repr(u32)]
-#[derive(PartialEq, Eq)]
-pub enum HostMemPolicy {
-    Default = 0,
-    Preferred = 1,
-    Bind = 2,
-    Interleave = 3,
-    NotSupported = 4,
-}
-
-impl From<String> for HostMemPolicy {
-    fn from(str: String) -> HostMemPolicy {
-        match str.to_lowercase().as_str() {
-            "default" => HostMemPolicy::Default,
-            "preferred" => HostMemPolicy::Preferred,
-            "bind" => HostMemPolicy::Bind,
-            "interleave" => HostMemPolicy::Interleave,
-            _ => HostMemPolicy::NotSupported,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MemZoneConfig {
-    pub id: String,
-    pub size: u64,
-    pub host_numa_node: Option<u32>,
-    pub policy: String,
-}
-
-impl Default for MemZoneConfig {
-    fn default() -> Self {
-        MemZoneConfig {
-            id: String::new(),
-            size: 0,
-            host_numa_node: None,
-            policy: String::from("bind"),
-        }
-    }
-}
-
 /// Config that contains machine's memory information config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineMemConfig {
@@ -104,7 +57,6 @@ pub struct MachineMemConfig {
     pub dump_guest_core: bool,
     pub mem_share: bool,
     pub mem_prealloc: bool,
-    pub mem_zones: Option<Vec<MemZoneConfig>>,
 }
 
 impl Default for MachineMemConfig {
@@ -115,7 +67,6 @@ impl Default for MachineMemConfig {
             dump_guest_core: true,
             mem_share: false,
             mem_prealloc: false,
-            mem_zones: None,
         }
     }
 }
@@ -126,11 +77,6 @@ impl Default for MachineMemConfig {
 pub struct MachineConfig {
     pub mach_type: MachineType,
     pub nr_cpus: u8,
-    pub nr_threads: u8,
-    pub nr_cores: u8,
-    pub nr_dies: u8,
-    pub nr_sockets: u8,
-    pub max_cpus: u8,
     pub mem_config: MachineMemConfig,
 }
 
@@ -140,11 +86,6 @@ impl Default for MachineConfig {
         MachineConfig {
             mach_type: MachineType::MicroVm,
             nr_cpus: DEFAULT_CPUS,
-            nr_threads: DEFAULT_THREADS,
-            nr_cores: DEFAULT_CORES,
-            nr_dies: DEFAULT_DIES,
-            nr_sockets: DEFAULT_SOCKETS,
-            max_cpus: DEFAULT_MAX_CPUS,
             mem_config: MachineMemConfig::default(),
         }
     }
@@ -244,9 +185,7 @@ impl VmConfig {
         let mut cmd_parser = CmdParser::new("smp");
         cmd_parser
             .push("")
-            .push("maxcpus")
             .push("sockets")
-            .push("dies")
             .push("cores")
             .push("threads")
             .push("cpus");
@@ -256,69 +195,42 @@ impl VmConfig {
         let cpu = if let Some(cpu) = cmd_parser.get_value::<u64>("")? {
             cpu
         } else if let Some(cpu) = cmd_parser.get_value::<u64>("cpus")? {
-            if cpu == 0 {
-                return Err(
-                    ErrorKind::IllegalValue("cpu".to_string(), 1, true, u64::MAX, true).into(),
-                );
-            }
             cpu
         } else {
             return Err(ErrorKind::FieldIsMissing("cpus", "smp").into());
         };
 
-        let mut sockets = cmd_parser.get_value::<u64>("sockets")?.unwrap_or_default();
-
-        let dies = cmd_parser.get_value::<u64>("dies")?.unwrap_or(1);
-
-        let mut cores = cmd_parser.get_value::<u64>("cores")?.unwrap_or_default();
-
-        let mut threads = cmd_parser.get_value::<u64>("threads")?.unwrap_or_default();
-
-        let mut max_cpus = cmd_parser.get_value::<u64>("maxcpus")?.unwrap_or_default();
-
-        (max_cpus, sockets, cores, threads) = adjust_topology(cpu, max_cpus, sockets, dies, cores, threads);
+        if let Some(sockets) = cmd_parser.get_value::<u64>("sockets")? {
+            if sockets.ne(&cpu) {
+                bail!("Invalid \'sockets\' arguments for \'smp\', it should equal to the number of cpus");
+            }
+        }
+        if let Some(cores) = cmd_parser.get_value::<u64>("cores")? {
+            if cores.ne(&1) {
+                bail!("Invalid \'cores\' arguments for \'smp\', it should be \'1\'");
+            }
+        }
+        if let Some(threads) = cmd_parser.get_value::<u64>("threads")? {
+            if threads.ne(&1) {
+                bail!("Invalid \'threads\' arguments for \'smp\', it should be \'1\'");
+            }
+        }
 
         // limit cpu count
         if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
             return Err(ErrorKind::IllegalValue(
                 "CPU number".to_string(),
-                MIN_NR_CPUS as u64,
+                MIN_NR_CPUS,
                 true,
-                MAX_NR_CPUS as u64,
-                true,
-            )
-            .into());
-        }
-
-        // limit cpu count
-        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&max_cpus) {
-            return Err(ErrorKind::IllegalValue(
-                "MAX CPU number".to_string(),
-                MIN_NR_CPUS as u64,
-                true,
-                MAX_NR_CPUS as u64,
+                MAX_NR_CPUS,
                 true,
             )
             .into());
         }
 
-        if max_cpus < cpu || sockets * dies * cores * threads != max_cpus {
-            return Err(ErrorKind::IllegalValue(
-                "maxcpus".to_string(),
-                cpu as u64,
-                true,
-                (sockets * dies * cores * threads) as u64,
-                true,
-            )
-            .into());
-        }
-
+        // it is safe, as value limited before
         self.machine_config.nr_cpus = cpu as u8;
-        self.machine_config.nr_threads = threads as u8;
-        self.machine_config.nr_cores = cores as u8;
-        self.machine_config.nr_dies = dies as u8;
-        self.machine_config.nr_sockets = sockets as u8;
-        self.machine_config.max_cpus = max_cpus as u8;
+
         Ok(())
     }
 
@@ -330,112 +242,9 @@ impl VmConfig {
     pub fn enable_mem_prealloc(&mut self) {
         self.machine_config.mem_config.mem_prealloc = true;
     }
-
-    pub fn add_mem_zone(&mut self, mem_zone: &str) -> Result<MemZoneConfig> {
-        let mut cmd_parser = CmdParser::new("mem_zone");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("size")
-            .push("host-nodes")
-            .push("policy");
-        cmd_parser.parse(mem_zone)?;
-
-        let mut zone_config = MemZoneConfig::default();
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            if id.len() > MAX_STRING_LENGTH {
-                return Err(
-                    ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into(),
-                );
-            }
-            zone_config.id = id;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("id", "memory-backend-ram").into());
-        }
-        if let Some(mem) = cmd_parser.get_value::<String>("size")? {
-            zone_config.size = memory_unit_conversion(&mem)?;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("size", "memory-backend-ram").into());
-        }
-        if let Some(host_nodes) = cmd_parser.get_value::<u32>("host-nodes")? {
-            if host_nodes >= MAX_NODES {
-                return Err(ErrorKind::IllegalValue(
-                    "host_nodes".to_string(),
-                    0,
-                    true,
-                    MAX_NODES as u64,
-                    false,
-                )
-                .into());
-            }
-            zone_config.host_numa_node = Some(host_nodes);
-        }
-        if let Some(policy) = cmd_parser.get_value::<String>("policy")? {
-            if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
-                return Err(ErrorKind::InvalidParam("policy".to_string(), policy).into());
-            }
-            zone_config.policy = policy;
-        }
-
-        if self.machine_config.mem_config.mem_zones.is_some() {
-            self.machine_config
-                .mem_config
-                .mem_zones
-                .as_mut()
-                .unwrap()
-                .push(zone_config.clone());
-        } else {
-            self.machine_config.mem_config.mem_zones = Some(vec![zone_config.clone()]);
-        }
-
-        Ok(zone_config)
-    }
 }
 
-fn adjust_topology(
-    cpu: u64,
-    mut max_cpus: u64,
-    mut sockets: u64,
-    dies: u64,
-    mut cores: u64,
-    mut threads: u64,
-) -> (u64, u64, u64, u64) {
-    if max_cpus == 0 {
-        if sockets * dies * cores * threads > 0 {
-            max_cpus = sockets * dies * cores * threads;
-        } else {
-            max_cpus = cpu;
-        }
-    }
-
-    if cores == 0 {
-        if sockets == 0 {
-            sockets = 1;
-        }
-        if threads == 0 {
-            threads = 1;
-        }
-        cores = max_cpus / (sockets * dies * threads);
-    } else if sockets == 0 {
-        if threads == 0 {
-            threads = 1;
-        }
-        sockets = max_cpus / (dies * cores * threads);
-    }
-
-    if threads == 0 {
-        threads = max_cpus / (sockets * dies * cores);
-    }
-
-    (max_cpus, sockets, cores, threads)
-}
-
-/// Convert memory units from GiB, Mib to Byte.
-///
-/// # Arguments
-///
-/// * `origin_value` - The origin memory value from user.
-pub fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
+fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
     if (origin_value.ends_with('M') | origin_value.ends_with('m'))
         && (origin_value.contains('M') ^ origin_value.contains('m'))
     {
@@ -493,16 +302,10 @@ mod tests {
             mem_share: false,
             dump_guest_core: false,
             mem_prealloc: false,
-            mem_zones: None,
         };
         let mut machine_config = MachineConfig {
             mach_type: MachineType::MicroVm,
-            nr_cpus: 1,
-            nr_cores: 1,
-            nr_threads: 1,
-            nr_dies: 1,
-            nr_sockets: 1,
-            max_cpus: MIN_NR_CPUS as u8,
+            nr_cpus: MIN_NR_CPUS as u8,
             mem_config: memory_config,
         };
         assert!(machine_config.check().is_ok());
@@ -819,42 +622,29 @@ mod tests {
         let cpu_cfg_str = "cpus=255,sockets=255,cores=1,threads=1";
         let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
         assert!(cpu_cfg_ret.is_err());
-    }
 
-    #[test]
-    fn test_add_mem_zone() {
+        // not supported yet
         let mut vm_config = VmConfig::default();
-        let zone_config_1 = vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind")
-            .unwrap();
-        assert_eq!(zone_config_1.id, "mem1");
-        assert_eq!(zone_config_1.size, 2147483648);
-        assert_eq!(zone_config_1.host_numa_node, Some(1));
-        assert_eq!(zone_config_1.policy, "bind");
+        let cpu_cfg_str = "cpus=8,sockets=4,cores=2,threads=1";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
 
-        let zone_config_2 = vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2G,id=mem1")
-            .unwrap();
-        assert_eq!(zone_config_2.host_numa_node, None);
-        assert_eq!(zone_config_2.policy, "bind");
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=2,cores=2,threads=2";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
 
-        assert!(vm_config
-            .add_mem_zone("-object memory-backend-ram,size=2G")
-            .is_err());
-        assert!(vm_config
-            .add_mem_zone("-object memory-backend-ram,id=mem1")
-            .is_err());
-    }
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=1,cores=4,threads=2";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
 
-    #[test]
-    fn test_host_mem_policy() {
-        let policy = HostMemPolicy::from(String::from("default"));
-        assert!(policy == HostMemPolicy::Default);
-
-        let policy = HostMemPolicy::from(String::from("interleave"));
-        assert!(policy == HostMemPolicy::Interleave);
-
-        let policy = HostMemPolicy::from(String::from("error"));
-        assert!(policy == HostMemPolicy::NotSupported);
+        // not supported yet
+        let mut vm_config = VmConfig::default();
+        let cpu_cfg_str = "cpus=8,sockets=1,cores=2,threads=4";
+        let cpu_cfg_ret = vm_config.add_cpu(cpu_cfg_str);
+        assert!(cpu_cfg_ret.is_err());
     }
 }

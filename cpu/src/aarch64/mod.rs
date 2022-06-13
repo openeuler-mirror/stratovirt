@@ -23,14 +23,12 @@ use kvm_bindings::{
 use kvm_ioctls::VcpuFd;
 use vmm_sys_util::fam::FamStructWrapper;
 
-pub use self::caps::ArmCPUCaps;
-use self::caps::CpregListEntry;
-use self::core_regs::{get_core_regs, set_core_regs};
 use crate::errors::{Result, ResultExt};
 use crate::CPU;
-
+pub use caps::ArmCPUCaps;
+use caps::CpregListEntry;
+use core_regs::{get_core_regs, set_core_regs};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
 type CpregList = FamStructWrapper<kvm_reg_list>;
@@ -62,23 +60,6 @@ const KVM_MAX_CPREG_ENTRIES: usize = 1024;
 pub struct ArmCPUBootConfig {
     pub fdt_addr: u64,
     pub boot_pc: u64,
-}
-
-#[derive(Default, Copy, Clone)]
-pub struct ArmCPUTopology {
-    threads: u8,
-    cores: u8,
-    clusters: u8,
-}
-
-impl ArmCPUTopology {
-    pub fn new() -> Self {
-        ArmCPUTopology::default();
-    }
-
-    pub fn set_topology(mut self) -> Self {
-        self
-    }
 }
 
 /// AArch64 CPU architect information

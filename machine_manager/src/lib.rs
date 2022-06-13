@@ -21,6 +21,11 @@
 //! 2. The API interface over VM inside and outside.
 //! 3. Configuration for VM and its devices.
 
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate error_chain;
+
 pub mod cmdline;
 pub mod config;
 pub mod event_loop;
@@ -31,8 +36,6 @@ pub mod socket;
 pub mod temp_cleaner;
 
 pub mod errors {
-    use error_chain::error_chain;
-
     error_chain! {
         links {
             ConfigParser(crate::config::errors::Error, crate::config::errors::ErrorKind);

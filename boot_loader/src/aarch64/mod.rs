@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress};
 use devices::legacy::{errors::ErrorKind as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
-use log::info;
 use util::byte_code::ByteCode;
 
 use crate::errors::{ErrorKind, Result, ResultExt};

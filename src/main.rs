@@ -10,12 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate log;
+
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
 
-use error_chain::{bail, error_chain, quick_main};
-use log::{error, info};
 use machine::{LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},

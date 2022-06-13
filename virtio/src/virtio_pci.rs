@@ -16,11 +16,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::{bail, ChainedError};
+use error_chain::ChainedError;
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
 use pci::config::{
     RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
     ROM_ADDRESS, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE,
@@ -1122,21 +1120,6 @@ impl PciDevOps for VirtioPciDevice {
             .unwrap()
             .reset()
             .chain_err(|| "Fail to reset virtio device")
-    }
-
-    fn get_dev_path(&self) -> Option<String> {
-        let parent_bus = self.parent_bus.upgrade().unwrap();
-        match self.device.lock().unwrap().device_type() {
-            VIRTIO_TYPE_BLOCK => {
-                // The virtio blk device is identified as a single-channel SCSI device,
-                // so add scsi controler indetification without channel, scsi-id and lun.
-                let parent_dev_path = self.get_parent_dev_path(parent_bus);
-                let mut dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/scsi@");
-                dev_path.push_str("/disk@0,0");
-                Some(dev_path)
-            }
-            _ => None,
-        }
     }
 }
 
