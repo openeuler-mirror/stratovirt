@@ -49,11 +49,6 @@ const MSR_LIST: &[u32] = &[
 const MSR_IA32_MISC_ENABLE: u32 = 0x01a0;
 const MSR_IA32_MISC_ENABLE_FAST_STRING: u64 = 0x1;
 
-const ECX_INVALID: u32 = 0u32 << 8;
-const ECX_THREAD: u32 = 1u32 << 8;
-const ECX_CORE: u32 = 2u32 << 8;
-const ECX_DIE: u32 = 5u32 << 8;
-
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Default, Clone)]
@@ -77,27 +72,6 @@ pub struct X86CPUBootConfig {
     pub pml4_start: u64,
 }
 
-#[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Copy, Clone)]
-pub struct X86CPUTopology {
-    threads: u8,
-    cores: u8,
-    dies: u8,
-}
-
-impl X86CPUTopology {
-    pub fn new() -> Self {
-        X86CPUTopology::default()
-    }
-
-    pub fn set_topology(mut self, toplogy: (u8, u8, u8)) -> Self {
-        self.threads = toplogy.0;
-        self.cores = toplogy.1;
-        self.dies = toplogy.2;
-        self
-    }
-}
-
 /// The state of vCPU's register.
 #[allow(clippy::upper_case_acronyms)]
 #[repr(C)]
@@ -105,10 +79,6 @@ impl X86CPUTopology {
 #[desc_version(compat_version = "0.1.0")]
 pub struct X86CPUState {
     nr_vcpus: u32,
-    nr_threads: u32,
-    nr_cores: u32,
-    nr_dies: u32,
-    nr_sockets: u32,
     apic_id: u32,
     regs: kvm_regs,
     sregs: kvm_sregs,
@@ -142,10 +112,6 @@ impl X86CPUState {
             apic_id: vcpu_id,
             nr_vcpus,
             mp_state,
-            nr_threads: 1,
-            nr_cores: 1,
-            nr_dies: 1,
-            nr_sockets: 1,
             ..Default::default()
         }
     }
@@ -184,18 +150,6 @@ impl X86CPUState {
         self.setup_fpu();
         self.setup_msrs();
 
-        Ok(())
-    }
-
-    /// Set cpu topology
-    ///
-    /// # Arguments
-    ///
-    /// * `topology`: 0: threads, 1: cores, 2: dies
-    pub fn set_cpu_topology(&mut self, topology: &X86CPUTopology) -> Result<()> {
-        self.nr_threads = topology.threads as u32;
-        self.nr_cores = topology.cores as u32;
-        self.nr_dies = topology.dies as u32;
         Ok(())
     }
 
@@ -390,9 +344,6 @@ impl X86CPUState {
     }
 
     fn setup_cpuid(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
-        let core_offset = 32u32 - (self.nr_threads - 1).leading_zeros();
-        let die_offset = (32u32 - (self.nr_cores - 1).leading_zeros()) + core_offset;
-        let pkg_offset = (32u32 - (self.nr_dies - 1).leading_zeros()) + die_offset;
         let sys_fd = match Kvm::new() {
             Ok(fd) => fd,
             _ => bail!("setup_cpuid: Open /dev/kvm failed"),
@@ -455,56 +406,20 @@ impl X86CPUState {
                     entry.ecx = entry.index & 0xff;
                     match entry.index {
                         0 => {
-                            entry.eax = core_offset;
-                            entry.ebx = self.nr_threads;
-                            entry.ecx |= ECX_THREAD;
+                            entry.eax = 0u32;
+                            entry.ebx = 1u32;
+                            entry.ecx |= 1u32 << 8;
                         }
                         1 => {
-                            entry.eax = pkg_offset;
-                            entry.ebx = self.nr_threads * self.nr_cores;
-                            entry.ecx |= ECX_CORE;
+                            entry.eax = 32u32 - self.nr_vcpus.leading_zeros();
+                            entry.ebx = self.nr_vcpus;
+                            entry.ecx |= 2u32 << 8;
                         }
                         _ => {
-                            entry.eax = 0;
-                            entry.ebx = 0;
-                            entry.ecx |= ECX_INVALID;
+                            entry.ebx = 0xff;
                         }
                     }
-                }
-                0x1f => {
-                    if self.nr_dies < 2 {
-                        entry.eax = 0;
-                        entry.ebx = 0;
-                        entry.ecx = 0;
-                        entry.edx = 0;
-                        continue;
-                    }
-
-                    entry.edx = self.apic_id as u32;
-                    entry.ecx = entry.index & 0xff;
-
-                    match entry.index {
-                        0 => {
-                            entry.eax = core_offset;
-                            entry.ebx = self.nr_threads;
-                            entry.ecx |= ECX_THREAD;
-                        }
-                        1 => {
-                            entry.eax = die_offset;
-                            entry.ebx = self.nr_cores * self.nr_threads;
-                            entry.ecx |= ECX_CORE;
-                        }
-                        2 => {
-                            entry.eax = pkg_offset;
-                            entry.ebx = self.nr_dies * self.nr_cores * self.nr_threads;
-                            entry.ecx |= ECX_DIE;
-                        }
-                        _ => {
-                            entry.eax = 0;
-                            entry.ebx = 0;
-                            entry.ecx |= ECX_INVALID;
-                        }
-                    }
+                    entry.ebx &= 0xffff;
                 }
                 0x8000_0002..=0x8000_0004 => {
                     // Passthrough host cpu model name directly to guest

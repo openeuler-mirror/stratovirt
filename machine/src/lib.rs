@@ -118,7 +118,7 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
 use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
-use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
+use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
@@ -221,7 +221,6 @@ pub trait MachineOps {
     fn init_vcpu(
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
         nr_cpus: u8,
-        topology: &CPUTopology,
         fds: &[Arc<VcpuFd>],
         boot_cfg: &Option<CPUBootConfig>,
     ) -> Result<Vec<Arc<CPU>>>
@@ -254,7 +253,7 @@ pub trait MachineOps {
         if let Some(boot_config) = boot_cfg {
             for cpu_index in 0..nr_cpus as usize {
                 cpus[cpu_index as usize]
-                    .realize(boot_config, topology)
+                    .realize(boot_config)
                     .chain_err(|| {
                         format!(
                             "Failed to realize arch cpu register for CPU {}/KVM",

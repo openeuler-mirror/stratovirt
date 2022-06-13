@@ -27,7 +27,7 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::legacy::{FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC, SERIAL_ADDR};
 use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
@@ -111,14 +111,7 @@ impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
         use crate::errors::ResultExt;
 
-        let cpu_topo = CpuTopology::new(
-            vm_config.machine_config.nr_cpus,
-            vm_config.machine_config.nr_threads,
-            vm_config.machine_config.nr_cores,
-            vm_config.machine_config.nr_dies,
-            vm_config.machine_config.nr_sockets,
-            vm_config.machine_config.max_cpus,
-        );
+        let cpu_topo = CpuTopology::new(vm_config.machine_config.nr_cpus);
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
             .chain_err(|| MachineErrorKind::CrtMemSpaceErr)?;
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
@@ -456,15 +449,9 @@ impl MachineOps for StdMachine {
         } else {
             (None, None)
         };
-        let topology = CPUTopology::new().set_topology((
-            vm_config.machine_config.nr_threads,
-            vm_config.machine_config.nr_cores,
-            vm_config.machine_config.nr_dies,
-        ));
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
-            &topology,
             &vcpu_fds,
             &boot_config,
         )?);

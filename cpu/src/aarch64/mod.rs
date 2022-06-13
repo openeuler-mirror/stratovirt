@@ -62,23 +62,6 @@ pub struct ArmCPUBootConfig {
     pub boot_pc: u64,
 }
 
-#[derive(Default, Copy, Clone)]
-pub struct ArmCPUTopology {
-    threads: u8,
-    cores: u8,
-    clusters: u8,
-}
-
-impl ArmCPUTopology {
-    pub fn new() -> Self {
-        ArmCPUTopology::default();
-    }
-
-    pub fn set_topology(mut self) -> Self {
-        self
-    }
-}
-
 /// AArch64 CPU architect information
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
