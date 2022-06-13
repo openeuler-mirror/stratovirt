@@ -16,22 +16,13 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 
-use error_chain::bail;
-use log::{error, info};
-use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
-use util::{
-    syscall::mbind,
-    unix::{do_mmap, host_page_size},
-};
+use machine_manager::config::MachineMemConfig;
 
 use crate::errors::{Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
+use util::unix::{do_mmap, host_page_size};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
-/// Verify existing pages in the mapping.
-const MPOL_MF_STRICT: u32 = 1;
-/// Move pages owned by this process to conform to mapping.
-const MPOL_MF_MOVE: u32 = 2;
 
 /// FileBackend represents backend-file of `HostMemMapping`.
 #[derive(Clone)]
@@ -287,51 +278,6 @@ pub fn create_host_mmaps(
     Ok(mappings)
 }
 
-/// Set host memory backend numa policy.
-///
-/// # Arguments
-///
-/// * `mem_mappings` - The host virtual address of mapped memory information.
-/// * `mem_zones` - Memory zone config.
-pub fn set_host_memory_policy(
-    mem_mappings: &[Arc<HostMemMapping>],
-    mem_zones: &Option<Vec<MemZoneConfig>>,
-) -> Result<()> {
-    if mem_zones.is_none() || mem_mappings.is_empty() {
-        return Ok(());
-    }
-
-    let mut host_addr_start = mem_mappings.get(0).map(|m| m.host_address()).unwrap();
-    for zone in mem_zones.as_ref().unwrap() {
-        let mut node_id = if let Some(id) = zone.host_numa_node {
-            id as usize
-        } else {
-            0_usize
-        };
-
-        let mut nmask = vec![0_u64; node_id / 64 + 1];
-        nmask[node_id / 64] |= 1_u64 << (node_id % 64);
-        let policy = HostMemPolicy::from(zone.policy.clone());
-        if policy != HostMemPolicy::Default {
-            // We need to pass node_id + 1 as mbind() max_node argument.
-            // It is kind of linux bug or feature which will cut off the last node.
-            node_id += 1;
-        }
-        mbind(
-            host_addr_start,
-            zone.size,
-            policy as u32,
-            nmask,
-            node_id as u64,
-            MPOL_MF_STRICT | MPOL_MF_MOVE,
-        )
-        .chain_err(|| "Failed to call mbind")?;
-        host_addr_start += zone.size;
-    }
-
-    Ok(())
-}
-
 /// Record information of memory mapping.
 pub struct HostMemMapping {
     /// Record the range of one memory segment.
@@ -544,7 +490,6 @@ mod test {
             dump_guest_core: false,
             mem_share: false,
             mem_prealloc: false,
-            mem_zones: None,
         };
 
         let host_mmaps = create_host_mmaps(&addr_ranges, &mem_config, 1).unwrap();

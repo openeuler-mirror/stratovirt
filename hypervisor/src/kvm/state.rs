@@ -13,7 +13,6 @@
 use kvm_bindings::{
     kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_CLOCK_TSC_STABLE, KVM_IRQCHIP_IOAPIC,
 };
-use migration_derive::{ByteCode, Desc};
 
 use super::KVM_FDS;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};

@@ -12,7 +12,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use error_chain::bail;
 use util::byte_code::ByteCode;
 
 use crate::errors::{ErrorKind, Result, ResultExt};

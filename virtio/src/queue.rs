@@ -17,8 +17,6 @@ use std::sync::atomic::{fence, Ordering};
 use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
-use error_chain::bail;
-use log::{error, warn};
 use util::byte_code::ByteCode;
 
 use super::errors::{ErrorKind, Result, ResultExt};

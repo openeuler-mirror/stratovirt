@@ -12,8 +12,6 @@
 
 use std::sync::{Arc, Mutex};
 
-#[cfg(target_arch = "aarch64")]
-use acpi::AmlOne;
 use acpi::{
     AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlByte, AmlCacheable, AmlCreateDWordField,
     AmlDWord, AmlDWordDesc, AmlDevice, AmlEisaId, AmlElse, AmlEqual, AmlISARanges, AmlIf,
@@ -362,12 +360,6 @@ impl AmlBuilder for PciHost {
         pci_host_bridge.append_child(AmlNameDecl::new("_CID", AmlEisaId::new("PNP0A03")));
         pci_host_bridge.append_child(AmlNameDecl::new("_ADR", AmlZero));
         pci_host_bridge.append_child(AmlNameDecl::new("_UID", AmlZero));
-        #[cfg(target_arch = "aarch64")]
-        {
-            // CCA: Cache Coherency Attribute, which determines whether
-            // guest supports DMA features in pci host on aarch64 platform.
-            pci_host_bridge.append_child(AmlNameDecl::new("_CCA", AmlOne));
-        }
 
         build_osc_for_aml(&mut pci_host_bridge);
 

@@ -19,8 +19,6 @@ use std::sync::Arc;
 
 use address_space::AddressSpace;
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
-use error_chain::bail;
-use log::{error, info};
 use util::byte_code::ByteCode;
 
 use self::elf::load_elf_kernel;

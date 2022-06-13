@@ -13,7 +13,6 @@
 //! Remove all capability for ozone when uid is 0, use -capability cap_* to add capability.
 
 use crate::{syscall, ErrorKind, Result, ResultExt};
-use error_chain::bail;
 use std::{collections::HashMap, io::Write};
 
 const CAPS_V3: u32 = 0x20080522;

@@ -14,19 +14,18 @@ mod pci_host_root;
 mod syscall;
 
 use std::fs::OpenOptions;
-use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
 use acpi::{
-    AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiSratGiccAffinity,
-    AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
-    AmlScopeBuilder, AmlString, TableLoader, ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ,
-    ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ,
-    ACPI_GTDT_CAP_ALWAYS_ON, ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP,
-    ACPI_IORT_NODE_PCI_ROOT_COMPLEX, ACPI_MADT_GENERIC_CPU_INTERFACE,
-    ACPI_MADT_GENERIC_DISTRIBUTOR, ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR,
-    ARCH_GIC_MAINT_IRQ, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
+    AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiTable, AmlBuilder,
+    AmlDevice, AmlInteger, AmlNameDecl, AmlScope, AmlScopeBuilder, AmlString, TableLoader,
+    ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ,
+    ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ, ACPI_GTDT_CAP_ALWAYS_ON,
+    ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP, ACPI_IORT_NODE_PCI_ROOT_COMPLEX,
+    ACPI_MADT_GENERIC_CPU_INTERFACE, ACPI_MADT_GENERIC_DISTRIBUTOR,
+    ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR, ARCH_GIC_MAINT_IRQ,
+    INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -34,14 +33,10 @@ use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
 use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
 };
-use devices::{ICGICConfig, ICGICv3Config, InterruptController};
-use error_chain::{bail, ChainedError};
+use devices::{InterruptController, InterruptControllerConfig};
+use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
-use log::error;
-use machine_manager::config::{
-    BootIndexInfo, BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
-};
-use machine_manager::event;
+use machine_manager::config::{BootSource, PFlashConfig, SerialConfig, VmConfig};
 use machine_manager::machine::{
     KvmVmState, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MigrateInterface,
@@ -49,7 +44,7 @@ use machine_manager::machine::{
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::{SysBus, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
@@ -130,12 +125,6 @@ pub struct StdMachine {
     reset_req: EventFd,
     /// Device Tree Blob.
     dtb_vec: Vec<u8>,
-    /// List of guest NUMA nodes information.
-    numa_nodes: Option<NumaNodes>,
-    /// List contains the boot order of boot devices.
-    boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
-    /// FwCfg device.
-    fwcfg_dev: Option<Arc<Mutex<FwCfgMem>>>,
 }
 
 impl StdMachine {
@@ -181,16 +170,13 @@ impl StdMachine {
             reset_req: EventFd::new(libc::EFD_NONBLOCK)
                 .chain_err(|| ErrorKind::InitEventFdErr("reset_req".to_string()))?,
             dtb_vec: Vec::new(),
-            numa_nodes: None,
-            boot_order_list: Arc::new(Mutex::new(Vec::new())),
-            fwcfg_dev: None,
         })
     }
 
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
         use crate::errors::ResultExt;
 
-        let mut locked_vm = vm.lock().unwrap();
+        let locked_vm = vm.lock().unwrap();
         let mut fdt_addr: u64 = 0;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
@@ -215,12 +201,18 @@ impl StdMachine {
             )
             .chain_err(|| "Fail to write dtb into sysmem")?;
 
+        for dev in locked_vm.sysbus.devices.iter() {
+            dev.lock()
+                .unwrap()
+                .reset()
+                .chain_err(|| "Fail to reset sysbus device")?;
+        }
         locked_vm
-            .reset_all_devices()
-            .chain_err(|| "Fail to reset all devices")?;
-        locked_vm
-            .reset_fwcfg_boot_order()
-            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
+            .pci_host
+            .lock()
+            .unwrap()
+            .reset()
+            .chain_err(|| "Fail to reset pci host")?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             cpu.resume()
@@ -294,7 +286,6 @@ impl StdMachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
         )
         .chain_err(|| "Failed to realize fwcfg device")?;
-        self.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(fwcfg_dev)
     }
@@ -314,10 +305,6 @@ impl StdMachineOps for StdMachine {
     fn get_vm_config(&self) -> &Mutex<VmConfig> {
         &self.vm_config
     }
-
-    fn get_numa_nodes(&self) -> &Option<NumaNodes> {
-        &self.numa_nodes
-    }
 }
 
 impl MachineOps for StdMachine {
@@ -326,7 +313,10 @@ impl MachineOps for StdMachine {
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
-        let v3 = ICGICv3Config {
+        let intc_conf = InterruptControllerConfig {
+            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+            vcpu_count,
+            max_irq: 192,
             msi: true,
             dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
             redist_region_ranges: vec![
@@ -334,13 +324,6 @@ impl MachineOps for StdMachine {
                 MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize],
             ],
             its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
-        };
-        let intc_conf = ICGICConfig {
-            version: None,
-            vcpu_count,
-            max_irq: 192,
-            v2: None,
-            v3: Some(v3),
         };
         let irq_chip = InterruptController::new(&intc_conf)?;
         self.irq_chip = Some(Arc::new(irq_chip));
@@ -425,7 +408,6 @@ impl MachineOps for StdMachine {
         locked_vm
             .register_reset_event(&locked_vm.reset_req, clone_vm)
             .chain_err(|| "Fail to register reset event")?;
-        locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_mem,
@@ -463,10 +445,6 @@ impl MachineOps for StdMachine {
         } else {
             (None, None)
         };
-
-        locked_vm
-            .reset_fwcfg_boot_order()
-            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
 
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
@@ -549,19 +527,6 @@ impl MachineOps for StdMachine {
 
     fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
         Ok(&self.pci_host)
-    }
-
-    fn get_sys_bus(&mut self) -> &SysBus {
-        &self.sysbus
-    }
-
-    fn get_fwcfg_dev(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
-        // Unwrap is safe. Because after standard machine realize, this will not be None.F
-        Ok(self.fwcfg_dev.clone().unwrap())
-    }
-
-    fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
-        Some(self.boot_order_list.clone())
     }
 }
 
@@ -769,71 +734,6 @@ impl AcpiBuilder for StdMachine {
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
             .chain_err(|| "Fail to add MADT table to loader")?;
         Ok(madt_begin as u64)
-    }
-
-    fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
-        for cpu in node.cpus.iter() {
-            srat.append_child(
-                &AcpiSratGiccAffinity {
-                    type_id: 3_u8,
-                    length: size_of::<AcpiSratGiccAffinity>() as u8,
-                    proximity_domain,
-                    process_uid: *cpu as u32,
-                    flags: 1,
-                    clock_domain: 0_u32,
-                }
-                .aml_bytes(),
-            );
-        }
-    }
-
-    fn build_srat_mem(
-        &self,
-        base_addr: u64,
-        proximity_domain: u32,
-        node: &NumaNode,
-        srat: &mut AcpiTable,
-    ) -> u64 {
-        srat.append_child(
-            &AcpiSratMemoryAffinity {
-                type_id: 1,
-                length: size_of::<AcpiSratMemoryAffinity>() as u8,
-                proximity_domain,
-                base_addr,
-                range_length: node.size,
-                flags: 1,
-                ..Default::default()
-            }
-            .aml_bytes(),
-        );
-        base_addr + node.size
-    }
-
-    fn build_srat_table(
-        &self,
-        acpi_data: &Arc<Mutex<Vec<u8>>>,
-        loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
-        if self.numa_nodes.is_none() {
-            return Ok(0);
-        }
-
-        let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
-        // Reserved
-        srat.append_child(&[1_u8; 4_usize]);
-        // Reserved
-        srat.append_child(&[0_u8; 8_usize]);
-
-        let mut next_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        for (id, node) in self.numa_nodes.as_ref().unwrap().iter() {
-            self.build_srat_cpu(*id, node, &mut srat);
-            next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
-        }
-
-        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
-            .chain_err(|| "Fail to add SRAT table to loader")?;
-        Ok(srat_begin as u64)
     }
 }
 
@@ -1146,8 +1046,6 @@ trait CompileFDTHelper {
     fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
     /// Function that helps to generate the chosen node.
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
-    /// Function that helps to generate numa node distances.
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
 }
 
 impl CompileFDTHelper for StdMachine {
@@ -1232,31 +1130,14 @@ impl CompileFDTHelper for StdMachine {
     }
 
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
-        if self.numa_nodes.is_none() {
-            let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-            let mem_size = self.sys_mem.memory_end_address().raw_value()
-                - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-            let node = "memory";
-            let memory_node_dep = fdt.begin_node(node)?;
-            fdt.set_property_string("device_type", "memory")?;
-            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
-            fdt.end_node(memory_node_dep)?;
-
-            return Ok(());
-        }
-
-        // Set NUMA node information.
-        let mut mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        for (id, node) in self.numa_nodes.as_ref().unwrap().iter().enumerate() {
-            let mem_size = node.1.size;
-            let node = format!("memory@{:x}", mem_base);
-            let memory_node_dep = fdt.begin_node(&node)?;
-            fdt.set_property_string("device_type", "memory")?;
-            fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
-            fdt.set_property_u32("numa-node-id", id as u32)?;
-            fdt.end_node(memory_node_dep)?;
-            mem_base += mem_size;
-        }
+        let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        let mem_size = self.sys_mem.memory_end_address().raw_value()
+            - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        let node = "memory";
+        let memory_node_dep = fdt.begin_node(node)?;
+        fdt.set_property_string("device_type", "memory")?;
+        fdt.set_property_array_u64("reg", &[mem_base, mem_size as u64])?;
+        fdt.end_node(memory_node_dep)?;
 
         Ok(())
     }
@@ -1342,39 +1223,6 @@ impl CompileFDTHelper for StdMachine {
 
         Ok(())
     }
-
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
-        if self.numa_nodes.is_none() {
-            return Ok(());
-        }
-
-        let distance_node_dep = fdt.begin_node("distance-map")?;
-        fdt.set_property_string("compatible", "numa-distance-map-v1")?;
-
-        let mut matrix = Vec::new();
-        let numa_nodes = self.numa_nodes.as_ref().unwrap();
-        let existing_nodes: Vec<u32> = numa_nodes.keys().cloned().collect();
-        for (id, node) in numa_nodes.iter().enumerate() {
-            let distances = &node.1.distances;
-            for i in existing_nodes.iter() {
-                matrix.push(id as u32);
-                matrix.push(*i as u32);
-                let dist: u32 = if id as u32 == *i {
-                    10
-                } else if let Some(distance) = distances.get(i) {
-                    *distance as u32
-                } else {
-                    20
-                };
-                matrix.push(dist);
-            }
-        }
-
-        fdt.set_property_array_u32("distance-matrix", matrix.as_ref())?;
-        fdt.end_node(distance_node_dep)?;
-
-        Ok(())
-    }
 }
 
 impl device_tree::CompileFDT for StdMachine {
@@ -1391,7 +1239,7 @@ impl device_tree::CompileFDT for StdMachine {
         self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
         self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
-        self.generate_distance_node(fdt)?;
+
         fdt.end_node(node_dep)?;
 
         Ok(())

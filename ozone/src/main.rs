@@ -10,10 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::{error_chain, quick_main};
+#[macro_use]
+extern crate error_chain;
 
-use crate::args::create_args_parser;
-use crate::handler::OzoneHandler;
+use args::create_args_parser;
+use handler::OzoneHandler;
 
 mod args;
 mod capability;

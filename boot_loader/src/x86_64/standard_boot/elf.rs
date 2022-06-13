@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress};
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
-use error_chain::bail;
 use util::byte_code::ByteCode;
 use util::num_ops::round_up;
 

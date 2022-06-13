@@ -16,8 +16,6 @@ use std::io::{Read, Write};
 use std::mem::size_of;
 use std::path::PathBuf;
 
-use error_chain::bail;
-use log::info;
 use util::byte_code::ByteCode;
 use util::reader::BufferReader;
 use util::unix::host_page_size;

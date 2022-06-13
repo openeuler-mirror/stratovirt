@@ -5,7 +5,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use log::error;
 use once_cell::sync::Lazy;
 
 use crate::errors::{Result, ResultExt};

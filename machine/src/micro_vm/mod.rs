@@ -29,8 +29,6 @@
 //! - `aarch64`
 
 pub mod errors {
-    use error_chain::error_chain;
-
     error_chain! {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);
@@ -75,7 +73,7 @@ use devices::legacy::PL031;
 use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
-use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController};
+use devices::{InterruptController, InterruptControllerConfig};
 use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
@@ -106,15 +104,11 @@ use virtio::{
 };
 use vmm_sys_util::eventfd::EventFd;
 
-use self::errors::{ErrorKind, Result};
 use super::{
     errors::{ErrorKind as MachineErrorKind, Result as MachineResult},
     MachineOps,
 };
-
-use error_chain::bail;
-use log::error;
-use machine_manager::event;
+use errors::{ErrorKind, Result};
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use syscall::syscall_whitelist;
 
@@ -500,7 +494,10 @@ impl MachineOps for LightMachine {
     #[cfg(target_arch = "aarch64")]
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> MachineResult<()> {
         // Interrupt Controller Chip init
-        let v3 = ICGICv3Config {
+        let intc_conf = InterruptControllerConfig {
+            version: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
+            vcpu_count,
+            max_irq: 192,
             msi: true,
             dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
             redist_region_ranges: vec![
@@ -508,20 +505,6 @@ impl MachineOps for LightMachine {
                 MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize],
             ],
             its_range: Some(MEM_LAYOUT[LayoutEntryType::GicIts as usize]),
-        };
-        let v2 = ICGICv2Config {
-            dist_range: MEM_LAYOUT[LayoutEntryType::GicDist as usize],
-            cpu_range: MEM_LAYOUT[LayoutEntryType::GicCpu as usize],
-            v2m_range: None,
-            sys_mem: None,
-        };
-        // Passing both v2 and v3, leave GIC self to decide which one to use.
-        let intc_conf = ICGICConfig {
-            version: None,
-            vcpu_count,
-            max_irq: 192,
-            v3: Some(v3),
-            v2: Some(v2),
         };
         let irq_chip = InterruptController::new(&intc_conf)?;
         self.irq_chip = Some(Arc::new(irq_chip));
@@ -623,10 +606,6 @@ impl MachineOps for LightMachine {
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
         &self.sys_mem
-    }
-
-    fn get_sys_bus(&mut self) -> &SysBus {
-        &self.sysbus
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -955,7 +934,7 @@ impl DeviceInterface for LightMachine {
                         current: true,
                         qom_path: String::from("/machine/unattached/device[")
                             + &cpu_index.to_string()
-                            + "]",
+                            + &"]".to_string(),
                         halted: false,
                         props: Some(cpu_instance),
                         CPU: cpu_index as isize,
@@ -1148,7 +1127,6 @@ impl DeviceInterface for LightMachine {
             iothread: None,
             iops: None,
             queues: 1,
-            boot_index: None,
         };
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),

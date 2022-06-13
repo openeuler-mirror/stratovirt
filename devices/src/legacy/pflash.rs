@@ -17,8 +17,7 @@ use std::sync::{Arc, Mutex};
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::{bail, ChainedError};
-use log::{debug, error, warn};
+use error_chain::ChainedError;
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::num_ops::{deposit_u32, extract_u32};
 

@@ -10,9 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    use error_chain::error_chain;
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate machine_manager;
+#[cfg(target_arch = "x86_64")]
+#[macro_use]
+extern crate vmm_sys_util;
 
+pub mod errors {
     error_chain! {
         links {
             AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
@@ -98,35 +106,29 @@ mod standard_vm;
 pub use micro_vm::LightMachine;
 use pci::{PciBus, PciDevOps, PciHost, RootPort};
 pub use standard_vm::StdMachine;
-use sysbus::{SysBus, SysBusDevOps};
 use virtio::{
     BlockState, RngState, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioState,
     VirtioNetState,
 };
 
-use std::collections::BTreeMap;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Mutex, Weak};
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
-use address_space::{
-    create_host_mmaps, set_host_memory_policy, AddressSpace, KvmMemoryListener, Region,
-};
+use address_space::{create_host_mmaps, AddressSpace, KvmMemoryListener, Region};
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use error_chain::bail;
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    check_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
-    parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, MachineMemConfig,
-    NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig,
-    VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id, parse_net,
+    parse_rng_dev, parse_root_port, parse_vfio, parse_virtconsole, parse_virtio_serial,
+    parse_vsock, MachineMemConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
+    FAST_UNPLUG_ON,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{KvmVmState, MachineInterface};
@@ -180,8 +182,6 @@ pub trait MachineOps {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
             mem_mappings = create_host_mmaps(&ram_ranges, mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
-            set_host_memory_policy(&mem_mappings, &mem_config.mem_zones)
-                .chain_err(|| "Failed to set host memory NUMA policy.")?;
         }
 
         sys_mem
@@ -471,36 +471,6 @@ pub trait MachineOps {
         bail!("No pci host found");
     }
 
-    fn get_sys_bus(&mut self) -> &SysBus;
-
-    fn get_fwcfg_dev(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
-        bail!("No FwCfg deivce found");
-    }
-
-    fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
-        None
-    }
-
-    fn reset_all_devices(&mut self) -> Result<()> {
-        let sysbus = self.get_sys_bus();
-        for dev in sysbus.devices.iter() {
-            dev.lock()
-                .unwrap()
-                .reset()
-                .chain_err(|| "Fail to reset sysbus device")?;
-        }
-
-        if let Ok(pci_host) = self.get_pci_host() {
-            pci_host
-                .lock()
-                .unwrap()
-                .reset()
-                .chain_err(|| "Fail to reset pci host")?;
-        }
-
-        Ok(())
-    }
-
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
         // If there is no pci bus, skip the id check, such as micro vm.
         if let Ok(pci_host) = self.get_pci_host() {
@@ -515,88 +485,12 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn reset_fwcfg_boot_order(&mut self) -> Result<()> {
-        // unwrap is safe because stand machine always make sure it not return null.
-        let boot_order_vec = self.get_boot_order_list().unwrap();
-        let mut locked_boot_order_vec = boot_order_vec.lock().unwrap().clone();
-        locked_boot_order_vec.sort_by(|x, y| x.boot_index.cmp(&y.boot_index));
-        let mut fwcfg_boot_order_string = String::new();
-        for item in &locked_boot_order_vec {
-            fwcfg_boot_order_string.push_str(&item.dev_path);
-            fwcfg_boot_order_string.push('\n');
-        }
-        fwcfg_boot_order_string.push('\0');
-
-        let fwcfg = self.get_fwcfg_dev()?;
-        fwcfg
-            .lock()
-            .unwrap()
-            .modify_file_entry("bootorder", fwcfg_boot_order_string.as_bytes().to_vec())
-            .chain_err(|| "Fail to add bootorder entry for standard VM.")?;
-        Ok(())
-    }
-
-    /// Add boot index of device.
-    ///
-    /// # Arguments
-    ///
-    /// * `bootindex` - The boot index of the device.
-    /// * `dev_path` - The firmware device path of the device.
-    /// * `dev_id` - The id of the device.
-    fn add_bootindex_devices(
-        &mut self,
-        boot_index: u8,
-        dev_path: &str,
-        dev_id: &str,
-    ) -> Result<()> {
-        // Unwrap is safe because StdMachine will overwrite this function,
-        // which ensure boot_order_list is not None.
-        let boot_order_list = self.get_boot_order_list().unwrap();
-        if boot_order_list
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|item| item.boot_index == boot_index)
-        {
-            bail!("Failed to add duplicated bootindex {}.", boot_index);
-        }
-
-        boot_order_list.lock().unwrap().push(BootIndexInfo {
-            boot_index,
-            id: dev_id.to_string(),
-            dev_path: dev_path.to_string(),
-        });
-
-        Ok(())
-    }
-
-    /// Delete boot index of device.
-    ///
-    /// # Arguments
-    ///
-    /// * `dev_id` - The id of the device.
-    fn del_bootindex_devices(&self, dev_id: &str) {
-        // Unwrap is safe because StdMachine will overwrite this function,
-        // which ensure boot_order_list is not None.
-        let boot_order_list = self.get_boot_order_list().unwrap();
-        let mut locked_boot_order_list = boot_order_list.lock().unwrap();
-        locked_boot_order_list.retain(|item| item.id != dev_id);
-    }
-
     fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_blk(vm_config, cfg_args)?;
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
-        let pci_dev = self
-            .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
-            .chain_err(|| "Failed to add virtio pci device")?;
-        if let Some(bootindex) = device_cfg.boot_index {
-            if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
-                self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id)
-                    .chain_err(|| "Fail to add boot index")?;
-            }
-        }
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)?;
         MigrationManager::register_device_instance_mutex_with_id(
             BlockState::descriptor(),
             device,
@@ -711,7 +605,7 @@ pub trait MachineOps {
         device: Arc<Mutex<dyn VirtioDevice>>,
         multi_func: bool,
         need_irqfd: bool,
-    ) -> Result<Arc<Mutex<dyn PciDevOps>>> {
+    ) -> Result<()> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let sys_mem = self.get_sys_mem();
         let mut pcidev = VirtioPciDevice::new(
@@ -725,11 +619,10 @@ pub trait MachineOps {
         if need_irqfd {
             pcidev.enable_need_irqfd();
         }
-        let clone_pcidev = Arc::new(Mutex::new(pcidev.clone()));
         pcidev
             .realize()
             .chain_err(|| "Failed to add virtio pci device")?;
-        Ok(clone_pcidev)
+        Ok(())
     }
 
     /// Set the parent bus slot on when device attached
@@ -789,72 +682,6 @@ pub trait MachineOps {
 
         RootPort::set_fast_unplug_feature(fast_unplug);
         Ok(())
-    }
-
-    /// Add numa nodes information to standard machine.
-    ///
-    /// # Arguments
-    ///
-    /// * `vm_config` - VM Configuration.
-    fn add_numa_nodes(&mut self, vm_config: &mut VmConfig) -> Result<Option<NumaNodes>> {
-        if vm_config.numa_nodes.is_empty() {
-            return Ok(None);
-        }
-
-        let mut numa_nodes: NumaNodes = BTreeMap::new();
-        vm_config.numa_nodes.sort_by(|p, n| n.0.cmp(&p.0));
-        for numa in vm_config.numa_nodes.iter() {
-            match numa.0.as_str() {
-                "node" => {
-                    let numa_config: NumaConfig = parse_numa_mem(numa.1.as_str())?;
-                    if numa_nodes.contains_key(&numa_config.numa_id) {
-                        bail!("Numa node id is repeated {}", numa_config.numa_id);
-                    }
-                    let mut numa_node = NumaNode {
-                        cpus: numa_config.cpus,
-                        ..Default::default()
-                    };
-
-                    if let Some(object_cfg) = vm_config.object.remove(&numa_config.mem_dev) {
-                        if let ObjConfig::Zone(zone_config) = object_cfg {
-                            numa_node.size = zone_config.size;
-                        }
-                    } else {
-                        bail!(
-                            "Object for memory-backend-ram {} config not found",
-                            numa_config.mem_dev
-                        );
-                    }
-                    numa_nodes.insert(numa_config.numa_id, numa_node);
-                }
-                "dist" => {
-                    let dist: (u32, NumaDistance) = parse_numa_distance(numa.1.as_str())?;
-                    if !numa_nodes.contains_key(&dist.0) {
-                        bail!("Numa node id is not found {}", dist.0);
-                    }
-                    if !numa_nodes.contains_key(&dist.1.destination) {
-                        bail!("Numa node id is not found {}", dist.1.destination);
-                    }
-
-                    if let Some(n) = numa_nodes.get_mut(&dist.0) {
-                        if n.distances.contains_key(&dist.1.destination) {
-                            bail!(
-                                "Numa destination info {} repeat settings",
-                                dist.1.destination
-                            );
-                        }
-                        n.distances.insert(dist.1.destination, dist.1.distance);
-                    }
-                }
-                _ => {
-                    bail!("Unsupported args for NUMA node: {}", numa.0.as_str());
-                }
-            }
-        }
-
-        check_numa_node(&numa_nodes, vm_config)?;
-
-        Ok(Some(numa_nodes))
     }
 
     /// Add peripheral devices.

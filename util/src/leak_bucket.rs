@@ -14,7 +14,6 @@
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::Instant;
 
-use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::loop_context::EventLoopContext;
