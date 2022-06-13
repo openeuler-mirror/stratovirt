@@ -30,18 +30,20 @@ This allows you to set the maximum number of VCPUs that VM will support. The max
 By default, after booted, VM will online all CPUs you set.
 Four properties are supported for `smp`.
 * cpus: the number of VCPUs.
-* sockets: the number of socket. (optional). If not set, default is the value of `cpus`.
-* cores: the number of core. (optional). If not set, default is one.
-* threads: the number of thread. (optional). If not set, default is one.
-NB: the arguments of cpu topology is used to interconnect with libvirt, but the cpu topology of StratoVirt 
-is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads). 
-If it is configured, the sockets number should equals to the number of cpu, `cores` should be `1` 
-and `threads` should be `1`.
+* maxcpus: the number of max VCPUs.
+* sockets: the number of socket. (optional). If not set, its value depends on the value of `maxcpus`.
+* dies: the number of dies. (optional). If not set, default is one.
+* cores: the number of core. (optional). If not set, its value depends on the value of `maxcpus`.
+* threads: the number of thread. (optional). If not set, its value depends on the value of `maxcpus`.
+
+NB: the arguments of cpu topology is used to interconnect with libvirt. The x86 cpu topology has supported. But the ARM cpu topology of StratoVirt is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads). 
+
+If it is configured, sockets * dies * cores * threads must be equal to maxcpus, and maxcpus should be larger than cpus.
 
 
 ```shell
 # cmdline
--smp [cpus=]n[,sockets=n,cores=1,threads=1]
+-smp [cpus=]n[,maxcpus=,sockets=,dies=,cores=,threads=]
 ```
 
 ### 1.3 Memory
