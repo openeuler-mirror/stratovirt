@@ -26,6 +26,8 @@
 //! - `aarch64`
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);

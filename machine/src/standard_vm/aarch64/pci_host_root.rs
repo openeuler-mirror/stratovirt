@@ -12,6 +12,7 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
+use log::{debug, error};
 use pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,

@@ -13,6 +13,7 @@
 use std::mem::size_of;
 use std::os::unix::io::RawFd;
 
+use error_chain::bail;
 use libc::{c_void, iovec};
 use util::unix::UnixSock;
 

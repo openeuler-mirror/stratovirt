@@ -11,6 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         links {
             Util(util::errors::Error, util::errors::ErrorKind);
@@ -85,6 +87,7 @@ pub use drive::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
+pub use numa::*;
 pub use pci::*;
 pub use rng::*;
 pub use vfio::*;
@@ -97,6 +100,7 @@ mod drive;
 mod iothread;
 mod machine_config;
 mod network;
+mod numa;
 mod pci;
 mod rng;
 mod vfio;
@@ -105,6 +109,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use error_chain::bail;
+use log::error;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
 use util::trace::enable_trace_events;
@@ -114,10 +120,12 @@ pub const MAX_PATH_LENGTH: usize = 4096;
 pub const MAX_VIRTIO_QUEUE: usize = 1024;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
+pub const MAX_NODES: u32 = 128;
 
 #[derive(Debug, Clone)]
 pub enum ObjConfig {
     Rng(RngObjConfig),
+    Zone(MemZoneConfig),
 }
 
 fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
@@ -157,6 +165,7 @@ pub struct VmConfig {
     pub pflashs: Option<Vec<PFlashConfig>>,
     pub dev_name: HashMap<String, u8>,
     pub global_config: HashMap<String, String>,
+    pub numa_nodes: Vec<(String, String)>,
 }
 
 impl VmConfig {
@@ -240,7 +249,17 @@ impl VmConfig {
                 if self.object.get(&id).is_none() {
                     self.object.insert(id, object_config);
                 } else {
-                    bail!("Object: {:?} has been added");
+                    bail!("Object: {} has been added", id);
+                }
+            }
+            "memory-backend-ram" => {
+                let zone_config = self.add_mem_zone(object_args)?;
+                let id = zone_config.id.clone();
+                let object_config = ObjConfig::Zone(zone_config);
+                if self.object.get(&id).is_none() {
+                    self.object.insert(id, object_config);
+                } else {
+                    bail!("Object: {} has been added", id);
                 }
             }
             _ => {
@@ -488,6 +507,42 @@ pub fn add_trace_events(config: &str) -> Result<()> {
         return Ok(());
     }
     bail!("trace: events file must be set.");
+}
+
+pub struct IntegerList(pub Vec<u64>);
+
+impl FromStr for IntegerList {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let mut integer_list = Vec::new();
+        let lists: Vec<&str> = s.trim().split(',').collect();
+        for list in lists.iter() {
+            let items: Vec<&str> = list.split('-').collect();
+            if items.len() > 2 {
+                return Err(());
+            }
+
+            let start = items[0]
+                .parse::<u64>()
+                .map_err(|_| error!("Invalid value {}", items[0]))?;
+            integer_list.push(start);
+            if items.len() == 2 {
+                let end = items[1]
+                    .parse::<u64>()
+                    .map_err(|_| error!("Invalid value {}", items[1]))?;
+                if start >= end {
+                    return Err(());
+                }
+
+                for i in start..end {
+                    integer_list.push(i + 1);
+                }
+            }
+        }
+
+        Ok(IntegerList(integer_list))
+    }
 }
 
 #[cfg(test)]
