@@ -77,6 +77,8 @@
 //! ```
 //! This programe will be trapped.
 
+use error_chain::bail;
+
 use crate::errors::Result;
 use crate::offset_of;
 

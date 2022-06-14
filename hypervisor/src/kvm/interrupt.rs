@@ -17,6 +17,7 @@ use kvm_bindings::{KVMIO, KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI};
 use kvm_ioctls::{Cap, Kvm};
 use util::bitmap::Bitmap;
 use vmm_sys_util::ioctl::ioctl_with_val;
+use vmm_sys_util::{ioctl_expr, ioctl_io_nr, ioctl_ioc_nr};
 
 use crate::errors::{Result, ResultExt};
 

@@ -27,17 +27,6 @@
 //! - `x86_64`
 //! - `aarch64`
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-#[macro_use]
-extern crate machine_manager;
-#[cfg(target_arch = "aarch64")]
-#[macro_use]
-extern crate util;
-#[macro_use]
-extern crate migration_derive;
 #[cfg(target_arch = "aarch64")]
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
@@ -46,6 +35,8 @@ mod aarch64;
 mod x86_64;
 
 pub mod errors {
+    use error_chain::error_chain;
+
     error_chain! {
         foreign_links {
             Signal(vmm_sys_util::errno::Error);
@@ -124,6 +115,8 @@ use std::time::Duration;
 
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use libc::{c_int, c_void, siginfo_t};
+use log::{error, info, warn};
+use machine_manager::event;
 use machine_manager::machine::MachineInterface;
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
 use vmm_sys_util::signal::{register_signal_handler, Killable};

@@ -15,6 +15,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
+use log::warn;
 use machine_manager::config::NetworkInterfaceConfig;
 use util::byte_code::ByteCode;
 use util::num_ops::{read_u32, write_u32};

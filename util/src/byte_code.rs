@@ -37,8 +37,9 @@ pub trait ByteCode: Default + Copy + Send + Sync {
         if data.len() != size_of::<Self>() {
             return None;
         }
-        let obj_array = unsafe { from_raw_parts::<Self>(data.as_ptr() as *const _, data.len()) };
-        Some(&obj_array[0])
+
+        // SAFETY: The pointer is properly aligned and point to an initialized instance of T.
+        unsafe { data.as_ptr().cast::<Self>().as_ref() }
     }
 
     /// Creates an mutable object (impl trait `ByteCode`) from a mutable slice of bytes
@@ -50,9 +51,9 @@ pub trait ByteCode: Default + Copy + Send + Sync {
         if data.len() != size_of::<Self>() {
             return None;
         }
-        let obj_array =
-            unsafe { from_raw_parts_mut::<Self>(data.as_mut_ptr() as *mut _, data.len()) };
-        Some(&mut obj_array[0])
+
+        // SAFETY: The pointer is properly aligned and point to an initialized instance of T.
+        unsafe { data.as_mut_ptr().cast::<Self>().as_mut() }
     }
 }
 
