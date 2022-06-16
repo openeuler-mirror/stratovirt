@@ -456,12 +456,15 @@ impl MachineOps for StdMachine {
         locked_vm
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
+        let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let (boot_config, fwcfg) = if !is_migrate {
-            let fwcfg = locked_vm.add_fwcfg_device()?;
-            (Some(locked_vm.load_boot_source(Some(&fwcfg))?), Some(fwcfg))
+        let boot_config = if !is_migrate {
+            locked_vm
+                .build_acpi_tables(&fwcfg)
+                .chain_err(|| "Failed to create ACPI tables")?;
+            Some(locked_vm.load_boot_source(Some(&fwcfg))?)
         } else {
-            (None, None)
+            None
         };
 
         locked_vm
@@ -491,12 +494,6 @@ impl MachineOps for StdMachine {
                     fdt_vec.len() as u64,
                 )
                 .chain_err(|| ErrorKind::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
-        }
-
-        if let Some(fwcfg) = fwcfg {
-            locked_vm
-                .build_acpi_tables(&fwcfg)
-                .chain_err(|| "Failed to create ACPI tables")?;
         }
 
         locked_vm.register_power_event(&locked_vm.power_button)?;
