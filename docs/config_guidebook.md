@@ -253,7 +253,7 @@ If not set, default is raw.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. If not set,
 the default block queue number is 1.
 * bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
-The number ranges from 1 to 255, the smaller the number, the higher the priority.
+The number ranges from 0 to 255, the smaller the number, the higher the priority.
 It determines the order of bootable devices which firmware will use for booting the guest OS.
 
 For virtio-blk-pci, two more properties are required.
