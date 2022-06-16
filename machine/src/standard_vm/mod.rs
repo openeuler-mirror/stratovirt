@@ -772,6 +772,11 @@ impl StdMachine {
             bail!("Drive not found");
         };
 
+        if let Some(bootindex) = args.boot_index {
+            self.check_bootindex(bootindex)
+                .chain_err(|| "Fail to add virtio pci blk device for invalid bootindex")?;
+        }
+
         let blk_id = blk.id.clone();
         let blk = Arc::new(Mutex::new(Block::new(blk)));
         let pci_dev = self
@@ -780,8 +785,7 @@ impl StdMachine {
 
         if let Some(bootindex) = args.boot_index {
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
-                self.add_bootindex_devices(bootindex, &dev_path, &args.id)
-                    .chain_err(|| "Fail to add boot index")?;
+                self.add_bootindex_devices(bootindex, &dev_path, &args.id);
             }
         }
 
