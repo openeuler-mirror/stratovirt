@@ -22,6 +22,7 @@ const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_THREADS: u8 = 1;
 const DEFAULT_CORES: u8 = 1;
 const DEFAULT_DIES: u8 = 1;
+const DEFAULT_CLUSTERS: u8 = 1;
 const DEFAULT_SOCKETS: u8 = 1;
 const DEFAULT_MAX_CPUS: u8 = 1;
 const DEFAULT_MEMSIZE: u64 = 256;
@@ -129,6 +130,7 @@ pub struct MachineConfig {
     pub nr_threads: u8,
     pub nr_cores: u8,
     pub nr_dies: u8,
+    pub nr_clusters: u8,
     pub nr_sockets: u8,
     pub max_cpus: u8,
     pub mem_config: MachineMemConfig,
@@ -143,6 +145,7 @@ impl Default for MachineConfig {
             nr_threads: DEFAULT_THREADS,
             nr_cores: DEFAULT_CORES,
             nr_dies: DEFAULT_DIES,
+            nr_clusters: DEFAULT_CLUSTERS,
             nr_sockets: DEFAULT_SOCKETS,
             max_cpus: DEFAULT_MAX_CPUS,
             mem_config: MachineMemConfig::default(),
@@ -247,6 +250,7 @@ impl VmConfig {
             .push("maxcpus")
             .push("sockets")
             .push("dies")
+            .push("clusters")
             .push("cores")
             .push("threads")
             .push("cpus");
@@ -270,6 +274,8 @@ impl VmConfig {
 
         let dies = cmd_parser.get_value::<u64>("dies")?.unwrap_or(1);
 
+        let clusters = cmd_parser.get_value::<u64>("clusters")?.unwrap_or(1);
+
         let cores = cmd_parser.get_value::<u64>("cores")?.unwrap_or_default();
 
         let threads = cmd_parser.get_value::<u64>("threads")?.unwrap_or_default();
@@ -277,7 +283,7 @@ impl VmConfig {
         let max_cpus = cmd_parser.get_value::<u64>("maxcpus")?.unwrap_or_default();
 
         let (max_cpus, sockets, cores, threads) =
-            adjust_topology(cpu, max_cpus, sockets, dies, cores, threads);
+            adjust_topology(cpu, max_cpus, sockets, dies, clusters, cores, threads);
 
         // limit cpu count
         if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
@@ -291,12 +297,12 @@ impl VmConfig {
             .into());
         }
 
-        if max_cpus < cpu || sockets * dies * cores * threads != max_cpus {
+        if max_cpus < cpu || sockets * dies * clusters * cores * threads != max_cpus {
             return Err(ErrorKind::IllegalValue(
                 "maxcpus".to_string(),
                 cpu as u64,
                 true,
-                (sockets * dies * cores * threads) as u64,
+                (sockets * dies * clusters * cores * threads) as u64,
                 true,
             )
             .into());
@@ -306,6 +312,7 @@ impl VmConfig {
         self.machine_config.nr_threads = threads as u8;
         self.machine_config.nr_cores = cores as u8;
         self.machine_config.nr_dies = dies as u8;
+        self.machine_config.nr_clusters = clusters as u8;
         self.machine_config.nr_sockets = sockets as u8;
         self.machine_config.max_cpus = max_cpus as u8;
 
@@ -387,12 +394,13 @@ fn adjust_topology(
     mut max_cpus: u64,
     mut sockets: u64,
     dies: u64,
+    clusters: u64,
     mut cores: u64,
     mut threads: u64,
 ) -> (u64, u64, u64, u64) {
     if max_cpus == 0 {
-        if sockets * dies * cores * threads > 0 {
-            max_cpus = sockets * dies * cores * threads;
+        if sockets * dies * clusters * cores * threads > 0 {
+            max_cpus = sockets * dies * clusters * cores * threads;
         } else {
             max_cpus = cpu;
         }
@@ -405,16 +413,16 @@ fn adjust_topology(
         if threads == 0 {
             threads = 1;
         }
-        cores = max_cpus / (sockets * dies * threads);
+        cores = max_cpus / (sockets * dies * clusters * threads);
     } else if sockets == 0 {
         if threads == 0 {
             threads = 1;
         }
-        sockets = max_cpus / (dies * cores * threads);
+        sockets = max_cpus / (dies * clusters * cores * threads);
     }
 
     if threads == 0 {
-        threads = max_cpus / (sockets * dies * cores);
+        threads = max_cpus / (sockets * dies * clusters * cores);
     }
 
     (max_cpus, sockets, cores, threads)
@@ -491,6 +499,7 @@ mod tests {
             nr_cores: 1,
             nr_threads: 1,
             nr_dies: 1,
+            nr_clusters: 1,
             nr_sockets: 1,
             max_cpus: MIN_NR_CPUS as u8,
             mem_config: memory_config,
