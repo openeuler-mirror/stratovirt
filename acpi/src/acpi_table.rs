@@ -178,6 +178,40 @@ impl AmlBuilder for AcpiTable {
     }
 }
 
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct ProcessorHierarchyNode {
+    pub r#type: u8,
+    pub length: u8,
+    pub reserved: u16,
+    pub flags: u32,
+    pub parent: u32,
+    pub acpi_processor_id: u32,
+    pub num_private_resources: u32,
+}
+
+impl ByteCode for ProcessorHierarchyNode {}
+
+impl AmlBuilder for ProcessorHierarchyNode {
+    fn aml_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+}
+
+impl ProcessorHierarchyNode {
+    pub fn new(r#type: u8, flags: u32, parent: u32, acpi_processor_id: u32) -> Self {
+        Self {
+            r#type,
+            length: 20,
+            reserved: 0,
+            flags,
+            parent,
+            acpi_processor_id,
+            num_private_resources: 0,
+        }
+    }
+}
+
 /// ACPI RSDP structure.
 #[repr(C, packed)]
 #[derive(Default, Copy, Clone)]

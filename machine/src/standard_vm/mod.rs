@@ -167,6 +167,14 @@ trait StdMachineOps: AcpiBuilder {
             xsdt_entries.push(slit_addr);
         }
 
+        #[cfg(target_arch = "aarch64")]
+        {
+            let pptt_addr = self
+                .build_pptt_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI PPTT table")?;
+            xsdt_entries.push(pptt_addr);
+        }
+
         let xsdt_addr = Self::build_xsdt_table(&acpi_tables, &mut loader, xsdt_entries)?;
 
         let mut locked_fw_cfg = fw_cfg.lock().unwrap();
@@ -378,6 +386,24 @@ trait AcpiBuilder {
     /// `loader` - ACPI table loader.
     #[cfg(target_arch = "aarch64")]
     fn build_spcr_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI PPTT table, returns the offset of ACPI PPTT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `Loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_pptt_table(
         &self,
         _acpi_data: &Arc<Mutex<Vec<u8>>>,
         _loader: &mut TableLoader,
