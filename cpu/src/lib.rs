@@ -706,6 +706,8 @@ pub struct CpuTopology {
     pub sockets: u8,
     /// Number of dies on one socket.
     pub dies: u8,
+    /// Number of clusters on one socket.
+    pub clusters: u8,
     /// Number of cores in VM.
     pub cores: u8,
     /// Number of threads in VM.
@@ -728,6 +730,7 @@ impl CpuTopology {
         nr_threads: u8,
         nr_cores: u8,
         nr_dies: u8,
+        nr_clusters: u8,
         nr_sockets: u8,
         max_cpus: u8,
     ) -> Self {
@@ -735,6 +738,7 @@ impl CpuTopology {
         Self {
             sockets: nr_sockets,
             dies: nr_dies,
+            clusters: nr_clusters,
             cores: nr_cores,
             threads: nr_threads,
             nrcpus: nr_cpus,
@@ -765,7 +769,7 @@ impl CpuTopology {
     ///
     /// * `vcpu_id` - ID of vcpu.
     pub fn get_topo(&self, vcpu_id: usize) -> (u8, u8, u8) {
-        let socketid: u8 = vcpu_id as u8 / (self.dies * self.cores * self.threads);
+        let socketid: u8 = vcpu_id as u8 / (self.dies * self.clusters * self.cores * self.threads);
         let coreid: u8 = (vcpu_id as u8 / self.threads) % self.cores;
         let threadid: u8 = vcpu_id as u8 % self.threads;
         (socketid, coreid, threadid)
@@ -941,6 +945,7 @@ mod tests {
         let microvm_cpu_topo = CpuTopology {
             sockets: test_nr_cpus,
             dies: 1,
+            clusters: 1,
             cores: 1,
             threads: 1,
             nrcpus: test_nr_cpus,
@@ -954,9 +959,10 @@ mod tests {
         assert_eq!(microvm_cpu_topo.get_topo(15), (15, 0, 0));
 
         let mask = Vec::with_capacity(test_nr_cpus as usize);
-        let microvm_cpu_topo1 = CpuTopology {
+        let microvm_cpu_topo_x86 = CpuTopology {
             sockets: 1,
             dies: 2,
+            clusters: 1,
             cores: 4,
             threads: 2,
             nrcpus: test_nr_cpus,
@@ -964,16 +970,34 @@ mod tests {
             online_mask: Arc::new(Mutex::new(mask)),
         };
 
-        assert_eq!(microvm_cpu_topo1.get_topo(0), (0, 0, 0));
-        assert_eq!(microvm_cpu_topo1.get_topo(4), (0, 2, 0));
-        assert_eq!(microvm_cpu_topo1.get_topo(8), (0, 0, 0));
-        assert_eq!(microvm_cpu_topo1.get_topo(15), (0, 3, 1));
+        assert_eq!(microvm_cpu_topo_x86.get_topo(0), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo_x86.get_topo(4), (0, 2, 0));
+        assert_eq!(microvm_cpu_topo_x86.get_topo(8), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo_x86.get_topo(15), (0, 3, 1));
+
+        let mask = Vec::with_capacity(test_nr_cpus as usize);
+        let microvm_cpu_topo_arm = CpuTopology {
+            sockets: 1,
+            dies: 1,
+            clusters: 2,
+            cores: 4,
+            threads: 2,
+            nrcpus: test_nr_cpus,
+            max_cpus: test_nr_cpus,
+            online_mask: Arc::new(Mutex::new(mask)),
+        };
+
+        assert_eq!(microvm_cpu_topo_arm.get_topo(0), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo_arm.get_topo(4), (0, 2, 0));
+        assert_eq!(microvm_cpu_topo_arm.get_topo(8), (0, 0, 0));
+        assert_eq!(microvm_cpu_topo_arm.get_topo(15), (0, 3, 1));
 
         let test_nr_cpus: u8 = 32;
         let mask = Vec::with_capacity(test_nr_cpus as usize);
         let test_cpu_topo = CpuTopology {
             sockets: 2,
             dies: 1,
+            clusters: 1,
             cores: 4,
             threads: 2,
             nrcpus: test_nr_cpus,

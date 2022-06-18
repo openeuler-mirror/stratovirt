@@ -31,19 +31,20 @@ By default, after booted, VM will online all CPUs you set.
 Four properties are supported for `smp`.
 * cpus: the number of VCPUs.
 * maxcpus: the number of max VCPUs.
-* sockets: the number of socket. (optional). If not set, its value depends on the value of `maxcpus`.
+* sockets: the number of socket. (optional). If not set, its value depends on the value of `maxcpus`. On the arm machine, if you start a microvm, the value of socket must be one so far.
 * dies: the number of dies. (optional). If not set, default is one.
+* clusters: the number of clusters. (optional). If not set, default is one.
 * cores: the number of core. (optional). If not set, its value depends on the value of `maxcpus`.
 * threads: the number of thread. (optional). If not set, its value depends on the value of `maxcpus`.
 
-NB: the arguments of cpu topology is used to interconnect with libvirt. The x86 cpu topology has supported. But the ARM cpu topology of StratoVirt is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads). 
+NB: the arguments of cpu topology is used to interconnect with libvirt.
 
-If it is configured, sockets * dies * cores * threads must be equal to maxcpus, and maxcpus should be larger than cpus.
+If it is configured, sockets * dies * clusters * cores * threads must be equal to maxcpus, and maxcpus should be larger than or equal to cpus.
 
 
 ```shell
 # cmdline
--smp [cpus=]n[,maxcpus=,sockets=,dies=,cores=,threads=]
+-smp [cpus=]n[,maxcpus=,sockets=,dies=,clusters=,cores=,threads=]
 ```
 
 ### 1.3 Memory

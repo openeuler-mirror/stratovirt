@@ -21,12 +21,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use acpi::{
     AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor, AcpiSratGiccAffinity,
     AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlScope,
-    AmlScopeBuilder, AmlString, TableLoader, ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ,
-    ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ, ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ,
-    ACPI_GTDT_CAP_ALWAYS_ON, ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP,
-    ACPI_IORT_NODE_PCI_ROOT_COMPLEX, ACPI_MADT_GENERIC_CPU_INTERFACE,
-    ACPI_MADT_GENERIC_DISTRIBUTOR, ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR,
-    ARCH_GIC_MAINT_IRQ, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
+    AmlScopeBuilder, AmlString, ProcessorHierarchyNode, TableLoader,
+    ACPI_GTDT_ARCH_TIMER_NS_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_NS_EL2_IRQ,
+    ACPI_GTDT_ARCH_TIMER_S_EL1_IRQ, ACPI_GTDT_ARCH_TIMER_VIRT_IRQ, ACPI_GTDT_CAP_ALWAYS_ON,
+    ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP, ACPI_IORT_NODE_PCI_ROOT_COMPLEX,
+    ACPI_MADT_GENERIC_CPU_INTERFACE, ACPI_MADT_GENERIC_DISTRIBUTOR,
+    ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR, ARCH_GIC_MAINT_IRQ,
+    INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -147,6 +148,7 @@ impl StdMachine {
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
+            vm_config.machine_config.nr_clusters,
             vm_config.machine_config.nr_sockets,
             vm_config.machine_config.max_cpus,
         );
@@ -833,6 +835,51 @@ impl AcpiBuilder for StdMachine {
             .chain_err(|| "Fail to add SRAT table to loader")?;
         Ok(srat_begin as u64)
     }
+
+    fn build_pptt_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+    ) -> super::errors::Result<u64> {
+        use super::errors::ResultExt;
+        let mut pptt = AcpiTable::new(*b"PPTT", 2, *b"STRATO", *b"VIRTPPTT", 1);
+        let pptt_start = 0;
+        let mut uid = 0;
+        for socket in 0..self.cpu_topo.sockets {
+            let socket_offset = pptt.table_len() - pptt_start;
+            let socket_hierarchy_node = ProcessorHierarchyNode::new(0, 0x2, 0, socket as u32);
+            pptt.append_child(&socket_hierarchy_node.aml_bytes());
+            for cluster in 0..self.cpu_topo.clusters {
+                let cluster_offset = pptt.table_len() - pptt_start;
+                let cluster_hierarchy_node =
+                    ProcessorHierarchyNode::new(0, 0x0, socket_offset as u32, cluster as u32);
+                pptt.append_child(&cluster_hierarchy_node.aml_bytes());
+                for core in 0..self.cpu_topo.cores {
+                    let core_offset = pptt.table_len() - pptt_start;
+                    if self.cpu_topo.threads > 1 {
+                        let core_hierarchy_node =
+                            ProcessorHierarchyNode::new(0, 0x0, cluster_offset as u32, core as u32);
+                        pptt.append_child(&core_hierarchy_node.aml_bytes());
+                        for _thread in 0..self.cpu_topo.threads {
+                            let thread_hierarchy_node =
+                                ProcessorHierarchyNode::new(0, 0xE, core_offset as u32, uid as u32);
+                            pptt.append_child(&thread_hierarchy_node.aml_bytes());
+                            uid += 1;
+                        }
+                    } else {
+                        let thread_hierarchy_node =
+                            ProcessorHierarchyNode::new(0, 0xA, cluster_offset as u32, uid as u32);
+                        pptt.append_child(&thread_hierarchy_node.aml_bytes());
+                        uid += 1;
+                    }
+                }
+            }
+        }
+        pptt.set_table_len(pptt.table_len());
+        let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
+            .chain_err(|| "Fail to add PPTT table to loader")?;
+        Ok(pptt_begin as u64)
+    }
 }
 
 impl MachineLifecycle for StdMachine {
@@ -1157,56 +1204,39 @@ impl CompileFDTHelper for StdMachine {
         fdt.set_property_u32("#size-cells", 0x0)?;
 
         // Generate CPU topology
-        if self.cpu_topo.max_cpus > 0 && self.cpu_topo.max_cpus % 8 == 0 {
-            let cpu_map_node_dep = fdt.begin_node("cpu-map")?;
-
-            let sockets = self.cpu_topo.max_cpus / 8;
-            for cluster in 0..u32::from(sockets) {
+        let cpu_map_node_dep = fdt.begin_node("cpu-map")?;
+        for socket in 0..self.cpu_topo.sockets {
+            let sock_name = format!("cluster{}", socket);
+            let sock_node_dep = fdt.begin_node(&sock_name)?;
+            for cluster in 0..self.cpu_topo.clusters {
                 let clster = format!("cluster{}", cluster);
                 let cluster_node_dep = fdt.begin_node(&clster)?;
 
-                for i in 0..2_u32 {
-                    let sub_cluster = format!("cluster{}", i);
-                    let sub_cluster_node_dep = fdt.begin_node(&sub_cluster)?;
+                for core in 0..self.cpu_topo.cores {
+                    let core_name = format!("core{}", core);
+                    let core_node_dep = fdt.begin_node(&core_name)?;
 
-                    let core0 = "core0".to_string();
-                    let core0_node_dep = fdt.begin_node(&core0)?;
-
-                    let thread0 = "thread0".to_string();
-                    let thread0_node_dep = fdt.begin_node(&thread0)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10)?;
-                    fdt.end_node(thread0_node_dep)?;
-
-                    let thread1 = "thread1".to_string();
-                    let thread1_node_dep = fdt.begin_node(&thread1)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10 + 1)?;
-                    fdt.end_node(thread1_node_dep)?;
-
-                    fdt.end_node(core0_node_dep)?;
-
-                    let core1 = "core1".to_string();
-                    let core1_node_dep = fdt.begin_node(&core1)?;
-
-                    let thread0 = "thread0".to_string();
-                    let thread0_node_dep = fdt.begin_node(&thread0)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10 + 2)?;
-                    fdt.end_node(thread0_node_dep)?;
-
-                    let thread1 = "thread1".to_string();
-                    let thread1_node_dep = fdt.begin_node(&thread1)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10 + 3)?;
-                    fdt.end_node(thread1_node_dep)?;
-
-                    fdt.end_node(core1_node_dep)?;
-
-                    fdt.end_node(sub_cluster_node_dep)?;
+                    for thread in 0..self.cpu_topo.threads {
+                        let thread_name = format!("thread{}", thread);
+                        let thread_node_dep = fdt.begin_node(&thread_name)?;
+                        let vcpuid = self.cpu_topo.threads * self.cpu_topo.cores * cluster
+                            + self.cpu_topo.threads * core
+                            + thread;
+                        fdt.set_property_u32(
+                            "cpu",
+                            u32::from(vcpuid) + device_tree::CPU_PHANDLE_START,
+                        )?;
+                        fdt.end_node(thread_node_dep)?;
+                    }
+                    fdt.end_node(core_node_dep)?;
                 }
                 fdt.end_node(cluster_node_dep)?;
             }
-            fdt.end_node(cpu_map_node_dep)?;
+            fdt.end_node(sock_node_dep)?;
         }
+        fdt.end_node(cpu_map_node_dep)?;
 
-        for cpu_index in 0..self.cpu_topo.max_cpus {
+        for cpu_index in 0..self.cpu_topo.nrcpus {
             let mpidr = self.cpus[cpu_index as usize].arch().lock().unwrap().mpidr();
 
             let node = format!("cpu@{:x}", mpidr);
