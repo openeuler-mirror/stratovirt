@@ -325,7 +325,7 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         vhost_type: None,
         vhost_fds: None,
         ifname: String::new(),
-        queues: 2,
+        queues: args.queues.unwrap_or(1) * 2,
         chardev: None,
     };
 

@@ -594,7 +594,7 @@ pub struct netdev_add {
     pub ifname: Option<String>,
     pub downscript: Option<String>,
     pub script: Option<String>,
-    pub queues: Option<String>,
+    pub queues: Option<u16>,
 }
 
 pub type NetDevAddArgument = netdev_add;
