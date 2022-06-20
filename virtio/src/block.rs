@@ -359,9 +359,9 @@ struct BlockIoHandler {
     /// The receiving half of Rust's channel to receive the image file.
     receiver: Receiver<SenderConfig>,
     /// Eventfd for config space update.
-    update_evt: RawFd,
+    update_evt: EventFd,
     /// Eventfd for device deactivate.
-    deactivate_evt: RawFd,
+    deactivate_evt: EventFd,
     /// Callback to trigger an interrupt.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// thread name of io handler
@@ -634,14 +634,14 @@ impl BlockIoHandler {
         let mut notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.update_evt,
+                self.update_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
                 Vec::new(),
             ),
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.deactivate_evt,
+                self.deactivate_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -699,7 +699,7 @@ impl EventNotifierHelper for BlockIoHandler {
             h_clone.lock().unwrap().update_evt_handler();
             None
         });
-        notifiers.push(build_event_notifier(handler_raw.update_evt, h));
+        notifiers.push(build_event_notifier(handler_raw.update_evt.as_raw_fd(), h));
 
         // Register event notifier for deactivate_evt.
         let h_clone = handler.clone();
@@ -707,7 +707,10 @@ impl EventNotifierHelper for BlockIoHandler {
             read_fd(fd);
             Some(h_clone.lock().unwrap().deactivate_evt_handler())
         });
-        notifiers.push(build_event_notifier(handler_raw.deactivate_evt, h));
+        notifiers.push(build_event_notifier(
+            handler_raw.deactivate_evt.as_raw_fd(),
+            h,
+        ));
 
         // Register event notifier for queue_evt.
         let h_clone = handler.clone();
@@ -1115,8 +1118,8 @@ impl VirtioDevice for Block {
                 aio: None,
                 driver_features: self.state.driver_features,
                 receiver,
-                update_evt: self.update_evt.as_raw_fd(),
-                deactivate_evt: self.deactivate_evt.as_raw_fd(),
+                update_evt: self.update_evt.try_clone().unwrap(),
+                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                 interrupt_cb: interrupt_cb.clone(),
                 iothread: self.blk_cfg.iothread.clone(),
                 leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),

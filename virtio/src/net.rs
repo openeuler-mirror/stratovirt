@@ -241,8 +241,8 @@ struct NetIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     receiver: Receiver<SenderConfig>,
-    update_evt: RawFd,
-    deactivate_evt: RawFd,
+    update_evt: EventFd,
+    deactivate_evt: EventFd,
     is_listening: bool,
 }
 
@@ -392,7 +392,7 @@ impl NetIoHandler {
 
         let mut notifiers = vec![
             build_event_notifier(
-                locked_net_io.update_evt,
+                locked_net_io.update_evt.as_raw_fd(),
                 None,
                 NotifierOperation::Delete,
                 EventSet::IN,
@@ -428,14 +428,14 @@ impl NetIoHandler {
         let mut notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.update_evt,
+                self.update_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
                 Vec::new(),
             ),
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.deactivate_evt,
+                self.deactivate_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -492,14 +492,12 @@ impl EventNotifierHelper for NetIoHandler {
             read_fd(fd);
             Some(NetIoHandler::update_evt_handler(&cloned_net_io))
         });
-        let mut notifiers = Vec::new();
-        let update_fd = locked_net_io.update_evt;
-        notifiers.push(build_event_notifier(
-            update_fd,
+        let mut notifiers = vec![build_event_notifier(
+            locked_net_io.update_evt.as_raw_fd(),
             Some(handler),
             NotifierOperation::AddShared,
             EventSet::IN,
-        ));
+        )];
 
         // Register event notifier for deactivate_evt.
         let cloned_net_io = net_io.clone();
@@ -508,7 +506,7 @@ impl EventNotifierHelper for NetIoHandler {
             Some(cloned_net_io.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(build_event_notifier(
-            locked_net_io.deactivate_evt,
+            locked_net_io.deactivate_evt.as_raw_fd(),
             Some(handler),
             NotifierOperation::AddShared,
             EventSet::IN,
@@ -945,8 +943,8 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.state.driver_features,
                 receiver,
-                update_evt: self.update_evt.as_raw_fd(),
-                deactivate_evt: self.deactivate_evt.as_raw_fd(),
+                update_evt: self.update_evt.try_clone().unwrap(),
+                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                 is_listening: true,
             };
             if let Some(tap) = &handler.tap {
