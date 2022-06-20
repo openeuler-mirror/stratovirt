@@ -161,13 +161,19 @@ pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
         if val < MIN_NUMA_DISTANCE {
             bail!("NUMA distance shouldn't be less than 10");
         }
+        if numa_id == dist.destination && val != MIN_NUMA_DISTANCE {
+            bail!("Local distance of node {} should be 10.", numa_id);
+        }
+        if numa_id != dist.destination && val == MIN_NUMA_DISTANCE {
+            bail!(
+                "Remote distance of node {} should be more than 10.",
+                numa_id
+            );
+        }
+
         dist.distance = val;
     } else {
         return Err(ErrorKind::FieldIsMissing("val", "numa").into());
-    }
-
-    if numa_id == dist.destination && dist.distance != MIN_NUMA_DISTANCE {
-        bail!("Local distance of node {} should be 10.", numa_id);
     }
 
     Ok((numa_id, dist))
