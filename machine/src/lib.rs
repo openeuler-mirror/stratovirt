@@ -807,6 +807,13 @@ pub trait MachineOps {
             return Ok(None);
         }
 
+        if vm_config.numa_nodes.len() > 8 {
+            bail!(
+                "NUMA nodes should be less than or equal to 8, now is {}",
+                vm_config.numa_nodes.len()
+            );
+        }
+
         let mut numa_nodes: NumaNodes = BTreeMap::new();
         vm_config.numa_nodes.sort_by(|p, n| n.0.cmp(&p.0));
         for numa in vm_config.numa_nodes.iter() {
