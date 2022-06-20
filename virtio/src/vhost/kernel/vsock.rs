@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -299,7 +299,7 @@ impl VirtioDevice for Vsock {
         let handler = VhostIoHandler {
             interrupt_cb,
             host_notifies,
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
         };
 
         EventLoop::update_event(
