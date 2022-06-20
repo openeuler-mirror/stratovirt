@@ -125,15 +125,15 @@ The following command shows how to set NUMA node:
 
 ```shell
 # The number of cpu must be set to be the same as numa node cpu.
--smp 4
+-smp 8
 
 # The memory size must be set to be the same as numa node mem.
 -m 4G
 
--object memory-backend-ram,size=2G,id=mem0,[host-nodes=0,policy=bind]
--object memory-backend-ram,size=2G,id=mem1,[host-nodes=1,policy=bind]
--numa node,nodeid=0,cpus=0-1,memdev=mem0
--numa node,nodeid=1,cpus=2-3,memdev=mem1
+-object memory-backend-ram,size=2G,id=mem0,[host-nodes=0-1,policy=bind]
+-object memory-backend-ram,size=2G,id=mem1,[host-nodes=0-1,policy=bind]
+-numa node,nodeid=0,cpus=0-1:4-5,memdev=mem0
+-numa node,nodeid=1,cpus=2-3:6-7,memdev=mem1
 [-numa dist,src=0,dst=0,val=10]
 [-numa dist,src=0,dst=1,val=20]
 [-numa dist,src=1,dst=0,val=20]

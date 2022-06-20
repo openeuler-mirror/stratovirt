@@ -122,7 +122,7 @@ use error_chain::bail;
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    check_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
     parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, MachineMemConfig,
     NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig,
@@ -807,13 +807,6 @@ pub trait MachineOps {
             return Ok(None);
         }
 
-        if vm_config.numa_nodes.len() > 8 {
-            bail!(
-                "NUMA nodes should be less than or equal to 8, now is {}",
-                vm_config.numa_nodes.len()
-            );
-        }
-
         let mut numa_nodes: NumaNodes = BTreeMap::new();
         vm_config.numa_nodes.sort_by(|p, n| n.0.cmp(&p.0));
         for numa in vm_config.numa_nodes.iter() {
@@ -865,7 +858,12 @@ pub trait MachineOps {
             }
         }
 
-        check_numa_node(&numa_nodes, vm_config)?;
+        // Complete user parameters if necessary.
+        complete_numa_node(
+            &mut numa_nodes,
+            vm_config.machine_config.nr_cpus,
+            vm_config.machine_config.mem_config.mem_size,
+        )?;
 
         Ok(Some(numa_nodes))
     }
