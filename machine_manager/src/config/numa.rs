@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::BTreeMap;
+use std::cmp::max;
+use std::collections::{BTreeMap, HashSet};
 
 use error_chain::bail;
 
@@ -43,41 +44,75 @@ pub struct NumaNode {
 
 pub type NumaNodes = BTreeMap<u32, NumaNode>;
 
-pub fn check_numa_node(numa_nodes: &NumaNodes, vm_config: &mut VmConfig) -> Result<()> {
+/// Complete the NUMA node parameters from user.
+///
+/// # Arguments
+///
+/// * `numa_nodes` - The NUMA node information parsing from user.
+/// * `nr_cpus` - The VM cpus number.
+/// * `mem_size` - The VM memory size.
+pub fn complete_numa_node(numa_nodes: &mut NumaNodes, nr_cpus: u8, mem_size: u64) -> Result<()> {
+    if numa_nodes.len() > 8 {
+        bail!(
+            "NUMA nodes should be less than or equal to 8, now is {}",
+            numa_nodes.len()
+        );
+    }
+
     let mut total_ram_size = 0_u64;
-    let mut total_cpu_num = 0_u8;
-    let mut max_cpu_idx = 0_u8;
-    for node in numa_nodes.iter() {
-        total_ram_size += node.1.size;
-        total_cpu_num += node.1.cpus.len() as u8;
-        for idx in &node.1.cpus {
-            if max_cpu_idx <= *idx {
-                max_cpu_idx = *idx;
+    let mut max_cpu_id = 0_u8;
+    let mut cpus_id = HashSet::<u8>::new();
+    for (_, node) in numa_nodes.iter() {
+        total_ram_size += node.size;
+        for id in node.cpus.iter() {
+            if cpus_id.contains(id) {
+                bail!("CPU id {} is repeat, please check it again", *id);
+            }
+            cpus_id.insert(*id);
+            max_cpu_id = max(max_cpu_id, *id);
+        }
+    }
+
+    if cpus_id.len() < nr_cpus as usize {
+        if let Some(node_0) = numa_nodes.get_mut(&0) {
+            for id in 0..nr_cpus {
+                if !cpus_id.contains(&id) {
+                    node_0.cpus.push(id);
+                }
             }
         }
     }
 
-    if total_ram_size != vm_config.machine_config.mem_config.mem_size {
+    if total_ram_size != mem_size {
         bail!(
             "Total memory {} of NUMA nodes is not equals to memory size {}",
             total_ram_size,
-            vm_config.machine_config.mem_config.mem_size,
+            mem_size,
         );
     }
-    if total_cpu_num != vm_config.machine_config.nr_cpus {
+    if max_cpu_id >= nr_cpus {
         bail!(
-            "Total cpu numbers {} of NUMA nodes is not equals to smp {}",
-            total_cpu_num,
-            vm_config.machine_config.nr_cpus,
+            "CPU index {} should be smaller than max cpu {}",
+            max_cpu_id,
+            nr_cpus
         );
     }
-    if max_cpu_idx != vm_config.machine_config.nr_cpus - 1 {
-        bail!("Error to configure CPU sets, please check you cmdline again");
+    if cpus_id.len() > nr_cpus as usize {
+        bail!(
+            "Total cpu numbers {} of NUMA nodes should be less than or equals to smp {}",
+            cpus_id.len(),
+            nr_cpus
+        );
     }
 
     Ok(())
 }
 
+/// Parse the NUMA node memory parameters.
+///
+/// # Arguments
+///
+/// * `numa_config` - The NUMA node configuration.
 pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
     let mut cmd_parser = CmdParser::new("numa");
     cmd_parser
@@ -103,11 +138,12 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
     } else {
         return Err(ErrorKind::FieldIsMissing("nodeid", "numa").into());
     }
-    if let Some(cpus) = cmd_parser
+    if let Some(mut cpus) = cmd_parser
         .get_value::<IntegerList>("cpus")
-        .map_err(|_| ErrorKind::ConvertValueFailed(String::from("u64"), "cpus".to_string()))?
-        .map(|v| v.0.iter().map(|e| *e as u8).collect())
+        .map_err(|_| ErrorKind::ConvertValueFailed(String::from("u8"), "cpus".to_string()))?
+        .map(|v| v.0.iter().map(|e| *e as u8).collect::<Vec<u8>>())
     {
+        cpus.sort_unstable();
         config.cpus = cpus;
     } else {
         return Err(ErrorKind::FieldIsMissing("cpus", "numa").into());
@@ -121,6 +157,11 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
     Ok(config)
 }
 
+/// Parse the NUMA node distance parameters.
+///
+/// # Arguments
+///
+/// * `numa_dist` - The NUMA node distance configuration.
 pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
     let mut cmd_parser = CmdParser::new("numa");
     cmd_parser.push("").push("src").push("dst").push("val");
@@ -180,6 +221,11 @@ pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
 }
 
 impl VmConfig {
+    /// Add the NUMA node config to vm config.
+    ///
+    /// # Arguments
+    ///
+    /// * `numa_config` - The NUMA node configuration.
     pub fn add_numa(&mut self, numa_config: &str) -> Result<()> {
         let mut cmd_params = CmdParser::new("numa");
         cmd_params.push("");
@@ -210,6 +256,9 @@ mod tests {
             .add_numa("-numa node,nodeid=2,memdev=mem2")
             .is_ok());
         assert!(vm_config.add_numa("-numa node,nodeid=3,cpus=3-4").is_ok());
+        assert!(vm_config
+            .add_numa("-numa node,nodeid=0,cpus=[0-1:3-5],memdev=mem0")
+            .is_ok());
 
         let numa = vm_config.numa_nodes.get(0).unwrap();
         let numa_config = parse_numa_mem(numa.1.as_str()).unwrap();
@@ -222,21 +271,26 @@ mod tests {
         assert!(parse_numa_mem(numa.1.as_str()).is_err());
         let numa = vm_config.numa_nodes.get(3).unwrap();
         assert!(parse_numa_mem(numa.1.as_str()).is_err());
+
+        let numa = vm_config.numa_nodes.get(4).unwrap();
+        let numa_config = parse_numa_mem(numa.1.as_str()).unwrap();
+        assert_eq!(numa_config.cpus, vec![0, 1, 3, 4, 5]);
     }
 
     #[test]
     fn test_parse_numa_distance() {
         let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_numa("-numa dist,src=0,dst=1,val=10").is_ok());
+        assert!(vm_config.add_numa("-numa dist,src=0,dst=1,val=15").is_ok());
         assert!(vm_config.add_numa("-numa dist,dst=1,val=10").is_ok());
         assert!(vm_config.add_numa("-numa dist,src=0,val=10").is_ok());
         assert!(vm_config.add_numa("-numa dist,src=0,dst=1").is_ok());
+        assert!(vm_config.add_numa("-numa dist,src=0,dst=1,val=10").is_ok());
 
         let numa = vm_config.numa_nodes.get(0).unwrap();
         let dist = parse_numa_distance(numa.1.as_str()).unwrap();
         assert_eq!(dist.0, 0);
         assert_eq!(dist.1.destination, 1);
-        assert_eq!(dist.1.distance, 10);
+        assert_eq!(dist.1.distance, 15);
 
         let numa = vm_config.numa_nodes.get(1).unwrap();
         assert!(parse_numa_distance(numa.1.as_str()).is_err());
@@ -244,13 +298,14 @@ mod tests {
         assert!(parse_numa_distance(numa.1.as_str()).is_err());
         let numa = vm_config.numa_nodes.get(3).unwrap();
         assert!(parse_numa_distance(numa.1.as_str()).is_err());
+        let numa = vm_config.numa_nodes.get(4).unwrap();
+        assert!(parse_numa_distance(numa.1.as_str()).is_err());
     }
 
     #[test]
     fn test_check_numa_nodes() {
-        let mut vm_config = VmConfig::default();
-        vm_config.machine_config.nr_cpus = 4;
-        vm_config.machine_config.mem_config.mem_size = 2147483648;
+        let nr_cpus = 4;
+        let mem_size = 2147483648;
 
         let numa_node1 = NumaNode {
             cpus: vec![0, 1],
@@ -266,7 +321,7 @@ mod tests {
         let mut numa_nodes = BTreeMap::new();
         numa_nodes.insert(0, numa_node1);
         numa_nodes.insert(1, numa_node2);
-        assert!(check_numa_node(&numa_nodes, &mut vm_config).is_ok());
+        assert!(complete_numa_node(&mut numa_nodes, nr_cpus, mem_size).is_ok());
 
         let numa_node3 = NumaNode {
             cpus: vec![2],
@@ -275,7 +330,7 @@ mod tests {
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(2, numa_node3);
-        assert!(check_numa_node(&numa_nodes, &mut vm_config).is_err());
+        assert!(complete_numa_node(&mut numa_nodes, nr_cpus, mem_size).is_ok());
 
         let numa_node4 = NumaNode {
             cpus: vec![2, 3, 4],
@@ -284,7 +339,7 @@ mod tests {
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node4);
-        assert!(check_numa_node(&numa_nodes, &mut vm_config).is_err());
+        assert!(complete_numa_node(&mut numa_nodes, nr_cpus, mem_size).is_err());
 
         let numa_node5 = NumaNode {
             cpus: vec![3, 4],
@@ -293,7 +348,7 @@ mod tests {
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node5);
-        assert!(check_numa_node(&numa_nodes, &mut vm_config).is_err());
+        assert!(complete_numa_node(&mut numa_nodes, nr_cpus, mem_size).is_err());
 
         let numa_node6 = NumaNode {
             cpus: vec![0, 1],
@@ -302,7 +357,7 @@ mod tests {
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node6);
-        assert!(check_numa_node(&numa_nodes, &mut vm_config).is_err());
+        assert!(complete_numa_node(&mut numa_nodes, nr_cpus, mem_size).is_err());
 
         let numa_node7 = NumaNode {
             cpus: vec![2, 3],
@@ -311,6 +366,6 @@ mod tests {
         };
         numa_nodes.remove(&1);
         numa_nodes.insert(1, numa_node7);
-        assert!(check_numa_node(&numa_nodes, &mut vm_config).is_err());
+        assert!(complete_numa_node(&mut numa_nodes, nr_cpus, mem_size).is_err());
     }
 }

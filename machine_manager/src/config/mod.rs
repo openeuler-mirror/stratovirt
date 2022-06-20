@@ -516,7 +516,11 @@ impl FromStr for IntegerList {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let mut integer_list = Vec::new();
-        let lists: Vec<&str> = s.trim().split(',').collect();
+        let lists: Vec<&str> = s
+            .trim()
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(':')
+            .collect();
         for list in lists.iter() {
             let items: Vec<&str> = list.split('-').collect();
             if items.len() > 2 {

@@ -16,7 +16,9 @@ use error_chain::bail;
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_NODES, MAX_STRING_LENGTH};
+use crate::config::{
+    CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES, MAX_STRING_LENGTH,
+};
 
 const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_THREADS: u8 = 1;
@@ -82,7 +84,7 @@ impl From<String> for HostMemPolicy {
 pub struct MemZoneConfig {
     pub id: String,
     pub size: u64,
-    pub host_numa_node: Option<u32>,
+    pub host_numa_nodes: Option<Vec<u32>>,
     pub policy: String,
 }
 
@@ -91,7 +93,7 @@ impl Default for MemZoneConfig {
         MemZoneConfig {
             id: String::new(),
             size: 0,
-            host_numa_node: None,
+            host_numa_nodes: None,
             policy: String::from("bind"),
         }
     }
@@ -327,7 +329,72 @@ impl VmConfig {
     pub fn enable_mem_prealloc(&mut self) {
         self.machine_config.mem_config.mem_prealloc = true;
     }
+}
 
+impl VmConfig {
+    fn get_mem_zone_id(&self, cmd_parser: &CmdParser) -> Result<String> {
+        if let Some(id) = cmd_parser.get_value::<String>("id")? {
+            if id.len() > MAX_STRING_LENGTH {
+                return Err(
+                    ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into(),
+                );
+            }
+            Ok(id)
+        } else {
+            Err(ErrorKind::FieldIsMissing("id", "memory-backend-ram").into())
+        }
+    }
+
+    fn get_mem_zone_size(&self, cmd_parser: &CmdParser) -> Result<u64> {
+        if let Some(mem) = cmd_parser.get_value::<String>("size")? {
+            let size = memory_unit_conversion(&mem)?;
+            Ok(size)
+        } else {
+            Err(ErrorKind::FieldIsMissing("size", "memory-backend-ram").into())
+        }
+    }
+
+    fn get_mem_zone_host_nodes(&self, cmd_parser: &CmdParser) -> Result<Option<Vec<u32>>> {
+        if let Some(mut host_nodes) = cmd_parser
+            .get_value::<IntegerList>("host-nodes")
+            .map_err(|_| {
+                ErrorKind::ConvertValueFailed(String::from("u32"), "host-nodes".to_string())
+            })?
+            .map(|v| v.0.iter().map(|e| *e as u32).collect::<Vec<u32>>())
+        {
+            host_nodes.sort_unstable();
+            if host_nodes[host_nodes.len() - 1] >= MAX_NODES {
+                return Err(ErrorKind::IllegalValue(
+                    "host_nodes".to_string(),
+                    0,
+                    true,
+                    MAX_NODES as u64,
+                    false,
+                )
+                .into());
+            }
+            Ok(Some(host_nodes))
+        } else {
+            Err(ErrorKind::FieldIsMissing("host-nodes", "memory-backend-ram").into())
+        }
+    }
+
+    fn get_mem_zone_policy(&self, cmd_parser: &CmdParser) -> Result<String> {
+        if let Some(policy) = cmd_parser.get_value::<String>("policy")? {
+            if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
+                return Err(ErrorKind::InvalidParam("policy".to_string(), policy).into());
+            }
+            Ok(policy)
+        } else {
+            Err(ErrorKind::FieldIsMissing("policy", "memory-backend-ram").into())
+        }
+    }
+
+    /// Convert memory zone cmdline to VM config
+    ///
+    /// # Arguments
+    ///
+    /// * `mem_zone` - The memory zone cmdline string.
     pub fn add_mem_zone(&mut self, mem_zone: &str) -> Result<MemZoneConfig> {
         let mut cmd_parser = CmdParser::new("mem_zone");
         cmd_parser
@@ -338,41 +405,12 @@ impl VmConfig {
             .push("policy");
         cmd_parser.parse(mem_zone)?;
 
-        let mut zone_config = MemZoneConfig::default();
-        if let Some(id) = cmd_parser.get_value::<String>("id")? {
-            if id.len() > MAX_STRING_LENGTH {
-                return Err(
-                    ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into(),
-                );
-            }
-            zone_config.id = id;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("id", "memory-backend-ram").into());
-        }
-        if let Some(mem) = cmd_parser.get_value::<String>("size")? {
-            zone_config.size = memory_unit_conversion(&mem)?;
-        } else {
-            return Err(ErrorKind::FieldIsMissing("size", "memory-backend-ram").into());
-        }
-        if let Some(host_nodes) = cmd_parser.get_value::<u32>("host-nodes")? {
-            if host_nodes >= MAX_NODES {
-                return Err(ErrorKind::IllegalValue(
-                    "host_nodes".to_string(),
-                    0,
-                    true,
-                    MAX_NODES as u64,
-                    false,
-                )
-                .into());
-            }
-            zone_config.host_numa_node = Some(host_nodes);
-        }
-        if let Some(policy) = cmd_parser.get_value::<String>("policy")? {
-            if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
-                return Err(ErrorKind::InvalidParam("policy".to_string(), policy).into());
-            }
-            zone_config.policy = policy;
-        }
+        let zone_config = MemZoneConfig {
+            id: self.get_mem_zone_id(&cmd_parser)?,
+            size: self.get_mem_zone_size(&cmd_parser)?,
+            host_numa_nodes: self.get_mem_zone_host_nodes(&cmd_parser)?,
+            policy: self.get_mem_zone_policy(&cmd_parser)?,
+        };
 
         if self.machine_config.mem_config.mem_zones.is_some() {
             self.machine_config
@@ -828,21 +866,26 @@ mod tests {
             .unwrap();
         assert_eq!(zone_config_1.id, "mem1");
         assert_eq!(zone_config_1.size, 2147483648);
-        assert_eq!(zone_config_1.host_numa_node, Some(1));
+        assert_eq!(zone_config_1.host_numa_nodes, Some(vec![1]));
         assert_eq!(zone_config_1.policy, "bind");
 
-        let zone_config_2 = vm_config
+        assert!(vm_config
             .add_mem_zone("-object memory-backend-ram,size=2G,id=mem1")
-            .unwrap();
-        assert_eq!(zone_config_2.host_numa_node, None);
-        assert_eq!(zone_config_2.policy, "bind");
-
+            .is_err());
         assert!(vm_config
             .add_mem_zone("-object memory-backend-ram,size=2G")
             .is_err());
         assert!(vm_config
             .add_mem_zone("-object memory-backend-ram,id=mem1")
             .is_err());
+
+        let mut vm_config = VmConfig::default();
+        let zone_config_2 = vm_config
+            .add_mem_zone(
+                "-object memory-backend-ram,size=2G,id=mem1,host-nodes=1-2,policy=default",
+            )
+            .unwrap();
+        assert_eq!(zone_config_2.host_numa_nodes, Some(vec![1, 2]));
     }
 
     #[test]
