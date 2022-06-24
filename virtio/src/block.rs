@@ -229,7 +229,6 @@ impl Request {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::borrowed_box)]
     fn execute(
         &self,
         aio: &mut Box<Aio<AioCompleteCb>>,

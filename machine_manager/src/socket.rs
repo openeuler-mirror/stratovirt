@@ -137,7 +137,7 @@ impl Socket {
     /// Get socket fd from `Socket`, it a private function.
     pub fn get_stream_fd(&self) -> RawFd {
         if self.is_connected() {
-            self.stream.read().unwrap().as_ref().unwrap().socket_fd
+            self.stream.read().unwrap().as_ref().unwrap().as_raw_fd()
         } else {
             panic!("Failed to get socket fd!");
         }
@@ -295,20 +295,17 @@ pub enum SocketType {
 
 /// Wrapper over UnixSteam.
 #[derive(Debug)]
-struct SocketStream {
-    /// `RawFd` for socket
-    socket_fd: RawFd,
-    /// Make `UnixStream` persistent without `drop`
-    #[allow(dead_code)]
-    persistent: Option<UnixStream>,
-}
+struct SocketStream(UnixStream);
 
 impl SocketStream {
     fn from_unix_stream(stream: UnixStream) -> Self {
-        SocketStream {
-            socket_fd: stream.as_raw_fd(),
-            persistent: Some(stream),
-        }
+        SocketStream(stream)
+    }
+}
+
+impl AsRawFd for SocketStream {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0.as_raw_fd()
     }
 }
 
