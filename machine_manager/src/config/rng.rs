@@ -114,7 +114,6 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
     }
 
     if let Some(object_cfg) = vm_config.object.remove(&rng) {
-        #[allow(irrefutable_let_patterns)]
         if let ObjConfig::Rng(obj_cfg) = object_cfg {
             rng_cfg.random_file = obj_cfg.filename;
         }

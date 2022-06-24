@@ -114,7 +114,6 @@ impl LibaioContext {
         Ok(())
     }
 
-    #[allow(clippy::zero_ptr)]
     pub fn get_events(&self) -> (&[IoEvent], u32, u32) {
         let ring = self.ctx as *mut AioRing;
         let head = unsafe { (*ring).head };

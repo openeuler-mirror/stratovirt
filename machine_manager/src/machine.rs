@@ -273,8 +273,7 @@ pub trait DeviceInterface {
     fn list_type(&self) -> Response {
         let mut vec_types = Vec::new();
         // These devices are used to interconnect with libvirt, but not been implemented yet.
-        #[allow(unused_mut)]
-        let mut list_types: Vec<(&str, &str)> = vec![
+        let list_types: Vec<(&str, &str)> = vec![
             ("ioh3420", "pcie-root-port-base"),
             ("pcie-root-port", "pcie-root-port-base"),
             ("pcie-pci-bridge", "base-pci-bridge"),
@@ -286,9 +285,10 @@ pub trait DeviceInterface {
             ("vfio-pci", "pci-device"),
             ("vhost-vsock-device", "virtio-device"),
             ("iothread", "object"),
+            #[cfg(target_arch = "aarch64")]
+            ("gpex-pcihost", "pcie-host-bridge"),
         ];
-        #[cfg(target_arch = "aarch64")]
-        list_types.push(("gpex-pcihost", "pcie-host-bridge"));
+
         for list in list_types {
             let re = TypeLists::new(String::from(list.0), String::from(list.1));
             vec_types.push(re);
