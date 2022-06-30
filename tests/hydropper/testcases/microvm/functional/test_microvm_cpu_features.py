@@ -136,10 +136,7 @@ def test_128vcpu_topo(microvm):
     test_vm.basic_config(vcpu_count=128)
     test_vm.launch()
 
-    if 'x86_64' in platform.machine():
-        _check_cpu_topology(test_vm, 128, 1, 128, "0-127")
-    else:
-        _check_cpu_topology(test_vm, 128, 2, 2, "0-127")
+    _check_cpu_topology(test_vm, 128, 1, 128, "0-127")
 
 
 @pytest.mark.skipif("platform.machine().startswith('aarch64')")
