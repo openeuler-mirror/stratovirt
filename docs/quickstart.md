@@ -80,7 +80,7 @@ rm -f ${socket_path}
 
 # Start linux VM with machine type "microvm" by StratoVirt.
 /usr/bin/stratovirt \
-    -machine microvm
+    -machine microvm \
     -kernel ${kernel_path} \
     -smp 1 \
     -m 1024 \
