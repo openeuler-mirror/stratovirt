@@ -1428,7 +1428,11 @@ impl CompileFDTHelper for LightMachine {
                     for thread in 0..self.cpu_topo.threads {
                         let thread_name = format!("thread{}", thread);
                         let thread_node_dep = fdt.begin_node(&thread_name)?;
-                        let vcpuid = self.cpu_topo.threads * self.cpu_topo.cores * cluster
+                        let vcpuid = self.cpu_topo.threads
+                            * self.cpu_topo.cores
+                            * self.cpu_topo.clusters
+                            * socket
+                            + self.cpu_topo.threads * self.cpu_topo.cores * cluster
                             + self.cpu_topo.threads * core
                             + thread;
                         fdt.set_property_u32(

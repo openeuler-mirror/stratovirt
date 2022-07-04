@@ -264,7 +264,7 @@ impl VmConfig {
         } else if let Some(cpu) = cmd_parser.get_value::<u64>("cpus")? {
             if cpu == 0 {
                 return Err(
-                    ErrorKind::IllegalValue("cpu".to_string(), 1, true, u64::MAX, true).into(),
+                    ErrorKind::IllegalValue("cpu".to_string(), 1, true, MAX_NR_CPUS, true).into(),
                 );
             }
             cpu
@@ -272,15 +272,15 @@ impl VmConfig {
             return Err(ErrorKind::FieldIsMissing("cpus", "smp").into());
         };
 
-        let sockets = cmd_parser.get_value::<u64>("sockets")?.unwrap_or_default();
+        let sockets = smp_read_and_check(&cmd_parser, "sockets", 0)?;
 
-        let dies = cmd_parser.get_value::<u64>("dies")?.unwrap_or(1);
+        let dies = smp_read_and_check(&cmd_parser, "dies", 1)?;
 
-        let clusters = cmd_parser.get_value::<u64>("clusters")?.unwrap_or(1);
+        let clusters = smp_read_and_check(&cmd_parser, "clusters", 1)?;
 
-        let cores = cmd_parser.get_value::<u64>("cores")?.unwrap_or_default();
+        let cores = smp_read_and_check(&cmd_parser, "cores", 0)?;
 
-        let threads = cmd_parser.get_value::<u64>("threads")?.unwrap_or_default();
+        let threads = smp_read_and_check(&cmd_parser, "threads", 0)?;
 
         let max_cpus = cmd_parser.get_value::<u64>("maxcpus")?.unwrap_or_default();
 
@@ -299,15 +299,30 @@ impl VmConfig {
             .into());
         }
 
-        if max_cpus < cpu || sockets * dies * clusters * cores * threads != max_cpus {
+        if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&max_cpus) {
+            return Err(ErrorKind::IllegalValue(
+                "MAX CPU number".to_string(),
+                MIN_NR_CPUS,
+                true,
+                MAX_NR_CPUS,
+                true,
+            )
+            .into());
+        }
+
+        if max_cpus < cpu {
             return Err(ErrorKind::IllegalValue(
                 "maxcpus".to_string(),
                 cpu as u64,
                 true,
-                (sockets * dies * clusters * cores * threads) as u64,
+                MAX_NR_CPUS,
                 true,
             )
             .into());
+        }
+
+        if sockets * dies * clusters * cores * threads != max_cpus {
+            bail!("sockets * dies * clusters * cores * threads must be equal to max_cpus");
         }
 
         self.machine_config.nr_cpus = cpu as u8;
@@ -424,6 +439,19 @@ impl VmConfig {
         }
 
         Ok(zone_config)
+    }
+}
+
+fn smp_read_and_check(cmd_parser: &CmdParser, name: &str, default_val: u64) -> Result<u64> {
+    if let Some(values) = cmd_parser.get_value::<u64>(name)? {
+        if values == 0 {
+            return Err(
+                ErrorKind::IllegalValue(name.to_string(), 1, true, u8::MAX as u64, false).into(),
+            );
+        }
+        Ok(values)
+    } else {
+        Ok(default_val)
     }
 }
 

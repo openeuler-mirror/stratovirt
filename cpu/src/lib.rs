@@ -734,7 +734,10 @@ impl CpuTopology {
         nr_sockets: u8,
         max_cpus: u8,
     ) -> Self {
-        let mask: Vec<u8> = vec![1; nr_cpus as usize];
+        let mut mask: Vec<u8> = vec![0; max_cpus as usize];
+        (0..nr_cpus as usize).for_each(|index| {
+            mask[index] = 1;
+        });
         Self {
             sockets: nr_sockets,
             dies: nr_dies,
