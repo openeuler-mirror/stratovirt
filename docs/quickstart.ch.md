@@ -77,7 +77,7 @@ rm -f ${socket_path}
 
 # 通过StratoVirt启动轻量化机型的Linux客户机。
 /usr/bin/stratovirt \
-    -machine microvm
+    -machine microvm \
     -kernel ${kernel_path} \
     -smp 1 \
     -m 1024 \
