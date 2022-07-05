@@ -357,7 +357,7 @@ impl VirtioDevice for Net {
             let handler = VhostIoHandler {
                 interrupt_cb: interrupt_cb.clone(),
                 host_notifies,
-                deactivate_evt: self.deactivate_evt.as_raw_fd(),
+                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             };
 
             EventLoop::update_event(
