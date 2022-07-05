@@ -805,40 +805,36 @@ impl Command for query_cpus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CpuInfoCommon {
+    #[serde(rename = "current")]
+    pub current: bool,
+    #[serde(rename = "qom_path")]
+    pub qom_path: String,
+    #[serde(rename = "halted")]
+    pub halted: bool,
+    #[serde(rename = "props", default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<CpuInstanceProperties>,
+    #[serde(rename = "CPU")]
+    pub CPU: isize,
+    #[serde(rename = "thread_id")]
+    pub thread_id: isize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "arch")]
 pub enum CpuInfo {
     #[serde(rename = "x86")]
     x86 {
-        #[serde(rename = "current")]
-        current: bool,
-        #[serde(rename = "qom_path")]
-        qom_path: String,
-        #[serde(rename = "halted")]
-        halted: bool,
-        #[serde(rename = "props", default, skip_serializing_if = "Option::is_none")]
-        props: Option<CpuInstanceProperties>,
-        #[serde(rename = "CPU")]
-        CPU: isize,
-        #[serde(rename = "thread_id")]
-        thread_id: isize,
+        #[serde(flatten)]
+        common: CpuInfoCommon,
         #[serde(flatten)]
         #[serde(rename = "x86")]
         x86: CpuInfoX86,
     },
     #[serde(rename = "arm")]
     Arm {
-        #[serde(rename = "current")]
-        current: bool,
-        #[serde(rename = "qom_path")]
-        qom_path: String,
-        #[serde(rename = "halted")]
-        halted: bool,
-        #[serde(rename = "props", default, skip_serializing_if = "Option::is_none")]
-        props: Option<CpuInstanceProperties>,
-        #[serde(rename = "CPU")]
-        CPU: isize,
-        #[serde(rename = "thread_id")]
-        thread_id: isize,
+        #[serde(flatten)]
+        common: CpuInfoCommon,
         #[serde(flatten)]
         #[serde(rename = "Arm")]
         arm: CpuInfoArm,

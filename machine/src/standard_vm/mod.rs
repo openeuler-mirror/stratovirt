@@ -930,7 +930,7 @@ impl DeviceInterface for StdMachine {
                     core_id: Some(coreid as isize),
                     thread_id: Some(threadid as isize),
                 };
-                let cpu_info = qmp_schema::CpuInfo::x86 {
+                let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
                         + &cpu_index.to_string()
@@ -939,9 +939,23 @@ impl DeviceInterface for StdMachine {
                     props: Some(cpu_instance),
                     CPU: cpu_index as isize,
                     thread_id: thread_id as isize,
-                    x86: qmp_schema::CpuInfoX86 {},
                 };
-                cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let cpu_info = qmp_schema::CpuInfo::x86 {
+                        common: cpu_common,
+                        x86: qmp_schema::CpuInfoX86 {},
+                    };
+                    cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    let cpu_info = qmp_schema::CpuInfo::Arm {
+                        common: cpu_common,
+                        arm: qmp_schema::CpuInfoArm {},
+                    };
+                    cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+                }
             }
         }
         Response::create_response(cpu_vec.into(), None)
