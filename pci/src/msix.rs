@@ -45,6 +45,7 @@ pub const MSIX_CAP_TABLE: u8 = 0x04;
 pub const MSIX_CAP_PBA: u8 = 0x08;
 
 /// MSI-X message structure.
+#[derive(Copy, Clone)]
 pub struct Message {
     /// Lower 32bit address of MSI-X address.
     pub address_lo: u32,
@@ -52,6 +53,11 @@ pub struct Message {
     pub address_hi: u32,
     /// MSI-X data.
     pub data: u32,
+}
+
+/// Trait used to update the interrupt routing table.
+pub trait MsixUpdate: Sync + Send {
+    fn update_irq_routing(&mut self, _vector: u16, _entry: &Message, _is_masked: bool) {}
 }
 
 /// The state of msix device.
@@ -78,6 +84,7 @@ pub struct Msix {
     pub enabled: bool,
     pub msix_cap_offset: u16,
     pub dev_id: Arc<AtomicU16>,
+    pub msix_update: Option<Arc<Mutex<dyn MsixUpdate>>>,
 }
 
 impl Msix {
@@ -97,6 +104,7 @@ impl Msix {
             enabled: true,
             msix_cap_offset,
             dev_id: Arc::new(AtomicU16::new(dev_id)),
+            msix_update: None,
         };
         msix.mask_all_vectors();
         msix
@@ -186,7 +194,19 @@ impl Msix {
             locked_msix.table[offset..(offset + 4)].copy_from_slice(data);
 
             let is_masked: bool = locked_msix.is_vector_masked(vector);
-            if was_masked && !is_masked {
+            if was_masked != is_masked {
+                if let Some(msix_update) = &locked_msix.msix_update {
+                    let entry = locked_msix.get_message(vector);
+                    msix_update
+                        .lock()
+                        .unwrap()
+                        .update_irq_routing(vector, &entry, is_masked);
+                }
+            }
+
+            // Clear the pending vector just when it is pending. Otherwise, it
+            // will cause unknown error.
+            if was_masked && !is_masked && locked_msix.is_vector_pending(vector) {
                 locked_msix.clear_pending_vector(vector);
                 locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
             }
