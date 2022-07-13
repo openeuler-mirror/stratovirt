@@ -935,17 +935,20 @@ impl DeviceInterface for LightMachine {
                     core_id: Some(coreid as isize),
                     thread_id: Some(threadid as isize),
                 };
+                let cpu_common = qmp_schema::CpuInfoCommon {
+                    current: true,
+                    qom_path: String::from("/machine/unattached/device[")
+                        + &cpu_index.to_string()
+                        + "]",
+                    halted: false,
+                    props: Some(cpu_instance),
+                    CPU: cpu_index as isize,
+                    thread_id: thread_id as isize,
+                };
                 #[cfg(target_arch = "x86_64")]
                 {
                     let cpu_info = qmp_schema::CpuInfo::x86 {
-                        current: true,
-                        qom_path: String::from("/machine/unattached/device[")
-                            + &cpu_index.to_string()
-                            + "]",
-                        halted: false,
-                        props: Some(cpu_instance),
-                        CPU: cpu_index as isize,
-                        thread_id: thread_id as isize,
+                        common: cpu_common,
                         x86: qmp_schema::CpuInfoX86 {},
                     };
                     cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
@@ -953,14 +956,7 @@ impl DeviceInterface for LightMachine {
                 #[cfg(target_arch = "aarch64")]
                 {
                     let cpu_info = qmp_schema::CpuInfo::Arm {
-                        current: true,
-                        qom_path: String::from("/machine/unattached/device[")
-                            + &cpu_index.to_string()
-                            + "]",
-                        halted: false,
-                        props: Some(cpu_instance),
-                        CPU: cpu_index as isize,
-                        thread_id: thread_id as isize,
+                        common: cpu_common,
                         arm: qmp_schema::CpuInfoArm {},
                     };
                     cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
