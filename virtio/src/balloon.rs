@@ -41,17 +41,20 @@ use util::{
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use super::{
-    errors::*, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+    errors::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
+    VirtioInterruptType, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
+const VIRTIO_BALLOON_F_REPORTING: u32 = 5;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
 const QUEUE_SIZE_BALLOON: u16 = 256;
 const QUEUE_NUM_BALLOON: usize = 2;
 const BALLOON_PAGE_SIZE: u64 = 1 << VIRTIO_BALLOON_PFN_SHIFT;
 const BALLOON_INFLATE_EVENT: bool = true;
 const BALLOON_DEFLATE_EVENT: bool = false;
+const IN_IOVEC: bool = true;
+const OUT_IOVEC: bool = false;
 const BITS_OF_TYPE_U64: u64 = 64;
 
 static mut BALLOON_DEV: Option<Arc<Mutex<Balloon>>> = None;
@@ -167,21 +170,27 @@ struct Request {
 
 impl Request {
     /// Parse the request from virtio queue.
-    /// Return the request from qirtio queue.
+    /// Return the request from virtio queue.
     ///
     /// # Arguments
     ///
     /// * `elem` - Available ring.
-    fn parse(elem: &Element) -> Result<Request> {
+    /// * `elem_type` - The type of available ring.
+    fn parse(elem: &Element, elem_type: bool) -> Result<Request> {
         let mut request = Request {
             desc_index: elem.index,
             elem_cnt: 0u32,
             iovec: Vec::new(),
         };
-        if elem.out_iovec.is_empty() {
-            return Err(ErrorKind::ElementEmpty.into());
+        let iovec = if elem_type {
+            &elem.in_iovec
         } else {
-            let elem_iov = elem.out_iovec.get(0).unwrap();
+            &elem.out_iovec
+        };
+        if iovec.is_empty() {
+            return Err(ErrorKind::ElementEmpty.into());
+        }
+        for elem_iov in iovec {
             request.iovec.push(Iovec {
                 iov_base: elem_iov.addr,
                 iov_len: elem_iov.len as u64,
@@ -296,6 +305,24 @@ impl Request {
                     }
                 }
             }
+        }
+    }
+
+    fn release_pages(&self, mem: &Arc<Mutex<BlnMemInfo>>) {
+        for iov in self.iovec.iter() {
+            let gpa: GuestAddress = iov.iov_base;
+            let hva = match mem.lock().unwrap().get_host_address(gpa) {
+                Some(addr) => (addr),
+                None => {
+                    error!("Can not get host address, gpa: {}", gpa.raw_value());
+                    continue;
+                }
+            };
+            memory_advise(
+                hva as *const libc::c_void as *mut _,
+                iov.iov_len as usize,
+                libc::MADV_DONTNEED,
+            );
         }
     }
 }
@@ -452,6 +479,10 @@ struct BalloonIoHandler {
     def_queue: Arc<Mutex<Queue>>,
     /// Deflate EventFd.
     def_evt: EventFd,
+    /// Reporting queue.
+    report_queue: Option<Arc<Mutex<Queue>>>,
+    /// Reporting EventFd.
+    report_evt: Option<EventFd>,
     /// EventFd for device deactivate
     deactivate_evt: RawFd,
     /// The interrupt call back function.
@@ -483,28 +514,46 @@ impl BalloonIoHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
-            match Request::parse(&elem) {
-                Ok(req) => {
-                    if !self.mem_info.lock().unwrap().has_huge_page() {
-                        req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
-                    }
-                    locked_queue
-                        .vring
-                        .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
-                        .chain_err(|| "Failed to add balloon response into used queue")?;
-                }
-                Err(e) => {
-                    error!(
-                        "Fail to parse available descriptor chain, error is {}",
-                        e.display_chain()
-                    );
-                    break;
-                }
+            let req = Request::parse(&elem, OUT_IOVEC)
+                .chain_err(|| "Fail to parse available descriptor chain")?;
+            if !self.mem_info.lock().unwrap().has_huge_page() {
+                req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
             }
+            locked_queue
+                .vring
+                .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
+                .chain_err(|| "Failed to add balloon response into used queue")?;
         }
 
         (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
             .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
+        Ok(())
+    }
+
+    fn reporting_evt_handler(&mut self) -> Result<()> {
+        let queue = &self.report_queue;
+        if queue.is_none() {
+            return Err(ErrorKind::VirtQueueIsNone.into());
+        }
+        let unwraped_queue = queue.as_ref().unwrap();
+        let mut locked_queue = unwraped_queue.lock().unwrap();
+        while let Ok(elem) = locked_queue
+            .vring
+            .pop_avail(&self.mem_space, self.driver_features)
+        {
+            let req = Request::parse(&elem, IN_IOVEC)
+                .chain_err(|| "Fail to parse available descriptor chain")?;
+            if !self.mem_info.lock().unwrap().has_huge_page() {
+                req.release_pages(&self.mem_info);
+            }
+            locked_queue
+                .vring
+                .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
+                .chain_err(|| "Failed to add balloon response into used queue")?;
+
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
+                .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
+        }
         Ok(())
     }
 
@@ -617,6 +666,19 @@ impl EventNotifierHelper for BalloonIoHandler {
             handler,
         ));
 
+        // register event notifier for free page reporting event.
+        if let Some(report_evt) = locked_balloon_io.report_evt.as_ref() {
+            let cloned_balloon_io = balloon_io.clone();
+            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+                read_fd(fd);
+                if let Err(e) = cloned_balloon_io.lock().unwrap().reporting_evt_handler() {
+                    error!("Failed to report free pages: {}", e.display_chain());
+                }
+                None
+            });
+            notifiers.push(build_event_notifier(report_evt.as_raw_fd(), handler));
+        }
+
         // register event notifier for reset event.
         let cloned_balloon_io = balloon_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
@@ -684,6 +746,9 @@ impl Balloon {
         let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
         if bln_cfg.deflate_on_oom {
             device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
+        }
+        if bln_cfg.free_page_reporting {
+            device_features |= 1u64 << VIRTIO_BALLOON_F_REPORTING;
         }
 
         Balloon {
@@ -774,7 +839,11 @@ impl VirtioDevice for Balloon {
 
     /// Get the number of balloon-device queues.
     fn queue_num(&self) -> usize {
-        QUEUE_NUM_BALLOON
+        let mut queue_num = QUEUE_NUM_BALLOON;
+        if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING) {
+            queue_num += 1;
+        }
+        queue_num
     }
 
     /// Get the zise of balloon queue.
@@ -874,23 +943,47 @@ impl VirtioDevice for Balloon {
         queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
-        if queues.len() != QUEUE_NUM_BALLOON {
+        if queues.len() != self.queue_num() {
             return Err(ErrorKind::IncorrectQueueNum(QUEUE_NUM_BALLOON, queues.len()).into());
         }
 
         let inf_queue = queues[0].clone();
-        let inf_queue_evt = queue_evts.remove(0);
+        let inf_evt = queue_evts.remove(0);
         let def_queue = queues[1].clone();
-        let def_queue_evt = queue_evts.remove(0);
+        let def_evt = queue_evts.remove(0);
+
+        let mut current_queue_index = 1;
+        let (report_queue, report_evt) =
+            if virtio_has_feature(self.device_features, VIRTIO_BALLOON_F_REPORTING)
+                && current_queue_index + 1 < self.queue_num()
+                && !queue_evts.is_empty()
+            {
+                current_queue_index += 1;
+                (
+                    Some(queues[current_queue_index].clone()),
+                    Some(queue_evts.remove(0)),
+                )
+            } else {
+                if current_queue_index + 1 >= self.queue_num() {
+                    error!(
+                        "Queue index: {} is invalid, correct index is from 0 to {}!",
+                        current_queue_index + 1,
+                        self.queue_num()
+                    )
+                }
+                (None, None)
+            };
 
         self.interrupt_cb = Some(interrupt_cb.clone());
         let handler = BalloonIoHandler {
             driver_features: self.driver_features,
             mem_space,
             inf_queue,
-            inf_evt: inf_queue_evt,
+            inf_evt,
             def_queue,
-            def_evt: def_queue_evt,
+            def_evt,
+            report_queue,
+            report_evt,
             deactivate_evt: self.deactivate_evt.as_raw_fd(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
@@ -1017,6 +1110,7 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
+            free_page_reporting: Default::default(),
         };
 
         let mem_space = address_space_init();
@@ -1058,6 +1152,7 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
+            free_page_reporting: Default::default(),
         };
 
         let mem_space = address_space_init();
@@ -1076,6 +1171,7 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
+            free_page_reporting: Default::default(),
         };
 
         let mem_space = address_space_init();
@@ -1093,6 +1189,7 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
+            free_page_reporting: Default::default(),
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         bln.realize().unwrap();
@@ -1165,6 +1262,8 @@ mod tests {
             inf_evt: event_inf.try_clone().unwrap(),
             def_queue: queue2,
             def_evt: event_def,
+            report_queue: None,
+            report_evt: None,
             deactivate_evt: event_deactivate.as_raw_fd(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
@@ -1266,6 +1365,7 @@ mod tests {
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
             deflate_on_oom: true,
+            free_page_reporting: Default::default(),
         };
         let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
         assert!(bln
@@ -1322,5 +1422,40 @@ mod tests {
         assert!(btp.is_full(8));
         // Out of range.
         assert!(!btp.is_full(65));
+    }
+
+    #[test]
+    fn test_balloon_init_free_page_reporting() {
+        let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
+            deflate_on_oom: true,
+            free_page_reporting: true,
+        };
+        let mem_space = address_space_init();
+        let mut bln = Balloon::new(&bln_cfg, mem_space);
+        assert_eq!(bln.driver_features, 0);
+        assert_eq!(bln.actual.load(Ordering::Acquire), 0);
+        assert_eq!(bln.num_pages, 0);
+        assert!(bln.interrupt_cb.is_none());
+        let feature = (1u64 << VIRTIO_F_VERSION_1)
+            | (1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM | 1u64 << VIRTIO_BALLOON_F_REPORTING);
+        assert_eq!(bln.device_features, feature);
+
+        let fts = bln.get_device_features(0);
+        assert_eq!(fts, feature as u32);
+        let fts = bln.get_device_features(1);
+        assert_eq!(fts, (feature >> 32) as u32);
+
+        // Test realize function.
+        bln.realize().unwrap();
+        assert_eq!(bln.device_type(), 5);
+        assert_eq!(bln.queue_num(), 3);
+        assert_eq!(bln.queue_size(), QUEUE_SIZE);
+        // Test methods of balloon.
+        let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
+        assert_eq!(ram_size, MEMORY_SIZE);
+
+        assert!(bln.deactivate().is_ok());
+        assert!(bln.update_config(None).is_err());
     }
 }

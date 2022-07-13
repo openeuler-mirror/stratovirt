@@ -23,6 +23,7 @@ use crate::config::{CmdParser, ExBool, VmConfig};
 pub struct BalloonConfig {
     pub id: String,
     pub deflate_on_oom: bool,
+    pub free_page_reporting: bool,
 }
 
 impl ConfigCheck for BalloonConfig {
@@ -50,13 +51,17 @@ pub fn parse_balloon(vm_config: &mut VmConfig, balloon_config: &str) -> Result<B
         .push("addr")
         .push("multifunction")
         .push("id")
-        .push("deflate-on-oom");
+        .push("deflate-on-oom")
+        .push("free-page-reporting");
     cmd_parser.parse(balloon_config)?;
 
     pci_args_check(&cmd_parser)?;
     let mut balloon: BalloonConfig = Default::default();
     if let Some(default) = cmd_parser.get_value::<ExBool>("deflate-on-oom")? {
         balloon.deflate_on_oom = default.into();
+    }
+    if let Some(default) = cmd_parser.get_value::<ExBool>("free-page-reporting")? {
+        balloon.free_page_reporting = default.into();
     }
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         balloon.id = id;
@@ -119,5 +124,62 @@ mod tests {
             "virtio-balloon-device,deflate-on-oom=true,id=balloon1",
         );
         assert!(bln_cfg_res2.is_err());
+    }
+
+    #[test]
+    fn test_fpr_balloon_config_cmdline_parser() {
+        let mut vm_config1 = VmConfig::default();
+        let bln_cfg_res1 = parse_balloon(
+            &mut vm_config1,
+            "virtio-balloon-device,free-page-reporting=true,id=balloon0",
+        );
+        assert!(bln_cfg_res1.is_ok());
+        let balloon_configs1 = bln_cfg_res1.unwrap();
+        assert_eq!(balloon_configs1.id, "balloon0".to_string());
+        assert_eq!(balloon_configs1.free_page_reporting, true);
+
+        let mut vm_config2 = VmConfig::default();
+        let bln_cfg_res2 = parse_balloon(
+            &mut vm_config2,
+            "virtio-balloon-device,free-page-reporting=false,id=balloon0",
+        );
+        assert!(bln_cfg_res2.is_ok());
+        let balloon_configs2 = bln_cfg_res2.unwrap();
+        assert_eq!(balloon_configs2.id, "balloon0".to_string());
+        assert_eq!(balloon_configs2.free_page_reporting, false);
+
+        let mut vm_config3 = VmConfig::default();
+        let bln_cfg_res3 = parse_balloon(
+            &mut vm_config3,
+            "virtio-balloon-pci,free-page-reporting=true,bus=pcie.0,addr=0x1.0x2,id=balloon0",
+        );
+        assert!(bln_cfg_res3.is_ok());
+        let balloon_configs3 = bln_cfg_res3.unwrap();
+        assert_eq!(balloon_configs3.id, "balloon0".to_string());
+        assert_eq!(balloon_configs3.free_page_reporting, true);
+
+        let mut vm_config4 = VmConfig::default();
+        let bln_cfg_res4 = parse_balloon(
+            &mut vm_config4,
+            "virtio-balloon-pci,free-page-reporting=false,bus=pcie.0,addr=0x1.0x2,id=balloon0",
+        );
+        assert!(bln_cfg_res4.is_ok());
+        let balloon_configs4 = bln_cfg_res4.unwrap();
+        assert_eq!(balloon_configs4.id, "balloon0".to_string());
+        assert_eq!(balloon_configs4.free_page_reporting, false);
+
+        let mut vm_config5 = VmConfig::default();
+        let bln_cfg_res5 = parse_balloon(&mut vm_config5, "virtio-balloon-device,id=balloon0");
+        assert!(bln_cfg_res5.is_ok());
+        let balloon_configs5 = bln_cfg_res5.unwrap();
+        assert_eq!(balloon_configs5.id, "balloon0".to_string());
+        assert_eq!(balloon_configs5.free_page_reporting, false);
+
+        let mut vm_config6 = VmConfig::default();
+        let bln_cfg_res6 = parse_balloon(
+            &mut vm_config6,
+            "virtio-balloon-device,free-page-reporting=2,id=balloon0",
+        );
+        assert!(bln_cfg_res6.is_err());
     }
 }
