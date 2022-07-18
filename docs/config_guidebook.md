@@ -254,7 +254,7 @@ Nine properties are supported for virtio block device.
 * format: the format of block image, default value `raw`. NB: currently only `raw` is supported. (optional)
 If not set, default is raw.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. If not set,
-the default block queue number is 1.
+the default block queue number is 1. The max queues number supported is no more than 32.
 * bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
 The number ranges from 0 to 255, the smaller the number, the higher the priority.
 It determines the order of bootable devices which firmware will use for booting the guest OS.
@@ -286,7 +286,8 @@ Six properties are supported for netdev.
 * ifname: name of tap device in host.
 * fd: the file descriptor of opened tap device.
 * fds: file descriptors of opened tap device.
-* queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or vhost-net device.
+* queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or
+  vhost-net device. The max queues number supported is no more than 16.
 NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given,
 the tap device would be created according to `ifname`.
 

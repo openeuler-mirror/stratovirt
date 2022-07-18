@@ -136,10 +136,13 @@ impl ConfigCheck for NetworkInterfaceConfig {
             }
         }
 
-        if self.queues * 2 + 1 > MAX_VIRTIO_QUEUE as u16 {
-            return Err(ErrorKind::StringLengthTooLong(
-                "queues".to_string(),
-                (MAX_VIRTIO_QUEUE - 1) / 2,
+        if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
+            return Err(ErrorKind::IllegalValue(
+                "number queues of net device".to_string(),
+                1,
+                true,
+                MAX_VIRTIO_QUEUE as u64 / 2,
+                true,
             )
             .into());
         }
