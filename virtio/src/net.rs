@@ -93,8 +93,10 @@ pub struct NetCtrlHandler {
     pub mem_space: Arc<AddressSpace>,
     /// The interrupt call back function.
     pub interrupt_cb: Arc<VirtioInterrupt>,
-    // Bit mask of features negotiated by the backend and the frontend.
+    /// Bit mask of features negotiated by the backend and the frontend.
     pub driver_features: u64,
+    /// Deactivate event to delete net control handler.
+    pub deactivate_evt: EventFd,
 }
 
 #[repr(C, packed)]
@@ -175,6 +177,27 @@ impl NetCtrlHandler {
 
         Ok(())
     }
+
+    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.ctrl.queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.deactivate_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+
+        notifiers
+    }
 }
 
 impl EventNotifierHelper for NetCtrlHandler {
@@ -194,6 +217,19 @@ impl EventNotifierHelper for NetCtrlHandler {
         let ctrl_fd = locked_net_io.ctrl.queue_evt.as_raw_fd();
         notifiers.push(build_event_notifier(
             ctrl_fd,
+            Some(handler),
+            NotifierOperation::AddShared,
+            EventSet::IN,
+        ));
+
+        // Register event notifier for deactivate_evt.
+        let cloned_net_io = net_io.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(cloned_net_io.lock().unwrap().deactivate_evt_handler())
+        });
+        notifiers.push(build_event_notifier(
+            locked_net_io.deactivate_evt.as_raw_fd(),
             Some(handler),
             NotifierOperation::AddShared,
             EventSet::IN,
@@ -915,6 +951,7 @@ impl VirtioDevice for Net {
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.state.driver_features,
+                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             };
 
             EventLoop::update_event(

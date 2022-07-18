@@ -263,6 +263,7 @@ impl VirtioDevice for Net {
                 mem_space,
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.driver_features,
+                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             };
 
             EventLoop::update_event(
