@@ -34,6 +34,7 @@ from utils.exception import QMPCapabilitiesError
 from utils.exception import QMPTimeoutError
 from utils.exception import SSHError
 from utils.exception import LoginTimeoutError
+from subprocess import getstatusoutput
 
 LOG = TestLog.get_global_log()
 LOGIN_TIMEOUT = 10
@@ -111,6 +112,7 @@ class BaseVM:
         self.withpid = False
         self.balloon = balloon
         self.deflate_on_oom = False
+        self.free_page_reporting = False
         self.quickstart_incoming = None
 
     def __enter__(self):
@@ -134,6 +136,20 @@ class BaseVM:
                 return int(pidf.read())
 
         return None
+
+    def get_rss_with_status_check(self):
+        INVALID_VALUE = -1
+        cmd = "ps -q %d -o rss=" % self.pid
+        status, output = getstatusoutput(cmd)
+        assert status == 0
+        return int(output)
+
+    def memory_stress(self, thread_num=2, vm_bytes='1G', timeout=20):
+        status, _ = self.serial_cmd("stress-ng --vm %d --vm-bytes %s --vm-keep --timeout %d" % (thread_num, vm_bytes, timeout))
+        if status != 0:
+            logging.error("Cannot execute stress in stratovirt.")
+            assert status == 0
+        time.sleep(20)
 
     def _pre_shutdown(self):
         pass
