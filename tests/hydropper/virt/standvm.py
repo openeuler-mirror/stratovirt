@@ -285,6 +285,10 @@ class StandVM(BaseVM):
                 _temp_balloon_args += ',deflate-on-oom=true'
             else:
                 _temp_balloon_args += ',deflate-on-oom=false'
+            if self.free_page_reporting:
+                _temp_balloon_args += ',free-page-reporting=true'
+            else:
+                _temp_balloon_args += ',free-page-reporting=false'
             if self.multifunction["balloon"]:
                 _temp_balloon_args += ",multifunction=on"
             self.add_args('-device', _temp_balloon_args)
