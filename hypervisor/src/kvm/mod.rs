@@ -10,28 +10,25 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod interrupt;
-#[cfg(target_arch = "x86_64")]
-mod state;
-
-pub use interrupt::MsiVector;
-
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
-use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
+use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
 use kvm_bindings::*;
 use kvm_ioctls::{Kvm, VmFd};
 use log::error;
 use once_cell::sync::Lazy;
-use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::{
-    ioctl_expr, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
+    eventfd::EventFd, ioctl_expr, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr,
+    ioctl_iowr_nr,
 };
 
 use crate::errors::{Result, ResultExt};
-#[cfg(target_arch = "x86_64")]
-use migration::{MigrationManager, MigrationRestoreOrder};
+pub use interrupt::MsiVector;
+use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
+
+mod interrupt;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/kvm.h
 pub const KVM_SET_DEVICE_ATTR: u32 = 0x4018_aee1;
@@ -102,6 +99,7 @@ pub struct KVMFds {
     pub fd: Option<Kvm>,
     pub vm_fd: Option<VmFd>,
     pub irq_route_table: Mutex<IrqRouteTable>,
+    pub mem_slots: Arc<Mutex<HashMap<u32, MemorySlot>>>,
 }
 
 impl KVMFds {
@@ -120,6 +118,7 @@ impl KVMFds {
                     fd: Some(fd),
                     vm_fd: Some(vm_fd),
                     irq_route_table,
+                    mem_slots: Arc::new(Mutex::new(HashMap::new())),
                 }
             }
             Err(e) => {
@@ -127,13 +126,6 @@ impl KVMFds {
                 KVMFds::default()
             }
         };
-
-        #[cfg(target_arch = "x86_64")]
-        MigrationManager::register_device_instance(
-            state::KvmDeviceState::descriptor(),
-            Arc::new(state::KvmDevice {}),
-            MigrationRestoreOrder::Default,
-        );
 
         kvm_fds
     }
@@ -172,6 +164,92 @@ impl KVMFds {
             .unwrap()
             .unregister_irqfd(fd, gsi)
             .chain_err(|| format!("Failed to unregister irqfd: gsi {}.", gsi))
+    }
+
+    /// Start dirty page tracking in kvm.
+    pub fn start_dirty_log(&self) -> Result<()> {
+        for (_, region) in self.mem_slots.lock().unwrap().iter_mut() {
+            region.flags = KVM_MEM_LOG_DIRTY_PAGES;
+            // Safe because region from `KVMFds` is reliable.
+            unsafe {
+                self.vm_fd
+                    .as_ref()
+                    .unwrap()
+                    .set_user_memory_region(*region)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to start dirty log, error is {}",
+                            std::io::Error::last_os_error()
+                        )
+                    })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Stop dirty page tracking in kvm.
+    pub fn stop_dirty_log(&self) -> Result<()> {
+        for (_, region) in self.mem_slots.lock().unwrap().iter_mut() {
+            region.flags = 0;
+            // Safe because region from `KVMFds` is reliable.
+            unsafe {
+                self.vm_fd
+                    .as_ref()
+                    .unwrap()
+                    .set_user_memory_region(*region)
+                    .chain_err(|| {
+                        format!(
+                            "Failed to stop dirty log, error is {}",
+                            std::io::Error::last_os_error()
+                        )
+                    })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get dirty page bitmap in kvm.
+    pub fn get_dirty_log(&self, slot: u32, mem_size: u64) -> Result<Vec<u64>> {
+        let res = self
+            .vm_fd
+            .as_ref()
+            .unwrap()
+            .get_dirty_log(slot, mem_size as usize)
+            .chain_err(|| {
+                format!(
+                    "Failed to get dirty log, error is {}",
+                    std::io::Error::last_os_error()
+                )
+            })?;
+
+        Ok(res)
+    }
+
+    /// Add ram memory region to `KVMFds` structure.
+    pub fn add_mem_slot(&self, mem_slot: MemorySlot) -> Result<()> {
+        if mem_slot.flags & KVM_MEM_READONLY != 0 {
+            return Ok(());
+        }
+
+        let mut locked_slots = self.mem_slots.as_ref().lock().unwrap();
+        locked_slots.insert(mem_slot.slot, mem_slot);
+
+        Ok(())
+    }
+
+    /// Remove ram memory region from `KVMFds` structure.
+    pub fn remove_mem_slot(&self, mem_slot: MemorySlot) -> Result<()> {
+        let mut locked_slots = self.mem_slots.as_ref().lock().unwrap();
+        locked_slots.remove(&mem_slot.slot);
+
+        Ok(())
+    }
+
+    /// Get ram memory region from `KVMFds` structure.
+    pub fn get_mem_slots(&self) -> Arc<Mutex<HashMap<u32, MemorySlot>>> {
+        self.mem_slots.clone()
     }
 }
 
