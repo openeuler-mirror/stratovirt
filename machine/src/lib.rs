@@ -94,20 +94,21 @@ pub mod errors {
 
 mod micro_vm;
 mod standard_vm;
-
-pub use micro_vm::LightMachine;
-use pci::{PciBus, PciDevOps, PciHost, RootPort};
-pub use standard_vm::StdMachine;
-use sysbus::{SysBus, SysBusDevOps};
-use virtio::{
-    BlockState, RngState, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioState,
-    VirtioNetState,
-};
+#[cfg(target_arch = "x86_64")]
+mod vm_state;
 
 use std::collections::BTreeMap;
-use std::os::unix::io::AsRawFd;
+use std::fs::remove_file;
+use std::net::TcpListener;
+use std::os::unix::{io::AsRawFd, net::UnixListener};
 use std::path::Path;
 use std::sync::{Arc, Barrier, Mutex, Weak};
+
+use error_chain::bail;
+use kvm_ioctls::VcpuFd;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+
+pub use micro_vm::LightMachine;
 
 #[cfg(target_arch = "x86_64")]
 use address_space::KvmIoListener;
@@ -118,28 +119,34 @@ use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use error_chain::bail;
+use errors::{ErrorKind, Result, ResultExt};
 use hypervisor::kvm::KVM_FDS;
-use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
     parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, MachineMemConfig,
-    NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig,
-    VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf,
+    SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
 };
-use machine_manager::event_loop::EventLoop;
-use machine_manager::machine::{KvmVmState, MachineInterface};
-use migration::{MigrationManager, MigrationRestoreOrder};
-use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
-use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
-use vfio::{VfioDevice, VfioPciDevice};
-use virtio::{balloon_allow_list, Balloon, Block, Console, Rng, VirtioMmioDevice, VirtioPciDevice};
-use vmm_sys_util::epoll::EventSet;
-use vmm_sys_util::eventfd::EventFd;
-
-use errors::{ErrorKind, Result, ResultExt};
+use machine_manager::{
+    event_loop::EventLoop,
+    machine::{KvmVmState, MachineInterface},
+};
+use migration::MigrationManager;
+use pci::{PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::errors::Result as StdResult;
+pub use standard_vm::StdMachine;
+use sysbus::{SysBus, SysBusDevOps};
+use util::{
+    loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
+    seccomp::{BpfRule, SeccompOpt, SyscallFilter},
+};
+use vfio::{VfioDevice, VfioPciDevice};
+use virtio::{
+    balloon_allow_list, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern, VhostUser,
+    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    VirtioPciDevice,
+};
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -168,7 +175,6 @@ pub trait MachineOps {
         mem_config: &MachineMemConfig,
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
-        is_migrate: bool,
         nr_cpus: u8,
     ) -> Result<()> {
         // KVM_CREATE_VM system call is invoked when KVM_FDS is used for the first time. The system
@@ -176,7 +182,8 @@ pub trait MachineOps {
         // doing memory prealloc.To avoid affecting memory prealloc performance, create_host_mmaps
         // needs to be invoked first.
         let mut mem_mappings = Vec::new();
-        if !is_migrate {
+        let migrate_mode = self.get_migrate_mode();
+        if migrate_mode != MigrateMode::File {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
             mem_mappings = create_host_mmaps(&ram_ranges, mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
@@ -194,7 +201,7 @@ pub trait MachineOps {
             .register_listener(Arc::new(Mutex::new(KvmIoListener::default())))
             .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
 
-        if !is_migrate {
+        if migrate_mode != MigrateMode::File {
             for mmap in mem_mappings.iter() {
                 let base = mmap.start_address().raw_value();
                 let size = mmap.size();
@@ -244,11 +251,7 @@ pub trait MachineOps {
             ));
             cpus.push(cpu.clone());
 
-            MigrationManager::register_device_instance(
-                cpu::ArchCPU::descriptor(),
-                cpu,
-                MigrationRestoreOrder::Default,
-            );
+            MigrationManager::register_cpu_instance(cpu::ArchCPU::descriptor(), cpu, vcpu_id);
         }
 
         if let Some(boot_config) = boot_cfg {
@@ -305,17 +308,18 @@ pub trait MachineOps {
         let vsock = Arc::new(Mutex::new(VhostKern::Vsock::new(&device_cfg, &sys_mem)));
         if cfg_args.contains("vhost-vsock-device") {
             let device = VirtioMmioDevice::new(&sys_mem, vsock.clone());
-            MigrationManager::register_device_instance_mutex(
+            MigrationManager::register_device_instance(
                 VirtioMmioState::descriptor(),
                 self.realize_virtio_mmio_device(device)
                     .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+                &device_cfg.id,
             );
         } else {
             let bdf = get_pci_bdf(cfg_args)?;
             let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
             let virtio_pci_device = VirtioPciDevice::new(
-                device_cfg.id,
+                device_cfg.id.clone(),
                 devfn,
                 sys_mem,
                 vsock.clone(),
@@ -326,9 +330,10 @@ pub trait MachineOps {
                 .realize()
                 .chain_err(|| "Failed to add virtio pci vsock device")?;
         }
-        MigrationManager::register_device_instance_mutex(
+        MigrationManager::register_device_instance(
             VhostKern::VsockState::descriptor(),
             vsock,
+            &device_cfg.id,
         );
 
         Ok(())
@@ -342,6 +347,12 @@ pub trait MachineOps {
     }
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace>;
+
+    fn get_vm_config(&self) -> &Mutex<VmConfig>;
+
+    /// Get migration mode from VM config. There are four modes in total:
+    /// Tcp, Unix, File and Unknown.
+    fn get_migrate_mode(&self) -> MigrateMode;
 
     /// Add net device.
     ///
@@ -390,13 +401,13 @@ pub trait MachineOps {
         if let Some(serial) = &vm_config.virtio_serial {
             if serial.pci_bdf.is_none() {
                 let device = VirtioMmioDevice::new(sys_mem, console.clone());
-                MigrationManager::register_device_instance_mutex(
+                MigrationManager::register_device_instance(
                     VirtioMmioState::descriptor(),
                     self.realize_virtio_mmio_device(device)
                         .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+                    &device_cfg.id,
                 );
             } else {
-                let name = device_cfg.id;
                 let virtio_serial_info = if let Some(serial_info) = &vm_config.virtio_serial {
                     serial_info
                 } else {
@@ -408,7 +419,7 @@ pub trait MachineOps {
                 let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
                 let sys_mem = self.get_sys_mem().clone();
                 let virtio_pci_device = VirtioPciDevice::new(
-                    name,
+                    device_cfg.id.clone(),
                     devfn,
                     sys_mem,
                     console.clone(),
@@ -422,7 +433,11 @@ pub trait MachineOps {
         } else {
             bail!("No virtio-serial-bus specified");
         }
-        MigrationManager::register_device_instance_mutex(VirtioConsoleState::descriptor(), console);
+        MigrationManager::register_device_instance(
+            VirtioConsoleState::descriptor(),
+            console,
+            &device_cfg.id,
+        );
 
         Ok(())
     }
@@ -452,7 +467,7 @@ pub trait MachineOps {
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
             let sys_mem = self.get_sys_mem().clone();
             let vitio_pci_device = VirtioPciDevice::new(
-                device_cfg.id,
+                device_cfg.id.clone(),
                 devfn,
                 sys_mem,
                 rng_dev.clone(),
@@ -463,7 +478,7 @@ pub trait MachineOps {
                 .realize()
                 .chain_err(|| "Failed to add pci rng device")?;
         }
-        MigrationManager::register_device_instance_mutex(RngState::descriptor(), rng_dev);
+        MigrationManager::register_device_instance(RngState::descriptor(), rng_dev, &device_cfg.id);
         Ok(())
     }
 
@@ -603,7 +618,7 @@ pub trait MachineOps {
                 self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
             }
         }
-        MigrationManager::register_device_instance_mutex_with_id(
+        MigrationManager::register_device_instance(
             BlockState::descriptor(),
             device,
             &device_cfg.id,
@@ -632,7 +647,7 @@ pub trait MachineOps {
             }
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(device_cfg.clone())));
-            MigrationManager::register_device_instance_mutex_with_id(
+            MigrationManager::register_device_instance(
                 VirtioNetState::descriptor(),
                 device.clone(),
                 &device_cfg.id,
@@ -995,7 +1010,7 @@ pub trait MachineOps {
     ///
     /// * `vm` - The machine structure.
     /// * `vm_config` - VM configuration.
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig, is_migrate: bool) -> Result<()>
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()>
     where
         Self: Sized;
 
@@ -1154,6 +1169,43 @@ pub trait MachineOps {
                 old_state,
                 new_state
             );
+        }
+
+        Ok(())
+    }
+
+    fn start_incoming(&self) -> Result<()> {
+        let mut locked_vm_config = self.get_vm_config().lock().unwrap();
+        if let Some((mode, path)) = locked_vm_config.incoming.as_ref() {
+            match mode {
+                MigrateMode::File => {
+                    MigrationManager::restore_snapshot(path)
+                        .chain_err(|| "Failed to restore snapshot")?;
+                }
+                MigrateMode::Unix => {
+                    let listener = UnixListener::bind(path)?;
+                    let (mut sock, _) = listener.accept()?;
+                    remove_file(&path)?;
+
+                    MigrationManager::recv_migration(&mut sock)
+                        .chain_err(|| "Failed to receive migration with unix mode")?;
+                }
+                MigrateMode::Tcp => {
+                    let listener = TcpListener::bind(&path)?;
+                    let mut sock = listener.accept().map(|(stream, _)| stream)?;
+
+                    MigrationManager::recv_migration(&mut sock)
+                        .chain_err(|| "Failed to receive migration with tcp mode")?;
+                }
+                MigrateMode::Unknown => {
+                    bail!("Unknown migration mode");
+                }
+            }
+        }
+
+        // End the migration and reset the mode.
+        if let Some((mode, _)) = locked_vm_config.incoming.as_mut() {
+            *mode = MigrateMode::Unknown;
         }
 
         Ok(())

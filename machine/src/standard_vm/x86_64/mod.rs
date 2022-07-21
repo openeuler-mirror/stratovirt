@@ -20,6 +20,10 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 
+use error_chain::{bail, ChainedError};
+use log::error;
+use vmm_sys_util::{eventfd::EventFd, ioctl_expr, ioctl_ioc_nr, ioctl_iow_nr};
+
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder,
@@ -32,12 +36,11 @@ use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
 };
-use error_chain::{bail, ChainedError};
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use log::error;
 use machine_manager::config::{
-    BootIndexInfo, BootSource, NumaNode, NumaNodes, PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, MigrateMode, NumaNode, NumaNodes, PFlashConfig,
+    SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -50,18 +53,15 @@ use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use sysbus::SysBus;
 use syscall::syscall_whitelist;
-use util::byte_code::ByteCode;
-use util::loop_context::EventLoopManager;
-use util::seccomp::BpfRule;
-use util::set_termi_canon_mode;
-use vmm_sys_util::eventfd::EventFd;
-use vmm_sys_util::{ioctl_expr, ioctl_ioc_nr, ioctl_iow_nr};
+use util::{
+    byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
+};
 
 use self::ich9_lpc::SLEEP_CTRL_OFFSET;
 use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
-use crate::MachineOps;
+use crate::{vm_state, MachineOps};
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -112,6 +112,7 @@ pub struct StdMachine {
     boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
+    /// All configuration information of virtual machine.
     vm_config: Mutex<VmConfig>,
     /// List of guest NUMA nodes information.
     numa_nodes: Option<NumaNodes>,
@@ -335,10 +336,6 @@ impl StdMachineOps for StdMachine {
         &self.cpus
     }
 
-    fn get_vm_config(&self) -> &Mutex<VmConfig> {
-        &self.vm_config
-    }
-
     fn get_numa_nodes(&self) -> &Option<NumaNodes> {
         &self.numa_nodes
     }
@@ -441,11 +438,7 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(
-        vm: &Arc<Mutex<Self>>,
-        vm_config: &mut VmConfig,
-        is_migrate: bool,
-    ) -> MachineResult<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let clone_vm = vm.clone();
@@ -456,7 +449,6 @@ impl MachineOps for StdMachine {
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
-            is_migrate,
             vm_config.machine_config.nr_cpus,
         )?;
 
@@ -478,7 +470,8 @@ impl MachineOps for StdMachine {
         locked_vm.add_devices(vm_config)?;
         let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let boot_config = if !is_migrate {
+        let incoming = locked_vm.get_migrate_mode();
+        let boot_config = if incoming == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(Some(&fwcfg))?)
         } else {
             None
@@ -496,7 +489,7 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        if !is_migrate {
+        if incoming == MigrateMode::Unknown {
             locked_vm
                 .build_acpi_tables(&fwcfg)
                 .chain_err(|| "Failed to create ACPI tables")?;
@@ -509,6 +502,12 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
 
+        MigrationManager::register_vm_config(vm_config);
+        MigrationManager::register_vm_instance(vm.clone());
+        MigrationManager::register_kvm_instance(
+            vm_state::KvmDeviceState::descriptor(),
+            Arc::new(vm_state::KvmDevice {}),
+        );
         if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
             bail!("Failed to set migration status {}", e);
         }
@@ -588,6 +587,18 @@ impl MachineOps for StdMachine {
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
         &self.sys_mem
+    }
+
+    fn get_vm_config(&self) -> &Mutex<VmConfig> {
+        &self.vm_config
+    }
+
+    fn get_migrate_mode(&self) -> MigrateMode {
+        if let Some(incoming) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
+            return incoming.0;
+        }
+
+        MigrateMode::Unknown
     }
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
@@ -902,24 +913,10 @@ impl MachineAddressInterface for StdMachine {
 
 impl MigrateInterface for StdMachine {
     fn migrate(&self, uri: String) -> Response {
-        use util::unix::{parse_uri, UnixPath};
-
-        match parse_uri(&uri) {
-            Ok((UnixPath::File, path)) => {
-                if let Err(e) = MigrationManager::save_snapshot(&path) {
-                    error!(
-                        "Failed to migrate to path \'{:?}\': {}",
-                        path,
-                        e.display_chain()
-                    );
-                    let _ = MigrationManager::set_status(MigrationStatus::Failed)
-                        .map_err(|e| error!("{}", e));
-                    return Response::create_error_response(
-                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                        None,
-                    );
-                }
-            }
+        match parse_incoming_uri(&uri) {
+            Ok((MigrateMode::File, path)) => migration::snapshot(path),
+            Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
+            Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
             _ => {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
@@ -927,17 +924,14 @@ impl MigrateInterface for StdMachine {
                 );
             }
         }
-
-        Response::create_empty_response()
     }
 
     fn query_migrate(&self) -> Response {
-        let status_str = MigrationManager::migration_get_status().to_string();
-        let migration_info = qmp_schema::MigrationInfo {
-            status: Some(status_str),
-        };
+        migration::query_migrate()
+    }
 
-        Response::create_response(serde_json::to_value(migration_info).unwrap(), None)
+    fn cancel_migrate(&self) -> Response {
+        migration::cancel_migrate()
     }
 }
 
