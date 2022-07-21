@@ -332,13 +332,14 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 ```
 
 StratoVirt also supports vhost-user net to get a higher performance by ovs-dpdk. Currently, only
-virtio pci net device support vhost-user net.
+virtio pci net device support vhost-user net. It should open sharing memory('-mem-share=on') and
+hugepages('-mem-path ...' ) when using vhost-user net.
 
 ```shell
 # virtio pci net device
 -chardev socket,id=chardevid,path=socket_path
--netdev vhost-user,id=netdevid,chardev=chardevid
--device virtio-net-pci,netdev=netdevid,id=netid,mac=12:34:56:78:9A:BC,bus=pci.0,addr=0x2.0x0
+-netdev vhost-user,id=netdevid,chardev=chardevid[,queues=N]
+-device virtio-net-pci,netdev=netdevid,id=netid,mac=12:34:56:78:9A:BC,bus=pci.0,addr=0x2.0x0[,mq=on]
 ```
 
 *How to set a tap device?*
@@ -393,8 +394,8 @@ $ ovs-vsctl add-br ovs_br -- set bridge ovs_br datapath_type=netdev
 $ ovs-vsctl add-port ovs_br port1 -- set Interface port1 type=dpdkvhostuser
 $ ovs-vsctl add-port ovs_br port2 -- set Interface port2 type=dpdkvhostuser
 # Set num of rxq/txq
-$ ovs-vsctl set Interface port1 options:n_rxq=1,n_txq=1
-$ ovs-vsctl set Interface port2 options:n_rxq=1,n_txq=1
+$ ovs-vsctl set Interface port1 options:n_rxq=num,n_txq=num
+$ ovs-vsctl set Interface port2 options:n_rxq=num,n_txq=num
 ```
 
 ### 2.4 Virtio-console
