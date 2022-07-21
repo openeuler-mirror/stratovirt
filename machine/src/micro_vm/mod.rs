@@ -954,13 +954,7 @@ impl DeviceInterface for LightMachine {
         for cpu_index in 0..self.cpu_topo.max_cpus {
             if self.cpu_topo.get_mask(cpu_index as usize) == 1 {
                 let thread_id = self.cpus[cpu_index as usize].tid();
-                let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = qmp_schema::CpuInstanceProperties {
-                    node_id: None,
-                    socket_id: Some(socketid as isize),
-                    core_id: Some(coreid as isize),
-                    thread_id: Some(threadid as isize),
-                };
+                let cpu_instance = self.cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
                 let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
@@ -1001,13 +995,7 @@ impl DeviceInterface for LightMachine {
 
         for cpu_index in 0..self.cpu_topo.max_cpus {
             if self.cpu_topo.get_mask(cpu_index as usize) == 0 {
-                let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = qmp_schema::CpuInstanceProperties {
-                    node_id: None,
-                    socket_id: Some(socketid as isize),
-                    core_id: Some(coreid as isize),
-                    thread_id: Some(threadid as isize),
-                };
+                let cpu_instance = self.cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
                 let hotpluggable_cpu = qmp_schema::HotpluggableCPU {
                     type_: cpu_type.clone(),
                     vcpus_count: 1,
@@ -1016,13 +1004,7 @@ impl DeviceInterface for LightMachine {
                 };
                 hotplug_vec.push(serde_json::to_value(hotpluggable_cpu).unwrap());
             } else {
-                let (socketid, coreid, threadid) = self.cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = qmp_schema::CpuInstanceProperties {
-                    node_id: None,
-                    socket_id: Some(socketid as isize),
-                    core_id: Some(coreid as isize),
-                    thread_id: Some(threadid as isize),
-                };
+                let cpu_instance = self.cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
                 let hotpluggable_cpu = qmp_schema::HotpluggableCPU {
                     type_: cpu_type.clone(),
                     vcpus_count: 1,

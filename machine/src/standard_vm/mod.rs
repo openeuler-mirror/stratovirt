@@ -960,13 +960,7 @@ impl DeviceInterface for StdMachine {
         for cpu_index in 0..cpu_topo.max_cpus {
             if cpu_topo.get_mask(cpu_index as usize) == 1 {
                 let thread_id = cpus[cpu_index as usize].tid();
-                let (socketid, coreid, threadid) = cpu_topo.get_topo(cpu_index as usize);
-                let cpu_instance = qmp_schema::CpuInstanceProperties {
-                    node_id: None,
-                    socket_id: Some(socketid as isize),
-                    core_id: Some(coreid as isize),
-                    thread_id: Some(threadid as isize),
-                };
+                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
                 let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
