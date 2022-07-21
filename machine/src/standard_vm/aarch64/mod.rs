@@ -41,8 +41,8 @@ use devices::legacy::{
 use devices::{ICGICConfig, ICGICv3Config, InterruptController};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, BootSource, MigrateMode, NumaNode, NumaNodes, PFlashConfig,
-    SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, Incoming, MigrateMode, NumaNode, NumaNodes,
+    PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -457,8 +457,8 @@ impl MachineOps for StdMachine {
             .chain_err(|| "Failed to add devices")?;
         let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let incoming = locked_vm.get_migrate_mode();
-        let boot_config = if incoming == MigrateMode::Unknown {
+        let migrate = locked_vm.get_migrate_info();
+        let boot_config = if migrate.0 == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(Some(&fwcfg))?)
         } else {
             None
@@ -493,7 +493,7 @@ impl MachineOps for StdMachine {
                 .chain_err(|| ErrorKind::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
         }
 
-        if incoming == MigrateMode::Unknown {
+        if migrate.0 == MigrateMode::Unknown {
             locked_vm
                 .build_acpi_tables(&fwcfg)
                 .chain_err(|| "Failed to create ACPI tables")?;
@@ -554,12 +554,12 @@ impl MachineOps for StdMachine {
         &self.vm_config
     }
 
-    fn get_migrate_mode(&self) -> MigrateMode {
-        if let Some(incoming) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return incoming.0;
+    fn get_migrate_info(&self) -> Incoming {
+        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
+            return (*mode, path.to_string());
         }
 
-        MigrateMode::Unknown
+        (MigrateMode::Unknown, String::new())
     }
 
     fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
@@ -967,12 +967,10 @@ impl MigrateInterface for StdMachine {
             Ok((MigrateMode::File, path)) => migration::snapshot(path),
             Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
             Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
-            _ => {
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
-                    None,
-                );
-            }
+            _ => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
+                None,
+            ),
         }
     }
 

@@ -28,7 +28,6 @@ use machine_manager::{
     temp_cleaner::TempCleaner,
 };
 use util::loop_context::EventNotifierHelper;
-use util::unix::{parse_uri, UnixPath};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
 error_chain! {
@@ -139,8 +138,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             let vm = Arc::new(Mutex::new(
                 LightMachine::new(vm_config).chain_err(|| "Failed to init MicroVM")?,
             ));
-            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
-                .chain_err(|| "Failed to realize micro VM.")?;
+            MachineOps::realize(&vm, vm_config).chain_err(|| "Failed to realize micro VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             for listener in listeners {
@@ -152,8 +150,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             let vm = Arc::new(Mutex::new(
                 StdMachine::new(vm_config).chain_err(|| "Failed to init StandardVM")?,
             ));
-            MachineOps::realize(&vm, vm_config, cmd_args.is_present("incoming"))
-                .chain_err(|| "Failed to realize standard VM.")?;
+            MachineOps::realize(&vm, vm_config).chain_err(|| "Failed to realize standard VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             for listener in listeners {
@@ -173,15 +170,6 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
     };
 
-    if let Some(uri) = cmd_args.value_of("incoming") {
-        if let (UnixPath::File, path) = parse_uri(&uri)? {
-            migration::MigrationManager::restore_snapshot(&path)
-                .chain_err(|| "Failed to start with incoming migration.")?;
-        } else {
-            bail!("Unsupported incoming unix path type.")
-        }
-    }
-
     for socket in sockets {
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(socket))),
@@ -190,10 +178,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         .chain_err(|| "Failed to add api event to MainLoop")?;
     }
 
-    vm.lock()
-        .unwrap()
-        .run(cmd_args.is_present("freeze_cpu"))
-        .chain_err(|| "Failed to start VM.")?;
+    machine::vm_run(&vm, cmd_args).chain_err(|| "Failed to start VM.")?;
 
     let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
     if !cmd_args.is_present("disable-seccomp") {

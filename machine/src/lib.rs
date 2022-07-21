@@ -124,7 +124,7 @@ use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
-    parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, MachineMemConfig,
+    parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, Incoming, MachineMemConfig,
     MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf,
     SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
 };
@@ -138,6 +138,7 @@ use standard_vm::errors::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
 use util::{
+    arg_parser,
     loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
@@ -182,8 +183,8 @@ pub trait MachineOps {
         // doing memory prealloc.To avoid affecting memory prealloc performance, create_host_mmaps
         // needs to be invoked first.
         let mut mem_mappings = Vec::new();
-        let migrate_mode = self.get_migrate_mode();
-        if migrate_mode != MigrateMode::File {
+        let migrate_info = self.get_migrate_info();
+        if migrate_info.0 != MigrateMode::File {
             let ram_ranges = self.arch_ram_ranges(mem_config.mem_size);
             mem_mappings = create_host_mmaps(&ram_ranges, mem_config, nr_cpus)
                 .chain_err(|| "Failed to mmap guest ram.")?;
@@ -201,7 +202,7 @@ pub trait MachineOps {
             .register_listener(Arc::new(Mutex::new(KvmIoListener::default())))
             .chain_err(|| "Failed to register KVM listener for I/O address space.")?;
 
-        if migrate_mode != MigrateMode::File {
+        if migrate_info.0 != MigrateMode::File {
             for mmap in mem_mappings.iter() {
                 let base = mmap.start_address().raw_value();
                 let size = mmap.size();
@@ -350,9 +351,9 @@ pub trait MachineOps {
 
     fn get_vm_config(&self) -> &Mutex<VmConfig>;
 
-    /// Get migration mode from VM config. There are four modes in total:
+    /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
-    fn get_migrate_mode(&self) -> MigrateMode;
+    fn get_migrate_info(&self) -> Incoming;
 
     /// Add net device.
     ///
@@ -1173,41 +1174,80 @@ pub trait MachineOps {
 
         Ok(())
     }
+}
 
-    fn start_incoming(&self) -> Result<()> {
-        let mut locked_vm_config = self.get_vm_config().lock().unwrap();
-        if let Some((mode, path)) = locked_vm_config.incoming.as_ref() {
-            match mode {
-                MigrateMode::File => {
-                    MigrationManager::restore_snapshot(path)
-                        .chain_err(|| "Failed to restore snapshot")?;
-                }
-                MigrateMode::Unix => {
-                    let listener = UnixListener::bind(path)?;
-                    let (mut sock, _) = listener.accept()?;
-                    remove_file(&path)?;
-
-                    MigrationManager::recv_migration(&mut sock)
-                        .chain_err(|| "Failed to receive migration with unix mode")?;
-                }
-                MigrateMode::Tcp => {
-                    let listener = TcpListener::bind(&path)?;
-                    let mut sock = listener.accept().map(|(stream, _)| stream)?;
-
-                    MigrationManager::recv_migration(&mut sock)
-                        .chain_err(|| "Failed to receive migration with tcp mode")?;
-                }
-                MigrateMode::Unknown => {
-                    bail!("Unknown migration mode");
-                }
-            }
-        }
-
-        // End the migration and reset the mode.
-        if let Some((mode, _)) = locked_vm_config.incoming.as_mut() {
-            *mode = MigrateMode::Unknown;
-        }
-
-        Ok(())
+/// Normal run or resume virtual machine from migration/snapshot  .
+///
+/// # Arguments
+///
+/// * `vm` - virtual machine that implement `MachineOps`.
+/// * `cmd_args` - Command arguments from user.
+pub fn vm_run(
+    vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>,
+    cmd_args: &arg_parser::ArgMatches,
+) -> Result<()> {
+    let migrate = vm.lock().unwrap().get_migrate_info();
+    if migrate.0 == MigrateMode::Unknown {
+        vm.lock()
+            .unwrap()
+            .run(cmd_args.is_present("freeze_cpu"))
+            .chain_err(|| "Failed to start VM.")?;
+    } else {
+        start_incoming_migration(vm).chain_err(|| "Failed to start migration.")?;
     }
+
+    Ok(())
+}
+
+/// Start incoming migration from destination.
+fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Result<()> {
+    let (mode, path) = vm.lock().unwrap().get_migrate_info();
+    match mode {
+        MigrateMode::File => {
+            MigrationManager::restore_snapshot(&path).chain_err(|| "Failed to restore snapshot")?;
+            vm.lock()
+                .unwrap()
+                .run(false)
+                .chain_err(|| "Failed to start VM.")?;
+        }
+        MigrateMode::Unix => {
+            let listener = UnixListener::bind(&path)?;
+            let (mut sock, _) = listener.accept()?;
+            remove_file(&path)?;
+
+            MigrationManager::recv_migration(&mut sock)
+                .chain_err(|| "Failed to receive migration with unix mode")?;
+            vm.lock()
+                .unwrap()
+                .run(false)
+                .chain_err(|| "Failed to start VM.")?;
+            MigrationManager::finish_migration(&mut sock)
+                .chain_err(|| "Failed to finish migraton.")?;
+        }
+        MigrateMode::Tcp => {
+            let listener = TcpListener::bind(&path)?;
+            let mut sock = listener.accept().map(|(stream, _)| stream)?;
+
+            MigrationManager::recv_migration(&mut sock)
+                .chain_err(|| "Failed to receive migration with tcp mode")?;
+            vm.lock()
+                .unwrap()
+                .run(false)
+                .chain_err(|| "Failed to start VM.")?;
+            MigrationManager::finish_migration(&mut sock)
+                .chain_err(|| "Failed to finish migraton.")?;
+        }
+        MigrateMode::Unknown => {
+            bail!("Unknown migration mode");
+        }
+    }
+
+    // End the migration and reset the mode.
+    let locked_vm = vm.lock().unwrap();
+    let vm_config = locked_vm.get_vm_config();
+    if let Some((mode, _)) = vm_config.lock().unwrap().incoming.as_mut() {
+        *mode = MigrateMode::Unknown;
+    }
+
+    Ok(())
 }

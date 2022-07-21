@@ -167,6 +167,13 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "migrate_cancel")]
+    cancel_migrate {
+        #[serde(default)]
+        arguments: cancel_migrate,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "query-version")]
     query_version {
         #[serde(default)]
@@ -957,6 +964,20 @@ impl Command for migrate {
 pub struct query_migrate {}
 
 impl Command for query_migrate {
+    type Res = MigrationInfo;
+
+    fn back(self) -> MigrationInfo {
+        Default::default()
+    }
+}
+
+/// cancel-migrate:
+///
+/// Cancel migrate the current VM.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct cancel_migrate {}
+
+impl Command for cancel_migrate {
     type Res = MigrationInfo;
 
     fn back(self) -> MigrationInfo {

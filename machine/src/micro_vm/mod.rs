@@ -84,7 +84,7 @@ use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, MigrateMode,
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, Incoming, MigrateMode,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -637,11 +637,12 @@ impl MachineOps for LightMachine {
         &self.vm_config
     }
 
-    fn get_migrate_mode(&self) -> MigrateMode {
-        if let Some(incoming) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return incoming.0;
+    fn get_migrate_info(&self) -> Incoming {
+        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
+            return (*mode, path.to_string());
         }
-        MigrateMode::Unknown
+
+        (MigrateMode::Unknown, String::new())
     }
 
     fn get_sys_bus(&mut self) -> &SysBus {
@@ -776,8 +777,8 @@ impl MachineOps for LightMachine {
             .chain_err(|| "Failed to create replaceable devices.")?;
         locked_vm.add_devices(vm_config)?;
 
-        let incoming = locked_vm.get_migrate_mode();
-        let boot_config = if incoming == MigrateMode::Unknown {
+        let migrate_info = locked_vm.get_migrate_info();
+        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(None)?)
         } else {
             None
@@ -1281,6 +1282,14 @@ impl MigrateInterface for LightMachine {
     fn migrate(&self, uri: String) -> Response {
         match parse_incoming_uri(&uri) {
             Ok((MigrateMode::File, path)) => migration::snapshot(path),
+            Ok((MigrateMode::Unix, _)) | Ok((MigrateMode::Tcp, _)) => {
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "MicroVM does not support migration".to_string(),
+                    ),
+                    None,
+                )
+            }
             _ => {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),

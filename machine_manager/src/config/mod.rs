@@ -84,6 +84,7 @@ pub use boot_source::*;
 pub use chardev::*;
 pub use devices::*;
 pub use drive::*;
+pub use incoming::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
@@ -97,6 +98,7 @@ mod boot_source;
 mod chardev;
 mod devices;
 mod drive;
+mod incoming;
 mod iothread;
 mod machine_config;
 mod network;
@@ -168,6 +170,7 @@ pub struct VmConfig {
     pub dev_name: HashMap<String, u8>,
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
+    pub incoming: Option<Incoming>,
 }
 
 impl VmConfig {
