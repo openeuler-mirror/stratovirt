@@ -750,6 +750,16 @@ pub struct CpuInstanceProperties {
     pub node_id: Option<isize>,
     #[serde(rename = "socket-id", default, skip_serializing_if = "Option::is_none")]
     pub socket_id: Option<isize>,
+    #[cfg(target_arch = "x86_64")]
+    #[serde(rename = "die_id", default, skip_serializing_if = "Option::is_none")]
+    pub die_id: Option<isize>,
+    #[cfg(target_arch = "aarch64")]
+    #[serde(
+        rename = "cluster_id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cluster_id: Option<isize>,
     #[serde(rename = "thread-id", default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<isize>,
     #[serde(rename = "core-id", default, skip_serializing_if = "Option::is_none")]

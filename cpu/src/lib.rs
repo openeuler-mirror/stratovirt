@@ -97,6 +97,7 @@ pub use aarch64::ArmCPUCaps as CPUCaps;
 pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUTopology as CPUTopology;
+use machine_manager::qmp::qmp_schema;
 #[cfg(target_arch = "x86_64")]
 use x86_64::caps::X86CPUCaps as CPUCaps;
 #[cfg(target_arch = "x86_64")]
@@ -771,11 +772,27 @@ impl CpuTopology {
     /// # Arguments
     ///
     /// * `vcpu_id` - ID of vcpu.
-    pub fn get_topo(&self, vcpu_id: usize) -> (u8, u8, u8) {
+    fn get_topo_item(&self, vcpu_id: usize) -> (u8, u8, u8, u8, u8) {
         let socketid: u8 = vcpu_id as u8 / (self.dies * self.clusters * self.cores * self.threads);
+        let dieid: u8 = (vcpu_id as u8 / (self.clusters * self.cores * self.threads)) % self.dies;
+        let clusterid: u8 = (vcpu_id as u8 / (self.cores * self.threads)) % self.clusters;
         let coreid: u8 = (vcpu_id as u8 / self.threads) % self.cores;
         let threadid: u8 = vcpu_id as u8 % self.threads;
-        (socketid, coreid, threadid)
+        (socketid, dieid, clusterid, coreid, threadid)
+    }
+
+    pub fn get_topo_instance_for_qmp(&self, cpu_index: usize) -> qmp_schema::CpuInstanceProperties {
+        let (socketid, _dieid, _clusterid, coreid, threadid) = self.get_topo_item(cpu_index);
+        qmp_schema::CpuInstanceProperties {
+            node_id: None,
+            socket_id: Some(socketid as isize),
+            #[cfg(target_arch = "x86_64")]
+            die_id: Some(_dieid as isize),
+            #[cfg(target_arch = "aarch64")]
+            cluster_id: Some(_clusterid as isize),
+            core_id: Some(coreid as isize),
+            thread_id: Some(threadid as isize),
+        }
     }
 }
 
@@ -956,10 +973,10 @@ mod tests {
             online_mask: Arc::new(Mutex::new(mask)),
         };
 
-        assert_eq!(microvm_cpu_topo.get_topo(0), (0, 0, 0));
-        assert_eq!(microvm_cpu_topo.get_topo(4), (4, 0, 0));
-        assert_eq!(microvm_cpu_topo.get_topo(8), (8, 0, 0));
-        assert_eq!(microvm_cpu_topo.get_topo(15), (15, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo_item(0), (0, 0, 0, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo_item(4), (4, 0, 0, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo_item(8), (8, 0, 0, 0, 0));
+        assert_eq!(microvm_cpu_topo.get_topo_item(15), (15, 0, 0, 0, 0));
 
         let mask = Vec::with_capacity(test_nr_cpus as usize);
         let microvm_cpu_topo_x86 = CpuTopology {
@@ -973,10 +990,10 @@ mod tests {
             online_mask: Arc::new(Mutex::new(mask)),
         };
 
-        assert_eq!(microvm_cpu_topo_x86.get_topo(0), (0, 0, 0));
-        assert_eq!(microvm_cpu_topo_x86.get_topo(4), (0, 2, 0));
-        assert_eq!(microvm_cpu_topo_x86.get_topo(8), (0, 0, 0));
-        assert_eq!(microvm_cpu_topo_x86.get_topo(15), (0, 3, 1));
+        assert_eq!(microvm_cpu_topo_x86.get_topo_item(0), (0, 0, 0, 0, 0));
+        assert_eq!(microvm_cpu_topo_x86.get_topo_item(4), (0, 0, 0, 2, 0));
+        assert_eq!(microvm_cpu_topo_x86.get_topo_item(8), (0, 1, 0, 0, 0));
+        assert_eq!(microvm_cpu_topo_x86.get_topo_item(15), (0, 1, 0, 3, 1));
 
         let mask = Vec::with_capacity(test_nr_cpus as usize);
         let microvm_cpu_topo_arm = CpuTopology {
@@ -990,10 +1007,10 @@ mod tests {
             online_mask: Arc::new(Mutex::new(mask)),
         };
 
-        assert_eq!(microvm_cpu_topo_arm.get_topo(0), (0, 0, 0));
-        assert_eq!(microvm_cpu_topo_arm.get_topo(4), (0, 2, 0));
-        assert_eq!(microvm_cpu_topo_arm.get_topo(8), (0, 0, 0));
-        assert_eq!(microvm_cpu_topo_arm.get_topo(15), (0, 3, 1));
+        assert_eq!(microvm_cpu_topo_arm.get_topo_item(0), (0, 0, 0, 0, 0));
+        assert_eq!(microvm_cpu_topo_arm.get_topo_item(4), (0, 0, 0, 2, 0));
+        assert_eq!(microvm_cpu_topo_arm.get_topo_item(8), (0, 0, 1, 0, 0));
+        assert_eq!(microvm_cpu_topo_arm.get_topo_item(15), (0, 0, 1, 3, 1));
 
         let test_nr_cpus: u8 = 32;
         let mask = Vec::with_capacity(test_nr_cpus as usize);
@@ -1008,14 +1025,14 @@ mod tests {
             online_mask: Arc::new(Mutex::new(mask)),
         };
 
-        assert_eq!(test_cpu_topo.get_topo(0), (0, 0, 0));
-        assert_eq!(test_cpu_topo.get_topo(4), (0, 2, 0));
-        assert_eq!(test_cpu_topo.get_topo(7), (0, 3, 1));
-        assert_eq!(test_cpu_topo.get_topo(11), (1, 1, 1));
-        assert_eq!(test_cpu_topo.get_topo(15), (1, 3, 1));
-        assert_eq!(test_cpu_topo.get_topo(17), (2, 0, 1));
-        assert_eq!(test_cpu_topo.get_topo(23), (2, 3, 1));
-        assert_eq!(test_cpu_topo.get_topo(29), (3, 2, 1));
-        assert_eq!(test_cpu_topo.get_topo(31), (3, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo_item(0), (0, 0, 0, 0, 0));
+        assert_eq!(test_cpu_topo.get_topo_item(4), (0, 0, 0, 2, 0));
+        assert_eq!(test_cpu_topo.get_topo_item(7), (0, 0, 0, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo_item(11), (1, 0, 0, 1, 1));
+        assert_eq!(test_cpu_topo.get_topo_item(15), (1, 0, 0, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo_item(17), (2, 0, 0, 0, 1));
+        assert_eq!(test_cpu_topo.get_topo_item(23), (2, 0, 0, 3, 1));
+        assert_eq!(test_cpu_topo.get_topo_item(29), (3, 0, 0, 2, 1));
+        assert_eq!(test_cpu_topo.get_topo_item(31), (3, 0, 0, 3, 1));
     }
 }
