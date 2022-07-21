@@ -463,7 +463,7 @@ pub fn init_msix(
     config.msix = Some(msix.clone());
 
     #[cfg(not(test))]
-    MigrationManager::register_device_instance_mutex_with_id(MsixState::descriptor(), msix, _id);
+    MigrationManager::register_device_instance(MsixState::descriptor(), msix, _id);
 
     Ok(())
 }
