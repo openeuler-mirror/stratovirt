@@ -21,6 +21,7 @@ extern crate log;
 
 pub mod general;
 pub mod manager;
+pub mod migration;
 pub mod protocol;
 pub mod snapshot;
 
