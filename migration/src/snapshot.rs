@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Huawei Technologies Co.,Ltd. All rights reserved.
+// Copyright (c) 2022 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
@@ -13,30 +13,28 @@
 use std::collections::HashMap;
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
-use std::mem::size_of;
 use std::path::PathBuf;
 
-use error_chain::bail;
-use log::info;
-use util::byte_code::ByteCode;
-use util::reader::BufferReader;
+use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::general::{translate_id, Lifecycle};
+use crate::manager::{MigrationManager, MIGRATION_MANAGER};
+use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus, HEADER_LENGTH};
 use util::unix::host_page_size;
 
-use crate::device_state::{DeviceStateDesc, VersionCheck};
-use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::header::{FileFormat, MigrationHeader};
-use crate::manager::{id_remap, InstanceId, MigrationEntry, MigrationManager, MIGRATION_MANAGER};
-use crate::status::MigrationStatus;
+pub const SERIAL_SNAPSHOT_ID: &str = "serial";
+pub const KVM_SNAPSHOT_ID: &str = "kvm";
+pub const GICV3_SNAPSHOT_ID: &str = "gicv3";
+pub const GICV3_ITS_SNAPSHOT_ID: &str = "gicv3_its";
+pub const PL011_SNAPSHOT_ID: &str = "pl011";
+pub const PL031_SNAPSHOT_ID: &str = "pl031";
 
-/// The length of `MigrationHeader` part occupies bytes in snapshot file.
-const HEADER_LENGTH: usize = 4096;
 /// The suffix used for snapshot memory storage.
 const MEMORY_PATH_SUFFIX: &str = "memory";
 /// The suffix used for snapshot device state storage.
 const DEVICE_PATH_SUFFIX: &str = "state";
 
 impl MigrationManager {
-    /// Do snapshot for `VM`.
+    /// Save snapshot for `VM`.
     ///
     /// # Notes
     ///
@@ -63,9 +61,7 @@ impl MigrationManager {
         vm_state_path.push(DEVICE_PATH_SUFFIX);
         match File::create(vm_state_path) {
             Ok(mut state_file) => {
-                Self::save_header(FileFormat::Device, &mut state_file)?;
-                Self::save_descriptor_db(&mut state_file)?;
-                Self::save_device_state(&mut state_file)?;
+                Self::save_vmstate(Some(FileFormat::Device), &mut state_file)?;
             }
             Err(e) => {
                 bail!("Failed to create snapshot state file: {}", e);
@@ -77,8 +73,7 @@ impl MigrationManager {
         vm_memory_path.push(MEMORY_PATH_SUFFIX);
         match File::create(vm_memory_path) {
             Ok(mut memory_file) => {
-                Self::save_header(FileFormat::MemoryFull, &mut memory_file)?;
-                Self::save_memory(&mut memory_file)?;
+                Self::save_memory(Some(FileFormat::MemoryFull), &mut memory_file)?;
             }
             Err(e) => {
                 bail!("Failed to create snapshot memory file: {}", e);
@@ -113,7 +108,7 @@ impl MigrationManager {
         snapshot_path.push(MEMORY_PATH_SUFFIX);
         let mut memory_file =
             File::open(&snapshot_path).chain_err(|| "Failed to open memory snapshot file")?;
-        let memory_header = Self::load_header(&mut memory_file)?;
+        let memory_header = Self::restore_header(&mut memory_file)?;
         memory_header.check_header()?;
         if memory_header.format != FileFormat::MemoryFull {
             bail!("Invalid memory snapshot file");
@@ -122,17 +117,17 @@ impl MigrationManager {
         snapshot_path.push(DEVICE_PATH_SUFFIX);
         let mut device_state_file =
             File::open(&snapshot_path).chain_err(|| "Failed to open device state snapshot file")?;
-        let device_state_header = Self::load_header(&mut device_state_file)?;
+        let device_state_header = Self::restore_header(&mut device_state_file)?;
         device_state_header.check_header()?;
         if device_state_header.format != FileFormat::Device {
             bail!("Invalid device state snapshot file");
         }
 
-        Self::load_memory(&mut memory_file).chain_err(|| "Failed to load snapshot memory")?;
+        Self::restore_memory(&mut memory_file).chain_err(|| "Failed to load snapshot memory")?;
         let snapshot_desc_db =
-            Self::load_descriptor_db(&mut device_state_file, device_state_header.desc_len)
+            Self::restore_desc_db(&mut device_state_file, device_state_header.desc_len)
                 .chain_err(|| "Failed to load device descriptor db")?;
-        Self::load_vmstate(snapshot_desc_db, &mut device_state_file)
+        Self::restore_vmstate(snapshot_desc_db, &mut device_state_file)
             .chain_err(|| "Failed to load snapshot device state")?;
         Self::resume()?;
 
@@ -142,62 +137,16 @@ impl MigrationManager {
         Ok(())
     }
 
-    /// Write `MigrationHeader` to `Write` trait object as bytes.
-    /// `MigrationHeader` will occupy the first 4096 bytes in snapshot file.
-    ///
-    /// # Arguments
-    ///
-    /// * `file_format` - confirm snapshot file format.
-    /// * `writer` - The `Write` trait object to write header message.
-    fn save_header(file_format: FileFormat, writer: &mut dyn Write) -> Result<()> {
-        let mut header = MigrationHeader::default();
-        header.format = file_format;
-        header.desc_len = match file_format {
-            FileFormat::Device => Self::get_desc_db_len()?,
-            FileFormat::MemoryFull => (host_page_size() as usize) * 2 - HEADER_LENGTH,
-        };
-        let header_bytes = header.as_bytes();
-        let mut input_slice = [0u8; HEADER_LENGTH];
-
-        input_slice[0..size_of::<MigrationHeader>()].copy_from_slice(header_bytes);
-        writer
-            .write(&input_slice)
-            .chain_err(|| "Failed to save migration header")?;
-
-        Ok(())
-    }
-
-    /// Load and parse `MigrationHeader` from `Read` object.
-    ///
-    /// # Arguments
-    ///
-    /// * `reader` - The `Read` trait object.
-    fn load_header(reader: &mut dyn Read) -> Result<MigrationHeader> {
-        let mut header_bytes = [0u8; size_of::<MigrationHeader>()];
-        reader.read_exact(&mut header_bytes)?;
-
-        let mut place_holder = [0u8; HEADER_LENGTH - size_of::<MigrationHeader>()];
-        reader.read_exact(&mut place_holder)?;
-
-        Ok(*MigrationHeader::from_bytes(&header_bytes)
-            .ok_or(ErrorKind::FromBytesError("HEADER"))?)
-    }
-
     /// Save memory state and data to `Write` trait object.
     ///
     /// # Arguments
     ///
-    /// * `writer` - The `Write` trait object.
-    fn save_memory(writer: &mut dyn Write) -> Result<()> {
-        let entry = MIGRATION_MANAGER.entry.read().unwrap();
-        for item in entry.iter() {
-            for (id, entry) in item.iter() {
-                if let MigrationEntry::Memory(i) = entry {
-                    i.pre_save(id, writer)
-                        .chain_err(|| "Failed to save vm memory")?;
-                }
-            }
-        }
+    /// * `fd` - The `Write` trait object to save memory data.
+    fn save_memory(file_format: Option<FileFormat>, fd: &mut dyn Write) -> Result<()> {
+        Self::save_header(file_format, fd)?;
+
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        locked_vmm.memory.as_ref().unwrap().save_memory(fd)?;
 
         Ok(())
     }
@@ -207,115 +156,129 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `file` - snapshot memory file.
-    fn load_memory(file: &mut File) -> Result<()> {
+    fn restore_memory(file: &mut File) -> Result<()> {
         let mut state_bytes = [0_u8].repeat((host_page_size() as usize) * 2 - HEADER_LENGTH);
         file.read_exact(&mut state_bytes)?;
-        let entry = MIGRATION_MANAGER.entry.read().unwrap();
-        for item in entry.iter() {
-            for (_, entry) in item.iter() {
-                if let MigrationEntry::Memory(i) = entry {
-                    i.pre_load(&state_bytes, Some(file))
-                        .chain_err(|| "Failed to load vm memory")?;
-                }
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        locked_vmm
+            .memory
+            .as_ref()
+            .unwrap()
+            .restore_memory(Some(file), &state_bytes)?;
+
+        Ok(())
+    }
+
+    /// Save vm state to `Write` trait object as bytes..
+    ///
+    /// # Arguments
+    ///
+    /// * fd - The `Write` trait object to save VM data.
+    pub fn save_vmstate(file_format: Option<FileFormat>, fd: &mut dyn Write) -> Result<()> {
+        Self::save_header(file_format, fd)?;
+        Self::save_desc_db(fd)?;
+
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        // Save CPUs state.
+        for (id, cpu) in locked_vmm.cpus.iter() {
+            cpu.save_device(*id, fd)
+                .chain_err(|| "Failed to save cpu state")?;
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            // Save kvm device state.
+            locked_vmm
+                .kvm
+                .as_ref()
+                .unwrap()
+                .save_device(translate_id(KVM_SNAPSHOT_ID), fd)
+                .chain_err(|| "Failed to save kvm state")?;
+        }
+
+        // Save devices state.
+        for (id, device) in locked_vmm.devices.iter() {
+            device
+                .lock()
+                .unwrap()
+                .save_device(*id, fd)
+                .chain_err(|| "Failed to save device state")?;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            // Save GICv3 device state.
+            let gic_id = translate_id(GICV3_SNAPSHOT_ID);
+            if let Some(gic) = locked_vmm.gic_group.get(&gic_id) {
+                gic.save_device(gic_id, fd)
+                    .chain_err(|| "Failed to save gic state")?;
+            }
+
+            // Save GICv3 ITS device state.
+            let its_id = translate_id(GICV3_ITS_SNAPSHOT_ID);
+            if let Some(its) = locked_vmm.gic_group.get(&its_id) {
+                its.save_device(its_id, fd)
+                    .chain_err(|| "Failed to save gic its state")?;
             }
         }
 
         Ok(())
     }
 
-    /// Save device state to `Write` trait object.
+    /// Restore vm state from `Read` trait object as bytes..
     ///
     /// # Arguments
     ///
-    /// * `writer` - The `Write` trait object.
-    fn save_device_state(writer: &mut dyn Write) -> Result<()> {
-        let entry = MIGRATION_MANAGER.entry.read().unwrap();
-        for item in entry.iter() {
-            for (id, entry) in item.iter() {
-                match entry {
-                    MigrationEntry::Safe(i) => i.pre_save(id, writer)?,
-                    MigrationEntry::Mutex(i) => i.lock().unwrap().pre_save(id, writer)?,
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Restore vm state from `Read` trait object.
-    ///
-    /// # Arguments
-    ///
-    /// * `snap_desc_db` - The snapshot descriptor hashmap read from snapshot file.
-    /// * `reader` - The `Read` trait object.
-    fn load_vmstate(
+    /// * snap_desc_db - snapshot state descriptor.
+    /// * fd - The `Read` trait object to restore VM data.
+    pub fn restore_vmstate(
         snap_desc_db: HashMap<u64, DeviceStateDesc>,
-        reader: &mut dyn Read,
+        fd: &mut dyn Read,
     ) -> Result<()> {
-        let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
-        let device_entry = MIGRATION_MANAGER.entry.read().unwrap();
-
-        let mut migration_file = BufferReader::new(reader);
-        migration_file.read_buffer()?;
-
-        while let Some(data) = &migration_file.read_vectored(size_of::<InstanceId>()) {
-            let instance_id = InstanceId::from_bytes(data.as_slice()).unwrap();
-            let snap_desc = snap_desc_db.get(&instance_id.object_type).unwrap();
-            let current_desc = desc_db.get(&snap_desc.name).unwrap();
-
-            let mut state_data =
-                if let Some(data) = migration_file.read_vectored(snap_desc.size as usize) {
-                    data
-                } else {
-                    bail!("Invalid snapshot device state data");
-                };
-            match current_desc.check_version(snap_desc) {
-                VersionCheck::Same => {}
-                VersionCheck::Compat => {
-                    current_desc
-                        .add_padding(snap_desc, &mut state_data)
-                        .chain_err(|| "Failed to transform snapshot data version.")?;
-                }
-                VersionCheck::Mismatch => {
-                    return Err(ErrorKind::VersionNotFit(
-                        current_desc.compat_version,
-                        snap_desc.current_version,
-                    )
-                    .into())
-                }
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        // Restore CPUs state.
+        for _ in 0..locked_vmm.cpus.len() {
+            let (cpu_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            if let Some(cpu) = locked_vmm.cpus.get(&id) {
+                cpu.restore_device(&cpu_data)
+                    .chain_err(|| "Failed to restore cpu state")?;
             }
+        }
 
-            for item in device_entry.iter() {
-                for (key, state) in item {
-                    if id_remap(key) == instance_id.object_id {
-                        info!("Load VM state: key {}", key);
-                        match state {
-                            MigrationEntry::Safe(i) => i.pre_load(&state_data, None)?,
-                            MigrationEntry::Mutex(i) => {
-                                i.lock().unwrap().pre_load_mut(&state_data, None)?
-                            }
-                            _ => {}
-                        }
-                    }
+        #[cfg(target_arch = "x86_64")]
+        {
+            // Restore kvm device state.
+            if let Some(kvm) = &locked_vmm.kvm {
+                let (kvm_data, _) = Self::check_vm_state(fd, &snap_desc_db)?;
+                kvm.restore_device(&kvm_data)
+                    .chain_err(|| "Failed to restore kvm state")?;
+            }
+        }
+
+        // Restore devices state.
+        for _ in 0..locked_vmm.devices.len() {
+            let (device_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            if let Some(device) = locked_vmm.devices.get(&id) {
+                device
+                    .lock()
+                    .unwrap()
+                    .restore_mut_device(&device_data)
+                    .chain_err(|| "Failed to restore device state")?;
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            // Restore GIC group state.
+            for _ in 0..locked_vmm.gic_group.len() {
+                let (gic_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+                if let Some(gic) = locked_vmm.gic_group.get(&id) {
+                    gic.restore_device(&gic_data)
+                        .chain_err(|| "Failed to restore gic state")?;
                 }
             }
         }
 
-        Ok(())
-    }
-
-    /// Resume recovered device.
-    /// This function will be called after restore device state.
-    fn resume() -> Result<()> {
-        let entry = MIGRATION_MANAGER.entry.read().unwrap();
-        for item in entry.iter() {
-            for (_, state) in item {
-                if let MigrationEntry::Mutex(i) = state {
-                    i.lock().unwrap().resume()?
-                }
-            }
-        }
         Ok(())
     }
 }

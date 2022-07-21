@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Huawei Technologies Co.,Ltd. All rights reserved.
+// Copyright (c) 2022 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
@@ -14,22 +14,27 @@
 //!
 //! Offer snapshot and migration interface for VM.
 
-mod device_state;
-mod header;
-mod manager;
-mod snapshot;
-mod status;
+#[macro_use]
+extern crate error_chain;
+#[macro_use]
+extern crate log;
 
-pub use device_state::{DeviceStateDesc, FieldDesc, StateTransfer};
-pub use manager::{MigrationHook, MigrationManager, MigrationRestoreOrder};
-pub use status::MigrationStatus;
+pub mod general;
+pub mod manager;
+pub mod protocol;
+pub mod snapshot;
+
+pub use manager::{MigrationHook, MigrationManager};
+pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
 
 pub mod errors {
-    use error_chain::error_chain;
-
-    use super::status::MigrationStatus;
+    use super::protocol::MigrationStatus;
 
     error_chain! {
+        links {
+            Util(util::errors::Error, util::errors::ErrorKind);
+            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
+        }
         foreign_links {
             Io(std::io::Error);
             Ioctl(kvm_ioctls::Error);
@@ -57,8 +62,23 @@ pub mod errors {
             SaveVmMemoryErr(e: String) {
                 display("Failed to save vm memory: {}", e)
             }
-            RestoreVmMemoryErr {
-                display("Failed to restore vm memory.")
+            RestoreVmMemoryErr(e: String) {
+                display("Failed to restore vm memory: {}", e)
+            }
+            SendVmMemoryErr(e: String) {
+                display("Failed to send vm memory: {}", e)
+            }
+            RecvVmMemoryErr(e: String) {
+                display("Failed to receive vm memory: {}", e)
+            }
+            ResponseErr {
+                display("Response error")
+            }
+            MigrationStatusErr(source: String, destination: String) {
+                display("Migration status mismatch: source {}, destination {}.", source, destination)
+            }
+            MigrationConfigErr(config_type: String, source: String, destination: String) {
+                display("Migration config {} mismatch: source {}, destination {}.", config_type, source, destination)
             }
             InvalidSnapshotPath {
                 display("Invalid snapshot path for restoring snapshot")
