@@ -147,7 +147,7 @@ pub fn migration_unix_mode(path: String) -> Response {
         .spawn(move || {
             if let Err(e) = MigrationManager::send_migration(&mut socket) {
                 error!("Failed to send migration: {}", e.display_chain());
-                let _ = MigrationManager::recover();
+                let _ = MigrationManager::recover_from_migration();
                 let _ = MigrationManager::set_status(MigrationStatus::Failed)
                     .map_err(|e| error!("{}", e));
             }
@@ -193,7 +193,7 @@ pub fn migration_tcp_mode(path: String) -> Response {
         .spawn(move || {
             if let Err(e) = MigrationManager::send_migration(&mut socket) {
                 error!("Failed to send migration: {}", e.display_chain());
-                let _ = MigrationManager::recover();
+                let _ = MigrationManager::recover_from_migration();
                 let _ = MigrationManager::set_status(MigrationStatus::Failed)
                     .map_err(|e| error!("{}", e));
             }

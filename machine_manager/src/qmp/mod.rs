@@ -446,6 +446,7 @@ fn qmp_command_exec(
         (query_gic_capabilities, query_gic_capabilities),
         (query_iothreads, query_iothreads),
         (query_migrate, query_migrate),
+        (cancel_migrate, cancel_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
         (list_type, list_type),
