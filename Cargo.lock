@@ -205,8 +205,6 @@ dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
  "log",
- "migration",
- "migration_derive",
  "once_cell",
  "util",
  "vmm-sys-util",
@@ -326,8 +324,11 @@ name = "migration"
 version = "2.2.0"
 dependencies = [
  "error-chain",
+ "hypervisor",
+ "kvm-bindings",
  "kvm-ioctls",
  "log",
+ "machine_manager",
  "migration_derive",
  "once_cell",
  "serde",

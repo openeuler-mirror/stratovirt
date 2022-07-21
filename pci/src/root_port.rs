@@ -330,11 +330,7 @@ impl PciDevOps for RootPort {
         }
         // Need to drop locked_root_port in order to register root_port instance.
         drop(locked_root_port);
-        MigrationManager::register_device_instance_mutex_with_id(
-            RootPortState::descriptor(),
-            root_port,
-            &name,
-        );
+        MigrationManager::register_device_instance(RootPortState::descriptor(), root_port, &name);
 
         Ok(())
     }

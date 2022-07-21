@@ -10,12 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use kvm_bindings::{
-    kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_CLOCK_TSC_STABLE, KVM_IRQCHIP_IOAPIC,
-};
+use kvm_bindings::{kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_IRQCHIP_IOAPIC};
 use migration_derive::{ByteCode, Desc};
 
-use super::KVM_FDS;
+use hypervisor::kvm::KVM_FDS;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
 
@@ -43,7 +41,8 @@ impl StateTransfer for KvmDevice {
 
         // save kvm_clock
         let mut kvm_clock = vm_fd.get_clock()?;
-        kvm_clock.flags &= !KVM_CLOCK_TSC_STABLE;
+        // Reset kvm clock flag.
+        kvm_clock.flags = 0;
 
         // save ioapic
         let mut ioapic = kvm_irqchip {

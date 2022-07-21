@@ -27,7 +27,10 @@ use machine_manager::{
     config::{BlkDevConfig, ConfigCheck},
     event_loop::EventLoop,
 };
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
+    StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
@@ -275,6 +278,9 @@ impl Request {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
                 if direct {
+                    for iov in self.iovec.iter() {
+                        MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
+                    }
                     (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
                         "Failed to process block request for reading asynchronously"
                     })?;
@@ -1025,10 +1031,7 @@ impl VirtioDevice for Block {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        MigrationManager::unregister_device_instance_mutex_by_id(
-            BlockState::descriptor(),
-            &self.blk_cfg.id,
-        );
+        MigrationManager::unregister_device_instance(BlockState::descriptor(), &self.blk_cfg.id);
         Ok(())
     }
 

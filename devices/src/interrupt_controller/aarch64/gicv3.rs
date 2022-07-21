@@ -22,7 +22,10 @@ use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::DeviceFd;
 use log::error;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use migration::{MigrationManager, MigrationRestoreOrder};
+use migration::{
+    snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
+    MigrationManager,
+};
 use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
@@ -370,16 +373,16 @@ impl GICDevice for GICv3 {
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
         let gicv3 = Arc::new(GICv3::new(gic_conf)?);
         if gicv3.its_dev.is_some() {
-            MigrationManager::register_device_instance(
+            MigrationManager::register_gic_instance(
                 GICv3ItsState::descriptor(),
                 gicv3.its_dev.as_ref().unwrap().clone(),
-                MigrationRestoreOrder::Gicv3Its,
+                GICV3_ITS_SNAPSHOT_ID,
             );
         }
-        MigrationManager::register_device_instance(
+        MigrationManager::register_gic_instance(
             GICv3State::descriptor(),
             gicv3.clone(),
-            MigrationRestoreOrder::Gicv3,
+            GICV3_SNAPSHOT_ID,
         );
 
         Ok(gicv3)
