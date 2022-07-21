@@ -66,6 +66,10 @@ use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
 
+use error_chain::{bail, ChainedError};
+use log::error;
+use vmm_sys_util::eventfd::EventFd;
+
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUTopology, CpuLifecycleState, CpuTopology, CPU};
@@ -76,13 +80,13 @@ use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController};
-use error_chain::ChainedError;
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::parse_blk;
-use machine_manager::config::parse_net;
-use machine_manager::config::BlkDevConfig;
+use machine_manager::config::{
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, MigrateMode,
+};
+use machine_manager::event;
 use machine_manager::machine::{
     DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
     MachineInterface, MachineLifecycle, MigrateInterface,
@@ -91,32 +95,27 @@ use machine_manager::{
     config::{BootSource, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig},
     qmp::{qmp_schema, QmpChannel, Response},
 };
+use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
 use sysbus::SysBus;
 #[cfg(target_arch = "aarch64")]
 use sysbus::{SysBusDevType, SysRes};
+use syscall::syscall_whitelist;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::loop_context::EventLoopManager;
-use util::seccomp::BpfRule;
-use util::set_termi_canon_mode;
+use util::{loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode};
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VirtioDevice,
     VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
-use vmm_sys_util::eventfd::EventFd;
 
 use self::errors::{ErrorKind, Result};
 use super::{
     errors::{ErrorKind as MachineErrorKind, Result as MachineResult},
     MachineOps,
 };
-
-use error_chain::bail;
-use log::error;
-use machine_manager::event;
-use mem_layout::{LayoutEntryType, MEM_LAYOUT};
-use syscall::syscall_whitelist;
+#[cfg(target_arch = "x86_64")]
+use crate::vm_state;
 
 // The replaceable block device maximum count.
 const MMIO_REPLACEABLE_BLK_NR: usize = 4;
@@ -188,6 +187,8 @@ pub struct LightMachine {
     boot_source: Arc<Mutex<BootSource>>,
     // VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
+    // All configuration information of virtual machine.
+    vm_config: Mutex<VmConfig>,
 }
 
 impl LightMachine {
@@ -225,10 +226,6 @@ impl LightMachine {
         let power_button = EventFd::new(libc::EFD_NONBLOCK)
             .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?;
 
-        if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
-            error!("{}", e);
-        }
-
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(
                 vm_config.machine_config.nr_cpus,
@@ -250,6 +247,7 @@ impl LightMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             power_button,
+            vm_config: Mutex::new(vm_config.clone()),
         })
     }
 
@@ -278,35 +276,43 @@ impl LightMachine {
         use errors::ResultExt;
 
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
-        for _ in 0..MMIO_REPLACEABLE_BLK_NR {
+        for id in 0..MMIO_REPLACEABLE_BLK_NR {
             let block = Arc::new(Mutex::new(Block::default()));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block.clone());
             rpl_devs.push(virtio_mmio);
 
-            MigrationManager::register_device_instance_mutex(BlockState::descriptor(), block);
+            MigrationManager::register_device_instance(
+                BlockState::descriptor(),
+                block,
+                &id.to_string(),
+            );
         }
-        for _ in 0..MMIO_REPLACEABLE_NET_NR {
+        for id in 0..MMIO_REPLACEABLE_NET_NR {
             let net = Arc::new(Mutex::new(Net::default()));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, net.clone());
             rpl_devs.push(virtio_mmio);
 
-            MigrationManager::register_device_instance_mutex(VirtioNetState::descriptor(), net);
+            MigrationManager::register_device_instance(
+                VirtioNetState::descriptor(),
+                net,
+                &id.to_string(),
+            );
         }
 
         let mut region_base = self.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
-        for dev in rpl_devs {
+        for (id, dev) in rpl_devs.into_iter().enumerate() {
             self.replaceable_info
                 .devices
                 .lock()
                 .unwrap()
                 .push(MmioReplaceableDevInfo {
                     device: dev.device.clone(),
-                    id: "".to_string(),
+                    id: id.to_string(),
                     used: false,
                 });
 
-            MigrationManager::register_device_instance_mutex(
+            MigrationManager::register_device_instance(
                 VirtioMmioState::descriptor(),
                 VirtioMmioDevice::realize(
                     dev,
@@ -317,6 +323,7 @@ impl LightMachine {
                     &self.boot_source,
                 )
                 .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+                &id.to_string(),
             );
             region_base += region_size;
         }
@@ -626,6 +633,17 @@ impl MachineOps for LightMachine {
         &self.sys_mem
     }
 
+    fn get_vm_config(&self) -> &Mutex<VmConfig> {
+        &self.vm_config
+    }
+
+    fn get_migrate_mode(&self) -> MigrateMode {
+        if let Some(incoming) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
+            return incoming.0;
+        }
+        MigrateMode::Unknown
+    }
+
     fn get_sys_bus(&mut self) -> &SysBus {
         &self.sysbus
     }
@@ -720,11 +738,7 @@ impl MachineOps for LightMachine {
         syscall_whitelist()
     }
 
-    fn realize(
-        vm: &Arc<Mutex<Self>>,
-        vm_config: &mut VmConfig,
-        is_migrate: bool,
-    ) -> MachineResult<()> {
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
         let mut locked_vm = vm.lock().unwrap();
@@ -734,7 +748,6 @@ impl MachineOps for LightMachine {
             #[cfg(target_arch = "x86_64")]
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
-            is_migrate,
             vm_config.machine_config.nr_cpus,
         )?;
 
@@ -763,7 +776,8 @@ impl MachineOps for LightMachine {
             .chain_err(|| "Failed to create replaceable devices.")?;
         locked_vm.add_devices(vm_config)?;
 
-        let boot_config = if !is_migrate {
+        let incoming = locked_vm.get_migrate_mode();
+        let boot_config = if incoming == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(None)?)
         } else {
             None
@@ -800,6 +814,17 @@ impl MachineOps for LightMachine {
         locked_vm
             .register_power_event(&locked_vm.power_button)
             .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?;
+
+        MigrationManager::register_vm_instance(vm.clone());
+        #[cfg(target_arch = "x86_64")]
+        MigrationManager::register_kvm_instance(
+            vm_state::KvmDeviceState::descriptor(),
+            Arc::new(vm_state::KvmDevice {}),
+        );
+        if let Err(e) = MigrationManager::set_status(MigrationStatus::Setup) {
+            bail!("Failed to set migration status {}", e);
+        }
+
         Ok(())
     }
 
@@ -1254,24 +1279,8 @@ impl DeviceInterface for LightMachine {
 
 impl MigrateInterface for LightMachine {
     fn migrate(&self, uri: String) -> Response {
-        use util::unix::{parse_uri, UnixPath};
-
-        match parse_uri(&uri) {
-            Ok((UnixPath::File, path)) => {
-                if let Err(e) = MigrationManager::save_snapshot(&path) {
-                    error!(
-                        "Failed to migrate to path \'{:?}\': {}",
-                        path,
-                        e.display_chain()
-                    );
-                    let _ = MigrationManager::set_status(MigrationStatus::Failed)
-                        .map_err(|e| error!("{}", e));
-                    return Response::create_error_response(
-                        qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                        None,
-                    );
-                }
-            }
+        match parse_incoming_uri(&uri) {
+            Ok((MigrateMode::File, path)) => migration::snapshot(path),
             _ => {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
@@ -1279,17 +1288,10 @@ impl MigrateInterface for LightMachine {
                 );
             }
         }
-
-        Response::create_empty_response()
     }
 
     fn query_migrate(&self) -> Response {
-        let status_str = MigrationManager::migration_get_status().to_string();
-        let migration_info = qmp_schema::MigrationInfo {
-            status: Some(status_str),
-        };
-
-        Response::create_response(serde_json::to_value(migration_info).unwrap(), None)
+        migration::query_migrate()
     }
 }
 

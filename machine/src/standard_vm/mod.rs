@@ -79,7 +79,7 @@ use error_chain::{bail, ChainedError};
 use errors::{Result, ResultExt};
 use machine_manager::config::{
     get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,
-    NumaNode, NumaNodes, PciBdf, VmConfig,
+    NumaNode, NumaNodes, PciBdf,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -204,8 +204,6 @@ trait StdMachineOps: AcpiBuilder {
     fn get_cpu_topo(&self) -> &CpuTopology;
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
-
-    fn get_vm_config(&self) -> &Mutex<VmConfig>;
 
     fn get_numa_nodes(&self) -> &Option<NumaNodes>;
 
@@ -815,11 +813,7 @@ impl StdMachine {
             }
         }
 
-        MigrationManager::register_device_instance_mutex_with_id(
-            BlockState::descriptor(),
-            blk,
-            &blk_id,
-        );
+        MigrationManager::register_device_instance(BlockState::descriptor(), blk, &blk_id);
         Ok(())
     }
 
@@ -863,11 +857,7 @@ impl StdMachine {
             let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
             self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction, false)
                 .chain_err(|| "Failed to add virtio net device")?;
-            MigrationManager::register_device_instance_mutex_with_id(
-                VirtioNetState::descriptor(),
-                net,
-                &net_id,
-            );
+            MigrationManager::register_device_instance(VirtioNetState::descriptor(), net, &net_id);
         }
 
         Ok(())
