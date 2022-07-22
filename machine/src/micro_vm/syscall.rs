@@ -48,7 +48,7 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 43 syscalls
+/// * x86_64-unknown-gnu: 44 syscalls
 /// * x86_64-unknown-musl: 43 syscalls
 /// * aarch64-unknown-gnu: 42 syscalls
 /// * aarch64-unknown-musl: 42 syscalls
@@ -118,6 +118,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_mkdir),
         #[cfg(target_arch = "aarch64")]
         BpfRule::new(libc::SYS_mkdirat),
+        #[cfg(all(target_env = "gnu", target_arch = "x86_64"))]
+        BpfRule::new(libc::SYS_readlink),
         madvise_rule(),
     ]
 }
