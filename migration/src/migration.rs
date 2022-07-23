@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
 
@@ -24,7 +24,508 @@ use crate::manager::MIGRATION_MANAGER;
 use crate::protocol::{MemBlock, MigrationStatus, Request, Response, TransStatus};
 use crate::MigrationManager;
 use hypervisor::kvm::KVM_FDS;
+use machine_manager::config::VmConfig;
 use util::unix::host_page_size;
+
+impl MigrationManager {
+    /// Start VM live migration at source VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object. it
+    /// will send source VM memory data and devices state to destination VM.
+    /// And, it will receive confirmation from destination VM.
+    pub fn send_migration<T>(fd: &mut T) -> Result<()>
+    where
+        T: Read + Write,
+    {
+        // Activate the migration status of source and destination virtual machine.
+        Self::active_migration(fd).chain_err(|| "Failed to active migration")?;
+
+        // Send source virtual machine configuration.
+        Self::send_vm_config(fd).chain_err(|| "Failed to send vm config")?;
+
+        // Start logging dirty pages.
+        Self::start_dirty_log().chain_err(|| "Failed to start logging dirty page")?;
+
+        // Send all memory of virtual machine itself to destination.
+        Self::send_vm_memory(fd).chain_err(|| "Failed to send VM memory")?;
+
+        // Iteratively send virtual machine dirty memory.
+        let iterations = MIGRATION_MANAGER.limit.read().unwrap().max_dirty_iterations;
+        for _ in 0..iterations {
+            // Check the migration is active.
+            if !Self::is_active() {
+                break;
+            }
+
+            if !Self::iteration_send(fd)? {
+                break;
+            }
+        }
+
+        // Check whether the migration is canceled.
+        if Self::is_canceled() {
+            // Cancel the migration of source and destination.
+            Self::cancel_migration(fd).chain_err(|| "Failed to cancel migration")?;
+            return Ok(());
+        }
+
+        // Pause virtual machine.
+        Self::pause()?;
+
+        // Send remaining virtual machine dirty memory.
+        Self::send_dirty_memory(fd).chain_err(|| "Failed to send dirty memory")?;
+
+        // Stop logging dirty pages.
+        Self::stop_dirty_log().chain_err(|| "Failed to stop logging dirty page")?;
+
+        // Get virtual machine state and send it to destination VM.
+        Self::send_vmstate(fd).chain_err(|| "Failed to send vm state")?;
+
+        // Complete the migration.
+        Self::complete_migration(fd).chain_err(|| "Failed to completing migration")?;
+
+        // Destroy virtual machine.
+        Self::clear_migration().chain_err(|| "Failed to clear migration")?;
+
+        Ok(())
+    }
+
+    /// Start VM live migration at destination VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object. it
+    /// will receive source VM memory data and devices state. And,
+    /// it will send confirmation to source VM.
+    pub fn recv_migration<T>(fd: &mut T) -> Result<()>
+    where
+        T: Read + Write,
+    {
+        // Activate the migration status.
+        let request = Request::recv_msg(fd)?;
+        if request.status == TransStatus::Active {
+            info!("Active the migration");
+            Self::set_status(MigrationStatus::Active)?;
+            Response::send_msg(fd, TransStatus::Ok)?;
+        } else {
+            Response::send_msg(fd, TransStatus::Error)?;
+            return Err(ErrorKind::MigrationStatusErr(
+                request.status.to_string(),
+                TransStatus::Active.to_string(),
+            )
+            .into());
+        }
+
+        // Check source and destination virtual machine configuration.
+        let request = Request::recv_msg(fd)?;
+        if request.status == TransStatus::VmConfig {
+            info!("Receive VmConfig status");
+            Self::check_vm_config(fd, request.length).chain_err(|| "Failed to check vm config")?;
+        } else {
+            Response::send_msg(fd, TransStatus::Error)?;
+            return Err(ErrorKind::MigrationStatusErr(
+                request.status.to_string(),
+                TransStatus::VmConfig.to_string(),
+            )
+            .into());
+        }
+
+        loop {
+            let request = Request::recv_msg(fd)?;
+            match request.status {
+                TransStatus::Memory => {
+                    info!("Receive Memory status");
+                    Self::recv_vm_memory(fd, request.length)?;
+                }
+                TransStatus::State => {
+                    info!("Receive State status");
+                    Self::recv_vmstate(fd)?;
+                    break;
+                }
+                TransStatus::Cancel => {
+                    info!("Receive Cancel status");
+                    Self::set_status(MigrationStatus::Canceled)?;
+                    Response::send_msg(fd, TransStatus::Ok)?;
+
+                    bail!("Cancel migration from source");
+                }
+                _ => {
+                    warn!("Unable to distinguish status");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Send Vm configuration from source virtual machine.
+    fn send_vm_config<T>(fd: &mut T) -> Result<()>
+    where
+        T: Write + Read,
+    {
+        let vm_config = &MIGRATION_MANAGER.vmm.read().unwrap().config;
+        let config_data = serde_json::to_vec(vm_config)?;
+        Request::send_msg(fd, TransStatus::VmConfig, config_data.len() as u64)?;
+        fd.write_all(&config_data)?;
+
+        let result = Response::recv_msg(fd)?;
+        if result.is_err() {
+            return Err(ErrorKind::ResponseErr.into());
+        }
+
+        Ok(())
+    }
+
+    fn check_vm_config<T>(fd: &mut T, len: u64) -> Result<()>
+    where
+        T: Write + Read,
+    {
+        let mut data: Vec<u8> = Vec::new();
+        data.resize_with(len as usize, Default::default);
+        fd.read_exact(&mut data)?;
+        let source_config: VmConfig = serde_json::from_slice(&data)?;
+        let dest_config = &MIGRATION_MANAGER.vmm.read().unwrap().config;
+
+        // Check vCPU number.
+        let source_cpu = source_config.machine_config.nr_cpus;
+        let dest_cpu = dest_config.machine_config.nr_cpus;
+        if source_cpu != dest_cpu {
+            return Err(ErrorKind::MigrationConfigErr(
+                "vCPU number".to_string(),
+                source_cpu.to_string(),
+                dest_cpu.to_string(),
+            )
+            .into());
+        }
+
+        // Check memory size
+        let source_mem = source_config.machine_config.mem_config.mem_size;
+        let dest_mem = dest_config.machine_config.mem_config.mem_size;
+        if source_mem != dest_mem {
+            return Err(ErrorKind::MigrationConfigErr(
+                "memory size".to_string(),
+                source_mem.to_string(),
+                dest_mem.to_string(),
+            )
+            .into());
+        }
+
+        // Check devices number.
+        let source_dev = source_config.devices.len();
+        let dest_dev = dest_config.devices.len();
+        if source_dev != dest_dev {
+            return Err(ErrorKind::MigrationConfigErr(
+                "device number".to_string(),
+                source_dev.to_string(),
+                dest_dev.to_string(),
+            )
+            .into());
+        }
+
+        Response::send_msg(fd, TransStatus::Ok)?;
+
+        Ok(())
+    }
+
+    /// Start to send dirty memory page iteratively. Return true if it should
+    /// continue to the next iteration. Otherwise, return false.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn iteration_send<T>(fd: &mut T) -> Result<bool>
+    where
+        T: Write + Read,
+    {
+        let mut state = Self::send_dirty_memory(fd).chain_err(|| "Failed to send dirty memory")?;
+
+        // Check the virtual machine downtime.
+        if MIGRATION_MANAGER
+            .limit
+            .read()
+            .unwrap()
+            .iteration_start_time
+            .elapsed()
+            < Duration::from_millis(MIGRATION_MANAGER.limit.read().unwrap().limit_downtime)
+        {
+            state = false;
+        }
+        // Update iteration start time.
+        MIGRATION_MANAGER
+            .limit
+            .write()
+            .unwrap()
+            .iteration_start_time = Instant::now();
+
+        Ok(state)
+    }
+
+    /// Receive memory data from source VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    /// * `len` - The length of Block data.
+    fn recv_vm_memory<T>(fd: &mut T, len: u64) -> Result<()>
+    where
+        T: Write + Read,
+    {
+        let mut blocks = Vec::<MemBlock>::new();
+        blocks.resize_with(len as usize / (size_of::<MemBlock>()), Default::default);
+        fd.read_exact(unsafe {
+            std::slice::from_raw_parts_mut(
+                blocks.as_ptr() as *mut MemBlock as *mut u8,
+                len as usize,
+            )
+        })?;
+
+        if let Some(locked_memory) = &MIGRATION_MANAGER.vmm.read().unwrap().memory {
+            for block in blocks.iter() {
+                locked_memory.recv_memory(
+                    fd,
+                    MemBlock {
+                        gpa: block.gpa,
+                        len: block.len,
+                    },
+                )?;
+            }
+        }
+
+        Response::send_msg(fd, TransStatus::Ok)?;
+
+        Ok(())
+    }
+
+    /// Send memory data to destination VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    /// * `blocks` - The memory blocks need to be sent.
+    fn send_memory<T>(fd: &mut T, blocks: Vec<MemBlock>) -> Result<()>
+    where
+        T: Read + Write,
+    {
+        let len = size_of::<MemBlock>() * blocks.len();
+        Request::send_msg(fd, TransStatus::Memory, len as u64)?;
+        fd.write_all(unsafe {
+            std::slice::from_raw_parts(blocks.as_ptr() as *const MemBlock as *const u8, len)
+        })?;
+
+        if let Some(locked_memory) = &MIGRATION_MANAGER.vmm.read().unwrap().memory {
+            for block in blocks.iter() {
+                locked_memory.send_memory(
+                    fd,
+                    MemBlock {
+                        gpa: block.gpa,
+                        len: block.len,
+                    },
+                )?;
+            }
+        }
+
+        let result = Response::recv_msg(fd)?;
+        if result.is_err() {
+            return Err(ErrorKind::ResponseErr.into());
+        }
+
+        Ok(())
+    }
+
+    /// Send entire VM memory data to destination VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn send_vm_memory<T>(fd: &mut T) -> Result<()>
+    where
+        T: Read + Write,
+    {
+        let mut blocks: Vec<MemBlock> = Vec::new();
+        let slots = KVM_FDS.load().get_mem_slots();
+        for (_, slot) in slots.lock().unwrap().iter() {
+            blocks.push(MemBlock {
+                gpa: slot.guest_phys_addr,
+                len: slot.memory_size,
+            });
+        }
+
+        Self::send_memory(fd, blocks)?;
+
+        Ok(())
+    }
+
+    /// Send dirty memory data to destination VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn send_dirty_memory<T>(fd: &mut T) -> Result<bool>
+    where
+        T: Read + Write,
+    {
+        let mut blocks: Vec<MemBlock> = Vec::new();
+        let mem_slots = KVM_FDS.load().get_mem_slots();
+        for (_, slot) in mem_slots.lock().unwrap().iter() {
+            let sub_blocks: Vec<MemBlock> = Self::get_dirty_log(slot)?;
+            blocks.extend(sub_blocks);
+        }
+
+        if blocks.is_empty() {
+            return Ok(false);
+        }
+
+        Self::send_memory(fd, blocks)?;
+
+        Ok(true)
+    }
+
+    /// Send VM state data to destination VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn send_vmstate<T>(fd: &mut T) -> Result<()>
+    where
+        T: Read + Write,
+    {
+        Request::send_msg(fd, TransStatus::State, 0)?;
+        Self::save_vmstate(None, fd)?;
+
+        let result = Response::recv_msg(fd)?;
+        if result.is_err() {
+            return Err(ErrorKind::ResponseErr.into());
+        }
+
+        Ok(())
+    }
+
+    /// Receive VM state data from source VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn recv_vmstate<T>(fd: &mut T) -> Result<()>
+    where
+        T: Write + Read,
+    {
+        let header = Self::restore_header(fd)?;
+        header.check_header()?;
+        let desc_db = Self::restore_desc_db(fd, header.desc_len)
+            .chain_err(|| "Failed to load device descriptor db")?;
+        Self::restore_vmstate(desc_db, fd).chain_err(|| "Failed to load snapshot device")?;
+        Self::resume()?;
+
+        Response::send_msg(fd, TransStatus::Ok)?;
+
+        Ok(())
+    }
+
+    /// Active migration status and synchronize the state of destination VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn active_migration<T>(fd: &mut T) -> Result<()>
+    where
+        T: Read + Write,
+    {
+        Self::set_status(MigrationStatus::Active)?;
+        Request::send_msg(fd, TransStatus::Active, 0)?;
+        let result = Response::recv_msg(fd)?;
+        if result.is_err() {
+            return Err(ErrorKind::ResponseErr.into());
+        }
+
+        Ok(())
+    }
+
+    /// Synchronize the `Completed` status of destination VM
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn complete_migration<T>(fd: &mut T) -> Result<()>
+    where
+        T: Write + Read,
+    {
+        Self::set_status(MigrationStatus::Completed)?;
+        Request::send_msg(fd, TransStatus::Complete, 0)?;
+        let result = Response::recv_msg(fd)?;
+        if result.is_err() {
+            return Err(ErrorKind::ResponseErr.into());
+        }
+
+        Ok(())
+    }
+
+    ///  Finish the migration of destination VM and notify the source VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    pub fn finish_migration<T>(fd: &mut T) -> Result<()>
+    where
+        T: Write + Read,
+    {
+        // Receive complete status from source vm.
+        let request = Request::recv_msg(fd)?;
+        if request.status == TransStatus::Complete {
+            info!("Receive Complete status");
+            Self::set_status(MigrationStatus::Completed)?;
+            Response::send_msg(fd, TransStatus::Ok)?;
+        } else {
+            return Err(ErrorKind::MigrationStatusErr(
+                request.status.to_string(),
+                TransStatus::Complete.to_string(),
+            )
+            .into());
+        }
+
+        Ok(())
+    }
+
+    /// Cancel live migration.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The fd implements `Read` and `Write` trait object.
+    fn cancel_migration<T>(fd: &mut T) -> Result<()>
+    where
+        T: Write + Read,
+    {
+        // Stop logging dirty pages.
+        Self::stop_dirty_log().chain_err(|| "Failed to stop logging dirty page")?;
+
+        Request::send_msg(fd, TransStatus::Cancel, 0)?;
+        let result = Response::recv_msg(fd)?;
+        if result.is_err() {
+            return Err(ErrorKind::ResponseErr.into());
+        }
+
+        Ok(())
+    }
+
+    /// Clear live migration environment and shut down VM.
+    fn clear_migration() -> Result<()> {
+        if let Some(locked_vm) = &MIGRATION_MANAGER.vmm.read().unwrap().vm {
+            locked_vm.lock().unwrap().destroy();
+        }
+
+        Ok(())
+    }
+
+    /// Recover the virtual machine if migration is failed.
+    pub fn recover_from_migration() -> Result<()> {
+        if let Some(locked_vm) = &MIGRATION_MANAGER.vmm.read().unwrap().vm {
+            locked_vm.lock().unwrap().resume();
+        }
+
+        Ok(())
+    }
+}
 
 /// Dirty bitmap information of vmm memory slot.
 pub struct DirtyBitmap {
