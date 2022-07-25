@@ -1266,6 +1266,24 @@ impl DeviceInterface for LightMachine {
         )
     }
 
+    fn chardev_add(&mut self, _args: qmp_schema::CharDevAddArgument) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "chardev_add not supported yet for microVM".to_string(),
+            ),
+            None,
+        )
+    }
+
+    fn chardev_remove(&mut self, _id: String) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "chardev_remove not supported yet for microVM".to_string(),
+            ),
+            None,
+        )
+    }
+
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response {
         if let Some(fd) = if_fd {
             QmpChannel::set_fd(fd_name, fd);

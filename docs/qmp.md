@@ -138,9 +138,50 @@ Remove a network backend.
 -> {"return": {}}
 ```
 
+## Character device backend management
+
+Currently, It only supports Standard VM.
+
+### chardev-add
+
+Add a character device backend.
+
+#### Arguments
+
+* `id` : the character device's ID, must be unique.
+* `backend` : the chardev backend info.
+
+#### Notes
+
+*Standard VM*
+
+* `id` in `chardev-add` should be same as `id` in `netdev_add`.
+
+#### Example
+
+```json
+<- {"execute":"chardev-add", "arguments": {"id": "chardev_id", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": "/path/to/socket"}}, "server": false}}}}
+-> {"return": {}}
+```
+
+### chardev-remove
+
+Remove a character device backend.
+
+#### Arguments
+
+* `id` : the character device's ID.
+
+#### Example
+
+```json
+<- {"execute": "chardev-remove", "arguments": {"id": "chardev_id"}}
+-> {"return": {}}
+```
+
 ## Hot plug management
 
-StratoVirt supports hot-plug virtio-blk and virtio-net devices with QMP. Standard VM supports hot-plug vfio devices.
+StratoVirt supports hot-plug virtio-blk and virtio-net devices with QMP. Standard VM supports hot-plug vfio and vhost-user net devices.
 
 ### device_add
 

@@ -78,8 +78,8 @@ use devices::legacy::FwCfgOps;
 use error_chain::{bail, ChainedError};
 use errors::{Result, ResultExt};
 use machine_manager::config::{
-    get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,
-    NumaNode, NumaNodes, PciBdf,
+    get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig,
+    NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -1154,8 +1154,8 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
-        let config = match get_netdev_config(args) {
+    fn chardev_add(&mut self, args: qmp_schema::CharDevAddArgument) -> Response {
+        let config = match get_chardev_config(args) {
             Ok(conf) => conf,
             Err(e) => {
                 return Response::create_error_response(
@@ -1171,6 +1171,41 @@ impl DeviceInterface for StdMachine {
                 None,
             );
         }
+
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_chardev_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn chardev_remove(&mut self, id: String) -> Response {
+        match self.get_vm_config().lock().unwrap().del_chardev_by_id(&id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
+        let config = match get_netdev_config(args) {
+            Ok(conf) => conf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        };
 
         match self
             .get_vm_config()

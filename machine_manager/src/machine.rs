@@ -17,9 +17,9 @@ use once_cell::sync::Lazy;
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    BlockDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument, DeviceProps, Events, GicCap,
-    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList,
-    QmpCommand, QmpEvent, Target, TypeLists,
+    BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument,
+    DeviceProps, Events, GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities,
+    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -165,6 +165,12 @@ pub trait DeviceInterface {
     fn netdev_add(&mut self, args: Box<NetDevAddArgument>) -> Response;
 
     fn netdev_del(&mut self, id: String) -> Response;
+
+    /// Create a new chardev device.
+    fn chardev_add(&mut self, _args: CharDevAddArgument) -> Response;
+
+    /// Remove a chardev device.
+    fn chardev_remove(&mut self, _id: String) -> Response;
 
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;
