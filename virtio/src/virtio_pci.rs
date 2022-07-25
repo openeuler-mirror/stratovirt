@@ -679,7 +679,7 @@ impl VirtioPciDevice {
                 .write_common_config(&cloned_pci_device.device.clone(), offset, value)
             {
                 error!(
-                    "Failed to read common config of virtio-pci device, error is {}",
+                    "Failed to write common config of virtio-pci device, error is {}",
                     e.display_chain(),
                 );
                 return false;
@@ -1002,7 +1002,7 @@ impl PciDevOps for VirtioPciDevice {
         )?;
 
         if let Some(ref msix) = self.config.msix {
-            msix.lock().unwrap().msix_update = Some(Arc::new(Mutex::new(self.clone())))
+            msix.lock().unwrap().msix_update = Some(Arc::new(Mutex::new(self.clone())));
         }
         self.assign_interrupt_cb();
 
@@ -1060,6 +1060,10 @@ impl PciDevOps for VirtioPciDevice {
 
         let bus = self.parent_bus.upgrade().unwrap();
         self.config.unregister_bars(&bus)?;
+
+        if let Some(ref msix) = self.config.msix {
+            msix.lock().unwrap().msix_update = None;
+        }
 
         MigrationManager::unregister_device_instance_mutex_by_id(
             MsixState::descriptor(),
