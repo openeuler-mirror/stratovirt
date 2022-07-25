@@ -717,6 +717,7 @@ mod tests {
             downscript: None,
             script: None,
             queues: None,
+            chardev: None,
         })
     }
 
