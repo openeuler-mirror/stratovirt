@@ -1,6 +1,6 @@
 [package]
 name = "machine_manager"
-version = "2.1.0"
+version = "2.2.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2018"
 license = "Mulan PSL v2"
