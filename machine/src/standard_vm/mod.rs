@@ -167,6 +167,14 @@ trait StdMachineOps: AcpiBuilder {
             xsdt_entries.push(slit_addr);
         }
 
+        #[cfg(target_arch = "aarch64")]
+        {
+            let pptt_addr = self
+                .build_pptt_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI PPTT table")?;
+            xsdt_entries.push(pptt_addr);
+        }
+
         let xsdt_addr = Self::build_xsdt_table(&acpi_tables, &mut loader, xsdt_entries)?;
 
         let mut locked_fw_cfg = fw_cfg.lock().unwrap();
@@ -378,6 +386,24 @@ trait AcpiBuilder {
     /// `loader` - ACPI table loader.
     #[cfg(target_arch = "aarch64")]
     fn build_spcr_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+    ) -> Result<u64>
+    where
+        Self: Sized,
+    {
+        Ok(0)
+    }
+
+    /// Build ACPI PPTT table, returns the offset of ACPI PPTT table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `Loader` - ACPI table loader.
+    #[cfg(target_arch = "aarch64")]
+    fn build_pptt_table(
         &self,
         _acpi_data: &Arc<Mutex<Vec<u8>>>,
         _loader: &mut TableLoader,
@@ -772,6 +798,11 @@ impl StdMachine {
             bail!("Drive not found");
         };
 
+        if let Some(bootindex) = args.boot_index {
+            self.check_bootindex(bootindex)
+                .chain_err(|| "Fail to add virtio pci blk device for invalid bootindex")?;
+        }
+
         let blk_id = blk.id.clone();
         let blk = Arc::new(Mutex::new(Block::new(blk)));
         let pci_dev = self
@@ -780,8 +811,7 @@ impl StdMachine {
 
         if let Some(bootindex) = args.boot_index {
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
-                self.add_bootindex_devices(bootindex, &dev_path, &args.id)
-                    .chain_err(|| "Fail to add boot index")?;
+                self.add_bootindex_devices(bootindex, &dev_path, &args.id);
             }
         }
 
@@ -900,7 +930,7 @@ impl DeviceInterface for StdMachine {
                     core_id: Some(coreid as isize),
                     thread_id: Some(threadid as isize),
                 };
-                let cpu_info = qmp_schema::CpuInfo::x86 {
+                let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
                         + &cpu_index.to_string()
@@ -909,9 +939,23 @@ impl DeviceInterface for StdMachine {
                     props: Some(cpu_instance),
                     CPU: cpu_index as isize,
                     thread_id: thread_id as isize,
-                    x86: qmp_schema::CpuInfoX86 {},
                 };
-                cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let cpu_info = qmp_schema::CpuInfo::x86 {
+                        common: cpu_common,
+                        x86: qmp_schema::CpuInfoX86 {},
+                    };
+                    cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    let cpu_info = qmp_schema::CpuInfo::Arm {
+                        common: cpu_common,
+                        arm: qmp_schema::CpuInfoArm {},
+                    };
+                    cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+                }
             }
         }
         Response::create_response(cpu_vec.into(), None)

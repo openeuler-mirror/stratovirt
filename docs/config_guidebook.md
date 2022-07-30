@@ -30,18 +30,21 @@ This allows you to set the maximum number of VCPUs that VM will support. The max
 By default, after booted, VM will online all CPUs you set.
 Four properties are supported for `smp`.
 * cpus: the number of VCPUs.
-* sockets: the number of socket. (optional). If not set, default is the value of `cpus`.
-* cores: the number of core. (optional). If not set, default is one.
-* threads: the number of thread. (optional). If not set, default is one.
-NB: the arguments of cpu topology is used to interconnect with libvirt, but the cpu topology of StratoVirt
-is not supported yet. Therefore, it is better to ignore these three arguments (sockets, cores, threads).
-If it is configured, the sockets number should equals to the number of cpu, `cores` should be `1`
-and `threads` should be `1`.
+* maxcpus: the number of max VCPUs.
+* sockets: the number of socket. (optional). If not set, its value depends on the value of `maxcpus`. On the arm machine, if you start a microvm, the value of socket must be one so far.
+* dies: the number of dies. (optional). If not set, default is one.
+* clusters: the number of clusters. (optional). If not set, default is one.
+* cores: the number of core. (optional). If not set, its value depends on the value of `maxcpus`.
+* threads: the number of thread. (optional). If not set, its value depends on the value of `maxcpus`.
+
+NB: the arguments of cpu topology is used to interconnect with libvirt.
+
+If it is configured, sockets * dies * clusters * cores * threads must be equal to maxcpus, and maxcpus should be larger than or equal to cpus.
 
 
 ```shell
 # cmdline
--smp [cpus=]n[,sockets=n,cores=1,threads=1]
+-smp [cpus=]n[,maxcpus=,sockets=,dies=,clusters=,cores=,threads=]
 ```
 
 ### 1.3 Memory
@@ -122,15 +125,15 @@ The following command shows how to set NUMA node:
 
 ```shell
 # The number of cpu must be set to be the same as numa node cpu.
--smp 4
+-smp 8
 
 # The memory size must be set to be the same as numa node mem.
 -m 4G
 
--object memory-backend-ram,size=2G,id=mem0,[host-nodes=0,policy=bind]
--object memory-backend-ram,size=2G,id=mem1,[host-nodes=1,policy=bind]
--numa node,nodeid=0,cpus=0-1,memdev=mem0
--numa node,nodeid=1,cpus=2-3,memdev=mem1
+-object memory-backend-ram,size=2G,id=mem0,[host-nodes=0-1,policy=bind]
+-object memory-backend-ram,size=2G,id=mem1,[host-nodes=0-1,policy=bind]
+-numa node,nodeid=0,cpus=0-1:4-5,memdev=mem0
+-numa node,nodeid=1,cpus=2-3:6-7,memdev=mem1
 [-numa dist,src=0,dst=0,val=10]
 [-numa dist,src=0,dst=1,val=20]
 [-numa dist,src=1,dst=0,val=20]
@@ -251,9 +254,9 @@ Nine properties are supported for virtio block device.
 * format: the format of block image, default value `raw`. NB: currently only `raw` is supported. (optional)
 If not set, default is raw.
 * num-queues: the optional num-queues attribute controls the number of queues to be used for block device. If not set,
-the default block queue number is 1.
+the default block queue number is 1. The max queues number supported is no more than 32.
 * bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
-The number ranges from 1 to 255, the smaller the number, the higher the priority.
+The number ranges from 0 to 255, the smaller the number, the higher the priority.
 It determines the order of bootable devices which firmware will use for booting the guest OS.
 
 For virtio-blk-pci, two more properties are required.
@@ -283,7 +286,8 @@ Six properties are supported for netdev.
 * ifname: name of tap device in host.
 * fd: the file descriptor of opened tap device.
 * fds: file descriptors of opened tap device.
-* queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or vhost-net device.
+* queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or
+  vhost-net device. The max queues number supported is no more than 16.
 NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given,
 the tap device would be created according to `ifname`.
 
@@ -329,13 +333,14 @@ given when `vhost=on`, StratoVirt gets it by opening "/dev/vhost-net" automatica
 ```
 
 StratoVirt also supports vhost-user net to get a higher performance by ovs-dpdk. Currently, only
-virtio pci net device support vhost-user net.
+virtio pci net device support vhost-user net. It should open sharing memory('-mem-share=on') and
+hugepages('-mem-path ...' ) when using vhost-user net.
 
 ```shell
 # virtio pci net device
 -chardev socket,id=chardevid,path=socket_path
--netdev vhost-user,id=netdevid,chardev=chardevid
--device virtio-net-pci,netdev=netdevid,id=netid,mac=12:34:56:78:9A:BC,bus=pci.0,addr=0x2.0x0
+-netdev vhost-user,id=netdevid,chardev=chardevid[,queues=N]
+-device virtio-net-pci,netdev=netdevid,id=netid,mac=12:34:56:78:9A:BC,bus=pci.0,addr=0x2.0x0[,mq=on]
 ```
 
 *How to set a tap device?*
@@ -390,8 +395,8 @@ $ ovs-vsctl add-br ovs_br -- set bridge ovs_br datapath_type=netdev
 $ ovs-vsctl add-port ovs_br port1 -- set Interface port1 type=dpdkvhostuser
 $ ovs-vsctl add-port ovs_br port2 -- set Interface port2 type=dpdkvhostuser
 # Set num of rxq/txq
-$ ovs-vsctl set Interface port1 options:n_rxq=1,n_txq=1
-$ ovs-vsctl set Interface port2 options:n_rxq=1,n_txq=1
+$ ovs-vsctl set Interface port1 options:n_rxq=num,n_txq=num
+$ ovs-vsctl set Interface port2 options:n_rxq=num,n_txq=num
 ```
 
 ### 2.4 Virtio-console
@@ -637,14 +642,14 @@ in StratoVirt process by default. It will make a slight influence on performance
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      46       |       46       |
-|        q35         |      52       |       54       |
+|      microvm       |      47       |       46       |
+|        q35         |      53       |       54       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      44       |       45       |
+|      microvm       |      45       |       45       |
 |        virt        |      51       |       50       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.

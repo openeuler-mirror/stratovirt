@@ -68,7 +68,7 @@ use std::vec::Vec;
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CpuLifecycleState, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUTopology, CpuLifecycleState, CpuTopology, CPU};
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
 #[cfg(target_arch = "x86_64")]
@@ -230,7 +230,15 @@ impl LightMachine {
         }
 
         Ok(LightMachine {
-            cpu_topo: CpuTopology::new(vm_config.machine_config.nr_cpus),
+            cpu_topo: CpuTopology::new(
+                vm_config.machine_config.nr_cpus,
+                vm_config.machine_config.nr_threads,
+                vm_config.machine_config.nr_cores,
+                vm_config.machine_config.nr_dies,
+                vm_config.machine_config.nr_clusters,
+                vm_config.machine_config.nr_sockets,
+                vm_config.machine_config.max_cpus,
+            ),
             cpus: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             irq_chip: None,
@@ -760,9 +768,15 @@ impl MachineOps for LightMachine {
         } else {
             None
         };
+        let topology = CPUTopology::new().set_topology((
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_dies,
+        ));
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
+            &topology,
             &vcpu_fds,
             &boot_config,
         )?);
@@ -921,17 +935,20 @@ impl DeviceInterface for LightMachine {
                     core_id: Some(coreid as isize),
                     thread_id: Some(threadid as isize),
                 };
+                let cpu_common = qmp_schema::CpuInfoCommon {
+                    current: true,
+                    qom_path: String::from("/machine/unattached/device[")
+                        + &cpu_index.to_string()
+                        + "]",
+                    halted: false,
+                    props: Some(cpu_instance),
+                    CPU: cpu_index as isize,
+                    thread_id: thread_id as isize,
+                };
                 #[cfg(target_arch = "x86_64")]
                 {
                     let cpu_info = qmp_schema::CpuInfo::x86 {
-                        current: true,
-                        qom_path: String::from("/machine/unattached/device[")
-                            + &cpu_index.to_string()
-                            + "]",
-                        halted: false,
-                        props: Some(cpu_instance),
-                        CPU: cpu_index as isize,
-                        thread_id: thread_id as isize,
+                        common: cpu_common,
                         x86: qmp_schema::CpuInfoX86 {},
                     };
                     cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
@@ -939,14 +956,7 @@ impl DeviceInterface for LightMachine {
                 #[cfg(target_arch = "aarch64")]
                 {
                     let cpu_info = qmp_schema::CpuInfo::Arm {
-                        current: true,
-                        qom_path: String::from("/machine/unattached/device[")
-                            + &cpu_index.to_string()
-                            + "]",
-                        halted: false,
-                        props: Some(cpu_instance),
-                        CPU: cpu_index as isize,
-                        thread_id: thread_id as isize,
+                        common: cpu_common,
                         arm: qmp_schema::CpuInfoArm {},
                     };
                     cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
@@ -1403,56 +1413,43 @@ impl CompileFDTHelper for LightMachine {
         fdt.set_property_u32("#size-cells", 0x0)?;
 
         // Generate CPU topology
-        if self.cpu_topo.max_cpus > 0 && self.cpu_topo.max_cpus % 8 == 0 {
-            let cpu_map_node_dep = fdt.begin_node("cpu-map")?;
-
-            let sockets = self.cpu_topo.max_cpus / 8;
-            for cluster in 0..u32::from(sockets) {
+        let cpu_map_node_dep = fdt.begin_node("cpu-map")?;
+        for socket in 0..self.cpu_topo.sockets {
+            let sock_name = format!("cluster{}", socket);
+            let sock_node_dep = fdt.begin_node(&sock_name)?;
+            for cluster in 0..self.cpu_topo.clusters {
                 let clster = format!("cluster{}", cluster);
                 let cluster_node_dep = fdt.begin_node(&clster)?;
 
-                for i in 0..2_u32 {
-                    let sub_cluster = format!("cluster{}", i);
-                    let sub_cluster_node_dep = fdt.begin_node(&sub_cluster)?;
+                for core in 0..self.cpu_topo.cores {
+                    let core_name = format!("core{}", core);
+                    let core_node_dep = fdt.begin_node(&core_name)?;
 
-                    let core0 = "core0".to_string();
-                    let core0_node_dep = fdt.begin_node(&core0)?;
-
-                    let thread0 = "thread0".to_string();
-                    let thread0_node_dep = fdt.begin_node(&thread0)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10)?;
-                    fdt.end_node(thread0_node_dep)?;
-
-                    let thread1 = "thread1".to_string();
-                    let thread1_node_dep = fdt.begin_node(&thread1)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10 + 1)?;
-                    fdt.end_node(thread1_node_dep)?;
-
-                    fdt.end_node(core0_node_dep)?;
-
-                    let core1 = "core1".to_string();
-                    let core1_node_dep = fdt.begin_node(&core1)?;
-
-                    let thread0 = "thread0".to_string();
-                    let thread0_node_dep = fdt.begin_node(&thread0)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10 + 2)?;
-                    fdt.end_node(thread0_node_dep)?;
-
-                    let thread1 = "thread1".to_string();
-                    let thread1_node_dep = fdt.begin_node(&thread1)?;
-                    fdt.set_property_u32("cpu", cluster * 8 + i * 4 + 10 + 3)?;
-                    fdt.end_node(thread1_node_dep)?;
-
-                    fdt.end_node(core1_node_dep)?;
-
-                    fdt.end_node(sub_cluster_node_dep)?;
+                    for thread in 0..self.cpu_topo.threads {
+                        let thread_name = format!("thread{}", thread);
+                        let thread_node_dep = fdt.begin_node(&thread_name)?;
+                        let vcpuid = self.cpu_topo.threads
+                            * self.cpu_topo.cores
+                            * self.cpu_topo.clusters
+                            * socket
+                            + self.cpu_topo.threads * self.cpu_topo.cores * cluster
+                            + self.cpu_topo.threads * core
+                            + thread;
+                        fdt.set_property_u32(
+                            "cpu",
+                            u32::from(vcpuid) + device_tree::CPU_PHANDLE_START,
+                        )?;
+                        fdt.end_node(thread_node_dep)?;
+                    }
+                    fdt.end_node(core_node_dep)?;
                 }
                 fdt.end_node(cluster_node_dep)?;
             }
-            fdt.end_node(cpu_map_node_dep)?;
+            fdt.end_node(sock_node_dep)?;
         }
+        fdt.end_node(cpu_map_node_dep)?;
 
-        for cpu_index in 0..self.cpu_topo.max_cpus {
+        for cpu_index in 0..self.cpu_topo.nrcpus {
             let mpidr = self.cpus[cpu_index as usize].arch().lock().unwrap().mpidr();
 
             let node = format!("cpu@{:x}", mpidr);

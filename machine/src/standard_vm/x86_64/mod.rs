@@ -27,7 +27,7 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CpuTopology, CPU};
+use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::{
     errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
@@ -126,7 +126,15 @@ impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
         use crate::errors::ResultExt;
 
-        let cpu_topo = CpuTopology::new(vm_config.machine_config.nr_cpus);
+        let cpu_topo = CpuTopology::new(
+            vm_config.machine_config.nr_cpus,
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_dies,
+            vm_config.machine_config.nr_clusters,
+            vm_config.machine_config.nr_sockets,
+            vm_config.machine_config.max_cpus,
+        );
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
             .chain_err(|| MachineErrorKind::CrtMemSpaceErr)?;
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
@@ -469,25 +477,32 @@ impl MachineOps for StdMachine {
             .init_ich9_lpc(clone_vm)
             .chain_err(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
+        let fwcfg = locked_vm.add_fwcfg_device()?;
 
-        let (boot_config, fwcfg) = if !is_migrate {
-            let fwcfg = locked_vm.add_fwcfg_device()?;
-            (Some(locked_vm.load_boot_source(Some(&fwcfg))?), Some(fwcfg))
+        let boot_config = if !is_migrate {
+            Some(locked_vm.load_boot_source(Some(&fwcfg))?)
         } else {
-            (None, None)
+            None
         };
+        let topology = CPUTopology::new().set_topology((
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_dies,
+        ));
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
+            &topology,
             &vcpu_fds,
             &boot_config,
         )?);
 
-        if let Some(fwcfg) = fwcfg {
+        if !is_migrate {
             locked_vm
                 .build_acpi_tables(&fwcfg)
                 .chain_err(|| "Failed to create ACPI tables")?;
         }
+
         StdMachine::arch_init()?;
         locked_vm.register_power_event(&locked_vm.power_button)?;
 

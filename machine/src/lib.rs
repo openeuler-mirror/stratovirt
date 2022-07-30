@@ -114,7 +114,7 @@ use address_space::KvmIoListener;
 use address_space::{
     create_host_mmaps, set_host_memory_policy, AddressSpace, KvmMemoryListener, Region,
 };
-use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPU};
+use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
@@ -122,7 +122,7 @@ use error_chain::bail;
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::VcpuFd;
 use machine_manager::config::{
-    check_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
+    complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
     parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, MachineMemConfig,
     NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig,
@@ -221,6 +221,7 @@ pub trait MachineOps {
     fn init_vcpu(
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
         nr_cpus: u8,
+        topology: &CPUTopology,
         fds: &[Arc<VcpuFd>],
         boot_cfg: &Option<CPUBootConfig>,
     ) -> Result<Vec<Arc<CPU>>>
@@ -253,7 +254,7 @@ pub trait MachineOps {
         if let Some(boot_config) = boot_cfg {
             for cpu_index in 0..nr_cpus as usize {
                 cpus[cpu_index as usize]
-                    .realize(boot_config)
+                    .realize(boot_config, topology)
                     .chain_err(|| {
                         format!(
                             "Failed to realize arch cpu register for CPU {}/KVM",
@@ -535,19 +536,12 @@ pub trait MachineOps {
         Ok(())
     }
 
-    /// Add boot index of device.
+    /// Check the boot index of device is duplicated or not.
     ///
     /// # Arguments
     ///
     /// * `bootindex` - The boot index of the device.
-    /// * `dev_path` - The firmware device path of the device.
-    /// * `dev_id` - The id of the device.
-    fn add_bootindex_devices(
-        &mut self,
-        boot_index: u8,
-        dev_path: &str,
-        dev_id: &str,
-    ) -> Result<()> {
+    fn check_bootindex(&mut self, boot_index: u8) -> Result<()> {
         // Unwrap is safe because StdMachine will overwrite this function,
         // which ensure boot_order_list is not None.
         let boot_order_list = self.get_boot_order_list().unwrap();
@@ -560,13 +554,23 @@ pub trait MachineOps {
             bail!("Failed to add duplicated bootindex {}.", boot_index);
         }
 
+        Ok(())
+    }
+
+    /// Add boot index of device.
+    ///
+    /// # Arguments
+    ///
+    /// * `bootindex` - The boot index of the device.
+    /// * `dev_path` - The firmware device path of the device.
+    /// * `dev_id` - The id of the device.
+    fn add_bootindex_devices(&mut self, boot_index: u8, dev_path: &str, dev_id: &str) {
+        let boot_order_list = self.get_boot_order_list().unwrap();
         boot_order_list.lock().unwrap().push(BootIndexInfo {
             boot_index,
             id: dev_id.to_string(),
             dev_path: dev_path.to_string(),
         });
-
-        Ok(())
     }
 
     /// Delete boot index of device.
@@ -586,14 +590,17 @@ pub trait MachineOps {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_blk(vm_config, cfg_args)?;
+        if let Some(bootindex) = device_cfg.boot_index {
+            self.check_bootindex(bootindex)
+                .chain_err(|| "Fail to add virtio pci blk device for invalid bootindex")?;
+        }
         let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .chain_err(|| "Failed to add virtio pci device")?;
         if let Some(bootindex) = device_cfg.boot_index {
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
-                self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id)
-                    .chain_err(|| "Fail to add boot index")?;
+                self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
             }
         }
         MigrationManager::register_device_instance_mutex_with_id(
@@ -851,7 +858,12 @@ pub trait MachineOps {
             }
         }
 
-        check_numa_node(&numa_nodes, vm_config)?;
+        // Complete user parameters if necessary.
+        complete_numa_node(
+            &mut numa_nodes,
+            vm_config.machine_config.nr_cpus,
+            vm_config.machine_config.mem_config.mem_size,
+        )?;
 
         Ok(Some(numa_nodes))
     }

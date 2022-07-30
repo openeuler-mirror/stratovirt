@@ -117,7 +117,7 @@ use util::trace::enable_trace_events;
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
-pub const MAX_VIRTIO_QUEUE: usize = 1024;
+pub const MAX_VIRTIO_QUEUE: usize = 32;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_NODES: u32 = 128;
@@ -516,7 +516,11 @@ impl FromStr for IntegerList {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let mut integer_list = Vec::new();
-        let lists: Vec<&str> = s.trim().split(',').collect();
+        let lists: Vec<&str> = s
+            .trim()
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(':')
+            .collect();
         for list in lists.iter() {
             let items: Vec<&str> = list.split('-').collect();
             if items.len() > 2 {

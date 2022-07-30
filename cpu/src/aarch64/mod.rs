@@ -64,6 +64,24 @@ pub struct ArmCPUBootConfig {
     pub boot_pc: u64,
 }
 
+#[allow(dead_code)]
+#[derive(Default, Copy, Clone)]
+pub struct ArmCPUTopology {
+    threads: u8,
+    cores: u8,
+    clusters: u8,
+}
+
+impl ArmCPUTopology {
+    pub fn new() -> Self {
+        ArmCPUTopology::default()
+    }
+
+    pub fn set_topology(self, _topology: (u8, u8, u8)) -> Self {
+        self
+    }
+}
+
 /// AArch64 CPU architect information
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
@@ -160,6 +178,15 @@ impl ArmCPUState {
             .get_one_reg(SYS_MPIDR_EL1)
             .chain_err(|| "Failed to get mpidr")?;
 
+        Ok(())
+    }
+
+    /// Set cpu topology
+    ///
+    /// # Arguments
+    ///
+    /// * `topology` - ARM CPU Topology
+    pub fn set_cpu_topology(&mut self, _topology: &ArmCPUTopology) -> Result<()> {
         Ok(())
     }
 

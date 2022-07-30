@@ -423,7 +423,7 @@ impl VhostOps for VhostBackend {
 pub struct VhostIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
-    deactivate_evt: RawFd,
+    deactivate_evt: EventFd,
 }
 
 impl VhostIoHandler {
@@ -441,7 +441,7 @@ impl VhostIoHandler {
 
         notifiers.push(EventNotifier::new(
             NotifierOperation::Delete,
-            self.deactivate_evt,
+            self.deactivate_evt.as_raw_fd(),
             None,
             EventSet::IN,
             Vec::new(),
@@ -496,7 +496,7 @@ impl EventNotifierHelper for VhostIoHandler {
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            vhost_handler.lock().unwrap().deactivate_evt,
+            vhost_handler.lock().unwrap().deactivate_evt.as_raw_fd(),
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],

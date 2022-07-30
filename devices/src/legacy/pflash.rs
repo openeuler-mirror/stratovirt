@@ -214,8 +214,8 @@ impl PFlash {
             region_size,
             backend.map(FileBackend::new_common),
             false,
-            false,
-            false,
+            true,
+            self.read_only,
         )?);
 
         let dev = Arc::new(Mutex::new(self));
