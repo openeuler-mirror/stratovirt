@@ -55,6 +55,8 @@ pub struct Net {
     client: Option<VhostUserClient>,
     /// The notifier events from host.
     call_events: Vec<EventFd>,
+    /// EventFd for deactivate control Queue.
+    de_ctrl_evt: EventFd,
 }
 
 impl Net {
@@ -67,6 +69,7 @@ impl Net {
             mem_space: mem_space.clone(),
             client: None,
             call_events: Vec::<EventFd>::new(),
+            de_ctrl_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
 }
@@ -208,6 +211,7 @@ impl VirtioDevice for Net {
                 mem_space,
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.driver_features,
+                deactivate_evt: self.de_ctrl_evt.try_clone().unwrap(),
             };
 
             EventLoop::update_event(
@@ -325,6 +329,9 @@ impl VirtioDevice for Net {
         client
             .delete_event()
             .chain_err(|| "Failed to delete vhost-user net event")?;
+        self.de_ctrl_evt
+            .write(1)
+            .chain_err(|| ErrorKind::EventFdWrite)?;
         self.client = None;
 
         self.realize()
