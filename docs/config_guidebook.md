@@ -643,14 +643,14 @@ in StratoVirt process by default. It will make a slight influence on performance
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      47       |       46       |
-|        q35         |      53       |       54       |
+|        q35         |      60       |       61       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      45       |       45       |
-|        virt        |      51       |       50       |
+|        virt        |      59       |       57       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell
