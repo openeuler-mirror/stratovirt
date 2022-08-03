@@ -109,6 +109,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+
 use error_chain::bail;
 use log::error;
 #[cfg(target_arch = "aarch64")]
@@ -122,7 +124,7 @@ pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_NODES: u32 = 128;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ObjConfig {
     Rng(RngObjConfig),
     Zone(MemZoneConfig),
@@ -149,7 +151,7 @@ fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
 }
 
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct VmConfig {
     pub guest_name: String,
     pub machine_config: MachineConfig,
