@@ -23,7 +23,7 @@ const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
 
 /// Charecter device options.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChardevType {
     Stdio,
     Pty,
@@ -43,7 +43,7 @@ pub struct VirtioConsole {
 }
 
 /// Config structure for character device.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChardevConfig {
     pub id: String,
     pub backend: ChardevType,
@@ -223,7 +223,7 @@ impl VmConfig {
 }
 
 /// Config structure for serial.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerialConfig {
     pub chardev: ChardevConfig,
 }
@@ -322,7 +322,7 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     Ok(vsock)
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct VirtioSerialInfo {
     pub id: String,
     pub pci_bdf: Option<PciBdf>,
