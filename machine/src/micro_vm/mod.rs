@@ -50,6 +50,10 @@ use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
+#[cfg(target_arch = "aarch64")]
+use cpu::CPUFeatures;
+#[cfg(target_arch = "aarch64")]
+use cpu::PMU_INTR;
 use cpu::{CPUBootConfig, CPUTopology, CpuLifecycleState, CpuTopology, CPU};
 #[cfg(target_arch = "aarch64")]
 use devices::legacy::PL031;
@@ -154,6 +158,9 @@ impl MmioReplaceableInfo {
 pub struct LightMachine {
     // `vCPU` topology, support sockets, cores, threads.
     cpu_topo: CpuTopology,
+    // `vCPU` family and feature configuration. Only supports aarch64 currently.
+    #[cfg(target_arch = "aarch64")]
+    cpu_feature: CPUFeatures,
     // `vCPU` devices.
     cpus: Vec<Arc<CPU>>,
     // Interrupt controller device.
@@ -222,6 +229,8 @@ impl LightMachine {
                 vm_config.machine_config.max_cpus,
             ),
             cpus: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            cpu_feature: (&vm_config.machine_config.cpu_config).into(),
             #[cfg(target_arch = "aarch64")]
             irq_chip: None,
             sys_mem,
@@ -759,12 +768,23 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_dies,
         ));
         trace_cpu_topo(&topology);
+
+        #[cfg(target_arch = "aarch64")]
+        let cpu_config = if migrate_info.0 == MigrateMode::Unknown {
+            Some(locked_vm.load_cpu_features(vm_config)?)
+        } else {
+            None
+        };
+
+        // vCPUs init,and apply CPU features (for aarch64)
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
             &topology,
             &vcpu_fds,
             &boot_config,
+            #[cfg(target_arch = "aarch64")]
+            &cpu_config,
         )?);
 
         #[cfg(target_arch = "aarch64")]
@@ -1373,6 +1393,25 @@ fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Res
     Ok(())
 }
 
+#[cfg(target_arch = "aarch64")]
+fn generate_pmu_node(fdt: &mut FdtBuilder) -> util::Result<()> {
+    let node = "pmu";
+    let pmu_node_dep = fdt.begin_node(node)?;
+    fdt.set_property_string("compatible", "arm,armv8-pmuv3")?;
+    fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
+    fdt.set_property_array_u32(
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_PPI,
+            PMU_INTR,
+            device_tree::IRQ_TYPE_LEVEL_HIGH,
+        ],
+    )?;
+
+    fdt.end_node(pmu_node_dep)?;
+    Ok(())
+}
+
 /// Trait that helps to generate all nodes in device-tree.
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
@@ -1453,6 +1492,11 @@ impl CompileFDTHelper for LightMachine {
 
         fdt.end_node(cpus_node_dep)?;
 
+        // CPU Features : PMU
+        if self.cpu_feature.pmu {
+            generate_pmu_node(fdt)?;
+        }
+
         Ok(())
     }
 
@@ -1512,6 +1556,7 @@ impl CompileFDTHelper for LightMachine {
                 _ => (),
             }
         }
+
         Ok(())
     }
 

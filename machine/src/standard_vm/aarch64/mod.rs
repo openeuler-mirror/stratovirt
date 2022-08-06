@@ -14,6 +14,7 @@ mod pci_host_root;
 mod syscall;
 
 pub use crate::error::MachineError;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::mem::size_of;
@@ -34,7 +35,9 @@ use acpi::{
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
-use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
+use cpu::{
+    CPUBootConfig, CPUFeatures, CPUInterface, CPUTopology, CpuTopology, CPU, PMU_INTR, PPI_BASE,
+};
 #[cfg(not(target_env = "musl"))]
 use devices::legacy::Ramfb;
 use devices::legacy::{
@@ -117,6 +120,7 @@ pub struct StdMachine {
     cpu_topo: CpuTopology,
     /// `vCPU` devices.
     cpus: Vec<Arc<CPU>>,
+    cpu_features: CPUFeatures,
     // Interrupt controller device.
     #[cfg(target_arch = "aarch64")]
     irq_chip: Option<Arc<InterruptController>>,
@@ -173,6 +177,7 @@ impl StdMachine {
         Ok(StdMachine {
             cpu_topo,
             cpus: Vec::new(),
+            cpu_features: vm_config.machine_config.cpu_config.borrow().into(),
             irq_chip: None,
             sys_mem: sys_mem.clone(),
             sysbus,
@@ -500,6 +505,11 @@ impl MachineOps for StdMachine {
         } else {
             None
         };
+        let cpu_config = if migrate.0 == MigrateMode::Unknown {
+            Some(locked_vm.load_cpu_features(vm_config)?)
+        } else {
+            None
+        };
 
         locked_vm
             .reset_fwcfg_boot_order()
@@ -511,6 +521,7 @@ impl MachineOps for StdMachine {
             &CPUTopology::new(),
             &vcpu_fds,
             &boot_config,
+            &cpu_config,
         )?);
 
         if let Some(boot_cfg) = boot_config {
@@ -810,6 +821,7 @@ impl AcpiBuilder for StdMachine {
             gic_cpu.flags = 5;
             gic_cpu.mpidr = mpidr & mpidr_mask;
             gic_cpu.vgic_interrupt = ARCH_GIC_MAINT_IRQ + INTERRUPT_PPIS_COUNT;
+            gic_cpu.perf_interrupt = PMU_INTR + PPI_BASE;
             madt.append_child(&gic_cpu.aml_bytes());
         }
 
@@ -1191,6 +1203,24 @@ fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<
     Ok(())
 }
 
+fn generate_pmu_node(fdt: &mut FdtBuilder) -> util::Result<()> {
+    let node = "pmu";
+    let pmu_node_dep = fdt.begin_node(node)?;
+    fdt.set_property_string("compatible", "arm,armv8-pmuv3")?;
+    fdt.set_property_u32("interrupt-parent", device_tree::GIC_PHANDLE)?;
+    fdt.set_property_array_u32(
+        "interrupts",
+        &[
+            device_tree::GIC_FDT_IRQ_TYPE_PPI,
+            PMU_INTR,
+            device_tree::IRQ_TYPE_LEVEL_HIGH,
+        ],
+    )?;
+    fdt.end_node(pmu_node_dep)?;
+
+    Ok(())
+}
+
 /// Trait that helps to generate all nodes in device-tree.
 #[allow(clippy::upper_case_acronyms)]
 trait CompileFDTHelper {
@@ -1266,6 +1296,10 @@ impl CompileFDTHelper for StdMachine {
         }
 
         fdt.end_node(cpus_node_dep)?;
+
+        if self.cpu_features.pmu {
+            generate_pmu_node(fdt)?;
+        }
 
         Ok(())
     }

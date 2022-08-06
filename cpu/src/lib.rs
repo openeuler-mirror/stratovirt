@@ -43,9 +43,15 @@ pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUCaps as CPUCaps;
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::ArmCPUFeatures as CPUFeatures;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUTopology as CPUTopology;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::PMU_INTR;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::PPI_BASE;
 use machine_manager::qmp::qmp_schema;
 #[cfg(target_arch = "x86_64")]
 use x86_64::caps::X86CPUCaps as CPUCaps;
@@ -102,7 +108,12 @@ pub enum CpuLifecycleState {
 #[allow(clippy::upper_case_acronyms)]
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
-    fn realize(&self, boot: &CPUBootConfig, topology: &CPUTopology) -> Result<()>;
+    fn realize(
+        &self,
+        boot: &CPUBootConfig,
+        topology: &CPUTopology,
+        #[cfg(target_arch = "aarch64")] features: &CPUFeatures,
+    ) -> Result<()>;
 
     /// Start `CPU` thread and run virtual CPU in kvm.
     ///
@@ -237,7 +248,12 @@ impl CPU {
 }
 
 impl CPUInterface for CPU {
-    fn realize(&self, boot: &CPUBootConfig, topology: &CPUTopology) -> Result<()> {
+    fn realize(
+        &self,
+        boot: &CPUBootConfig,
+        topology: &CPUTopology,
+        #[cfg(target_arch = "aarch64")] config: &CPUFeatures,
+    ) -> Result<()> {
         trace_cpu_boot_config(boot);
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
@@ -250,7 +266,12 @@ impl CPUInterface for CPU {
         self.arch_cpu
             .lock()
             .unwrap()
-            .set_boot_config(&self.fd, boot)
+            .set_boot_config(
+                &self.fd,
+                boot,
+                #[cfg(target_arch = "aarch64")]
+                config,
+            )
             .with_context(|| "Failed to realize arch cpu")?;
 
         self.arch_cpu

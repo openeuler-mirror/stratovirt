@@ -37,6 +37,8 @@ use address_space::{
 };
 pub use anyhow::Result;
 use anyhow::{anyhow, bail, Context};
+#[cfg(target_arch = "aarch64")]
+use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::legacy::FwCfgOps;
 #[cfg(target_arch = "aarch64")]
@@ -94,6 +96,11 @@ pub trait MachineOps {
     fn arch_ram_ranges(&self, mem_size: u64) -> Vec<(u64, u64)>;
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
+
+    #[cfg(target_arch = "aarch64")]
+    fn load_cpu_features(&self, vmcfg: &VmConfig) -> Result<CPUFeatures> {
+        Ok((&vmcfg.machine_config.cpu_config).into())
+    }
 
     /// Init I/O & memory address space and mmap guest memory.
     ///
@@ -163,6 +170,7 @@ pub trait MachineOps {
         topology: &CPUTopology,
         fds: &[Arc<VcpuFd>],
         boot_cfg: &Option<CPUBootConfig>,
+        #[cfg(target_arch = "aarch64")] vcpu_cfg: &Option<CPUFeatures>,
     ) -> Result<Vec<Arc<CPU>>>
     where
         Self: Sized,
@@ -189,10 +197,15 @@ pub trait MachineOps {
         if let Some(boot_config) = boot_cfg {
             for cpu_index in 0..nr_cpus as usize {
                 cpus[cpu_index as usize]
-                    .realize(boot_config, topology)
+                    .realize(
+                        boot_config,
+                        topology,
+                        #[cfg(target_arch = "aarch64")]
+                        &vcpu_cfg.unwrap_or_default(),
+                    )
                     .with_context(|| {
                         format!(
-                            "Failed to realize arch cpu register for CPU {}/KVM",
+                            "Failed to realize arch cpu register/features for CPU {}/KVM",
                             cpu_index
                         )
                     })?;
