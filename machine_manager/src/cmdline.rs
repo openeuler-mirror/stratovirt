@@ -244,13 +244,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("-mon is another way to create qmp channel. To use it, the chardev should be specified")
             .takes_value(true),
         )
-        .arg(
+       .arg(
             Arg::with_name("cpu")
             .long("cpu")
-            .value_name("host")
-            .hidden(true)
-            .can_no_value(true)
-            .takes_value(true),
+            .value_name("[model][,pmu=on|off]")
+            .help("Set CPU model and features.")
+            .can_no_value(false)
+            .takes_value(true)
         )
         .arg(
             Arg::with_name("overcommit")
@@ -420,6 +420,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("memory")), vm_cfg, add_memory);
     add_args_to_config!((args.value_of("mem-path")), vm_cfg, add_mem_path);
     add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
+    add_args_to_config!((args.value_of("cpu")), vm_cfg, add_cpu_feature);
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
