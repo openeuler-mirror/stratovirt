@@ -72,6 +72,34 @@ impl Net {
             de_ctrl_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
         }
     }
+
+    fn stop_event(&mut self) -> Result<()> {
+        match &self.client {
+            Some(client) => {
+                client
+                    .delete_event()
+                    .chain_err(|| "Failed to delete vhost-user net event")?;
+            }
+            None => return Err("Failed to get client when stoping event".into()),
+        };
+        if ((self.driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && self.net_cfg.mq {
+            self.de_ctrl_evt
+                .write(1)
+                .chain_err(|| ErrorKind::EventFdWrite)?;
+        }
+
+        Ok(())
+    }
+
+    fn clean_up(&mut self) -> Result<()> {
+        self.stop_event()?;
+        self.device_features = 0_u64;
+        self.driver_features = 0_u64;
+        self.device_config = VirtioNetConfig::default();
+        self.client = None;
+
+        Ok(())
+    }
 }
 
 impl VirtioDevice for Net {
@@ -221,8 +249,8 @@ impl VirtioDevice for Net {
         }
 
         let client = match &self.client {
-            None => return Err("Failed to get client for vhost-user net".into()),
             Some(client_) => client_,
+            None => return Err("Failed to get client for vhost-user net".into()),
         };
 
         client
@@ -279,7 +307,6 @@ impl VirtioDevice for Net {
                         queue_index,
                     )
                 })?;
-
             client
                 .set_vring_call(queue_index, &self.call_events[queue_index])
                 .chain_err(|| {
@@ -314,26 +341,20 @@ impl VirtioDevice for Net {
 
     fn deactivate(&mut self) -> Result<()> {
         self.call_events.clear();
-        Ok(())
+        self.clean_up()?;
+        self.realize()
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.device_features = 0_u64;
-        self.driver_features = 0_u64;
-        self.device_config = VirtioNetConfig::default();
+        self.clean_up()?;
+        self.realize()
+    }
 
-        let client = match &self.client {
-            None => return Err("Failed to get client when reseting vhost-user net".into()),
-            Some(client_) => client_,
-        };
-        client
-            .delete_event()
-            .chain_err(|| "Failed to delete vhost-user net event")?;
-        self.de_ctrl_evt
-            .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)?;
+    fn unrealize(&mut self) -> Result<()> {
+        self.stop_event()?;
+        self.call_events.clear();
         self.client = None;
 
-        self.realize()
+        Ok(())
     }
 }

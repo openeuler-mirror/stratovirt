@@ -173,6 +173,11 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
     })
 }
 
+/// Get chardev config from qmp arguments.
+///
+/// # Arguments
+///
+/// * `args` - The qmp arguments.
 pub fn get_chardev_config(args: qmp_schema::CharDevAddArgument) -> Result<ChardevConfig> {
     let backend = args.backend;
     if backend.backend_type.as_str() != "socket" {
