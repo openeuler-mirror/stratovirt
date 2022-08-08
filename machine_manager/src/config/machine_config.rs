@@ -158,7 +158,7 @@ impl Default for MachineConfig {
 impl ConfigCheck for MachineConfig {
     fn check(&self) -> Result<()> {
         if self.mem_config.mem_size < MIN_MEMSIZE || self.mem_config.mem_size > MAX_MEMSIZE {
-            bail!("Memory size must >= 256MiB and <= 512GiB, default unit: MiB, current memory size: {:?} bytes", 
+            bail!("Memory size must >= 256MiB and <= 512GiB, default unit: MiB, current memory size: {:?} bytes",
             &self.mem_config.mem_size);
         }
 

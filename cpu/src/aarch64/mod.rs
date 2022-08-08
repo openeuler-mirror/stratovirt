@@ -194,7 +194,7 @@ impl ArmCPUState {
     ///
     /// # Arguments
     ///
-    /// * `vcpu_fd` - Vcpu file descriptor in kvm.   
+    /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         set_core_regs(vcpu_fd, self.core_regs)
             .chain_err(|| format!("Failed to set core register for CPU {}", self.apic_id))?;

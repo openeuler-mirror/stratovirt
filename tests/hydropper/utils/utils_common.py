@@ -70,7 +70,7 @@ def config_host_vfio(net_type, number, bdf):
 
 def rebind_vfio_pci(bdf):
     """unbind old driver and bind a new one"""
-    run("echo %s > /sys/bus/pci/devices/%s/driver/unbind" % (bdf, bdf), shell=True, check=True)    
+    run("echo %s > /sys/bus/pci/devices/%s/driver/unbind" % (bdf, bdf), shell=True, check=True)
     run("echo `lspci -ns %s | awk -F':| ' '{print $5\" \"$6}'` > /sys/bus/pci/drivers/vfio-pci/new_id"\
         %bdf, shell=True, check=True)
 
