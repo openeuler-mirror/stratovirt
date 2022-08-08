@@ -110,7 +110,7 @@ $ cat /proc/meminfo
 The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.
 The application of NUMA node is that one region of memory can be set as fast memory, another can be set as slow memory.
 
-Each NUMA node is given a list of command lines option, there will be described in detail below. 
+Each NUMA node is given a list of command lines option, there will be described in detail below.
 1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
    It describes the size and id of each memory zone, the policy of binding to host memory node.
    you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
@@ -120,7 +120,7 @@ Each NUMA node is given a list of command lines option, there will be described 
 3. -numa dist,src=0,dst=0,val=10
    It describes the distance between source and destination. The default of source to source is 10,
    source to destination is 20. And if you choose not to set these parameters, the VM will set the default values.
-   
+
 The following command shows how to set NUMA node:
 
 ```shell

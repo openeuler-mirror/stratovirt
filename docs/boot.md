@@ -176,8 +176,8 @@ Kernel image can be built with:
    # on x86_64 platform, get bzImage format kernel image.
    $ make -j$(nproc) bzImage
    ```
-In addition to manually building the kernel image, you can also download the 
-[kernel image](https://repo.openeuler.org/openEuler-21.09/stratovirt_img/x86_64/std-vmlinuxz) 
+In addition to manually building the kernel image, you can also download the
+[kernel image](https://repo.openeuler.org/openEuler-21.09/stratovirt_img/x86_64/std-vmlinuxz)
 from the openEuler official website.
 
 #### 2.2 Build rootfs
