@@ -11,17 +11,19 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
-
-use migration::errors::{ErrorKind, Result, ResultExt};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, StateTransfer};
+use migration::{
+    errors::{ErrorKind, Result},
+    DeviceStateDesc, FieldDesc, MemBlock, MigrationHook, StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::unix::host_page_size;
+
+use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 
 const MIGRATION_HEADER_LENGTH: usize = 4096;
 
@@ -78,17 +80,17 @@ impl StateTransfer for AddressSpace {
 }
 
 impl MigrationHook for AddressSpace {
-    fn pre_save(&self, _id: &str, writer: &mut dyn Write) -> Result<()> {
+    fn save_memory(&self, fd: &mut dyn Write) -> Result<()> {
         let ram_state = self.get_state_vec()?;
-        writer.write_all(&ram_state)?;
+        fd.write_all(&ram_state)?;
         let padding_buffer =
             [0].repeat(memory_offset() - MIGRATION_HEADER_LENGTH - size_of::<AddressSpaceState>());
-        writer.write_all(&padding_buffer)?;
+        fd.write_all(&padding_buffer)?;
 
         for region in self.root().subregions().iter() {
             if let Some(base_addr) = region.start_addr() {
                 region
-                    .read(writer, base_addr, 0, region.size())
+                    .read(fd, base_addr, 0, region.size())
                     .map_err(|e| ErrorKind::SaveVmMemoryErr(e.to_string()))?;
             }
         }
@@ -96,7 +98,7 @@ impl MigrationHook for AddressSpace {
         Ok(())
     }
 
-    fn pre_load(&self, state: &[u8], memory: Option<&File>) -> Result<()> {
+    fn restore_memory(&self, memory: Option<&File>, state: &[u8]) -> Result<()> {
         let address_space_state: &AddressSpaceState =
             AddressSpaceState::from_bytes(&state[0..size_of::<AddressSpaceState>()])
                 .ok_or(ErrorKind::FromBytesError("MEMORY"))?;
@@ -121,15 +123,29 @@ impl MigrationHook for AddressSpace {
                     false,
                     false,
                 )
-                .chain_err(|| ErrorKind::RestoreVmMemoryErr)?,
+                .map_err(|e| ErrorKind::RestoreVmMemoryErr(e.to_string()))?,
             );
             self.root()
                 .add_subregion(
                     Region::init_ram_region(host_mmap.clone()),
                     host_mmap.start_address().raw_value(),
                 )
-                .chain_err(|| ErrorKind::RestoreVmMemoryErr)?;
+                .map_err(|e| ErrorKind::RestoreVmMemoryErr(e.to_string()))?;
         }
+
+        Ok(())
+    }
+
+    fn send_memory(&self, fd: &mut dyn Write, range: MemBlock) -> Result<()> {
+        self.read(fd, GuestAddress(range.gpa), range.len)
+            .map_err(|e| ErrorKind::SendVmMemoryErr(e.to_string()))?;
+
+        Ok(())
+    }
+
+    fn recv_memory(&self, fd: &mut dyn Read, range: MemBlock) -> Result<()> {
+        self.write(fd, GuestAddress(range.gpa), range.len)
+            .map_err(|e| ErrorKind::RecvVmMemoryErr(e.to_string()))?;
 
         Ok(())
     }

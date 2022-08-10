@@ -24,7 +24,10 @@ use machine_manager::{
     config::{BootSource, Param, SerialConfig},
     event_loop::EventLoop,
 };
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    snapshot::PL011_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
+    StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
@@ -174,7 +177,11 @@ impl PL011 {
             param_type: "earlycon".to_string(),
             value: format!("pl011,mmio,0x{:08x}", region_base),
         });
-        MigrationManager::register_device_instance_mutex(PL011State::descriptor(), dev.clone());
+        MigrationManager::register_device_instance(
+            PL011State::descriptor(),
+            dev.clone(),
+            PL011_SNAPSHOT_ID,
+        );
         let locked_dev = dev.lock().unwrap();
         locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
         EventLoop::update_event(

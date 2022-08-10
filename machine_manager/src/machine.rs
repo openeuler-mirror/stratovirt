@@ -419,6 +419,10 @@ pub trait MigrateInterface {
     fn query_migrate(&self) -> Response {
         Response::create_empty_response()
     }
+
+    fn cancel_migrate(&self) -> Response {
+        Response::create_empty_response()
+    }
 }
 
 /// Machine interface which is exposed to inner hypervisor.

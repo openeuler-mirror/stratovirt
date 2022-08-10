@@ -25,7 +25,10 @@ use log::error;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    snapshot::SERIAL_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
+    StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
@@ -151,7 +154,11 @@ impl Serial {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
 
-        MigrationManager::register_device_instance_mutex(SerialState::descriptor(), dev.clone());
+        MigrationManager::register_device_instance(
+            SerialState::descriptor(),
+            dev.clone(),
+            SERIAL_SNAPSHOT_ID,
+        );
         #[cfg(target_arch = "aarch64")]
         bs.lock().unwrap().kernel_cmdline.push(Param {
             param_type: "earlycon".to_string(),
