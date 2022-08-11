@@ -22,7 +22,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use error_chain::{bail, ChainedError};
 use log::error;
-use vmm_sys_util::{eventfd::EventFd, ioctl_expr, ioctl_ioc_nr, ioctl_iow_nr};
+use vmm_sys_util::{eventfd::EventFd, ioctl_ioc_nr, ioctl_iow_nr};
 
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
@@ -459,7 +459,7 @@ impl MachineOps for StdMachine {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nr_cpus {
-            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
+            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id as u64)?));
         }
 
         locked_vm

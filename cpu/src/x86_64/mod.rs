@@ -241,7 +241,7 @@ impl X86CPUState {
             .set_lapic(&self.lapic)
             .chain_err(|| format!("Failed to set lapic for CPU {}", self.apic_id))?;
         vcpu_fd
-            .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len]))
+            .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len]).unwrap())
             .chain_err(|| format!("Failed to set msrs for CPU {}", self.apic_id))?;
         vcpu_fd
             .set_vcpu_events(&self.cpu_events)

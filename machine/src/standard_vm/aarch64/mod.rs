@@ -441,7 +441,7 @@ impl MachineOps for StdMachine {
                         .vm_fd
                         .as_ref()
                         .unwrap()
-                        .create_vcpu(vcpu_id)?,
+                        .create_vcpu(vcpu_id as u64)?,
                 ));
             }
             fds

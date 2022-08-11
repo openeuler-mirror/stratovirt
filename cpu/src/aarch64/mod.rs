@@ -17,11 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
-    kvm_mp_state, kvm_reg_list, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, KVM_MP_STATE_RUNNABLE,
+    kvm_mp_state, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, RegList, KVM_MP_STATE_RUNNABLE,
     KVM_MP_STATE_STOPPED,
 };
 use kvm_ioctls::VcpuFd;
-use vmm_sys_util::fam::FamStructWrapper;
 
 pub use self::caps::ArmCPUCaps;
 use self::caps::CpregListEntry;
@@ -32,8 +31,6 @@ use crate::CPU;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-
-type CpregList = FamStructWrapper<kvm_reg_list>;
 
 // PSR (Processor State Register) bits.
 // See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/ptrace.h#L34
@@ -49,7 +46,7 @@ const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
 // MPIDR - Multiprocessor Affinity Register.
 // See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/asm/sysreg.h#L130
 const SYS_MPIDR_EL1: u64 = 0x6030_0000_0013_c005;
-const KVM_MAX_CPREG_ENTRIES: usize = 1024;
+const KVM_MAX_CPREG_ENTRIES: usize = 500;
 
 /// AArch64 CPU booting configure information
 ///
@@ -256,7 +253,7 @@ impl StateTransfer for CPU {
             cpu_state_locked.mp_state = mp_state;
         }
 
-        let mut cpreg_list = CpregList::new(KVM_MAX_CPREG_ENTRIES);
+        let mut cpreg_list = RegList::new(KVM_MAX_CPREG_ENTRIES).unwrap();
         self.fd.get_reg_list(&mut cpreg_list)?;
         cpu_state_locked.cpreg_len = 0;
         for (index, cpreg) in cpreg_list.as_slice().iter().enumerate() {

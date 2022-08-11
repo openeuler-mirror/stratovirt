@@ -33,9 +33,7 @@ use util::loop_context::{
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
-use vmm_sys_util::{
-    ioctl_expr, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
-};
+use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::{QueueConfig, VirtioInterrupt, VirtioInterruptType};

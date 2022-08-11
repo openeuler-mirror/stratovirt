@@ -431,10 +431,7 @@ impl EventLoopContext {
     }
 
     fn epoll_wait_manager(&mut self, time_out: i32) -> Result<bool> {
-        let ev_count = match self
-            .epoll
-            .wait(READY_EVENT_MAX, time_out, &mut self.ready_events[..])
-        {
+        let ev_count = match self.epoll.wait(time_out, &mut self.ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(ErrorKind::EpollWait(e).into()),
