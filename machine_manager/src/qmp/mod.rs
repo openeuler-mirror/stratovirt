@@ -44,6 +44,7 @@ use serde_json::Value;
 use util::leak_bucket::LeakBucket;
 use util::set_termi_canon_mode;
 
+use self::qmp_schema::{self as schema, QmpCommand};
 use crate::event_loop::EventLoop;
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
@@ -51,8 +52,6 @@ use crate::{
     errors::{Result, ResultExt},
     temp_cleaner::TempCleaner,
 };
-use qmp_schema as schema;
-use schema::QmpCommand;
 
 static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 
@@ -583,8 +582,8 @@ impl QmpChannel {
 
 #[cfg(test)]
 mod tests {
-    extern crate serde_json;
     use super::*;
+    use serde_json;
     use std::os::unix::net::{UnixListener, UnixStream};
 
     #[test]

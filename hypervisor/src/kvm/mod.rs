@@ -20,8 +20,7 @@ use kvm_ioctls::{Kvm, VmFd};
 use log::error;
 use once_cell::sync::Lazy;
 use vmm_sys_util::{
-    eventfd::EventFd, ioctl_expr, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr,
-    ioctl_iowr_nr,
+    eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
 };
 
 use crate::errors::{Result, ResultExt};
@@ -105,7 +104,7 @@ pub struct KVMFds {
 
 impl KVMFds {
     pub fn new() -> Self {
-        let kvm_fds = match Kvm::new() {
+        match Kvm::new() {
             Ok(fd) => {
                 let vm_fd = match fd.create_vm() {
                     Ok(vm_fd) => vm_fd,
@@ -126,9 +125,7 @@ impl KVMFds {
                 error!("Failed to open /dev/kvm: {}", e);
                 KVMFds::default()
             }
-        };
-
-        kvm_fds
+        }
     }
 
     /// Sets the gsi routing table entries. It will overwrite previously set entries.

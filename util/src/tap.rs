@@ -16,7 +16,7 @@ use std::io::{Read, Result as IoResult, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use vmm_sys_util::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
-use vmm_sys_util::{ioctl_expr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
+use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
 
 use super::errors::{Result, ResultExt};
 

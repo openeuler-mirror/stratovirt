@@ -51,56 +51,84 @@ pub enum Arm64CoreRegs {
 
 impl From<Arm64CoreRegs> for u64 {
     fn from(elem: Arm64CoreRegs) -> Self {
-        let register_size;
-        let regid;
-        match elem {
-            Arm64CoreRegs::KvmSpEl1 => {
-                register_size = KVM_REG_SIZE_U64;
-                regid = offset_of!(kvm_regs, sp_el1)
-            }
-            Arm64CoreRegs::KvmElrEl1 => {
-                register_size = KVM_REG_SIZE_U64;
-                regid = offset_of!(kvm_regs, elr_el1)
-            }
+        let (register_size, reg_offset) = match elem {
+            Arm64CoreRegs::KvmSpEl1 => (KVM_REG_SIZE_U64, offset_of!(kvm_regs, sp_el1)),
+            Arm64CoreRegs::KvmElrEl1 => (KVM_REG_SIZE_U64, offset_of!(kvm_regs, elr_el1)),
             Arm64CoreRegs::KvmSpsr(idx) if idx < KVM_NR_SPSR as usize => {
-                register_size = KVM_REG_SIZE_U64;
-                regid = offset_of!(kvm_regs, spsr) + idx * 8
+                (KVM_REG_SIZE_U64, offset_of!(kvm_regs, spsr) + idx * 8)
             }
-            Arm64CoreRegs::UserPTRegRegs(idx) if idx < 31 => {
-                register_size = KVM_REG_SIZE_U64;
-                regid = offset_of!(kvm_regs, regs, user_pt_regs, regs) + idx * 8
-            }
-            Arm64CoreRegs::UserPTRegSp => {
-                register_size = KVM_REG_SIZE_U64;
-                regid = offset_of!(kvm_regs, regs, user_pt_regs, sp)
-            }
-            Arm64CoreRegs::UserPTRegPc => {
-                register_size = KVM_REG_SIZE_U64;
-                regid = offset_of!(kvm_regs, regs, user_pt_regs, pc)
-            }
-            Arm64CoreRegs::UserPTRegPState => {
-                register_size = KVM_REG_SIZE_U64;
-                regid = offset_of!(kvm_regs, regs, user_pt_regs, pstate)
-            }
-            Arm64CoreRegs::UserFPSIMDStateVregs(idx) if idx < 32 => {
-                register_size = KVM_REG_SIZE_U128;
-                regid = offset_of!(kvm_regs, fp_regs, user_fpsimd_state, vregs) + idx * 16
-            }
-            Arm64CoreRegs::UserFPSIMDStateFpsr => {
-                register_size = KVM_REG_SIZE_U32;
-                regid = offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpsr)
-            }
-            Arm64CoreRegs::UserFPSIMDStateFpcr => {
-                register_size = KVM_REG_SIZE_U32;
-                regid = offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpcr)
-            }
+            Arm64CoreRegs::UserPTRegRegs(idx) if idx < 31 => (
+                KVM_REG_SIZE_U64,
+                offset_of!(kvm_regs, regs, user_pt_regs, regs) + idx * 8,
+            ),
+            Arm64CoreRegs::UserPTRegSp => (
+                KVM_REG_SIZE_U64,
+                offset_of!(kvm_regs, regs, user_pt_regs, sp),
+            ),
+            Arm64CoreRegs::UserPTRegPc => (
+                KVM_REG_SIZE_U64,
+                offset_of!(kvm_regs, regs, user_pt_regs, pc),
+            ),
+            Arm64CoreRegs::UserPTRegPState => (
+                KVM_REG_SIZE_U64,
+                offset_of!(kvm_regs, regs, user_pt_regs, pstate),
+            ),
+            Arm64CoreRegs::UserFPSIMDStateVregs(idx) if idx < 32 => (
+                KVM_REG_SIZE_U128,
+                offset_of!(kvm_regs, fp_regs, user_fpsimd_state, vregs) + idx * 16,
+            ),
+            Arm64CoreRegs::UserFPSIMDStateFpsr => (
+                KVM_REG_SIZE_U32,
+                offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpsr),
+            ),
+            Arm64CoreRegs::UserFPSIMDStateFpcr => (
+                KVM_REG_SIZE_U32,
+                offset_of!(kvm_regs, fp_regs, user_fpsimd_state, fpcr),
+            ),
             _ => panic!("No such Register"),
         };
 
+        // The core registers of an arm64 machine are represented
+        // in kernel by the `kvm_regs` structure. This structure is a
+        // mix of 32, 64 and 128 bit fields, we index it as if it
+        // was a 32bit array.
+        // struct kvm_regs {
+        //     struct user_pt_regs      regs;
+        //     __u64                    sp_el1;
+        //     __u64                    elr_el1;
+        //     __u64                    spsr[KVM_NR_SPSR];
+        //     struct user_fpsimd_state fp_regs;
+        // };
+        // struct user_pt_regs {
+        //     __u64 regs[31];
+        //     __u64 sp;
+        //     __u64 pc;
+        //     __u64 pstate;
+        // };
+
+        // struct user_fpsimd_state {
+        //     __uint128_t	vregs[32];
+        //     __u32		fpsr;
+        //     __u32		fpcr;
+        //     __u32		__reserved[2];
+        // };
+
+        // #define KVM_REG_ARM64	0x6000000000000000ULL
+        // #define KVM_REG_SIZE_U32	0x0020000000000000ULL
+        // #define KVM_REG_SIZE_U64	0x0030000000000000ULL
+        // #define KVM_REG_SIZE_U128	0x0040000000000000ULL
+        // #define KVM_REG_ARM_CORE	0x00100000ULL
+
+        // The id of the register is encoded as specified for `KVM_GET_ONE_REG` in the kernel documentation.
+        // reg_id = KVM_REG_ARM64 | KVM_REG_SIZE_* | KVM_REG_ARM_CORE | reg_offset_index
+        // reg_offset_index = reg_offset / sizeof(u32)
+        // KVM_REG_SIZE_* => KVM_REG_SIZE_U32/KVM_REG_SIZE_U64/KVM_REG_SIZE_U128
+
+        // calculate reg_id
         KVM_REG_ARM64 as u64
             | register_size as u64
             | u64::from(KVM_REG_ARM_CORE)
-            | (regid / size_of::<u32>()) as u64
+            | (reg_offset / size_of::<u32>()) as u64
     }
 }
 
@@ -196,8 +224,7 @@ pub fn get_core_regs(vcpu_fd: &VcpuFd) -> Result<kvm_regs> {
     for i in 0..KVM_NR_FP_REGS as usize {
         let register_value_vec =
             get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateVregs(i).into())?;
-        core_regs.fp_regs.vregs[i][0] = *u64::from_bytes(&register_value_vec[0..8]).unwrap();
-        core_regs.fp_regs.vregs[i][1] = *u64::from_bytes(&register_value_vec[8..16]).unwrap();
+        core_regs.fp_regs.vregs[i] = *u128::from_bytes(&register_value_vec).unwrap();
     }
 
     let register_value_vec = get_one_reg_vec(vcpu_fd, Arm64CoreRegs::UserFPSIMDStateFpsr.into())?;
@@ -237,8 +264,8 @@ pub fn set_core_regs(vcpu_fd: &VcpuFd, core_regs: kvm_regs) -> Result<()> {
 
     for i in 0..KVM_NR_FP_REGS as usize {
         let mut data: Vec<u8> = Vec::new();
-        data.append(&mut core_regs.fp_regs.vregs[i][0].as_bytes().to_vec());
-        data.append(&mut core_regs.fp_regs.vregs[i][1].as_bytes().to_vec());
+        data.append(&mut core_regs.fp_regs.vregs[i].as_bytes().to_vec());
+
         set_one_reg_vec(
             vcpu_fd,
             Arm64CoreRegs::UserFPSIMDStateVregs(i).into(),

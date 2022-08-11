@@ -352,7 +352,7 @@ impl MigrationHook for Msix {
 
                 // update and commit irq routing
                 {
-                    let kvm_fds = KVM_FDS.load_signal_safe();
+                    let kvm_fds = KVM_FDS.load();
                     let mut locked_irq_table = kvm_fds.irq_route_table.lock().unwrap();
                     let allocated_gsi = match locked_irq_table.allocate_gsi() {
                         Ok(gsi) => gsi,
