@@ -23,12 +23,14 @@ use super::message::{MAX_ATTACHED_FD_ENTRIES, VHOST_USER_MSG_MAX_SIZE};
 #[derive(Clone)]
 pub struct VhostUserSock {
     pub domain: UnixSock,
+    pub path: String,
 }
 
 impl VhostUserSock {
     pub fn new(path: &str) -> Self {
         VhostUserSock {
             domain: UnixSock::new(path),
+            path: path.to_string(),
         }
     }
 
