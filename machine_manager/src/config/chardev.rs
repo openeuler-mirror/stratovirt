@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use error_chain::bail;
+use log::error;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -18,6 +19,7 @@ use super::{
     get_pci_bdf, pci_args_check, PciBdf,
 };
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
+use crate::qmp::qmp_schema;
 
 const MAX_GUEST_CID: u64 = 4_294_967_295;
 const MIN_GUEST_CID: u64 = 3;
@@ -171,6 +173,39 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
     })
 }
 
+/// Get chardev config from qmp arguments.
+///
+/// # Arguments
+///
+/// * `args` - The qmp arguments.
+pub fn get_chardev_config(args: qmp_schema::CharDevAddArgument) -> Result<ChardevConfig> {
+    let backend = args.backend;
+    if backend.backend_type.as_str() != "socket" {
+        return Err(ErrorKind::InvalidParam("backend".to_string(), backend.backend_type).into());
+    }
+
+    let data = backend.backend_data;
+    if data.server {
+        error!("Not support chardev socket as server now.");
+        return Err(ErrorKind::InvalidParam("backend".to_string(), "server".to_string()).into());
+    }
+
+    let addr = data.addr;
+    if addr.addr_type.as_str() != "unix" {
+        error!("Just support \"unix\" addr type option now.");
+        return Err(ErrorKind::InvalidParam("backend".to_string(), "addr".to_string()).into());
+    }
+
+    Ok(ChardevConfig {
+        id: args.id,
+        backend: ChardevType::Socket {
+            path: addr.addr_data.path,
+            server: data.server,
+            nowait: false,
+        },
+    })
+}
+
 pub fn parse_virtconsole(vm_config: &mut VmConfig, config_args: &str) -> Result<VirtioConsole> {
     let mut cmd_parser = CmdParser::new("virtconsole");
     cmd_parser.push("").push("id").push("chardev");
@@ -217,6 +252,39 @@ impl VmConfig {
             self.chardev.insert(chardev_id, chardev);
         } else {
             bail!("Chardev {:?} has been added", &chardev_id);
+        }
+        Ok(())
+    }
+
+    /// Add chardev config to vm config.
+    ///
+    /// # Arguments
+    ///
+    /// * `conf` - The chardev config to be added to the vm.
+    pub fn add_chardev_with_config(&mut self, conf: ChardevConfig) -> Result<()> {
+        if let Err(e) = conf.check() {
+            bail!("Chardev config checking failed, {}", e.to_string());
+        }
+
+        let chardev_id = conf.id.clone();
+        if self.chardev.get(&chardev_id).is_none() {
+            self.chardev.insert(chardev_id, conf);
+        } else {
+            bail!("Chardev {:?} has been added", chardev_id);
+        }
+        Ok(())
+    }
+
+    /// Delete chardev config from vm config.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The chardev id which is used to delete chardev config.
+    pub fn del_chardev_by_id(&mut self, id: &str) -> Result<()> {
+        if self.chardev.get(id).is_some() {
+            self.chardev.remove(id);
+        } else {
+            bail!("Chardev {} not found", id);
         }
         Ok(())
     }
