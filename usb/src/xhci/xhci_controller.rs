@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::xhci::xhci_ring::XhciEventRingSeg;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
 use std::slice::from_raw_parts_mut;
@@ -436,6 +437,16 @@ impl XhciDevice {
         Ok(())
     }
 
+    /// Control plane
+    pub fn handle_command(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Data plane
+    pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<()> {
+        Ok(())
+    }
+
     fn disable_slot(&mut self, slot_id: u32) -> Result<TRBCCode> {
         for i in 1..=self.slots[(slot_id - 1) as usize].endpoints.len() as u32 {
             self.disable_endpoint(slot_id, i)?;
@@ -459,6 +470,35 @@ impl XhciDevice {
         }
         epctx.enabled = false;
         Ok(TRBCCode::Success)
+    }
+
+    /// Get microframe index
+    pub fn get_mf_index(&self) -> u64 {
+        warn!("get_mf_index not implemented");
+        0
+    }
+
+    pub fn update_mf(&self) {
+        warn!("update_mf not implemented");
+    }
+
+    pub(crate) fn reset_event_ring(&mut self, idx: u32) -> Result<()> {
+        let intr = &mut self.intrs[idx as usize];
+        if intr.erstsz == 0 || intr.erstba == 0 {
+            intr.er_start = 0;
+            intr.er_size = 0;
+            return Ok(());
+        }
+        let mut seg = XhciEventRingSeg::new(&self.mem_space);
+        seg.fetch_event_ring_seg(intr.erstba)?;
+        if seg.size < 16 || seg.size > 4096 {
+            bail!("Invalid segment size {}", seg.size);
+        }
+        intr.er_start = addr64_from_u32(seg.addr_lo, seg.addr_hi);
+        intr.er_size = seg.size;
+        intr.er_ep_idx = 0;
+        intr.er_pcs = true;
+        Ok(())
     }
 
     /// Send event TRB to driver, first write TRB and then send interrupt.
