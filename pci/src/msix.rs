@@ -166,6 +166,8 @@ impl Msix {
         msix: Arc<Mutex<Self>>,
         region: &Region,
         dev_id: Arc<AtomicU16>,
+        table_offset: u64,
+        pba_offset: u64,
     ) -> Result<()> {
         let locked_msix = msix.lock().unwrap();
         let table_size = locked_msix.table.len() as u64;
@@ -219,7 +221,7 @@ impl Msix {
         };
         let table_region = Region::init_io_region(table_size, table_region_ops);
         region
-            .add_subregion(table_region, 0)
+            .add_subregion(table_region, table_offset)
             .chain_err(|| "Failed to register MSI-X table region.")?;
 
         let cloned_msix = msix.clone();
@@ -243,7 +245,7 @@ impl Msix {
         };
         let pba_region = Region::init_io_region(pba_size, pba_region_ops);
         region
-            .add_subregion(pba_region, table_size)
+            .add_subregion(pba_region, pba_offset)
             .chain_err(|| "Failed to register MSI-X PBA region.")?;
 
         Ok(())
@@ -423,12 +425,24 @@ fn send_msix(msg: Message, dev_id: u16) {
 }
 
 /// MSI-X initialization.
+///
+/// # Arguments
+///
+/// * `bar_id` - BAR id.
+/// * `vector_nr` - The number of vector.
+/// * `config` - The PCI config.
+/// * `dev_id` - Dev id.
+/// * `_id` - MSI-X id used in MigrationManager.
+/// * `parent_region` - Parent region which the MSI-X region registered. If none, registered in BAR.
+/// * `offset_opt` - Offset of table(table_offset) and Offset of pba(pba_offset). Set the table_offset and pba_offset together.
 pub fn init_msix(
     bar_id: usize,
     vector_nr: u32,
     config: &mut PciConfig,
     dev_id: Arc<AtomicU16>,
     _id: &str,
+    parent_region: Option<&Region>,
+    offset_opt: Option<(u32, u32)>,
 ) -> Result<()> {
     if vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
         bail!("Too many msix vectors.");
@@ -443,10 +457,15 @@ pub fn init_msix(
         MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
     )?;
     offset = msix_cap_offset + MSIX_CAP_TABLE as usize;
-    le_write_u32(&mut config.config, offset, bar_id as u32)?;
-    offset = msix_cap_offset + MSIX_CAP_PBA as usize;
     let table_size = vector_nr * MSIX_TABLE_ENTRY_SIZE as u32;
-    le_write_u32(&mut config.config, offset, table_size | bar_id as u32)?;
+    let (table_offset, pba_offset) = if let Some((table, pba)) = offset_opt {
+        (table, pba)
+    } else {
+        (0, table_size)
+    };
+    le_write_u32(&mut config.config, offset, table_offset | bar_id as u32)?;
+    offset = msix_cap_offset + MSIX_CAP_PBA as usize;
+    le_write_u32(&mut config.config, offset, pba_offset | bar_id as u32)?;
 
     let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
     let msix = Arc::new(Mutex::new(Msix::new(
@@ -455,11 +474,28 @@ pub fn init_msix(
         msix_cap_offset as u16,
         dev_id.load(Ordering::Acquire),
     )));
-    let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
-    bar_size = round_up(bar_size, host_page_size()).unwrap();
-    let region = Region::init_container_region(bar_size);
-    Msix::register_memory_region(msix.clone(), &region, dev_id)?;
-    config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);
+    if let Some(region) = parent_region {
+        Msix::register_memory_region(
+            msix.clone(),
+            region,
+            dev_id,
+            table_offset as u64,
+            pba_offset as u64,
+        )?;
+    } else {
+        let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
+        bar_size = round_up(bar_size, host_page_size()).unwrap();
+        let region = Region::init_container_region(bar_size);
+        Msix::register_memory_region(
+            msix.clone(),
+            &region,
+            dev_id,
+            table_offset as u64,
+            pba_offset as u64,
+        )?;
+        config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);
+    }
+
     config.msix = Some(msix.clone());
 
     #[cfg(not(test))]
@@ -494,11 +530,22 @@ mod tests {
             MSIX_TABLE_SIZE_MAX as u32 + 2,
             &mut pci_config,
             Arc::new(AtomicU16::new(0)),
-            "msix"
+            "msix",
+            None,
+            None,
         )
         .is_err());
 
-        init_msix(1, 2, &mut pci_config, Arc::new(AtomicU16::new(0)), "msix").unwrap();
+        init_msix(
+            1,
+            2,
+            &mut pci_config,
+            Arc::new(AtomicU16::new(0)),
+            "msix",
+            None,
+            None,
+        )
+        .unwrap();
         let msix_cap_start = 64_u8;
         assert_eq!(pci_config.last_cap_end, 64 + MSIX_CAP_SIZE as u16);
         // Capabilities pointer
@@ -563,7 +610,16 @@ mod tests {
     #[test]
     fn test_write_config() {
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
-        init_msix(0, 2, &mut pci_config, Arc::new(AtomicU16::new(0)), "msix").unwrap();
+        init_msix(
+            0,
+            2,
+            &mut pci_config,
+            Arc::new(AtomicU16::new(0)),
+            "msix",
+            None,
+            None,
+        )
+        .unwrap();
         let msix = pci_config.msix.as_ref().unwrap();
         let mut locked_msix = msix.lock().unwrap();
         locked_msix.enabled = false;
