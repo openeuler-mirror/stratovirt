@@ -33,6 +33,41 @@ impl UsbBus {
             used_ports: LinkedList::new(),
         }
     }
+
+    /// Register USB port to the bus.
+    pub fn register_usb_port(&mut self, port: &Arc<Mutex<UsbPort>>) {
+        let mut locked_port = port.lock().unwrap();
+        locked_port.path = format!("{}", locked_port.index + 1);
+        self.free_ports.push_back(port.clone());
+    }
+
+    /// Assign USB port and attach the device.
+    pub fn assign_usb_port(
+        &mut self,
+        dev: &Arc<Mutex<dyn UsbDeviceOps>>,
+    ) -> Result<Arc<Mutex<UsbPort>>> {
+        if let Some(port) = self.free_ports.pop_front() {
+            let mut locked_dev = dev.lock().unwrap();
+            locked_dev.set_usb_port(Some(Arc::downgrade(&port)));
+            let mut locked_port = port.lock().unwrap();
+            locked_port.dev = Some(dev.clone());
+            drop(locked_port);
+            self.used_ports.push_back(port.clone());
+            Ok(port)
+        } else {
+            bail!("No available usb port");
+        }
+    }
+
+    /// Find USB port by path.
+    pub fn find_usb_port(&self, path: String) -> Option<Arc<Mutex<UsbPort>>> {
+        for usb in &self.used_ports {
+            if usb.lock().unwrap().path == path {
+                return Some(usb.clone());
+            }
+        }
+        None
+    }
 }
 
 /// Bus device ops for USB controller to handle USB device attach/detach.
