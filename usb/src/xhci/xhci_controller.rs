@@ -10,12 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::mem::size_of;
 use std::sync::{Arc, Mutex, Weak};
 
-use address_space::AddressSpace;
+use address_space::{AddressSpace, GuestAddress};
+use byteorder::{ByteOrder, LittleEndian};
 
 use crate::bus::UsbBus;
 use crate::config::*;
+use crate::errors::{Result, ResultExt};
 use crate::usb::{UsbPacket, UsbPort};
 use crate::xhci::xhci_regs::{XchiOperReg, XhciInterrupter, XhciPort};
 use crate::xhci::xhci_ring::{TRBCCode, TRBType, XhciRing, XhciTRB};
@@ -214,4 +217,76 @@ impl XhciDevice {
         locked_xhci.oper.usb_status = USB_STS_HCH;
         xhci
     }
+}
+
+// DMA read/write helpers.
+pub(crate) fn dma_read_bytes(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    mut buf: &mut [u8],
+    len: u64,
+) -> Result<()> {
+    addr_space.read(&mut buf, addr, len).chain_err(|| {
+        format!(
+            "Failed to read dma memory at gpa=0x{:x} len=0x{:x}",
+            addr.0, len
+        )
+    })?;
+    Ok(())
+}
+
+pub(crate) fn dma_write_bytes(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    mut buf: &[u8],
+    len: u64,
+) -> Result<()> {
+    addr_space.write(&mut buf, addr, len).chain_err(|| {
+        format!(
+            "Failed to write dma memory at gpa=0x{:x} len=0x{:x}",
+            addr.0, len
+        )
+    })?;
+    Ok(())
+}
+
+pub(crate) fn dma_read_u64(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    data: &mut u64,
+) -> Result<()> {
+    let mut tmp = [0_u8; 8];
+    dma_read_bytes(addr_space, addr, &mut tmp, 8)?;
+    *data = LittleEndian::read_u64(&tmp);
+    Ok(())
+}
+
+pub(crate) fn dma_read_u32(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    buf: &mut [u32],
+) -> Result<()> {
+    let vec_len = size_of::<u32>() * buf.len();
+    let mut vec = vec![0_u8; vec_len];
+    let tmp = vec.as_mut_slice();
+    dma_read_bytes(addr_space, addr, tmp, vec_len as u64)?;
+    for i in 0..buf.len() {
+        buf[i] = LittleEndian::read_u32(&tmp[(size_of::<u32>() * i)..]);
+    }
+    Ok(())
+}
+
+pub(crate) fn dma_write_u32(
+    addr_space: &Arc<AddressSpace>,
+    addr: GuestAddress,
+    buf: &[u32],
+) -> Result<()> {
+    let vec_len = size_of::<u32>() * buf.len();
+    let mut vec = vec![0_u8; vec_len];
+    let tmp = vec.as_mut_slice();
+    for i in 0..buf.len() {
+        LittleEndian::write_u32(&mut tmp[(size_of::<u32>() * i)..], buf[i]);
+    }
+    dma_write_bytes(addr_space, addr, tmp, vec_len as u64)?;
+    Ok(())
 }
