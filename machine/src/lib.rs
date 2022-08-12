@@ -124,9 +124,9 @@ use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
-    parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, Incoming, MachineMemConfig,
-    MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf,
-    SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci, BootIndexInfo, Incoming,
+    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig,
+    PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -137,6 +137,7 @@ use pci::{PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::errors::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
+use usb::{bus::BusDeviceMap, xhci::xhci_pci::XhciPciDevice};
 use util::{
     arg_parser,
     loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
@@ -354,6 +355,12 @@ pub trait MachineOps {
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
     fn get_migrate_info(&self) -> Incoming;
+
+    /// Get the bus device map. The map stores the mapping between bus name and bus device.
+    /// The bus device is the device which can attach other devices.
+    fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
+        None
+    }
 
     /// Add net device.
     ///
@@ -884,6 +891,36 @@ pub trait MachineOps {
         Ok(Some(numa_nodes))
     }
 
+    /// Add usb xhci controller.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - XHCI Configuration.
+    fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let device_cfg = parse_xhci(cfg_args)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+
+        let bus_device = if let Some(bus_device) = self.get_bus_device() {
+            bus_device.clone()
+        } else {
+            bail!("No bus device found");
+        };
+
+        let pcidev = XhciPciDevice::new(
+            &device_cfg.id,
+            devfn,
+            parent_bus,
+            self.get_sys_mem(),
+            bus_device,
+        );
+
+        pcidev
+            .realize()
+            .chain_err(|| "Failed to realize usb xhci device")?;
+        Ok(())
+    }
+
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -946,6 +983,9 @@ pub trait MachineOps {
                 }
                 "vfio-pci" => {
                     self.add_vfio_device(cfg_args)?;
+                }
+                "nec-usb-xhci" => {
+                    self.add_usb_xhci(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
