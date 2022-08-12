@@ -13,7 +13,33 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::Arc;
 
-use address_space::AddressSpace;
+use address_space::{AddressSpace, GuestAddress};
+use byteorder::{ByteOrder, LittleEndian};
+
+use crate::errors::Result;
+use crate::xhci::xhci_controller::dma_read_bytes;
+
+/// Transfer Request Block
+pub const TRB_SIZE: u32 = 16;
+pub const TRB_TYPE_SHIFT: u32 = 10;
+pub const TRB_TYPE_MASK: u32 = 0x3f;
+/// Cycle bit
+pub const TRB_C: u32 = 1;
+/// Event Data
+pub const TRB_EV_ED: u32 = 1 << 2;
+/// Toggle Cycle
+pub const TRB_LK_TC: u32 = 1 << 1;
+/// Interrupt-on Short Packet
+pub const TRB_TR_ISP: u32 = 1 << 2;
+/// Chain bit
+pub const TRB_TR_CH: u32 = 1 << 4;
+/// Interrupt On Completion
+pub const TRB_TR_IOC: u32 = 1 << 5;
+/// Immediate Data.
+pub const TRB_TR_IDT: u32 = 1 << 6;
+
+const TRB_LINK_LIMIT: u32 = 32;
+const RING_LEN_LIMIT: u32 = 32;
 
 /// TRB Type Definitions. See the spec 6.4.6 TRB types.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -160,6 +186,16 @@ impl XhciTRB {
             ccs: true,
         }
     }
+
+    /// Get TRB type
+    pub fn get_type(&self) -> TRBType {
+        ((self.control >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK).into()
+    }
+
+    // Get Cycle bit
+    pub fn get_cycle_bit(&self) -> bool {
+        self.control & TRB_C == TRB_C
+    }
 }
 
 /// XHCI Ring
@@ -184,6 +220,85 @@ impl XhciRing {
         self.dequeue = addr;
         self.ccs = true;
     }
+
+    /// Fetch TRB from the ring.
+    pub fn fetch_trb(&mut self) -> Result<XhciTRB> {
+        let mut link_cnt = 0;
+        loop {
+            let mut trb = self.read_trb(self.dequeue)?;
+            trb.addr = self.dequeue;
+            trb.ccs = self.ccs;
+            if trb.get_cycle_bit() != self.ccs {
+                bail!("TRB cycle bit not matched");
+            }
+            let trb_type = trb.get_type();
+            debug!("Fetch TRB: type {:?} trb {:?}", trb_type, trb);
+            if trb_type == TRBType::TrLink {
+                link_cnt += 1;
+                if link_cnt > TRB_LINK_LIMIT {
+                    bail!("TRB reach link limit");
+                }
+                self.dequeue = trb.parameter;
+                if trb.control & TRB_LK_TC == TRB_LK_TC {
+                    self.ccs = !self.ccs;
+                }
+            } else {
+                self.dequeue += TRB_SIZE as u64;
+                return Ok(trb);
+            }
+        }
+    }
+
+    fn read_trb(&self, addr: u64) -> Result<XhciTRB> {
+        let mut buf = [0; TRB_SIZE as usize];
+        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf, TRB_SIZE as u64)?;
+        let trb = XhciTRB {
+            parameter: LittleEndian::read_u64(&buf),
+            status: LittleEndian::read_u32(&buf[8..]),
+            control: LittleEndian::read_u32(&buf[12..]),
+            addr: 0,
+            ccs: true,
+        };
+        Ok(trb)
+    }
+
+    /// Get the number of TRBs in the TD if success.
+    pub fn get_transfer_len(&self) -> Result<usize> {
+        let mut len = 0;
+        let mut dequeue = self.dequeue;
+        let mut ccs = self.ccs;
+        let mut ctrl_td = false;
+        let mut link_cnt = 0;
+        for _ in 0..RING_LEN_LIMIT {
+            let trb = self.read_trb(dequeue)?;
+            if trb.get_cycle_bit() != ccs {
+                bail!("TRB cycle bit not matched");
+            }
+            let trb_type = trb.get_type();
+            if trb_type == TRBType::TrLink {
+                link_cnt += 1;
+                if link_cnt > TRB_LINK_LIMIT {
+                    bail!("TRB link over limit");
+                }
+                dequeue = trb.parameter;
+                if trb.control & TRB_LK_TC == TRB_LK_TC {
+                    ccs = !ccs;
+                }
+            } else {
+                len += 1;
+                dequeue += TRB_SIZE as u64;
+                if trb_type == TRBType::TrSetup {
+                    ctrl_td = true;
+                } else if trb_type == TRBType::TrStatus {
+                    ctrl_td = false;
+                }
+                if !ctrl_td && (trb.control & TRB_TR_CH != TRB_TR_CH) {
+                    return Ok(len);
+                }
+            }
+        }
+        bail!("Transfer TRB length over limit");
+    }
 }
 
 impl Display for XhciRing {
@@ -192,7 +307,7 @@ impl Display for XhciRing {
     }
 }
 
-/// XHCI event ring segment
+/// Event Ring Segment Table Entry. See in the specs 6.5 Event Ring Segment Table.
 #[derive(Clone)]
 pub struct XhciEventRingSeg {
     mem: Arc<AddressSpace>,
@@ -209,5 +324,28 @@ impl Display for XhciEventRingSeg {
             "XhciEventRingSeg addr_lo {:x} addr_hi {:x} size {} rsvd {}",
             self.addr_lo, self.addr_hi, self.size, self.rsvd
         )
+    }
+}
+
+impl XhciEventRingSeg {
+    pub fn new(mem: &Arc<AddressSpace>) -> Self {
+        Self {
+            mem: mem.clone(),
+            addr_lo: 0,
+            addr_hi: 0,
+            size: 0,
+            rsvd: 0,
+        }
+    }
+
+    /// Fetch the event ring segment.
+    pub fn fetch_event_ring_seg(&mut self, addr: u64) -> Result<()> {
+        let mut buf = [0_u8; TRB_SIZE as usize];
+        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf, TRB_SIZE as u64)?;
+        self.addr_lo = LittleEndian::read_u32(&buf);
+        self.addr_hi = LittleEndian::read_u32(&buf[4..]);
+        self.size = LittleEndian::read_u32(&buf[8..]);
+        self.rsvd = LittleEndian::read_u32(&buf[12..]);
+        Ok(())
     }
 }
