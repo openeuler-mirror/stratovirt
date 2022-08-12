@@ -486,7 +486,17 @@ impl Default for UsbDevice {
 /// Include device handle attach/detach and the transfer between controller and device.
 pub trait UsbDeviceOps: Send + Sync {
     /// Handle the attach ops when attach device to controller.
-    fn handle_attach(&mut self) -> Result<()>;
+    fn handle_attach(&mut self) -> Result<()> {
+        let usb_dev = self.get_mut_usb_device();
+        let mut locked_dev = usb_dev.lock().unwrap();
+        locked_dev.attached = true;
+        locked_dev.state = UsbDeviceState::Attached;
+        drop(locked_dev);
+        let usb_dev = self.get_mut_usb_device();
+        let mut locked_dev = usb_dev.lock().unwrap();
+        locked_dev.set_default_descriptor()?;
+        Ok(())
+    }
 
     /// Reset the USB device.
     fn reset(&mut self);
@@ -496,10 +506,25 @@ pub trait UsbDeviceOps: Send + Sync {
     fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>);
 
     /// Set the attached USB port.
-    fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>);
+    fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>) {
+        let usb_dev = self.get_mut_usb_device();
+        let mut locked_dev = usb_dev.lock().unwrap();
+        locked_dev.port = port;
+    }
 
     /// Handle usb packet, used for controller to deliever packet to device.
-    fn handle_packet(&mut self, packet: &mut UsbPacket);
+    fn handle_packet(&mut self, packet: &mut UsbPacket) {
+        if packet.state != UsbPacketState::Setup {
+            error!("The packet state is not Setup");
+            return;
+        }
+        if let Err(e) = self.process_packet(packet) {
+            error!("Failed to process packet: {}", e);
+        }
+        if packet.status != UsbPacketStatus::Nak {
+            packet.state = UsbPacketState::Complete;
+        }
+    }
 
     /// Handle control pakcet.
     fn handle_control(
@@ -522,10 +547,96 @@ pub trait UsbDeviceOps: Send + Sync {
     fn get_mut_usb_device(&mut self) -> Arc<Mutex<UsbDevice>>;
 
     /// Get the device speed.
-    fn speed(&self) -> u32;
+    fn speed(&self) -> u32 {
+        let usb_dev = self.get_usb_device();
+        let locked_dev = usb_dev.lock().unwrap();
+        locked_dev.speed
+    }
 
     /// If USB device is attached.
-    fn attached(&self) -> bool;
+    fn attached(&self) -> bool {
+        let usb_dev = self.get_usb_device();
+        let locked_dev = usb_dev.lock().unwrap();
+        locked_dev.attached
+    }
+
+    fn process_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
+        packet.status = UsbPacketStatus::Success;
+        let ep = if let Some(ep) = &packet.ep {
+            ep.upgrade().unwrap()
+        } else {
+            bail!("Failed to find ep");
+        };
+        let locked_ep = ep.lock().unwrap();
+        let nr = locked_ep.nr;
+        drop(locked_ep);
+        if nr == 0 {
+            if packet.parameter != 0 {
+                return self.do_parameter(packet);
+            }
+            match packet.pid as u8 {
+                USB_TOKEN_SETUP => {
+                    warn!("process_packet USB_TOKEN_SETUP not implemented");
+                }
+                USB_TOKEN_IN => {
+                    warn!("process_packet USB_TOKEN_IN not implemented");
+                }
+                USB_TOKEN_OUT => {
+                    warn!("process_packet USB_TOKEN_OUT not implemented");
+                }
+                _ => {
+                    warn!("Unknown pid {}", packet.pid);
+                    packet.status = UsbPacketStatus::Stall;
+                }
+            }
+        } else {
+            self.handle_data(packet);
+        }
+        Ok(())
+    }
+
+    fn do_parameter(&mut self, p: &mut UsbPacket) -> Result<()> {
+        let usb_dev = self.get_mut_usb_device();
+        let mut locked_dev = usb_dev.lock().unwrap();
+        for i in 0..8 {
+            locked_dev.setup_buf[i] = (p.parameter >> (i * 8)) as u8;
+        }
+        locked_dev.setup_state = SetupState::Parameter;
+        locked_dev.setup_index = 0;
+        let device_req = UsbDeviceRequest {
+            request_type: locked_dev.setup_buf[0],
+            request: locked_dev.setup_buf[1],
+            value: (locked_dev.setup_buf[3] as u16) << 8 | locked_dev.setup_buf[2] as u16,
+            index: (locked_dev.setup_buf[5] as u16) << 8 | locked_dev.setup_buf[4] as u16,
+            length: (locked_dev.setup_buf[7] as u16) << 8 | locked_dev.setup_buf[6] as u16,
+        };
+        if device_req.length as usize > locked_dev.data_buf.len() {
+            bail!("data buffer small len {}", device_req.length);
+        }
+        locked_dev.setup_len = device_req.length as u32;
+        if p.pid as u8 == USB_TOKEN_OUT {
+            let len = locked_dev.data_buf.len();
+            usb_packet_transfer(p, &mut locked_dev.data_buf, len);
+        }
+        // Drop locked for handle_control use it
+        drop(locked_dev);
+        let mut data_buf: [u8; 4096] = [0; 4096];
+        self.handle_control(p, &device_req, &mut data_buf);
+        let mut locked_dev = usb_dev.lock().unwrap();
+        locked_dev.data_buf = data_buf.to_vec();
+        if p.status == UsbPacketStatus::Async {
+            return Ok(());
+        }
+        if p.actual_length < locked_dev.setup_len {
+            locked_dev.setup_len = p.actual_length;
+        }
+        if p.pid as u8 == USB_TOKEN_IN {
+            p.actual_length = 0;
+            let len = locked_dev.data_buf.len();
+            usb_packet_transfer(p, &mut locked_dev.data_buf, len);
+        }
+        Ok(())
+    }
 }
 
 /// Io vector which save the hva.
@@ -609,4 +720,52 @@ impl Default for UsbPacket {
             state: UsbPacketState::Undefined,
         }
     }
+}
+
+fn read_mem(hva: u64, buf: &mut [u8]) {
+    let slice = unsafe { std::slice::from_raw_parts(hva as *const u8, buf.len()) };
+    buf.clone_from_slice(&slice[..buf.len()]);
+}
+
+fn write_mem(hva: u64, buf: &[u8]) {
+    use std::io::Write;
+    let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
+    if let Err(e) = (&mut slice).write(buf) {
+        error!("Failed to write mem {}", e);
+    }
+}
+
+/// Transfer packet from host to device or from device to host.
+pub fn usb_packet_transfer(packet: &mut UsbPacket, vec: &mut Vec<u8>, len: usize) {
+    let to_host = packet.pid as u8 & USB_TOKEN_IN == USB_TOKEN_IN;
+
+    if to_host {
+        let mut copyed = 0;
+        let mut offset = 0;
+        for iov in &packet.iovecs {
+            let cnt = std::cmp::min(iov.iov_len, len - copyed);
+            let tmp = &vec[offset..(offset + cnt)];
+            write_mem(iov.iov_base, tmp);
+            copyed += cnt;
+            offset += cnt;
+            if len - copyed == 0 {
+                break;
+            }
+        }
+    } else {
+        let mut copyed = 0;
+        let mut offset = 0;
+        for iov in &packet.iovecs {
+            let cnt = std::cmp::min(iov.iov_len, len - copyed);
+            let tmp = &mut vec[offset..(offset + cnt)];
+            read_mem(iov.iov_base, tmp);
+            copyed += cnt;
+            offset += cnt;
+            if len - copyed == 0 {
+                break;
+            }
+        }
+    }
+
+    packet.actual_length += len as u32;
 }
