@@ -110,6 +110,16 @@ impl UsbPort {
             index,
         }
     }
+
+    /// If the USB port attached USB device.
+    pub fn is_attached(&self) -> bool {
+        if let Some(dev) = &self.dev {
+            let locked_dev = dev.lock().unwrap();
+            locked_dev.attached()
+        } else {
+            false
+        }
+    }
 }
 
 /// USB descriptor strings.

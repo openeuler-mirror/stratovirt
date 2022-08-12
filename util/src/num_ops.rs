@@ -108,6 +108,48 @@ pub fn write_u32(value: u32, page: u32) -> u64 {
     }
 }
 
+/// Write the given u32 to the low bits in u64, keep the high bits,
+/// returns the u64 value.
+///
+/// # Arguments
+///
+/// * `origin` - The origin u64 value.
+/// * `value` - The set u32 value.
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::write_u64_low;
+///
+/// let value = write_u64_low(0x1000_0000_0000_0000, 0x1000_0000);
+/// assert!(value == 0x1000_0000_1000_0000);
+/// ```
+pub fn write_u64_low(origin: u64, value: u32) -> u64 {
+    origin & 0xFFFF_FFFF_0000_0000_u64 | u64::from(value)
+}
+
+/// Write the given u32 to the high bits in u64, keep the low bits,
+/// returns the u64 value.
+///
+/// # Arguments
+///
+/// * `origin` - The origin u64 value.
+/// * `value` - The set u32 value.
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::write_u64_high;
+///
+/// let value = write_u64_high(0x0000_0000_1000_0000, 0x1000_0000);
+/// assert!(value == 0x1000_0000_1000_0000);
+/// ```
+pub fn write_u64_high(origin: u64, value: u32) -> u64 {
+    u64::from(value) << 32 | (origin & 0x0000_0000_FFFF_FFFF_u64)
+}
+
 ///  Extract from the 32 bit input @value the bit field specified by the
 ///  @start and @length parameters, and return it. The bit field must
 ///  lie entirely within the 32 bit word. It is valid to request that
@@ -238,6 +280,30 @@ mod test {
         assert_eq!(write_u32(0x1234_5678, 0), 0x1234_5678u64);
         assert_eq!(write_u32(0x1234_5678, 1), 0x1234_5678_0000_0000u64);
         assert_eq!(write_u32(0x1234_5678, 2), 0);
+    }
+
+    #[test]
+    fn test_write_u64_low() {
+        assert_eq!(
+            write_u64_low(0x0000_0000_FFFF_FFFF_u64, 0x1234_5678),
+            0x0000_0000_1234_5678_u64
+        );
+        assert_eq!(
+            write_u64_low(0xFFFF_FFFF_0000_0000_u64, 0x1234_5678),
+            0xFFFF_FFFF_1234_5678_u64
+        );
+    }
+
+    #[test]
+    fn test_write_u64_high() {
+        assert_eq!(
+            write_u64_high(0x0000_0000_FFFF_FFFF_u64, 0x1234_5678),
+            0x1234_5678_FFFF_FFFF_u64
+        );
+        assert_eq!(
+            write_u64_high(0xFFFF_FFFF_0000_0000_u64, 0x1234_5678),
+            0x1234_5678_0000_0000_u64
+        );
     }
 
     #[test]
