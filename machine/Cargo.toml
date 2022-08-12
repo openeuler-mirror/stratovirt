@@ -30,6 +30,7 @@ sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 virtio = { path = "../virtio" }
 vfio = { path = "../vfio" }
+usb = { path = "../usb" }
 
 [features]
 default = ["qmp"]
