@@ -251,6 +251,9 @@ const PCIE_CAP_LINK_TLS_16GT: u16 = 0x0004;
 // PCIe type flag
 const PCI_EXP_FLAGS_TYPE_SHIFT: u16 = 4;
 const PCI_EXP_FLAGS_TYPE: u16 = 0x00f0;
+// XHCI device id
+pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
+pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
 
 /// Type of bar region.
 #[derive(PartialEq, Debug, Copy, Clone)]

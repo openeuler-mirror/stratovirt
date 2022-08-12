@@ -11,5 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod xhci_controller;
+pub mod xhci_pci;
 pub mod xhci_regs;
 mod xhci_ring;
