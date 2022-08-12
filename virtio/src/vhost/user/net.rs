@@ -52,7 +52,7 @@ pub struct Net {
     /// System address space.
     mem_space: Arc<AddressSpace>,
     /// Vhost user client
-    client: Option<VhostUserClient>,
+    client: Option<Arc<Mutex<VhostUserClient>>>,
     /// The notifier events from host.
     call_events: Vec<EventFd>,
     /// EventFd for deactivate control Queue.
@@ -73,10 +73,12 @@ impl Net {
         }
     }
 
-    fn stop_event(&mut self) -> Result<()> {
+    fn delete_event(&mut self) -> Result<()> {
         match &self.client {
             Some(client) => {
                 client
+                    .lock()
+                    .unwrap()
                     .delete_event()
                     .chain_err(|| "Failed to delete vhost-user net event")?;
             }
@@ -92,7 +94,7 @@ impl Net {
     }
 
     fn clean_up(&mut self) -> Result<()> {
-        self.stop_event()?;
+        self.delete_event()?;
         self.device_features = 0_u64;
         self.driver_features = 0_u64;
         self.device_config = VirtioNetConfig::default();
@@ -115,11 +117,17 @@ impl VirtioDevice for Net {
             .chain_err(|| {
             "Failed to create the client which communicates with the server for vhost-user net"
         })?;
-        client
-            .add_event_notifier()
-            .chain_err(|| "Failed to add event nitifier for vhost-user net")?;
+        let client = Arc::new(Mutex::new(client));
+
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(client.clone()),
+            None,
+        )
+        .chain_err(|| "Failed to update event for client sock")?;
 
         self.device_features = client
+            .lock()
+            .unwrap()
             .get_features()
             .chain_err(|| "Failed to get features for vhost-user net")?;
 
@@ -228,11 +236,10 @@ impl VirtioDevice for Net {
         queues: &[Arc<Mutex<Queue>>],
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
-        let mut queue_num = queues.len();
+        let queue_num = queues.len();
         if ((self.driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
-            queue_num -= 1;
 
             let ctrl_handler = NetCtrlHandler {
                 ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt),
@@ -248,83 +255,16 @@ impl VirtioDevice for Net {
             )?;
         }
 
-        let client = match &self.client {
-            Some(client_) => client_,
+        let mut client = match &self.client {
+            Some(client) => client.lock().unwrap(),
             None => return Err("Failed to get client for vhost-user net".into()),
         };
 
-        client
-            .set_owner()
-            .chain_err(|| "Failed to set owner for vhost-user net")?;
-
         let features = self.driver_features & !(1 << VIRTIO_NET_F_MAC);
-        client
-            .set_features(features)
-            .chain_err(|| "Failed to set features for vhost-user net")?;
-
-        client
-            .set_mem_table()
-            .chain_err(|| "Failed to set mem table for vhost-user net")?;
-
-        // Set all vring num to notify ovs/dpdk how many queues it needs to poll
-        // before setting vring info.
-        for (queue_index, queue_mutex) in queues.iter().enumerate().take(queue_num) {
-            let queue = queue_mutex.lock().unwrap();
-            let actual_size = queue.vring.actual_size();
-            client
-                .set_vring_num(queue_index, actual_size)
-                .chain_err(|| {
-                    format!(
-                        "Failed to set vring num for vhost-user net, index: {}, size: {}",
-                        queue_index, actual_size,
-                    )
-                })?;
-        }
-
-        for (queue_index, queue_mutex) in queues.iter().enumerate().take(queue_num) {
-            let queue = queue_mutex.lock().unwrap();
-            let queue_config = queue.vring.get_queue_config();
-
-            client
-                .set_vring_addr(&queue_config, queue_index, 0)
-                .chain_err(|| {
-                    format!(
-                        "Failed to set vring addr for vhost-user net, index: {}",
-                        queue_index,
-                    )
-                })?;
-            client.set_vring_base(queue_index, 0).chain_err(|| {
-                format!(
-                    "Failed to set vring base for vhost-user net, index: {}",
-                    queue_index,
-                )
-            })?;
-            client
-                .set_vring_kick(queue_index, &queue_evts[queue_index])
-                .chain_err(|| {
-                    format!(
-                        "Failed to set vring kick for vhost-user net, index: {}",
-                        queue_index,
-                    )
-                })?;
-            client
-                .set_vring_call(queue_index, &self.call_events[queue_index])
-                .chain_err(|| {
-                    format!(
-                        "Failed to set vring call for vhost-user net, index: {}",
-                        queue_index,
-                    )
-                })?;
-        }
-
-        for (queue_index, _) in queues.iter().enumerate().take(queue_num) {
-            client.set_vring_enable(queue_index, true).chain_err(|| {
-                format!(
-                    "Failed to set vring enable for vhost-user net, index: {}",
-                    queue_index,
-                )
-            })?;
-        }
+        client.features = features;
+        client.set_queues(queues);
+        client.set_queue_evts(&queue_evts);
+        client.activate_vhost_user()?;
 
         Ok(())
     }
@@ -335,6 +275,11 @@ impl VirtioDevice for Net {
             let cloned_evt_fd = fd.try_clone().unwrap();
             self.call_events.push(cloned_evt_fd);
         }
+
+        match &self.client {
+            Some(client) => client.lock().unwrap().set_call_events(queue_evts),
+            None => return Err("Failed to get client for vhost-user net".into()),
+        };
 
         Ok(())
     }
@@ -351,7 +296,7 @@ impl VirtioDevice for Net {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        self.stop_event()?;
+        self.delete_event()?;
         self.call_events.clear();
         self.client = None;
 
