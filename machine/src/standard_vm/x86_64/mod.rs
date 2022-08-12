@@ -69,7 +69,6 @@ const HOLE_640K_END: u64 = 0x0010_0000;
 
 /// The type of memory layout entry on x86_64
 #[repr(usize)]
-#[allow(dead_code)]
 pub enum LayoutEntryType {
     MemBelow4g = 0_usize,
     PcieEcam,

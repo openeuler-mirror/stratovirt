@@ -250,7 +250,6 @@ impl X86CPUState {
         Ok(())
     }
 
-    #[allow(clippy::cast_ptr_alignment)]
     fn setup_lapic(&mut self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         // Disable nmi and external interrupt before enter protected mode
         // See: https://elixir.bootlin.com/linux/v4.19.123/source/arch/x86/include/asm/apicdef.h

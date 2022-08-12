@@ -66,7 +66,6 @@ use crate::errors::{ErrorKind, Result};
 use crate::MachineOps;
 
 /// The type of memory layout entry on aarch64
-#[allow(dead_code)]
 pub enum LayoutEntryType {
     Flash = 0,
     GicDist,

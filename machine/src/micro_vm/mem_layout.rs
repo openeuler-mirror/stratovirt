@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 /// The type of memory layout entry on aarch64
-#[allow(dead_code)]
 #[cfg(target_arch = "aarch64")]
 #[repr(usize)]
 pub enum LayoutEntryType {
@@ -41,7 +40,6 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
 ];
 
 /// The type of memory layout entry on x86_64
-#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 #[repr(usize)]
 pub enum LayoutEntryType {

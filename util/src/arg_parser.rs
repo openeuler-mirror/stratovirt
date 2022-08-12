@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::PartialEq;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
@@ -587,7 +588,6 @@ impl<'a> ArgMatches<'a> {
     }
 }
 
-#[allow(clippy::map_entry)]
 fn parse_cmdline(
     cmd_args: &[String],
     allow_list: &[String],
@@ -605,19 +605,21 @@ fn parse_cmdline(
 
         if cmd_arg.starts_with(PREFIX_CHARS_LONG) {
             let arg_str = split_arg(cmd_arg, PREFIX_CHARS_LONG);
-            if arg_map.contains_key(&arg_str) {
-                multi_vec.push(arg_str);
+
+            if let Entry::Vacant(e) = arg_map.entry(arg_str.clone()) {
+                e.insert(Vec::new());
             } else {
-                arg_map.insert(arg_str, Vec::new());
+                multi_vec.push(arg_str);
             }
 
             i = (j, PREFIX_CHARS_LONG);
         } else if cmd_arg.starts_with(PREFIX_CHARS_SHORT) {
             let arg_str = split_arg(cmd_arg, PREFIX_CHARS_SHORT);
-            if arg_map.contains_key(&arg_str) {
-                multi_vec.push(arg_str);
+
+            if let Entry::Vacant(e) = arg_map.entry(arg_str.clone()) {
+                e.insert(Vec::new());
             } else {
-                arg_map.insert(arg_str, Vec::new());
+                multi_vec.push(arg_str);
             }
             i = (j, PREFIX_CHARS_SHORT);
         } else {
