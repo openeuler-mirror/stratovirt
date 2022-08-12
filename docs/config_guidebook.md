@@ -623,6 +623,21 @@ Five properties can be set for chardev.
 -chardev file,id=chardev_id,path=file_path
 ```
 
+### 2.13 USB controller
+USB controller is a pci device which can be attached USB device.
+
+Three properties can be set for USB controller.
+
+* id: unique device id.
+* bus: bus number of the device.
+* addr: including slot number and function number.
+
+```shell
+-device nec-usb-xhci,id=xhci,bus=pcie.0,addr=0xa.0x0
+```
+
+Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.
