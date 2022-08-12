@@ -999,6 +999,8 @@ impl PciDevOps for VirtioPciDevice {
             &mut self.config,
             self.dev_id.clone(),
             &self.name,
+            None,
+            None,
         )?;
 
         if let Some(ref msix) = self.config.msix {
@@ -1738,6 +1740,8 @@ mod tests {
             &mut virtio_pci.config,
             virtio_pci.dev_id.clone(),
             &virtio_pci.name,
+            None,
+            None,
         )
         .unwrap();
         // Prepare valid queue config
