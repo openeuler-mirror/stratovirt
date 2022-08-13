@@ -329,13 +329,8 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         vhost_fds: None,
         ifname: String::new(),
         queues: args.queues.unwrap_or(1) * 2,
-        chardev: None,
+        chardev: args.chardev,
     };
-
-    if let Some(queues) = args.queues {
-        config.queues = queues;
-    }
-    config.chardev = args.chardev;
 
     if let Some(fds) = args.fds {
         let netdev_fd = if fds.contains(':') {
