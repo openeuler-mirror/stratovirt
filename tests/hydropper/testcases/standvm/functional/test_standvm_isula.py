@@ -140,7 +140,7 @@ def test_standvm_isula_sandbox(container):
                                                  name="sandbox1-hydropper-stand",
                                                  annotation="io.kubernetes.docker.type=podsandbox")
         LOG.info("podsandbox container id:%s", podsandbox_id)
-    
+
         podsandbox_id = podsandbox_id.strip('\n')
         container_id = kata_container.run_isula(options="-tid",
                                                 runtime="io.containerd.kata.v2",

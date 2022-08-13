@@ -89,6 +89,6 @@ def test_standvm_vfio_ssd(standvm, bdf):
     assert ret == 0
     ret, _ = testvm.serial_cmd("rm test")
     assert ret == 0
-    
+
     session.close()
     testvm.shutdown()
