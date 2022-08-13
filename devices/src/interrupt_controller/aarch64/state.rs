@@ -680,8 +680,6 @@ impl StateTransfer for GICv3Its {
         use migration::errors::ErrorKind;
 
         let mut state = GICv3ItsState::default();
-        self.access_gic_its_tables(true)
-            .map_err(|e| ErrorKind::GetGicRegsError("Its table", e.to_string()))?;
         for i in 0..8 {
             self.access_gic_its(GITS_BASER + 8 * i as u32, &mut state.baser[i], false)
                 .map_err(|e| ErrorKind::GetGicRegsError("Its baser", e.to_string()))?;

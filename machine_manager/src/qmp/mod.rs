@@ -446,6 +446,7 @@ fn qmp_command_exec(
         (query_gic_capabilities, query_gic_capabilities),
         (query_iothreads, query_iothreads),
         (query_migrate, query_migrate),
+        (cancel_migrate, cancel_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
         (list_type, list_type),
@@ -454,11 +455,13 @@ fn qmp_command_exec(
         (device_del, device_del, id),
         (blockdev_del, blockdev_del, node_name),
         (netdev_del, netdev_del, id),
+        (chardev_remove, chardev_remove, id),
         (balloon, balloon, value),
         (migrate, migrate, uri);
         (device_add, device_add),
         (blockdev_add, blockdev_add),
-        (netdev_add, netdev_add)
+        (netdev_add, netdev_add),
+        (chardev_add, chardev_add)
     );
 
     // Handle the Qmp command which macro can't cover

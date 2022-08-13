@@ -1,5 +1,5 @@
 #  libvirt
-Libvirt是StratoVirt的管理软件，它是通过创建命令行来运行StratoVirt和发送QMP命令来管理StratoVirt。目前，支持五个virsh命令来管理StratoVirt: 
+Libvirt是StratoVirt的管理软件，它是通过创建命令行来运行StratoVirt和发送QMP命令来管理StratoVirt。目前，支持五个virsh命令来管理StratoVirt:
 `virsh create`, `virsh destroy`, `virsh suspend`, `virsh resume` 和 `virsh console`.
 
 

@@ -2,13 +2,13 @@
 
 ## Introduction
 
-The VFIO driver is an IOMMU/device agnostic framework for exposing direct access to userspace, in a secure, 
-IOMMU protected environment. Virtual machine often makes use of direct device access when configured for the highest 
+The VFIO driver is an IOMMU/device agnostic framework for exposing direct access to userspace, in a secure,
+IOMMU protected environment. Virtual machine often makes use of direct device access when configured for the highest
 possible I/O performance.
 
 ## Preparation
 
-In order to successfully use VFIO device, it is mandatory that hardware supports virtualization and IOMMU groups. 
+In order to successfully use VFIO device, it is mandatory that hardware supports virtualization and IOMMU groups.
 Execute the following command on your host OS to check whether the IOMMU has been turned on.
 ```shell
 # dmesg | grep iommu

@@ -90,6 +90,18 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "chardev-add")]
+    chardev_add {
+        arguments: chardev_add,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "chardev-remove")]
+    chardev_remove {
+        arguments: chardev_remove,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     netdev_add {
         arguments: Box<netdev_add>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,6 +176,13 @@ pub enum QmpCommand {
     query_migrate {
         #[serde(default)]
         arguments: query_migrate,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    #[serde(rename = "migrate_cancel")]
+    cancel_migrate {
+        #[serde(default)]
+        arguments: cancel_migrate,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
@@ -595,11 +614,110 @@ pub struct netdev_add {
     pub downscript: Option<String>,
     pub script: Option<String>,
     pub queues: Option<u16>,
+    pub chardev: Option<String>,
 }
 
 pub type NetDevAddArgument = netdev_add;
 
 impl Command for netdev_add {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddrDataOptions {
+    pub path: String,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddrOptions {
+    #[serde(rename = "type")]
+    pub addr_type: String,
+    #[serde(rename = "data")]
+    pub addr_data: AddrDataOptions,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendDataOptions {
+    pub addr: AddrOptions,
+    pub server: bool,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendOptions {
+    #[serde(rename = "type")]
+    pub backend_type: String,
+    #[serde(rename = "data")]
+    pub backend_data: BackendDataOptions,
+}
+
+/// chardev-add
+///
+/// # Arguments
+///
+/// * `id` - the character device's ID, must be unique.
+/// * `backend` - the chardev backend info.
+///
+/// Additional arguments depend on the type.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "chardev-add",
+///      "arguments": { "id": "chardev_id", "backend": { "type": "socket", "data": {
+///            "addr": { "type": "unix", "data": { "path": "/path/to/socket" } },
+///            "server": false }}}}
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct chardev_add {
+    pub id: String,
+    pub backend: BackendOptions,
+}
+
+pub type CharDevAddArgument = chardev_add;
+
+impl Command for chardev_add {
+    type Res = Empty;
+
+    fn back(self) -> Empty {
+        Default::default()
+    }
+}
+
+/// chardev-remove
+///
+/// Remove a chardev backend.
+///
+/// # Arguments
+///
+/// * `id` - The ID of the character device.
+///
+/// # Errors
+///
+/// If `id` is not a valid chardev backend, DeviceNotFound
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "chardev-remove", "arguments": { "id": "chardev_id" } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct chardev_remove {
+    pub id: String,
+}
+
+impl Command for chardev_remove {
     type Res = Empty;
 
     fn back(self) -> Empty {
@@ -957,6 +1075,20 @@ impl Command for migrate {
 pub struct query_migrate {}
 
 impl Command for query_migrate {
+    type Res = MigrationInfo;
+
+    fn back(self) -> MigrationInfo {
+        Default::default()
+    }
+}
+
+/// cancel-migrate:
+///
+/// Cancel migrate the current VM.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct cancel_migrate {}
+
+impl Command for cancel_migrate {
     type Res = MigrationInfo;
 
     fn back(self) -> MigrationInfo {

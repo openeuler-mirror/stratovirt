@@ -17,7 +17,10 @@ use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    snapshot::PL031_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
+    StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
@@ -106,7 +109,11 @@ impl PL031 {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
 
-        MigrationManager::register_device_instance_mutex(PL031State::descriptor(), dev);
+        MigrationManager::register_device_instance(
+            PL031State::descriptor(),
+            dev,
+            PL031_SNAPSHOT_ID,
+        );
 
         Ok(())
     }

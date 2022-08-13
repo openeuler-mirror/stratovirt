@@ -263,6 +263,11 @@ impl KvmMemoryListener {
         unsafe {
             KVM_FDS
                 .load()
+                .add_mem_slot(kvm_region)
+                .chain_err(|| "Failed to add memory slot to kvm")?;
+
+            KVM_FDS
+                .load()
                 .vm_fd
                 .as_ref()
                 .unwrap()
@@ -316,6 +321,11 @@ impl KvmMemoryListener {
             flags: 0,
         };
         unsafe {
+            KVM_FDS
+                .load()
+                .remove_mem_slot(kvm_region)
+                .chain_err(|| "Failed to remove memory slot to kvm")?;
+
             KVM_FDS
                 .load()
                 .vm_fd

@@ -22,7 +22,10 @@ use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::DeviceFd;
 use log::error;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
-use migration::{MigrationManager, MigrationRestoreOrder};
+use migration::{
+    snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID},
+    MigrationManager,
+};
 use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
@@ -83,7 +86,7 @@ pub struct GICv3 {
     /// Number of vCPUs, determines the number of redistributor and CPU interface.
     pub(crate) vcpu_count: u64,
     /// GICv3 ITS device.
-    pub(crate) its_dev: Option<Arc<GICv3Its>>,
+    pub its_dev: Option<Arc<GICv3Its>>,
     /// Maximum irq number.
     pub(crate) nr_irqs: u32,
     /// GICv3 redistributor info, support multiple redistributor regions.
@@ -249,15 +252,23 @@ impl MachineLifecycle for GICv3 {
             0,
             true,
         )
-        .is_ok()
+        .is_err()
         {
-            let mut state = self.state.lock().unwrap();
-            *state = KvmVmState::Running;
-
-            true
-        } else {
-            false
+            return false;
         }
+
+        // The ITS tables need to be flushed into guest RAM before VM pause.
+        if let Some(its_dev) = &self.its_dev {
+            if let Err(e) = its_dev.access_gic_its_tables(true) {
+                error!("Failed to access GIC ITS tables, error: {}", e);
+                return false;
+            }
+        }
+
+        let mut state = self.state.lock().unwrap();
+        *state = KvmVmState::Running;
+
+        true
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
@@ -362,16 +373,16 @@ impl GICDevice for GICv3 {
     ) -> Result<Arc<dyn GICDevice + std::marker::Send + std::marker::Sync>> {
         let gicv3 = Arc::new(GICv3::new(gic_conf)?);
         if gicv3.its_dev.is_some() {
-            MigrationManager::register_device_instance(
+            MigrationManager::register_gic_instance(
                 GICv3ItsState::descriptor(),
                 gicv3.its_dev.as_ref().unwrap().clone(),
-                MigrationRestoreOrder::Gicv3Its,
+                GICV3_ITS_SNAPSHOT_ID,
             );
         }
-        MigrationManager::register_device_instance(
+        MigrationManager::register_gic_instance(
             GICv3State::descriptor(),
             gicv3.clone(),
-            MigrationRestoreOrder::Gicv3,
+            GICV3_SNAPSHOT_ID,
         );
 
         Ok(gicv3)
@@ -431,7 +442,7 @@ impl GICDevice for GICv3 {
     }
 }
 
-pub(crate) struct GICv3Its {
+pub struct GICv3Its {
     /// The fd for the GICv3Its device
     fd: DeviceFd,
 

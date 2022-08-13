@@ -1042,11 +1042,7 @@ impl PciDevOps for VirtioPciDevice {
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
-        MigrationManager::register_device_instance_mutex_with_id(
-            VirtioPciState::descriptor(),
-            dev,
-            &name,
-        );
+        MigrationManager::register_device_instance(VirtioPciState::descriptor(), dev, &name);
 
         Ok(())
     }
@@ -1065,14 +1061,9 @@ impl PciDevOps for VirtioPciDevice {
             msix.lock().unwrap().msix_update = None;
         }
 
-        MigrationManager::unregister_device_instance_mutex_by_id(
-            MsixState::descriptor(),
-            &self.name,
-        );
-        MigrationManager::unregister_device_instance_mutex_by_id(
-            VirtioPciState::descriptor(),
-            &self.name,
-        );
+        MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name);
+        MigrationManager::unregister_device_instance(VirtioPciState::descriptor(), &self.name);
+
         Ok(())
     }
 

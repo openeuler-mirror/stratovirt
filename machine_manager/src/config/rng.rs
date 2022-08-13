@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use error_chain::bail;
+use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result};
 use super::{pci_args_check, ObjConfig};
@@ -19,7 +20,7 @@ use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 const MIN_BYTES_PER_SEC: u64 = 64;
 const MAX_BYTES_PER_SEC: u64 = 1_000_000_000;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RngObjConfig {
     pub id: String,
     pub filename: String,
@@ -114,7 +115,6 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
     }
 
     if let Some(object_cfg) = vm_config.object.remove(&rng) {
-        #[allow(irrefutable_let_patterns)]
         if let ObjConfig::Rng(obj_cfg) = object_cfg {
             rng_cfg.random_file = obj_cfg.filename;
         }

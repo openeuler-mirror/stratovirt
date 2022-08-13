@@ -71,6 +71,9 @@ pub mod errors {
             ElementEmpty {
                 display("Failed to get iovec from element!")
             }
+            VirtQueueIsNone {
+                display("Virt queue is none!")
+            }
             IncorrectQueueNum(expect: usize, actual: usize) {
                 display("Cannot perform activate. Expected {} queue(s), got {}", expect, actual)
             }

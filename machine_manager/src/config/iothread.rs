@@ -10,13 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use serde::{Deserialize, Serialize};
+
 use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
 
 const MAX_IOTHREAD_NUM: usize = 8;
 
 /// Config structure for iothread.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IothreadConfig {
     pub id: String,
 }

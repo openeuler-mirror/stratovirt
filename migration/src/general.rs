@@ -1,0 +1,244 @@
+// Copyright (c) 2022 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// StratoVirt is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan
+// PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//         http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
+use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::hash::{Hash, Hasher};
+use std::io::{Read, Write};
+use std::mem::size_of;
+
+use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::manager::{Instance, MIGRATION_MANAGER};
+use crate::protocol::{
+    DeviceStateDesc, FileFormat, MigrationHeader, MigrationStatus, VersionCheck, HEADER_LENGTH,
+};
+use crate::MigrationManager;
+use util::{byte_code::ByteCode, unix::host_page_size};
+
+impl MigrationManager {
+    /// Write `MigrationHeader` to `Write` trait object as bytes.
+    /// `MigrationHeader` will occupy the first 4096 bytes in snapshot file.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_format` - confirm snapshot file format.
+    /// * `fd` - The `Write` trait object to write header message.
+    pub fn save_header(file_format: Option<FileFormat>, fd: &mut dyn Write) -> Result<()> {
+        let mut header = MigrationHeader::default();
+        if let Some(format) = file_format {
+            header.format = format;
+            header.desc_len = match format {
+                FileFormat::Device => Self::desc_db_len()?,
+                FileFormat::MemoryFull => (host_page_size() as usize) * 2 - HEADER_LENGTH,
+            };
+        } else {
+            header.desc_len = Self::desc_db_len()?;
+        }
+
+        let mut input_slice = [0u8; HEADER_LENGTH];
+        input_slice[0..size_of::<MigrationHeader>()].copy_from_slice(header.as_bytes());
+        fd.write(&input_slice)
+            .chain_err(|| "Failed to save migration header")?;
+
+        Ok(())
+    }
+
+    /// Restore and parse `MigrationHeader` from `Read` object.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - The `Read` trait object to read header message.
+    pub fn restore_header(fd: &mut dyn Read) -> Result<MigrationHeader> {
+        let mut header_bytes = [0u8; size_of::<MigrationHeader>()];
+        fd.read_exact(&mut header_bytes)?;
+
+        let mut place_holder = [0u8; HEADER_LENGTH - size_of::<MigrationHeader>()];
+        fd.read_exact(&mut place_holder)?;
+
+        Ok(*MigrationHeader::from_bytes(&header_bytes)
+            .ok_or(ErrorKind::FromBytesError("HEADER"))?)
+    }
+
+    /// Write all `DeviceStateDesc` in `desc_db` hashmap to `Write` trait object.
+    pub fn save_desc_db(fd: &mut dyn Write) -> Result<()> {
+        let length = Self::desc_db_len()?;
+        let mut buffer = Vec::new();
+        buffer.resize(length, 0);
+        let mut start = 0;
+
+        let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
+        for (_, desc) in desc_db.iter() {
+            let desc_str = serde_json::to_string(desc)?;
+            let desc_bytes = desc_str.as_bytes();
+            buffer[start..start + desc_bytes.len()].copy_from_slice(desc_bytes);
+            start += desc_bytes.len();
+        }
+        fd.write_all(&buffer)
+            .chain_err(|| "Failed to write descriptor message.")?;
+
+        Ok(())
+    }
+
+    /// Load and parse device state descriptor from `Read` trait object. Save as a Hashmap.
+    pub fn restore_desc_db(
+        fd: &mut dyn Read,
+        desc_length: usize,
+    ) -> Result<HashMap<u64, DeviceStateDesc>> {
+        let mut desc_buffer = Vec::new();
+        desc_buffer.resize(desc_length, 0);
+        fd.read_exact(&mut desc_buffer)?;
+        let mut snapshot_desc_db = HashMap::<u64, DeviceStateDesc>::new();
+
+        let deserializer = serde_json::Deserializer::from_slice(&desc_buffer);
+        for desc in deserializer.into_iter::<DeviceStateDesc>() {
+            let device_desc: DeviceStateDesc = match desc {
+                Ok(desc) => desc,
+                Err(_) => break,
+            };
+            snapshot_desc_db.insert(device_desc.alias, device_desc);
+        }
+
+        Ok(snapshot_desc_db)
+    }
+
+    /// Get vm state and check its version can be match.
+    ///
+    /// # Arguments
+    ///
+    /// * fd - The `Read` trait object.
+    /// * snap_desc_db - snap_desc_db - snapshot state descriptor.
+    pub fn check_vm_state(
+        fd: &mut dyn Read,
+        desc_db: &HashMap<u64, DeviceStateDesc>,
+    ) -> Result<(Vec<u8>, u64)> {
+        let mut instance = Instance::default();
+        fd.read_exact(unsafe {
+            std::slice::from_raw_parts_mut(
+                &mut instance as *mut Instance as *mut u8,
+                size_of::<Instance>() as usize,
+            )
+        })
+        .chain_err(|| "Failed to read instance of object")?;
+
+        let locked_desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
+        let snap_desc = desc_db
+            .get(&instance.object)
+            .chain_err(|| "Failed to get instance object")?;
+        let current_desc = locked_desc_db
+            .get(&snap_desc.name)
+            .chain_err(|| "Failed to get snap_desc name")?;
+
+        let mut state_data = Vec::new();
+        state_data.resize(snap_desc.size as usize, 0);
+        fd.read_exact(&mut state_data)?;
+
+        match current_desc.check_version(snap_desc) {
+            VersionCheck::Same => {}
+            VersionCheck::Compat => {
+                current_desc
+                    .add_padding(snap_desc, &mut state_data)
+                    .chain_err(|| "Failed to transform snapshot data version")?;
+            }
+            VersionCheck::Mismatch => {
+                return Err(ErrorKind::VersionNotFit(
+                    current_desc.compat_version,
+                    snap_desc.current_version,
+                )
+                .into())
+            }
+        }
+
+        Ok((state_data, instance.name))
+    }
+
+    /// Get `Device`'s alias from device type string.
+    ///
+    /// # Argument
+    ///
+    /// * `device_type` - The type string of device instance.
+    pub fn get_desc_alias(device_type: &str) -> Option<u64> {
+        Some(translate_id(device_type))
+    }
+
+    /// Return `desc_db` value len(0 restored as `serde_json`)
+    pub fn desc_db_len() -> Result<usize> {
+        let mut db_data_len = 0;
+        let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
+        for (_, desc) in desc_db.iter() {
+            let desc_str = serde_json::to_string(desc)?;
+            db_data_len += desc_str.as_bytes().len();
+        }
+
+        Ok(db_data_len)
+    }
+
+    /// Get current migration status for migration manager.
+    pub fn status() -> MigrationStatus {
+        *MIGRATION_MANAGER.status.read().unwrap()
+    }
+
+    /// Set a new migration status for migration manager.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_status`: new migration status, the transform must be illegal.
+    pub fn set_status(new_status: MigrationStatus) -> Result<()> {
+        let mut status = MIGRATION_MANAGER.status.write().unwrap();
+        *status = status.transfer(new_status)?;
+
+        Ok(())
+    }
+
+    /// Check whether current migration status is active.
+    pub fn is_active() -> bool {
+        Self::status() == MigrationStatus::Active
+    }
+
+    /// Check whether current migration status is cancel.
+    pub fn is_canceled() -> bool {
+        Self::status() == MigrationStatus::Canceled
+    }
+}
+
+pub trait Lifecycle {
+    /// Pause VM during migration.
+    fn pause() -> Result<()> {
+        if let Some(locked_vm) = &MIGRATION_MANAGER.vmm.read().unwrap().vm {
+            locked_vm.lock().unwrap().pause();
+        }
+
+        Ok(())
+    }
+
+    /// Resume devices during migration.
+    fn resume() -> Result<()> {
+        let locked_devices = &MIGRATION_MANAGER.vmm.read().unwrap().devices;
+        for (_, device) in locked_devices.iter() {
+            device.lock().unwrap().resume()?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Lifecycle for MigrationManager {}
+
+/// Converting device instance to unique ID of u64 bit.
+/// Because name of String type in `Instance` does not implement Copy trait.
+///
+/// # Arguments
+///
+/// * `dev_id` - The device id.
+pub fn translate_id(dev_id: &str) -> u64 {
+    let mut hash = DefaultHasher::new();
+    dev_id.hash(&mut hash);
+    hash.finish()
+}

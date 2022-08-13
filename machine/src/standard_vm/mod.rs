@@ -78,8 +78,8 @@ use devices::legacy::FwCfgOps;
 use error_chain::{bail, ChainedError};
 use errors::{Result, ResultExt};
 use machine_manager::config::{
-    get_netdev_config, get_pci_df, BlkDevConfig, ConfigCheck, DriveConfig, NetworkInterfaceConfig,
-    NumaNode, NumaNodes, PciBdf, VmConfig,
+    get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
+    DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, VmConfig,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -87,7 +87,10 @@ use migration::MigrationManager;
 use pci::hotplug::{handle_plug, handle_unplug_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
-use virtio::{qmp_balloon, qmp_query_balloon, Block, BlockState, VhostKern, VirtioNetState};
+use virtio::{
+    qmp_balloon, qmp_query_balloon, Block, BlockState, VhostKern, VhostUser, VirtioDevice,
+    VirtioNetState,
+};
 
 #[cfg(target_arch = "aarch64")]
 use aarch64::{LayoutEntryType, MEM_LAYOUT};
@@ -204,8 +207,6 @@ trait StdMachineOps: AcpiBuilder {
     fn get_cpu_topo(&self) -> &CpuTopology;
 
     fn get_cpus(&self) -> &Vec<Arc<CPU>>;
-
-    fn get_vm_config(&self) -> &Mutex<VmConfig>;
 
     fn get_numa_nodes(&self) -> &Option<NumaNodes>;
 
@@ -815,12 +816,37 @@ impl StdMachine {
             }
         }
 
-        MigrationManager::register_device_instance_mutex_with_id(
-            BlockState::descriptor(),
-            blk,
-            &blk_id,
-        );
+        MigrationManager::register_device_instance(BlockState::descriptor(), blk, &blk_id);
         Ok(())
+    }
+
+    fn get_socket_path(&self, vm_config: &VmConfig, chardev: String) -> Result<Option<String>> {
+        let char_dev = if let Some(char_dev) = vm_config.chardev.get(&chardev) {
+            char_dev
+        } else {
+            bail!("Chardev: {:?} not found for character device", &chardev);
+        };
+
+        let socket_path = match &char_dev.backend {
+            ChardevType::Socket {
+                path,
+                server,
+                nowait,
+            } => {
+                if *server || *nowait {
+                    bail!(
+                        "Argument \'server\' or \'nowait\' is not needed for chardev \'{}\'",
+                        path
+                    );
+                }
+                Some(path.clone())
+            }
+            _ => {
+                bail!("Chardev {:?} backend should be socket type.", &chardev);
+            }
+        };
+
+        Ok(socket_path)
     }
 
     fn plug_virtio_pci_net(
@@ -835,7 +861,14 @@ impl StdMachine {
             bail!("Netdev not set");
         };
 
-        let dev = if let Some(conf) = self.get_vm_config().lock().unwrap().netdevs.get(netdev) {
+        let vm_config = self.get_vm_config().lock().unwrap();
+        let dev = if let Some(conf) = vm_config.netdevs.get(netdev) {
+            let mut socket_path: Option<String> = None;
+            if let Some(chardev) = &conf.chardev {
+                socket_path = self
+                    .get_socket_path(&vm_config, (&chardev).to_string())
+                    .chain_err(|| "Failed to get socket path")?;
+            }
             let dev = NetworkInterfaceConfig {
                 id: args.id.clone(),
                 host_dev_name: conf.ifname.clone(),
@@ -846,28 +879,32 @@ impl StdMachine {
                 iothread: args.iothread.clone(),
                 queues: conf.queues,
                 mq: conf.queues > 2,
-                socket_path: None,
+                socket_path,
             };
             dev.check()?;
             dev
         } else {
             bail!("Netdev not found");
         };
+        drop(vm_config);
 
         if dev.vhost_type.is_some() {
-            let net = Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())));
-            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, false)
-                .chain_err(|| "Failed to add virtio net device")?;
+            let mut need_irqfd = false;
+            let net: Arc<Mutex<dyn VirtioDevice>> =
+                if dev.vhost_type == Some(String::from("vhost-kernel")) {
+                    Arc::new(Mutex::new(VhostKern::Net::new(&dev, self.get_sys_mem())))
+                } else {
+                    need_irqfd = true;
+                    Arc::new(Mutex::new(VhostUser::Net::new(&dev, self.get_sys_mem())))
+                };
+            self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, need_irqfd)
+                .chain_err(|| "Failed to add vhost-kernel/vhost-user net device")?;
         } else {
             let net_id = dev.id.clone();
             let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
             self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction, false)
                 .chain_err(|| "Failed to add virtio net device")?;
-            MigrationManager::register_device_instance_mutex_with_id(
-                VirtioNetState::descriptor(),
-                net,
-                &net_id,
-            );
+            MigrationManager::register_device_instance(VirtioNetState::descriptor(), net, &net_id);
         }
 
         Ok(())
@@ -1164,8 +1201,8 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
-        let config = match get_netdev_config(args) {
+    fn chardev_add(&mut self, args: qmp_schema::CharDevAddArgument) -> Response {
+        let config = match get_chardev_config(args) {
             Ok(conf) => conf,
             Err(e) => {
                 return Response::create_error_response(
@@ -1181,6 +1218,41 @@ impl DeviceInterface for StdMachine {
                 None,
             );
         }
+
+        match self
+            .get_vm_config()
+            .lock()
+            .unwrap()
+            .add_chardev_with_config(config)
+        {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn chardev_remove(&mut self, id: String) -> Response {
+        match self.get_vm_config().lock().unwrap().del_chardev_by_id(&id) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn netdev_add(&mut self, args: Box<qmp_schema::NetDevAddArgument>) -> Response {
+        let config = match get_netdev_config(args) {
+            Ok(conf) => conf,
+            Err(e) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        };
 
         match self
             .get_vm_config()

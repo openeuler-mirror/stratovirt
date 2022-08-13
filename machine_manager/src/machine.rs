@@ -17,9 +17,9 @@ use once_cell::sync::Lazy;
 use strum::VariantNames;
 
 use crate::qmp::qmp_schema::{
-    BlockDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument, DeviceProps, Events, GicCap,
-    IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities, NetDevAddArgument, PropList,
-    QmpCommand, QmpEvent, Target, TypeLists,
+    BlockDevAddArgument, CharDevAddArgument, ChardevInfo, Cmd, CmdLine, DeviceAddArgument,
+    DeviceProps, Events, GicCap, IothreadInfo, KvmInfo, MachineInfo, MigrateCapabilities,
+    NetDevAddArgument, PropList, QmpCommand, QmpEvent, Target, TypeLists,
 };
 use crate::qmp::{Response, Version};
 
@@ -166,6 +166,12 @@ pub trait DeviceInterface {
 
     fn netdev_del(&mut self, id: String) -> Response;
 
+    /// Create a new chardev device.
+    fn chardev_add(&mut self, _args: CharDevAddArgument) -> Response;
+
+    /// Remove a chardev device.
+    fn chardev_remove(&mut self, _id: String) -> Response;
+
     /// Receive a file descriptor via SCM rights and assign it a name.
     fn getfd(&self, fd_name: String, if_fd: Option<RawFd>) -> Response;
 
@@ -273,8 +279,7 @@ pub trait DeviceInterface {
     fn list_type(&self) -> Response {
         let mut vec_types = Vec::new();
         // These devices are used to interconnect with libvirt, but not been implemented yet.
-        #[allow(unused_mut)]
-        let mut list_types: Vec<(&str, &str)> = vec![
+        let list_types: Vec<(&str, &str)> = vec![
             ("ioh3420", "pcie-root-port-base"),
             ("pcie-root-port", "pcie-root-port-base"),
             ("pcie-pci-bridge", "base-pci-bridge"),
@@ -286,9 +291,10 @@ pub trait DeviceInterface {
             ("vfio-pci", "pci-device"),
             ("vhost-vsock-device", "virtio-device"),
             ("iothread", "object"),
+            #[cfg(target_arch = "aarch64")]
+            ("gpex-pcihost", "pcie-host-bridge"),
         ];
-        #[cfg(target_arch = "aarch64")]
-        list_types.push(("gpex-pcihost", "pcie-host-bridge"));
+
         for list in list_types {
             let re = TypeLists::new(String::from(list.0), String::from(list.1));
             vec_types.push(re);
@@ -417,6 +423,10 @@ pub trait MigrateInterface {
 
     /// Returns information about current migration.
     fn query_migrate(&self) -> Response {
+        Response::create_empty_response()
+    }
+
+    fn cancel_migrate(&self) -> Response {
         Response::create_empty_response()
     }
 }

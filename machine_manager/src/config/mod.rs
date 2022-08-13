@@ -84,6 +84,7 @@ pub use boot_source::*;
 pub use chardev::*;
 pub use devices::*;
 pub use drive::*;
+pub use incoming::*;
 pub use iothread::*;
 pub use machine_config::*;
 pub use network::*;
@@ -97,6 +98,7 @@ mod boot_source;
 mod chardev;
 mod devices;
 mod drive;
+mod incoming;
 mod iothread;
 mod machine_config;
 mod network;
@@ -108,6 +110,8 @@ mod vfio;
 use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 
 use error_chain::bail;
 use log::error;
@@ -122,7 +126,7 @@ pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_NODES: u32 = 128;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ObjConfig {
     Rng(RngObjConfig),
     Zone(MemZoneConfig),
@@ -149,7 +153,7 @@ fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
 }
 
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct VmConfig {
     pub guest_name: String,
     pub machine_config: MachineConfig,
@@ -166,6 +170,7 @@ pub struct VmConfig {
     pub dev_name: HashMap<String, u8>,
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
+    pub incoming: Option<Incoming>,
 }
 
 impl VmConfig {

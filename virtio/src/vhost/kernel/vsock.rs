@@ -117,30 +117,32 @@ impl Vsock {
     /// been interrupted. The driver shuts down established connections and the guest_cid
     /// configuration field is fetched again.
     fn transport_reset(&self) -> Result<()> {
-        let mut event_queue_locked = self.event_queue.as_ref().unwrap().lock().unwrap();
-        let element = event_queue_locked
-            .vring
-            .pop_avail(&self.mem_space, self.state.driver_features)
-            .chain_err(|| "Failed to get avail ring element.")?;
+        if let Some(evt_queue) = self.event_queue.as_ref() {
+            let mut event_queue_locked = evt_queue.lock().unwrap();
+            let element = event_queue_locked
+                .vring
+                .pop_avail(&self.mem_space, self.state.driver_features)
+                .chain_err(|| "Failed to get avail ring element.")?;
 
-        self.mem_space
-            .write_object(
-                &VIRTIO_VSOCK_EVENT_TRANSPORT_RESET,
-                element.in_iovec[0].addr,
-            )
-            .chain_err(|| "Failed to write buf for virtio vsock event")?;
-        event_queue_locked
-            .vring
-            .add_used(
-                &self.mem_space,
-                element.index,
-                VIRTIO_VSOCK_EVENT_TRANSPORT_RESET.as_bytes().len() as u32,
-            )
-            .chain_err(|| format!("Failed to add used ring {}", element.index))?;
+            self.mem_space
+                .write_object(
+                    &VIRTIO_VSOCK_EVENT_TRANSPORT_RESET,
+                    element.in_iovec[0].addr,
+                )
+                .chain_err(|| "Failed to write buf for virtio vsock event")?;
+            event_queue_locked
+                .vring
+                .add_used(
+                    &self.mem_space,
+                    element.index,
+                    VIRTIO_VSOCK_EVENT_TRANSPORT_RESET.as_bytes().len() as u32,
+                )
+                .chain_err(|| format!("Failed to add used ring {}", element.index))?;
 
-        if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Vring, Some(&*event_queue_locked))
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+            if let Some(interrupt_cb) = &self.interrupt_cb {
+                interrupt_cb(&VirtioInterruptType::Vring, Some(&*event_queue_locked))
+                    .chain_err(|| ErrorKind::EventFdWrite)?;
+            }
         }
 
         Ok(())

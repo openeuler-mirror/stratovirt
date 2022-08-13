@@ -14,7 +14,7 @@ use std::os::unix::net::UnixListener;
 
 use error_chain::bail;
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
-use util::unix::{limit_permission, parse_uri};
+use util::unix::{limit_permission, parse_unix_uri};
 
 use crate::{
     config::{add_trace_events, ChardevType, CmdParser, MachineType, VmConfig},
@@ -412,6 +412,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
+    add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
     add_args_to_config!(
         (args.is_present("mem-prealloc")),
         vm_cfg,
@@ -462,8 +463,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 
         cmd_parser.parse(&qmp_config)?;
         if let Some(uri) = cmd_parser.get_value::<String>("")? {
-            let (_api_type, api_path) =
-                parse_uri(&uri).chain_err(|| "Failed to parse qmp socket path")?;
+            let api_path = parse_unix_uri(&uri).chain_err(|| "Failed to parse qmp socket path")?;
             sock_paths.push(api_path);
         } else {
             bail!("No uri found for qmp");

@@ -863,7 +863,7 @@ impl VirtioDevice for Net {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        MigrationManager::unregister_device_instance_mutex_by_id(
+        MigrationManager::unregister_device_instance(
             VirtioNetState::descriptor(),
             &self.net_cfg.id,
         );

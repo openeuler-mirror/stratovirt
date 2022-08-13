@@ -19,6 +19,26 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logging.basicConfig(filename='/var/log/pytest.log', level=logging.DEBUG, format=LOG_FORMAT)
 
 @pytest.mark.acceptance
+def test_standvm_balloon_fpr(standvm):
+    """
+    Test free page reporting of querying balloon
+
+    steps:
+    1) launch standvm with argument: "-balloon free-page-reporting=true".
+    2) execute command "stress --vm 2 --vm-bytes 1G --vm-keep --timeout 20".
+    3) compare rss between booted and fpr done.
+    """
+    test_vm = standvm
+    test_vm.basic_config(mem_size=3072, balloon=True, free_page_reporting=True)
+    test_vm.launch()
+
+    rss_booted = test_vm.get_rss_with_status_check()
+    test_vm.memory_stress()
+    rss_fpr_done = test_vm.get_rss_with_status_check()
+    assert rss_fpr_done - rss_booted < 20480
+    test_vm.shutdown()
+
+@pytest.mark.acceptance
 def test_standvm_balloon_query(standvm):
     """
     Test qmp command of querying balloon
@@ -49,7 +69,6 @@ def test_standvm_balloon(standvm):
     Note that balloon device may not inflate as many as the given argument, but it can deflate until
     no page left in balloon device. Therefore, memory in step 5 is less than 2524971008,
     while that in step 7 equals 2524971008.
-
     """
     test_vm = standvm
     test_vm.basic_config(balloon=True, deflate_on_oom=True)

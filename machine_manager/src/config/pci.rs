@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use error_chain::bail;
+use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
@@ -18,7 +19,7 @@ use crate::config::ExBool;
 
 /// Basic information of pci devices such as bus number,
 /// slot number and function number.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PciBdf {
     /// Bus number
     pub bus: String,

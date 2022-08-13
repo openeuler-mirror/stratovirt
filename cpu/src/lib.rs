@@ -107,8 +107,7 @@ pub use x86_64::X86CPUState as ArchCPU;
 pub use x86_64::X86CPUTopology as CPUTopology;
 
 use std::cell::RefCell;
-use std::sync::atomic::fence;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
@@ -214,6 +213,8 @@ pub struct CPU {
     caps: CPUCaps,
     /// The state backup of architecture CPU right before boot.
     boot_state: Arc<Mutex<ArchCPU>>,
+    /// Sync the pause state of vCPU in kvm and userspace.
+    pause_signal: Arc<AtomicBool>,
 }
 
 impl CPU {
@@ -241,6 +242,7 @@ impl CPU {
             vm: Arc::downgrade(&vm),
             caps: CPUCaps::init_capabilities(),
             boot_state: Arc::new(Mutex::new(ArchCPU::default())),
+            pause_signal: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -320,6 +322,7 @@ impl CPUInterface for CPU {
         }
 
         *cpu_state = CpuLifecycleState::Running;
+        self.pause_signal.store(false, Ordering::SeqCst);
         drop(cpu_state);
         cvar.notify_one();
         Ok(())
@@ -390,15 +393,25 @@ impl CPUInterface for CPU {
         }
 
         match task.as_ref() {
-            Some(thread) => match thread.kill(VCPU_TASK_SIGNAL) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(ErrorKind::StopVcpu(format!("{}", e)).into()),
-            },
+            Some(thread) => {
+                if let Err(e) = thread.kill(VCPU_TASK_SIGNAL) {
+                    return Err(ErrorKind::StopVcpu(format!("{}", e)).into());
+                }
+            }
             None => {
-                warn!("VCPU thread not started, no need to stop");
-                Ok(())
+                warn!("vCPU thread not started, no need to stop");
+                return Ok(());
             }
         }
+
+        // It shall wait for the vCPU pause state from kvm exits.
+        loop {
+            if self.pause_signal.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     fn destroy(&self) -> Result<()> {
@@ -595,6 +608,8 @@ impl CPUThreadWorker {
                 VCPU_TASK_SIGNAL => {
                     let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
                         vcpu.fd().set_kvm_immediate_exit(1);
+                        // Setting pause_signal to be `true` if kvm changes vCPU to pause state.
+                        vcpu.pause_signal.store(true, Ordering::SeqCst);
                         fence(Ordering::Release)
                     });
                 }

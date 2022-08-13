@@ -110,7 +110,7 @@ $ cat /proc/meminfo
 The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.
 The application of NUMA node is that one region of memory can be set as fast memory, another can be set as slow memory.
 
-Each NUMA node is given a list of command lines option, there will be described in detail below. 
+Each NUMA node is given a list of command lines option, there will be described in detail below.
 1. -object memory-backend-ram,size=2G,id=mem0,[policy=bind,host-nodes=0]
    It describes the size and id of each memory zone, the policy of binding to host memory node.
    you should choose `G` or `M` as unit for each memory zone. The host-nodes id must exist on host OS.
@@ -120,7 +120,7 @@ Each NUMA node is given a list of command lines option, there will be described 
 3. -numa dist,src=0,dst=0,val=10
    It describes the distance between source and destination. The default of source to source is 10,
    source to destination is 20. And if you choose not to set these parameters, the VM will set the default values.
-   
+
 The following command shows how to set NUMA node:
 
 ```shell
@@ -498,9 +498,10 @@ Or you can simply use `-serial dev` to bind serial with character device.
 ### 2.7 Virtio-balloon
 Balloon is a virtio device, it offers a flex memory mechanism for VM.
 
-Only one property is supported for virtio-balloon.
+Two properties are supported for virtio-balloon.
 * deflate_on_oom: whether to deflate balloon when there is no enough memory in guest.
 This feature can prevent OOM occur in guest.
+* free_page_reporting: whether to release free pages from kernel reporting. This feature can be used to reuse memory.
 
 For virtio-balloon-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -509,9 +510,9 @@ of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio balloon device
--device virtio-balloon-device,deflate-on-oom=true
+-device virtio-balloon-device[,deflate-on-oom=true|false][,free-page-reporting=true|false]
 # virtio pci balloon device
--device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true,id=balloon-0[,multifunction=on]
+-device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,id=balloon-0[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]
 ```
 
 ### 2.8 Virtio-rng
@@ -643,14 +644,14 @@ in StratoVirt process by default. It will make a slight influence on performance
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      47       |       46       |
-|        q35         |      53       |       54       |
+|        q35         |      60       |       61       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
 |      microvm       |      45       |       45       |
-|        virt        |      51       |       50       |
+|        virt        |      59       |       57       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell

@@ -63,7 +63,7 @@ impl ConfigCheck for NetDevcfg {
         }
 
         if let Some(vhost_type) = self.vhost_type.as_ref() {
-            if vhost_type != "vhost-kernel" {
+            if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
                 return Err(ErrorKind::UnknownVhostType.into());
             }
         }
@@ -329,7 +329,7 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         vhost_fds: None,
         ifname: String::new(),
         queues: args.queues.unwrap_or(1) * 2,
-        chardev: None,
+        chardev: args.chardev,
     };
 
     if let Some(fds) = args.fds {
@@ -355,18 +355,31 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         config.ifname = if_name;
     }
 
+    let netdev_type = if let Some(net_type) = args.net_type {
+        net_type
+    } else {
+        "".to_string()
+    };
+
     if let Some(vhost) = args.vhost {
         match vhost.parse::<ExBool>() {
             Ok(vhost) => {
                 if vhost.into() {
-                    config.vhost_type = Some(String::from("vhost-kernel"));
+                    if netdev_type.ne("vhost-user") {
+                        config.vhost_type = Some(String::from("vhost-kernel"));
+                    } else {
+                        bail!("vhost-user netdev does not support \"vhost\" option");
+                    }
                 }
             }
             Err(_) => {
                 bail!("Failed to get vhost type: {}", vhost);
             }
         };
+    } else if netdev_type.eq("vhost-user") {
+        config.vhost_type = Some(netdev_type.clone());
     }
+
     if let Some(vhostfd) = args.vhostfds {
         match vhostfd.parse::<i32>() {
             Ok(fd) => config.vhost_fds = Some(vec![fd]),
@@ -378,7 +391,7 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
     if config.vhost_fds.is_some() && config.vhost_type.is_none() {
         bail!("Argument \'vhostfd\' is not needed for virtio-net device");
     }
-    if config.tap_fds.is_none() && config.ifname.eq("") {
+    if config.tap_fds.is_none() && config.ifname.eq("") && netdev_type.ne("vhost-user") {
         bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
     }
 
@@ -717,6 +730,7 @@ mod tests {
             downscript: None,
             script: None,
             queues: None,
+            chardev: None,
         })
     }
 

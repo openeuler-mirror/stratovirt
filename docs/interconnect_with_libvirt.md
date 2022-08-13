@@ -1,6 +1,6 @@
 #  libvirt
-Libvirt is one of manager for StratoVirt, it manages StratoVirt by creating cmdlines to launch StratoVirt 
-and giving commands via QMP. Currently, five virsh commands are supported to manage StratoVirt: 
+Libvirt is one of manager for StratoVirt, it manages StratoVirt by creating cmdlines to launch StratoVirt
+and giving commands via QMP. Currently, five virsh commands are supported to manage StratoVirt:
 `virsh create`, `virsh destroy`, `virsh suspend`, `virsh resume` and `virsh console`.
 
 
@@ -102,7 +102,7 @@ Pflash can be added by the following config.
 </disk>
 ```
 
-- net 
+- net
 
 ```
 <controller type='pci' index='2' model='pcie-root-port' />
@@ -117,7 +117,7 @@ Pflash can be added by the following config.
 
 - console
 
-To use `virsh console` command, the virtio console with redirect `pty` should be configured. 
+To use `virsh console` command, the virtio console with redirect `pty` should be configured.
 ```
 <controller type='pci' index='3' model='pcie-root-port' />
 <controller type='virtio-serial' index='0'>

@@ -55,8 +55,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * aarch64-unknown-gnu: 48 syscalls
-/// * aarch64-unknown-musl: 47 syscalls
+/// * aarch64-unknown-gnu: 56 syscalls
+/// * aarch64-unknown-musl: 54 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -88,7 +88,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_openat),
         BpfRule::new(libc::SYS_sigaltstack),
         BpfRule::new(libc::SYS_mmap),
-        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_mprotect),
         BpfRule::new(libc::SYS_munmap),
         BpfRule::new(libc::SYS_accept4),
@@ -116,6 +115,16 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_socket),
         BpfRule::new(libc::SYS_connect),
         BpfRule::new(libc::SYS_getcwd),
+        BpfRule::new(libc::SYS_clone),
+        BpfRule::new(libc::SYS_prctl),
+        BpfRule::new(libc::SYS_sendto),
+        BpfRule::new(libc::SYS_getrandom),
+        BpfRule::new(libc::SYS_rt_sigaction),
+        BpfRule::new(libc::SYS_setsockopt),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_set_robust_list),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_sched_getaffinity),
     ]
 }
 
@@ -174,6 +183,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_ARM_VCPU_INIT() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
 }
 
 fn madvise_rule() -> BpfRule {

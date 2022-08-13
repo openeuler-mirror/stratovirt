@@ -48,39 +48,15 @@ pub fn host_page_size() -> u64 {
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
 }
 
-#[derive(PartialEq, Debug)]
-/// Three path type in unix.
-pub enum UnixPath {
-    File = 0,
-    Unix = 1,
-    Tcp = 2,
-    Unknown = 3,
-}
-
-impl From<&str> for UnixPath {
-    fn from(s: &str) -> Self {
-        match s {
-            "file" | "File" | "FILE" => UnixPath::File,
-            "unix" | "Unix" | "UNIX" => UnixPath::Unix,
-            "tcp" | "Tcp" | "TCP" => UnixPath::Tcp,
-            _ => UnixPath::Unknown,
-        }
-    }
-}
-
 /// Parse unix uri to unix path.
 ///
 /// # Notions
 ///
-/// Unix uri is the string as `file:/xxx/xxx` or `unix:/xxx/xxx` or `tcp:xxx.xxx.xxx`.
-pub fn parse_uri(uri: &str) -> Result<(UnixPath, String)> {
+/// Unix uri is the string as `unix:/xxx/xxx`.
+pub fn parse_unix_uri(uri: &str) -> Result<String> {
     let parse_vec: Vec<&str> = uri.split(':').collect();
-    if parse_vec.len() == 2 {
-        match UnixPath::from(parse_vec[0]) {
-            UnixPath::File => Ok((UnixPath::File, String::from(parse_vec[1]))),
-            UnixPath::Unix => Ok((UnixPath::Unix, String::from(parse_vec[1]))),
-            _ => bail!("Unsupported unix path type."),
-        }
+    if parse_vec.len() == 2 && parse_vec[0] == "unix" {
+        Ok(parse_vec[1].to_string())
     } else {
         bail!("Invalid unix uri: {}", uri)
     }
@@ -454,22 +430,22 @@ mod tests {
 
     use libc::{c_void, iovec};
 
-    use super::{parse_uri, UnixPath, UnixSock};
+    use super::{parse_unix_uri, UnixSock};
 
     #[test]
     fn test_parse_uri() {
-        let test_uri_01 = "file:/tmp/test_file";
-        assert!(parse_uri(test_uri_01).is_ok());
+        let test_uri_01 = "unix:/tmp/test_file.sock";
+        assert!(parse_unix_uri(test_uri_01).is_ok());
         assert_eq!(
-            parse_uri(test_uri_01).unwrap(),
-            (UnixPath::File, String::from("/tmp/test_file"))
+            parse_unix_uri(test_uri_01).unwrap(),
+            String::from("/tmp/test_file.sock")
         );
 
         let test_uri_02 = "file:/tmp/test_file:file";
-        assert!(parse_uri(test_uri_02).is_err());
+        assert!(parse_unix_uri(test_uri_02).is_err());
 
         let test_uri_03 = "tcp:127.0.0.1";
-        assert!(parse_uri(test_uri_03).is_err());
+        assert!(parse_unix_uri(test_uri_03).is_err());
     }
 
     #[test]
