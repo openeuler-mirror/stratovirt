@@ -121,6 +121,7 @@ use util::trace::enable_trace_events;
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
+// FIXME: `queue_config` len in `VirtioPciState` struct needs to be modified together.
 pub const MAX_VIRTIO_QUEUE: usize = 32;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";

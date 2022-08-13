@@ -461,8 +461,8 @@ pub struct VirtioPciState {
     config_generation: u32,
     queue_select: u16,
     msix_config: u16,
-    /// The configuration of queues. Max number of queues is 8.
-    queues_config: [QueueConfig; 8],
+    /// The configuration of queues. Max number of queues is 32(equals to MAX_VIRTIO_QUEUE).
+    queues_config: [QueueConfig; 32],
     /// The number of queues.
     queue_num: usize,
 }
