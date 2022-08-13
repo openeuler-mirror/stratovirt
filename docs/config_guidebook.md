@@ -498,9 +498,10 @@ Or you can simply use `-serial dev` to bind serial with character device.
 ### 2.7 Virtio-balloon
 Balloon is a virtio device, it offers a flex memory mechanism for VM.
 
-Only one property is supported for virtio-balloon.
+Two properties are supported for virtio-balloon.
 * deflate_on_oom: whether to deflate balloon when there is no enough memory in guest.
 This feature can prevent OOM occur in guest.
+* free_page_reporting: whether to release free pages from kernel reporting. This feature can be used to reuse memory.
 
 For virtio-balloon-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -509,9 +510,9 @@ of device and the second one represents function number of it.
 
 ```shell
 # virtio mmio balloon device
--device virtio-balloon-device,deflate-on-oom=true
+-device virtio-balloon-device[,deflate-on-oom=true|false][,free-page-reporting=true|false]
 # virtio pci balloon device
--device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,deflate-on-oom=true,id=balloon-0[,multifunction=on]
+-device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,id=balloon-0[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]
 ```
 
 ### 2.8 Virtio-rng

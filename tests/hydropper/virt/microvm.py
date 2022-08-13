@@ -195,11 +195,16 @@ class MicroVM(BaseVM):
                                  'guest-cid=%s' % (sockcid, sockcid)])
 
         if self.balloon:
+            _temp_balloon_args = 'virtio-balloon-device'
             if self.deflate_on_oom:
-                _temp_balloon_args = 'deflate-on-oom=true'
+                _temp_balloon_args += ',deflate-on-oom=true'
             else:
-                _temp_balloon_args = 'deflate-on-oom=false'
-            args.extend(['-device', 'virtio-balloon-device', _temp_balloon_args])
+                _temp_balloon_args += ',deflate-on-oom=false'
+            if self.free_page_reporting:
+                _temp_balloon_args += ',free-page-reporting=true'
+            else:
+                _temp_balloon_args += ',free-page-reporting=false'
+            args.extend(['-device', _temp_balloon_args])
 
         if self.iothreads > 0:
             args = self.make_iothread_cmd(args)
