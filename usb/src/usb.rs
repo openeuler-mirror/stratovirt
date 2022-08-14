@@ -99,6 +99,36 @@ impl UsbEndpoint {
             queue: LinkedList::new(),
         }
     }
+
+    pub fn get_ep_id(&self) -> u8 {
+        if self.nr == 0 {
+            // Control endpoint
+            1
+        } else if self.pid == USB_TOKEN_IN {
+            self.nr * 2 + 1
+        } else {
+            self.nr * 2
+        }
+    }
+}
+
+/// Init USB endpoint, similar with init_usb_endpoint, but set dev in endpoint.
+pub fn usb_endpoint_init(dev: &Arc<Mutex<dyn UsbDeviceOps>>) {
+    let mut locked_dev = dev.lock().unwrap();
+    let usb_dev = locked_dev.get_mut_usb_device();
+    let mut locked_dev = usb_dev.lock().unwrap();
+    locked_dev.reset_usb_endpoint();
+    let mut ep_ctl = locked_dev.ep_ctl.lock().unwrap();
+    ep_ctl.dev = Some(Arc::downgrade(dev));
+    ep_ctl.queue = LinkedList::new();
+    for i in 0..USB_MAX_ENDPOINTS {
+        let mut ep_in = locked_dev.ep_in[i as usize].lock().unwrap();
+        let mut ep_out = locked_dev.ep_out[i as usize].lock().unwrap();
+        ep_in.queue = LinkedList::new();
+        ep_out.queue = LinkedList::new();
+        ep_in.dev = Some(Arc::downgrade(dev));
+        ep_out.dev = Some(Arc::downgrade(dev));
+    }
 }
 
 /// USB port which can attached device.
@@ -531,6 +561,37 @@ pub struct UsbPacket {
     /// Actually transfer length
     pub actual_length: u32,
     pub state: UsbPacketState,
+}
+
+impl std::fmt::Display for UsbPacket {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "pid {} id {} param {} status {:?} actual_length {}, state {:?}",
+            self.pid, self.id, self.parameter, self.status, self.actual_length, self.state
+        )
+    }
+}
+
+impl UsbPacket {
+    pub fn init(
+        &mut self,
+        pid: u32,
+        ep: Weak<Mutex<UsbEndpoint>>,
+        id: u64,
+        short_or_ok: bool,
+        int_req: bool,
+    ) {
+        self.id = id;
+        self.pid = pid;
+        self.ep = Some(ep);
+        self.status = UsbPacketStatus::Success;
+        self.actual_length = 0;
+        self.parameter = 0;
+        self.short_not_ok = short_or_ok;
+        self.int_req = int_req;
+        self.state = UsbPacketState::Setup;
+    }
 }
 
 impl Default for UsbPacket {

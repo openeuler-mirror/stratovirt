@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::xhci::xhci_ring::XhciEventRingSeg;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
 use std::slice::from_raw_parts_mut;
@@ -23,9 +22,14 @@ use util::num_ops::{read_u32, write_u64_low};
 use crate::bus::UsbBus;
 use crate::config::*;
 use crate::errors::{Result, ResultExt};
-use crate::usb::{UsbPacket, UsbPort};
+use crate::usb::{
+    Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus, UsbPort,
+};
 use crate::xhci::xhci_regs::{XchiOperReg, XhciInterrupter, XhciPort};
-use crate::xhci::xhci_ring::{TRBCCode, TRBType, XhciRing, XhciTRB, TRB_SIZE, TRB_TYPE_SHIFT};
+use crate::xhci::xhci_ring::{
+    TRBCCode, TRBType, XhciEventRingSeg, XhciRing, XhciTRB, TRB_EV_ED, TRB_SIZE, TRB_TR_IDT,
+    TRB_TR_IOC, TRB_TR_ISP, TRB_TYPE_SHIFT,
+};
 
 pub const MAX_INTRS: u16 = 16;
 pub const MAX_SLOTS: u32 = 64;
@@ -40,6 +44,26 @@ const EP_TYPE_SHIFT: u32 = 3;
 const EP_TYPE_MASK: u32 = 0x7;
 #[allow(unused)]
 const EP_ERROR: u32 = 4;
+/// Slot state
+const SLOT_STATE_MASK: u32 = 0x1f;
+const SLOT_STATE_SHIFT: u32 = 27;
+#[allow(unused)]
+const SLOT_ENABLED: u32 = 0;
+const SLOT_DEFAULT: u32 = 1;
+const SLOT_ADDRESSED: u32 = 2;
+const SLOT_CONFIGURED: u32 = 3;
+const SLOT_CONTEXT_ENTRIES_MASK: u32 = 0x1f;
+const SLOT_CONTEXT_ENTRIES_SHIFT: u32 = 27;
+/// TRB flags
+const TRB_CR_BSR: u32 = 1 << 9;
+const TRB_CR_EPID_SHIFT: u32 = 16;
+const TRB_CR_EPID_MASK: u32 = 0x1f;
+const TRB_INTR_SHIFT: u32 = 22;
+const TRB_INTR_MASK: u32 = 0x3ff;
+const TRB_CR_DC: u32 = 1 << 9;
+const TRB_CR_SLOTID_SHIFT: u32 = 24;
+const TRB_CR_SLOTID_MASK: u32 = 0xff;
+const COMMAND_LIMIT: u32 = 256;
 const EP_CTX_MAX_PACKET_SIZE_SHIFT: u32 = 16;
 const EP_CTX_LSA_SHIFT: u32 = 15;
 const EP_CTX_INTERVAL_SHIFT: u32 = 16;
@@ -48,6 +72,7 @@ const EVENT_TRB_CCODE_SHIFT: u32 = 24;
 const EVENT_TRB_SLOT_ID_SHIFT: u32 = 24;
 const EVENT_TRB_EP_ID_SHIFT: u32 = 16;
 const PORT_EVENT_ID_SHIFT: u32 = 24;
+const SLOT_CTX_PORT_NUMBER_SHIFT: u32 = 16;
 
 type DmaAddr = u64;
 
@@ -437,14 +462,130 @@ impl XhciDevice {
         Ok(())
     }
 
+    fn get_slot_id(&self, evt: &mut XhciEvent, trb: &XhciTRB) -> u32 {
+        let slot_id = (trb.control >> TRB_CR_SLOTID_SHIFT) & TRB_CR_SLOTID_MASK;
+        if slot_id < 1 || slot_id > self.slots.len() as u32 {
+            error!("Failed to get slot id, slot {} out of range", slot_id);
+            evt.ccode = TRBCCode::TrbError;
+            return 0;
+        } else if !self.slots[(slot_id - 1) as usize].enabled {
+            error!("Failed to get slot id, slot {} is disabled", slot_id);
+            evt.ccode = TRBCCode::SlotNotEnabledError;
+            return 0;
+        }
+        slot_id
+    }
+
+    fn lookup_usb_port(&mut self, slot_ctx: &XhciSlotCtx) -> Option<Arc<Mutex<UsbPort>>> {
+        let mut path = String::new();
+        let mut port = slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff;
+        if port < 1 || port > self.port_num {
+            error!("Invalid port: {}", port);
+            return None;
+        }
+        let usb_port = &self.usb_ports[(port - 1) as usize];
+        port = usb_port.lock().unwrap().index + 1;
+        path += &format!("{}", port);
+        for i in 0..5 {
+            port = (slot_ctx.dev_info >> (4 * i)) & 0x0f;
+            if port == 0 {
+                break;
+            }
+            path += &format!(".{}", port);
+        }
+        let locked_bus = self.bus.lock().unwrap();
+        locked_bus.find_usb_port(path)
+    }
+
     /// Control plane
     pub fn handle_command(&mut self) -> Result<()> {
+        if !self.running() {
+            bail!("Failed to process command: xhci is not running");
+        }
+        let mut lo = read_u32(self.oper.cmd_ring_ctrl, 0);
+        lo |= CMD_RING_CTRL_CRR;
+        self.oper.cmd_ring_ctrl = write_u64_low(self.oper.cmd_ring_ctrl, lo);
+        let mut slot_id: u32;
+        let mut event = XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::Success);
+        for _ in 0..COMMAND_LIMIT {
+            match self.cmd_ring.fetch_trb() {
+                Ok(trb) => {
+                    let trb_type = trb.get_type();
+                    event.ptr = trb.addr;
+                    slot_id = self.get_slot_id(&mut event, &trb);
+                    info!("handle_command {:?} {:?}", trb_type, trb);
+                    match trb_type {
+                        TRBType::CrEnableSlot => {
+                            let mut found = 0;
+                            for i in 0..self.slots.len() as u32 {
+                                if !self.slots[i as usize].enabled {
+                                    found = i + 1;
+                                    break;
+                                }
+                            }
+                            if found == 0 {
+                                event.ccode = TRBCCode::NoSlotsError;
+                            } else {
+                                slot_id = found;
+                                event.ccode = self.enable_slot(slot_id);
+                            }
+                        }
+                        TRBType::CrDisableSlot => {
+                            if slot_id != 0 {
+                                event.ccode = self.disable_slot(slot_id)?;
+                            }
+                        }
+                        TRBType::CrAddressDevice => {
+                            if slot_id != 0 {
+                                event.ccode = self.address_slot(slot_id, &trb)?;
+                            }
+                        }
+                        TRBType::CrConfigureEndpoint => {
+                            if slot_id != 0 {
+                                event.ccode = self.config_slot(slot_id, &trb)?;
+                            }
+                        }
+                        TRBType::CrEvaluateContext => {
+                            if slot_id != 0 {
+                                event.ccode = self.evaluate_slot(slot_id, &trb)?;
+                            }
+                        }
+                        TRBType::CrStopEndpoint => {
+                            let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                            event.ccode = self.stop_endpoint(slot_id, ep_id)?;
+                        }
+                        TRBType::CrResetEndpoint => {
+                            let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                            event.ccode = self.reset_endpoint(slot_id, ep_id)?;
+                        }
+                        TRBType::CrSetTrDequeue => {
+                            let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                            event.ccode = self.set_endpoint_dequeue(slot_id, ep_id, &trb)?;
+                        }
+                        TRBType::CrResetDevice => {
+                            event.ccode = self.reset_slot(slot_id)?;
+                        }
+                        _ => {
+                            error!("Invalid Command: type {:?}", trb_type);
+                            event.ccode = TRBCCode::TrbError;
+                        }
+                    }
+                    event.slot_id = slot_id as u8;
+                    self.send_event(&event, 0)?;
+                }
+                Err(e) => {
+                    error!("Failed to fetch ring: {}", e);
+                    event.ccode = TRBCCode::TrbError;
+                    break;
+                }
+            }
+        }
         Ok(())
     }
 
-    /// Data plane
-    pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<()> {
-        Ok(())
+    fn enable_slot(&mut self, slot_id: u32) -> TRBCCode {
+        self.slots[(slot_id - 1) as usize].enabled = true;
+        TRBCCode::Success
     }
 
     fn disable_slot(&mut self, slot_id: u32) -> Result<TRBCCode> {
@@ -455,6 +596,270 @@ impl XhciDevice {
         self.slots[(slot_id - 1) as usize].addressed = false;
         self.slots[(slot_id - 1) as usize].usb_port = None;
         self.slots[(slot_id - 1) as usize].intr = 0;
+        Ok(TRBCCode::Success)
+    }
+
+    fn address_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        let bsr = trb.control & TRB_CR_BSR == TRB_CR_BSR;
+        let dcbaap = self.oper.dcbaap;
+        let ictx = trb.parameter;
+        let mut octx = 0;
+        dma_read_u64(
+            &self.mem_space,
+            GuestAddress(dcbaap + (8 * slot_id) as u64),
+            &mut octx,
+        )?;
+        let mut ictl_ctx = XhciInputCtrlCtx::default();
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(ictx),
+            ictl_ctx.as_mut_dwords(),
+        )?;
+        if ictl_ctx.drop_flags != 0x0 || ictl_ctx.add_flags != 0x3 {
+            error!("Invalid input: {:?}", ictl_ctx);
+            return Ok(TRBCCode::TrbError);
+        }
+        let mut slot_ctx = XhciSlotCtx::default();
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(ictx + 32),
+            slot_ctx.as_mut_dwords(),
+        )?;
+        if let Some(usb_port) = self.lookup_usb_port(&slot_ctx) {
+            let lock_port = usb_port.lock().unwrap();
+            let dev = lock_port.dev.as_ref().unwrap();
+            let mut locked_dev = dev.lock().unwrap();
+            if !locked_dev.attached() {
+                error!("Failed to connect device");
+                return Ok(TRBCCode::UsbTransactionError);
+            }
+            self.slots[(slot_id - 1) as usize].usb_port = Some(Arc::downgrade(&usb_port));
+            self.slots[(slot_id - 1) as usize].ctx = octx;
+            self.slots[(slot_id - 1) as usize].intr =
+                ((slot_ctx.tt_info >> TRB_INTR_SHIFT) & TRB_INTR_MASK) as u16;
+            locked_dev.reset();
+            drop(locked_dev);
+            if bsr {
+                slot_ctx.dev_state = SLOT_DEFAULT << SLOT_STATE_SHIFT;
+            } else {
+                slot_ctx.dev_state = (SLOT_ADDRESSED << SLOT_STATE_SHIFT) | slot_id;
+                self.address_device(dev, slot_id);
+            }
+            let mut ep0_ctx = XhciEpCtx::default();
+            dma_read_u32(
+                &self.mem_space,
+                GuestAddress(ictx + 64),
+                ep0_ctx.as_mut_dwords(),
+            )?;
+            self.enable_endpoint(slot_id, 1, octx + 32, &mut ep0_ctx)?;
+            dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+            dma_write_u32(
+                &self.mem_space,
+                GuestAddress(octx + 32),
+                ep0_ctx.as_dwords(),
+            )?;
+            self.slots[(slot_id - 1) as usize].addressed = true;
+        } else {
+            error!("Failed to found usb port");
+            return Ok(TRBCCode::TrbError);
+        }
+        Ok(TRBCCode::Success)
+    }
+
+    fn address_device(&mut self, dev: &Arc<Mutex<dyn UsbDeviceOps>>, slot_id: u32) {
+        let mut p = UsbPacket::default();
+        let mut locked_dev = dev.lock().unwrap();
+        let usb_dev = locked_dev.get_mut_usb_device();
+        let locked_usb = usb_dev.lock().unwrap();
+        let ep = Arc::downgrade(&locked_usb.get_endpoint(USB_TOKEN_OUT as u32, 0));
+        p.init(USB_TOKEN_OUT as u32, ep, 0, false, false);
+        drop(locked_usb);
+        let device_req = UsbDeviceRequest {
+            request_type: USB_DEVICE_OUT_REQUEST,
+            request: USB_REQUEST_SET_ADDRESS,
+            value: slot_id as u16,
+            index: 0,
+            length: 0,
+        };
+        locked_dev.handle_control(&mut p, &device_req, &mut []);
+    }
+
+    fn config_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        let ictx = trb.parameter;
+        let octx = self.slots[(slot_id - 1) as usize].ctx;
+        let mut slot_ctx = XhciSlotCtx::default();
+        if trb.control & TRB_CR_DC == TRB_CR_DC {
+            for i in 2..32 {
+                self.disable_endpoint(slot_id, i)?;
+            }
+            dma_read_u32(
+                &self.mem_space,
+                GuestAddress(octx),
+                slot_ctx.as_mut_dwords(),
+            )?;
+            slot_ctx.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
+            slot_ctx.dev_state |= SLOT_ADDRESSED << SLOT_STATE_SHIFT;
+            dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+            return Ok(TRBCCode::Success);
+        }
+        let mut ictl_ctx = XhciInputCtrlCtx::default();
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(ictx),
+            ictl_ctx.as_mut_dwords(),
+        )?;
+        if ictl_ctx.drop_flags & 0x3 != 0x0 || ictl_ctx.add_flags & 0x3 != 0x1 {
+            error!("Invalid control context {:?}", ictl_ctx);
+            return Ok(TRBCCode::TrbError);
+        }
+        let mut islot_ctx = XhciSlotCtx::default();
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(ictx + 32),
+            islot_ctx.as_mut_dwords(),
+        )?;
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(octx),
+            slot_ctx.as_mut_dwords(),
+        )?;
+        if (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK < SLOT_ADDRESSED {
+            error!("Invalid slot state");
+            return Ok(TRBCCode::TrbError);
+        }
+        self.config_slot_ep(slot_id, ictx, octx, ictl_ctx)?;
+        slot_ctx.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
+        slot_ctx.dev_state |= SLOT_CONFIGURED << SLOT_STATE_SHIFT;
+        slot_ctx.dev_info &= !(SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
+        slot_ctx.dev_info |=
+            islot_ctx.dev_info & (SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
+        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        Ok(TRBCCode::Success)
+    }
+
+    fn config_slot_ep(
+        &mut self,
+        slot_id: u32,
+        ictx: u64,
+        octx: u64,
+        ictl_ctx: XhciInputCtrlCtx,
+    ) -> Result<TRBCCode> {
+        for i in 2..32 {
+            if ictl_ctx.drop_flags & (1 << i) == 1 << i {
+                self.disable_endpoint(slot_id, i)?;
+            }
+            if ictl_ctx.add_flags & (1 << i) == 1 << i {
+                let offset = 32 + 32 * i as u64;
+                let mut ep_ctx = XhciEpCtx::default();
+                dma_read_u32(
+                    &self.mem_space,
+                    GuestAddress(ictx + offset),
+                    ep_ctx.as_mut_dwords(),
+                )?;
+                self.disable_endpoint(slot_id, i)?;
+                let offset = 32 * i as u64;
+                let ret = self.enable_endpoint(slot_id, i, octx + offset, &mut ep_ctx)?;
+                if ret != TRBCCode::Success {
+                    return Ok(ret);
+                }
+                dma_write_u32(
+                    &self.mem_space,
+                    GuestAddress(octx + offset),
+                    ep_ctx.as_dwords(),
+                )?;
+            }
+        }
+        Ok(TRBCCode::Success)
+    }
+
+    fn evaluate_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        let ictx = trb.parameter;
+        let octx = self.slots[(slot_id - 1) as usize].ctx;
+        let mut ictl_ctx = XhciInputCtrlCtx::default();
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(ictx),
+            ictl_ctx.as_mut_dwords(),
+        )?;
+        if ictl_ctx.drop_flags != 0x0 || ictl_ctx.add_flags & !0x3 == !0x3 {
+            error!("Invalid input control");
+            return Ok(TRBCCode::TrbError);
+        }
+        if ictl_ctx.add_flags & 0x1 == 0x1 {
+            let mut islot_ctx = XhciSlotCtx::default();
+            dma_read_u32(
+                &self.mem_space,
+                GuestAddress(ictx + 0x20),
+                islot_ctx.as_mut_dwords(),
+            )?;
+            let mut slot_ctx = XhciSlotCtx::default();
+            dma_read_u32(
+                &self.mem_space,
+                GuestAddress(octx),
+                slot_ctx.as_mut_dwords(),
+            )?;
+            slot_ctx.dev_info2 &= !0xffff;
+            slot_ctx.dev_info2 |= islot_ctx.dev_info2 & 0xffff;
+            slot_ctx.tt_info &= !0xff00000;
+            slot_ctx.tt_info |= islot_ctx.tt_info & 0xff000000;
+            dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        }
+        if ictl_ctx.add_flags & 0x2 == 0x2 {
+            let mut iep_ctx = XhciEpCtx::default();
+            dma_read_u32(
+                &self.mem_space,
+                GuestAddress(ictx + 0x40),
+                iep_ctx.as_mut_dwords(),
+            )?;
+            let mut ep_ctx = XhciEpCtx::default();
+            dma_read_u32(
+                &self.mem_space,
+                GuestAddress(octx + 0x20),
+                ep_ctx.as_mut_dwords(),
+            )?;
+            ep_ctx.ep_info2 &= !0xffff0000;
+            ep_ctx.ep_info2 |= iep_ctx.ep_info2 & 0xffff0000;
+            dma_write_u32(
+                &self.mem_space,
+                GuestAddress(octx + 0x20),
+                ep_ctx.as_dwords(),
+            )?;
+        }
+        Ok(TRBCCode::Success)
+    }
+
+    fn reset_slot(&mut self, slot_id: u32) -> Result<TRBCCode> {
+        let mut slot_ctx = XhciSlotCtx::default();
+        let octx = self.slots[(slot_id - 1) as usize].ctx;
+        for i in 2..32 {
+            self.disable_endpoint(slot_id, i)?;
+        }
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(octx),
+            slot_ctx.as_mut_dwords(),
+        )?;
+        slot_ctx.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
+        slot_ctx.dev_state |= SLOT_DEFAULT << SLOT_STATE_SHIFT;
+        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        Ok(TRBCCode::Success)
+    }
+
+    fn enable_endpoint(
+        &mut self,
+        slot_id: u32,
+        ep_id: u32,
+        pctx: DmaAddr,
+        ctx: &mut XhciEpCtx,
+    ) -> Result<TRBCCode> {
+        self.disable_endpoint(slot_id, ep_id)?;
+        let mut epctx = XhciEpContext::new(&self.mem_space, ep_id);
+        epctx.enabled = true;
+        epctx.init(pctx, ctx);
+        epctx.state = EP_RUNNING;
+        ctx.ep_info &= !EP_STATE_MASK;
+        ctx.ep_info |= EP_RUNNING;
+        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize] = epctx;
         Ok(TRBCCode::Success)
     }
 
@@ -470,6 +875,77 @@ impl XhciDevice {
         }
         epctx.enabled = false;
         Ok(TRBCCode::Success)
+    }
+
+    fn stop_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<TRBCCode> {
+        if !(1..=31).contains(&ep_id) {
+            error!("Invalid endpoint id");
+            return Ok(TRBCCode::TrbError);
+        }
+        if !self.slots[(slot_id - 1) as usize].enabled {
+            return Ok(TRBCCode::EpNotEnabledError);
+        }
+        if !self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize].enabled {
+            error!("stop_endpoint ep is disabled");
+        }
+        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
+            .set_state(&self.mem_space, EP_STOPPED)?;
+        Ok(TRBCCode::Success)
+    }
+
+    fn reset_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<TRBCCode> {
+        if !(1..=31).contains(&ep_id) {
+            error!("Invalid endpoint id {}", ep_id);
+            return Ok(TRBCCode::TrbError);
+        }
+        let slot = &mut self.slots[(slot_id - 1) as usize];
+        let epctx = &mut slot.endpoints[(ep_id - 1) as usize];
+        if !epctx.enabled {
+            error!("reset_endpoint ep is disabled");
+            return Ok(TRBCCode::EpNotEnabledError);
+        }
+        if epctx.state != EP_HALTED {
+            error!("Endpoint is not halted");
+            return Ok(TRBCCode::ContextStateError);
+        }
+        if let Some(port) = &slot.usb_port {
+            if port.upgrade().unwrap().lock().unwrap().dev.is_some() {
+                epctx.set_state(&self.mem_space, EP_STOPPED)?;
+            } else {
+                error!("Failed to found usb device");
+                return Ok(TRBCCode::UsbTransactionError);
+            }
+        } else {
+            error!("Failed to found port");
+            return Ok(TRBCCode::UsbTransactionError);
+        }
+        Ok(TRBCCode::Success)
+    }
+
+    fn set_endpoint_dequeue(&mut self, slotid: u32, epid: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        if !(1..=31).contains(&epid) {
+            error!("Invalid endpoint id {}", epid);
+            return Ok(TRBCCode::TrbError);
+        }
+        let dequeue = trb.parameter;
+        let mut epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize];
+        if !epctx.enabled {
+            error!(" Endpoint is disabled slotid {} epid {}", slotid, epid);
+            return Ok(TRBCCode::EpNotEnabledError);
+        }
+        if epctx.state != EP_STOPPED {
+            error!("Endpoint is not stopped slotid {} epid {}", slotid, epid);
+            return Ok(TRBCCode::ContextStateError);
+        }
+        epctx.ring.init(dequeue & !0xf);
+        epctx.ring.ccs = (dequeue & 1) == 1;
+        epctx.set_state(&self.mem_space, EP_STOPPED)?;
+        Ok(TRBCCode::Success)
+    }
+
+    /// Data plane
+    pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<()> {
+        Ok(())
     }
 
     /// Get microframe index
