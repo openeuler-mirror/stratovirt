@@ -448,8 +448,8 @@ impl EventLoopContext {
             };
             if let EventStatus::Alive = event.status {
                 let mut notifiers = Vec::new();
-                for i in 0..event.handlers.len() {
-                    let handle = event.handlers[i].lock().unwrap();
+                for j in 0..event.handlers.len() {
+                    let handle = event.handlers[j].lock().unwrap();
                     match handle(self.ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
