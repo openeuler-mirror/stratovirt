@@ -91,11 +91,11 @@ pub struct XhciTransfer {
 }
 
 impl XhciTransfer {
-    fn new(len: u32) -> Self {
+    fn new(len: usize) -> Self {
         XhciTransfer {
             packet: UsbPacket::default(),
             status: TRBCCode::Invalid,
-            trbs: vec![XhciTRB::new(); len as usize],
+            trbs: vec![XhciTRB::new(); len],
             complete: false,
             slotid: 0,
             epid: 0,
@@ -885,6 +885,9 @@ impl XhciDevice {
         if !self.slots[(slot_id - 1) as usize].enabled {
             return Ok(TRBCCode::EpNotEnabledError);
         }
+        if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Stopped)? > 0 {
+            warn!("endpoint stop when xfers running!");
+        }
         if !self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize].enabled {
             error!("stop_endpoint ep is disabled");
         }
@@ -945,6 +948,427 @@ impl XhciDevice {
 
     /// Data plane
     pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<()> {
+        if !self.slots[(slot_id - 1) as usize].enabled {
+            bail!("Kick disbaled slot slotid {}", slot_id);
+        }
+
+        let ep_ctx = &self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
+        debug!(
+            "kick_endpoint slotid {} epid {} dequeue {:x}",
+            slot_id, ep_id, ep_ctx.ring.dequeue
+        );
+        if !ep_ctx.enabled {
+            bail!("Kick disabled endpoint slot id {} ep id {}", slot_id, ep_id);
+        }
+        let mut epctx = ep_ctx.clone();
+        self.endpoint_retry_transfer(&mut epctx)?;
+        if epctx.state == EP_HALTED {
+            info!("xhci: endpoint halted");
+            return Ok(());
+        }
+        epctx.set_state(&self.mem_space, EP_RUNNING)?;
+        const KICK_LIMIT: u32 = 32;
+        let mut count = 0;
+        loop {
+            let len = match epctx.ring.get_transfer_len() {
+                Ok(len) => len,
+                Err(e) => {
+                    error!("Failed to get transfer len: {}", e);
+                    break;
+                }
+            };
+            let mut xfer: XhciTransfer = XhciTransfer::new(len);
+            xfer.slotid = slot_id;
+            xfer.epid = ep_id;
+            for i in 0..len {
+                match epctx.ring.fetch_trb() {
+                    Ok(trb) => {
+                        debug!(
+                            "fetch transfer trb {:?} ring dequeue {:x}",
+                            trb, epctx.ring.dequeue,
+                        );
+                        xfer.trbs[i] = trb;
+                    }
+                    Err(e) => {
+                        self.oper.usb_status |= USB_STS_HCE;
+                        // update the endpoint in slot
+                        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize] = epctx;
+                        bail!("fetch ring failed {}", e);
+                    }
+                }
+            }
+            if let Err(e) = self.endpoint_do_transfer(&mut xfer, &mut epctx) {
+                error!("Failed to transfer {}", e);
+            }
+            if xfer.complete {
+                epctx.set_state(&self.mem_space, epctx.state)?;
+            } else {
+                epctx.transfers.push(xfer.clone());
+            }
+            if epctx.state == EP_HALTED {
+                break;
+            }
+            // retry
+            if !xfer.complete && xfer.running_retry {
+                epctx.retry = Some(xfer.clone());
+                break;
+            }
+            count += 1;
+            if count > KICK_LIMIT {
+                warn!("kick endpoint over limit");
+                break;
+            }
+        }
+        // Update the endpoint context in slot.
+        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize] = epctx;
+        Ok(())
+    }
+
+    fn endpoint_retry_transfer(&mut self, epctx: &mut XhciEpContext) -> Result<()> {
+        if let Some(xfer) = &mut epctx.retry {
+            self.setup_usb_packet(xfer, epctx.epid)?;
+            self.device_handle_packet(&mut xfer.packet)?;
+            self.complete_packet(xfer)?;
+            if xfer.complete {
+                epctx.set_state(&self.mem_space, epctx.state)?;
+            }
+            epctx.retry = None;
+        }
+        Ok(())
+    }
+
+    fn device_handle_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
+        if let Some(ep) = &packet.ep {
+            let ep = ep.upgrade().unwrap();
+            let locked_ep = ep.lock().unwrap();
+            let dev = if let Some(usb_dev) = &locked_ep.dev {
+                usb_dev.upgrade().unwrap()
+            } else {
+                bail!("No device found in endpoint");
+            };
+            drop(locked_ep);
+            let mut locked_dev = dev.lock().unwrap();
+            locked_dev.handle_packet(packet);
+        } else {
+            bail!("No endpoint found");
+        }
+        Ok(())
+    }
+
+    fn endpoint_do_transfer(
+        &mut self,
+        xfer: &mut XhciTransfer,
+        epctx: &mut XhciEpContext,
+    ) -> Result<()> {
+        if xfer.epid == 1 {
+            self.do_ctrl_transfer(xfer, epctx)?;
+        } else {
+            self.do_data_transfer(xfer, epctx)?;
+        }
+        Ok(())
+    }
+
+    /// Control Transfer, TRBs include Setup, Data(option), Status.
+    fn do_ctrl_transfer(
+        &mut self,
+        xfer: &mut XhciTransfer,
+        epctx: &mut XhciEpContext,
+    ) -> Result<()> {
+        let trb_setup = xfer.trbs[0];
+        let mut trb_status = xfer.trbs[xfer.trbs.len() - 1];
+        let setup_type = trb_setup.get_type();
+        let status_type = trb_status.get_type();
+        if status_type == TRBType::TrEvdata && xfer.trbs.len() > 2 {
+            trb_status = xfer.trbs[xfer.trbs.len() - 2];
+        }
+        if setup_type != TRBType::TrSetup {
+            bail!("The first TRB is not Setup");
+        }
+        if trb_status.get_type() != TRBType::TrStatus {
+            bail!("The last TRB is not Status");
+        }
+        if trb_setup.control & TRB_TR_IDT != TRB_TR_IDT {
+            bail!("no IDT bit");
+        }
+        if trb_setup.status & 0x1ffff != 8 {
+            bail!("Bad Setup TRB length {}", trb_setup.status & 0x1ffff);
+        }
+
+        let bm_request_type = trb_setup.parameter as u8;
+        xfer.in_xfer =
+            bm_request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
+        self.setup_usb_packet(xfer, epctx.epid)?;
+        xfer.packet.parameter = trb_setup.parameter;
+        self.device_handle_packet(&mut xfer.packet)?;
+        self.complete_packet(xfer)?;
+        Ok(())
+    }
+
+    fn do_data_transfer(
+        &mut self,
+        xfer: &mut XhciTransfer,
+        epctx: &mut XhciEpContext,
+    ) -> Result<()> {
+        xfer.in_xfer = epctx.ep_type == EpType::Control
+            || epctx.ep_type == EpType::IsoIn
+            || epctx.ep_type == EpType::BulkIn
+            || epctx.ep_type == EpType::IntrIn;
+        if epctx.ep_type != EpType::IntrOut && epctx.ep_type != EpType::IntrIn {
+            bail!("Unhandled ep_type {:?}", epctx.ep_type);
+        }
+        self.setup_usb_packet(xfer, epctx.epid)?;
+        self.device_handle_packet(&mut xfer.packet)?;
+        self.complete_packet(xfer)?;
+        Ok(())
+    }
+
+    // Setup USB packet, include mapping dma address to iovector.
+    fn setup_usb_packet(&mut self, xfer: &mut XhciTransfer, epid: u32) -> Result<()> {
+        let ep = if let Some(ep) = &xfer.packet.ep {
+            ep.clone()
+        } else {
+            let ep = self.get_usb_ep(xfer.slotid, epid)?;
+            Arc::downgrade(&ep)
+        };
+        let dir = if xfer.in_xfer {
+            USB_TOKEN_IN
+        } else {
+            USB_TOKEN_OUT
+        };
+        // Map dma address to iovec.
+        let mut vec = Vec::new();
+        for trb in &xfer.trbs {
+            let trb_type = trb.get_type();
+            if trb.control & TRB_TR_IOC == TRB_TR_IOC {
+                xfer.int_req = true;
+            }
+            if trb_type == TRBType::TrData
+                || trb_type == TRBType::TrNormal
+                || trb_type == TRBType::TrIsoch
+            {
+                let chunk = trb.status & 0x1ffff;
+                let dma_addr = if trb.control & TRB_TR_IDT == TRB_TR_IDT {
+                    trb.addr
+                } else {
+                    trb.parameter
+                };
+                if let Some(hva) = self.mem_space.get_host_address(GuestAddress(dma_addr)) {
+                    vec.push(Iovec::new(hva, chunk as usize));
+                } else {
+                    error!("HVA not existed {:x}", dma_addr);
+                }
+            }
+        }
+        xfer.packet.init(dir as u32, ep, 0, false, xfer.int_req);
+        for v in vec {
+            xfer.packet.iovecs.push(v);
+        }
+        Ok(())
+    }
+
+    fn get_usb_ep(&self, slotid: u32, epid: u32) -> Result<Arc<Mutex<UsbEndpoint>>> {
+        let port = if let Some(port) = &self.slots[(slotid - 1) as usize].usb_port {
+            port.upgrade().unwrap()
+        } else {
+            bail!("USB port not found slotid {} epid {}", slotid, epid);
+        };
+        let locked_port = port.lock().unwrap();
+        let dev = locked_port.dev.as_ref().unwrap();
+        let mut locked_dev = dev.lock().unwrap();
+        let pid = if epid & 1 == 1 {
+            USB_TOKEN_IN
+        } else {
+            USB_TOKEN_OUT
+        };
+        let usb_dev = locked_dev.get_mut_usb_device();
+        let locked_usb = usb_dev.lock().unwrap();
+        let ep = locked_usb.get_endpoint(pid as u32, epid >> 1);
+        Ok(ep)
+    }
+
+    /// Update packet status and then submit transfer.
+    fn complete_packet(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
+        if xfer.packet.status == UsbPacketStatus::Async {
+            xfer.complete = false;
+            xfer.running_retry = false;
+            return Ok(());
+        } else if xfer.packet.status == UsbPacketStatus::Nak {
+            xfer.complete = false;
+            xfer.running_retry = true;
+            return Ok(());
+        } else {
+            xfer.complete = true;
+            xfer.running_retry = false;
+        }
+        if xfer.packet.status == UsbPacketStatus::Success {
+            xfer.status = TRBCCode::Success;
+            self.submit_transfer(xfer)?;
+            return Ok(());
+        }
+        // Handle packet error status
+        match xfer.packet.status {
+            v if v == UsbPacketStatus::NoDev || v == UsbPacketStatus::IoError => {
+                xfer.status = TRBCCode::UsbTransactionError;
+                self.submit_transfer(xfer)?;
+            }
+            UsbPacketStatus::Stall => {
+                xfer.status = TRBCCode::StallError;
+                self.submit_transfer(xfer)?;
+            }
+            UsbPacketStatus::Babble => {
+                xfer.status = TRBCCode::BabbleDetected;
+                self.submit_transfer(xfer)?;
+            }
+            _ => {
+                bail!("Unhandle status {:?}", xfer.packet.status);
+            }
+        }
+        Ok(())
+    }
+
+    /// Submit transfer TRBs.
+    fn submit_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
+        // Event Data Transfer Length Accumulator
+        let mut edtla = 0;
+        let mut left = xfer.packet.actual_length;
+        let mut reported = false;
+        let mut short_pkt = false;
+        for i in 0..xfer.trbs.len() {
+            let trb = &xfer.trbs[i];
+            let trb_type = trb.get_type();
+            let mut chunk = trb.status & 0x1ffff;
+            match trb_type {
+                TRBType::TrSetup => {
+                    if chunk > 8 {
+                        chunk = 8;
+                    }
+                }
+                TRBType::TrData | TRBType::TrNormal | TRBType::TrIsoch => {
+                    if chunk > left {
+                        chunk = left;
+                        if xfer.status == TRBCCode::Success {
+                            short_pkt = true;
+                        }
+                    }
+                    left -= chunk;
+                    edtla += chunk;
+                }
+                TRBType::TrStatus => {
+                    reported = false;
+                    short_pkt = false;
+                }
+                _ => {
+                    bail!("submit_transfer, unhandled trb type {:?}", trb.get_type());
+                }
+            }
+            if !reported
+                && ((trb.control & TRB_TR_IOC == TRB_TR_IOC)
+                    || (short_pkt && (trb.control & TRB_TR_ISP == TRB_TR_ISP))
+                    || (xfer.status != TRBCCode::Success && left == 0))
+            {
+                self.send_transfer_event(xfer, trb, chunk, short_pkt, &mut edtla)?;
+                reported = true;
+                if xfer.status != TRBCCode::Success {
+                    // Send unSuccess event succeed,return directly.
+                    info!("submit_transfer xfer status {:?}", xfer.status);
+                    return Ok(());
+                }
+            }
+            if trb_type == TRBType::TrSetup {
+                reported = false;
+                short_pkt = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn send_transfer_event(
+        &mut self,
+        xfer: &XhciTransfer,
+        trb: &XhciTRB,
+        chunk: u32,
+        short_pkt: bool,
+        edtla: &mut u32,
+    ) -> Result<()> {
+        let trb_type = trb.get_type();
+        let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
+        evt.slot_id = xfer.slotid as u8;
+        evt.ep_id = xfer.epid as u8;
+        evt.length = (trb.status & 0x1ffff) - chunk;
+        evt.flags = 0;
+        evt.ptr = trb.addr;
+        evt.ccode = if xfer.status == TRBCCode::Success {
+            if short_pkt {
+                TRBCCode::ShortPacket
+            } else {
+                TRBCCode::Success
+            }
+        } else {
+            xfer.status
+        };
+        if trb_type == TRBType::TrEvdata {
+            evt.ptr = trb.parameter;
+            evt.flags |= TRB_EV_ED;
+            evt.length = *edtla & 0xffffff;
+            *edtla = 0;
+        }
+        self.send_event(&evt, 0)?;
+        Ok(())
+    }
+
+    /// Flush transfer in endpoint in some case such as stop endpoint.
+    fn flush_ep_transfer(&mut self, slotid: u32, epid: u32, report: TRBCCode) -> Result<u32> {
+        info!("flush_ep_transfer slotid {} epid {}", slotid, epid);
+        let mut cnt = 0;
+        let mut report = report;
+        let xfers = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
+            .transfers
+            .clone();
+        for mut xfer in xfers {
+            cnt += self.do_ep_transfer(slotid, epid, &mut xfer, report)?;
+            if cnt != 0 {
+                // Only report once.
+                report = TRBCCode::Invalid;
+            }
+        }
+        self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
+            .transfers
+            .clear();
+        Ok(cnt)
+    }
+
+    fn do_ep_transfer(
+        &mut self,
+        slotid: u32,
+        ep_id: u32,
+        xfer: &mut XhciTransfer,
+        report: TRBCCode,
+    ) -> Result<u32> {
+        let mut killed = 0;
+        if xfer.running_retry {
+            if report != TRBCCode::Invalid {
+                xfer.status = report;
+                self.submit_transfer(xfer)?;
+            }
+            let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(ep_id - 1) as usize];
+            if !epctx.enabled {
+                bail!("Endpoint is disabled");
+            }
+            epctx.retry = None;
+            xfer.running_retry = false;
+            killed = 1;
+        }
+        xfer.trbs.clear();
+        Ok(killed)
+    }
+
+    /// Used for device to wakeup endpoint
+    pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &Arc<Mutex<UsbEndpoint>>) -> Result<()> {
+        let locked_ep = ep.lock().unwrap();
+        let ep_id = locked_ep.get_ep_id();
+        // Kick endpoint may hold the lock, drop it.
+        drop(locked_ep);
+        self.kick_endpoint(slot_id as u32, ep_id as u32)?;
         Ok(())
     }
 
