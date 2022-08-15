@@ -2,12 +2,12 @@
 name = "migration_derive"
 version = "2.2.0"
 authors = ["Huawei StratoVirt Team"]
-edition = "2018"
+edition = "2021"
 license = "Mulan PSL v2"
 
 [dependencies]
 syn = { version = "1.0.72", features = ["full", "extra-traits"] }
-quote = "1.0.7"
+quote = "1.0"
 proc-macro2 = "1.0"
 
 [dev-dependencies]

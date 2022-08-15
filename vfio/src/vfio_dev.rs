@@ -29,7 +29,7 @@ use vfio_bindings::bindings::vfio;
 use vmm_sys_util::ioctl::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
 };
-use vmm_sys_util::{ioctl_expr, ioctl_io_nr, ioctl_ioc_nr};
+use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{CONTAINERS, GROUPS, KVM_DEVICE_FD};

@@ -312,13 +312,13 @@ impl UnixSock {
             unsafe { sendmsg(self.sock.as_ref().unwrap().as_raw_fd(), &msg, MSG_NOSIGNAL) };
 
         if write_count == -1 {
-            return Err(std::io::Error::new(
+            Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "Failed to send msg, err: {}",
                     std::io::Error::last_os_error()
                 ),
-            ));
+            ))
         } else {
             Ok(write_count as usize)
         }

@@ -65,6 +65,6 @@ impl X86CPUCaps {
                 }
             })
             .collect();
-        Msrs::from_entries(&entry_vec)
+        Msrs::from_entries(&entry_vec).unwrap()
     }
 }

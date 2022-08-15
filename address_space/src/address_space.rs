@@ -64,7 +64,7 @@ pub struct AddressSpace {
     root: Region,
     /// Flat_view is the output of rendering all regions in parent address-space,
     /// every time the topology changed (add/delete region), flat_view would be updated.
-    flat_view: ArcSwap<FlatView>,
+    flat_view: Arc<ArcSwap<FlatView>>,
     /// The triggered call-backs when flat_view changed.
     listeners: Arc<Mutex<Vec<ListenerObj>>>,
     /// The current layout of ioeventfds, which is compared with new ones in topology-update stage.
@@ -80,7 +80,7 @@ impl AddressSpace {
     pub fn new(root: Region) -> Result<Arc<AddressSpace>> {
         let space = Arc::new(AddressSpace {
             root: root.clone(),
-            flat_view: ArcSwap::new(Arc::new(FlatView::default())),
+            flat_view: Arc::new(ArcSwap::new(Arc::new(FlatView::default()))),
             listeners: Arc::new(Mutex::new(Vec::new())),
             ioeventfds: Arc::new(Mutex::new(Vec::new())),
         });
