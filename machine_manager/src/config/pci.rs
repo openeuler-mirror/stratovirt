@@ -19,7 +19,7 @@ use crate::config::ExBool;
 
 /// Basic information of pci devices such as bus number,
 /// slot number and function number.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PciBdf {
     /// Bus number
     pub bus: String,

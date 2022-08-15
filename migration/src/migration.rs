@@ -24,7 +24,7 @@ use crate::manager::MIGRATION_MANAGER;
 use crate::protocol::{MemBlock, MigrationStatus, Request, Response, TransStatus};
 use crate::MigrationManager;
 use hypervisor::kvm::KVM_FDS;
-use machine_manager::config::VmConfig;
+use machine_manager::config::{get_pci_bdf, PciBdf, VmConfig};
 use util::unix::host_page_size;
 
 impl MigrationManager {
@@ -178,6 +178,7 @@ impl MigrationManager {
         Ok(())
     }
 
+    /// Check source and destination virtual machine config.
     fn check_vm_config<T>(fd: &mut T, len: u64) -> Result<()>
     where
         T: Write + Read,
@@ -185,46 +186,80 @@ impl MigrationManager {
         let mut data: Vec<u8> = Vec::new();
         data.resize_with(len as usize, Default::default);
         fd.read_exact(&mut data)?;
-        let source_config: VmConfig = serde_json::from_slice(&data)?;
-        let dest_config = &MIGRATION_MANAGER.vmm.read().unwrap().config;
 
+        let src_config: &VmConfig = &serde_json::from_slice(&data)?;
+        let dest_config: &VmConfig = &MIGRATION_MANAGER.vmm.read().unwrap().config;
         // Check vCPU number.
-        let source_cpu = source_config.machine_config.nr_cpus;
+        Self::check_vcpu(src_config, dest_config)?;
+        Self::check_memory(src_config, dest_config)?;
+        Self::check_devices(src_config, dest_config)?;
+
+        Response::send_msg(fd, TransStatus::Ok)?;
+
+        Ok(())
+    }
+
+    /// Check vcpu number config.
+    fn check_vcpu(src_config: &VmConfig, dest_config: &VmConfig) -> Result<()> {
+        let src_cpu = src_config.machine_config.nr_cpus;
         let dest_cpu = dest_config.machine_config.nr_cpus;
-        if source_cpu != dest_cpu {
+        if src_cpu != dest_cpu {
             return Err(ErrorKind::MigrationConfigErr(
                 "vCPU number".to_string(),
-                source_cpu.to_string(),
+                src_cpu.to_string(),
                 dest_cpu.to_string(),
             )
             .into());
         }
 
-        // Check memory size
-        let source_mem = source_config.machine_config.mem_config.mem_size;
+        Ok(())
+    }
+
+    /// Check memory size config.
+    fn check_memory(src_config: &VmConfig, dest_config: &VmConfig) -> Result<()> {
+        let src_mem = src_config.machine_config.mem_config.mem_size;
         let dest_mem = dest_config.machine_config.mem_config.mem_size;
-        if source_mem != dest_mem {
+        if src_mem != dest_mem {
             return Err(ErrorKind::MigrationConfigErr(
                 "memory size".to_string(),
-                source_mem.to_string(),
+                src_mem.to_string(),
                 dest_mem.to_string(),
             )
             .into());
         }
 
-        // Check devices number.
-        let source_dev = source_config.devices.len();
-        let dest_dev = dest_config.devices.len();
-        if source_dev != dest_dev {
-            return Err(ErrorKind::MigrationConfigErr(
-                "device number".to_string(),
-                source_dev.to_string(),
-                dest_dev.to_string(),
-            )
-            .into());
-        }
+        Ok(())
+    }
 
-        Response::send_msg(fd, TransStatus::Ok)?;
+    /// Check devices type and BDF config.
+    fn check_devices(src_config: &VmConfig, dest_config: &VmConfig) -> Result<()> {
+        let mut dest_devices: HashMap<PciBdf, String> = HashMap::new();
+        for (dev_type, dev_info) in dest_config.devices.iter() {
+            if let Ok(dest_bdf) = get_pci_bdf(dev_info) {
+                dest_devices.insert(dest_bdf, dev_type.to_string());
+            }
+        }
+        for (src_type, dev_info) in src_config.devices.iter() {
+            if let Ok(src_bdf) = get_pci_bdf(dev_info) {
+                match dest_devices.get(&src_bdf) {
+                    Some(dest_type) => {
+                        if !src_type.eq(dest_type) {
+                            return Err(ErrorKind::MigrationConfigErr(
+                                "device type".to_string(),
+                                src_type.to_string(),
+                                dest_type.to_string(),
+                            )
+                            .into());
+                        }
+                    }
+                    None => bail!(
+                        "Failed to get destination device bdf {:?}, type {}",
+                        src_bdf,
+                        src_type
+                    ),
+                }
+            }
+        }
 
         Ok(())
     }
