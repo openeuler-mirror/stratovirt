@@ -28,6 +28,7 @@ pub mod input;
 pub mod pixman;
 pub mod server;
 pub mod utils;
+pub mod vencrypt;
 pub mod vnc;
 
 pub const fn round_up_div(n: u64, d: u64) -> u64 {

@@ -32,9 +32,25 @@ pub enum SubAuthState {
     VncAuthVencryptTlssasl = 264,
 }
 
+/// Configuration for authentication
+/// Identity: authentication user
+#[derive(Debug, Clone, Default)]
+pub struct SaslAuth {
+    pub identity: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum SaslStage {
+    SaslServerStart,
+    SaslServerStep,
+}
+
 impl VncClient {
-    /// Send auth version
-    pub fn protocol_client_vencrypt_init(&mut self) -> Result<()> {
+    pub fn get_mechname_length(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn start_sasl_auth(&mut self) -> Result<()> {
         Ok(())
     }
 }

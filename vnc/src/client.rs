@@ -25,6 +25,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use machine_manager::event_loop::EventLoop;
+use rustls::ServerConnection;
 use sscanf::scanf;
 use std::{
     cmp,
@@ -41,6 +42,7 @@ use util::{
 use vmm_sys_util::epoll::EventSet;
 
 const MAX_RECVBUF_LEN: usize = 1024;
+const MAX_SEND_LEN: usize = 64 * 1024;
 const NUM_OF_COLORMAP: u16 = 256;
 
 // VNC encodings types.
@@ -109,9 +111,9 @@ impl From<u8> for ClientMsg {
 }
 
 /// RFB protocol version.
-struct VncVersion {
-    major: u16,
-    minor: u16,
+pub struct VncVersion {
+    pub major: u16,
+    pub minor: u16,
 }
 
 impl VncVersion {
@@ -219,7 +221,7 @@ pub struct VncClient {
     /// Connection status.
     pub dis_conn: bool,
     /// RFB protocol version.
-    version: VncVersion,
+    pub version: VncVersion,
     /// Auth type.
     auth: AuthState,
     /// SubAuth type.
@@ -230,6 +232,8 @@ pub struct VncClient {
     pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
     /// Pointer to VncServer.
     pub server: Arc<Mutex<VncServer>>,
+    /// Tls server connection.
+    pub tls_conn: Option<rustls::ServerConnection>,
     /// Data storage type for client.
     pub big_endian: bool,
     /// State flags whether the image needs to be updated for the client.
@@ -276,6 +280,7 @@ impl VncClient {
             handle_msg: VncClient::handle_version,
             handlers: Vec::new(),
             server,
+            tls_conn: None,
             big_endian: false,
             state: UpdateState::No,
             dirty_bitmap: Bitmap::<u64>::new(
@@ -416,6 +421,43 @@ impl VncClient {
         Ok(())
     }
 
+    // Read from vencrypt channel.
+    pub fn read_tls_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        let mut len = 0_usize;
+        if self.tls_conn.is_none() {
+            return Ok(0_usize);
+        }
+        let tc: &mut ServerConnection;
+        match &mut self.tls_conn {
+            Some(sc) => tc = sc,
+            None => return Ok(0_usize),
+        }
+
+        if let Err(e) = tc.read_tls(&mut self.stream) {
+            error!("tls_conn read error {:?}", e);
+            return Err(anyhow!(VncError::ReadMessageFailed(format!(
+                "tls_conn read error {:?}",
+                e
+            ))));
+        }
+
+        if let Ok(io_state) = tc.process_new_packets() {
+            if io_state.plaintext_bytes_to_read() > 0 {
+                len = io_state.plaintext_bytes_to_read();
+                buf.resize(len, 0u8);
+                if let Err(e) = tc.reader().read_exact(buf) {
+                    error!("tls_conn read error {:?}", e);
+                    buf.clear();
+                    return Err(anyhow!(VncError::ReadMessageFailed(format!(
+                        "tls_conn read error {:?}",
+                        e
+                    ))));
+                }
+            }
+        }
+        Ok(len)
+    }
+
     /// Read plain txt.
     pub fn read_plain_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
         let mut len = 0_usize;
@@ -432,8 +474,33 @@ impl VncClient {
         Ok(len)
     }
 
+    // Send vencrypt message.
+    fn write_tls_msg(&mut self, buf: &[u8]) {
+        let buf_size = buf.len();
+        let mut offset = 0;
+
+        let tc: &mut ServerConnection;
+        match &mut self.tls_conn {
+            Some(ts) => tc = ts,
+            None => {
+                return;
+            }
+        }
+
+        while offset < buf_size {
+            let next = cmp::min(buf_size, offset + MAX_SEND_LEN);
+            let tmp_buf = &buf[offset..next].to_vec();
+            if let Err(e) = tc.writer().write_all(tmp_buf) {
+                error!("write msg error: {:?}", e);
+                return;
+            }
+            vnc_write_tls_message(tc, &mut self.stream);
+            offset = next;
+        }
+    }
+
     /// Send plain txt.
-    pub fn write_plain_msg(&mut self, buf: &[u8]) {
+    fn write_plain_msg(&mut self, buf: &[u8]) {
         let buf_size = buf.len();
         let mut offset = 0;
         loop {
@@ -465,12 +532,20 @@ impl VncClient {
     /// # Arguments
     /// * `buf` - Data to be send.
     pub fn write_msg(&mut self, buf: &[u8]) {
-        self.write_plain_msg(buf);
+        if self.tls_conn.is_none() {
+            self.write_plain_msg(buf)
+        } else {
+            self.write_tls_msg(buf)
+        }
     }
 
-    /// Read buf from stream, return the size of buff.
+    /// Read buf from stream, return the size.
     pub fn read_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
-        self.read_plain_msg(buf)
+        if self.tls_conn.is_none() {
+            self.read_plain_msg(buf)
+        } else {
+            self.read_tls_msg(buf)
+        }
     }
 
     /// Read buf from tcpstream.
@@ -581,7 +656,7 @@ impl VncClient {
                 buf[1] = 2_u8;
 
                 self.write_msg(&buf);
-                self.update_event_handler(2, VncClient::protocol_client_vencrypt_init);
+                self.update_event_handler(2, VncClient::client_vencrypt_init);
             }
             _ => {
                 self.auth_failed("Unhandled auth method");
@@ -1003,22 +1078,35 @@ impl EventNotifierHelper for VncClient {
                 }
 
                 if dis_conn {
-                    let addr = client.lock().unwrap().addr.clone();
-                    info!("Client disconnect : {:?}", addr);
-                    let server = VNC_SERVERS.lock().unwrap()[0].clone();
-                    let mut locked_server = server.lock().unwrap();
-                    locked_server.clients.remove(&addr);
-                    if locked_server.clients.is_empty() {
-                        update_client_surface(&mut locked_server);
-                    }
-                    drop(locked_server);
-                    client.lock().unwrap().disconnect();
+                    connection_cleanup(client.clone());
                 }
 
                 None as Option<Vec<EventNotifier>>
             });
 
         let mut locked_client = client_handler.lock().unwrap();
+        locked_client.handlers.push(Arc::new(Mutex::new(handler)));
+
+        let client = client_handler.clone();
+        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Box::new(move |event, _| {
+                let mut dis_conn = false;
+                if event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP {
+                    dis_conn = true;
+                } else if event == EventSet::IN {
+                    let mut locked_client = client.lock().unwrap();
+                    if locked_client.tls_handshake().is_err() {
+                        dis_conn = true;
+                    }
+                }
+
+                if dis_conn {
+                    connection_cleanup(client.clone());
+                }
+
+                None as Option<Vec<EventNotifier>>
+            });
+
         locked_client.handlers.push(Arc::new(Mutex::new(handler)));
 
         vec![EventNotifier::new(
@@ -1028,5 +1116,34 @@ impl EventNotifierHelper for VncClient {
             EventSet::IN | EventSet::READ_HANG_UP,
             vec![locked_client.handlers[0].clone()],
         )]
+    }
+}
+
+fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) {
+    while tc.wants_write() {
+        match tc.write_tls(stream) {
+            Ok(_) => {}
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    stream.flush().unwrap();
+                    continue;
+                } else {
+                    error!("write msg error: {:?}", e);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn connection_cleanup(client: Arc<Mutex<VncClient>>) {
+    let addr = client.lock().unwrap().addr.clone();
+    info!("Client disconnect : {:?}", addr);
+    client.lock().unwrap().disconnect();
+    let server = VNC_SERVERS.lock().unwrap()[0].clone();
+    let mut locked_server = server.lock().unwrap();
+    locked_server.clients.remove(&addr);
+    if locked_server.clients.is_empty() {
+        update_client_surface(&mut locked_server);
     }
 }
