@@ -279,6 +279,8 @@ pub fn update_client_surface(server: &mut VncServer) {
     };
     for client in server.clients.values_mut() {
         client.lock().unwrap().server_image = server.server_image;
+        client.lock().unwrap().width = width;
+        client.lock().unwrap().height = height;
     }
     server.guest_dirtymap.clear_all();
     set_area_dirty(
