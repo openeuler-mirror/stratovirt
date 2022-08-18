@@ -640,6 +640,19 @@ Three properties can be set for USB controller.
 
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
 
+### 2.14 USB Keyboard
+The USB keyboard is a keyboard that uses the USB protocol. It should be attached to USB controller. Keypad is not supported yet.
+
+One property can be set for USB Keyboard.
+
+* id: unique device id.
+
+```shell
+-device usb-kbd,id=kbd
+```
+
+Note: Only one keyboard can be configured.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.

@@ -16,12 +16,15 @@ use std::{
 };
 
 use super::errors::Result;
-use crate::config::*;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
     UsbInterfaceDescriptor,
 };
 use crate::xhci::xhci_controller::XhciDevice;
+use crate::{
+    config::*,
+    xhci::xhci_controller::{get_field, set_field},
+};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;
@@ -505,6 +508,12 @@ pub trait UsbDeviceOps: Send + Sync {
     /// USB deivce need to kick controller in some cases.
     fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>);
 
+    /// Set the controller which the USB device attached.
+    fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>>;
+
+    /// Get the endpoint to wakeup.
+    fn get_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>>;
+
     /// Set the attached USB port.
     fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>) {
         let usb_dev = self.get_mut_usb_device();
@@ -637,6 +646,67 @@ pub trait UsbDeviceOps: Send + Sync {
         }
         Ok(())
     }
+}
+
+/// Notify controller to process data request.
+pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
+    let locked_dev = dev.lock().unwrap();
+    let xhci = if let Some(ctrl) = &locked_dev.get_controller() {
+        ctrl.upgrade().unwrap()
+    } else {
+        bail!("USB controller not found");
+    };
+    drop(locked_dev);
+    // Lock controller before device to avoid dead lock.
+    let mut locked_xhci = xhci.lock().unwrap();
+    let locked_dev = dev.lock().unwrap();
+    let usb_dev = locked_dev.get_usb_device();
+    drop(locked_dev);
+    let locked_usb_dev = usb_dev.lock().unwrap();
+    let usb_port = if let Some(port) = &locked_usb_dev.port {
+        port.upgrade().unwrap()
+    } else {
+        bail!("No usb port found");
+    };
+    let slot_id = locked_usb_dev.addr;
+    let wakeup =
+        locked_usb_dev.remote_wakeup & USB_DEVICE_REMOTE_WAKEUP == USB_DEVICE_REMOTE_WAKEUP;
+    drop(locked_usb_dev);
+    let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
+        xhci_port
+    } else {
+        bail!("No xhci port found");
+    };
+    if wakeup {
+        let mut locked_port = xhci_port.lock().unwrap();
+        let port_status = get_field(locked_port.portsc, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+        if port_status == PLS_U3 {
+            locked_port.portsc = set_field(
+                locked_port.portsc,
+                PLS_RESUME,
+                PORTSC_PLS_MASK,
+                PORTSC_PLS_SHIFT,
+            );
+            debug!(
+                "Update portsc when notify controller, port {} status {}",
+                locked_port.portsc, port_status
+            );
+            drop(locked_port);
+            locked_xhci.port_notify(&xhci_port, PORTSC_PLC)?;
+        }
+    }
+    let locked_dev = dev.lock().unwrap();
+    let intr = if let Some(intr) = locked_dev.get_endpoint() {
+        intr
+    } else {
+        bail!("No interrupter found");
+    };
+    drop(locked_dev);
+    let ep = intr.upgrade().unwrap();
+    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep) {
+        error!("Failed to wakeup endpoint {}", e);
+    }
+    Ok(())
 }
 
 /// Io vector which save the hva.

@@ -33,5 +33,6 @@ pub mod bus;
 pub mod config;
 mod descriptor;
 pub mod hid;
+pub mod keyboard;
 pub mod usb;
 pub mod xhci;

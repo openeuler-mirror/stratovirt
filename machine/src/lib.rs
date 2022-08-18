@@ -106,6 +106,8 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 
 use error_chain::bail;
 use kvm_ioctls::VcpuFd;
+use usb::keyboard::UsbKeyboard;
+use usb::usb::UsbDeviceOps;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub use micro_vm::LightMachine;
@@ -123,10 +125,11 @@ use errors::{ErrorKind, Result, ResultExt};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
-    parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci, BootIndexInfo, Incoming,
-    MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig,
-    PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_usb_keyboard, parse_vfio, parse_virtconsole, parse_virtio_serial, parse_vsock,
+    parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
+    NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
+    FAST_UNPLUG_ON,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -921,6 +924,32 @@ pub trait MachineOps {
         Ok(())
     }
 
+    /// Add usb keyboard.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Keyboard Configuration.
+    fn add_usb_keyboard(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_keyboard(cfg_args)?;
+        let keyboard = UsbKeyboard::new(device_cfg.id);
+        let kbd = keyboard
+            .realize()
+            .chain_err(|| "Failed to realize usb keyboard device")?;
+        if let Some(bus_device) = self.get_bus_device() {
+            let locked_dev = bus_device.lock().unwrap();
+            if let Some(ctrl) = locked_dev.get("usb.0") {
+                let mut locked_ctrl = ctrl.lock().unwrap();
+                locked_ctrl
+                    .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .chain_err(|| "Failed to attach keyboard device")?;
+            } else {
+                bail!("No usb controller found");
+            }
+        } else {
+            bail!("No bus device found");
+        }
+        Ok(())
+    }
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -986,6 +1015,9 @@ pub trait MachineOps {
                 }
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
+                }
+                "usb-kbd" => {
+                    self.add_usb_keyboard(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
