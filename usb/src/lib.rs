@@ -34,5 +34,6 @@ pub mod config;
 mod descriptor;
 pub mod hid;
 pub mod keyboard;
+pub mod tablet;
 pub mod usb;
 pub mod xhci;

@@ -106,8 +106,6 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 
 use error_chain::bail;
 use kvm_ioctls::VcpuFd;
-use usb::keyboard::UsbKeyboard;
-use usb::usb::UsbDeviceOps;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub use micro_vm::LightMachine;
@@ -126,10 +124,10 @@ use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
-    parse_usb_keyboard, parse_vfio, parse_virtconsole, parse_virtio_serial, parse_vsock,
-    parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
-    NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig,
-    FAST_UNPLUG_ON,
+    parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_virtconsole, parse_virtio_serial,
+    parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
+    NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
+    VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -140,7 +138,10 @@ use pci::{PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::errors::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
-use usb::{bus::BusDeviceMap, xhci::xhci_pci::XhciPciDevice};
+use usb::{
+    bus::BusDeviceMap, keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps,
+    xhci::xhci_pci::XhciPciDevice,
+};
 use util::{
     arg_parser,
     loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
@@ -950,6 +951,34 @@ pub trait MachineOps {
         }
         Ok(())
     }
+
+    /// Add usb tablet.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Tablet Configuration.
+    fn add_usb_tablet(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_tablet(cfg_args)?;
+        let tablet = UsbTablet::new(device_cfg.id);
+        let tbt = tablet
+            .realize()
+            .chain_err(|| "Failed to realize usb tablet device")?;
+        if let Some(bus_device) = self.get_bus_device() {
+            let locked_dev = bus_device.lock().unwrap();
+            if let Some(ctrl) = locked_dev.get("usb.0") {
+                let mut locked_ctrl = ctrl.lock().unwrap();
+                locked_ctrl
+                    .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .chain_err(|| "Failed to attach tablet device")?;
+            } else {
+                bail!("No usb controller found");
+            }
+        } else {
+            bail!("No bus device list found");
+        }
+        Ok(())
+    }
+
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -1018,6 +1047,9 @@ pub trait MachineOps {
                 }
                 "usb-kbd" => {
                     self.add_usb_keyboard(cfg_args)?;
+                }
+                "usb-tablet" => {
+                    self.add_usb_tablet(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

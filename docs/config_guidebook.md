@@ -650,7 +650,18 @@ One property can be set for USB Keyboard.
 ```
 
 Note: Only one keyboard can be configured.
+### 2.15 USB Tablet
+Pointer Device which uses alsolute coordinates. It should be attached to USB controller.
 
+One property can be set for USB Tablet.
+
+* id: unique device id.
+
+```shell
+-device usb-tablet,id=tablet
+```
+
+Note: Only one tablet can be configured.
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.
