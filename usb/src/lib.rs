@@ -32,5 +32,6 @@ pub mod errors {
 pub mod bus;
 pub mod config;
 mod descriptor;
+pub mod hid;
 pub mod usb;
 pub mod xhci;
