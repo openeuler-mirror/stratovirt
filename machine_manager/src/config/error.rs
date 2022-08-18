@@ -54,4 +54,6 @@ pub enum ConfigError {
     Unaligned(String, u64, u64),
     #[error("PFlash unit id given {0} should not be more than {1}")]
     UnitIdError(usize, usize),
+    #[error("Directory {0} does not exist")]
+    DirNotExist(String),
 }

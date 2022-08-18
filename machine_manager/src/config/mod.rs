@@ -26,6 +26,7 @@ pub use numa::*;
 pub use pci::*;
 pub use rng::*;
 pub use scsi::*;
+pub use tls_creds::*;
 pub use usb::*;
 pub use vfio::*;
 pub use vnc::*;
@@ -46,6 +47,7 @@ mod numa;
 mod pci;
 mod rng;
 mod scsi;
+mod tls_creds;
 mod usb;
 mod vfio;
 pub mod vnc;
@@ -75,6 +77,7 @@ pub const MAX_NODES: u32 = 128;
 pub enum ObjConfig {
     Rng(RngObjConfig),
     Zone(MemZoneConfig),
+    Tls(TlsCredObjConfig),
 }
 
 fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
@@ -214,6 +217,9 @@ impl VmConfig {
                 } else {
                     bail!("Object: {} has been added", id);
                 }
+            }
+            "tls-creds-x509" => {
+                self.add_tlscred(object_args)?;
             }
             _ => {
                 bail!("Unknow object type: {:?}", &device_type);
