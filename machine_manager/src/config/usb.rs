@@ -46,6 +46,40 @@ pub fn parse_xhci(conf: &str) -> Result<XhciConfig> {
     } else {
         bail!("id is none for usb xhci");
     }
+
+    dev.check()?;
+    Ok(dev)
+}
+
+pub struct UsbKeyboardConfig {
+    pub id: String,
+}
+
+impl UsbKeyboardConfig {
+    fn new() -> Self {
+        UsbKeyboardConfig { id: String::new() }
+    }
+}
+
+impl ConfigCheck for UsbKeyboardConfig {
+    fn check(&self) -> Result<()> {
+        if self.id.len() > MAX_STRING_LENGTH {
+            return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
+        }
+        Ok(())
+    }
+}
+
+pub fn parse_usb_keyboard(conf: &str) -> Result<UsbKeyboardConfig> {
+    let mut cmd_parser = CmdParser::new("usb-kbd");
+    cmd_parser.push("").push("id");
+    cmd_parser.parse(conf)?;
+    let mut dev = UsbKeyboardConfig::new();
+    if let Some(id) = cmd_parser.get_value::<String>("id")? {
+        dev.id = id;
+    } else {
+        bail!("id is none for usb keyboard");
+    }
     dev.check()?;
     Ok(dev)
 }
