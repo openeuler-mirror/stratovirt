@@ -22,14 +22,15 @@ $ pip3 install -r requirements.txt
 ```sh
 $ yum install nmap
 $ yum install iperf3
+$ yum install bridge-utils
 ```
 
 4. 网络配置（可参考以下模板）：
 
 ```sh
 brctl addbr strato_br0
-ifconfig strato_br0 up
-ifconfig strato_br0 1.1.1.1
+ip link set strato_br0 up
+ip address add 1.1.1.1 dev strato_br0
 ```
 
 5. 构建测试镜像请参考 docs/IMAGE_BUILD.md。
