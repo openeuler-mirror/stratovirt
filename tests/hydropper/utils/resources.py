@@ -47,7 +47,7 @@ class NetworkResource(Singleton):
         # create bridge if it does not exist
         run("brctl show %s || brctl addbr %s" % (self.bridge, self.bridge), shell=True, check=True)
 
-        run("ifconfig %s up" % self.bridge, shell=True, check=True)
+        run("ip link set %s up" % self.bridge, shell=True, check=True)
 
         for index in range(self.nets_num):
             ipaddr = "%s.%s.1" % (self.ip_prefix, str(self.ip_3rd + index))
