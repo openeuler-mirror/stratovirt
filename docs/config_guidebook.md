@@ -515,6 +515,8 @@ of device and the second one represents function number of it.
 -device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,id=balloon-0[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]
 ```
 
+Note: avoid using balloon devices and vfio devices together.
+
 ### 2.8 Virtio-rng
 Virtio rng is a paravirtualized random number generator device, it provides a hardware rng device to the guest.
 
