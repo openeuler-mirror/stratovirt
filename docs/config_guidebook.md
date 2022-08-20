@@ -350,8 +350,9 @@ hugepages('-mem-path ...' ) when using vhost-user net.
 $ brctl addbr qbr0
 $ ip tuntap add tap0 mode tap
 $ brctl addif qbr0 tap0
-$ ifconfig qbr0 up; ifconfig tap0 up
-$ ifconfig qbr0 1.1.1.1
+$ ip link set qbr0 up
+$ ip link set tap0 up
+$ ip address add 1.1.1.1 dev qbr0
 
 # Run StratoVirt
 ... -netdev tap,id=netdevid,ifname=tap0 ...
@@ -370,8 +371,9 @@ note: If you want to use multiple queues, create a tap device as follows:
 $ brctl addbr qbr0
 $ ip tuntap add tap1 mode tap multi_queue
 $ brctl addif qbr0 tap1
-$ ifconfig qbr0 up; ifconfig tap1 up
-$ ifconfig qbr0 1.1.1.1
+$ ip link set qbr0 up
+$ ip link set tap1 up
+$ ip address add 1.1.1.1 dev qbr0
 ```
 
 *How to create port by ovs-dpdk?*
