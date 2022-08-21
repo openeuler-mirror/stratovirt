@@ -13,6 +13,7 @@
 mod pci_host_root;
 mod syscall;
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::mem::size_of;
 use std::ops::Deref;
@@ -55,6 +56,7 @@ use pci::{PciDevOps, PciHost};
 use pci_host_root::PciHostRoot;
 use sysbus::{SysBus, SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
+use usb::bus::BusDeviceMap;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
@@ -138,6 +140,8 @@ pub struct StdMachine {
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
     /// FwCfg device.
     fwcfg_dev: Option<Arc<Mutex<FwCfgMem>>>,
+    /// Bus device used to attach other devices. Only USB controller used now.
+    bus_device: BusDeviceMap,
 }
 
 impl StdMachine {
@@ -187,6 +191,7 @@ impl StdMachine {
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
+            bus_device: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -576,6 +581,10 @@ impl MachineOps for StdMachine {
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
         Some(self.boot_order_list.clone())
+    }
+
+    fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
+        Some(&self.bus_device)
     }
 }
 

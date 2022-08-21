@@ -91,6 +91,7 @@ pub use network::*;
 pub use numa::*;
 pub use pci::*;
 pub use rng::*;
+pub use usb::*;
 pub use vfio::*;
 
 mod balloon;
@@ -105,6 +106,7 @@ mod network;
 mod numa;
 mod pci;
 mod rng;
+mod usb;
 mod vfio;
 
 use std::any::Any;
