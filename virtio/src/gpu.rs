@@ -11,19 +11,30 @@
 // See the Mulan PSL v2 for more details.
 
 use super::errors::{ErrorKind, Result, ResultExt};
-use super::{Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_VERSION_1, VIRTIO_TYPE_GPU};
+use super::{
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1, VIRTIO_TYPE_GPU,
+};
 use address_space::AddressSpace;
 use error_chain::bail;
-use log::warn;
+use log::{error, warn};
 use machine_manager::config::{GpuConfig, VIRTIO_GPU_MAX_SCANOUTS};
+use machine_manager::event_loop::EventLoop;
 use migration::{DeviceStateDesc, FieldDesc};
 use migration_derive::{ByteCode, Desc};
 use std::cmp;
 use std::io::Write;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
+use std::{ptr, vec};
+use util::aio::Iovec;
 use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use util::num_ops::{read_u32, write_u32};
-use vmm_sys_util::eventfd::EventFd;
+use util::pixman::pixman_image_t;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+use vnc::{DisplayMouse, DisplaySurface};
 
 /// Number of virtqueues.
 const QUEUE_NUM_GPU: usize = 2;
@@ -48,6 +59,268 @@ pub struct VirtioGpuBaseConf {
     flags: u32,
     xres: u32,
     yres: u32,
+}
+
+#[allow(unused)]
+#[derive(Debug)]
+struct GpuResource {
+    resource_id: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    iov: Vec<Iovec>,
+    scanouts_bitmask: u32,
+    host_mem: u64,
+    pixman_image: *mut pixman_image_t,
+}
+impl Default for GpuResource {
+    fn default() -> Self {
+        GpuResource {
+            resource_id: 0,
+            width: 0,
+            height: 0,
+            format: 0,
+            iov: Vec::new(),
+            scanouts_bitmask: 0,
+            host_mem: 0,
+            pixman_image: ptr::null_mut(),
+        }
+    }
+}
+
+#[allow(unused)]
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuReqState {
+    width: u32,
+    height: u32,
+    x_coor: i32,
+    y_coor: i32,
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuCtrlHdr {
+    hdr_type: u32,
+    flags: u32,
+    fence_id: u64,
+    ctx_id: u32,
+    padding: u32,
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuCursorPos {
+    scanout_id: u32,
+    x_coord: u32,
+    y_coord: u32,
+    padding: u32,
+}
+
+impl ByteCode for VirtioGpuCursorPos {}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuUpdateCursor {
+    header: VirtioGpuCtrlHdr,
+    pos: VirtioGpuCursorPos,
+    resource_id: u32,
+    hot_x: u32,
+    hot_y: u32,
+    padding: u32,
+}
+
+impl ByteCode for VirtioGpuUpdateCursor {}
+
+#[allow(unused)]
+#[derive(Clone, Default)]
+struct GpuScanout {
+    surface: Option<DisplaySurface>,
+    mouse: Option<DisplayMouse>,
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    invalidate: i32,
+    resource_id: u32,
+    cursor: VirtioGpuUpdateCursor,
+}
+
+#[allow(unused)]
+impl GpuScanout {
+    fn clear(&mut self) {
+        self.resource_id = 0;
+        self.surface = None;
+        self.width = 0;
+        self.height = 0;
+    }
+}
+
+/// Control block of GPU IO.
+#[allow(unused)]
+struct GpuIoHandler {
+    /// The virtqueue for for sending control commands.
+    ctrl_queue: Arc<Mutex<Queue>>,
+    /// The virtqueue for sending cursor updates
+    cursor_queue: Arc<Mutex<Queue>>,
+    /// The address space to which the GPU device belongs.
+    mem_space: Arc<AddressSpace>,
+    /// Eventfd for contorl virtqueue.
+    ctrl_queue_evt: EventFd,
+    /// Eventfd for cursor virtqueue.
+    cursor_queue_evt: EventFd,
+    /// Eventfd for device deactivate.
+    deactivate_evt: RawFd,
+    /// Callback to trigger an interrupt.
+    interrupt_cb: Arc<VirtioInterrupt>,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+    /// Vector for resources.
+    resources_list: Vec<GpuResource>,
+    /// The bit mask of whether scanout is enabled or not.
+    enable_output_bitmask: u32,
+    /// Baisc Configure of GPU device.
+    base_conf: VirtioGpuBaseConf,
+    /// States of all request in scanout.
+    req_states: [VirtioGpuReqState; VIRTIO_GPU_MAX_SCANOUTS],
+    ///
+    scanouts: Vec<GpuScanout>,
+    /// Max host mem for resource.
+    max_hostmem: u64,
+    /// Current usage of host mem.
+    used_hostmem: u64,
+}
+
+impl GpuIoHandler {
+    fn ctrl_queue_evt_handler(&mut self) -> Result<()> {
+        let mut queue = self.ctrl_queue.lock().unwrap();
+        if !queue.is_valid(&self.mem_space) {
+            bail!("Failed to handle any request, the queue is not ready");
+        }
+        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            queue
+                .vring
+                .add_used(&self.mem_space, elem.index, 0)
+                .chain_err(|| "Failed to add used ring")?;
+        }
+        drop(queue);
+        (self.interrupt_cb)(
+            &VirtioInterruptType::Vring,
+            Some(&self.cursor_queue.lock().unwrap()),
+        )
+        .chain_err(|| ErrorKind::InterruptTrigger("gpu", VirtioInterruptType::Vring))?;
+
+        Ok(())
+    }
+
+    fn cursor_queue_evt_handler(&mut self) -> Result<()> {
+        let mut queue = self.cursor_queue.lock().unwrap();
+        if !queue.is_valid(&self.mem_space) {
+            bail!("Failed to handle any request, the queue is not ready");
+        }
+
+        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            queue
+                .vring
+                .add_used(&self.mem_space, elem.index, 0)
+                .chain_err(|| "Failed to add used ring")?;
+
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
+                .chain_err(|| ErrorKind::InterruptTrigger("gpu", VirtioInterruptType::Vring))?;
+        }
+
+        Ok(())
+    }
+
+    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.ctrl_queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.cursor_queue_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.deactivate_evt,
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
+        notifiers
+    }
+}
+
+impl EventNotifierHelper for GpuIoHandler {
+    fn internal_notifiers(gpu_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
+        // Register event notifier for deactivate_evt.
+        let gpu_handler_clone = gpu_handler.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            Some(gpu_handler_clone.lock().unwrap().deactivate_evt_handler())
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            gpu_handler.lock().unwrap().deactivate_evt,
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        // Register event notifier for ctrl_queue_evt.
+        let gpu_handler_clone = gpu_handler.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            if let Err(e) = gpu_handler_clone.lock().unwrap().ctrl_queue_evt_handler() {
+                error!(
+                    "Failed to process queue for virtio gpu, err: {}",
+                    error_chain::ChainedError::display_chain(&e),
+                );
+            }
+
+            None
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            gpu_handler.lock().unwrap().ctrl_queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        // Register event notifier for cursor_queue_evt.
+        let gpu_handler_clone = gpu_handler.clone();
+        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            if let Err(e) = gpu_handler_clone.lock().unwrap().cursor_queue_evt_handler() {
+                error!(
+                    "Failed to process queue for virtio gpu, err: {}",
+                    error_chain::ChainedError::display_chain(&e),
+                );
+            }
+
+            None
+        });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            gpu_handler.lock().unwrap().cursor_queue_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        notifiers
+    }
 }
 
 /// State of gpu device.
@@ -189,15 +462,47 @@ impl VirtioDevice for Gpu {
 
     fn activate(
         &mut self,
-        _mem_space: Arc<AddressSpace>,
+        mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut _queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         if queues.len() != QUEUE_NUM_GPU {
             return Err(ErrorKind::IncorrectQueueNum(QUEUE_NUM_GPU, queues.len()).into());
         }
+
         self.interrupt_cb = Some(interrupt_cb.clone());
+        let req_states = [VirtioGpuReqState::default(); VIRTIO_GPU_MAX_SCANOUTS];
+        let mut scanouts = vec![];
+        for _i in 0..VIRTIO_GPU_MAX_SCANOUTS {
+            let scanout = GpuScanout::default();
+            scanouts.push(scanout);
+        }
+
+        let mut gpu_handler = GpuIoHandler {
+            ctrl_queue: queues[0].clone(),
+            cursor_queue: queues[1].clone(),
+            mem_space,
+            ctrl_queue_evt: queue_evts.remove(0),
+            cursor_queue_evt: queue_evts.remove(0),
+            deactivate_evt: self.deactivate_evt.as_raw_fd(),
+            interrupt_cb,
+            driver_features: self.state.driver_features,
+            resources_list: Vec::new(),
+            enable_output_bitmask: 1,
+            base_conf: self.state.base_conf,
+            scanouts,
+            req_states,
+            max_hostmem: self.gpu_conf.max_hostmem,
+            used_hostmem: 0,
+        };
+        gpu_handler.req_states[0].width = self.state.base_conf.xres;
+        gpu_handler.req_states[0].height = self.state.base_conf.yres;
+
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(gpu_handler))),
+            None,
+        )?;
 
         Ok(())
     }
