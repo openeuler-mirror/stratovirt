@@ -12,9 +12,10 @@
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1, VIRTIO_TYPE_GPU,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_GPU,
 };
-use address_space::AddressSpace;
+use address_space::{AddressSpace, GuestAddress};
 use error_chain::bail;
 use log::{error, warn};
 use machine_manager::config::{GpuConfig, VIRTIO_GPU_MAX_SCANOUTS};
@@ -23,6 +24,7 @@ use migration::{DeviceStateDesc, FieldDesc};
 use migration_derive::{ByteCode, Desc};
 use std::cmp;
 use std::io::Write;
+use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 use std::{ptr, vec};
@@ -32,18 +34,28 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::num_ops::{read_u32, write_u32};
-use util::pixman::pixman_image_t;
+use util::pixman::{
+    pixman_image_get_data, pixman_image_get_height, pixman_image_get_width, pixman_image_t,
+};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-use vnc::{DisplayMouse, DisplaySurface};
+use vnc::{vnc_display_cursor, DisplayMouse, DisplaySurface};
 
 /// Number of virtqueues.
 const QUEUE_NUM_GPU: usize = 2;
 /// Size of each virtqueue.
 const QUEUE_SIZE_GPU: u16 = 256;
+
 /// Flags for virtio gpu base conf.
 const VIRTIO_GPU_FLAG_VIRGL_ENABLED: u32 = 1;
-//const VIRTIO_GPU_FLAG_STATS_ENABLED: u32 = 2;
+#[allow(unused)]
+const VIRTIO_GPU_FLAG_STATS_ENABLED: u32 = 2;
 const VIRTIO_GPU_FLAG_EDID_ENABLED: u32 = 3;
+/// flag used to distinguish the cmd type and format VirtioGpuRequest
+const VIRTIO_GPU_CMD_CTRL: u32 = 0;
+const VIRTIO_GPU_CMD_CURSOR: u32 = 1;
+/// virtio_gpu_ctrl_type: cursor commands.
+const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
+const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
 
 #[derive(Clone, Copy, Debug, ByteCode)]
 pub struct VirtioGpuConfig {
@@ -73,6 +85,7 @@ struct GpuResource {
     host_mem: u64,
     pixman_image: *mut pixman_image_t,
 }
+
 impl Default for GpuResource {
     fn default() -> Self {
         GpuResource {
@@ -105,6 +118,114 @@ pub struct VirtioGpuCtrlHdr {
     fence_id: u64,
     ctx_id: u32,
     padding: u32,
+}
+
+impl VirtioGpuCtrlHdr {
+    fn is_valid(&self) -> bool {
+        match self.hdr_type {
+            VIRTIO_GPU_CMD_UPDATE_CURSOR => true,
+            VIRTIO_GPU_CMD_MOVE_CURSOR => true,
+            _ => {
+                error!("request type {} is not supported for GPU", self.hdr_type);
+                false
+            }
+        }
+    }
+}
+
+impl ByteCode for VirtioGpuCtrlHdr {}
+
+#[allow(unused)]
+#[derive(Default, Clone)]
+pub struct VirtioGpuRequest {
+    header: VirtioGpuCtrlHdr,
+    index: u16,
+    desc_num: u16,
+    out_iovec: Vec<Iovec>,
+    in_iovec: Vec<Iovec>,
+    in_header: GuestAddress,
+    out_header: GuestAddress,
+}
+
+impl VirtioGpuRequest {
+    fn new(mem_space: &Arc<AddressSpace>, elem: &Element, cmd_type: u32) -> Result<Self> {
+        if cmd_type != VIRTIO_GPU_CMD_CTRL && cmd_type != VIRTIO_GPU_CMD_CURSOR {
+            bail!("unsupport GPU request: {} ", cmd_type);
+        }
+
+        if elem.out_iovec.is_empty()
+            || (cmd_type == VIRTIO_GPU_CMD_CTRL && elem.in_iovec.is_empty())
+            || (cmd_type == VIRTIO_GPU_CMD_CURSOR && !elem.in_iovec.is_empty())
+        {
+            bail!(
+                "Missed header for GPU request: out {} in {} desc num {}",
+                elem.out_iovec.len(),
+                elem.in_iovec.len(),
+                elem.desc_num
+            );
+        }
+
+        let out_elem = elem.out_iovec.get(0).unwrap();
+        if out_elem.len < size_of::<VirtioGpuCtrlHdr>() as u32 {
+            bail!(
+                "Invalid out header for GPU request: length {}",
+                out_elem.len
+            );
+        }
+
+        let out_header = mem_space
+            .read_object::<VirtioGpuCtrlHdr>(out_elem.addr)
+            .chain_err(|| ErrorKind::ReadObjectErr("the GPU's request header", out_elem.addr.0))?;
+        if !out_header.is_valid() {
+            bail!("Unsupported GPU request type");
+        }
+
+        let in_elem_addr = match cmd_type {
+            VIRTIO_GPU_CMD_CTRL => {
+                let in_elem = elem.in_iovec.last().unwrap();
+                if in_elem.len < 1 {
+                    bail!("Invalid in header for GPU request: length {}", in_elem.len)
+                }
+                in_elem.addr
+            }
+            VIRTIO_GPU_CMD_CURSOR => GuestAddress(0),
+            _ => {
+                bail!("unsupport GPU request: {}", cmd_type)
+            }
+        };
+
+        let mut request = VirtioGpuRequest {
+            header: out_header,
+            index: elem.index,
+            desc_num: elem.desc_num,
+            out_iovec: Vec::with_capacity(elem.out_iovec.len()),
+            in_iovec: Vec::with_capacity(elem.in_iovec.len()),
+            in_header: in_elem_addr,
+            out_header: out_elem.addr,
+        };
+
+        for (index, elem_iov) in elem.in_iovec.iter().enumerate() {
+            if index == elem.in_iovec.len() - 1 {
+                break;
+            }
+            if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
+                let iov = Iovec {
+                    iov_base: hva,
+                    iov_len: u64::from(elem_iov.len),
+                };
+                request.in_iovec.push(iov);
+            }
+        }
+
+        for (_index, elem_iov) in elem.out_iovec.iter().enumerate() {
+            request.out_iovec.push(Iovec {
+                iov_base: elem_iov.addr.0,
+                iov_len: elem_iov.len as u64,
+            });
+        }
+
+        Ok(request)
+    }
 }
 
 #[repr(C)]
@@ -190,7 +311,71 @@ struct GpuIoHandler {
     used_hostmem: u64,
 }
 
+fn display_define_mouse(mouse: &mut Option<DisplayMouse>) {
+    if let Some(mouse) = mouse {
+        vnc_display_cursor(mouse);
+    }
+}
+
 impl GpuIoHandler {
+    fn gpu_update_cursor(&mut self, req: &VirtioGpuRequest) -> Result<()> {
+        let info_cursor = self
+            .mem_space
+            .read_object::<VirtioGpuUpdateCursor>(req.out_header)
+            .chain_err(|| {
+                ErrorKind::ReadObjectErr("the GPU's cursor request header", req.out_header.0)
+            })?;
+
+        let scanout = &mut self.scanouts[info_cursor.pos.scanout_id as usize];
+        if info_cursor.header.hdr_type == VIRTIO_GPU_CMD_MOVE_CURSOR {
+            scanout.cursor.pos.x_coord = info_cursor.hot_x;
+            scanout.cursor.pos.y_coord = info_cursor.hot_y;
+        } else if info_cursor.header.hdr_type == VIRTIO_GPU_CMD_UPDATE_CURSOR {
+            if scanout.mouse.is_none() {
+                let tmp_mouse = DisplayMouse {
+                    height: 64,
+                    width: 64,
+                    hot_x: info_cursor.hot_x,
+                    hot_y: info_cursor.hot_y,
+                    ..Default::default()
+                };
+                scanout.mouse = Some(tmp_mouse);
+            }
+            if info_cursor.resource_id != 0 {
+                if let Some(res_index) = self
+                    .resources_list
+                    .iter()
+                    .position(|x| x.resource_id == info_cursor.resource_id)
+                {
+                    let res = &self.resources_list[res_index];
+                    unsafe {
+                        let res_width = pixman_image_get_width(res.pixman_image);
+                        let res_height = pixman_image_get_height(res.pixman_image);
+
+                        if res_width as u32 == scanout.mouse.as_ref().unwrap().width
+                            && res_height as u32 == scanout.mouse.as_ref().unwrap().height
+                        {
+                            let pixels = scanout.mouse.as_ref().unwrap().width
+                                * scanout.mouse.as_ref().unwrap().height;
+                            let mouse_data_size = pixels * (size_of::<u32>() as u32);
+                            let mut con = vec![0u8; 64 * 64 * 4];
+                            let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
+                            ptr::copy(res_data_ptr, con.as_mut_ptr(), mouse_data_size as usize);
+                            scanout.mouse.as_mut().unwrap().data.clear();
+                            scanout.mouse.as_mut().unwrap().data.append(&mut con);
+                        }
+                    }
+                }
+            }
+            display_define_mouse(&mut scanout.mouse);
+            scanout.cursor = info_cursor;
+        } else {
+            bail!("Wrong header type for cursor queue");
+        }
+
+        Ok(())
+    }
+
     fn ctrl_queue_evt_handler(&mut self) -> Result<()> {
         let mut queue = self.ctrl_queue.lock().unwrap();
         if !queue.is_valid(&self.mem_space) {
@@ -213,12 +398,25 @@ impl GpuIoHandler {
     }
 
     fn cursor_queue_evt_handler(&mut self) -> Result<()> {
-        let mut queue = self.cursor_queue.lock().unwrap();
+        let cursor_queue = self.cursor_queue.clone();
+        let mut queue = cursor_queue.lock().unwrap();
         if !queue.is_valid(&self.mem_space) {
             bail!("Failed to handle any request, the queue is not ready");
         }
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            match VirtioGpuRequest::new(&self.mem_space, &elem, VIRTIO_GPU_CMD_CURSOR) {
+                Ok(req) => {
+                    self.gpu_update_cursor(&req)
+                        .chain_err(|| "Fail to update cursor")?;
+                }
+                Err(e) => {
+                    error!(
+                        "failed to create GPU request, {}",
+                        error_chain::ChainedError::display_chain(&e)
+                    );
+                }
+            }
             queue
                 .vring
                 .add_used(&self.mem_space, elem.index, 0)
