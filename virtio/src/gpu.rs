@@ -28,7 +28,6 @@ use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 use std::{ptr, vec};
-use util::aio::Iovec;
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -37,6 +36,7 @@ use util::num_ops::{read_u32, write_u32};
 use util::pixman::{
     pixman_image_get_data, pixman_image_get_height, pixman_image_get_width, pixman_image_t,
 };
+use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 use vnc::{vnc_display_cursor, DisplayMouse, DisplaySurface};
 
@@ -50,12 +50,36 @@ const VIRTIO_GPU_FLAG_VIRGL_ENABLED: u32 = 1;
 #[allow(unused)]
 const VIRTIO_GPU_FLAG_STATS_ENABLED: u32 = 2;
 const VIRTIO_GPU_FLAG_EDID_ENABLED: u32 = 3;
+
+/// Features which virtio gpu cmd can support
+const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
+
 /// flag used to distinguish the cmd type and format VirtioGpuRequest
 const VIRTIO_GPU_CMD_CTRL: u32 = 0;
 const VIRTIO_GPU_CMD_CURSOR: u32 = 1;
+
+/// virtio_gpu_ctrl_type: 2d commands.
+const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
+const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
+const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
+const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
+const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
+const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
+const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
+const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
+const VIRTIO_GPU_CMD_GET_CAPSET_INFO: u32 = 0x0108;
+const VIRTIO_GPU_CMD_GET_CAPSET: u32 = 0x0109;
+const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010a;
 /// virtio_gpu_ctrl_type: cursor commands.
 const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
 const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
+/// virtio_gpu_ctrl_type: success responses.
+const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
+const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
+/// virtio_gpu_ctrl_type: error responses.
+const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
+const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 
 #[derive(Clone, Copy, Debug, ByteCode)]
 pub struct VirtioGpuConfig {
@@ -123,8 +147,19 @@ pub struct VirtioGpuCtrlHdr {
 impl VirtioGpuCtrlHdr {
     fn is_valid(&self) -> bool {
         match self.hdr_type {
-            VIRTIO_GPU_CMD_UPDATE_CURSOR => true,
-            VIRTIO_GPU_CMD_MOVE_CURSOR => true,
+            VIRTIO_GPU_CMD_UPDATE_CURSOR
+            | VIRTIO_GPU_CMD_MOVE_CURSOR
+            | VIRTIO_GPU_CMD_GET_DISPLAY_INFO
+            | VIRTIO_GPU_CMD_RESOURCE_CREATE_2D
+            | VIRTIO_GPU_CMD_RESOURCE_UNREF
+            | VIRTIO_GPU_CMD_SET_SCANOUT
+            | VIRTIO_GPU_CMD_RESOURCE_FLUSH
+            | VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D
+            | VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING
+            | VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING
+            | VIRTIO_GPU_CMD_GET_CAPSET_INFO
+            | VIRTIO_GPU_CMD_GET_CAPSET
+            | VIRTIO_GPU_CMD_GET_EDID => true,
             _ => {
                 error!("request type {} is not supported for GPU", self.hdr_type);
                 false
@@ -134,6 +169,65 @@ impl VirtioGpuCtrlHdr {
 }
 
 impl ByteCode for VirtioGpuCtrlHdr {}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuRect {
+    x_coord: u32,
+    y_coord: u32,
+    width: u32,
+    height: u32,
+}
+
+impl ByteCode for VirtioGpuRect {}
+
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuDisplayOne {
+    rect: VirtioGpuRect,
+    enabled: u32,
+    flags: u32,
+}
+
+impl ByteCode for VirtioGpuDisplayOne {}
+
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuDisplayInfo {
+    header: VirtioGpuCtrlHdr,
+    pmodes: [VirtioGpuDisplayOne; VIRTIO_GPU_MAX_SCANOUTS],
+}
+impl ByteCode for VirtioGpuDisplayInfo {}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct VirtioGpuGetEdid {
+    header: VirtioGpuCtrlHdr,
+    scanouts: u32,
+    padding: u32,
+}
+impl ByteCode for VirtioGpuGetEdid {}
+
+#[allow(unused)]
+// data which transfer to frontend need padding
+#[derive(Clone, Copy)]
+pub struct VirtioGpuRespEdid {
+    header: VirtioGpuCtrlHdr,
+    size: u32,
+    padding: u32,
+    edid: [u8; 1024],
+}
+
+impl Default for VirtioGpuRespEdid {
+    fn default() -> Self {
+        VirtioGpuRespEdid {
+            header: VirtioGpuCtrlHdr::default(),
+            size: 0,
+            padding: 0,
+            edid: [0; 1024],
+        }
+    }
+}
+
+impl ByteCode for VirtioGpuRespEdid {}
 
 #[allow(unused)]
 #[derive(Default, Clone)]
@@ -376,25 +470,278 @@ impl GpuIoHandler {
         Ok(())
     }
 
+    fn gpu_response_nodata(
+        &mut self,
+        need_interrupt: &mut bool,
+        resp_head_type: u32,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        let mut resp = VirtioGpuCtrlHdr {
+            hdr_type: resp_head_type,
+            ..Default::default()
+        };
+
+        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
+            resp.flags |= VIRTIO_GPU_FLAG_FENCE;
+            resp.fence_id = req.header.fence_id;
+            resp.ctx_id = req.header.ctx_id;
+        }
+
+        self.mem_space
+            .write_object(&resp, req.in_header)
+            .chain_err(|| "Fail to write nodata response")?;
+        self.ctrl_queue
+            .lock()
+            .unwrap()
+            .vring
+            .add_used(
+                &self.mem_space,
+                req.index,
+                size_of::<VirtioGpuCtrlHdr>() as u32,
+            )
+            .chain_err(|| "Fail to add used elem for control queue")?;
+
+        Ok(())
+    }
+
+    fn gpu_cmd_get_display_info(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        let mut display_info = VirtioGpuDisplayInfo::default();
+        display_info.header.hdr_type = VIRTIO_GPU_RESP_OK_DISPLAY_INFO;
+        for i in 0..self.base_conf.max_outputs {
+            if (self.enable_output_bitmask & (1 << i)) != 0 {
+                let i = i as usize;
+                display_info.pmodes[i].enabled = 1;
+                display_info.pmodes[i].rect.width = self.req_states[i].width;
+                display_info.pmodes[i].rect.height = self.req_states[i].height;
+                display_info.pmodes[i].flags = 0;
+            }
+        }
+
+        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
+            display_info.header.flags |= VIRTIO_GPU_FLAG_FENCE;
+            display_info.header.fence_id = req.header.fence_id;
+            display_info.header.ctx_id = req.header.ctx_id;
+        }
+        self.mem_space
+            .write_object(&display_info, req.in_header)
+            .chain_err(|| "Fail to write displayinfo")?;
+        self.ctrl_queue
+            .lock()
+            .unwrap()
+            .vring
+            .add_used(
+                &self.mem_space,
+                req.index,
+                size_of::<VirtioGpuDisplayInfo>() as u32,
+            )
+            .chain_err(|| "Fail to add used elem for control queue")?;
+
+        Ok(())
+    }
+
+    fn gpu_cmd_get_edid(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        let mut edid_resp = VirtioGpuRespEdid::default();
+        edid_resp.header.hdr_type = VIRTIO_GPU_RESP_OK_EDID;
+
+        let edid_req = self
+            .mem_space
+            .read_object::<VirtioGpuGetEdid>(req.out_header)
+            .chain_err(|| {
+                ErrorKind::ReadObjectErr("the GPU's edid request header", req.out_header.0)
+            })?;
+
+        if edid_req.scanouts >= self.base_conf.max_outputs {
+            error!(
+                "The scanouts {} of request exceeds the max_outputs {}",
+                edid_req.scanouts, self.base_conf.max_outputs
+            );
+            return self.gpu_response_nodata(
+                need_interrupt,
+                VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                req,
+            );
+        }
+
+        let mut edid_info = EdidInfo::new(
+            "HWV",
+            "STRA Monitor",
+            100,
+            self.req_states[edid_req.scanouts as usize].width,
+            self.req_states[edid_req.scanouts as usize].height,
+        );
+        edid_info.edid_array_fulfill(&mut edid_resp.edid.to_vec());
+        edid_resp.size = edid_resp.edid.len() as u32;
+
+        if (req.header.flags & VIRTIO_GPU_FLAG_FENCE) != 0 {
+            edid_resp.header.flags |= VIRTIO_GPU_FLAG_FENCE;
+            edid_resp.header.fence_id = req.header.fence_id;
+            edid_resp.header.ctx_id = req.header.ctx_id;
+        }
+        self.mem_space
+            .write_object(&edid_resp, req.in_header)
+            .chain_err(|| "Fail to write displayinfo")?;
+        self.ctrl_queue
+            .lock()
+            .unwrap()
+            .vring
+            .add_used(
+                &self.mem_space,
+                req.index,
+                size_of::<VirtioGpuDisplayInfo>() as u32,
+            )
+            .chain_err(|| "Fail to add used elem for control queue")?;
+
+        Ok(())
+    }
+
+    fn gpu_cmd_resource_create_2d(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
+    }
+
+    fn gpu_cmd_resource_unref(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
+    }
+
+    fn gpu_cmd_set_scanout(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
+    }
+
+    fn gpu_cmd_resource_flush(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
+    }
+
+    fn gpu_cmd_transfer_to_host_2d(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
+    }
+    fn gpu_cmd_resource_attach_backing(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
+    }
+    fn gpu_cmd_resource_detach_backing(
+        &mut self,
+        need_interrupt: &mut bool,
+        req: &VirtioGpuRequest,
+    ) -> Result<()> {
+        *need_interrupt = true;
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
+    }
+    fn process_control_queue(&mut self, mut req_queue: Vec<VirtioGpuRequest>) -> Result<()> {
+        for req in req_queue.iter_mut() {
+            let mut need_interrupt = true;
+
+            if let Err(e) = match req.header.hdr_type {
+                VIRTIO_GPU_CMD_GET_DISPLAY_INFO => self
+                    .gpu_cmd_get_display_info(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to get display info"),
+                VIRTIO_GPU_CMD_RESOURCE_CREATE_2D => self
+                    .gpu_cmd_resource_create_2d(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to create 2d resource"),
+                VIRTIO_GPU_CMD_RESOURCE_UNREF => self
+                    .gpu_cmd_resource_unref(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to unref resource"),
+                VIRTIO_GPU_CMD_SET_SCANOUT => self
+                    .gpu_cmd_set_scanout(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to set scanout"),
+                VIRTIO_GPU_CMD_RESOURCE_FLUSH => self
+                    .gpu_cmd_resource_flush(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to flush resource"),
+                VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D => self
+                    .gpu_cmd_transfer_to_host_2d(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to transfer fo host 2d resource"),
+                VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING => self
+                    .gpu_cmd_resource_attach_backing(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to attach backing"),
+                VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING => self
+                    .gpu_cmd_resource_detach_backing(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to detach backing"),
+                VIRTIO_GPU_CMD_GET_EDID => self
+                    .gpu_cmd_get_edid(&mut need_interrupt, req)
+                    .chain_err(|| "Fail to get edid info"),
+                _ => self
+                    .gpu_response_nodata(&mut need_interrupt, VIRTIO_GPU_RESP_ERR_UNSPEC, req)
+                    .chain_err(|| "Fail to get nodata response"),
+            } {
+                error!("Fail to handle GPU request, {}", e);
+            }
+
+            if need_interrupt {
+                (self.interrupt_cb)(
+                    &VirtioInterruptType::Vring,
+                    Some(&self.ctrl_queue.lock().unwrap()),
+                )
+                .chain_err(|| ErrorKind::InterruptTrigger("gpu", VirtioInterruptType::Vring))?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn ctrl_queue_evt_handler(&mut self) -> Result<()> {
         let mut queue = self.ctrl_queue.lock().unwrap();
         if !queue.is_valid(&self.mem_space) {
             bail!("Failed to handle any request, the queue is not ready");
         }
+
+        let mut req_queue = Vec::new();
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
-            queue
-                .vring
-                .add_used(&self.mem_space, elem.index, 0)
-                .chain_err(|| "Failed to add used ring")?;
+            match VirtioGpuRequest::new(&self.mem_space, &elem, VIRTIO_GPU_CMD_CTRL) {
+                Ok(req) => {
+                    req_queue.push(req);
+                }
+                Err(e) => {
+                    queue
+                        .vring
+                        .add_used(&self.mem_space, elem.index, 0)
+                        .chain_err(|| "Failed to add used ring")?;
+                    error!(
+                        "failed to create GPU request, {}",
+                        error_chain::ChainedError::display_chain(&e)
+                    );
+                }
+            }
         }
         drop(queue);
-        (self.interrupt_cb)(
-            &VirtioInterruptType::Vring,
-            Some(&self.cursor_queue.lock().unwrap()),
-        )
-        .chain_err(|| ErrorKind::InterruptTrigger("gpu", VirtioInterruptType::Vring))?;
-
-        Ok(())
+        self.process_control_queue(req_queue)
     }
 
     fn cursor_queue_evt_handler(&mut self) -> Result<()> {
