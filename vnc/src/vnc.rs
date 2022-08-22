@@ -35,8 +35,8 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
     bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width, round_up,
-    round_up_div, PixelFormat, VncClient, VncFeatures, VncServer, ENCODING_ALPHA_CURSOR,
-    ENCODING_RAW, ENCODING_RICH_CURSOR,
+    round_up_div, unref_pixman_image, PixelFormat, RectInfo, Rectangle, VncClient, VncFeatures,
+    VncServer, ENCODING_ALPHA_CURSOR, ENCODING_RAW, ENCODING_RICH_CURSOR,
 };
 
 /// The number of dirty pixels represented bt one bit in dirty bitmap.
@@ -51,6 +51,34 @@ pub const VNC_BITMAP_WIDTH: u64 =
 
 const DEFAULT_REFRESH_INTERVAL: u64 = 30;
 const BIT_PER_BYTE: u32 = 8;
+
+/// A struct to record image information
+#[derive(Clone, Copy)]
+pub struct DisplaySurface {
+    /// image format
+    pub format: pixman_format_code_t,
+    /// pointer to image
+    pub image: *mut pixman_image_t,
+}
+
+impl Default for DisplaySurface {
+    fn default() -> Self {
+        DisplaySurface {
+            format: pixman_format_code_t::PIXMAN_a1,
+            image: ptr::null_mut(),
+        }
+    }
+}
+
+/// Struct to record mouse information
+#[derive(Clone, Default)]
+pub struct DisplayMouse {
+    pub width: u32,
+    pub height: u32,
+    pub hot_x: u32,
+    pub hot_y: u32,
+    pub data: Vec<u8>,
+}
 
 pub fn vnc_init(vnc_cfg: &VncConfig, object: &HashMap<String, ObjConfig>) -> Result<()> {
     let addr = format!("{}:{}", vnc_cfg.ip, vnc_cfg.port);
@@ -137,20 +165,9 @@ fn vnc_height(height: i32) -> i32 {
     cmp::min(MAX_WINDOW_HEIGHT as i32, height)
 }
 
-/// Decrease the reference of image
-/// # Arguments
-///
-/// * `image` - the pointer to image in pixman
-fn vnc_pixman_image_unref(image: *mut pixman_image_t) {
-    if image.is_null() {
-        return;
-    }
-    unsafe { pixman_image_unref(image) };
-}
-
 /// Update Client image
 pub fn update_client_surface(server: &mut VncServer) {
-    vnc_pixman_image_unref(server.server_image);
+    unref_pixman_image(server.server_image);
     server.server_image = ptr::null_mut();
 
     if server.clients.is_empty() {
@@ -190,6 +207,110 @@ pub fn update_client_surface(server: &mut VncServer) {
     );
 }
 
+/// Check if the suface for VncClient is need update
+fn check_surface(surface: &mut DisplaySurface) -> bool {
+    let server = VNC_SERVERS.lock().unwrap()[0].clone();
+    let locked_server = server.lock().unwrap();
+    if surface.image.is_null()
+        || locked_server.server_image.is_null()
+        || locked_server.guest_format != surface.format
+        || get_image_width(locked_server.server_image) != get_image_width(surface.image)
+        || get_image_height(locked_server.server_image) != get_image_height(surface.image)
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Check if rectangle is in spec
+pub fn check_rect(rect: &mut Rectangle, width: i32, height: i32) -> bool {
+    if rect.x >= width {
+        return false;
+    }
+
+    rect.w = cmp::min(width - rect.x, rect.w);
+    if rect.w == 0 {
+        return false;
+    }
+
+    if rect.y >= height {
+        return false;
+    }
+
+    rect.h = cmp::min(height - rect.y, rect.h);
+    if rect.h == 0 {
+        return false;
+    }
+
+    true
+}
+
+/// Send updated pixel information to client
+///
+/// # Arguments
+///
+/// * `x` `y` `w` `h` - coordinate, width, height
+/// * `buf` - send buffer
+pub fn framebuffer_upadate(x: i32, y: i32, w: i32, h: i32, encoding: i32, buf: &mut Vec<u8>) {
+    buf.append(&mut (x as u16).to_be_bytes().to_vec());
+    buf.append(&mut (y as u16).to_be_bytes().to_vec());
+    buf.append(&mut (w as u16).to_be_bytes().to_vec());
+    buf.append(&mut (h as u16).to_be_bytes().to_vec());
+    buf.append(&mut encoding.to_be_bytes().to_vec());
+}
+
+/// Convert the sent information to a format supported  
+/// by the client depend on byte arrangement
+///
+/// # Arguments
+///
+/// * `ptr` = pointer to the data need to be convert
+/// * `big_endian` - byte arrangement
+/// * `pf` - pixelformat
+/// * `buf` - send buffer
+/// * `size` - total number of bytes need to convert
+fn convert_pixel(ptr: *mut u32, big_endian: bool, pf: &PixelFormat, buf: &mut Vec<u8>, size: u32) {
+    let num = size >> 2;
+    for i in 0..num {
+        let value = unsafe { *ptr.offset(i as isize) };
+        let mut ret = [0u8; 4];
+        let red = (((value >> 16) & 0xff) << pf.red.bits) >> 8;
+        let green = (((value >> 8) & 0xff) << pf.green.bits) >> 8;
+        let blue = ((value & 0xff) << pf.blue.bits) >> 8;
+        let v = (red << pf.red.shift) | (green << pf.green.shift) | (blue << pf.blue.shift);
+        match pf.pixel_bytes {
+            1 => {
+                ret[0] = v as u8;
+            }
+            2 => {
+                if big_endian {
+                    ret[0] = (v >> 8) as u8;
+                    ret[1] = v as u8;
+                } else {
+                    ret[1] = (v >> 8) as u8;
+                    ret[0] = v as u8;
+                }
+            }
+            4 => {
+                if big_endian {
+                    ret = (v as u32).to_be_bytes();
+                } else {
+                    ret = (v as u32).to_le_bytes();
+                }
+            }
+            _ => {
+                if big_endian {
+                    ret = (v as u32).to_be_bytes();
+                } else {
+                    ret = (v as u32).to_le_bytes();
+                }
+            }
+        }
+        buf.append(&mut ret[..pf.pixel_bytes as usize].to_vec());
+    }
+}
+
 /// Initialize a default image
 /// Default: width is 640, height is 480, stride is 640 * 4
 fn get_client_image() -> *mut pixman_image_t {
@@ -204,7 +325,57 @@ fn get_client_image() -> *mut pixman_image_t {
     }
 }
 
+/// Update guest_image
+/// Send a resize command to the client based on whether the image size has changed
+pub fn vnc_display_switch(surface: &mut DisplaySurface) {
+    let need_resize = check_surface(surface);
+    let server = VNC_SERVERS.lock().unwrap()[0].clone();
+    let mut locked_server = server.lock().unwrap();
+    unref_pixman_image(locked_server.guest_image);
+
+    // Vnc_pixman_image_ref
+    locked_server.guest_image = unsafe { pixman_image_ref(surface.image) };
+    locked_server.guest_format = surface.format;
+
+    let guest_width: i32 = get_image_width(locked_server.guest_image);
+    let guest_height: i32 = get_image_height(locked_server.guest_image);
+    if !need_resize {
+        set_area_dirty(
+            &mut locked_server.guest_dirtymap,
+            0,
+            0,
+            guest_width,
+            guest_height,
+            guest_width,
+            guest_height,
+        );
+        return;
+    }
+    update_client_surface(&mut locked_server);
+
+    for client in locked_server.clients.values_mut() {
+        let width = vnc_width(guest_width);
+        let height = vnc_height(guest_height);
+        let mut locked_client = client.lock().unwrap();
+        // Desktop_resize;
+        // Cursor
+        locked_client.desktop_resize();
+        locked_client.dirty_bitmap.clear_all();
+        set_area_dirty(
+            &mut locked_client.dirty_bitmap,
+            0,
+            0,
+            width,
+            height,
+            guest_width,
+            guest_height,
+        );
+    }
+}
+
 pub static VNC_SERVERS: Lazy<Mutex<Vec<Arc<Mutex<VncServer>>>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
+pub static VNC_RECT_INFO: Lazy<Arc<Mutex<Vec<RectInfo>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
 pub static REFRESH_EVT: Lazy<Arc<Mutex<EventFd>>> =
     Lazy::new(|| Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())));

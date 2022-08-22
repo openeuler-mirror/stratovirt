@@ -35,10 +35,47 @@ use vmm_sys_util::epoll::EventSet;
 
 use crate::{
     bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
-    get_image_width, round_up_div, update_client_surface, AuthState, SubAuthState, VncClient,
-    DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH,
-    VNC_SERVERS,
+    get_image_width, round_up_div, unref_pixman_image, update_client_surface, AuthState,
+    DisplayMouse, SubAuthState, VncClient, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
+    REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
 };
+
+/// Info of image
+/// stride is not always equal to stride because of memory alignment.
+pub struct ImageInfo {
+    /// The start pointer to image.
+    data: *mut u8,
+    /// The memory size of each line for image.
+    stride: i32,
+    /// The memory size of each line to store pixel for image
+    length: i32,
+    /// Middle pointer.
+    ptr: *mut u8,
+}
+
+impl Default for ImageInfo {
+    fn default() -> Self {
+        ImageInfo {
+            data: ptr::null_mut(),
+            stride: 0,
+            length: 0,
+            ptr: ptr::null_mut(),
+        }
+    }
+}
+
+impl ImageInfo {
+    fn new(image: *mut pixman_image_t) -> Self {
+        let bpp = pixman_format_bpp(get_image_format(image) as u32);
+        let length = get_image_width(image) * round_up_div(bpp as u64, 8) as i32;
+        ImageInfo {
+            data: get_image_data(image) as *mut u8,
+            stride: get_image_stride(image),
+            length,
+            ptr: ptr::null_mut(),
+        }
+    }
+}
 
 /// VncServer
 pub struct VncServer {
@@ -54,6 +91,10 @@ pub struct VncServer {
     pub guest_dirtymap: Bitmap<u64>,
     /// Image format of pixman.
     pub guest_format: pixman_format_code_t,
+    /// Cursor property.
+    pub cursor: Option<DisplayMouse>,
+    /// Identify the area need update for cursor.
+    pub mask: Option<Vec<u8>>,
     // Connection limit.
     conn_limits: usize,
     /// Width of current image.
@@ -78,6 +119,8 @@ impl VncServer {
                     ) as usize,
             ),
             guest_format: pixman_format_code_t::PIXMAN_x8r8g8b8,
+            cursor: None,
+            mask: None,
             conn_limits: 1,
             true_width: 0,
         }
@@ -90,6 +133,193 @@ impl VncServer {
         object: &HashMap<String, ObjConfig>,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Set diry for client
+    ///
+    /// # Arguments
+    ///
+    /// * `x` `y`- coordinates of dirty area.
+    fn set_dirty_for_clients(&mut self, x: usize, y: usize) {
+        for client in self.clients.values_mut() {
+            client
+                .lock()
+                .unwrap()
+                .dirty_bitmap
+                .set(x + y * VNC_BITMAP_WIDTH as usize)
+                .unwrap();
+        }
+    }
+
+    /// Transfer dirty data to buff in one line
+    ///
+    /// # Arguments
+    ///
+    /// * `s_info` - source image.
+    /// * `g_info` - dest image.
+    fn get_one_line_buf(
+        &self,
+        s_info: &mut ImageInfo,
+        g_info: &mut ImageInfo,
+    ) -> *mut pixman_image_t {
+        let mut line_buf = ptr::null_mut();
+        if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
+            line_buf = unsafe {
+                pixman_image_create_bits(
+                    pixman_format_code_t::PIXMAN_x8r8g8b8,
+                    get_image_width(self.server_image),
+                    1,
+                    ptr::null_mut(),
+                    0,
+                )
+            };
+            g_info.stride = s_info.stride;
+            g_info.length = g_info.stride;
+        }
+
+        line_buf
+    }
+
+    /// Get min width
+    fn get_min_width(&self) -> i32 {
+        cmp::min(
+            get_image_width(self.server_image),
+            get_image_width(self.guest_image),
+        )
+    }
+
+    /// Get min height
+    fn get_min_height(&self) -> i32 {
+        cmp::min(
+            get_image_height(self.server_image),
+            get_image_height(self.guest_image),
+        )
+    }
+
+    /// Update each line
+    ///
+    /// # Arguments
+    ///
+    /// * `x` `y` - start coordinate in image to refresh
+    /// * `s_info` - source image.
+    /// * `g_info` - dest image.
+    fn update_one_line(
+        &mut self,
+        mut x: usize,
+        y: usize,
+        s_info: &mut ImageInfo,
+        g_info: &mut ImageInfo,
+        cmp_bytes: usize,
+    ) -> i32 {
+        let mut count = 0;
+        let width = self.get_min_width();
+        let line_bytes = cmp::min(s_info.stride, g_info.length);
+
+        while x < round_up_div(width as u64, DIRTY_PIXELS_NUM as u64) as usize {
+            if !self
+                .guest_dirtymap
+                .contain(x + y * VNC_BITMAP_WIDTH as usize)
+                .unwrap()
+            {
+                x += 1;
+                g_info.ptr = (g_info.ptr as usize + cmp_bytes) as *mut u8;
+                s_info.ptr = (s_info.ptr as usize + cmp_bytes) as *mut u8;
+                continue;
+            }
+            self.guest_dirtymap
+                .clear(x + y * VNC_BITMAP_WIDTH as usize)
+                .unwrap();
+            let mut _cmp_bytes = cmp_bytes;
+            if (x + 1) * cmp_bytes > line_bytes as usize {
+                _cmp_bytes = line_bytes as usize - x * cmp_bytes;
+            }
+
+            unsafe {
+                if libc::memcmp(
+                    s_info.ptr as *mut libc::c_void,
+                    g_info.ptr as *mut libc::c_void,
+                    _cmp_bytes,
+                ) == 0
+                {
+                    x += 1;
+                    g_info.ptr = (g_info.ptr as usize + cmp_bytes) as *mut u8;
+                    s_info.ptr = (s_info.ptr as usize + cmp_bytes) as *mut u8;
+                    continue;
+                }
+
+                ptr::copy(g_info.ptr, s_info.ptr, _cmp_bytes);
+            };
+
+            self.set_dirty_for_clients(x, y);
+            count += 1;
+
+            x += 1;
+            g_info.ptr = (g_info.ptr as usize + cmp_bytes) as *mut u8;
+            s_info.ptr = (s_info.ptr as usize + cmp_bytes) as *mut u8;
+        }
+
+        count
+    }
+
+    /// Update the dirty area of the image
+    /// Return dirty number
+    pub fn update_server_image(&mut self) -> i32 {
+        let mut dirty_num = 0;
+        let height = self.get_min_height();
+        let g_bpl = self.guest_dirtymap.vol() / MAX_WINDOW_HEIGHT as usize;
+
+        let mut offset = self.guest_dirtymap.find_next_bit(0).unwrap();
+        if offset >= (height as usize) * g_bpl {
+            return dirty_num;
+        }
+
+        let mut s_info = ImageInfo::new(self.server_image);
+        let mut g_info = ImageInfo::new(self.guest_image);
+
+        let cmp_bytes = cmp::min(
+            DIRTY_PIXELS_NUM as usize * bytes_per_pixel(),
+            s_info.stride as usize,
+        );
+
+        let line_buf = self.get_one_line_buf(&mut s_info, &mut g_info);
+        loop {
+            let mut y = offset / g_bpl;
+            let x = offset % g_bpl;
+            s_info.ptr =
+                (s_info.data as usize + y * s_info.stride as usize + x * cmp_bytes) as *mut u8;
+
+            if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
+                unsafe {
+                    pixman_image_composite(
+                        pixman_op_t::PIXMAN_OP_SRC,
+                        self.guest_image,
+                        ptr::null_mut(),
+                        line_buf,
+                        0,
+                        y as i16,
+                        0,
+                        0,
+                        0,
+                        0,
+                        self.get_min_width() as u16,
+                        1,
+                    );
+                };
+                g_info.ptr = get_image_data(line_buf) as *mut u8;
+            } else {
+                g_info.ptr = (g_info.data as usize + y * g_info.stride as usize) as *mut u8;
+            }
+            g_info.ptr = (g_info.ptr as usize + x * cmp_bytes) as *mut u8;
+            dirty_num += self.update_one_line(x, y, &mut s_info, &mut g_info, cmp_bytes);
+            y += 1;
+            offset = self.guest_dirtymap.find_next_bit(y * g_bpl).unwrap();
+            if offset >= (height as usize) * g_bpl {
+                break;
+            }
+            unref_pixman_image(line_buf);
+        }
+
+        dirty_num
     }
 
     /// Listen to the port and accpet client's connection.
@@ -185,5 +415,15 @@ impl EventNotifierHelper for VncServer {
 fn vnc_refresh() {
     if VNC_SERVERS.lock().unwrap().is_empty() {
         return;
+    }
+    let server = VNC_SERVERS.lock().unwrap()[0].clone();
+    if server.lock().unwrap().clients.is_empty() {
+        return;
+    }
+
+    let dirty_num = server.lock().unwrap().update_server_image();
+    let mut _rects: i32 = 0;
+    for client in server.lock().unwrap().clients.values_mut() {
+        _rects += client.lock().unwrap().get_rects(dirty_num);
     }
 }
