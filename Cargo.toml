@@ -19,6 +19,7 @@ migration = { path = "migration" }
 util = { path = "util" }
 virtio = { path = "virtio" }
 vfio = { path = "vfio" }
+vnc = { path = "vnc" }
 
 [workspace]
 members = [
@@ -38,6 +39,7 @@ members = [
     "virtio",
     "ozone",
     "vfio",
+    "vnc",
 ]
 
 [[bin]]

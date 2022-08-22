@@ -382,6 +382,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("numa describes the memory read/write latency, bandwidth between Initiator Proximity Domains and Target Proximity Domains(Memory)")
             .takes_values(true),
         )
+        .arg(
+            Arg::with_name("vnc")
+            .multiple(false)
+            .long("vnc")
+            .value_name("ip:port")
+            .help("specify the ip and port for vnc")
+            .takes_value(true),
+        )
 }
 
 /// Create `VmConfig` from `ArgMatches`'s arg.
@@ -413,6 +421,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
     add_args_to_config!((args.value_of("incoming")), vm_cfg, add_incoming);
+    add_args_to_config!((args.value_of("vnc")), vm_cfg, add_vnc);
     add_args_to_config!(
         (args.is_present("mem-prealloc")),
         vm_cfg,
