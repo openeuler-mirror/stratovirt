@@ -53,11 +53,15 @@ pub mod errors {
     }
 }
 
+pub mod auth;
 pub mod client;
+pub mod input;
 pub mod server;
 pub mod utils;
 pub mod vnc;
 pub use crate::vnc::*;
+pub use auth::*;
 pub use client::*;
+pub use input::*;
 pub use server::*;
 pub use utils::BuffPool;
