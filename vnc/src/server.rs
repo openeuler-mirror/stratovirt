@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
+use super::errors::Result;
 use machine_manager::{
     config::{ObjConfig, VncConfig},
     event_loop::EventLoop,
@@ -40,7 +40,7 @@ use crate::{
     REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
 };
 
-/// Info of image
+/// Info of image.
 /// stride is not always equal to stride because of memory alignment.
 pub struct ImageInfo {
     /// The start pointer to image.
@@ -79,10 +79,14 @@ impl ImageInfo {
 
 /// VncServer
 pub struct VncServer {
-    // Tcp connection listened by server.
+    /// Tcp connection listened by server.
     listener: Arc<Mutex<TcpListener>>,
-    // Clients connected to vnc.
+    /// Clients connected to vnc.
     pub clients: HashMap<String, Arc<Mutex<VncClient>>>,
+    /// Auth type.
+    pub auth: AuthState,
+    /// Subauth type.
+    pub subauth: SubAuthState,
     /// Image refresh to VncClient.
     pub server_image: *mut pixman_image_t,
     /// Image from gpu.
@@ -95,7 +99,7 @@ pub struct VncServer {
     pub cursor: Option<DisplayMouse>,
     /// Identify the area need update for cursor.
     pub mask: Option<Vec<u8>>,
-    // Connection limit.
+    /// Connection limit.
     conn_limits: usize,
     /// Width of current image.
     pub true_width: i32,
@@ -109,6 +113,8 @@ impl VncServer {
         VncServer {
             listener,
             clients: HashMap::new(),
+            auth: AuthState::No,
+            subauth: SubAuthState::VncAuthVencryptPlain,
             server_image: ptr::null_mut(),
             guest_image,
             guest_dirtymap: Bitmap::<u64>::new(
@@ -129,9 +135,11 @@ impl VncServer {
     /// Make configuration for VncServer.
     pub fn make_config(
         &mut self,
-        vnc_cfg: &VncConfig,
-        object: &HashMap<String, ObjConfig>,
+        _vnc_cfg: &VncConfig,
+        _object: &HashMap<String, ObjConfig>,
     ) -> Result<()> {
+        // tls configuration
+
         Ok(())
     }
 
@@ -180,7 +188,7 @@ impl VncServer {
         line_buf
     }
 
-    /// Get min width
+    /// Get min width.
     fn get_min_width(&self) -> i32 {
         cmp::min(
             get_image_width(self.server_image),
@@ -188,7 +196,7 @@ impl VncServer {
         )
     }
 
-    /// Get min height
+    /// Get min height.
     fn get_min_height(&self) -> i32 {
         cmp::min(
             get_image_height(self.server_image),
@@ -261,8 +269,8 @@ impl VncServer {
         count
     }
 
-    /// Update the dirty area of the image
-    /// Return dirty number
+    /// Flush dirty data from guest_image to server_image.
+    /// Return the number of dirty area.
     pub fn update_server_image(&mut self) -> i32 {
         let mut dirty_num = 0;
         let height = self.get_min_height();
@@ -336,8 +344,14 @@ impl VncServer {
                     .expect("set nonblocking failed");
 
                 let server = VNC_SERVERS.lock().unwrap()[0].clone();
-                let mut client =
-                    VncClient::new(stream, addr.to_string(), server, self.server_image);
+                let mut client = VncClient::new(
+                    stream,
+                    addr.to_string(),
+                    self.auth,
+                    self.subauth,
+                    server,
+                    self.server_image,
+                );
                 client.write_msg("RFB 003.008\n".to_string().as_bytes());
                 info!("{:?}", client.stream);
 
@@ -411,7 +425,7 @@ impl EventNotifierHelper for VncServer {
     }
 }
 
-/// Refresh server_image to guest_image
+/// Refresh server_image to guest_image.
 fn vnc_refresh() {
     if VNC_SERVERS.lock().unwrap().is_empty() {
         return;
