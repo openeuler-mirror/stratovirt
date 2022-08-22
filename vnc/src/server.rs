@@ -15,38 +15,71 @@ use machine_manager::{
     config::{ObjConfig, VncConfig},
     event_loop::EventLoop,
 };
-use once_cell::sync::Lazy;
 use std::{
+    cmp,
     collections::HashMap,
     net::{Shutdown, TcpListener},
     os::unix::prelude::{AsRawFd, RawFd},
+    ptr,
     sync::{Arc, Mutex},
 };
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::{
+    bitmap::Bitmap,
+    loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation},
+    pixman::{
+        pixman_format_bpp, pixman_format_code_t, pixman_image_composite, pixman_image_create_bits,
+        pixman_image_t, pixman_op_t,
+    },
+};
 use vmm_sys_util::epoll::EventSet;
 
-use crate::{VncClient, VNC_SERVERS};
+use crate::{
+    bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
+    get_image_width, round_up_div, update_client_surface, AuthState, SubAuthState, VncClient,
+    DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH,
+    VNC_SERVERS,
+};
 
 /// VncServer
-#[derive(Clone)]
 pub struct VncServer {
     // Tcp connection listened by server.
     listener: Arc<Mutex<TcpListener>>,
     // Clients connected to vnc.
     pub clients: HashMap<String, Arc<Mutex<VncClient>>>,
+    /// Image refresh to VncClient.
+    pub server_image: *mut pixman_image_t,
+    /// Image from gpu.
+    pub guest_image: *mut pixman_image_t,
+    /// Identify the image update area for guest image.
+    pub guest_dirtymap: Bitmap<u64>,
+    /// Image format of pixman.
+    pub guest_format: pixman_format_code_t,
     // Connection limit.
     conn_limits: usize,
+    /// Width of current image.
+    pub true_width: i32,
 }
 
 unsafe impl Send for VncServer {}
 
 impl VncServer {
     /// Create a new VncServer.
-    pub fn new(listener: Arc<Mutex<TcpListener>>) -> Self {
+    pub fn new(listener: Arc<Mutex<TcpListener>>, guest_image: *mut pixman_image_t) -> Self {
         VncServer {
             listener,
             clients: HashMap::new(),
+            server_image: ptr::null_mut(),
+            guest_image,
+            guest_dirtymap: Bitmap::<u64>::new(
+                MAX_WINDOW_HEIGHT as usize
+                    * round_up_div(
+                        (MAX_WINDOW_WIDTH / DIRTY_PIXELS_NUM) as u64,
+                        u64::BITS as u64,
+                    ) as usize,
+            ),
+            guest_format: pixman_format_code_t::PIXMAN_x8r8g8b8,
             conn_limits: 1,
+            true_width: 0,
         }
     }
 
@@ -73,7 +106,8 @@ impl VncServer {
                     .expect("set nonblocking failed");
 
                 let server = VNC_SERVERS.lock().unwrap()[0].clone();
-                let mut client = VncClient::new(stream, addr.to_string(), server);
+                let mut client =
+                    VncClient::new(stream, addr.to_string(), server, self.server_image);
                 client.write_msg("RFB 003.008\n".to_string().as_bytes());
                 info!("{:?}", client.stream);
 
@@ -86,6 +120,8 @@ impl VncServer {
                 info!("Connect failed: {:?}", e);
             }
         }
+
+        update_client_surface(self);
 
         Ok(())
     }
@@ -100,7 +136,7 @@ impl EventNotifierHelper for VncServer {
                 read_fd(fd);
 
                 if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    info!("Client closed.");
+                    info!("Client Closed");
                 } else if event == EventSet::IN {
                     let mut locked_handler = server.lock().unwrap();
                     if let Err(e) = locked_handler.handle_connection() {
@@ -112,21 +148,42 @@ impl EventNotifierHelper for VncServer {
                 None as Option<Vec<EventNotifier>>
             });
 
-        let mut notifiers = Vec::new();
+        let mut notifiers = vec![
+            (EventNotifier::new(
+                NotifierOperation::AddShared,
+                server_handler
+                    .lock()
+                    .unwrap()
+                    .listener
+                    .lock()
+                    .unwrap()
+                    .as_raw_fd(),
+                None,
+                EventSet::IN | EventSet::HANG_UP,
+                vec![Arc::new(Mutex::new(handler))],
+            )),
+        ];
+
+        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Box::new(move |_event, fd: RawFd| {
+                read_fd(fd);
+                vnc_refresh();
+                None as Option<Vec<EventNotifier>>
+            });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            server_handler
-                .lock()
-                .unwrap()
-                .listener
-                .lock()
-                .unwrap()
-                .as_raw_fd(),
+            REFRESH_EVT.lock().unwrap().as_raw_fd(),
             None,
-            EventSet::IN | EventSet::HANG_UP,
+            EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],
         ));
-
         notifiers
+    }
+}
+
+/// Refresh server_image to guest_image
+fn vnc_refresh() {
+    if VNC_SERVERS.lock().unwrap().is_empty() {
+        return;
     }
 }

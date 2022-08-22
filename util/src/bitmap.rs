@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
 use std::cmp::Ord;
 use std::mem::size_of;
 
@@ -133,12 +132,62 @@ impl<T: BitOps> Bitmap<T> {
     ///
     /// * `offset` - the input offset as the query's start.
     pub fn find_next_zero(&self, offset: usize) -> Result<usize> {
-        for i in offset + 1..self.vol() {
-            if !self.contain(i)? {
-                return Ok(i);
+        let size = self.size();
+        let idx = offset / T::len();
+        let mut offset = offset % T::len();
+        for i in idx..size {
+            if self.data[i] == T::full() {
+                continue;
             }
+            for j in offset..T::len() {
+                if !self.contain(i * T::len() + j)? {
+                    return Ok(i * T::len() + j);
+                }
+            }
+            offset = 0;
         }
-        bail!("Failed to get new zero bit")
+        Ok(self.vol())
+    }
+
+    /// Return a new offset to get next nonzero bit from input offset.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - the input offset as the query's start.
+    pub fn find_next_bit(&self, offset: usize) -> Result<usize> {
+        let size = self.size();
+        let idx = offset / T::len();
+        let mut offset = offset % T::len();
+        for i in idx..size {
+            if self.data[i] == T::zero() {
+                continue;
+            }
+            for j in offset..T::len() {
+                if self.contain(i * T::len() + j)? {
+                    return Ok(i * T::len() + j);
+                }
+            }
+            offset = 0;
+        }
+
+        Ok(self.vol())
+    }
+
+    /// Get the inner data from bitmap.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - the cache to receive the data.
+    pub fn get_data(&mut self, buf: &mut Vec<T>) {
+        buf.clear();
+        buf.append(&mut self.data);
+    }
+
+    /// clear all the data in bitmap
+    pub fn clear_all(&mut self) {
+        for i in 0..self.size() {
+            self.data[i] = T::zero();
+        }
     }
 
     fn bit_index(&self, num: usize) -> usize {

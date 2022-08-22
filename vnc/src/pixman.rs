@@ -127,3 +127,8 @@ pub fn get_image_data(image: *mut pixman_image_t) -> *mut u32 {
 pub fn get_image_format(image: *mut pixman_image_t) -> pixman_format_code_t {
     unsafe { pixman_image_get_format(image as *mut pixman_image_t) }
 }
+
+/// Bpp: bit per pixel
+pub fn bytes_per_pixel() -> usize {
+    ((pixman_format_bpp(pixman_format_code_t::PIXMAN_x8r8g8b8 as u32) + 7) / 8) as usize
+}
