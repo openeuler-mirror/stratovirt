@@ -24,10 +24,15 @@ use std::{
 use util::{
     bitmap::Bitmap,
     loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation},
+    pixman::pixman_image_t,
 };
 use vmm_sys_util::epoll::EventSet;
 
-use crate::{AuthState, BuffPool, SubAuthState, VncServer, VNC_SERVERS};
+use crate::{
+    get_image_height, get_image_width, round_up_div, set_area_dirty, update_client_surface,
+    AuthState, BuffPool, PixelFormat, SubAuthState, VncServer, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
+    MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_SERVERS,
+};
 
 const MAX_RECVBUF_LEN: usize = 1024;
 
@@ -146,6 +151,14 @@ pub struct VncClient {
     big_endian: bool,
     /// State flags whether the image needs to be updated for the client.
     state: UpdateState,
+    /// Identify the image update area.
+    dirty: Bitmap<u64>,
+    /// Number of dirty data.
+    dirty_num: i32,
+    /// Image pixel format in pixman.
+    pixel_format: PixelFormat,
+    /// Image pointer.
+    pub server_image: *mut pixman_image_t,
     /// Tcp listening address.
     pub addr: String,
     /// Image width.
@@ -161,7 +174,12 @@ pub struct VncClient {
 }
 
 impl VncClient {
-    pub fn new(stream: TcpStream, addr: String, server: Arc<Mutex<VncServer>>) -> Self {
+    pub fn new(
+        stream: TcpStream,
+        addr: String,
+        server: Arc<Mutex<VncServer>>,
+        image: *mut pixman_image_t,
+    ) -> Self {
         VncClient {
             stream,
             buffpool: BuffPool::new(),
@@ -175,6 +193,13 @@ impl VncClient {
             server,
             big_endian: false,
             state: UpdateState::No,
+            dirty: Bitmap::<u64>::new(
+                MAX_WINDOW_HEIGHT as usize
+                    * round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) as usize,
+            ),
+            dirty_num: 0,
+            pixel_format: PixelFormat::default(),
+            server_image: image,
             addr,
             width: 0,
             height: 0,
@@ -387,6 +412,49 @@ impl VncClient {
     /// Initialize the connection of vnc client
     pub fn handle_client_init(&mut self) -> Result<()> {
         let mut buf = Vec::new();
+        // Send server framebuffer info
+        let server = VNC_SERVERS.lock().unwrap()[0].clone();
+        let locked_server = server.lock().unwrap();
+        let width = get_image_width(locked_server.server_image);
+        if width < 0 || width > MAX_WINDOW_WIDTH as i32 {
+            error!("Invalid Image Size!");
+            return Err(ErrorKind::InvalidImageSize.into());
+        }
+        self.width = width as i32;
+        buf.append(&mut (self.width as u16).to_be_bytes().to_vec());
+
+        let height = get_image_height(locked_server.server_image);
+        if height < 0 || height > MAX_WINDOW_HEIGHT as i32 {
+            error!("Invalid Image Size!");
+            return Err(ErrorKind::InvalidImageSize.into());
+        }
+        self.height = height as i32;
+
+        buf.append(&mut (self.height as u16).to_be_bytes().to_vec());
+        drop(locked_server);
+
+        self.pixel_format.init_pixelformat();
+        buf.push(self.pixel_format.pixel_bits);
+        buf.push(self.pixel_format.depth);
+        buf.push(0); // Big-endian flag.
+        buf.push(1); // True-color flag.
+        buf.push(0);
+        buf.push(self.pixel_format.red.max);
+        buf.push(0);
+        buf.push(self.pixel_format.green.max);
+        buf.push(0);
+        buf.push(self.pixel_format.blue.max);
+        buf.push(self.pixel_format.red.shift);
+        buf.push(self.pixel_format.green.shift);
+        buf.push(self.pixel_format.blue.shift);
+        buf.append(&mut [0; 3].to_vec());
+
+        buf.append(
+            &mut ("StratoVirt".to_string().len() as u32)
+                .to_be_bytes()
+                .to_vec(),
+        );
+        buf.append(&mut "StratoVirt".to_string().as_bytes().to_vec());
         self.write_msg(&buf);
         self.update_event_handler(1, VncClient::handle_protocol_msg);
         Ok(())
@@ -498,7 +566,7 @@ impl VncClient {
                 // ENCODING_COMPRESSLEVEL0 ..= ENCODING_COMPRESSLEVEL0 + 9 => {}
                 // ENCODING_QUALITYLEVEL0 ..= ENCODING_QUALITYLEVEL0 + 9 => {}
                 _ => {
-                    error!("Unknow encoding");
+                    info!("Unknow encoding");
                 }
             }
 
