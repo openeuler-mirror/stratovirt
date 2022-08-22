@@ -18,7 +18,7 @@ use machine_manager::{
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
-    net::TcpListener,
+    net::{Shutdown, TcpListener},
     os::unix::prelude::{AsRawFd, RawFd},
     sync::{Arc, Mutex},
 };
@@ -37,6 +37,8 @@ pub struct VncServer {
     // Connection limit.
     conn_limits: usize,
 }
+
+unsafe impl Send for VncServer {}
 
 impl VncServer {
     /// Create a new VncServer.
@@ -59,11 +61,37 @@ impl VncServer {
 
     /// Listen to the port and accpet client's connection.
     pub fn handle_connection(&mut self) -> Result<()> {
+        match self.listener.lock().unwrap().accept() {
+            Ok((stream, addr)) => {
+                if self.clients.len() >= self.conn_limits {
+                    stream.shutdown(Shutdown::Both).unwrap();
+                    return Ok(());
+                }
+                info!("new client: {:?}", addr);
+                stream
+                    .set_nonblocking(true)
+                    .expect("set nonblocking failed");
+
+                let server = VNC_SERVERS.lock().unwrap()[0].clone();
+                let mut client = VncClient::new(stream, addr.to_string(), server);
+                client.write_msg("RFB 003.008\n".to_string().as_bytes());
+                info!("{:?}", client.stream);
+
+                let tmp_client = Arc::new(Mutex::new(client));
+                self.clients.insert(addr.to_string(), tmp_client.clone());
+
+                EventLoop::update_event(EventNotifierHelper::internal_notifiers(tmp_client), None)?;
+            }
+            Err(e) => {
+                info!("Connect failed: {:?}", e);
+            }
+        }
+
         Ok(())
     }
 }
 
-/// internal_notifiers for VncServer.
+/// Internal_notifiers for VncServer.
 impl EventNotifierHelper for VncServer {
     fn internal_notifiers(server_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let server = server_handler.clone();
