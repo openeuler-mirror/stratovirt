@@ -55,7 +55,9 @@ pub mod errors {
 
 pub mod client;
 pub mod server;
+pub mod utils;
 pub mod vnc;
 pub use crate::vnc::*;
 pub use client::*;
 pub use server::*;
+pub use utils::BuffPool;
