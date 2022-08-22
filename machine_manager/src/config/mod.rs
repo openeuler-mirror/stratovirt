@@ -93,6 +93,7 @@ pub use pci::*;
 pub use rng::*;
 pub use usb::*;
 pub use vfio::*;
+pub use vnc::*;
 
 mod balloon;
 mod boot_source;
@@ -108,6 +109,7 @@ mod pci;
 mod rng;
 mod usb;
 mod vfio;
+pub mod vnc;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -174,6 +176,7 @@ pub struct VmConfig {
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
+    pub vnc: VncConfig,
 }
 
 impl VmConfig {
