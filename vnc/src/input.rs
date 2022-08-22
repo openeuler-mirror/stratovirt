@@ -19,7 +19,6 @@ impl VncClient {
             self.expect = 8;
             return;
         }
-        let buf = self.buffpool.read_front(self.expect);
 
         self.update_event_handler(1, VncClient::handle_protocol_msg);
     }

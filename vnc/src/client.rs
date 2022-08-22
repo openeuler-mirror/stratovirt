@@ -29,14 +29,15 @@ use util::{
 use vmm_sys_util::epoll::EventSet;
 
 use crate::{
-    get_image_height, get_image_width, round_up_div, set_area_dirty, update_client_surface,
-    AuthState, BuffPool, PixelFormat, SubAuthState, VncServer, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
-    MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
+    framebuffer_upadate, get_image_height, get_image_width, round_up_div, set_area_dirty,
+    update_client_surface, AuthState, BuffPool, PixelFormat, SubAuthState, VncServer,
+    DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO,
+    VNC_SERVERS,
 };
 
 const MAX_RECVBUF_LEN: usize = 1024;
 
-// VNC encodings types
+// VNC encodings types.
 pub const ENCODING_RAW: i32 = 0;
 const ENCODING_HEXTILE: i32 = 5;
 const ENCODING_ZLIB: i32 = 6;
@@ -142,22 +143,22 @@ impl Rectangle {
 
 unsafe impl Send for RectInfo {}
 pub struct RectInfo {
-    /// TcpStream address
-    addr: String,
-    /// Dirty area of image
-    rects: Vec<Rectangle>,
-    width: i32,
-    height: i32,
-    /// Encoding type
-    encoding: i32,
+    /// TcpStream address.
+    pub addr: String,
+    /// Dirty area of image.
+    pub rects: Vec<Rectangle>,
+    pub width: i32,
+    pub height: i32,
+    /// Encoding type.
+    pub encoding: i32,
     /// The pixel need to convert.
-    convert: bool,
+    pub convert: bool,
     /// Data storage type for client.
-    big_endian: bool,
+    pub big_endian: bool,
     /// Image pixel format in pixman.
-    pixel_format: PixelFormat,
+    pub pixel_format: PixelFormat,
     /// Image
-    image: *mut pixman_image_t,
+    pub image: *mut pixman_image_t,
 }
 
 impl RectInfo {
@@ -223,7 +224,7 @@ pub struct VncClient {
     /// Pointer to VncServer.
     pub server: Arc<Mutex<VncServer>>,
     /// Data storage type for client.
-    big_endian: bool,
+    pub big_endian: bool,
     /// State flags whether the image needs to be updated for the client.
     state: UpdateState,
     /// Identify the image update area.
@@ -231,7 +232,7 @@ pub struct VncClient {
     /// Number of dirty data.
     dirty_num: i32,
     /// Image pixel format in pixman.
-    pixel_format: PixelFormat,
+    pub pixel_format: PixelFormat,
     /// Image pointer.
     pub server_image: *mut pixman_image_t,
     /// Tcp listening address.
@@ -252,6 +253,8 @@ impl VncClient {
     pub fn new(
         stream: TcpStream,
         addr: String,
+        auth: AuthState,
+        subauth: SubAuthState,
         server: Arc<Mutex<VncServer>>,
         image: *mut pixman_image_t,
     ) -> Self {
@@ -261,9 +264,9 @@ impl VncClient {
             expect: 12,
             dis_conn: false,
             version: VncVersion::default(),
+            auth,
+            subauth,
             handle_msg: VncClient::handle_version,
-            auth: AuthState::No,
-            subauth: SubAuthState::VncAuthVencryptPlain,
             handlers: Vec::new(),
             server,
             big_endian: false,
@@ -284,7 +287,7 @@ impl VncClient {
         }
     }
 
-    /// Whether the client's image data needs to be updated
+    /// Whether the client's image data needs to be updated.
     pub fn is_need_update(&self) -> bool {
         match self.state {
             UpdateState::No => false,
@@ -299,7 +302,7 @@ impl VncClient {
         }
     }
 
-    /// Generate the data that needs to be sent
+    /// Generate the data that needs to be sent.
     /// Add to send queue
     pub fn get_rects(&mut self, dirty_num: i32) -> i32 {
         self.dirty_num += dirty_num;
@@ -406,7 +409,7 @@ impl VncClient {
         Ok(())
     }
 
-    /// Read plain txt
+    /// Read plain txt.
     pub fn read_plain_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
         let mut len = 0_usize;
         buf.resize(MAX_RECVBUF_LEN, 0u8);
@@ -433,7 +436,13 @@ impl VncClient {
                     offset += ret;
                 }
                 Err(e) => {
-                    error!("write msg error: {:?}", e);
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        self.stream.flush().unwrap();
+                        continue;
+                    } else {
+                        error!("write msg error: {:?}", e);
+                        return;
+                    }
                 }
             }
             self.stream.flush().unwrap();
@@ -576,30 +585,22 @@ impl VncClient {
         Ok(())
     }
 
-    /// Initialize the connection of vnc client
+    /// Initialize the connection of vnc client.
     pub fn handle_client_init(&mut self) -> Result<()> {
         let mut buf = Vec::new();
-        // Send server framebuffer info
-        let server = VNC_SERVERS.lock().unwrap()[0].clone();
-        let locked_server = server.lock().unwrap();
-        let width = get_image_width(locked_server.server_image);
-        if width < 0 || width > MAX_WINDOW_WIDTH as i32 {
+        // Send server framebuffer info.
+        self.width = get_image_width(self.server_image);
+        if self.width < 0 || self.width > MAX_WINDOW_WIDTH as i32 {
             error!("Invalid Image Size!");
             return Err(ErrorKind::InvalidImageSize.into());
         }
-        self.width = width as i32;
         buf.append(&mut (self.width as u16).to_be_bytes().to_vec());
-
-        let height = get_image_height(locked_server.server_image);
-        if height < 0 || height > MAX_WINDOW_HEIGHT as i32 {
+        self.height = get_image_height(self.server_image);
+        if self.height < 0 || self.height > MAX_WINDOW_HEIGHT as i32 {
             error!("Invalid Image Size!");
             return Err(ErrorKind::InvalidImageSize.into());
         }
-        self.height = height as i32;
-
         buf.append(&mut (self.height as u16).to_be_bytes().to_vec());
-        drop(locked_server);
-
         self.pixel_format.init_pixelformat();
         buf.push(self.pixel_format.pixel_bits);
         buf.push(self.pixel_format.depth);
@@ -627,7 +628,7 @@ impl VncClient {
         Ok(())
     }
 
-    /// Set image format
+    /// Set image format.
     fn set_pixel_format(&mut self) -> Result<()> {
         if self.expect == 1 {
             self.expect = 20;
@@ -635,23 +636,82 @@ impl VncClient {
         }
 
         let mut buf = self.buffpool.read_front(self.expect).to_vec();
+        if buf[7] == 0 {
+            // Set a default 256 color map.
+            // Bit per pixel.
+            buf[4] = 8;
+            // Max bit of red.
+            buf[8] = 7;
+            // Max bit of green.
+            buf[10] = 7;
+            // Max bit of blue.
+            buf[12] = 3;
+            // Red shift.
+            buf[14] = 0;
+            // Green shift.
+            buf[15] = 3;
+            // Blue shift.
+            buf[16] = 6;
+        }
+        if ![8, 16, 32].contains(&buf[4]) {
+            self.dis_conn = true;
+            error!("Worng format of bits_per_pixel");
+            return Err(ErrorKind::ProtocolMessageFailed(String::from("set pixel format")).into());
+        }
+
+        self.pixel_format
+            .red
+            .set_color_info(buf[14], u16::from_be_bytes([buf[8], buf[9]]));
+        self.pixel_format
+            .green
+            .set_color_info(buf[15], u16::from_be_bytes([buf[10], buf[11]]));
+        self.pixel_format
+            .blue
+            .set_color_info(buf[16], u16::from_be_bytes([buf[12], buf[13]]));
+        self.pixel_format.pixel_bits = buf[4];
+        self.pixel_format.pixel_bytes = buf[4] / 8;
+        self.pixel_format.depth = if buf[4] == 32 { 24 } else { buf[4] };
+        self.big_endian = buf[6] != 0;
+
+        if !self.pixel_format.is_default_pixel_format() {
+            self.pixel_convert = true;
+        }
 
         self.update_event_handler(1, VncClient::handle_protocol_msg);
         Ok(())
     }
 
-    /// Update image for client
+    /// Update image for client.
     fn update_frame_buff(&mut self) {
         if self.expect == 1 {
             self.expect = 10;
             return;
         }
         let buf = self.buffpool.read_front(self.expect);
-
+        if buf[1] != 0 {
+            if self.state != UpdateState::Force {
+                self.state = UpdateState::Incremental;
+            }
+        } else {
+            self.state = UpdateState::Force;
+            let x = u16::from_be_bytes([buf[2], buf[3]]) as i32;
+            let y = u16::from_be_bytes([buf[4], buf[5]]) as i32;
+            let w = u16::from_be_bytes([buf[6], buf[7]]) as i32;
+            let h = u16::from_be_bytes([buf[8], buf[9]]) as i32;
+            set_area_dirty(
+                &mut self.dirty_bitmap,
+                x,
+                y,
+                w,
+                h,
+                get_image_width(self.server_image),
+                get_image_height(self.server_image),
+            );
+        }
         self.update_event_handler(1, VncClient::handle_protocol_msg);
     }
 
-    /// Set encoding
+    /// Set encoding.
     fn set_encodings(&mut self) -> Result<()> {
         let buf = self.buffpool.read_front(self.expect);
         if self.expect == 1 {
@@ -726,15 +786,7 @@ impl VncClient {
                 ENCODING_LED_STATE => {
                     self.feature |= 1 << VncFeatures::VncFeatureLedState as usize;
                 }
-                // ENCODING_EXT_KEY_EVENT => {}
-                // ENCODING_AUDIO => {}
-                // VNC_ENCODING_XVP => {}
-                // ENCODING_CLIPBOARD_EXT => {}
-                // ENCODING_COMPRESSLEVEL0 ..= ENCODING_COMPRESSLEVEL0 + 9 => {}
-                // ENCODING_QUALITYLEVEL0 ..= ENCODING_QUALITYLEVEL0 + 9 => {}
-                _ => {
-                    info!("Unknow encoding");
-                }
+                _ => {}
             }
 
             num_encoding -= 1;
@@ -747,12 +799,21 @@ impl VncClient {
         Ok(())
     }
 
-    fn has_feature(&mut self, feature: VncFeatures) -> bool {
+    pub fn has_feature(&mut self, feature: VncFeatures) -> bool {
         self.feature & (1 << feature as usize) != 0
     }
 
     pub fn desktop_resize(&mut self) {
-        // If hash feature VNC_FEATURE_RESIZE
+        // If hash feature VNC_FEATURE_RESIZE.
+        let width = get_image_width(self.server_image);
+        let height = get_image_height(self.server_image);
+        let mut buf: Vec<u8> = Vec::new();
+        buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
+        buf.append(&mut (0_u8).to_be_bytes().to_vec());
+        buf.append(&mut (1_u16).to_be_bytes().to_vec());
+
+        framebuffer_upadate(0, 0, width, height, ENCODING_DESKTOPRESIZE, &mut buf);
+        self.write_msg(&buf);
     }
 
     /// Process the data sent by the client
@@ -806,7 +867,9 @@ impl VncClient {
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         let mut locked_server = server.lock().unwrap();
         locked_server.clients.remove(&self.addr);
-
+        if locked_server.clients.is_empty() {
+            update_client_surface(&mut locked_server);
+        }
         drop(locked_server);
 
         if let Err(e) = self.modify_event(NotifierOperation::Delete, 0) {
