@@ -24,6 +24,7 @@ pub mod logger;
 pub mod loop_context;
 pub mod num_ops;
 pub mod offsetof;
+pub mod pixman;
 pub mod reader;
 pub mod seccomp;
 pub mod syscall;
