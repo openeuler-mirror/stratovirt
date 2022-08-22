@@ -31,7 +31,7 @@ use vmm_sys_util::epoll::EventSet;
 use crate::{
     get_image_height, get_image_width, round_up_div, set_area_dirty, update_client_surface,
     AuthState, BuffPool, PixelFormat, SubAuthState, VncServer, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS,
-    MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_SERVERS,
+    MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
 };
 
 const MAX_RECVBUF_LEN: usize = 1024;
@@ -70,7 +70,7 @@ pub enum VncFeatures {
     VncFeatureClipboardExt,
 }
 
-// According to Remote Framebuffer Protocol
+/// Client to server message in Remote Framebuffer Protocol.
 pub enum ClientMsg {
     SetPixelFormat = 0,
     SetEncodings = 2,
@@ -81,7 +81,7 @@ pub enum ClientMsg {
     InvalidMsg,
 }
 
-// Message id of server
+/// Server to client message in Remote Framebuffer Protocol.
 pub enum ServerMsg {
     FramebufferUpdate = 0,
 }
@@ -125,6 +125,81 @@ pub enum UpdateState {
     Force,
 }
 
+/// Dirty area of image
+#[derive(Clone)]
+pub struct Rectangle {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Rectangle {
+    pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        Rectangle { x, y, w, h }
+    }
+}
+
+unsafe impl Send for RectInfo {}
+pub struct RectInfo {
+    /// TcpStream address
+    addr: String,
+    /// Dirty area of image
+    rects: Vec<Rectangle>,
+    width: i32,
+    height: i32,
+    /// Encoding type
+    encoding: i32,
+    /// The pixel need to convert.
+    convert: bool,
+    /// Data storage type for client.
+    big_endian: bool,
+    /// Image pixel format in pixman.
+    pixel_format: PixelFormat,
+    /// Image
+    image: *mut pixman_image_t,
+}
+
+impl RectInfo {
+    pub fn new(client: &VncClient, rects: Vec<Rectangle>) -> Self {
+        RectInfo {
+            addr: client.addr.clone(),
+            rects,
+            width: client.width,
+            height: client.height,
+            encoding: client.encoding,
+            convert: client.pixel_convert,
+            big_endian: client.big_endian,
+            pixel_format: client.pixel_format.clone(),
+            image: client.server_image,
+        }
+    }
+}
+
+impl Clone for RectInfo {
+    fn clone(&self) -> Self {
+        let mut rects = Vec::new();
+        for rect in &self.rects {
+            rects.push(rect.clone());
+        }
+        Self {
+            addr: self.addr.clone(),
+            rects,
+            width: self.width,
+            height: self.height,
+            encoding: self.encoding,
+            convert: self.convert,
+            big_endian: self.big_endian,
+            pixel_format: self.pixel_format.clone(),
+            image: self.image,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        *self = source.clone()
+    }
+}
+
 /// VncClient struct to record the information of connnection.
 pub struct VncClient {
     /// TcpStream connected with client.
@@ -152,7 +227,7 @@ pub struct VncClient {
     /// State flags whether the image needs to be updated for the client.
     state: UpdateState,
     /// Identify the image update area.
-    dirty: Bitmap<u64>,
+    pub dirty_bitmap: Bitmap<u64>,
     /// Number of dirty data.
     dirty_num: i32,
     /// Image pixel format in pixman.
@@ -193,7 +268,7 @@ impl VncClient {
             server,
             big_endian: false,
             state: UpdateState::No,
-            dirty: Bitmap::<u64>::new(
+            dirty_bitmap: Bitmap::<u64>::new(
                 MAX_WINDOW_HEIGHT as usize
                     * round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) as usize,
             ),
@@ -207,6 +282,98 @@ impl VncClient {
             feature: 0,
             pixel_convert: false,
         }
+    }
+
+    /// Whether the client's image data needs to be updated
+    pub fn is_need_update(&self) -> bool {
+        match self.state {
+            UpdateState::No => false,
+            UpdateState::Incremental => {
+                // throttle_output_offset
+                true
+            }
+            UpdateState::Force => {
+                // force_update_offset
+                true
+            }
+        }
+    }
+
+    /// Generate the data that needs to be sent
+    /// Add to send queue
+    pub fn get_rects(&mut self, dirty_num: i32) -> i32 {
+        self.dirty_num += dirty_num;
+        if !self.is_need_update() || (self.dirty_num == 0 && self.state != UpdateState::Force) {
+            return 0;
+        }
+
+        let mut num_rects = 0;
+        let mut x: u64;
+        let mut y: u64 = 0;
+        let mut h: u64;
+        let mut x2: u64;
+        let mut rects = Vec::new();
+        let bpl = self.dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
+
+        let height = get_image_height(self.server_image) as u64;
+        let width = get_image_width(self.server_image) as u64;
+        loop {
+            // Find the first non-zero bit in dirty bitmap.
+            let offset = self.dirty_bitmap.find_next_bit(y as usize * bpl).unwrap() as u64;
+            if offset >= height as u64 * bpl as u64 {
+                break;
+            }
+
+            x = offset % bpl as u64;
+            y = offset / bpl as u64;
+            // Find value in one line to the end.
+            x2 = self.dirty_bitmap.find_next_zero(offset as usize).unwrap() as u64 % bpl as u64;
+            let mut i = y;
+            while i < height {
+                if !self
+                    .dirty_bitmap
+                    .contain((i * bpl as u64 + x) as usize)
+                    .unwrap()
+                {
+                    break;
+                }
+                for j in x..x2 {
+                    self.dirty_bitmap
+                        .clear((i * bpl as u64 + j) as usize)
+                        .unwrap();
+                }
+                i += 1;
+            }
+
+            h = i - y;
+            x2 = cmp::min(x2, width / DIRTY_PIXELS_NUM as u64);
+            if x2 > x as u64 {
+                rects.push(Rectangle::new(
+                    (x * DIRTY_PIXELS_NUM as u64) as i32,
+                    y as i32,
+                    ((x2 - x) * DIRTY_PIXELS_NUM as u64) as i32,
+                    h as i32,
+                ));
+                num_rects += 1;
+            }
+
+            if x == 0 && x2 == width / DIRTY_PIXELS_NUM as u64 {
+                y += h;
+                if y == height {
+                    break;
+                }
+            }
+        }
+
+        VNC_RECT_INFO
+            .lock()
+            .unwrap()
+            .push(RectInfo::new(self, rects));
+
+        self.state = UpdateState::No;
+        self.dirty_num = 0;
+
+        num_rects
     }
 
     /// Modify event notifiers to  event loop
@@ -584,7 +751,7 @@ impl VncClient {
         self.feature & (1 << feature as usize) != 0
     }
 
-    fn desktop_resize(&mut self) {
+    pub fn desktop_resize(&mut self) {
         // If hash feature VNC_FEATURE_RESIZE
     }
 

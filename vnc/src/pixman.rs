@@ -15,6 +15,7 @@ use util::pixman::{
     pixman_format_a, pixman_format_b, pixman_format_bpp, pixman_format_code_t, pixman_format_depth,
     pixman_format_g, pixman_format_r, pixman_image_get_data, pixman_image_get_format,
     pixman_image_get_height, pixman_image_get_stride, pixman_image_get_width, pixman_image_t,
+    pixman_image_unref,
 };
 
 #[derive(Clone, Default)]
@@ -131,4 +132,15 @@ pub fn get_image_format(image: *mut pixman_image_t) -> pixman_format_code_t {
 /// Bpp: bit per pixel
 pub fn bytes_per_pixel() -> usize {
     ((pixman_format_bpp(pixman_format_code_t::PIXMAN_x8r8g8b8 as u32) + 7) / 8) as usize
+}
+
+/// Decrease the reference of image
+/// # Arguments
+///
+/// * `image` - the pointer to image in pixman
+pub fn unref_pixman_image(image: *mut pixman_image_t) {
+    if image.is_null() {
+        return;
+    }
+    unsafe { pixman_image_unref(image as *mut pixman_image_t) };
 }
