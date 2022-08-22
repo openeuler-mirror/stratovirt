@@ -216,7 +216,7 @@ impl VncClient {
 
     /// Read plain txt
     pub fn read_plain_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
-        let mut len = 0 as usize;
+        let mut len = 0_usize;
         buf.resize(MAX_RECVBUF_LEN, 0u8);
         match self.stream.read(buf) {
             Ok(ret) => {
@@ -283,7 +283,7 @@ impl VncClient {
     /// Exchange RFB protocol version with client.
     fn handle_version(&mut self) -> Result<()> {
         let buf = self.buffpool.read_front(self.expect);
-        let res = String::from_utf8_lossy(&buf[..]);
+        let res = String::from_utf8_lossy(buf);
         let ver_str = &res[0..12].to_string();
         let ver;
         match scanf!(ver_str, "RFB {usize:/\\d\\{3\\}/}.{usize:/\\d\\{3\\}/}\n") {
