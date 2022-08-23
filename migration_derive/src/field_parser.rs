@@ -76,14 +76,10 @@ fn parse_field(
 fn parse_ty(input: syn::Type) -> (syn::TypePath, usize, bool) {
     match input {
         syn::Type::Array(array) => {
-            let array_type_token;
-
-            match *array.elem.clone() {
-                syn::Type::Path(token) => {
-                    array_type_token = token;
-                }
+            let array_type_token = match *array.elem.clone() {
+                syn::Type::Path(token) => token,
                 _ => panic!("Unsupported array type."),
-            }
+            };
 
             match &array.len {
                 syn::Expr::Lit(expr_lit) => match &expr_lit.lit {

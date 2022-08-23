@@ -123,10 +123,11 @@ use errors::{ErrorKind, Result, ResultExt};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port, parse_vfio,
-    parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo, Incoming, MachineMemConfig,
-    MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf,
-    SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    parse_gpu, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_virtconsole, parse_virtio_serial,
+    parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
+    NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
+    VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -137,6 +138,10 @@ use pci::{PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::errors::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
+use usb::{
+    bus::BusDeviceMap, keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps,
+    xhci::xhci_pci::XhciPciDevice,
+};
 use util::{
     arg_parser,
     loop_context::{EventNotifier, NotifierCallback, NotifierOperation},
@@ -144,8 +149,8 @@ use util::{
 };
 use vfio::{VfioDevice, VfioPciDevice};
 use virtio::{
-    balloon_allow_list, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern, VhostUser,
-    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    balloon_allow_list, Balloon, Block, BlockState, Console, Gpu, Rng, RngState, VhostKern,
+    VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
     VirtioPciDevice,
 };
 
@@ -354,6 +359,12 @@ pub trait MachineOps {
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
     fn get_migrate_info(&self) -> Incoming;
+
+    /// Get the bus device map. The map stores the mapping between bus name and bus device.
+    /// The bus device is the device which can attach other devices.
+    fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
+        None
+    }
 
     /// Add net device.
     ///
@@ -692,6 +703,15 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let multi_func = get_multi_function(cfg_args)?;
+        let device_cfg = parse_gpu(cfg_args)?;
+        let device = Arc::new(Mutex::new(Gpu::new(device_cfg.clone())));
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)?;
+        Ok(())
+    }
+
     fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> StdResult<(u8, Weak<Mutex<PciBus>>)> {
         let pci_host = self.get_pci_host()?;
         let bus = pci_host.lock().unwrap().root_bus.clone();
@@ -884,6 +904,90 @@ pub trait MachineOps {
         Ok(Some(numa_nodes))
     }
 
+    /// Add usb xhci controller.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - XHCI Configuration.
+    fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let device_cfg = parse_xhci(cfg_args)?;
+        let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+
+        let bus_device = if let Some(bus_device) = self.get_bus_device() {
+            bus_device.clone()
+        } else {
+            bail!("No bus device found");
+        };
+
+        let pcidev = XhciPciDevice::new(
+            &device_cfg.id,
+            devfn,
+            parent_bus,
+            self.get_sys_mem(),
+            bus_device,
+        );
+
+        pcidev
+            .realize()
+            .chain_err(|| "Failed to realize usb xhci device")?;
+        Ok(())
+    }
+
+    /// Add usb keyboard.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Keyboard Configuration.
+    fn add_usb_keyboard(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_keyboard(cfg_args)?;
+        let keyboard = UsbKeyboard::new(device_cfg.id);
+        let kbd = keyboard
+            .realize()
+            .chain_err(|| "Failed to realize usb keyboard device")?;
+        if let Some(bus_device) = self.get_bus_device() {
+            let locked_dev = bus_device.lock().unwrap();
+            if let Some(ctrl) = locked_dev.get("usb.0") {
+                let mut locked_ctrl = ctrl.lock().unwrap();
+                locked_ctrl
+                    .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .chain_err(|| "Failed to attach keyboard device")?;
+            } else {
+                bail!("No usb controller found");
+            }
+        } else {
+            bail!("No bus device found");
+        }
+        Ok(())
+    }
+
+    /// Add usb tablet.
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Tablet Configuration.
+    fn add_usb_tablet(&mut self, cfg_args: &str) -> Result<()> {
+        let device_cfg = parse_usb_tablet(cfg_args)?;
+        let tablet = UsbTablet::new(device_cfg.id);
+        let tbt = tablet
+            .realize()
+            .chain_err(|| "Failed to realize usb tablet device")?;
+        if let Some(bus_device) = self.get_bus_device() {
+            let locked_dev = bus_device.lock().unwrap();
+            if let Some(ctrl) = locked_dev.get("usb.0") {
+                let mut locked_ctrl = ctrl.lock().unwrap();
+                locked_ctrl
+                    .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .chain_err(|| "Failed to attach tablet device")?;
+            } else {
+                bail!("No usb controller found");
+            }
+        } else {
+            bail!("No bus device list found");
+        }
+        Ok(())
+    }
+
     /// Add peripheral devices.
     ///
     /// # Arguments
@@ -946,6 +1050,18 @@ pub trait MachineOps {
                 }
                 "vfio-pci" => {
                     self.add_vfio_device(cfg_args)?;
+                }
+                "virtio-gpu-pci" => {
+                    self.add_virtio_pci_gpu(cfg_args)?;
+                }
+                "nec-usb-xhci" => {
+                    self.add_usb_xhci(cfg_args)?;
+                }
+                "usb-kbd" => {
+                    self.add_usb_keyboard(cfg_args)?;
+                }
+                "usb-tablet" => {
+                    self.add_usb_tablet(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

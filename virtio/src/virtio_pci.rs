@@ -19,7 +19,7 @@ use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEv
 use byteorder::{ByteOrder, LittleEndian};
 use error_chain::{bail, ChainedError};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
+use log::{error, warn};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
@@ -461,8 +461,8 @@ pub struct VirtioPciState {
     config_generation: u32,
     queue_select: u16,
     msix_config: u16,
-    /// The configuration of queues. Max number of queues is 8.
-    queues_config: [QueueConfig; 8],
+    /// The configuration of queues. Max number of queues is 32(equals to MAX_VIRTIO_QUEUE).
+    queues_config: [QueueConfig; 32],
     /// The number of queues.
     queue_num: usize,
 }
@@ -707,19 +707,20 @@ impl VirtioPciDevice {
                 let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
                 for q_config in queues_config.iter_mut() {
                     if !q_config.ready {
-                        continue;
+                        warn!("queue is not ready, please check your init process");
+                    } else {
+                        q_config.addr_cache.desc_table_host = cloned_mem_space
+                            .get_host_address(q_config.desc_table)
+                            .unwrap_or(0);
+                        q_config.addr_cache.avail_ring_host = cloned_mem_space
+                            .get_host_address(q_config.avail_ring)
+                            .unwrap_or(0);
+                        q_config.addr_cache.used_ring_host = cloned_mem_space
+                            .get_host_address(q_config.used_ring)
+                            .unwrap_or(0);
                     }
-                    q_config.addr_cache.desc_table_host = cloned_mem_space
-                        .get_host_address(q_config.desc_table)
-                        .unwrap_or(0);
-                    q_config.addr_cache.avail_ring_host = cloned_mem_space
-                        .get_host_address(q_config.avail_ring)
-                        .unwrap_or(0);
-                    q_config.addr_cache.used_ring_host = cloned_mem_space
-                        .get_host_address(q_config.used_ring)
-                        .unwrap_or(0);
                     let queue = Queue::new(*q_config, queue_type).unwrap();
-                    if !queue.is_valid(&cloned_pci_device.sys_mem) {
+                    if q_config.ready && !queue.is_valid(&cloned_pci_device.sys_mem) {
                         error!("Failed to activate device: Invalid queue");
                         return false;
                     }
@@ -999,6 +1000,8 @@ impl PciDevOps for VirtioPciDevice {
             &mut self.config,
             self.dev_id.clone(),
             &self.name,
+            None,
+            None,
         )?;
 
         if let Some(ref msix) = self.config.msix {
@@ -1738,6 +1741,8 @@ mod tests {
             &mut virtio_pci.config,
             virtio_pci.dev_id.clone(),
             &virtio_pci.name,
+            None,
+            None,
         )
         .unwrap();
         // Prepare valid queue config

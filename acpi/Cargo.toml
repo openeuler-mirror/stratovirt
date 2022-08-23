@@ -2,14 +2,14 @@
 name = "acpi"
 version = "2.2.0"
 authors = ["Huawei StratoVirt Team"]
-edition = "2018"
+edition = "2021"
 license = "Mulan PSL v2"
 description = "acpi module"
 
 [dependencies]
 error-chain = "0.12.4"
-log = "0.4.8"
-byteorder = "1.3.4"
+log = "0.4"
+byteorder = "1.4.3"
 
 address_space = { path = "../address_space" }
 util = {path = "../util"}

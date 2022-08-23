@@ -84,6 +84,7 @@ pub use boot_source::*;
 pub use chardev::*;
 pub use devices::*;
 pub use drive::*;
+pub use gpu::*;
 pub use incoming::*;
 pub use iothread::*;
 pub use machine_config::*;
@@ -91,13 +92,16 @@ pub use network::*;
 pub use numa::*;
 pub use pci::*;
 pub use rng::*;
+pub use usb::*;
 pub use vfio::*;
+pub use vnc::*;
 
 mod balloon;
 mod boot_source;
 mod chardev;
 mod devices;
 mod drive;
+mod gpu;
 mod incoming;
 mod iothread;
 mod machine_config;
@@ -105,7 +109,9 @@ mod network;
 mod numa;
 mod pci;
 mod rng;
+mod usb;
 mod vfio;
+pub mod vnc;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -121,6 +127,7 @@ use util::trace::enable_trace_events;
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
+// FIXME: `queue_config` len in `VirtioPciState` struct needs to be modified together.
 pub const MAX_VIRTIO_QUEUE: usize = 32;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
@@ -171,6 +178,7 @@ pub struct VmConfig {
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
+    pub vnc: VncConfig,
 }
 
 impl VmConfig {

@@ -18,12 +18,14 @@ pub mod checksum;
 pub mod daemonize;
 #[cfg(target_arch = "aarch64")]
 pub mod device_tree;
+pub mod edid;
 pub mod leak_bucket;
 mod link_list;
 pub mod logger;
 pub mod loop_context;
 pub mod num_ops;
 pub mod offsetof;
+pub mod pixman;
 pub mod reader;
 pub mod seccomp;
 pub mod syscall;

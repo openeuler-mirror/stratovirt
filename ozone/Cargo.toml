@@ -2,12 +2,12 @@
 name = "ozone"
 version = "2.2.0"
 authors = ["Huawei StratoVirt Team"]
-edition = "2018"
+edition = "2021"
 description = "Provides protection for stratovirt"
 license = "Mulan PSL v2"
 
 [dependencies]
 error-chain = "0.12.4"
-libc = ">=0.2.71"
+libc = "0.2"
 
 util = { path = "../util" }

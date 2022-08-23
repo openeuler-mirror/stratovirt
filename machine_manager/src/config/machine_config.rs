@@ -32,8 +32,8 @@ const MAX_NR_CPUS: u64 = 254;
 const MIN_NR_CPUS: u64 = 1;
 const MAX_MEMSIZE: u64 = 549_755_813_888;
 const MIN_MEMSIZE: u64 = 268_435_456;
-const M: u64 = 1024 * 1024;
-const G: u64 = 1024 * 1024 * 1024;
+pub const M: u64 = 1024 * 1024;
+pub const G: u64 = 1024 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MachineType {

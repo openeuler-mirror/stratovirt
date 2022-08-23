@@ -14,6 +14,7 @@ pub(crate) mod ich9_lpc;
 mod mch;
 mod syscall;
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
@@ -22,7 +23,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use error_chain::{bail, ChainedError};
 use log::error;
-use vmm_sys_util::{eventfd::EventFd, ioctl_expr, ioctl_ioc_nr, ioctl_iow_nr};
+use vmm_sys_util::{eventfd::EventFd, ioctl_ioc_nr, ioctl_iow_nr};
 
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
@@ -53,6 +54,7 @@ use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use sysbus::SysBus;
 use syscall::syscall_whitelist;
+use usb::bus::BusDeviceMap;
 use util::{
     byte_code::ByteCode, loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode,
 };
@@ -62,6 +64,7 @@ use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::{vm_state, MachineOps};
+use vnc::vnc;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -120,6 +123,8 @@ pub struct StdMachine {
     boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
     /// FwCfg device.
     fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
+    /// Bus device used to attach other devices. Only USB controller used now.
+    bus_device: BusDeviceMap,
 }
 
 impl StdMachine {
@@ -171,6 +176,7 @@ impl StdMachine {
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
+            bus_device: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -458,7 +464,7 @@ impl MachineOps for StdMachine {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nr_cpus {
-            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id)?));
+            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id as u64)?));
         }
 
         locked_vm
@@ -468,6 +474,8 @@ impl MachineOps for StdMachine {
             .init_ich9_lpc(clone_vm)
             .chain_err(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
+        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
+            .chain_err(|| "Failed to init VNC server!")?;
         let fwcfg = locked_vm.add_fwcfg_device()?;
 
         let migrate = locked_vm.get_migrate_info();
@@ -616,6 +624,10 @@ impl MachineOps for StdMachine {
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
         Some(self.boot_order_list.clone())
+    }
+
+    fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
+        Some(&self.bus_device)
     }
 }
 

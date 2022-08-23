@@ -375,7 +375,7 @@ class BaseVM:
             self.serial_cmd("systemctl restart sshd")
         if 'dhcp' in model:
             self.serial_session.run_func("cmd_output", ("dhclient %s" % self.interfaces[index]))
-            _cmd = "ifconfig %s | awk '/inet/ {print $2}' | cut -f2 -d ':' | " \
+            _cmd = "ip address show %s | awk '/inet/ {print $2}' | cut -f2 -d ':' | " \
                    "awk 'NR==1 {print $1}'" % self.interfaces[index]
             output = self.serial_session.run_func("cmd_output", _cmd)
             self.guest_ips.append(output)

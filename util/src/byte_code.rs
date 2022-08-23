@@ -63,11 +63,13 @@ impl ByteCode for u8 {}
 impl ByteCode for u16 {}
 impl ByteCode for u32 {}
 impl ByteCode for u64 {}
+impl ByteCode for u128 {}
 impl ByteCode for isize {}
 impl ByteCode for i8 {}
 impl ByteCode for i16 {}
 impl ByteCode for i32 {}
 impl ByteCode for i64 {}
+impl ByteCode for i128 {}
 
 #[cfg(test)]
 mod test {

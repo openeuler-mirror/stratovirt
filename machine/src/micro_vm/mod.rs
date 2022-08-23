@@ -765,7 +765,7 @@ impl MachineOps for LightMachine {
                     .vm_fd
                     .as_ref()
                     .unwrap()
-                    .create_vcpu(vcpu_id)?,
+                    .create_vcpu(vcpu_id as u64)?,
             ));
         }
         #[cfg(target_arch = "aarch64")]
@@ -1308,12 +1308,10 @@ impl MigrateInterface for LightMachine {
                     None,
                 )
             }
-            _ => {
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
-                    None,
-                );
-            }
+            _ => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
+                None,
+            ),
         }
     }
 

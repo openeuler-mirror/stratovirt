@@ -2,17 +2,17 @@
 name = "cpu"
 version = "2.2.0"
 authors = ["Huawei StratoVirt Team"]
-edition = "2018"
+edition = "2021"
 license = "Mulan PSL v2"
 description = "CPU emulation"
 
 [dependencies]
 error-chain = "0.12.4"
-kvm-bindings = ">=0.3.0"
-kvm-ioctls = "0.6.0"
-log = "0.4.8"
-libc = ">=0.2.71"
-vmm-sys-util = ">=0.7.0"
+kvm-bindings = { version = ">=0.5.0", features = ["fam-wrappers"] }
+kvm-ioctls = ">=0.11.0"
+log = "0.4"
+libc = "0.2"
+vmm-sys-util = ">=0.10.0"
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }

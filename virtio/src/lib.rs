@@ -102,6 +102,7 @@ pub mod errors {
 mod balloon;
 mod block;
 mod console;
+mod gpu;
 mod net;
 mod queue;
 mod rng;
@@ -114,6 +115,7 @@ pub use balloon::*;
 pub use block::{Block, BlockState};
 pub use console::{Console, VirtioConsoleState};
 pub use errors::*;
+pub use gpu::*;
 pub use net::*;
 pub use queue::*;
 pub use rng::{Rng, RngState};
@@ -140,6 +142,7 @@ pub const VIRTIO_TYPE_BLOCK: u32 = 2;
 pub const VIRTIO_TYPE_CONSOLE: u32 = 3;
 pub const VIRTIO_TYPE_RNG: u32 = 4;
 pub const VIRTIO_TYPE_BALLOON: u32 = 5;
+pub const VIRTIO_TYPE_GPU: u32 = 16;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const _VIRTIO_TYPE_FS: u32 = 26;
 

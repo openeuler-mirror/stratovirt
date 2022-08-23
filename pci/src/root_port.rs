@@ -291,7 +291,15 @@ impl PciDevOps for RootPort {
             .add_pcie_cap(self.devfn, self.port_num, PcieDevType::RootPort as u8)?;
 
         self.dev_id.store(self.devfn as u16, Ordering::SeqCst);
-        init_msix(0, 1, &mut self.config, self.dev_id.clone(), &self.name)?;
+        init_msix(
+            0,
+            1,
+            &mut self.config,
+            self.dev_id.clone(),
+            &self.name,
+            None,
+            None,
+        )?;
 
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();

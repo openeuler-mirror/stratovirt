@@ -261,6 +261,22 @@ impl EventLoopContext {
         Ok(())
     }
 
+    /// change the callback for event
+    fn modify_event(&mut self, event: EventNotifier) -> Result<()> {
+        let mut events_map = self.events.write().unwrap();
+        match events_map.get_mut(&event.raw_fd) {
+            Some(notifier) => {
+                notifier.handlers.clear();
+                let mut event = event;
+                notifier.handlers.append(&mut event.handlers);
+            }
+            _ => {
+                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+            }
+        }
+        Ok(())
+    }
+
     fn park_event(&mut self, event: &EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
@@ -314,6 +330,9 @@ impl EventLoopContext {
                 NotifierOperation::AddExclusion | NotifierOperation::AddShared => {
                     self.add_event(en)?;
                 }
+                NotifierOperation::Modify => {
+                    self.modify_event(en)?;
+                }
                 NotifierOperation::Delete => {
                     self.rm_event(&en)?;
                 }
@@ -322,9 +341,6 @@ impl EventLoopContext {
                 }
                 NotifierOperation::Resume => {
                     self.resume_event(&en)?;
-                }
-                _ => {
-                    return Err(ErrorKind::UnExpectedOperationType.into());
                 }
             }
         }
@@ -431,10 +447,7 @@ impl EventLoopContext {
     }
 
     fn epoll_wait_manager(&mut self, time_out: i32) -> Result<bool> {
-        let ev_count = match self
-            .epoll
-            .wait(READY_EVENT_MAX, time_out, &mut self.ready_events[..])
-        {
+        let ev_count = match self.epoll.wait(time_out, &mut self.ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(ErrorKind::EpollWait(e).into()),
@@ -448,8 +461,8 @@ impl EventLoopContext {
             };
             if let EventStatus::Alive = event.status {
                 let mut notifiers = Vec::new();
-                for i in 0..event.handlers.len() {
-                    let handle = event.handlers[i].lock().unwrap();
+                for j in 0..event.handlers.len() {
+                    let handle = event.handlers[j].lock().unwrap();
                     match handle(self.ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
