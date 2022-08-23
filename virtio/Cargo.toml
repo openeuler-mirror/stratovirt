@@ -24,3 +24,4 @@ util = { path = "../util" }
 pci = { path = "../pci" }
 acpi = { path = "../acpi" }
 devices = {path = "../devices"}
+vnc = {path = "../vnc"}

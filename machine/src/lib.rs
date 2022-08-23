@@ -123,7 +123,7 @@ use errors::{ErrorKind, Result, ResultExt};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_gpu, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
     parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_virtconsole, parse_virtio_serial,
     parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
     NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
@@ -149,8 +149,8 @@ use util::{
 };
 use vfio::{VfioDevice, VfioPciDevice};
 use virtio::{
-    balloon_allow_list, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern, VhostUser,
-    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    balloon_allow_list, Balloon, Block, BlockState, Console, Gpu, Rng, RngState, VhostKern,
+    VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
     VirtioPciDevice,
 };
 
@@ -703,6 +703,15 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let multi_func = get_multi_function(cfg_args)?;
+        let device_cfg = parse_gpu(cfg_args)?;
+        let device = Arc::new(Mutex::new(Gpu::new(device_cfg.clone())));
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)?;
+        Ok(())
+    }
+
     fn get_devfn_and_parent_bus(&mut self, bdf: &PciBdf) -> StdResult<(u8, Weak<Mutex<PciBus>>)> {
         let pci_host = self.get_pci_host()?;
         let bus = pci_host.lock().unwrap().root_bus.clone();
@@ -1041,6 +1050,9 @@ pub trait MachineOps {
                 }
                 "vfio-pci" => {
                     self.add_vfio_device(cfg_args)?;
+                }
+                "virtio-gpu-pci" => {
+                    self.add_virtio_pci_gpu(cfg_args)?;
                 }
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
