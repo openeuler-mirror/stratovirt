@@ -15,5 +15,11 @@
 [target.'cfg(any(target_arch="aarch64"))']
 rustflags = [
     "-C", "link-arg=-lgcc",
+    "-C", "link-arg=-lpixman-1",
+]
+
+[target.'cfg(any(target_arch="x86_64"))']
+rustflags = [
+    "-C", "link-arg=-lpixman-1",
 ]
 

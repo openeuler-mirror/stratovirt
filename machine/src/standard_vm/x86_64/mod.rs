@@ -64,6 +64,7 @@ use super::errors::{ErrorKind, Result};
 use super::{AcpiBuilder, StdMachineOps};
 use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::{vm_state, MachineOps};
+use vnc::vnc;
 
 const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
@@ -473,6 +474,8 @@ impl MachineOps for StdMachine {
             .init_ich9_lpc(clone_vm)
             .chain_err(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
+        vnc::vnc_init(&vm_config.vnc, &vm_config.object)
+            .chain_err(|| "Failed to init VNC server!")?;
         let fwcfg = locked_vm.add_fwcfg_device()?;
 
         let migrate = locked_vm.get_migrate_info();

@@ -31,6 +31,7 @@ util = { path = "../util" }
 virtio = { path = "../virtio" }
 vfio = { path = "../vfio" }
 usb = { path = "../usb" }
+vnc = { path = "../vnc" }
 
 [features]
 default = ["qmp"]

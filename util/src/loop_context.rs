@@ -261,6 +261,22 @@ impl EventLoopContext {
         Ok(())
     }
 
+    /// change the callback for event
+    fn modify_event(&mut self, event: EventNotifier) -> Result<()> {
+        let mut events_map = self.events.write().unwrap();
+        match events_map.get_mut(&event.raw_fd) {
+            Some(notifier) => {
+                notifier.handlers.clear();
+                let mut event = event;
+                notifier.handlers.append(&mut event.handlers);
+            }
+            _ => {
+                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+            }
+        }
+        Ok(())
+    }
+
     fn park_event(&mut self, event: &EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
@@ -314,6 +330,9 @@ impl EventLoopContext {
                 NotifierOperation::AddExclusion | NotifierOperation::AddShared => {
                     self.add_event(en)?;
                 }
+                NotifierOperation::Modify => {
+                    self.modify_event(en)?;
+                }
                 NotifierOperation::Delete => {
                     self.rm_event(&en)?;
                 }
@@ -322,9 +341,6 @@ impl EventLoopContext {
                 }
                 NotifierOperation::Resume => {
                     self.resume_event(&en)?;
-                }
-                _ => {
-                    return Err(ErrorKind::UnExpectedOperationType.into());
                 }
             }
         }
