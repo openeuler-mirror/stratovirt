@@ -120,15 +120,15 @@ fn le_write_clear_value_u16(buf: &mut [u8], offset: usize, data: u16) -> Result<
     le_write_u16(buf, offset, val & !data)
 }
 
-pub fn pci_devfn(slot: u8, func: u8) -> u8 {
+fn pci_devfn(slot: u8, func: u8) -> u8 {
     ((slot & 0x1f) << 3) | (func & 0x07)
 }
 
-pub fn pci_slot(devfn: u8) -> u8 {
+fn pci_slot(devfn: u8) -> u8 {
     devfn >> 3 & 0x1f
 }
 
-pub fn pci_func(devfn: u8) -> u8 {
+fn pci_func(devfn: u8) -> u8 {
     devfn & 0x07
 }
 
