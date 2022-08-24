@@ -1,6 +1,6 @@
 .PHONY: build
-build:
-	cargo build
+build: yum-deps
+	cargo build --release
 
 .PHONY: install
 install:
@@ -9,3 +9,6 @@ install:
 .PHONY: clean
 clean:
 	cargo clean
+
+yum-deps:
+	@yum install pixman-devel
