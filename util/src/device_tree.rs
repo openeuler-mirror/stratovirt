@@ -292,13 +292,6 @@ pub trait CompileFDT {
     fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> Result<()>;
 }
 
-pub fn dump_dtb(fdt: &[u8], file_path: &str) {
-    use std::fs::File;
-    use std::io::Write;
-    let mut f = File::create(file_path).unwrap();
-    f.write_all(fdt).expect("Unable to write data");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

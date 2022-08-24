@@ -82,7 +82,7 @@ impl Log for VmLogger {
     fn flush(&self) {}
 }
 
-pub fn init_vm_logger(
+fn init_vm_logger(
     level: Option<Level>,
     logfile: Option<Box<dyn Write + Send>>,
 ) -> Result<(), log::SetLoggerError> {

@@ -1527,22 +1527,14 @@ pub fn dma_write_bytes(
     Ok(())
 }
 
-pub fn dma_read_u64(
-    addr_space: &Arc<AddressSpace>,
-    addr: GuestAddress,
-    data: &mut u64,
-) -> Result<()> {
+fn dma_read_u64(addr_space: &Arc<AddressSpace>, addr: GuestAddress, data: &mut u64) -> Result<()> {
     let mut tmp = [0_u8; 8];
     dma_read_bytes(addr_space, addr, &mut tmp, 8)?;
     *data = LittleEndian::read_u64(&tmp);
     Ok(())
 }
 
-pub fn dma_read_u32(
-    addr_space: &Arc<AddressSpace>,
-    addr: GuestAddress,
-    buf: &mut [u32],
-) -> Result<()> {
+fn dma_read_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &mut [u32]) -> Result<()> {
     let vec_len = size_of::<u32>() * buf.len();
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();
@@ -1553,11 +1545,7 @@ pub fn dma_read_u32(
     Ok(())
 }
 
-pub fn dma_write_u32(
-    addr_space: &Arc<AddressSpace>,
-    addr: GuestAddress,
-    buf: &[u32],
-) -> Result<()> {
+fn dma_write_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &[u32]) -> Result<()> {
     let vec_len = size_of::<u32>() * buf.len();
     let mut vec = vec![0_u8; vec_len];
     let tmp = vec.as_mut_slice();

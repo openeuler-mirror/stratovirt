@@ -52,7 +52,7 @@ use crate::errors::{ErrorKind, Result, ResultExt};
 ///
 /// * Invalid BzImage header or version.
 /// * Failed to write bzImage linux kernel to guest memory.
-pub fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
+fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
     let mut boot_hdr = RealModeKernelHeader::new();
 
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
@@ -196,7 +196,7 @@ fn setup_boot_params(
     Ok(())
 }
 
-pub fn setup_kernel_cmdline(
+fn setup_kernel_cmdline(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     boot_hdr: &mut RealModeKernelHeader,

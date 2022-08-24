@@ -721,7 +721,7 @@ pub fn build_device_config_space(device_config: &mut VirtioNetConfig, mac: &str)
 ///
 /// * `dev_name` - The name of tap device on host.
 /// * `queue_pairs` - The number of virtio queue pairs.
-pub fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
+fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
     let path = format!("/sys/class/net/{}/tun_flags", dev_name);
     let tap_path = Path::new(&path);
     if !tap_path.exists() {

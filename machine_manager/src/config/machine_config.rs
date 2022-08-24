@@ -499,7 +499,7 @@ fn adjust_topology(
 /// # Arguments
 ///
 /// * `origin_value` - The origin memory value from user.
-pub fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
+fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
     if (origin_value.ends_with('M') | origin_value.ends_with('m'))
         && (origin_value.contains('M') ^ origin_value.contains('m'))
     {

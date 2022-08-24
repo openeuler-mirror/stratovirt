@@ -212,7 +212,7 @@ impl ConfigCheck for BlkDevConfig {
     }
 }
 
-pub fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
+fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     let mut drive = DriveConfig::default();
 
     if let Some(format) = cmd_parser.get_value::<String>("format")? {

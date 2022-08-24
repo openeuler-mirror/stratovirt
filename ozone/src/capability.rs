@@ -90,7 +90,7 @@ pub struct CapUserData {
     inheritable_s1: u32,
 }
 
-pub fn has_cap(cap: u8) -> Result<bool> {
+fn has_cap(cap: u8) -> Result<bool> {
     let mut hdr = CapUserHeader {
         version: CAPS_V3,
         pid: 0,
