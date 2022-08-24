@@ -178,7 +178,7 @@ pub struct VmConfig {
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
     pub incoming: Option<Incoming>,
-    pub vnc: VncConfig,
+    pub vnc: Option<VncConfig>,
 }
 
 impl VmConfig {
