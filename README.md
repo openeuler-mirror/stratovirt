@@ -24,7 +24,7 @@ To build StratoVirt, clone the project and build it first:
 ```sh
 $ git clone https://gitee.com/openeuler/stratovirt.git
 $ cd stratovirt
-$ cargo build --release
+$ make build
 ```
 Now you can find StratoVirt binary in `target/release/stratovirt`.
 
