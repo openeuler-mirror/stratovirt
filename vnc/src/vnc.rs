@@ -574,11 +574,7 @@ pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
 }
 
 /// Send framebuf of mouse to the client.
-pub fn display_cursor_define(
-    client: &mut VncClient,
-    cursor: &mut DisplayMouse,
-    mask: &mut Vec<u8>,
-) {
+fn display_cursor_define(client: &mut VncClient, cursor: &mut DisplayMouse, mask: &mut Vec<u8>) {
     let mut buf = Vec::new();
     if client.has_feature(VncFeatures::VncFeatureAlphaCursor) {
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());

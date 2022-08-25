@@ -195,7 +195,7 @@ pub extern "C" fn virtio_gpu_unref_resource_callback(
     unsafe { pixman_image_unref(data.cast()) };
 }
 
-pub fn pixman_format_reshift(val: u32, ofs: u32, num: u32) -> u32 {
+fn pixman_format_reshift(val: u32, ofs: u32, num: u32) -> u32 {
     ((val >> (ofs)) & ((1 << (num)) - 1)) << ((val >> 22) & 3)
 }
 pub fn pixman_format_bpp(val: u32) -> u8 {

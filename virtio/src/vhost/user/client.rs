@@ -75,7 +75,7 @@ impl ClientInternal {
     }
 }
 
-pub fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
+fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     let cloned_client = client.clone();
     let func = Box::new(move || {
         vhost_user_reconnect(&cloned_client);
