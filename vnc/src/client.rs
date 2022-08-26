@@ -12,6 +12,7 @@
 
 use crate::VncError;
 use crate::{
+    auth::Sasl,
     auth::{AuthState, SubAuthState},
     pixman::{get_image_height, get_image_width, PixelFormat},
     round_up_div,
@@ -234,6 +235,8 @@ pub struct VncClient {
     pub server: Arc<Mutex<VncServer>>,
     /// Tls server connection.
     pub tls_conn: Option<rustls::ServerConnection>,
+    /// Configuration for sasl authentication.
+    pub sasl: Sasl,
     /// Data storage type for client.
     pub big_endian: bool,
     /// State flags whether the image needs to be updated for the client.
@@ -281,6 +284,7 @@ impl VncClient {
             handlers: Vec::new(),
             server,
             tls_conn: None,
+            sasl: Sasl::default(),
             big_endian: false,
             state: UpdateState::No,
             dirty_bitmap: Bitmap::<u64>::new(
