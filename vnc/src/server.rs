@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
+    auth::SaslAuth,
     auth::{AuthState, SubAuthState},
     client::VncClient,
     data::keycode::KEYSYM2KEYCODE,
@@ -185,6 +186,14 @@ impl VncServer {
                 }
             }
             self.tlscreds = Some(tlscred);
+        }
+
+        // Sasl configuration.
+        if let Some(ObjConfig::Sasl(sasl_auth)) = object.get(&vnc_cfg.sasl_authz) {
+            let saslauth = SaslAuth {
+                identity: sasl_auth.identity.clone(),
+            };
+            self.saslauth = Some(saslauth);
         }
 
         // Server.auth.
@@ -435,6 +444,9 @@ impl VncServer {
                     server,
                     self.server_image,
                 );
+                if let Some(saslauth) = &self.saslauth {
+                    client.sasl.identity = saslauth.identity.clone();
+                }
                 client.write_msg("RFB 003.008\n".to_string().as_bytes());
                 info!("{:?}", client.stream);
 

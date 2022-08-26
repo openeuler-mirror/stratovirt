@@ -25,6 +25,7 @@ pub use network::*;
 pub use numa::*;
 pub use pci::*;
 pub use rng::*;
+pub use sasl_auth::*;
 pub use scsi::*;
 pub use tls_creds::*;
 pub use usb::*;
@@ -46,6 +47,7 @@ mod network;
 mod numa;
 mod pci;
 mod rng;
+mod sasl_auth;
 mod scsi;
 mod tls_creds;
 mod usb;
@@ -78,6 +80,7 @@ pub enum ObjConfig {
     Rng(RngObjConfig),
     Zone(MemZoneConfig),
     Tls(TlsCredObjConfig),
+    Sasl(SaslAuthObjConfig),
 }
 
 fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
@@ -220,6 +223,9 @@ impl VmConfig {
             }
             "tls-creds-x509" => {
                 self.add_tlscred(object_args)?;
+            }
+            "authz-simple" => {
+                self.add_saslauth(object_args)?;
             }
             _ => {
                 bail!("Unknow object type: {:?}", &device_type);
