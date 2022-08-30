@@ -94,8 +94,12 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("smp")
             .long("smp")
-            .value_name("[cpus=]n[,maxcpus=cpus][,dies=dies][,sockets=sockets][,cores=cores][,threads=threads]")
-            .help("set the number of CPUs to 'n' (default: 1)")
+            .value_name("[cpus=]n[,maxcpus=cpus][,sockets=sockets][,dies=dies][,clusters=clusters][,cores=cores][,threads=threads]")
+            .help("set the number of CPUs to 'n' (default: 1). maxcpus=maximum number of total CPUs, including online and offline CPUs. \
+                   sockets is the number of sockets on the machine. \
+                   dies is the number of dies in one socket. \
+                   clusters is the number of clusters in one die. cores is the number of cores in one cluster. \
+                   threads is the number of threads in one core")
             .takes_value(true),
         )
         .arg(
