@@ -151,11 +151,11 @@ impl StdMachine {
 
         let cpu_topo = CpuTopology::new(
             vm_config.machine_config.nr_cpus,
-            vm_config.machine_config.nr_threads,
-            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_sockets,
             vm_config.machine_config.nr_dies,
             vm_config.machine_config.nr_clusters,
-            vm_config.machine_config.nr_sockets,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_threads,
             vm_config.machine_config.max_cpus,
         );
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))

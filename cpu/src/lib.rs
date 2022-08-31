@@ -717,18 +717,18 @@ impl CPUThreadWorker {
 /// The wrapper for topology for VCPU.
 #[derive(Clone)]
 pub struct CpuTopology {
-    /// Number of sockets in VM.
-    pub sockets: u8,
-    /// Number of dies on one socket.
-    pub dies: u8,
-    /// Number of clusters on one socket.
-    pub clusters: u8,
-    /// Number of cores in VM.
-    pub cores: u8,
-    /// Number of threads in VM.
-    pub threads: u8,
     /// Number of vcpus in VM.
     pub nrcpus: u8,
+    /// Number of sockets in VM.
+    pub sockets: u8,
+    /// Number of dies in one socket.
+    pub dies: u8,
+    /// Number of clusters in one die.
+    pub clusters: u8,
+    /// Number of cores in one cluster.
+    pub cores: u8,
+    /// Number of threads in one core.
+    pub threads: u8,
     /// Number of online vcpus in VM.
     pub max_cpus: u8,
     /// Online mask number of all vcpus.
@@ -737,16 +737,19 @@ pub struct CpuTopology {
 
 impl CpuTopology {
     /// * `nr_cpus`: Number of vcpus in one VM.
-    /// * `nr_threads`: Number of threads on one core.
-    /// * `nr_cores`: Number of cores on one socket
-    /// * `nr_sockets`: Number of sockets on in one VM.
+    /// * `nr_sockets`: Number of sockets in one VM.
+    /// * `nr_dies`: Number of dies in one socket.
+    /// * `nr_clusters`: Number of clusters in one die.
+    /// * `nr_cores`: Number of cores in one cluster.
+    /// * `nr_threads`: Number of threads in one core.
+    /// * `max_cpus`: Number of online vcpus in VM.
     pub fn new(
         nr_cpus: u8,
-        nr_threads: u8,
-        nr_cores: u8,
+        nr_sockets: u8,
         nr_dies: u8,
         nr_clusters: u8,
-        nr_sockets: u8,
+        nr_cores: u8,
+        nr_threads: u8,
         max_cpus: u8,
     ) -> Self {
         let mut mask: Vec<u8> = vec![0; max_cpus as usize];
@@ -754,12 +757,12 @@ impl CpuTopology {
             mask[index] = 1;
         });
         Self {
+            nrcpus: nr_cpus,
             sockets: nr_sockets,
             dies: nr_dies,
             clusters: nr_clusters,
             cores: nr_cores,
             threads: nr_threads,
-            nrcpus: nr_cpus,
             max_cpus,
             online_mask: Arc::new(Mutex::new(mask)),
         }
