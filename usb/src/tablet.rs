@@ -184,7 +184,8 @@ pub fn pointer_sync(tablet: &Arc<Mutex<UsbTablet>>) -> Result<()> {
     let locked_tablet = tablet.lock().unwrap();
     let mut locked_hid = locked_tablet.hid.lock().unwrap();
     if locked_hid.num == QUEUE_LENGTH - 1 {
-        info!("Pointer queue full");
+        debug!("Pointer queue is full!");
+        return Ok(());
     }
     let cur_index = ((locked_hid.head + locked_hid.num) & QUEUE_MASK) as usize;
     let pre_index = if cur_index == 0 {

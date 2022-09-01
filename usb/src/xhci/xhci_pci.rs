@@ -298,9 +298,7 @@ impl XhciOps for XhciPciDevice {
         }
     }
 
-    fn update_intr(&mut self, _n: u32, _enable: bool) {
-        warn!("XhciPciDevice update_intr not implemented");
-    }
+    fn update_intr(&mut self, _n: u32, _enable: bool) {}
 }
 
 impl BusDeviceOps for XhciPciDevice {
