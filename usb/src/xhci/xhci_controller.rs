@@ -417,6 +417,44 @@ impl XhciDevice {
         Some(self.ports[index as usize].clone())
     }
 
+    /// Reset xhci port.
+    pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<XhciPort>>, warm_reset: bool) -> Result<()> {
+        let mut locked_port = xhci_port.lock().unwrap();
+        if let Some(usb_port) = locked_port.usb_port.clone() {
+            let locked_usb_port = usb_port.upgrade().unwrap();
+            let speed = locked_usb_port
+                .lock()
+                .unwrap()
+                .dev
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .speed();
+            if speed == USB_SPEED_SUPER && warm_reset {
+                locked_port.portsc |= PORTSC_WRC;
+            }
+            match speed {
+                USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH => {
+                    locked_port.portsc = set_field(
+                        locked_port.portsc,
+                        PLS_U0,
+                        PORTSC_PLS_MASK,
+                        PORTSC_PLS_SHIFT,
+                    );
+                    locked_port.portsc |= PORTSC_PED;
+                }
+                _ => {
+                    error!("Invalid speed {}", speed);
+                }
+            }
+            locked_port.portsc &= !PORTSC_PR;
+            drop(locked_port);
+            self.port_notify(xhci_port, PORTSC_PRC)?;
+        }
+        Ok(())
+    }
+
     /// Send PortStatusChange event to notify drivers.
     pub fn port_notify(&mut self, port: &Arc<Mutex<XhciPort>>, flag: u32) -> Result<()> {
         let mut locked_port = port.lock().unwrap();
