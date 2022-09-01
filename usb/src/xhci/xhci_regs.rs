@@ -98,7 +98,6 @@ const XHCI_PORTSC: u64 = 0x0;
 const XHCI_PORTPMSC: u64 = 0x4;
 const XHCI_PORTLI: u64 = 0x8;
 const XHCI_PORTHLPMC: u64 = 0xc;
-const TRB_PORT_ID_SHIFT: u32 = 24;
 
 /// XHCI Operation Registers
 #[derive(Default, Copy, Clone)]
@@ -237,48 +236,6 @@ impl XhciPort {
             usb_port: None,
             name,
         }
-    }
-
-    pub fn reset(&mut self, warm_reset: bool) {
-        if let Some(usb_port) = self.usb_port.clone() {
-            let locked_port = usb_port.upgrade().unwrap();
-            let speed = locked_port
-                .lock()
-                .unwrap()
-                .dev
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .speed();
-            if speed == USB_SPEED_SUPER && warm_reset {
-                self.portsc |= PORTSC_WRC;
-            }
-            match speed {
-                USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH => {
-                    self.portsc = set_field(self.portsc, PLS_U0, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
-                    self.portsc |= PORTSC_PED;
-                }
-                _ => {
-                    error!("Invalid speed {}", speed);
-                }
-            }
-            self.portsc &= !PORTSC_PR;
-            if let Err(e) = self.notify(PORTSC_PRC) {
-                error!("Failed to notify {}", e);
-            }
-        }
-    }
-
-    pub fn notify(&mut self, flag: u32) -> Result<()> {
-        if self.portsc & flag == flag {
-            return Ok(());
-        }
-        let xhci = self.xhci.upgrade().unwrap();
-        let mut evt = XhciEvent::new(TRBType::ErPortStatusChange, TRBCCode::Success);
-        evt.ptr = (self.port_idx << TRB_PORT_ID_SHIFT) as u64;
-        xhci.lock().unwrap().send_event(&evt, 0)?;
-        Ok(())
     }
 }
 
@@ -684,25 +641,32 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
                 return false;
             }
         };
-        let mut locked_port = port.lock().unwrap();
+        let locked_port = port.lock().unwrap();
         debug!(
             "port write {} {:x} {:x} {:x}",
             locked_port.name, addr.0, offset, value
         );
-
+        let xhci = locked_port.xhci.upgrade().unwrap();
+        drop(locked_port);
+        // Lock controller first.
+        let mut locked_xhci = xhci.lock().unwrap();
         #[allow(clippy::never_loop)]
         loop {
             match offset {
                 XHCI_PORTSC => {
                     if value & PORTSC_WPR == PORTSC_WPR {
-                        locked_port.reset(true);
+                        if let Err(e) = locked_xhci.reset_port(&port, true) {
+                            error!("Failed to warn reset port {}", e);
+                        }
                         break;
                     }
                     if value & PORTSC_PR == PORTSC_PR {
-                        locked_port.reset(false);
+                        if let Err(e) = locked_xhci.reset_port(&port, false) {
+                            error!("Failed to reset port {}", e);
+                        }
                         break;
                     }
-
+                    let mut locked_port = port.lock().unwrap();
                     let mut portsc = locked_port.portsc;
                     let mut notify = 0;
                     portsc &= !(value
@@ -747,9 +711,9 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
                     portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
                     portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
                     locked_port.portsc = portsc;
-
+                    drop(locked_port);
                     if notify != 0 {
-                        if let Err(e) = locked_port.notify(notify) {
+                        if let Err(e) = locked_xhci.port_notify(&port, notify) {
                             error!("Failed to notify: {}", e);
                         }
                     }
