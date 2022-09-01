@@ -806,7 +806,7 @@ fn write_mem(hva: u64, buf: &[u8]) {
 }
 
 /// Transfer packet from host to device or from device to host.
-pub fn usb_packet_transfer(packet: &mut UsbPacket, vec: &mut Vec<u8>, len: usize) {
+pub fn usb_packet_transfer(packet: &mut UsbPacket, vec: &mut [u8], len: usize) {
     let to_host = packet.pid as u8 & USB_TOKEN_IN == USB_TOKEN_IN;
 
     if to_host {
