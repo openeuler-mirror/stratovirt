@@ -55,6 +55,7 @@ pub mod errors {
 
 pub mod auth;
 pub mod client;
+mod data;
 pub mod input;
 pub mod pixman;
 pub mod server;

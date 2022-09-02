@@ -107,6 +107,7 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 use error_chain::bail;
 use kvm_ioctls::VcpuFd;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+use vnc::INPUT;
 
 pub use micro_vm::LightMachine;
 
@@ -962,7 +963,7 @@ pub trait MachineOps {
             if let Some(ctrl) = locked_dev.get("usb.0") {
                 let mut locked_ctrl = ctrl.lock().unwrap();
                 locked_ctrl
-                    .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .attach_device(&(kbd.clone() as Arc<Mutex<dyn UsbDeviceOps>>))
                     .chain_err(|| "Failed to attach keyboard device")?;
             } else {
                 bail!("No usb controller found");
@@ -970,6 +971,8 @@ pub trait MachineOps {
         } else {
             bail!("No bus device found");
         }
+        let mut locked_input = INPUT.lock().unwrap();
+        locked_input.keyboard = Some(kbd);
         Ok(())
     }
 
@@ -989,7 +992,7 @@ pub trait MachineOps {
             if let Some(ctrl) = locked_dev.get("usb.0") {
                 let mut locked_ctrl = ctrl.lock().unwrap();
                 locked_ctrl
-                    .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .attach_device(&(tbt.clone() as Arc<Mutex<dyn UsbDeviceOps>>))
                     .chain_err(|| "Failed to attach tablet device")?;
             } else {
                 bail!("No usb controller found");
@@ -997,6 +1000,8 @@ pub trait MachineOps {
         } else {
             bail!("No bus device list found");
         }
+        let mut locked_input = INPUT.lock().unwrap();
+        locked_input.tablet = Some(tbt);
         Ok(())
     }
 
