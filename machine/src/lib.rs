@@ -107,7 +107,6 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 use error_chain::bail;
 use kvm_ioctls::VcpuFd;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-use vnc::INPUT;
 
 pub use micro_vm::LightMachine;
 
@@ -122,9 +121,11 @@ use devices::legacy::FwCfgOps;
 use devices::InterruptController;
 use errors::{ErrorKind, Result, ResultExt};
 use hypervisor::kvm::KVM_FDS;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::parse_gpu;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_gpu, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
     parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_virtconsole, parse_virtio_serial,
     parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
     NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
@@ -141,7 +142,7 @@ pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
 use usb::{
     bus::BusDeviceMap, keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps,
-    xhci::xhci_pci::XhciPciDevice,
+    xhci::xhci_pci::XhciPciDevice, INPUT,
 };
 use util::{
     arg_parser,
@@ -149,9 +150,11 @@ use util::{
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
 use vfio::{VfioDevice, VfioPciDevice};
+#[cfg(not(target_env = "musl"))]
+use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, Balloon, Block, BlockState, Console, Gpu, Rng, RngState, VhostKern,
-    VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    balloon_allow_list, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern, VhostUser,
+    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
     VirtioPciDevice,
 };
 
@@ -704,6 +707,7 @@ pub trait MachineOps {
         Ok(())
     }
 
+    #[cfg(not(target_env = "musl"))]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -1056,9 +1060,6 @@ pub trait MachineOps {
                 "vfio-pci" => {
                     self.add_vfio_device(cfg_args)?;
                 }
-                "virtio-gpu-pci" => {
-                    self.add_virtio_pci_gpu(cfg_args)?;
-                }
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
                 }
@@ -1067,6 +1068,10 @@ pub trait MachineOps {
                 }
                 "usb-tablet" => {
                     self.add_usb_tablet(cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "virtio-gpu-pci" => {
+                    self.add_virtio_pci_gpu(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
