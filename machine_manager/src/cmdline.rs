@@ -225,8 +225,9 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("incoming")
             .long("incoming")
-            .help("wait for the URI to be specified via migrate_incoming")
-            .value_name("incoming")
+            .value_name("tcp:ip:port> or -incoming <unix:socket path> or -incoming <file:file path")
+            .help("tcp: do the migration using tcp socket; unix: do the migration using unix socket; \
+            file: do the virtual machine snapshot;")
             .takes_value(true),
         )
         .arg(
