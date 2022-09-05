@@ -24,4 +24,6 @@ util = { path = "../util" }
 pci = { path = "../pci" }
 acpi = { path = "../acpi" }
 devices = {path = "../devices"}
-vnc = {path = "../vnc"}
+
+[target.'cfg(not(target_env = "musl"))'.dependencies]
+vnc = { path = "../vnc" }
