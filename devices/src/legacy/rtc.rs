@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use acpi::{
     AmlBuilder, AmlDevice, AmlEisaId, AmlIoDecode, AmlIoResource, AmlIrqNoFlags, AmlNameDecl,
@@ -22,6 +23,8 @@ use hypervisor::kvm::KVM_FDS;
 use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
+
+use util::time::NANOSECONDS_PER_SECOND;
 
 /// IO port of RTC device to select Register to read/write.
 pub const RTC_PORT_INDEX: u64 = 0x70;
@@ -36,7 +39,7 @@ const RTC_SECONDS_ALARM: u8 = 0x01;
 const RTC_MINUTES: u8 = 0x02;
 const RTC_MINUTES_ALARM: u8 = 0x03;
 const RTC_HOURS: u8 = 0x04;
-const RTC_HOURS_ARARM: u8 = 0x05;
+const RTC_HOURS_ALARM: u8 = 0x05;
 const RTC_DAY_OF_WEEK: u8 = 0x06;
 const RTC_DAY_OF_MONTH: u8 = 0x07;
 const RTC_MONTH: u8 = 0x08;
@@ -46,6 +49,11 @@ const RTC_REG_B: u8 = 0x0B;
 const RTC_REG_C: u8 = 0x0C;
 const RTC_REG_D: u8 = 0x0D;
 const RTC_CENTURY_BCD: u8 = 0x32;
+
+// Update in progress (UIP) bit.
+const REG_A_UIP: u8 = 0x80;
+// UIP bit held for last 244 us of every second.
+const UIP_HOLD_LENGTH: u64 = 8 * NANOSECONDS_PER_SECOND / 32768;
 
 // Index of memory data in RTC static RAM.
 // 0x15/0x16 stores low/high byte below 1MB, range is [0, 640KB].
@@ -59,12 +67,7 @@ const CMOS_MEM_BELOW_4GB: (u8, u8) = (0x34, 0x35);
 // 0x5B/0x5C/0x5D stores low/middle/high byte of memory above 4GB, unit is 64KB.
 const CMOS_MEM_ABOVE_4GB: (u8, u8, u8) = (0x5B, 0x5C, 0x5D);
 
-fn get_utc_time() -> libc::tm {
-    let time_val = 0_i64;
-
-    // Safe because `libc::time` only get time.
-    unsafe { libc::time(time_val as *mut i64) };
-
+fn rtc_time_to_tm(time_val: i64) -> libc::tm {
     let mut dest_tm = libc::tm {
         tm_sec: 0,
         tm_min: 0,
@@ -91,6 +94,16 @@ fn bin_to_bcd(src: u8) -> u8 {
     ((src / 10) << 4) + (src % 10)
 }
 
+/// Transfer BCD coded decimal to binary coded decimal.
+fn bcd_to_bin(src: u8) -> u64 {
+    if (src >> 4) > 9 || (src & 0x0f) > 9 {
+        error!("RTC: The BCD coded format is wrong.");
+        return 0_u64;
+    }
+
+    (((src >> 4) * 10) + (src & 0x0f)) as u64
+}
+
 #[allow(clippy::upper_case_acronyms)]
 /// RTC device.
 pub struct RTC {
@@ -106,6 +119,10 @@ pub struct RTC {
     mem_size: u64,
     /// The start address of gap.
     gap_start: u64,
+    /// The tick offset.
+    tick_offset: u64,
+    /// Record the real time.
+    base_time: Instant,
 }
 
 impl RTC {
@@ -122,7 +139,21 @@ impl RTC {
             },
             mem_size: 0,
             gap_start: 0,
+            // Since 1970-01-01 00:00:00, it never cause overflow.
+            tick_offset: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time wrong")
+                .as_secs() as u64,
+            base_time: Instant::now(),
         };
+
+        // Set Time frequency divider and Rate selection frequency in Register-A.
+        // Bits 6-4 = Time frequency divider (010 = 32.768KHz).
+        // Bits 3-0 = Rate selection frequency (110 = 1.024KHz, 976.562s).
+        rtc.cmos_data[RTC_REG_A as usize] = 0x26;
+
+        // Set 24 hour mode in Register-B.
+        rtc.cmos_data[RTC_REG_B as usize] = 0x02;
 
         // Set VRT bit in Register-D, indicates that RAM and time are valid.
         rtc.cmos_data[RTC_REG_D as usize] = 0x80;
@@ -175,7 +206,7 @@ impl RTC {
             return false;
         }
 
-        let tm = get_utc_time();
+        let tm = rtc_time_to_tm(self.get_current_value() as i64);
         match self.cur_index {
             RTC_SECONDS => {
                 data[0] = bin_to_bcd(tm.tm_sec as u8);
@@ -201,6 +232,18 @@ impl RTC {
             }
             RTC_CENTURY_BCD => {
                 data[0] = bin_to_bcd(((tm.tm_year + 1900) % 100) as u8);
+            }
+            RTC_REG_A => {
+                data[0] = self.cmos_data[RTC_REG_A as usize];
+                // UIP(update in progress) bit will be set at last 244us of every second.
+                if self.update_in_progress() {
+                    data[0] |= REG_A_UIP;
+                    self.inject_interrupt();
+                }
+            }
+            RTC_REG_C => {
+                // The interrupt request flag (IRQF), alarm interrupt flag (AF).
+                data[0] = 1 << 7 | 1 << 5;
             }
             _ => {
                 data[0] = self.cmos_data[self.cur_index as usize];
@@ -249,6 +292,15 @@ impl RTC {
             return;
         }
         error!("cmos rtc: failed to get interrupt event fd.");
+    }
+
+    /// Get current clock value.
+    fn get_current_value(&self) -> u64 {
+        self.base_time.elapsed().as_secs() + self.tick_offset
+    }
+
+    fn update_in_progress(&self) -> bool {
+        self.base_time.elapsed().subsec_nanos() >= (NANOSECONDS_PER_SECOND - UIP_HOLD_LENGTH) as u32
     }
 }
 
