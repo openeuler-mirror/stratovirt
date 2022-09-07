@@ -11,11 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::VncClient;
-use once_cell::sync::Lazy;
-use std::sync::{Arc, Mutex};
 use usb::{
-    keyboard::{keyboard_event, UsbKeyboard},
-    tablet::{pointer_event, pointer_sync, UsbTablet},
+    keyboard::keyboard_event,
+    tablet::{pointer_event, pointer_sync},
+    INPUT,
 };
 // Logical window size for mouse.
 const ABS_MAX: u64 = 0x7fff;
@@ -149,14 +148,3 @@ impl VncClient {
         self.update_event_handler(1, VncClient::handle_protocol_msg);
     }
 }
-
-pub struct Input {
-    pub keyboard: Option<Arc<Mutex<UsbKeyboard>>>,
-    pub tablet: Option<Arc<Mutex<UsbTablet>>>,
-}
-pub static INPUT: Lazy<Arc<Mutex<Input>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(Input {
-        keyboard: None,
-        tablet: None,
-    }))
-});

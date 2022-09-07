@@ -102,6 +102,7 @@ pub mod errors {
 mod balloon;
 mod block;
 mod console;
+#[cfg(not(target_env = "musl"))]
 mod gpu;
 mod net;
 mod queue;
@@ -115,6 +116,7 @@ pub use balloon::*;
 pub use block::{Block, BlockState};
 pub use console::{Console, VirtioConsoleState};
 pub use errors::*;
+#[cfg(not(target_env = "musl"))]
 pub use gpu::*;
 pub use net::*;
 pub use queue::*;

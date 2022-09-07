@@ -19,6 +19,8 @@ migration = { path = "migration" }
 util = { path = "util" }
 virtio = { path = "virtio" }
 vfio = { path = "vfio" }
+
+[target.'cfg(not(target_env = "musl"))'.dependencies]
 vnc = { path = "vnc" }
 
 [workspace]
@@ -39,7 +41,6 @@ members = [
     "virtio",
     "ozone",
     "vfio",
-    "vnc",
 ]
 
 [[bin]]
