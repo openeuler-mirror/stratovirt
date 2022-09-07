@@ -15,6 +15,7 @@ use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
 #[derive(Default)]
 pub struct VfioConfig {
+    pub sysfsdev: String,
     pub host: String,
     pub id: String,
 }
@@ -40,6 +41,7 @@ pub fn parse_vfio(vfio_config: &str) -> Result<VfioConfig> {
     cmd_parser
         .push("")
         .push("host")
+        .push("sysfsdev")
         .push("id")
         .push("bus")
         .push("addr")
@@ -49,9 +51,22 @@ pub fn parse_vfio(vfio_config: &str) -> Result<VfioConfig> {
     let mut vfio: VfioConfig = VfioConfig::default();
     if let Some(host) = cmd_parser.get_value::<String>("host")? {
         vfio.host = host;
-    } else {
-        return Err(ErrorKind::FieldIsMissing("host", "vfio").into());
     }
+
+    if let Some(sysfsdev) = cmd_parser.get_value::<String>("sysfsdev")? {
+        vfio.sysfsdev = sysfsdev;
+    }
+
+    if vfio.host.is_empty() && vfio.sysfsdev.is_empty() {
+        return Err(ErrorKind::FieldIsMissing("host nor sysfsdev", "vfio").into());
+    }
+
+    if !vfio.host.is_empty() && !vfio.sysfsdev.is_empty() {
+        return Err(
+            ErrorKind::InvalidParam("host and sysfsdev".to_string(), "vfio".to_string()).into(),
+        );
+    }
+
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         vfio.id = id;
     }

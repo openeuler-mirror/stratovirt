@@ -84,7 +84,14 @@ pub struct DisplayMouse {
 /// # Arguments
 ///
 /// * `VncConfig` `object`- vnc related parameters
-pub fn vnc_init(vnc_cfg: &VncConfig, object: &HashMap<String, ObjConfig>) -> Result<()> {
+pub fn vnc_init(vnc: &Option<VncConfig>, object: &HashMap<String, ObjConfig>) -> Result<()> {
+    let vnc_cfg;
+    if let Some(v) = vnc {
+        vnc_cfg = v;
+    } else {
+        return Ok(());
+    }
+
     let addr = format!("{}:{}", vnc_cfg.ip, vnc_cfg.port);
     let listener: TcpListener;
     match TcpListener::bind(&addr.as_str()) {
@@ -119,7 +126,6 @@ pub fn vnc_init(vnc_cfg: &VncConfig, object: &HashMap<String, ObjConfig>) -> Res
         EventNotifierHelper::internal_notifiers(VNC_SERVERS.lock().unwrap()[0].clone()),
         None,
     )?;
-
     Ok(())
 }
 
@@ -273,6 +279,8 @@ pub fn update_client_surface(server: &mut VncServer) {
     };
     for client in server.clients.values_mut() {
         client.lock().unwrap().server_image = server.server_image;
+        client.lock().unwrap().width = width;
+        client.lock().unwrap().height = height;
     }
     server.guest_dirtymap.clear_all();
     set_area_dirty(
@@ -488,6 +496,9 @@ fn get_client_image() -> *mut pixman_image_t {
 /// Update guest_image
 /// Send a resize command to the client based on whether the image size has changed
 pub fn vnc_display_switch(surface: &mut DisplaySurface) {
+    if VNC_SERVERS.lock().unwrap().is_empty() {
+        return;
+    }
     let need_resize = check_surface(surface);
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
     let mut locked_server = server.lock().unwrap();
@@ -545,6 +556,9 @@ pub fn vnc_display_switch(surface: &mut DisplaySurface) {
 }
 
 pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
+    if VNC_SERVERS.lock().unwrap().is_empty() {
+        return;
+    }
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
     let width = cursor.width as u64;
     let heigt = cursor.height as u64;
@@ -574,11 +588,7 @@ pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
 }
 
 /// Send framebuf of mouse to the client.
-pub fn display_cursor_define(
-    client: &mut VncClient,
-    cursor: &mut DisplayMouse,
-    mask: &mut Vec<u8>,
-) {
+fn display_cursor_define(client: &mut VncClient, cursor: &mut DisplayMouse, mask: &mut Vec<u8>) {
     let mut buf = Vec::new();
     if client.has_feature(VncFeatures::VncFeatureAlphaCursor) {
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());

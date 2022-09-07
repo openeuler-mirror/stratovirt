@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use log::warn;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
@@ -751,11 +752,11 @@ impl VfioDevice {
             let ret =
                 unsafe { ioctl_with_mut_ref(&self.fd, VFIO_DEVICE_GET_IRQ_INFO(), &mut info) };
             if ret < 0 {
-                return Err(ErrorKind::VfioIoctl(
-                    "VFIO_DEVICE_GET_IRQ_INFO".to_string(),
-                    std::io::Error::last_os_error(),
-                )
-                .into());
+                warn!(
+                    "VFIO_DEVICE_GET_IRQ_INFO return irq type{} not supported",
+                    index
+                );
+                continue;
             }
 
             let irq = VfioIrq {
@@ -804,13 +805,14 @@ impl VfioDevice {
     /// # Arguments
     ///
     /// * `irq_fds` - Irq fds that will be registered to kvm.
-    pub fn enable_irqs(&mut self, irq_fds: Vec<RawFd>) -> Result<()> {
+    /// * `start` - The start of subindexes being specified.
+    pub fn enable_irqs(&mut self, irq_fds: Vec<RawFd>, start: u32) -> Result<()> {
         let mut irq_set = array_to_vec::<vfio::vfio_irq_set, u32>(irq_fds.len());
         irq_set[0].argsz =
             (size_of::<vfio::vfio_irq_set>() + irq_fds.len() * size_of::<RawFd>()) as u32;
         irq_set[0].flags = vfio::VFIO_IRQ_SET_DATA_EVENTFD | vfio::VFIO_IRQ_SET_ACTION_TRIGGER;
         irq_set[0].index = vfio::VFIO_PCI_MSIX_IRQ_INDEX;
-        irq_set[0].start = 0u32;
+        irq_set[0].start = start;
         irq_set[0].count = irq_fds.len() as u32;
 
         // It is safe as enough memory space to save irq_set data.
@@ -829,7 +831,6 @@ impl VfioDevice {
             )
             .into());
         }
-        self.nr_vectors = irq_fds.len();
         Ok(())
     }
 

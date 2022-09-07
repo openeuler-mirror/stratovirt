@@ -68,7 +68,7 @@ impl VmConfig {
             vnc_config.sasl_authz = sasl_authz;
         }
 
-        self.vnc = vnc_config;
+        self.vnc = Some(vnc_config);
         Ok(())
     }
 }
@@ -83,17 +83,19 @@ mod tests {
         vm_config
             .add_vnc("0.0.0.0:1,tls-creds=vnc-tls-creds0,sasl,sasl-authz=authz0")
             .unwrap();
-        assert_eq!(vm_config.vnc.ip, String::from("0.0.0.0"));
-        assert_eq!(vm_config.vnc.port, String::from("1"));
-        assert_eq!(vm_config.vnc.tls_creds, String::from("vnc-tls-creds0"));
-        assert_eq!(vm_config.vnc.sasl, true);
-        assert_eq!(vm_config.vnc.sasl_authz, String::from("authz0"));
+        let vnc_config = vm_config.vnc.unwrap();
+        assert_eq!(vnc_config.ip, String::from("0.0.0.0"));
+        assert_eq!(vnc_config.port, String::from("1"));
+        assert_eq!(vnc_config.tls_creds, String::from("vnc-tls-creds0"));
+        assert_eq!(vnc_config.sasl, true);
+        assert_eq!(vnc_config.sasl_authz, String::from("authz0"));
 
         let mut vm_config = VmConfig::default();
         vm_config
             .add_vnc("0.0.0.0:1,tls-creds=vnc-tls-creds0")
             .unwrap();
-        assert_eq!(vm_config.vnc.sasl, false);
+        let vnc_config = vm_config.vnc.unwrap();
+        assert_eq!(vnc_config.sasl, false);
 
         let mut vm_config = VmConfig::default();
         let res = vm_config.add_vnc("tls-creds=vnc-tls-creds0");
@@ -101,6 +103,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         let _res = vm_config.add_vnc("0.0.0.0:1,sasl,sasl-authz=authz0");
-        assert_eq!(vm_config.vnc.tls_creds, "".to_string());
+        let vnc_config = vm_config.vnc.unwrap();
+        assert_eq!(vnc_config.tls_creds, "".to_string());
     }
 }

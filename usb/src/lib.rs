@@ -37,3 +37,19 @@ pub mod keyboard;
 pub mod tablet;
 pub mod usb;
 pub mod xhci;
+
+use crate::keyboard::UsbKeyboard;
+use crate::tablet::UsbTablet;
+use once_cell::sync::Lazy;
+use std::sync::{Arc, Mutex};
+
+pub struct Input {
+    pub keyboard: Option<Arc<Mutex<UsbKeyboard>>>,
+    pub tablet: Option<Arc<Mutex<UsbTablet>>>,
+}
+pub static INPUT: Lazy<Arc<Mutex<Input>>> = Lazy::new(|| {
+    Arc::new(Mutex::new(Input {
+        keyboard: None,
+        tablet: None,
+    }))
+});

@@ -178,7 +178,7 @@ fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
     }
 }
 
-pub fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
+fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     let mut net = NetDevcfg::default();
     let netdev_type = if let Some(netdev_type) = cmd_parser.get_value::<String>("")? {
         netdev_type

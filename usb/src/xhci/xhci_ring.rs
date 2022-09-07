@@ -272,7 +272,9 @@ impl XhciRing {
         for _ in 0..RING_LEN_LIMIT {
             let trb = self.read_trb(dequeue)?;
             if trb.get_cycle_bit() != ccs {
-                bail!("TRB cycle bit not matched");
+                // TRB is not ready
+                debug!("TRB cycle bit not matched");
+                return Ok(0);
             }
             let trb_type = trb.get_type();
             if trb_type == TRBType::TrLink {

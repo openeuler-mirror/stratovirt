@@ -238,9 +238,9 @@ pub struct VncClient {
     /// Tcp listening address.
     pub addr: String,
     /// Image width.
-    width: i32,
+    pub width: i32,
     /// Image height.
-    height: i32,
+    pub height: i32,
     /// Encoding type.
     encoding: i32,
     /// Image display feature.

@@ -121,9 +121,11 @@ use devices::legacy::FwCfgOps;
 use devices::InterruptController;
 use errors::{ErrorKind, Result, ResultExt};
 use hypervisor::kvm::KVM_FDS;
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::parse_gpu;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_gpu, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
     parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_virtconsole, parse_virtio_serial,
     parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
     NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
@@ -140,7 +142,7 @@ pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
 use usb::{
     bus::BusDeviceMap, keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps,
-    xhci::xhci_pci::XhciPciDevice,
+    xhci::xhci_pci::XhciPciDevice, INPUT,
 };
 use util::{
     arg_parser,
@@ -148,9 +150,11 @@ use util::{
     seccomp::{BpfRule, SeccompOpt, SyscallFilter},
 };
 use vfio::{VfioDevice, VfioPciDevice};
+#[cfg(not(target_env = "musl"))]
+use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, Balloon, Block, BlockState, Console, Gpu, Rng, RngState, VhostKern,
-    VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    balloon_allow_list, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern, VhostUser,
+    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
     VirtioPciDevice,
 };
 
@@ -676,10 +680,16 @@ pub trait MachineOps {
         id: &str,
         bdf: &PciBdf,
         host: &str,
+        sysfsdev: &str,
         multifunc: bool,
     ) -> Result<()> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
-        let path = format!("/sys/bus/pci/devices/{}", host);
+        let path;
+        if !host.is_empty() {
+            path = format!("/sys/bus/pci/devices/{}", host);
+        } else {
+            path = sysfsdev.to_string();
+        }
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
             .chain_err(|| "Failed to create vfio device.")?;
         let vfio_pci = VfioPciDevice::new(
@@ -698,11 +708,18 @@ pub trait MachineOps {
         let device_cfg: VfioConfig = parse_vfio(cfg_args)?;
         let bdf = get_pci_bdf(cfg_args)?;
         let multifunc = get_multi_function(cfg_args)?;
-        self.create_vfio_pci_device(&device_cfg.id, &bdf, &device_cfg.host, multifunc)?;
+        self.create_vfio_pci_device(
+            &device_cfg.id,
+            &bdf,
+            &device_cfg.host,
+            &device_cfg.sysfsdev,
+            multifunc,
+        )?;
         self.reset_bus(&device_cfg.id)?;
         Ok(())
     }
 
+    #[cfg(not(target_env = "musl"))]
     fn add_virtio_pci_gpu(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -950,7 +967,7 @@ pub trait MachineOps {
             if let Some(ctrl) = locked_dev.get("usb.0") {
                 let mut locked_ctrl = ctrl.lock().unwrap();
                 locked_ctrl
-                    .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .attach_device(&(kbd.clone() as Arc<Mutex<dyn UsbDeviceOps>>))
                     .chain_err(|| "Failed to attach keyboard device")?;
             } else {
                 bail!("No usb controller found");
@@ -958,6 +975,8 @@ pub trait MachineOps {
         } else {
             bail!("No bus device found");
         }
+        let mut locked_input = INPUT.lock().unwrap();
+        locked_input.keyboard = Some(kbd);
         Ok(())
     }
 
@@ -977,7 +996,7 @@ pub trait MachineOps {
             if let Some(ctrl) = locked_dev.get("usb.0") {
                 let mut locked_ctrl = ctrl.lock().unwrap();
                 locked_ctrl
-                    .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))
+                    .attach_device(&(tbt.clone() as Arc<Mutex<dyn UsbDeviceOps>>))
                     .chain_err(|| "Failed to attach tablet device")?;
             } else {
                 bail!("No usb controller found");
@@ -985,6 +1004,8 @@ pub trait MachineOps {
         } else {
             bail!("No bus device list found");
         }
+        let mut locked_input = INPUT.lock().unwrap();
+        locked_input.tablet = Some(tbt);
         Ok(())
     }
 
@@ -1051,9 +1072,6 @@ pub trait MachineOps {
                 "vfio-pci" => {
                     self.add_vfio_device(cfg_args)?;
                 }
-                "virtio-gpu-pci" => {
-                    self.add_virtio_pci_gpu(cfg_args)?;
-                }
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
                 }
@@ -1062,6 +1080,10 @@ pub trait MachineOps {
                 }
                 "usb-tablet" => {
                     self.add_usb_tablet(cfg_args)?;
+                }
+                #[cfg(not(target_env = "musl"))]
+                "virtio-gpu-pci" => {
+                    self.add_virtio_pci_gpu(cfg_args)?;
                 }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());

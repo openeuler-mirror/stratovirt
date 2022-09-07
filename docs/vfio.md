@@ -49,6 +49,7 @@ Four properties are supported for VFIO device
 -device vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x03.0x0[,multifunction=on]
 ```
 Note: the kernel must contain physical device drivers, otherwise it cannot be loaded normally.
+Note: avoid using balloon devices and vfio devices together.
 
 ## Hot plug management
 

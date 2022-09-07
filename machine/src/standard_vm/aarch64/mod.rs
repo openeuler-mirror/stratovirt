@@ -62,6 +62,7 @@ use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::loop_context::EventLoopManager;
 use util::seccomp::BpfRule;
 use util::set_termi_canon_mode;
+#[cfg(not(target_env = "musl"))]
 use vnc::vnc;
 
 use super::{errors::Result as StdResult, AcpiBuilder, StdMachineOps};
@@ -460,6 +461,7 @@ impl MachineOps for StdMachine {
         locked_vm
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
+        #[cfg(not(target_env = "musl"))]
         vnc::vnc_init(&vm_config.vnc, &vm_config.object)
             .chain_err(|| "Failed to init VNC server!")?;
         let fwcfg = locked_vm.add_fwcfg_device()?;

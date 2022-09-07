@@ -76,6 +76,7 @@ struct VfioBar {
 struct GsiMsiRoute {
     irq_fd: Option<EventFd>,
     gsi: i32,
+    nr: u32,
 }
 
 /// VfioPciDevice is a VFIO PCI device. It implements PciDevOps trait for a PCI device.
@@ -548,12 +549,26 @@ impl VfioPciDevice {
             }
 
             let mut locked_dev = cloned_dev.lock().unwrap();
-            locked_dev
-                .disable_irqs()
-                .unwrap_or_else(|e| error!("Failed to disable irq, error is {}", e));
-            locked_dev
-                .enable_irqs(get_irq_rawfds(&locked_gsi_routes))
-                .unwrap_or_else(|e| error!("Failed to enable irq, error is {}", e));
+            if (vector + 1) > (locked_dev.nr_vectors as u64) {
+                locked_dev
+                    .disable_irqs()
+                    .unwrap_or_else(|e| error!("Failed to disable irq, error is {}", e));
+
+                locked_dev
+                    .enable_irqs(
+                        get_irq_rawfds(&locked_gsi_routes, 0, (vector + 1) as u32),
+                        0,
+                    )
+                    .unwrap_or_else(|e| error!("Failed to enable irq, error is {}", e));
+                locked_dev.nr_vectors = (vector + 1) as usize;
+            } else {
+                locked_dev
+                    .enable_irqs(
+                        get_irq_rawfds(&locked_gsi_routes, vector as u32, 1),
+                        vector as u32,
+                    )
+                    .unwrap_or_else(|e| error!("Failed to enable irq, error is {}", e));
+            }
             true
         };
 
@@ -646,10 +661,13 @@ impl VfioPciDevice {
                 .chain_err(|| "Failed to get bar info")?;
             let region = &mut bar.vfio_region;
             // If bar region already setups or does not support mapping, just process the nest.
-            if region.size == 0 || region.mmaps.is_empty() || region.guest_phys_addr == gpa {
+            if region.size == 0 || region.guest_phys_addr == gpa {
                 continue;
-            } else {
-                region.guest_phys_addr = gpa;
+            }
+
+            region.guest_phys_addr = gpa;
+            if region.mmaps.is_empty() {
+                continue;
             }
 
             let mut read_only = true;
@@ -697,14 +715,16 @@ impl VfioPciDevice {
             let gsi_route = GsiMsiRoute {
                 irq_fd: Some(irq_fd),
                 gsi: -1,
+                nr: 0,
             };
             gsi_routes.push(gsi_route);
 
             let entries = self.msix_info.as_ref().unwrap().enteries;
-            for _ in 1..entries {
+            for i in 1..entries {
                 let gsi_route = GsiMsiRoute {
                     irq_fd: None,
                     gsi: -1,
+                    nr: i as u32,
                 };
                 gsi_routes.push(gsi_route);
             }
@@ -714,7 +734,7 @@ impl VfioPciDevice {
         self.vfio_device
             .lock()
             .unwrap()
-            .enable_irqs(get_irq_rawfds(&gsi_routes))
+            .enable_irqs(get_irq_rawfds(&gsi_routes, 0, 1), 0)
             .chain_err(|| "Failed enable irqfds in kvm")?;
 
         Ok(())
@@ -1007,11 +1027,15 @@ impl PciDevOps for VfioPciDevice {
     }
 }
 
-fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute]) -> Vec<RawFd> {
+fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute], start: u32, count: u32) -> Vec<RawFd> {
     let mut rawfds: Vec<RawFd> = Vec::new();
     for r in gsi_msi_routes.iter() {
-        if let Some(fd) = r.irq_fd.as_ref() {
-            rawfds.push(fd.as_raw_fd());
+        if r.nr >= start && r.nr < start + count {
+            if let Some(fd) = r.irq_fd.as_ref() {
+                rawfds.push(fd.as_raw_fd());
+            } else {
+                rawfds.push(-1);
+            }
         }
     }
     rawfds

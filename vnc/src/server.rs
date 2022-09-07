@@ -34,10 +34,10 @@ use util::{
 use vmm_sys_util::epoll::EventSet;
 
 use crate::{
-    bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
-    get_image_width, round_up_div, unref_pixman_image, update_client_surface, AuthState,
-    DisplayMouse, SubAuthState, VncClient, DIRTY_PIXELS_NUM, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
-    REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
+    bytes_per_pixel, data::keycode::KEYSYM2KEYCODE, get_image_data, get_image_format,
+    get_image_height, get_image_stride, get_image_width, round_up_div, unref_pixman_image,
+    update_client_surface, AuthState, DisplayMouse, SubAuthState, VncClient, DIRTY_PIXELS_NUM,
+    MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
 };
 
 /// Info of image.
@@ -87,6 +87,8 @@ pub struct VncServer {
     pub auth: AuthState,
     /// Subauth type.
     pub subauth: SubAuthState,
+    /// Mapping ASCII to keycode.
+    pub keysym2keycode: HashMap<u16, u16>,
     /// Image refresh to VncClient.
     pub server_image: *mut pixman_image_t,
     /// Image from gpu.
@@ -115,6 +117,7 @@ impl VncServer {
             clients: HashMap::new(),
             auth: AuthState::No,
             subauth: SubAuthState::VncAuthVencryptPlain,
+            keysym2keycode: HashMap::new(),
             server_image: ptr::null_mut(),
             guest_image,
             guest_dirtymap: Bitmap::<u64>::new(
@@ -132,7 +135,12 @@ impl VncServer {
         }
     }
 
-    /// Make configuration for VncServer.
+    /// make configuration for VncServer
+    ///
+    /// # Arguments
+    ///
+    /// * `vnc_cfg` - configure of vnc.
+    /// * `object` - configure of sasl and tls.
     pub fn make_config(
         &mut self,
         _vnc_cfg: &VncConfig,
@@ -140,6 +148,10 @@ impl VncServer {
     ) -> Result<()> {
         // tls configuration
 
+        // Mapping ASCII to keycode.
+        for &(k, v) in KEYSYM2KEYCODE.iter() {
+            self.keysym2keycode.insert(k, v);
+        }
         Ok(())
     }
 
