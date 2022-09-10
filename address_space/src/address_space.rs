@@ -9,7 +9,7 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-
+use std::fmt;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Contain an array of `FlatRange`.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub(crate) struct FlatView(pub Vec<FlatRange>);
 
 impl FlatView {
@@ -69,6 +69,16 @@ pub struct AddressSpace {
     listeners: Arc<Mutex<Vec<ListenerObj>>>,
     /// The current layout of ioeventfds, which is compared with new ones in topology-update stage.
     ioeventfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
+}
+
+impl fmt::Debug for AddressSpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AddressSpace")
+            .field("root", &self.root)
+            .field("flat_view", &self.flat_view)
+            .field("ioeventfds", &self.ioeventfds)
+            .finish()
+    }
 }
 
 impl AddressSpace {

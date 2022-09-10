@@ -9,7 +9,7 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-
+use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
@@ -61,6 +61,22 @@ pub struct Region {
     rom_dev_romd: Arc<AtomicBool>,
 }
 
+impl fmt::Debug for Region {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Region")
+            .field("region_type", &self.region_type)
+            .field("priority", &self.priority)
+            .field("size", &self.size)
+            .field("offset", &self.offset)
+            .field("mem_mapping", &self.mem_mapping)
+            .field("io_evtfds", &self.io_evtfds)
+            .field("space", &self.space)
+            .field("subregions", &self.subregions)
+            .field("rom_dev_romd", &self.rom_dev_romd)
+            .finish()
+    }
+}
+
 /// Used to trigger events.
 /// If `data_match` is enabled, the `EventFd` is triggered iff `data` is written
 /// to the specified address.
@@ -75,6 +91,16 @@ pub struct RegionIoEventFd {
     pub data_match: bool,
     /// The specified value to trigger events.
     pub data: u64,
+}
+
+impl fmt::Debug for RegionIoEventFd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegionIoEventFd")
+            .field("addr_range", &self.addr_range)
+            .field("data_match", &self.data_match)
+            .field("data_match", &self.data)
+            .finish()
+    }
 }
 
 impl RegionIoEventFd {
@@ -113,7 +139,7 @@ impl RegionIoEventFd {
 }
 
 /// FlatRange is a piece of continuous memory address。
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FlatRange {
     /// The address range.
     pub addr_range: AddressRange,

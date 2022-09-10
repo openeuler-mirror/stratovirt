@@ -716,7 +716,7 @@ impl CPUThreadWorker {
 }
 
 /// The wrapper for topology for VCPU.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CpuTopology {
     /// Number of vcpus in VM.
     pub nrcpus: u8,

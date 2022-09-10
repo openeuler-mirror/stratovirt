@@ -330,7 +330,7 @@ impl<T: Any> AsAny for T {
 }
 
 /// This trait is to check the legality of Config structure.
-pub trait ConfigCheck: AsAny + Send + Sync {
+pub trait ConfigCheck: AsAny + Send + Sync + std::fmt::Debug {
     /// To check the legality of Config structure.
     ///
     /// # Errors

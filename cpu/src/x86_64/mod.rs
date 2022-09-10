@@ -12,6 +12,7 @@
 
 pub mod caps;
 mod cpuid;
+extern crate util;
 
 use std::sync::{Arc, Mutex};
 
@@ -58,7 +59,7 @@ const ECX_DIE: u32 = 5u32 << 8;
 
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct X86CPUBootConfig {
     pub prot64_mode: bool,
     /// Register %rip value
@@ -181,6 +182,7 @@ impl X86CPUState {
         boot_config: &X86CPUBootConfig,
     ) -> Result<()> {
         self.setup_lapic(vcpu_fd)?;
+        trace_cpu_boot_config(boot_config);
         self.setup_regs(boot_config);
         self.setup_sregs(vcpu_fd, boot_config)?;
         self.setup_fpu();
@@ -576,6 +578,11 @@ impl StateTransfer for CPU {
 }
 
 impl MigrationHook for CPU {}
+
+/// The trace describes the configuration information when the cpu is booted.
+fn trace_cpu_boot_config(cpu_boot_config: &X86CPUBootConfig) {
+    util::ftrace!(trace_cpu_boot_config, "{:#?}", cpu_boot_config);
+}
 
 #[cfg(test)]
 mod test {
