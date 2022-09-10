@@ -33,7 +33,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_CONSOLE_F_SIZE,
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_SIZE,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
 
@@ -149,6 +149,7 @@ impl InputReceiver for ConsoleHandler {
 
 impl ConsoleHandler {
     fn output_handle(&mut self) {
+        self.trace_request("Console".to_string(), "to IO".to_string());
         let mut queue_lock = self.output_queue.lock().unwrap();
         let mut buffer = [0_u8; 4096];
 
@@ -463,6 +464,8 @@ impl StateTransfer for Console {
 }
 
 impl MigrationHook for Console {}
+
+impl VirtioTrace for ConsoleHandler {}
 
 #[cfg(test)]
 mod tests {

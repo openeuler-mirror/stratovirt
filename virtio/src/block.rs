@@ -43,11 +43,11 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_BLK_F_FLUSH,
-    VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX,
-    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_BLOCK,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH,
+    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
 /// Number of virtqueues.
@@ -413,6 +413,7 @@ impl BlockIoHandler {
     }
 
     fn process_queue(&mut self) -> Result<bool> {
+        self.trace_request("Block".to_string(), "to IO".to_string());
         let mut req_queue = Vec::new();
         let mut req_index = 0;
         let mut last_aio_req_index = 0;
@@ -552,6 +553,7 @@ impl BlockIoHandler {
                 Some(&self.queue.lock().unwrap()),
             )
             .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Vring))?;
+            self.trace_send_interrupt("Block".to_string());
         }
 
         Ok(done)
@@ -1214,6 +1216,8 @@ impl StateTransfer for Block {
 }
 
 impl MigrationHook for Block {}
+
+impl VirtioTrace for BlockIoHandler {}
 
 #[cfg(test)]
 mod tests {

@@ -35,8 +35,8 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_RNG,
+    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
 
 const QUEUE_NUM_RNG: usize = 1;
@@ -79,6 +79,7 @@ impl RngHandler {
     }
 
     fn process_queue(&mut self) -> Result<()> {
+        self.trace_request("Rng".to_string(), "to IO".to_string());
         let mut queue_lock = self.queue.lock().unwrap();
         let mut need_interrupt = false;
 
@@ -127,6 +128,7 @@ impl RngHandler {
         if need_interrupt {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock))
                 .chain_err(|| ErrorKind::InterruptTrigger("rng", VirtioInterruptType::Vring))?;
+            self.trace_send_interrupt("Rng".to_string());
         }
 
         Ok(())
@@ -414,6 +416,8 @@ impl StateTransfer for Rng {
 }
 
 impl MigrationHook for Rng {}
+
+impl VirtioTrace for RngHandler {}
 
 #[cfg(test)]
 mod tests {

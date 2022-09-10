@@ -42,7 +42,7 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use super::{
     errors::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+    VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
@@ -505,8 +505,10 @@ impl BalloonIoHandler {
     /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the balloon.
     fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
         let queue = if req_type {
+            self.trace_request("Balloon".to_string(), "to inflate".to_string());
             &self.inf_queue
         } else {
+            self.trace_request("Balloon".to_string(), "to deflate".to_string());
             &self.def_queue
         };
         let mut locked_queue = queue.lock().unwrap();
@@ -527,6 +529,7 @@ impl BalloonIoHandler {
 
         (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
             .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
+        self.trace_send_interrupt("Balloon".to_string());
         Ok(())
     }
 
@@ -1054,6 +1057,8 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
         BpfRule::new(libc::SYS_timerfd_gettime),
     ])
 }
+
+impl VirtioTrace for BalloonIoHandler {}
 
 #[cfg(test)]
 mod tests {
