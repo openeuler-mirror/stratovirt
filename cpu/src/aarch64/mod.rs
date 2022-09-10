@@ -12,6 +12,7 @@
 
 pub mod caps;
 mod core_regs;
+extern crate util;
 
 use std::sync::{Arc, Mutex};
 
@@ -55,7 +56,7 @@ const KVM_MAX_CPREG_ENTRIES: usize = 500;
 /// tree blob (dtb) in system RAM.
 ///
 /// See: https://elixir.bootlin.com/linux/v5.6/source/Documentation/arm64/booting.rst
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct ArmCPUBootConfig {
     pub fdt_addr: u64,
     pub boot_pc: u64,
@@ -166,6 +167,7 @@ impl ArmCPUState {
             self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
         }
 
+        trace_cpu_boot_config(boot_config);
         self.set_core_reg(boot_config);
 
         vcpu_fd
@@ -294,3 +296,8 @@ impl StateTransfer for CPU {
 }
 
 impl MigrationHook for CPU {}
+
+/// The trace describes the configuration information when the cpu is booted.
+fn trace_cpu_boot_config(cpu_boot_config: &ArmCPUBootConfig) {
+    util::ftrace!(trace_cpu_boot_config, "{:#?}", cpu_boot_config);
+}

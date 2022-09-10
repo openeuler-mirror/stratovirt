@@ -13,7 +13,7 @@
 use super::errors::{ErrorKind, Result};
 use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct VfioConfig {
     pub sysfsdev: String,
     pub host: String,

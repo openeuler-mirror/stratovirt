@@ -23,7 +23,7 @@ pub const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
 
 pub const VIRTIO_GPU_MAX_HOSTMEM: u64 = 256 * M;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GpuConfig {
     pub id: String,
     pub max_outputs: u32,
