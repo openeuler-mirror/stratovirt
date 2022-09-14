@@ -144,6 +144,14 @@ impl SysBus {
         self.devices.push(dev.clone());
         Ok(())
     }
+
+    pub fn attach_dynamic_device<T: 'static + SysBusDevOps>(
+        &mut self,
+        dev: &Arc<Mutex<T>>,
+    ) -> Result<()> {
+        self.devices.push(dev.clone());
+        Ok(())
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -173,6 +181,7 @@ pub enum SysBusDevType {
     PL011,
     FwCfg,
     Flash,
+    Ramfb,
     Others,
 }
 
