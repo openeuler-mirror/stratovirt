@@ -131,7 +131,7 @@ fn get_key_name(key: usize) -> &'static str {
 
 /// FwCfg select callback and write callback type definition
 type FwCfgCallbackType = Arc<dyn FwCfgCallback + Send + Sync>;
-type FwCfgWriteCallbackType = Arc<dyn FwCfgWriteCallback + Send + Sync>;
+type FwCfgWriteCallbackType = Arc<Mutex<dyn FwCfgWriteCallback + Send + Sync>>;
 
 /// FwCfg select callback
 pub trait FwCfgCallback {
@@ -140,7 +140,7 @@ pub trait FwCfgCallback {
 
 /// FwCfg write callback
 pub trait FwCfgWriteCallback {
-    fn write_callback(&self, start: u64, len: usize);
+    fn write_callback(&mut self, data: Vec<u8>, start: u64, len: usize);
 }
 
 /// The FwCfgEntry type which holds the firmware item
@@ -646,7 +646,11 @@ impl FwCfgCommon {
                         dma.control |= FW_CFG_DMA_CTL_ERROR;
                     } else if true {
                         if let Some(cb) = &entry.write_cb {
-                            cb.write_callback(offset as u64, len as usize);
+                            cb.lock().unwrap().write_callback(
+                                data.to_vec(),
+                                offset as u64,
+                                len as usize,
+                            );
                         }
                     }
                 }
