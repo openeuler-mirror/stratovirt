@@ -1085,6 +1085,10 @@ pub trait MachineOps {
                 "virtio-gpu-pci" => {
                     self.add_virtio_pci_gpu(cfg_args)?;
                 }
+                #[cfg(not(target_env = "musl"))]
+                "ramfb" => {
+                    self.add_ramfb()?;
+                }
                 _ => {
                     bail!("Unsupported device: {:?}", dev.0.as_str());
                 }
@@ -1096,6 +1100,10 @@ pub trait MachineOps {
 
     fn add_pflash_device(&mut self, _configs: &[PFlashConfig]) -> Result<()> {
         bail!("Pflash device is not supported!");
+    }
+
+    fn add_ramfb(&mut self) -> Result<()> {
+        bail!("ramfb device is not supported!");
     }
 
     /// Return the syscall whitelist for seccomp.
