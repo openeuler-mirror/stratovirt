@@ -56,8 +56,8 @@ impl Log for VmLogger {
             let pid = unsafe { libc::getpid() };
             let tid = gettid();
 
-            self.handler.as_ref().map(|writer| match record.level() {
-                Level::Error => writer.lock().unwrap().write_fmt(format_args!(
+            self.handler.as_ref().map(|writer| {
+                writer.lock().unwrap().write_fmt(format_args!(
                     "{:<5}: [{}][{}][{}: {}]:{}: {}\n",
                     format_now(),
                     pid,
@@ -66,15 +66,7 @@ impl Log for VmLogger {
                     record.line().unwrap_or(0),
                     record.level(),
                     record.args()
-                )),
-                _ => writer.lock().unwrap().write_fmt(format_args!(
-                    "{:<5}: [{}][{}]:{}: {}\n",
-                    format_now(),
-                    pid,
-                    tid,
-                    record.level(),
-                    record.args()
-                )),
+                ))
             });
         }
     }
@@ -98,13 +90,14 @@ fn init_vm_logger(
 pub fn init_logger_with_env(logfile: Option<Box<dyn Write + Send>>) -> Result<(), SetLoggerError> {
     let level = match std::env::var("STRATOVIRT_LOG_LEVEL") {
         Ok(l) => match l.to_lowercase().as_str() {
-            "trace" => Level::Trace,
-            "debug" => Level::Debug,
-            "info" => Level::Info,
+            "error" => Level::Error,
             "warn" => Level::Warn,
-            _ => Level::Error,
+            "info" => Level::Info,
+            "debug" => Level::Debug,
+            "trace" => Level::Trace,
+            _ => Level::Info,
         },
-        _ => Level::Error,
+        _ => Level::Info,
     };
 
     init_vm_logger(Some(level), logfile)?;
