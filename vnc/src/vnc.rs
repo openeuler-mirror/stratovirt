@@ -50,6 +50,10 @@ pub const VNC_BITMAP_WIDTH: u64 =
 
 const DEFAULT_REFRESH_INTERVAL: u64 = 30;
 const BIT_PER_BYTE: u32 = 8;
+const MILLI_PER_SEC: u64 = 1_000_000;
+pub const DISPLAY_UPDATE_INTERVAL_DEFAULT: u32 = 30;
+pub const DISPLAY_UPDATE_INTERVAL_INC: u32 = 50;
+pub const DISPLAY_UPDATE_INTERVAL_MAX: u32 = 3_000;
 
 /// Struct to record image information
 #[derive(Clone, Copy)]
@@ -235,6 +239,30 @@ pub fn vnc_display_update(x: i32, y: i32, w: i32, h: i32) {
     let g_w = get_image_width(locked_server.guest_image);
     let g_h = get_image_height(locked_server.guest_image);
     set_area_dirty(&mut locked_server.guest_dirtymap, x, y, w, h, g_w, g_h);
+}
+
+fn vnc_get_display_update_interval() -> u32 {
+    if VNC_SERVERS.lock().unwrap().is_empty() {
+        return DISPLAY_UPDATE_INTERVAL_DEFAULT;
+    }
+    let server = VNC_SERVERS.lock().unwrap()[0].clone();
+    let locked_server = server.lock().unwrap();
+
+    locked_server.update_interval
+}
+
+pub fn vnc_loop_update_display(x: i32, y: i32, width: i32, height: i32) {
+    let func = Box::new(move || {
+        vnc_display_update(x, y, width as i32, height as i32);
+        vnc_loop_update_display(x, y, width, height);
+    });
+
+    if let Some(ctx) = EventLoop::get_ctx(None) {
+        ctx.delay_call(
+            func,
+            vnc_get_display_update_interval() as u64 * MILLI_PER_SEC,
+        );
+    }
 }
 
 /// Get the width of image.
