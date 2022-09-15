@@ -10,6 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use error_chain::bail;
+use std::mem::size_of;
+
+use super::super::super::errors::Result;
+
 /// The version of the protocol StratoVirt support.
 pub const VHOST_USER_VERSION: u32 = 0x1;
 pub const VHOST_USER_MSG_MAX_SIZE: usize = 0x1000;
@@ -127,6 +132,32 @@ impl Default for VhostUserMsgHdr {
             flags: VHOST_USER_VERSION,
             size: 0,
         }
+    }
+}
+
+/// Struct for get and set config to vhost user.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct VhostUserConfig<T: Default + Sized> {
+    offset: u32,
+    size: u32,
+    flags: u32,
+    pub config: T,
+}
+
+impl<T: Default + Sized> VhostUserConfig<T> {
+    /// Create a new instance of `VhostUserConfig`.
+    pub fn new(offset: u32, flags: u32, config: T) -> Result<Self> {
+        let size = size_of::<T>() as u32;
+        if size > VHOST_USER_MAX_CONFIG_SIZE {
+            bail!("Failed to create VhostUserConfig: exceed max config size.")
+        }
+        Ok(VhostUserConfig {
+            offset,
+            size,
+            flags,
+            config,
+        })
     }
 }
 

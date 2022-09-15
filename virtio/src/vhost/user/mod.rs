@@ -10,10 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod block;
 mod client;
 mod message;
 mod net;
 mod sock;
 
+pub use block::Block;
 use client::VhostUserClient;
 pub use net::Net;
