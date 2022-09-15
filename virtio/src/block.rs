@@ -842,7 +842,7 @@ impl ByteCode for VirtioBlkGeometry {}
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
-struct VirtioBlkConfig {
+pub struct VirtioBlkConfig {
     /// The capacity in 512 byte sectors.
     capacity: u64,
     /// The maximum segment size.
@@ -866,7 +866,7 @@ struct VirtioBlkConfig {
     /// Reserved data.
     unused: u8,
     /// Number of virtio queues, only available when `VIRTIO_BLK_F_MQ` is set.
-    num_queues: u16,
+    pub num_queues: u16,
     /// The maximum discard sectors for one segment.
     max_discard_sectors: u32,
     /// The maximum number of discard segments in a discard command.
@@ -891,11 +891,11 @@ impl ByteCode for VirtioBlkConfig {}
 #[desc_version(compat_version = "0.1.0")]
 pub struct BlockState {
     /// Bitmask of features supported by the backend.
-    device_features: u64,
+    pub device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
+    pub driver_features: u64,
     /// Config space of the block device.
-    config_space: VirtioBlkConfig,
+    pub config_space: VirtioBlkConfig,
 }
 
 /// Block device structure.
