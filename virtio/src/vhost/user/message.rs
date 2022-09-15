@@ -14,6 +14,8 @@
 pub const VHOST_USER_VERSION: u32 = 0x1;
 pub const VHOST_USER_MSG_MAX_SIZE: usize = 0x1000;
 pub const MAX_ATTACHED_FD_ENTRIES: usize = 32;
+pub const VHOST_USER_F_PROTOCOL_FEATURES: u32 = 30;
+pub const VHOST_USER_MAX_CONFIG_SIZE: u32 = 256;
 
 /// Type of requests sending from vhost user device to the userspace process.
 #[repr(u32)]
