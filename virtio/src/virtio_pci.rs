@@ -731,7 +731,9 @@ impl VirtioPciDevice {
                 let mut queue_num = cloned_pci_device.device.lock().unwrap().queue_num();
                 // No need to create call event for control queue.
                 // It will be polled in StratoVirt when activating the device.
-                if queue_num % 2 != 0 {
+                if cloned_pci_device.device.lock().unwrap().has_control_queue()
+                    && queue_num % 2 != 0
+                {
                     queue_num -= 1;
                 }
                 let call_evts = NotifyEventFds::new(queue_num);
@@ -1368,7 +1370,10 @@ fn virtio_pci_register_irqfd(
     let locked_queues = pci_device.queues.lock().unwrap();
     let mut locked_gsi_routes = gsi_routes.lock().unwrap();
     for (queue_index, queue_mutex) in locked_queues.iter().enumerate() {
-        if queue_index + 1 == locked_queues.len() && locked_queues.len() % 2 != 0 {
+        if pci_device.device.lock().unwrap().has_control_queue()
+            && queue_index + 1 == locked_queues.len()
+            && locked_queues.len() % 2 != 0
+        {
             break;
         }
 

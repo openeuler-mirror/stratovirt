@@ -23,6 +23,7 @@ use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
+use super::super::super::virtio_has_feature;
 use super::super::super::{
     net::{build_device_config_space, VirtioNetConfig},
     CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
@@ -301,5 +302,9 @@ impl VirtioDevice for Net {
         self.client = None;
 
         Ok(())
+    }
+
+    fn has_control_queue(&mut self) -> bool {
+        virtio_has_feature(self.device_features, VIRTIO_NET_F_CTRL_VQ)
     }
 }

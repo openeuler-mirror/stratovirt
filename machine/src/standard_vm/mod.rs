@@ -792,6 +792,8 @@ impl StdMachine {
                 iops: conf.iops,
                 queues: args.queues.unwrap_or(1),
                 boot_index: args.boot_index,
+                chardev: None,
+                socket_path: None,
             };
             dev.check()?;
             dev
