@@ -643,7 +643,7 @@ Three properties can be set for USB controller.
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
 
 ### 2.14 USB Keyboard
-The USB keyboard is a keyboard that uses the USB protocol. It should be attached to USB controller. Keypad is not supported yet.
+The USB keyboard is a keyboard that uses the USB protocol. It should be attached to USB controller. Keypad and led are not supported yet.
 
 One property can be set for USB Keyboard.
 
@@ -654,6 +654,7 @@ One property can be set for USB Keyboard.
 ```
 
 Note: Only one keyboard can be configured.
+
 ### 2.15 USB Tablet
 Pointer Device which uses alsolute coordinates. It should be attached to USB controller.
 
@@ -666,6 +667,7 @@ One property can be set for USB Tablet.
 ```
 
 Note: Only one tablet can be configured.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.
