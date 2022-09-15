@@ -50,10 +50,10 @@ use machine_manager::config::parse_gpu;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
-    parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_vhost_user_blk_pci, parse_virtconsole,
-    parse_virtio_serial, parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig,
-    MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf,
-    SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    parse_scsi_controller, parse_usb_keyboard, parse_usb_tablet, parse_vfio,
+    parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci,
+    BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
+    NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -77,9 +77,9 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern,
-    VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
-    VirtioPciDevice,
+    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiCntlr,
+    VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
+    VirtioNetState, VirtioPciDevice,
 };
 
 pub trait MachineOps {
@@ -614,6 +614,17 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_virtio_pci_scsi(&mut self, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let multi_func = get_multi_function(cfg_args)?;
+        let device_cfg = parse_scsi_controller(cfg_args)?;
+        let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(device_cfg.clone())));
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)
+            .with_context(|| "Failed to add virtio scsi controller")?;
+        self.reset_bus(&device_cfg.id)?;
+        Ok(())
+    }
+
     fn add_virtio_pci_net(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -1040,6 +1051,9 @@ pub trait MachineOps {
                 }
                 "virtio-blk-pci" => {
                     self.add_virtio_pci_blk(vm_config, cfg_args)?;
+                }
+                "virtio-scsi-pci" => {
+                    self.add_virtio_pci_scsi(cfg_args)?;
                 }
                 "virtio-net-device" => {
                     self.add_virtio_mmio_net(vm_config, cfg_args)?;

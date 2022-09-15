@@ -34,6 +34,7 @@ mod gpu;
 mod net;
 mod queue;
 mod rng;
+mod scsi;
 pub mod vhost;
 mod virtio_mmio;
 #[allow(dead_code)]
@@ -51,6 +52,7 @@ pub use gpu::*;
 pub use net::*;
 pub use queue::*;
 pub use rng::{Rng, RngState};
+pub use scsi::controller as ScsiCntlr;
 pub use vhost::kernel as VhostKern;
 pub use vhost::user as VhostUser;
 pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
@@ -74,6 +76,7 @@ pub const VIRTIO_TYPE_BLOCK: u32 = 2;
 pub const VIRTIO_TYPE_CONSOLE: u32 = 3;
 pub const VIRTIO_TYPE_RNG: u32 = 4;
 pub const VIRTIO_TYPE_BALLOON: u32 = 5;
+pub const VIRTIO_TYPE_SCSI: u32 = 8;
 pub const VIRTIO_TYPE_GPU: u32 = 16;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const VIRTIO_TYPE_FS: u32 = 26;
@@ -154,6 +157,17 @@ pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN: u16 = 1;
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX: u16 = 0x8000;
 /// Support more than one virtqueue.
 pub const VIRTIO_BLK_F_MQ: u32 = 12;
+
+/// A single request can include both device-readable and device-writable data buffers.
+pub const VIRTIO_SCSI_F_INOUT: u32 = 0;
+/// The host SHOULD enable reporting of hot-plug and hot-unplug events for LUNs and targets on the SCSI bus.
+/// The guest SHOULD handle hot-plug and hot-unplug events.
+pub const VIRTIO_SCSI_F_HOTPLUG: u32 = 1;
+/// The host will report changes to LUN parameters via a VIRTIO_SCSI_T_PARAM_CHANGE event.
+/// The guest SHOULD handle them.
+pub const VIRTIO_SCSI_F_CHANGE: u32 = 2;
+/// The extended fields for T10 protection information (DIF/DIX) are included in the SCSI request header.
+pub const VIRTIO_SCSI_F_T10_PI: u32 = 3;
 
 /// The IO type of virtio block, refer to Virtio Spec.
 /// Read.
