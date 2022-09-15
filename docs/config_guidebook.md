@@ -276,6 +276,72 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 -device virtio-blk-pci,drive=drive_id,bus=pcie.0,addr=0x3.0x0,id=blk-0[,multifunction=on,iothread=iothread1,serial=serial_num,num-queues=N,bootindex=1]
 ```
 
+StratoVirt also supports vhost-user-blk-pci to get a higher performance in storage, but only standard vm supports it. 
+
+You can use it by adding a new device, one more property is supported by vhost-user-blk-pci device than virtio-blk-pci.
+
+* chardev: id for char device, that means you need to add a chardev first, and use its id to index char device.
+
+```shell
+# vhost user blk pci device
+-chardev socket,id=chardevid,path=socket_path
+-device vhost-user-blk-pci,id=blk1,chardev=chardevid,bus=pcie.0,addr=0x3[,num-queues=N,bootindex=1]
+```
+
+Note: More features to be supported.
+
+It should open sharing memory('-mem-share=on') and hugepages('-mem-path ...' ) when using vhost-user-blk-pci.
+
+Vhost-user-blk-pci use spdk as vhost-backend, so you need to start spdk before starting stratovirt.
+
+*How to start and configure spdk?*
+
+``` shell
+# Get code and compile spdk
+$ git clone https://github.com/spdk/spdk.git
+$ cd spdk
+$ git submodule update --init
+$ ./scripts/pkgdep.sh
+$ ./configure
+$ make
+
+# Test spdk environment
+$ ./test/unit/unittest.sh
+
+# Setup spdk
+$ sudo HUGEMEM=2048 ./scripts/setup.sh
+# Mount huge pages, you need to add -mem-path=/dev/hugepages in stratovirt config
+$ sudo mount -t hugetlbfs hugetlbfs /dev/hugepages
+$ sudo sysctl vm.nr_hugepages=1024
+# Start vhost, alloc 1024MB memory, default socket path is /var/tmp/spdk.sock, 0x3 means we use cpu cores 0 and 1 (cpumask 0x3)
+$ sudo build/bin/vhost --logflag vhost_blk -S /var/tmp -s 1024 -m 0x3 &
+# Attach nvme controller, you can find you nvme id by lspci command
+$ sudo ./scripts/rpc.py bdev_nvme_attach_controller -b Nvme0 -t pcie -a you-nvme-id
+# Create a bdev which size is 128MB, block size is 512B
+$ sudo ./scripts/rpc.py bdev_malloc_create 128 512 -b Malloc0
+# Create a vhost-blk device exposing Malloc0 bdev, the I/O polling will be pinned to the CPU 0 (cpumask 0x1).
+$ sudo ./scripts/rpc.py vhost_create_blk_controller --cpumask 0x1 spdk.sock Malloc0
+```
+A config template to start stratovirt with vhost-user-blk-pci as below:
+
+``` shell
+stratovirt \
+        -machine q35,mem-share=on \
+        -smp 1 \
+        -kernel /path-to/std-vmlinuxz \
+        -mem-path /dev/hugepages \
+        -m 1G \
+        -append "console=ttyS0 reboot=k panic=1 root=/dev/vda rw" \
+        -drive file=/path-to/OVMF_CODE.fd,if=pflash,unit=0,readonly=true \
+        -drive file=/path-to/OVMF_VARS.fd,if=pflash,unit=1 \
+        -drive file=/path-to/openEuler.img,id=rootfs,readonly=off,direct=off \
+        -device virtio-blk-pci,drive=rootfs,id=blk0,bus=pcie.0,addr=0x2,bootindex=0 \
+        -chardev socket,id=spdk_vhost_blk0,path=/var/tmp/spdk.sock \
+        -device vhost-user-blk-pci,id=blk1,chardev=spdk_vhost_blk0,bus=pcie.0,addr=0x3\
+        -qmp unix:/path-to/stratovirt.socket,server,nowait \
+        -serial stdio
+```
+
 ### 2.3 Virtio-net
 
 Virtio-net is a virtual Ethernet card in VM. It can enable the network capability of VM.
