@@ -18,8 +18,8 @@ use super::{
     pci_args_check,
 };
 use crate::config::{
-    ChardevType, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH,
-    MAX_VIRTIO_QUEUE,
+    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH,
+    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::{qmp_schema, QmpChannel};
 
@@ -290,28 +290,7 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
         netdevinterfacecfg.queues = netcfg.queues;
         if let Some(chardev) = &netcfg.chardev {
-            if let Some(char_dev) = vm_config.chardev.remove(chardev) {
-                match &char_dev.backend {
-                    ChardevType::Socket {
-                        path,
-                        server,
-                        nowait,
-                    } => {
-                        if *server || *nowait {
-                            bail!(
-                                "Argument \'server\' or \'nowait\' is not need for chardev \'{}\'",
-                                path
-                            );
-                        }
-                        netdevinterfacecfg.socket_path = Some(path.clone());
-                    }
-                    _ => {
-                        bail!("Chardev {:?} backend should be socket type.", &chardev);
-                    }
-                }
-            } else {
-                bail!("Chardev: {:?} not found for character device", &chardev);
-            }
+            netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
         }
     } else {
         bail!("Netdev: {:?} not found for net device", &netdev);
