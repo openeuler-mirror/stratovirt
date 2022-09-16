@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use log::warn;
+
 use super::{
     errors::{ErrorKind, Result},
     M,
@@ -18,6 +20,8 @@ use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
 /// The maximum number of scanouts.
 pub const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
+
+pub const VIRTIO_GPU_MAX_HOSTMEM: u64 = 256 * M;
 
 #[derive(Clone)]
 pub struct GpuConfig {
@@ -37,7 +41,7 @@ impl Default for GpuConfig {
             edid: true,
             xres: 1024,
             yres: 768,
-            max_hostmem: 256 * M,
+            max_hostmem: VIRTIO_GPU_MAX_HOSTMEM,
         }
     }
 }
@@ -59,15 +63,12 @@ impl ConfigCheck for GpuConfig {
             .into());
         }
 
-        if self.max_hostmem < 256 * M {
-            return Err(ErrorKind::IllegalValue(
-                "max_hostmem".to_string(),
-                0,
-                false,
-                256 * M as u64,
-                true,
-            )
-            .into());
+        if self.max_hostmem < VIRTIO_GPU_MAX_HOSTMEM {
+            warn!(
+                "max_hostmem must >= {}, allocating less than it may cause \
+                the GPU to fail to start or refresh.",
+                VIRTIO_GPU_MAX_HOSTMEM
+            );
         }
 
         Ok(())
@@ -110,4 +111,45 @@ pub fn parse_gpu(gpu_config: &str) -> Result<GpuConfig> {
     gpu_cfg.check()?;
 
     Ok(gpu_cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_gpu_max_hostmem_greater_than_limit() {
+        let max_hostmem = VIRTIO_GPU_MAX_HOSTMEM + 1;
+        let gpu_cfg_cmdline = format!(
+            "{}{}",
+            "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,\
+            max_outputs=1,edid=true,xres=1024,yres=768,max_hostmem=",
+            max_hostmem.to_string()
+        );
+
+        let gpu_cfg_ = parse_gpu(&gpu_cfg_cmdline);
+
+        assert!(gpu_cfg_.is_ok());
+
+        let gpu_cfg = gpu_cfg_.unwrap();
+        assert_eq!(gpu_cfg.max_hostmem, max_hostmem);
+    }
+
+    #[test]
+    fn test_parse_gpu_max_hostmem_less_than_limit() {
+        let max_hostmem = VIRTIO_GPU_MAX_HOSTMEM - 1;
+        let gpu_cfg_cmdline = format!(
+            "{}{}",
+            "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,\
+            max_outputs=1,edid=true,xres=1024,yres=768,max_hostmem=",
+            max_hostmem.to_string()
+        );
+
+        let gpu_cfg_ = parse_gpu(&gpu_cfg_cmdline);
+
+        assert!(gpu_cfg_.is_ok());
+
+        let gpu_cfg = gpu_cfg_.unwrap();
+        assert_eq!(gpu_cfg.max_hostmem, max_hostmem);
+    }
 }
