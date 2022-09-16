@@ -344,22 +344,20 @@ impl Hid {
             self.head - 1
         };
         let evt = &mut self.pointer.queue[(index & QUEUE_MASK) as usize];
-        let mut z = evt.pos_z;
-        evt.pos_z -= z;
-        if self.num != 0 && evt.pos_z == 0 {
+        let z = evt.pos_z;
+        evt.pos_z = 0;
+        if self.num != 0 {
             increase_queue(&mut self.head);
             self.num -= 1;
         }
-        z = 0 - z;
-        let data = vec![
+        vec![
             evt.button_state as u8,
             evt.pos_x as u8,
             (evt.pos_x >> 8) as u8,
             evt.pos_y as u8,
             (evt.pos_y >> 8) as u8,
             z as u8,
-        ];
-        data
+        ]
     }
 
     /// USB HID device handle control packet.
