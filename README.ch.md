@@ -15,7 +15,7 @@ https://www.rust-lang.org/tools/install
 ```sh
 $ git clone https://gitee.com/openeuler/stratovirt.git
 $ cd stratovirt
-$ cargo build --release
+$ make build
 ```
 可以在`target/release/stratovirt`路径下找到生成的二进制文件
 
