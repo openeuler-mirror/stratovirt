@@ -68,6 +68,17 @@ impl ConfigCheck for NetDevcfg {
             }
         }
 
+        if !is_netdev_queues_valid(self.queues) {
+            return Err(ErrorKind::IllegalValue(
+                "number queues of net device".to_string(),
+                1,
+                true,
+                MAX_VIRTIO_QUEUE as u64 / 2,
+                true,
+            )
+            .into());
+        }
+
         Ok(())
     }
 }
@@ -130,23 +141,6 @@ impl ConfigCheck for NetworkInterfaceConfig {
             return Err(ErrorKind::MacFormatError.into());
         }
 
-        if let Some(vhost_type) = self.vhost_type.as_ref() {
-            if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
-                return Err(ErrorKind::UnknownVhostType.into());
-            }
-        }
-
-        if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
-            return Err(ErrorKind::IllegalValue(
-                "number queues of net device".to_string(),
-                1,
-                true,
-                MAX_VIRTIO_QUEUE as u64 / 2,
-                true,
-            )
-            .into());
-        }
-
         if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
             return Err(ErrorKind::StringLengthTooLong(
                 "iothread name".to_string(),
@@ -198,9 +192,19 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     }
     if let Some(queue_pairs) = cmd_parser.get_value::<u16>("queues")? {
         let queues = queue_pairs * 2;
-        if queues > net.queues {
-            net.queues = queues;
+
+        if !is_netdev_queues_valid(queues) {
+            return Err(ErrorKind::IllegalValue(
+                "number queues of net device".to_string(),
+                1,
+                true,
+                MAX_VIRTIO_QUEUE as u64 / 2,
+                true,
+            )
+            .into());
         }
+
+        net.queues = queues;
     }
 
     if let Some(tap_fd) = parse_fds(&cmd_parser, "fd")? {
@@ -243,6 +247,8 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     if net.tap_fds.is_none() && net.ifname.eq("") && netdev_type.ne("vhost-user") {
         bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
     }
+
+    net.check()?;
 
     Ok(net)
 }
@@ -446,6 +452,10 @@ fn check_mac_address(mac: &str) -> bool {
     true
 }
 
+fn is_netdev_queues_valid(queues: u16) -> bool {
+    queues >= 1 && queues <= MAX_VIRTIO_QUEUE as u16
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::get_pci_bdf;
@@ -644,6 +654,27 @@ mod tests {
         assert!(netdev_conf.check().is_ok());
         netdev_conf.vhost_type = Some(String::from("vhost-"));
         assert!(netdev_conf.check().is_err());
+    }
+
+    #[test]
+    fn test_add_netdev_with_different_queues() {
+        let mut vm_config = VmConfig::default();
+
+        let set_queues = |q: u16| {
+            format!(
+                "vhost-user,id=netdevid{num},chardev=chardevid,queues={num}",
+                num = q.to_string()
+            )
+        };
+
+        assert!(vm_config.add_netdev(&set_queues(0)).is_err());
+        assert!(vm_config.add_netdev(&set_queues(1)).is_ok());
+        assert!(vm_config
+            .add_netdev(&set_queues(MAX_VIRTIO_QUEUE as u16 / 2))
+            .is_ok());
+        assert!(vm_config
+            .add_netdev(&set_queues(MAX_VIRTIO_QUEUE as u16 / 2 + 1))
+            .is_err());
     }
 
     #[test]
