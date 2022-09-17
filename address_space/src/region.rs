@@ -98,7 +98,7 @@ impl fmt::Debug for RegionIoEventFd {
         f.debug_struct("RegionIoEventFd")
             .field("addr_range", &self.addr_range)
             .field("data_match", &self.data_match)
-            .field("data_match", &self.data)
+            .field("data", &self.data)
             .finish()
     }
 }
