@@ -13,7 +13,7 @@
 use anyhow::{anyhow, Result};
 
 use super::{error::ConfigError, pci_args_check};
-use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE};
+use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE};
 
 #[derive(Debug, Clone)]
 pub struct ScsiCntlrConfig {
@@ -97,4 +97,90 @@ pub fn parse_scsi_controller(drive_config: &str) -> Result<ScsiCntlrConfig> {
 
     cntlr_cfg.check()?;
     Ok(cntlr_cfg)
+}
+
+#[derive(Clone, Default)]
+pub struct ScsiDevConfig {
+    /// Scsi Device id.
+    pub id: String,
+    /// The image file path.
+    pub path_on_host: String,
+    /// Serial number of the scsi device.
+    pub serial: Option<String>,
+    /// Scsi bus which the scsi device attaches to.
+    pub bus: String,
+    /// Scsi four level hierarchical address(host, channel, target, lun).
+    pub channel: u8,
+    pub target: u8,
+    pub lun: u16,
+}
+
+pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result<ScsiDevConfig> {
+    let mut cmd_parser = CmdParser::new("scsi-device");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("bus")
+        .push("scsi-id")
+        .push("lun")
+        .push("serial")
+        .push("drive");
+
+    cmd_parser.parse(drive_config)?;
+
+    let mut scsi_dev_cfg = ScsiDevConfig::default();
+
+    let scsi_drive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
+        drive
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing("drive", "scsi device")));
+    };
+
+    if let Some(serial) = cmd_parser.get_value::<String>("serial")? {
+        scsi_dev_cfg.serial = Some(serial);
+    }
+
+    if let Some(id) = cmd_parser.get_value::<String>("id")? {
+        scsi_dev_cfg.id = id;
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "scsi device")));
+    }
+
+    if let Some(bus) = cmd_parser.get_value::<String>("bus")? {
+        scsi_dev_cfg.bus = bus;
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing("bus", "scsi device")));
+    }
+
+    if let Some(target) = cmd_parser.get_value::<u8>("scsi-id")? {
+        if target != 0 {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "scsi-id of scsi device".to_string(),
+                0,
+                true,
+                0,
+                true,
+            )));
+        }
+        scsi_dev_cfg.target = target;
+    }
+
+    if let Some(lun) = cmd_parser.get_value::<u16>("lun")? {
+        if lun > 255 {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "lun of scsi device".to_string(),
+                0,
+                true,
+                255,
+                true,
+            )));
+        }
+        scsi_dev_cfg.lun = lun;
+    }
+
+    if let Some(drive_arg) = &vm_config.drives.remove(&scsi_drive) {
+        scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
+    }
+
+    Ok(scsi_dev_cfg)
 }
