@@ -75,10 +75,11 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiCntlr,
-    VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
-    VirtioNetState, VirtioPciDevice,
+    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiBus,
+    ScsiCntlr, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
+    VirtioMmioState, VirtioNetState, VirtioPciDevice,
 };
+use ScsiCntlr::ScsiCntlrMap;
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -289,6 +290,11 @@ pub trait MachineOps {
     /// Get the bus device map. The map stores the mapping between bus name and bus device.
     /// The bus device is the device which can attach other devices.
     fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
+        None
+    }
+
+    /// Get the Scsi Controller list. The map stores the mapping between scsi bus name and scsi controller.
+    fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
         None
     }
 
@@ -606,6 +612,16 @@ pub trait MachineOps {
         let multi_func = get_multi_function(cfg_args)?;
         let device_cfg = parse_scsi_controller(cfg_args)?;
         let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(device_cfg.clone())));
+
+        let bus_name = format!("{}.0", device_cfg.id);
+        ScsiBus::create_scsi_bus(&bus_name, &device)?;
+        if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
+            let mut lock_cntlr_list = cntlr_list.lock().unwrap();
+            lock_cntlr_list.insert(bus_name, device.clone());
+        } else {
+            bail!("No scsi controller list found!");
+        }
+
         self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)
             .with_context(|| "Failed to add virtio scsi controller")?;
         self.reset_bus(&device_cfg.id)?;

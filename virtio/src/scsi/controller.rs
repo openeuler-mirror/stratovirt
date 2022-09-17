@@ -11,12 +11,14 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Result};
 
 use super::super::{Queue, VirtioDevice, VirtioInterrupt, VIRTIO_TYPE_SCSI};
+use crate::ScsiBus::ScsiBus;
 use crate::VirtioError;
 use address_space::AddressSpace;
 use log::warn;
@@ -31,6 +33,9 @@ const SCSI_EVENT_QUEUE_NUM: usize = 1;
 const SCSI_MIN_QUEUE_NUM: usize = 3;
 /// Size of each virtqueue.
 const QUEUE_SIZE_SCSI: u16 = 256;
+
+/// The key is bus name, the value is the attached Scsi Controller.
+pub type ScsiCntlrMap = Arc<Mutex<HashMap<String, Arc<Mutex<ScsiCntlr>>>>>;
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -67,6 +72,8 @@ pub struct ScsiCntlr {
     config: ScsiCntlrConfig,
     /// Status of virtio scsi controller.
     state: ScsiCntlrState,
+    /// Scsi bus.
+    pub bus: Option<Arc<Mutex<ScsiBus>>>,
 }
 
 impl ScsiCntlr {
@@ -74,6 +81,7 @@ impl ScsiCntlr {
         Self {
             config,
             state: ScsiCntlrState::default(),
+            bus: None,
         }
     }
 }

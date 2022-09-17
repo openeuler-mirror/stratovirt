@@ -52,6 +52,7 @@ pub use gpu::*;
 pub use net::*;
 pub use queue::*;
 pub use rng::{Rng, RngState};
+pub use scsi::bus as ScsiBus;
 pub use scsi::controller as ScsiCntlr;
 pub use vhost::kernel as VhostKern;
 pub use vhost::user as VhostUser;
