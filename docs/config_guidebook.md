@@ -21,7 +21,9 @@ NB: machine type "none" is used to get the capabilities of stratovirt.
 -machine [type=]name[,dump-guest-core=on|off,mem-share=on|off]
 ```
 
-### 1.2 Cpu Number
+### 1.2 CPU Config
+
+#### 1.2.1 CPU Number
 
 StratoVirt supports to set the number of VCPUs(**nr_vcpus**).
 
@@ -45,6 +47,20 @@ If it is configured, sockets * dies * clusters * cores * threads must be equal t
 ```shell
 # cmdline
 -smp [cpus=]n[,maxcpus=,sockets=,dies=,clusters=,cores=,threads=]
+```
+
+#### 1.2.2 CPU Features
+
+StratoVirt allows the configuration of CPU features.
+
+Currently, these options are supported.
+
+* CPU Family: Set the CPU family for VM, default to `host`, and this is the only supported variant currently.
+* pmu: This enables armv8 PMU for VM. Should be `off` or `on`, default to `off`. (Currently only supported on aarch64)
+
+```shell
+# cmdline
+-cpu [host,][pmu=on|off]
 ```
 
 ### 1.3 Memory

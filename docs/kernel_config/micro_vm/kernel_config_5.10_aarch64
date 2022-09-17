@@ -1948,7 +1948,7 @@ CONFIG_PARTITION_PERCPU=y
 # CONFIG_ARM_CCI_PMU is not set
 # CONFIG_ARM_CCN is not set
 # CONFIG_ARM_CMN is not set
-# CONFIG_ARM_PMU is not set
+CONFIG_ARM_PMU=y
 # CONFIG_ARM_DSU_PMU is not set
 # CONFIG_ARM_SPE_PMU is not set
 # end of Performance monitor support

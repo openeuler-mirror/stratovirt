@@ -86,6 +86,7 @@ Some devices and feature don't support to be snapshot yet:
 - `vfio` devices
 - `balloon`
 - `hugepage`,`mem-shared`,`backend file of memory`
+- `pmu`: ongoing PMU measurements
 
 Some device attributes can't be changed:
 - `virtio-net`: mac
