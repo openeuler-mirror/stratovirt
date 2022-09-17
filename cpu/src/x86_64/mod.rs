@@ -12,7 +12,6 @@
 
 pub mod caps;
 mod cpuid;
-extern crate util;
 
 use std::sync::{Arc, Mutex};
 
@@ -81,7 +80,7 @@ pub struct X86CPUBootConfig {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct X86CPUTopology {
     threads: u8,
     cores: u8,
@@ -182,7 +181,6 @@ impl X86CPUState {
         boot_config: &X86CPUBootConfig,
     ) -> Result<()> {
         self.setup_lapic(vcpu_fd)?;
-        trace_cpu_boot_config(boot_config);
         self.setup_regs(boot_config);
         self.setup_sregs(vcpu_fd, boot_config)?;
         self.setup_fpu();
@@ -578,11 +576,6 @@ impl StateTransfer for CPU {
 }
 
 impl MigrationHook for CPU {}
-
-/// The trace describes the configuration information when the cpu is booted.
-fn trace_cpu_boot_config(cpu_boot_config: &X86CPUBootConfig) {
-    util::ftrace!(trace_cpu_boot_config, "{:#?}", cpu_boot_config);
-}
 
 #[cfg(test)]
 mod test {

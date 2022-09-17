@@ -291,6 +291,7 @@ impl CPU {
 
 impl CPUInterface for CPU {
     fn realize(&self, boot: &CPUBootConfig, topology: &CPUTopology) -> Result<()> {
+        trace_cpu_boot_config(boot);
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
             return Err(
@@ -716,7 +717,7 @@ impl CPUThreadWorker {
 }
 
 /// The wrapper for topology for VCPU.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CpuTopology {
     /// Number of vcpus in VM.
     pub nrcpus: u8,
@@ -812,6 +813,10 @@ impl CpuTopology {
             thread_id: Some(threadid as isize),
         }
     }
+}
+
+fn trace_cpu_boot_config(cpu_boot_config: &CPUBootConfig) {
+    util::ftrace!(trace_CPU_boot_config, "{:#?}", cpu_boot_config);
 }
 
 #[cfg(test)]

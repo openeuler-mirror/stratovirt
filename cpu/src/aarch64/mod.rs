@@ -12,7 +12,6 @@
 
 pub mod caps;
 mod core_regs;
-extern crate util;
 
 use std::sync::{Arc, Mutex};
 
@@ -63,7 +62,7 @@ pub struct ArmCPUBootConfig {
 }
 
 #[allow(dead_code)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct ArmCPUTopology {
     threads: u8,
     cores: u8,
@@ -167,7 +166,6 @@ impl ArmCPUState {
             self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
         }
 
-        trace_cpu_boot_config(boot_config);
         self.set_core_reg(boot_config);
 
         vcpu_fd
@@ -296,8 +294,3 @@ impl StateTransfer for CPU {
 }
 
 impl MigrationHook for CPU {}
-
-/// The trace describes the configuration information when the cpu is booted.
-fn trace_cpu_boot_config(cpu_boot_config: &ArmCPUBootConfig) {
-    util::ftrace!(trace_cpu_boot_config, "{:#?}", cpu_boot_config);
-}

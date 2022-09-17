@@ -762,7 +762,6 @@ impl MachineOps for LightMachine {
         let mut locked_vm = vm.lock().unwrap();
 
         //trace for lightmachine
-        trace_cpu_topo(&locked_vm.cpu_topo);
         trace_sysbus(&locked_vm.sysbus);
         trace_vm_state(&locked_vm.vm_state);
 
@@ -811,6 +810,7 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
         ));
+        trace_cpu_topo(&topology);
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
@@ -1609,7 +1609,7 @@ impl device_tree::CompileFDT for LightMachine {
 }
 
 /// Trace descriptions for some devices at stratovirt startup.
-fn trace_cpu_topo(cpu_topo: &CpuTopology) {
+fn trace_cpu_topo(cpu_topo: &CPUTopology) {
     util::ftrace!(trace_cpu_topo, "{:#?}", cpu_topo);
 }
 
