@@ -73,6 +73,7 @@ use vnc::vnc;
 use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
 use crate::MachineOps;
 use anyhow::{anyhow, bail, Context, Result};
+use virtio::ScsiCntlr::ScsiCntlrMap;
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {
@@ -149,6 +150,8 @@ pub struct StdMachine {
     fwcfg_dev: Option<Arc<Mutex<FwCfgMem>>>,
     /// Bus device used to attach other devices. Only USB controller used now.
     bus_device: BusDeviceMap,
+    /// Scsi Controller List.
+    scsi_cntlr_list: ScsiCntlrMap,
 }
 
 impl StdMachine {
@@ -199,6 +202,7 @@ impl StdMachine {
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
             bus_device: Arc::new(Mutex::new(HashMap::new())),
+            scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -638,6 +642,10 @@ impl MachineOps for StdMachine {
 
     fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
         Some(&self.bus_device)
+    }
+
+    fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
+        Some(&self.scsi_cntlr_list)
     }
 }
 
