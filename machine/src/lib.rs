@@ -48,7 +48,7 @@ use machine_manager::config::parse_gpu;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
-    parse_scsi_controller, parse_usb_keyboard, parse_usb_tablet, parse_vfio,
+    parse_scsi_controller, parse_scsi_device, parse_usb_keyboard, parse_usb_tablet, parse_vfio,
     parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci,
     BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
     NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
@@ -76,10 +76,11 @@ use vfio::{VfioDevice, VfioPciDevice};
 use virtio::Gpu;
 use virtio::{
     balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, ScsiBus,
-    ScsiCntlr, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
+    ScsiCntlr, ScsiDisk, VhostKern, VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice,
     VirtioMmioState, VirtioNetState, VirtioPciDevice,
 };
 use ScsiCntlr::ScsiCntlrMap;
+use ScsiDisk::SCSI_TYPE_DISK;
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -628,6 +629,52 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_scsi_device(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        scsi_type: u32,
+    ) -> Result<()> {
+        let device_cfg = parse_scsi_device(vm_config, cfg_args)?;
+        let device = Arc::new(Mutex::new(ScsiDisk::ScsiDevice::new(
+            device_cfg.clone(),
+            scsi_type,
+        )));
+
+        let lock_cntlr_list = if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
+            cntlr_list.lock().unwrap()
+        } else {
+            bail!("Wrong! No scsi controller list found")
+        };
+
+        let lock_cntlr = if let Some(cntlr) = lock_cntlr_list.get(&device_cfg.bus) {
+            cntlr.lock().unwrap()
+        } else {
+            bail!("Wrong! Bus {} not found in list", &device_cfg.bus)
+        };
+
+        if let Some(bus) = &lock_cntlr.bus {
+            if bus
+                .lock()
+                .unwrap()
+                .devices
+                .contains_key(&(device_cfg.target, device_cfg.lun))
+            {
+                bail!("Wrong! Two scsi devices have the same scsi-id and lun");
+            }
+            bus.lock()
+                .unwrap()
+                .devices
+                .insert((device_cfg.target, device_cfg.lun), device.clone());
+            device.lock().unwrap().parent_bus = Arc::downgrade(bus);
+        } else {
+            bail!("Wrong! Controller has no bus {} !", &device_cfg.bus);
+        }
+
+        device.lock().unwrap().realize()?;
+        Ok(())
+    }
+
     fn add_virtio_pci_net(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
@@ -1057,6 +1104,9 @@ pub trait MachineOps {
                 }
                 "virtio-scsi-pci" => {
                     self.add_virtio_pci_scsi(cfg_args)?;
+                }
+                "scsi-hd" => {
+                    self.add_scsi_device(vm_config, cfg_args, SCSI_TYPE_DISK)?;
                 }
                 "virtio-net-device" => {
                     self.add_virtio_mmio_net(vm_config, cfg_args)?;

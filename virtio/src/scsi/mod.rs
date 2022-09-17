@@ -12,3 +12,4 @@
 
 pub mod bus;
 pub mod controller;
+pub mod disk;

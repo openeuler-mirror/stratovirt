@@ -10,15 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 
 use crate::ScsiCntlr::ScsiCntlr;
+use crate::ScsiDisk::ScsiDevice;
 
 pub struct ScsiBus {
     /// Bus name.
     pub name: String,
+    /// Scsi Devices attached to the bus.
+    pub devices: HashMap<(u8, u16), Arc<Mutex<ScsiDevice>>>,
     /// Scsi Controller which the bus orignates from.
     pub parent_cntlr: Weak<Mutex<ScsiCntlr>>,
 }
@@ -27,6 +31,7 @@ impl ScsiBus {
     pub fn new(bus_name: String, parent_cntlr: Weak<Mutex<ScsiCntlr>>) -> ScsiBus {
         ScsiBus {
             name: bus_name,
+            devices: HashMap::new(),
             parent_cntlr,
         }
     }
