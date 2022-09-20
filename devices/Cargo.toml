@@ -23,6 +23,7 @@ migration_derive = { path = "../migration_derive" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 acpi = { path = "../acpi" }
+[target.'cfg(not(target_env = "musl"))'.dependencies]
 vnc = { path = "../vnc" }
 
 [dev-dependencies]
