@@ -282,6 +282,8 @@ fn vnc_height(height: i32) -> i32 {
 pub fn update_client_surface(server: &mut VncServer) {
     unref_pixman_image(server.server_image);
     server.server_image = ptr::null_mut();
+    // Server image changes, clear the task queue.
+    VNC_RECT_INFO.lock().unwrap().clear();
     if server.clients.is_empty() {
         return;
     }
