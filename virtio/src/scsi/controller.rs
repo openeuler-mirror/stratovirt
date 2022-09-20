@@ -13,19 +13,30 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Write;
+use std::mem::size_of;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
-use super::super::{Queue, VirtioDevice, VirtioInterrupt, VIRTIO_TYPE_SCSI};
+use super::super::{
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_SCSI,
+};
 use crate::ScsiBus::ScsiBus;
 use crate::VirtioError;
-use address_space::AddressSpace;
-use log::warn;
-use machine_manager::config::{ConfigCheck, ScsiCntlrConfig};
+use address_space::{AddressSpace, GuestAddress};
+use log::{error, info, warn};
+use machine_manager::{
+    config::{ConfigCheck, ScsiCntlrConfig},
+    event_loop::EventLoop,
+};
+use util::aio::Iovec;
 use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use util::num_ops::{read_u32, write_u32};
-use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 /// Virtio Scsi Controller has 1 ctrl queue, 1 event queue and at least 1 cmd queue.
 const SCSI_CTRL_QUEUE_NUM: usize = 1;
@@ -34,8 +45,57 @@ const SCSI_MIN_QUEUE_NUM: usize = 3;
 /// Size of each virtqueue.
 const QUEUE_SIZE_SCSI: u16 = 256;
 
+/// Default values of the cdb and sense data size configuration fields. Cannot change cdb size
+/// and sense data size Now.
+/// To do: support Override CDB/sense data size.(Guest controlled)
+pub const VIRTIO_SCSI_CDB_DEFAULT_SIZE: usize = 32;
+pub const VIRTIO_SCSI_SENSE_DEFAULT_SIZE: usize = 96;
+
 /// The key is bus name, the value is the attached Scsi Controller.
 pub type ScsiCntlrMap = Arc<Mutex<HashMap<String, Arc<Mutex<ScsiCntlr>>>>>;
+
+/// Control type codes.
+/// Task Management Function.
+pub const VIRTIO_SCSI_T_TMF: u32 = 0;
+/// Asynchronous notification query.
+pub const VIRTIO_SCSI_T_AN_QUERY: u32 = 1;
+/// Asynchronous notification subscription.
+pub const VIRTIO_SCSI_T_AN_SUBSCRIBE: u32 = 2;
+
+/// Valid TMF Subtypes.
+pub const VIRTIO_SCSI_T_TMF_ABORT_TASK: u32 = 0;
+pub const VIRTIO_SCSI_T_TMF_ABORT_TASK_SET: u32 = 1;
+pub const VIRTIO_SCSI_T_TMF_CLEAR_ACA: u32 = 2;
+pub const VIRTIO_SCSI_T_TMF_CLEAR_TASK_SET: u32 = 3;
+pub const VIRTIO_SCSI_T_TMF_I_T_NEXUS_RESET: u32 = 4;
+pub const VIRTIO_SCSI_T_TMF_LOGICAL_UNIT_RESET: u32 = 5;
+pub const VIRTIO_SCSI_T_TMF_QUERY_TASK: u32 = 6;
+pub const VIRTIO_SCSI_T_TMF_QUERY_TASK_SET: u32 = 7;
+
+/// Response codes.
+pub const VIRTIO_SCSI_S_OK: u8 = 0;
+pub const VIRTIO_SCSI_S_OVERRUN: u8 = 1;
+pub const VIRTIO_SCSI_S_ABORTED: u8 = 2;
+pub const VIRTIO_SCSI_S_BAD_TARGET: u8 = 3;
+pub const VIRTIO_SCSI_S_RESET: u8 = 4;
+pub const VIRTIO_SCSI_S_BUSY: u8 = 5;
+pub const VIRTIO_SCSI_S_TRANSPORT_FAILURE: u8 = 6;
+pub const VIRTIO_SCSI_S_TARGET_FAILURE: u8 = 7;
+pub const VIRTIO_SCSI_S_NEXUS_FAILURE: u8 = 8;
+pub const VIRTIO_SCSI_S_FAILURE: u8 = 9;
+pub const VIRTIO_SCSI_S_FUNCTION_SUCCEEDED: u8 = 10;
+pub const VIRTIO_SCSI_S_FUNCTION_REJECTED: u8 = 11;
+pub const VIRTIO_SCSI_S_INCORRECT_LUN: u8 = 12;
+
+#[derive(Clone)]
+pub enum ScsiXferMode {
+    /// TEST_UNIT_READY, ...
+    ScsiXferNone,
+    /// READ, INQUIRY, MODE_SENSE, ...
+    ScsiXferFromDev,
+    /// WRITE, MODE_SELECT, ...
+    ScsiXferToDev,
+}
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -170,15 +230,30 @@ impl VirtioDevice for ScsiCntlr {
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
-        _mem_space: Arc<AddressSpace>,
-        _interrupt_cb: Arc<VirtioInterrupt>,
+        mem_space: Arc<AddressSpace>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        _queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let queue_num = queues.len();
         if queue_num < SCSI_MIN_QUEUE_NUM {
             bail!("virtio scsi controller queues num can not be less than 3!");
         }
+
+        let ctrl_queue = queues[0].clone();
+        let ctrl_queue_evt = queue_evts.remove(0);
+        let ctrl_handler = ScsiCtrlHandler {
+            queue: ctrl_queue,
+            queue_evt: ctrl_queue_evt,
+            mem_space,
+            interrupt_cb: interrupt_cb.clone(),
+            driver_features: self.state.driver_features,
+        };
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
+            self.config.iothread.as_ref(),
+        )?;
+
         Ok(())
     }
 
@@ -188,5 +263,303 @@ impl VirtioDevice for ScsiCntlr {
 
     fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
         Ok(())
+    }
+}
+
+fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
+    EventNotifier::new(
+        NotifierOperation::AddShared,
+        fd,
+        None,
+        EventSet::IN,
+        vec![Arc::new(Mutex::new(handler))],
+    )
+}
+
+/// Task Managememt Request
+#[derive(Copy, Clone, Debug, Default)]
+pub struct VirtioScsiCtrlTmfReq {
+    pub ctrltype: u32,
+    pub subtype: u32,
+    pub lun: [u8; 8],
+    pub tag: u64,
+}
+
+impl ByteCode for VirtioScsiCtrlTmfReq {}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub struct VirtioScsiCtrlTmfResp {
+    pub response: u8,
+}
+
+impl ByteCode for VirtioScsiCtrlTmfResp {}
+
+/// Asynchronous notification query/subscription
+#[derive(Copy, Clone, Debug, Default)]
+pub struct VirtioScsiCtrlAnReq {
+    pub ctrltype: u32,
+    pub lun: [u8; 8],
+    pub event_requested: u32,
+}
+
+impl ByteCode for VirtioScsiCtrlAnReq {}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub struct VirtioScsiCtrlAnResp {
+    pub evnet_actual: u32,
+    pub response: u8,
+}
+
+impl ByteCode for VirtioScsiCtrlAnResp {}
+
+/// T: request; U: response
+pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
+    queue: Arc<Mutex<Queue>>,
+    desc_index: u16,
+    /// Read or Write data, HVA, except resp
+    iovec: Vec<Iovec>,
+    data_len: u32,
+    _cdb_size: u32,
+    _sense_size: u32,
+    mode: ScsiXferMode,
+    _interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    _driver_features: u64,
+    /// resp GPA
+    resp_addr: GuestAddress,
+    req: T,
+    resp: U,
+}
+
+/// T: request; U:response
+impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
+    fn new(
+        mem_space: &Arc<AddressSpace>,
+        queue: Arc<Mutex<Queue>>,
+        interrupt_cb: Option<Arc<VirtioInterrupt>>,
+        driver_features: u64,
+        elem: &Element,
+    ) -> Result<Self> {
+        let out_iov_elem = elem.out_iovec.get(0).unwrap();
+        if out_iov_elem.len < size_of::<T>() as u32 {
+            bail!(
+                "Invalid virtio scsi request: get length {}, expected length {}",
+                out_iov_elem.len,
+                size_of::<T>(),
+            );
+        }
+
+        let scsi_req = mem_space
+            .read_object::<T>(out_iov_elem.addr)
+            .with_context(|| VirtioError::ReadObjectErr("the scsi request", out_iov_elem.addr.0))?;
+
+        let in_iov_elem = elem.in_iovec.get(0).unwrap();
+        if in_iov_elem.len < size_of::<U>() as u32 {
+            bail!(
+                "Invalid virtio scsi response: get length {}, expected length {}",
+                in_iov_elem.len,
+                size_of::<U>()
+            );
+        }
+        let scsi_resp = mem_space
+            .read_object::<U>(in_iov_elem.addr)
+            .with_context(|| VirtioError::ReadObjectErr("the scsi response", in_iov_elem.addr.0))?;
+
+        let mut request = VirtioScsiRequest {
+            queue,
+            desc_index: elem.index,
+            iovec: Vec::with_capacity(elem.desc_num as usize),
+            data_len: 0,
+            _cdb_size: VIRTIO_SCSI_CDB_DEFAULT_SIZE as u32,
+            _sense_size: VIRTIO_SCSI_SENSE_DEFAULT_SIZE as u32,
+            mode: ScsiXferMode::ScsiXferNone,
+            _interrupt_cb: interrupt_cb,
+            _driver_features: driver_features,
+            resp_addr: in_iov_elem.addr,
+            req: scsi_req,
+            resp: scsi_resp,
+        };
+
+        let mut out_len: u32 = 0;
+        let mut skip_out_size: u32 = size_of::<T>() as u32;
+        for (_index, elem_iov) in elem.out_iovec.iter().enumerate() {
+            if skip_out_size >= elem_iov.len {
+                skip_out_size -= elem_iov.len;
+            } else if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
+                let len = elem_iov.len - skip_out_size;
+                let iov = Iovec {
+                    iov_base: hva + skip_out_size as u64,
+                    iov_len: u64::from(len),
+                };
+                out_len += len;
+                skip_out_size = 0;
+                request.iovec.push(iov);
+            }
+        }
+
+        let mut in_len: u32 = 0;
+        let mut skip_in_size: u32 = size_of::<U>() as u32;
+        for (_index, elem_iov) in elem.in_iovec.iter().enumerate() {
+            if skip_in_size >= elem_iov.len {
+                skip_in_size -= elem_iov.len;
+            } else {
+                if out_len > 0 {
+                    bail!("Wrong scsi request!");
+                }
+                if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
+                    let len = elem_iov.len - skip_in_size;
+                    let iov = Iovec {
+                        iov_base: hva + skip_in_size as u64,
+                        iov_len: u64::from(len),
+                    };
+                    in_len += len;
+                    skip_in_size = 0;
+                    request.iovec.push(iov);
+                }
+            }
+        }
+
+        if out_len > 0 {
+            request.mode = ScsiXferMode::ScsiXferToDev;
+            request.data_len = out_len;
+        } else if in_len > 0 {
+            request.mode = ScsiXferMode::ScsiXferFromDev;
+            request.data_len = in_len;
+        }
+
+        Ok(request)
+    }
+
+    fn complete(&self, mem_space: &Arc<AddressSpace>) -> bool {
+        if let Err(ref e) = mem_space.write_object(&self.resp, self.resp_addr) {
+            error!("Failed to write the scsi response {:?}", e);
+            return false;
+        }
+        let mut queue_lock = self.queue.lock().unwrap();
+        if let Err(ref e) = queue_lock.vring.add_used(
+            mem_space,
+            self.desc_index,
+            self.data_len + (size_of::<U>() as u32),
+        ) {
+            error!(
+                "Failed to add used ring(scsi completion), index {}, len {} {:?}",
+                self.desc_index, self.data_len, e
+            );
+            return false;
+        }
+        true
+    }
+}
+
+pub struct ScsiCtrlHandler {
+    /// The ctrl virtqueue
+    queue: Arc<Mutex<Queue>>,
+    /// EventFd for the ctrl virtqueue
+    queue_evt: EventFd,
+    /// The address space to which the scsi HBA belongs.
+    mem_space: Arc<AddressSpace>,
+    /// The interrupt callback function
+    interrupt_cb: Arc<VirtioInterrupt>,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+}
+
+impl ScsiCtrlHandler {
+    fn handle_ctrl(&mut self) -> Result<()> {
+        let mut queue = self.queue.lock().unwrap();
+
+        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            drop(queue);
+            let ctrl_desc = elem.out_iovec.get(0).unwrap();
+            let ctrl_type = self
+                .mem_space
+                .read_object::<u32>(ctrl_desc.addr)
+                .with_context(|| "Failed to get control queue descriptor")?;
+            match ctrl_type {
+                VIRTIO_SCSI_T_TMF => {
+                    match VirtioScsiRequest::<VirtioScsiCtrlTmfReq, VirtioScsiCtrlTmfResp>::new(
+                        &self.mem_space,
+                        self.queue.clone(),
+                        Some(self.interrupt_cb.clone()),
+                        self.driver_features,
+                        &elem,
+                    ) {
+                        Ok(mut tmf) => {
+                            info!("incomplete tmf req, subtype {}!", tmf.req.subtype);
+
+                            tmf.resp.response = VIRTIO_SCSI_S_OK;
+                            tmf.complete(&self.mem_space);
+                        }
+                        Err(ref e) => {
+                            let mut queue = self.queue.lock().unwrap();
+                            queue
+                                .vring
+                                .add_used(&self.mem_space, elem.index, 0)
+                                .with_context(|| "Failed to add used ring")?;
+                            drop(queue);
+
+                            error!("Failed to create VIRTIO_SCSI_T_TMF request, {:?}", e);
+                        }
+                    }
+                }
+
+                VIRTIO_SCSI_T_AN_QUERY | VIRTIO_SCSI_T_AN_SUBSCRIBE => {
+                    match VirtioScsiRequest::<VirtioScsiCtrlAnReq, VirtioScsiCtrlAnResp>::new(
+                        &self.mem_space,
+                        self.queue.clone(),
+                        Some(self.interrupt_cb.clone()),
+                        self.driver_features,
+                        &elem,
+                    ) {
+                        Ok(mut an) => {
+                            info!("incomplete An req!");
+                            an.resp.evnet_actual = 0;
+                            an.resp.response = VIRTIO_SCSI_S_OK;
+                            an.complete(&self.mem_space);
+                        }
+                        Err(ref e) => {
+                            let mut queue = self.queue.lock().unwrap();
+                            queue
+                                .vring
+                                .add_used(&self.mem_space, elem.index, 0)
+                                .with_context(|| "Failed to add used ring")?;
+                            drop(queue);
+
+                            error!("Failed to create scsi ctrl an req, {:?}", e)
+                        }
+                    }
+                }
+                _ => {
+                    bail!("Control queue type doesn't support {}", ctrl_type);
+                }
+            }
+            queue = self.queue.lock().unwrap();
+        }
+
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
+            VirtioError::InterruptTrigger("scsi ctrl", VirtioInterruptType::Vring)
+        })?;
+        Ok(())
+    }
+}
+
+impl EventNotifierHelper for ScsiCtrlHandler {
+    fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let h_locked = handler.lock().unwrap();
+        let h_clone = handler.clone();
+        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            h_clone
+                .lock()
+                .unwrap()
+                .handle_ctrl()
+                .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
+            None
+        });
+
+        let mut notifiers = Vec::new();
+        let ctrl_fd = h_locked.queue_evt.as_raw_fd();
+        notifiers.push(build_event_notifier(ctrl_fd, h));
+
+        notifiers
     }
 }
