@@ -241,7 +241,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-Software: log 0.4.14
+Software: log 0.4.17
 Copyright notice:
 Copyright (c) 2014 The Rust Project Developers
 Copyright 2014-2015 The Rust Project Developers
@@ -282,14 +282,14 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <http://unlicense.org/>
 
-Software: serde 1.0.125
+Software: serde 1.0.143
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: serde_json 1.0.64
+Software: serde_json 1.0.143
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
@@ -302,7 +302,7 @@ Copyright (c) 2017 The Error-Chain Project Developers
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: vmm-sys-util 0.7.0
+Software: vmm-sys-util 0.10.0
 Copyright notice:
 Copyright 2019 Intel Corporation. All Rights Reserved.
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -344,7 +344,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Software: kvm-ioctls 0.6.1
+Software: kvm-ioctls 0.11.0
 Copyright notice:
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 Portions Copyright 2017 The Chromium OS Authors. All rights reserved.
@@ -353,13 +353,13 @@ Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: kvm-bindings 0.3.1
+Software: kvm-bindings 0.5.0
 Copyright notice:
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 License: The APACHE 2.0 License
 Please see above.
 
-Software: arc-swap 0.4.8
+Software: arc-swap 1.5.1
 Copyright notice:
 Copyright (c) 2017 arc-swap developers
 License: MIT or Apache License Version 2.0
@@ -371,44 +371,44 @@ Copyright (c) 2018 Tom Parker-Shemilt
 License: MIT
 Please see above.
 
-Software: syn 1.0.72
+Software: syn 1.0.99
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: quote 1.0.7
+Software: quote 1.0.21
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: proc-macro2 1.0
+Software: proc-macro2 1.0.43
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Alex Crichton <alex@alexcrichton.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: strum 0.20
+Software: strum 0.20.0
 Copyright notice:
 Copyright (c) 2019 Peter Glotfelty
 License: MIT
 Please see above.
 
-Software: strum_macros 0.20
+Software: strum_macros 0.20.1
 Copyright notice:
 Copyright (c) 2019 Peter Glotfelty
 License: MIT
 Please see above.
 
-Software: vfio-bindings 0.2.0
+Software: vfio-bindings 0.3.1
 Copyright notice:
 Copyright (c) 2019 Intel Corporation. All Rights Reserved.
 License: Apache License Version 2.0 or BSD 3-Clause License
 Please see above.
 
-Software: once_cell 1.9.0
+Software: once_cell 1.13.0
 Copyright notice:
 Copyright (c) Aleksey Kladov <aleksey.kladov@gmail.com>
 License: MIT OR Apache-2.0
