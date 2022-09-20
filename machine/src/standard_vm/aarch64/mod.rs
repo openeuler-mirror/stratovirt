@@ -36,9 +36,10 @@ use acpi::{
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
+#[cfg(not(target_env = "musl"))]
+use devices::legacy::Ramfb;
 use devices::legacy::{
-    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, Ramfb, PL011,
-    PL031,
+    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
 };
 
 use devices::{ICGICConfig, ICGICv3Config, InterruptController};
@@ -553,6 +554,7 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    #[cfg(not(target_env = "musl"))]
     fn add_ramfb(&mut self) -> Result<()> {
         let sys_mem = self.get_sys_mem();
         let mut ramfb = Ramfb::new(sys_mem.clone());
