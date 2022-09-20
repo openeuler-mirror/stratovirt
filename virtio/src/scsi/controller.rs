@@ -245,12 +245,26 @@ impl VirtioDevice for ScsiCntlr {
         let ctrl_handler = ScsiCtrlHandler {
             queue: ctrl_queue,
             queue_evt: ctrl_queue_evt,
-            mem_space,
+            mem_space: mem_space.clone(),
             interrupt_cb: interrupt_cb.clone(),
             driver_features: self.state.driver_features,
         };
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
+            self.config.iothread.as_ref(),
+        )?;
+
+        let event_queue = queues[1].clone();
+        let event_queue_evt = queue_evts.remove(0);
+        let event_handler = ScsiEventHandler {
+            _queue: event_queue,
+            queue_evt: event_queue_evt,
+            _mem_space: mem_space,
+            _interrupt_cb: interrupt_cb.clone(),
+            _driver_features: self.state.driver_features,
+        };
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler))),
             self.config.iothread.as_ref(),
         )?;
 
@@ -561,5 +575,46 @@ impl EventNotifierHelper for ScsiCtrlHandler {
         notifiers.push(build_event_notifier(ctrl_fd, h));
 
         notifiers
+    }
+}
+
+pub struct ScsiEventHandler {
+    /// The Event virtqueue
+    _queue: Arc<Mutex<Queue>>,
+    /// EventFd for the Event virtqueue
+    queue_evt: EventFd,
+    /// The address space to which the scsi HBA belongs.
+    _mem_space: Arc<AddressSpace>,
+    /// The interrupt callback function
+    _interrupt_cb: Arc<VirtioInterrupt>,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    _driver_features: u64,
+}
+
+impl EventNotifierHelper for ScsiEventHandler {
+    fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let h_locked = handler.lock().unwrap();
+        let h_clone = handler.clone();
+        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            h_clone
+                .lock()
+                .unwrap()
+                .handle_event()
+                .unwrap_or_else(|e| error!("Failed to handle event queue, err is {}", e));
+            None
+        });
+
+        let mut notifiers = Vec::new();
+        let event_fd = h_locked.queue_evt.as_raw_fd();
+        notifiers.push(build_event_notifier(event_fd, h));
+
+        notifiers
+    }
+}
+
+impl ScsiEventHandler {
+    fn handle_event(&mut self) -> Result<()> {
+        Ok(())
     }
 }
