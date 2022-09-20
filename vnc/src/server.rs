@@ -37,6 +37,7 @@ use crate::{
     bytes_per_pixel, data::keycode::KEYSYM2KEYCODE, get_image_data, get_image_format,
     get_image_height, get_image_stride, get_image_width, round_up_div, unref_pixman_image,
     update_client_surface, AuthState, DisplayMouse, SubAuthState, VncClient, DIRTY_PIXELS_NUM,
+    DISPLAY_UPDATE_INTERVAL_DEFAULT, DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX,
     MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
 };
 
@@ -105,6 +106,8 @@ pub struct VncServer {
     conn_limits: usize,
     /// Width of current image.
     pub true_width: i32,
+    /// updating interval of display devices.
+    pub update_interval: u32,
 }
 
 unsafe impl Send for VncServer {}
@@ -132,6 +135,7 @@ impl VncServer {
             mask: None,
             conn_limits: 1,
             true_width: 0,
+            update_interval: 0,
         }
     }
 
@@ -447,9 +451,22 @@ fn vnc_refresh() {
         return;
     }
 
-    let dirty_num = server.lock().unwrap().update_server_image();
+    let mut locked_server = server.lock().unwrap();
+    let dirty_num = locked_server.update_server_image();
+    if dirty_num != 0 {
+        locked_server.update_interval /= 2;
+        if locked_server.update_interval < DISPLAY_UPDATE_INTERVAL_DEFAULT {
+            locked_server.update_interval = DISPLAY_UPDATE_INTERVAL_DEFAULT
+        }
+    } else {
+        locked_server.update_interval += DISPLAY_UPDATE_INTERVAL_INC;
+        if locked_server.update_interval > DISPLAY_UPDATE_INTERVAL_MAX {
+            locked_server.update_interval = DISPLAY_UPDATE_INTERVAL_MAX;
+        }
+    }
+
     let mut _rects: i32 = 0;
-    for client in server.lock().unwrap().clients.values_mut() {
+    for client in locked_server.clients.values_mut() {
         _rects += client.lock().unwrap().get_rects(dirty_num);
     }
 }

@@ -13,6 +13,7 @@ kvm-ioctls = ">=0.11.0"
 serde = { version = "1.0", features = ["derive"] }
 vmm-sys-util = ">=0.10.0"
 byteorder = "1.4.3"
+drm-fourcc = ">=2.2.0"
 kvm-bindings = { version = ">=0.5.0", features = ["fam-wrappers"] }
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }
@@ -22,6 +23,7 @@ migration_derive = { path = "../migration_derive" }
 sysbus = { path = "../sysbus" }
 util = { path = "../util" }
 acpi = { path = "../acpi" }
+vnc = { path = "../vnc" }
 
 [dev-dependencies]
 serial_test = "0.5.1"

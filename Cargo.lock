@@ -18,6 +18,7 @@ dependencies = [
  "vfio",
  "virtio",
  "vmm-sys-util",
+ "vnc",
 ]
 
 [[package]]
@@ -67,6 +68,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
 
 [[package]]
+name = "aho-corasick"
+version = "0.7.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4f55bd91a0978cbfd91c457a164bab8b4001c833b7f323132c0a4e1922dd44e"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -98,6 +108,12 @@ name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitintr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f80c754495ef07b4554134bbfb23fc1e31a775113b49acccbe35076d57cba145"
 
 [[package]]
 name = "boot_loader"
@@ -133,6 +149,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "const_format"
+version = "0.2.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "939dc9e2eb9077e0679d2ce32de1ded8531779360b003b4a972a7a39ec263495"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef196d5d972878a48da7decb7686eded338b4858fbabeed513d63a7c98b2b82d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-xid",
+]
+
+[[package]]
 name = "cpu"
 version = "2.2.0"
 dependencies = [
@@ -157,6 +193,7 @@ dependencies = [
  "acpi",
  "address_space",
  "byteorder",
+ "drm-fourcc",
  "error-chain",
  "hypervisor",
  "kvm-bindings",
@@ -171,7 +208,14 @@ dependencies = [
  "sysbus",
  "util",
  "vmm-sys-util",
+ "vnc",
 ]
+
+[[package]]
+name = "drm-fourcc"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0aafbcdb8afc29c1a7ee5fbe53b5d62f4565b35a042a662ca9fecd0b54dae6f4"
 
 [[package]]
 name = "error-chain"
@@ -306,6 +350,7 @@ dependencies = [
  "vfio-bindings",
  "virtio",
  "vmm-sys-util",
+ "vnc",
 ]
 
 [[package]]
@@ -466,6 +511,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c4eb3267174b8c6c2f654116623910a0fef09c4753f8dd83db29c48a0df988b"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-syntax"
+version = "0.6.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3f87b73ce11b1619a3c6332f45341e0047173771e8b8b73f87bfeefb7b56244"
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -543,6 +605,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fd0db749597d91ff862fd1d55ea87f7855a744a8425a64695b6fca237d1dad1"
 
 [[package]]
+name = "sscanf"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40f3891ecd1b4d716fd674bf238ee743d2cd948c9aeb3b42b1dd9d8f56d0154b"
+dependencies = [
+ "const_format",
+ "lazy_static",
+ "regex",
+ "sscanf_macro",
+]
+
+[[package]]
+name = "sscanf_macro"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95d18335301db6e21d35b955cfb58327f3ede99f831a84cad5a07a59c6b1ec5d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex-syntax",
+ "syn",
+]
+
+[[package]]
 name = "strum"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -594,6 +680,12 @@ name = "unicode-segmentation"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e8820f5d777f6224dc4be3632222971ac30164d4a258d595640799554ebfd99"
+
+[[package]]
+name = "unicode-xid"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
 
 [[package]]
 name = "usb"
@@ -676,6 +768,7 @@ dependencies = [
  "sysbus",
  "util",
  "vmm-sys-util",
+ "vnc",
 ]
 
 [[package]]
@@ -686,6 +779,31 @@ checksum = "08604d7be03eb26e33b3cee3ed4aef2bf550b305d1cca60e84da5d28d3790b62"
 dependencies = [
  "bitflags",
  "libc",
+]
+
+[[package]]
+name = "vnc"
+version = "2.1.0"
+dependencies = [
+ "acpi",
+ "address_space",
+ "bitintr",
+ "byteorder",
+ "error-chain",
+ "hypervisor",
+ "libc",
+ "log",
+ "machine_manager",
+ "migration",
+ "migration_derive",
+ "once_cell",
+ "pci",
+ "serde_json",
+ "sscanf",
+ "sysbus",
+ "usb",
+ "util",
+ "vmm-sys-util",
 ]
 
 [[package]]
