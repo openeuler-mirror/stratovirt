@@ -585,6 +585,38 @@ impl VncClient {
         Ok(())
     }
 
+    /// Set color depth for client.
+    pub fn set_color_depth(&mut self) {
+        if self.has_feature(VncFeatures::VncFeatureWmvi) {
+            let mut buf = Vec::new();
+            buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
+            buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Padding.
+            buf.append(&mut (1_u16).to_be_bytes().to_vec()); // Number of pixel block.
+            framebuffer_upadate(0, 0, self.width, self.height, ENCODING_WMVI, &mut buf);
+            buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
+            self.pixel_format_message(&mut buf);
+            self.write_msg(&buf);
+        } else if !self.pixel_format.is_default_pixel_format() {
+            self.pixel_convert = true;
+        }
+    }
+
+    /// Set pixformat for client.
+    pub fn pixel_format_message(&mut self, buf: &mut Vec<u8>) {
+        self.pixel_format.init_pixelformat();
+        buf.append(&mut (self.pixel_format.pixel_bits as u8).to_be_bytes().to_vec()); // Bit per pixel.
+        buf.append(&mut (self.pixel_format.depth as u8).to_be_bytes().to_vec()); // Depth.
+        buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Big-endian flag.
+        buf.append(&mut (1_u8).to_be_bytes().to_vec()); // True-color flag.
+        buf.append(&mut (self.pixel_format.red.max as u16).to_be_bytes().to_vec()); // Red max.
+        buf.append(&mut (self.pixel_format.green.max as u16).to_be_bytes().to_vec()); // Green max.
+        buf.append(&mut (self.pixel_format.blue.max as u16).to_be_bytes().to_vec()); // Blue max.
+        buf.append(&mut (self.pixel_format.red.shift as u8).to_be_bytes().to_vec()); // Red shift.
+        buf.append(&mut (self.pixel_format.green.shift as u8).to_be_bytes().to_vec()); // Green shift.
+        buf.append(&mut (self.pixel_format.blue.shift as u8).to_be_bytes().to_vec()); // Blue shift.
+        buf.append(&mut [0; 3].to_vec()); // Padding.
+    }
+
     /// Initialize the connection of vnc client.
     pub fn handle_client_init(&mut self) -> Result<()> {
         let mut buf = Vec::new();
@@ -601,21 +633,7 @@ impl VncClient {
             return Err(ErrorKind::InvalidImageSize.into());
         }
         buf.append(&mut (self.height as u16).to_be_bytes().to_vec());
-        self.pixel_format.init_pixelformat();
-        buf.push(self.pixel_format.pixel_bits);
-        buf.push(self.pixel_format.depth);
-        buf.push(0); // Big-endian flag.
-        buf.push(1); // True-color flag.
-        buf.push(0);
-        buf.push(self.pixel_format.red.max);
-        buf.push(0);
-        buf.push(self.pixel_format.green.max);
-        buf.push(0);
-        buf.push(self.pixel_format.blue.max);
-        buf.push(self.pixel_format.red.shift);
-        buf.push(self.pixel_format.green.shift);
-        buf.push(self.pixel_format.blue.shift);
-        buf.append(&mut [0; 3].to_vec());
+        self.pixel_format_message(&mut buf);
 
         buf.append(
             &mut ("StratoVirt".to_string().len() as u32)
@@ -635,6 +653,7 @@ impl VncClient {
             return Ok(());
         }
 
+        info!("Set pixel format");
         let mut buf = self.buffpool.read_front(self.expect).to_vec();
         if buf[7] == 0 {
             // Set a default 256 color map.
@@ -653,6 +672,7 @@ impl VncClient {
             // Blue shift.
             buf[16] = 6;
         }
+
         if ![8, 16, 32].contains(&buf[4]) {
             self.dis_conn = true;
             error!("Worng format of bits_per_pixel");
@@ -730,6 +750,7 @@ impl VncClient {
             num_encoding = u16::from_be_bytes([buf[2], buf[3]]);
         }
 
+        info!("Set encoding");
         while num_encoding > 0 {
             let offset = (4 * num_encoding) as usize;
             let enc = i32::from_be_bytes([
@@ -803,16 +824,37 @@ impl VncClient {
         self.feature & (1 << feature as usize) != 0
     }
 
+    /// Set Desktop Size.
     pub fn desktop_resize(&mut self) {
-        // If hash feature VNC_FEATURE_RESIZE.
-        let width = get_image_width(self.server_image);
-        let height = get_image_height(self.server_image);
+        if !self.has_feature(VncFeatures::VncFeatureResizeExt)
+            && !self.has_feature(VncFeatures::VncFeatureResize)
+        {
+            return;
+        }
+        self.width = get_image_width(self.server_image);
+        self.height = get_image_height(self.server_image);
+        if self.width < 0
+            || self.width > MAX_WINDOW_WIDTH as i32
+            || self.height < 0
+            || self.height > MAX_WINDOW_HEIGHT as i32
+        {
+            error!("Invalid Image Size!");
+            return;
+        }
+
         let mut buf: Vec<u8> = Vec::new();
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
         buf.append(&mut (0_u8).to_be_bytes().to_vec());
         buf.append(&mut (1_u16).to_be_bytes().to_vec());
+        framebuffer_upadate(
+            0,
+            0,
+            self.width,
+            self.height,
+            ENCODING_DESKTOPRESIZE,
+            &mut buf,
+        );
 
-        framebuffer_upadate(0, 0, width, height, ENCODING_DESKTOPRESIZE, &mut buf);
         self.write_msg(&buf);
     }
 
@@ -864,14 +906,6 @@ impl VncClient {
 
     /// Clear the data when disconnected from client.
     pub fn disconnect(&mut self) {
-        let server = VNC_SERVERS.lock().unwrap()[0].clone();
-        let mut locked_server = server.lock().unwrap();
-        locked_server.clients.remove(&self.addr);
-        if locked_server.clients.is_empty() {
-            update_client_surface(&mut locked_server);
-        }
-        drop(locked_server);
-
         if let Err(e) = self.modify_event(NotifierOperation::Delete, 0) {
             error!("Failed to delete event, error is {}", e.display_chain());
         }
@@ -912,6 +946,15 @@ impl EventNotifierHelper for VncClient {
                 }
 
                 if dis_conn {
+                    let addr = client.lock().unwrap().addr.clone();
+                    info!("Client disconnect : {:?}", addr);
+                    let server = VNC_SERVERS.lock().unwrap()[0].clone();
+                    let mut locked_server = server.lock().unwrap();
+                    locked_server.clients.remove(&addr);
+                    if locked_server.clients.is_empty() {
+                        update_client_surface(&mut locked_server);
+                    }
+                    drop(locked_server);
                     client.lock().unwrap().disconnect();
                 }
 
