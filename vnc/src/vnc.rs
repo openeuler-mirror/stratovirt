@@ -238,7 +238,7 @@ pub fn vnc_display_update(x: i32, y: i32, w: i32, h: i32) {
     let mut locked_server = server.lock().unwrap();
     let g_w = get_image_width(locked_server.guest_image);
     let g_h = get_image_height(locked_server.guest_image);
-    set_area_dirty(&mut locked_server.guest_dirtymap, x, y, w, h, g_w, g_h);
+    set_area_dirty(&mut locked_server.guest_dirty_bitmap, x, y, w, h, g_w, g_h);
 }
 
 fn vnc_get_display_update_interval() -> u32 {
@@ -282,7 +282,6 @@ fn vnc_height(height: i32) -> i32 {
 pub fn update_client_surface(server: &mut VncServer) {
     unref_pixman_image(server.server_image);
     server.server_image = ptr::null_mut();
-
     if server.clients.is_empty() {
         return;
     }
@@ -310,9 +309,9 @@ pub fn update_client_surface(server: &mut VncServer) {
         client.lock().unwrap().width = width;
         client.lock().unwrap().height = height;
     }
-    server.guest_dirtymap.clear_all();
+    server.guest_dirty_bitmap.clear_all();
     set_area_dirty(
-        &mut server.guest_dirtymap,
+        &mut server.guest_dirty_bitmap,
         0,
         0,
         width,
@@ -540,7 +539,7 @@ pub fn vnc_display_switch(surface: &mut DisplaySurface) {
     let guest_height: i32 = get_image_height(locked_server.guest_image);
     if !need_resize {
         set_area_dirty(
-            &mut locked_server.guest_dirtymap,
+            &mut locked_server.guest_dirty_bitmap,
             0,
             0,
             guest_width,
@@ -565,11 +564,14 @@ pub fn vnc_display_switch(surface: &mut DisplaySurface) {
         let width = vnc_width(guest_width);
         let height = vnc_height(guest_height);
         let mut locked_client = client.lock().unwrap();
+        // Set Color depth.
+        locked_client.set_color_depth();
         // Desktop_resize.
+        locked_client.desktop_resize();
+        // Cursor define.
         if !mask.is_empty() {
             display_cursor_define(&mut locked_client, &mut cursor, &mut mask);
         }
-        locked_client.desktop_resize();
         locked_client.dirty_bitmap.clear_all();
         set_area_dirty(
             &mut locked_client.dirty_bitmap,
