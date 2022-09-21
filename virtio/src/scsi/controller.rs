@@ -259,7 +259,7 @@ impl VirtioDevice for ScsiCntlr {
         let event_handler = ScsiEventHandler {
             _queue: event_queue,
             queue_evt: event_queue_evt,
-            _mem_space: mem_space,
+            _mem_space: mem_space.clone(),
             _interrupt_cb: interrupt_cb.clone(),
             _driver_features: self.state.driver_features,
         };
@@ -267,6 +267,27 @@ impl VirtioDevice for ScsiCntlr {
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler))),
             self.config.iothread.as_ref(),
         )?;
+
+        let queues_num = queues.len();
+        for cmd_queue in queues.iter().take(queues_num).skip(2) {
+            if let Some(bus) = &self.bus {
+                let cmd_handler = ScsiCmdHandler {
+                    _scsibus: bus.clone(),
+                    queue: cmd_queue.clone(),
+                    queue_evt: queue_evts.remove(0),
+                    mem_space: mem_space.clone(),
+                    interrupt_cb: interrupt_cb.clone(),
+                    driver_features: self.state.driver_features,
+                };
+
+                EventLoop::update_event(
+                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(cmd_handler))),
+                    self.config.iothread.as_ref(),
+                )?;
+            } else {
+                bail!("Scsi controller has no bus!");
+            }
+        }
 
         Ok(())
     }
@@ -326,11 +347,60 @@ pub struct VirtioScsiCtrlAnResp {
 
 impl ByteCode for VirtioScsiCtrlAnResp {}
 
-/// T: request; U: response
+#[repr(C, packed)]
+#[derive(Default, Clone, Copy)]
+pub struct VirtioScsiCmdReq {
+    /// Logical Unit Number
+    lun: [u8; 8],
+    /// Command identifier
+    tag: u64,
+    /// Task attribute
+    task_attr: u8,
+    /// SAM command priority field
+    prio: u8,
+    crn: u8,
+    cdb: [u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE],
+}
+
+impl ByteCode for VirtioScsiCmdReq {}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VirtioScsiCmdResp {
+    /// Sense data length
+    sense_len: u32,
+    /// Resudual bytes in data buffer
+    resid: u32,
+    /// Status qualifier
+    status_qualifier: u16,
+    /// Command completion status
+    status: u8,
+    /// Respinse value
+    response: u8,
+    /// sense buffer data
+    sense: [u8; VIRTIO_SCSI_SENSE_DEFAULT_SIZE],
+}
+
+impl Default for VirtioScsiCmdResp {
+    fn default() -> Self {
+        VirtioScsiCmdResp {
+            sense_len: 0,
+            resid: 0,
+            status_qualifier: 0,
+            status: 0,
+            response: 0,
+            sense: [0; VIRTIO_SCSI_SENSE_DEFAULT_SIZE],
+        }
+    }
+}
+
+impl ByteCode for VirtioScsiCmdResp {}
+
+/// T: request; U: response.
 pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
     queue: Arc<Mutex<Queue>>,
     desc_index: u16,
-    /// Read or Write data, HVA, except resp
+    /// Read or Write data, HVA, except resp.
     iovec: Vec<Iovec>,
     data_len: u32,
     _cdb_size: u32,
@@ -338,13 +408,13 @@ pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
     mode: ScsiXferMode,
     _interrupt_cb: Option<Arc<VirtioInterrupt>>,
     _driver_features: u64,
-    /// resp GPA
+    /// resp GPA.
     resp_addr: GuestAddress,
     req: T,
     resp: U,
 }
 
-/// T: request; U:response
+/// T: request; U:response.
 impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
     fn new(
         mem_space: &Arc<AddressSpace>,
@@ -615,6 +685,83 @@ impl EventNotifierHelper for ScsiEventHandler {
 
 impl ScsiEventHandler {
     fn handle_event(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub struct ScsiCmdHandler {
+    /// The scsi controller
+    _scsibus: Arc<Mutex<ScsiBus>>,
+    /// The Cmd virtqueue
+    queue: Arc<Mutex<Queue>>,
+    /// EventFd for the Cmd virtqueue
+    queue_evt: EventFd,
+    /// The address space to which the scsi HBA belongs.
+    mem_space: Arc<AddressSpace>,
+    /// The interrupt callback function
+    interrupt_cb: Arc<VirtioInterrupt>,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+}
+
+impl EventNotifierHelper for ScsiCmdHandler {
+    fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let h_locked = handler.lock().unwrap();
+        let h_clone = handler.clone();
+        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            read_fd(fd);
+            h_clone
+                .lock()
+                .unwrap()
+                .handle_cmd()
+                .unwrap_or_else(|e| error!("Failed to handle cmd queue, err is {}", e));
+
+            None
+        });
+
+        let mut notifiers = Vec::new();
+        let event_fd = h_locked.queue_evt.as_raw_fd();
+        notifiers.push(build_event_notifier(event_fd, h));
+
+        notifiers
+    }
+}
+
+impl ScsiCmdHandler {
+    fn handle_cmd(&mut self) -> Result<()> {
+        let mut queue = self.queue.lock().unwrap();
+
+        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            match VirtioScsiRequest::<VirtioScsiCmdReq, VirtioScsiCmdResp>::new(
+                &self.mem_space,
+                self.queue.clone(),
+                Some(self.interrupt_cb.clone()),
+                self.driver_features,
+                &elem,
+            ) {
+                Ok(_cmd) => {}
+                Err(ref e) => {
+                    // If it fails, also need to free descriptor table entry
+                    let mut queue = self.queue.lock().unwrap();
+                    queue
+                        .vring
+                        .add_used(&self.mem_space, elem.index, 0)
+                        .chain_err(|| "Failed to add used ring")?;
+                    drop(queue);
+
+                    error!(
+                        "Failed to create cmd request, {}",
+                        error_chain::ChainedError::display_chain(e)
+                    );
+                }
+            }
+
+            queue = self.queue.lock().unwrap();
+        }
+
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
+            .chain_err(|| ErrorKind::InterruptTrigger("scsi cmd", VirtioInterruptType::Vring))?;
+
         Ok(())
     }
 }
