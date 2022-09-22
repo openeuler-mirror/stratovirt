@@ -126,10 +126,10 @@ use machine_manager::config::parse_gpu;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
     parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
-    parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_virtconsole, parse_virtio_serial,
-    parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig,
-    NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
-    VmConfig, FAST_UNPLUG_ON,
+    parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_vhost_user_blk_pci, parse_virtconsole,
+    parse_virtio_serial, parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig,
+    MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf,
+    SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -675,6 +675,31 @@ pub trait MachineOps {
         Ok(())
     }
 
+    fn add_vhost_user_blk_pci(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let bdf = get_pci_bdf(cfg_args)?;
+        let multi_func = get_multi_function(cfg_args)?;
+        let device_cfg = parse_vhost_user_blk_pci(vm_config, cfg_args)?;
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(VhostUser::Block::new(
+            &device_cfg,
+            self.get_sys_mem(),
+        )));
+        let pci_dev = self
+            .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, true)
+            .chain_err(|| {
+                format!(
+                    "Failed to add virtio pci device, device id: {}",
+                    &device_cfg.id
+                )
+            })?;
+        if let Some(bootindex) = device_cfg.boot_index {
+            if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
+                self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
+            }
+        }
+        self.reset_bus(&device_cfg.id)?;
+        Ok(())
+    }
+
     fn create_vfio_pci_device(
         &mut self,
         id: &str,
@@ -1071,6 +1096,9 @@ pub trait MachineOps {
                 }
                 "vfio-pci" => {
                     self.add_vfio_device(cfg_args)?;
+                }
+                "vhost-user-blk-pci" => {
+                    self.add_vhost_user_blk_pci(vm_config, cfg_args)?;
                 }
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;

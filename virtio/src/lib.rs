@@ -195,10 +195,23 @@ pub const VIRTIO_CONSOLE_F_SIZE: u64 = 0;
 pub const VIRTIO_BLK_F_SIZE_MAX: u32 = 1;
 /// Maximum number of segments in a request is in seg_max.
 pub const VIRTIO_BLK_F_SEG_MAX: u32 = 2;
+/// Legacy geometry available.
+pub const VIRTIO_BLK_F_GEOMETRY: u32 = 4;
 /// Device is read-only.
 pub const VIRTIO_BLK_F_RO: u32 = 5;
+/// Block size of disk is available.
+pub const VIRTIO_BLK_F_BLK_SIZE: u32 = 6;
 /// Cache flush command support.
 pub const VIRTIO_BLK_F_FLUSH: u32 = 9;
+/// Topology information is available.
+pub const VIRTIO_BLK_F_TOPOLOGY: u32 = 10;
+/// Support more than one virtqueue.
+pub const VIRTIO_BLK_F_MQ: u32 = 12;
+/// DISCARD is supported.
+pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
+/// WRITE ZEROES is supported.
+pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
+
 /// The device sets MQ ok status values to driver.
 pub const VIRTIO_NET_OK: u8 = 0;
 /// Driver configure the class before enabling virtqueue.
@@ -209,8 +222,6 @@ pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: u16 = 0;
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN: u16 = 1;
 /// The maximum pairs of multiple queue.
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX: u16 = 0x8000;
-/// Support more than one virtqueue.
-pub const VIRTIO_BLK_F_MQ: u32 = 12;
 
 /// The IO type of virtio block, refer to Virtio Spec.
 /// Read.
@@ -337,5 +348,11 @@ pub trait VirtioDevice: Send {
     /// * `_queue_evts` - The notifier events from host.
     fn set_guest_notifiers(&mut self, _queue_evts: &[EventFd]) -> Result<()> {
         Ok(())
+    }
+
+    /// Get whether the virtio device has a control queue,
+    /// devices with a control queue should override this function.
+    fn has_control_queue(&mut self) -> bool {
+        false
     }
 }

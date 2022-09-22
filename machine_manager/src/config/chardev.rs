@@ -206,6 +206,37 @@ pub fn get_chardev_config(args: qmp_schema::CharDevAddArgument) -> Result<Charde
     })
 }
 
+/// Get chardev socket path from ChardevConfig struct.
+///
+/// # Arguments
+///
+/// * `char_dev` - ChardevConfig struct reference.
+/// * `vm_config` - mutable VmConfig struct reference.
+pub fn get_chardev_socket_path(chardev: &str, vm_config: &mut VmConfig) -> Result<String> {
+    if let Some(char_dev) = vm_config.chardev.remove(chardev) {
+        match char_dev.backend.clone() {
+            ChardevType::Socket {
+                path,
+                server,
+                nowait,
+            } => {
+                if server || nowait {
+                    bail!(
+                        "Argument \'server\' or \'nowait\' is not need for chardev \'{}\'",
+                        path
+                    );
+                }
+                Ok(path)
+            }
+            _ => {
+                bail!("Chardev {:?} backend should be socket type.", &char_dev.id);
+            }
+        }
+    } else {
+        bail!("Chardev: {:?} not found for character device", &chardev);
+    }
+}
+
 pub fn parse_virtconsole(vm_config: &mut VmConfig, config_args: &str) -> Result<VirtioConsole> {
     let mut cmd_parser = CmdParser::new("virtconsole");
     cmd_parser.push("").push("id").push("chardev");

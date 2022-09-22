@@ -12,6 +12,7 @@
 
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 
 use address_space::{
@@ -35,6 +36,13 @@ use super::message::{
     VhostUserMsgReq, VhostUserVringAddr, VhostUserVringState,
 };
 use super::sock::VhostUserSock;
+use crate::block::VirtioBlkConfig;
+use crate::VhostUser::message::VhostUserConfig;
+
+/// Vhost supports multiple queue
+pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
+/// Vhost supports `VHOST_USER_GET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
+pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 
 struct ClientInternal {
     // Used to send requests to the vhost user backend in userspace.
@@ -374,7 +382,6 @@ impl VhostUserClient {
         if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
             queue_num -= 1;
         }
-
         // Set all vring num to notify ovs/dpdk how many queues it needs to poll
         // before setting vring info.
         for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
@@ -458,6 +465,101 @@ impl VhostUserClient {
                 vec![],
             ),
         ]
+    }
+
+    /// Send get protocol features request to vhost.
+    pub fn get_protocol_features(&self) -> Result<u64> {
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::GetProtocolFeatures as u32;
+        let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .chain_err(|| "Failed to send msg for getting features")?;
+        let features = client
+            .wait_ack_msg::<u64>(request)
+            .chain_err(|| "Failed to wait ack msg for getting protocols features")?;
+
+        Ok(features)
+    }
+
+    /// Send set protocol features request to vhost.
+    pub fn set_protocol_features(&self, features: u64) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let hdr = VhostUserMsgHdr::new(
+            VhostUserMsgReq::SetProtocolFeatures as u32,
+            0,
+            size_of::<u64>() as u32,
+        );
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&features), payload_opt, &[])
+            .chain_err(|| "Failed to send msg for setting protocols features")?;
+
+        Ok(())
+    }
+
+    /// Get virtio blk config from vhost.
+    pub fn get_virtio_blk_config(&self) -> Result<VirtioBlkConfig> {
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::GetConfig as u32;
+        let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
+        let hdr = VhostUserMsgHdr::new(
+            request,
+            VhostUserHdrFlag::NeedReply as u32,
+            config_len as u32,
+        );
+        let cnf = VhostUserConfig::new(0, 0, VirtioBlkConfig::default())?;
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = Some(unsafe {
+            from_raw_parts(
+                (&cnf as *const VhostUserConfig<VirtioBlkConfig>) as *const u8,
+                config_len,
+            )
+        });
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .chain_err(|| "Failed to send msg for getting config")?;
+        let res = client
+            .wait_ack_msg::<VhostUserConfig<VirtioBlkConfig>>(request)
+            .chain_err(|| "Failed to wait ack msg for getting virtio blk config")?;
+        Ok(res.config)
+    }
+
+    /// Set virtio blk config to vhost.
+    pub fn set_virtio_blk_config(&self, cnf: VirtioBlkConfig) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::SetConfig as u32;
+        let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
+        let hdr = VhostUserMsgHdr::new(request, 0, config_len as u32);
+        let payload_opt: Option<&[u8]> = None;
+        let config = VhostUserConfig::new(0, 0, cnf)?;
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&config), payload_opt, &[])
+            .chain_err(|| "Failed to send msg for getting virtio blk config")?;
+        Ok(())
+    }
+
+    /// Get max queues number that vhost supports.
+    pub fn get_max_queue_num(&self) -> Result<u64> {
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::GetQueueNum as u32;
+        let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .chain_err(|| "Failed to send msg for getting queue num")?;
+        let queue_num = client
+            .wait_ack_msg::<u64>(request)
+            .chain_err(|| "Failed to wait ack msg for getting queue num")?;
+        Ok(queue_num)
     }
 }
 
