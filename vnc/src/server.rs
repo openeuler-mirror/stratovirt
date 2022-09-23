@@ -95,7 +95,7 @@ pub struct VncServer {
     /// Image from gpu.
     pub guest_image: *mut pixman_image_t,
     /// Identify the image update area for guest image.
-    pub guest_dirtymap: Bitmap<u64>,
+    pub guest_dirty_bitmap: Bitmap<u64>,
     /// Image format of pixman.
     pub guest_format: pixman_format_code_t,
     /// Cursor property.
@@ -123,7 +123,7 @@ impl VncServer {
             keysym2keycode: HashMap::new(),
             server_image: ptr::null_mut(),
             guest_image,
-            guest_dirtymap: Bitmap::<u64>::new(
+            guest_dirty_bitmap: Bitmap::<u64>::new(
                 MAX_WINDOW_HEIGHT as usize
                     * round_up_div(
                         (MAX_WINDOW_WIDTH / DIRTY_PIXELS_NUM) as u64,
@@ -179,8 +179,8 @@ impl VncServer {
     ///
     /// # Arguments
     ///
-    /// * `s_info` - source image.
-    /// * `g_info` - dest image.
+    /// * `s_info` - Info of Server image.
+    /// * `g_info` - Info of Guest image.
     fn get_one_line_buf(
         &self,
         s_info: &mut ImageInfo,
@@ -225,8 +225,8 @@ impl VncServer {
     /// # Arguments
     ///
     /// * `x` `y` - start coordinate in image to refresh
-    /// * `s_info` - source image.
-    /// * `g_info` - dest image.
+    /// * `s_info` - Info of Server image.
+    /// * `g_info` - Info of Guest image.
     fn update_one_line(
         &mut self,
         mut x: usize,
@@ -241,7 +241,7 @@ impl VncServer {
 
         while x < round_up_div(width as u64, DIRTY_PIXELS_NUM as u64) as usize {
             if !self
-                .guest_dirtymap
+                .guest_dirty_bitmap
                 .contain(x + y * VNC_BITMAP_WIDTH as usize)
                 .unwrap()
             {
@@ -250,7 +250,7 @@ impl VncServer {
                 s_info.ptr = (s_info.ptr as usize + cmp_bytes) as *mut u8;
                 continue;
             }
-            self.guest_dirtymap
+            self.guest_dirty_bitmap
                 .clear(x + y * VNC_BITMAP_WIDTH as usize)
                 .unwrap();
             let mut _cmp_bytes = cmp_bytes;
@@ -290,9 +290,9 @@ impl VncServer {
     pub fn update_server_image(&mut self) -> i32 {
         let mut dirty_num = 0;
         let height = self.get_min_height();
-        let g_bpl = self.guest_dirtymap.vol() / MAX_WINDOW_HEIGHT as usize;
+        let g_bpl = self.guest_dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
 
-        let mut offset = self.guest_dirtymap.find_next_bit(0).unwrap();
+        let mut offset = self.guest_dirty_bitmap.find_next_bit(0).unwrap();
         if offset >= (height as usize) * g_bpl {
             return dirty_num;
         }
@@ -336,7 +336,7 @@ impl VncServer {
             g_info.ptr = (g_info.ptr as usize + x * cmp_bytes) as *mut u8;
             dirty_num += self.update_one_line(x, y, &mut s_info, &mut g_info, cmp_bytes);
             y += 1;
-            offset = self.guest_dirtymap.find_next_bit(y * g_bpl).unwrap();
+            offset = self.guest_dirty_bitmap.find_next_bit(y * g_bpl).unwrap();
             if offset >= (height as usize) * g_bpl {
                 break;
             }
@@ -354,7 +354,7 @@ impl VncServer {
                     stream.shutdown(Shutdown::Both).unwrap();
                     return Ok(());
                 }
-                info!("new client: {:?}", addr);
+                info!("New Client: {:?}", addr);
                 stream
                     .set_nonblocking(true)
                     .expect("set nonblocking failed");
