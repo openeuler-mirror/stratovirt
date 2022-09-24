@@ -57,7 +57,10 @@ pub mod errors {
 
 mod mem_layout;
 mod syscall;
+extern crate util;
 
+use std::fmt;
+use std::fmt::Debug;
 use std::fs::metadata;
 use std::ops::Deref;
 use std::os::linux::fs::MetadataExt;
@@ -123,6 +126,7 @@ const MMIO_REPLACEABLE_BLK_NR: usize = 4;
 const MMIO_REPLACEABLE_NET_NR: usize = 2;
 
 // The config of replaceable device.
+#[derive(Debug)]
 struct MmioReplaceableConfig {
     // Device id.
     id: String,
@@ -140,7 +144,18 @@ struct MmioReplaceableDevInfo {
     used: bool,
 }
 
+impl fmt::Debug for MmioReplaceableDevInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MmioReplaceableDevInfo")
+            .field("device_type", &self.device.lock().unwrap().device_type())
+            .field("id", &self.id)
+            .field("used", &self.used)
+            .finish()
+    }
+}
+
 // The gather of config, info and count of all replaceable devices.
+#[derive(Debug)]
 struct MmioReplaceableInfo {
     // The arrays of all replaceable configs.
     configs: Arc<Mutex<Vec<MmioReplaceableConfig>>>,
@@ -376,6 +391,8 @@ impl LightMachine {
             id: id.to_string(),
             dev_config,
         };
+
+        trace_mmio_replaceable_config(&config);
         configs_lock.push(config);
         Ok(())
     }
@@ -744,6 +761,10 @@ impl MachineOps for LightMachine {
 
         let mut locked_vm = vm.lock().unwrap();
 
+        //trace for lightmachine
+        trace_sysbus(&locked_vm.sysbus);
+        trace_vm_state(&locked_vm.vm_state);
+
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]
@@ -776,6 +797,7 @@ impl MachineOps for LightMachine {
             .create_replaceable_devices()
             .chain_err(|| "Failed to create replaceable devices.")?;
         locked_vm.add_devices(vm_config)?;
+        trace_replaceable_info(&locked_vm.replaceable_info);
 
         let migrate_info = locked_vm.get_migrate_info();
         let boot_config = if migrate_info.0 == MigrateMode::Unknown {
@@ -788,6 +810,7 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_cores,
             vm_config.machine_config.nr_dies,
         ));
+        trace_cpu_topo(&topology);
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
             vm_config.machine_config.nr_cpus,
@@ -1583,4 +1606,25 @@ impl device_tree::CompileFDT for LightMachine {
 
         Ok(())
     }
+}
+
+/// Trace descriptions for some devices at stratovirt startup.
+fn trace_cpu_topo(cpu_topo: &CPUTopology) {
+    util::ftrace!(trace_cpu_topo, "{:#?}", cpu_topo);
+}
+
+fn trace_sysbus(sysbus: &SysBus) {
+    util::ftrace!(trace_sysbus, "{:?}", sysbus);
+}
+
+fn trace_replaceable_info(replaceable_info: &MmioReplaceableInfo) {
+    util::ftrace!(trace_replaceable_info, "{:?}", replaceable_info);
+}
+
+fn trace_vm_state(vm_state: &Arc<(Mutex<KvmVmState>, Condvar)>) {
+    util::ftrace!(trace_vm_state, "{:#?}", vm_state);
+}
+
+fn trace_mmio_replaceable_config(config: &MmioReplaceableConfig) {
+    util::ftrace!(trace_mmio_replaceable_config, "{:#?}", config);
 }

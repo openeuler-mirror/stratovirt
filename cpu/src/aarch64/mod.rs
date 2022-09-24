@@ -55,14 +55,14 @@ const KVM_MAX_CPREG_ENTRIES: usize = 500;
 /// tree blob (dtb) in system RAM.
 ///
 /// See: https://elixir.bootlin.com/linux/v5.6/source/Documentation/arm64/booting.rst
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct ArmCPUBootConfig {
     pub fdt_addr: u64,
     pub boot_pc: u64,
 }
 
 #[allow(dead_code)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct ArmCPUTopology {
     threads: u8,
     cores: u8,

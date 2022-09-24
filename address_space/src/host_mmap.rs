@@ -34,7 +34,7 @@ const MPOL_MF_STRICT: u32 = 1;
 const MPOL_MF_MOVE: u32 = 2;
 
 /// FileBackend represents backend-file of `HostMemMapping`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FileBackend {
     /// File we used to map memory.
     pub file: Arc<File>,
@@ -341,6 +341,7 @@ pub fn set_host_memory_policy(
 }
 
 /// Record information of memory mapping.
+#[derive(Debug)]
 pub struct HostMemMapping {
     /// Record the range of one memory segment.
     address_range: AddressRange,

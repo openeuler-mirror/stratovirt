@@ -96,6 +96,7 @@ mod micro_vm;
 mod standard_vm;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
+extern crate util;
 
 use std::collections::BTreeMap;
 use std::fs::remove_file;
@@ -1174,6 +1175,7 @@ pub trait MachineOps {
             EventSet::IN,
             vec![power_button_handler],
         );
+        trace_eventnotifier(&notifier);
 
         EventLoop::update_event(vec![notifier], None).chain_err(|| ErrorKind::RegNotifierErr)?;
         Ok(())
@@ -1424,4 +1426,9 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
     }
 
     Ok(())
+}
+
+/// Description of the trace for eventnotifier.
+fn trace_eventnotifier(eventnotifier: &EventNotifier) {
+    util::ftrace!(trace_eventnotifier, "{:#?}", eventnotifier);
 }

@@ -17,6 +17,7 @@ use error_chain::bail;
 use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
 /// XHCI contoller configuration.
+#[derive(Debug)]
 pub struct XhciConfig {
     pub id: String,
 }
@@ -48,6 +49,7 @@ pub fn parse_xhci(conf: &str) -> Result<XhciConfig> {
     Ok(dev)
 }
 
+#[derive(Debug)]
 pub struct UsbKeyboardConfig {
     pub id: String,
 }
@@ -78,6 +80,7 @@ pub fn parse_usb_keyboard(conf: &str) -> Result<UsbKeyboardConfig> {
     Ok(dev)
 }
 
+#[derive(Debug)]
 pub struct UsbTabletConfig {
     pub id: String,
 }

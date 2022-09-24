@@ -111,6 +111,7 @@ mod vhost;
 mod virtio_mmio;
 #[allow(dead_code)]
 mod virtio_pci;
+extern crate util;
 
 pub use balloon::*;
 pub use block::{Block, BlockState};
@@ -354,5 +355,25 @@ pub trait VirtioDevice: Send {
     /// devices with a control queue should override this function.
     fn has_control_queue(&mut self) -> bool {
         false
+    }
+}
+
+/// The trait for trace descriptions of virtio device interactions
+/// on the front and back ends.
+pub trait VirtioTrace {
+    fn trace_request(&self, device: String, behaviour: String) {
+        util::ftrace!(
+            trace_request,
+            "{} : Request received from Guest {}, ready to start processing.",
+            device,
+            behaviour
+        );
+    }
+    fn trace_send_interrupt(&self, device: String) {
+        util::ftrace!(
+            trace_send_interrupt,
+            "{} : stratovirt processing complete, ready to send interrupt to guest.",
+            device
+        );
     }
 }

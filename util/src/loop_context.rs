@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -43,6 +44,7 @@ pub enum NotifierOperation {
     Resume = 32,
 }
 
+#[derive(Debug)]
 enum EventStatus {
     /// Event is currently monitored in epoll.
     Alive = 0,
@@ -70,6 +72,19 @@ pub struct EventNotifier {
     status: EventStatus,
     /// The flag representing whether pre polling is required
     pub io_poll: bool,
+}
+
+impl fmt::Debug for EventNotifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventNotifier")
+            .field("raw_fd", &self.raw_fd)
+            .field("op", &self.op)
+            .field("parked_fd", &self.parked_fd)
+            .field("event", &self.event)
+            .field("status", &self.status)
+            .field("io_poll", &self.io_poll)
+            .finish()
+    }
 }
 
 impl EventNotifier {

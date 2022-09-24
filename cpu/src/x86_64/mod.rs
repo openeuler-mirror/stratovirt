@@ -58,7 +58,7 @@ const ECX_DIE: u32 = 5u32 << 8;
 
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct X86CPUBootConfig {
     pub prot64_mode: bool,
     /// Register %rip value
@@ -80,7 +80,7 @@ pub struct X86CPUBootConfig {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct X86CPUTopology {
     threads: u8,
     cores: u8,

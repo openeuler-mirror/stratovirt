@@ -36,7 +36,7 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_VQ,
@@ -284,6 +284,7 @@ struct NetIoHandler {
 
 impl NetIoHandler {
     fn handle_rx(&mut self) -> Result<()> {
+        self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
         while let Some(tap) = self.tap.as_mut() {
             if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
@@ -353,12 +354,14 @@ impl NetIoHandler {
             self.rx.need_irqs = false;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
                 .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            self.trace_send_interrupt("Net".to_string());
         }
 
         Ok(())
     }
 
     fn handle_tx(&mut self) -> Result<()> {
+        self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
         let mut need_irq = false;
 
@@ -406,6 +409,7 @@ impl NetIoHandler {
         if need_irq {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
                 .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            self.trace_send_interrupt("Net".to_string());
         }
 
         Ok(())
@@ -1071,6 +1075,8 @@ impl StateTransfer for Net {
 }
 
 impl MigrationHook for Net {}
+
+impl VirtioTrace for NetIoHandler {}
 
 #[cfg(test)]
 mod tests {

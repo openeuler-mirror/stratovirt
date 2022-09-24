@@ -24,6 +24,7 @@ pub mod errors {
     }
 }
 
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
@@ -43,6 +44,31 @@ pub struct SysBus {
     pub min_free_irq: i32,
     pub mmio_region: (u64, u64),
     pub min_free_base: u64,
+}
+
+impl fmt::Debug for SysBus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(target_arch = "x86_64")]
+        let debug = f
+            .debug_struct("SysBus")
+            .field("sys_io", &self.sys_io)
+            .field("sys_mem", &self.sys_mem)
+            .field("free_irqs", &self.free_irqs)
+            .field("min_free_irq", &self.min_free_irq)
+            .field("mmio_region", &self.mmio_region)
+            .field("min_free_base", &self.min_free_base)
+            .finish();
+        #[cfg(target_arch = "aarch64")]
+        let debug = f
+            .debug_struct("SysBus")
+            .field("sys_mem", &self.sys_mem)
+            .field("free_irqs", &self.free_irqs)
+            .field("min_free_irq", &self.min_free_irq)
+            .field("mmio_region", &self.mmio_region)
+            .field("min_free_base", &self.min_free_base)
+            .finish();
+        debug
+    }
 }
 
 impl SysBus {
