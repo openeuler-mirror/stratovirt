@@ -20,7 +20,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_SCSI,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
+    VIRTIO_SCSI_F_CHANGE, VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
 };
 use crate::ScsiBus::{virtio_scsi_get_lun, ScsiBus, ScsiRequest, EMULATE_SCSI_OPS, GOOD};
 use crate::VirtioError;
@@ -149,6 +150,27 @@ impl ScsiCntlr {
 impl VirtioDevice for ScsiCntlr {
     /// Realize virtio scsi controller, which is a pci device.
     fn realize(&mut self) -> Result<()> {
+        // If iothread not found, return err.
+        if self.config.iothread.is_some()
+            && EventLoop::get_ctx(self.config.iothread.as_ref()).is_none()
+        {
+            bail!(
+                "IOThread {:?} of virtio scsi is not configured in params.",
+                self.config.iothread,
+            );
+        }
+
+        self.state.config_space.num_queues = self.config.queues;
+
+        self.state.config_space.max_sectors = 0xFFFF_u32;
+        // cmd_per_lun: maximum nuber of linked commands can be sent to one LUN. 32bit.
+        self.state.config_space.cmd_per_lun = 128;
+        // seg_max: queue size - 2, 32 bit.
+        self.state.config_space.seg_max = self.queue_size() as u32 - 2;
+
+        self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
+            | (1_u64 << VIRTIO_SCSI_F_HOTPLUG)
+            | (1_u64 << VIRTIO_SCSI_F_CHANGE);
         Ok(())
     }
 
