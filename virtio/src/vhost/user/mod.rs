@@ -19,3 +19,8 @@ mod sock;
 pub use block::Block;
 use client::VhostUserClient;
 pub use net::Net;
+pub mod fs;
+pub use self::client::*;
+pub use self::fs::*;
+pub use self::message::*;
+pub use self::sock::*;
