@@ -16,6 +16,7 @@ dependencies = [
  "migration",
  "util",
  "vfio",
+ "vhost_user_fs",
  "virtio",
  "vmm-sys-util",
  "vnc",
@@ -746,6 +747,28 @@ name = "vfio-bindings"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43449b404c488f70507dca193debd4bea361fe8089869b947adc19720e464bce"
+
+[[package]]
+name = "vhost_user_fs"
+version = "2.2.0"
+dependencies = [
+ "acpi",
+ "address_space",
+ "devices",
+ "errno",
+ "error-chain",
+ "hypervisor",
+ "libc",
+ "log",
+ "machine_manager",
+ "migration",
+ "migration_derive",
+ "pci",
+ "sysbus",
+ "util",
+ "virtio",
+ "vmm-sys-util",
+]
 
 [[package]]
 name = "virtio"
