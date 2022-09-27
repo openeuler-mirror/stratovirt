@@ -167,7 +167,7 @@ impl UnixSock {
     }
 
     /// Bind assigns a unique listener for the socket.
-    fn bind(&mut self, unlink: bool) -> Result<()> {
+    pub fn bind(&mut self, unlink: bool) -> Result<()> {
         if unlink {
             std::fs::remove_file(self.path.as_str())
                 .chain_err(|| format!("Failed to remove socket file {}.", self.path.as_str()))?;
@@ -180,7 +180,7 @@ impl UnixSock {
     }
 
     /// The listener accepts incoming client connections.
-    fn accept(&mut self) -> Result<()> {
+    pub fn accept(&mut self) -> Result<()> {
         let (sock, _addr) = self
             .listener
             .as_ref()
@@ -192,8 +192,20 @@ impl UnixSock {
         Ok(())
     }
 
-    fn is_accepted(&self) -> bool {
+    pub fn is_accepted(&self) -> bool {
         self.sock.is_some()
+    }
+
+    pub fn server_connection_refuse(&mut self) -> Result<()> {
+        // Refuse connection by finishing life cycle of stream fd from listener fd.
+        self.listener.as_ref().unwrap().accept().chain_err(|| {
+            format!(
+                "Failed to accept the socket for refused connection {}",
+                self.path
+            )
+        })?;
+
+        Ok(())
     }
 
     /// Unix socket stream create a connection for requests.
@@ -418,7 +430,6 @@ impl UnixSock {
 
             cmsg_ptr = self.get_next_cmsg(&msg, &cmsg, cmsg_ptr);
         }
-
         Ok((total_read as usize, in_fds_count as usize))
     }
 }
