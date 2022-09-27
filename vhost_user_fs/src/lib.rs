@@ -18,6 +18,7 @@ extern crate machine_manager;
 extern crate util;
 extern crate virtio;
 
+pub mod cmdline;
 pub mod errors {
     error_chain! {
         links {
