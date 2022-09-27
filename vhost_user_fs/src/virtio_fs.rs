@@ -98,16 +98,13 @@ impl FsIoHandler {
     }
 
     fn delete_notifiers(&self) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-        notifiers.push(EventNotifier::new(
+        vec![EventNotifier::new(
             NotifierOperation::Delete,
             self.kick_evt.as_raw_fd(),
             None,
             EventSet::IN,
             Vec::new(),
-        ));
-
-        notifiers
+        )]
     }
 }
 
@@ -233,8 +230,7 @@ impl VirtioFs {
 
     fn get_guest_address(&self, addr: u64) -> Result<u64> {
         for (_, info) in self.mem_info.iter().enumerate() {
-            if addr >= info.userspace_addr
-                && addr < info.userspace_addr + info.memory_size {
+            if addr >= info.userspace_addr && addr < info.userspace_addr + info.memory_size {
                 return Ok(info.guest_phys_addr + addr - info.userspace_addr);
             }
         }
@@ -270,7 +266,7 @@ impl VhostUserReqHandler for VirtioFs {
             self.config.mem_regions = Vec::new();
         }
 
-        self.mem_info = regions.to_vec().clone();
+        self.mem_info = regions.to_vec();
 
         for (index, region_config) in regions.iter().enumerate() {
             let file = unsafe { File::from_raw_fd(fds[index]) };

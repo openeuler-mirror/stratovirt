@@ -116,7 +116,12 @@ impl EventNotifierHelper for VhostUserServerHandler {
 
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
-            server_handler.lock().unwrap().sock.domain.get_listener_raw_fd(),
+            server_handler
+                .lock()
+                .unwrap()
+                .sock
+                .domain
+                .get_listener_raw_fd(),
             None,
             EventSet::IN,
             handlers,

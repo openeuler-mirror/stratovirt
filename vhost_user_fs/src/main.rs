@@ -15,9 +15,13 @@ extern crate error_chain;
 #[macro_use]
 extern crate log;
 extern crate vhost_user_fs;
+use machine_manager::event_loop::EventLoop;
 use std::os::unix::fs::OpenOptionsExt;
-use util::logger;
-use vhost_user_fs::cmdline::create_args_parser;
+use std::sync::{Arc, Mutex};
+use util::{arg_parser, logger};
+use vhost_user_fs::cmdline::{create_args_parser, create_fs_config, FsConfig};
+use vhost_user_fs::vhost_user_fs::VhostUserFs;
+
 error_chain! {
     links {
         VhostUserFs(vhost_user_fs::errors::Error, vhost_user_fs::errors::ErrorKind);
@@ -37,6 +41,34 @@ fn run() -> Result<()> {
         init_log(logfile_path)?;
     }
     set_panic_hook();
+    match real_main(&cmd_args) {
+        Ok(()) => info!("EventLoop over, Vm exit"),
+        Err(ref e) => {
+            error!("{}", error_chain::ChainedError::display_chain(e));
+        }
+    }
+
+    Ok(())
+}
+
+fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
+    let fsconfig: FsConfig = create_fs_config(cmd_args)?;
+    info!("FsConfig is {:?}", fsconfig);
+
+    EventLoop::object_init(&None)?;
+
+    let vhost_user_fs = Arc::new(Mutex::new(
+        VhostUserFs::new(fsconfig).chain_err(|| "Failed to create vhost use fs")?,
+    ));
+    EventLoop::set_manager(vhost_user_fs.clone(), None);
+
+    vhost_user_fs
+        .lock()
+        .unwrap()
+        .add_event_notifier()
+        .chain_err(|| "Failed to add event")?;
+
+    EventLoop::loop_run().chain_err(|| "EventLoop exits unexpectedly: error occurs")?;
     Ok(())
 }
 

@@ -16,8 +16,8 @@ use std::slice;
 use std::sync::{Arc, Mutex};
 use util::unix::limit_permission;
 use virtio::vhost::user::{
-    VhostUserHdrFlag, VhostUserMemHdr, RegionMemInfo,
-    VhostUserMsgHdr, VhostUserMsgReq, VhostUserVringAddr, VhostUserVringState, MAX_ATTACHED_FD_ENTRIES,
+    RegionMemInfo, VhostUserHdrFlag, VhostUserMemHdr, VhostUserMsgHdr, VhostUserMsgReq,
+    VhostUserVringAddr, VhostUserVringState, MAX_ATTACHED_FD_ENTRIES,
 };
 use virtio::VhostUser::VhostUserSock;
 
@@ -159,10 +159,7 @@ impl VhostUserServerHandler {
             .chain_err(|| format!("Failed to bind for vhost user server {}", path))?;
         limit_permission(path).chain_err(|| format!("Failed to limit permission {}", path))?;
 
-        Ok(VhostUserServerHandler {
-            sock,
-            backend,
-        })
+        Ok(VhostUserServerHandler { sock, backend })
     }
 
     fn recv_hdr_and_fds(&mut self) -> Result<(VhostUserMsgHdr, Option<Vec<RawFd>>)> {
@@ -216,7 +213,11 @@ impl VhostUserServerHandler {
             .chain_err(|| "Failed to recv msg body")?;
 
         if rcv_len != len {
-            bail!("The length of msg body {} is invalid, expected {}", rcv_len, len);
+            bail!(
+                "The length of msg body {} is invalid, expected {}",
+                rcv_len,
+                len
+            );
         }
 
         Ok((rcv_len, rbuf))
@@ -231,6 +232,7 @@ impl VhostUserServerHandler {
         if size_of::<D>() != len {
             bail!(
                 "Failed to get msg body for request {}, len {}, payload size {}",
+                hdr.request,
                 len,
                 size_of::<D>()
             );
@@ -267,16 +269,12 @@ impl VhostUserServerHandler {
             if let Some(fds) = fds_opt {
                 close_fds(fds);
             }
-            bail!(
-                "The header length of mem table is invalid {}",
-                len,
-            );
+            bail!("The header length of mem table is invalid {}", len);
         }
 
         let memhdrsize = size_of::<VhostUserMemHdr>();
         let memhdr = unsafe { &*(buf.as_ptr() as *const VhostUserMemHdr) };
-        let total_size =
-            (memhdr.nregions as usize * size_of::<RegionMemInfo>()) + memhdrsize;
+        let total_size = (memhdr.nregions as usize * size_of::<RegionMemInfo>()) + memhdrsize;
         if (hdr.size as usize) != total_size {
             if let Some(fds) = fds_opt {
                 close_fds(fds);
@@ -334,7 +332,7 @@ impl VhostUserServerHandler {
             }
             VhostUserMsgReq::SetFeatures => {
                 let features = self
-                    .get_msg_body::<u64>(&hdr, buf, len)
+                    .get_msg_body::<u64>(hdr, buf, len)
                     .chain_err(|| "Failed to get msg body for setting features")?;
                 self.backend.lock().unwrap().set_features(*features)?;
             }
@@ -345,7 +343,7 @@ impl VhostUserServerHandler {
                 self.backend.lock().unwrap().set_owner()?;
             }
             VhostUserMsgReq::SetMemTable => {
-                let ret = match self.set_msg_mem_table(&hdr, buf, len, rfds) {
+                let ret = match self.set_msg_mem_table(hdr, buf, len, rfds) {
                     Err(ref e) => {
                         error!(
                             "Failed to set mem table {}",
@@ -362,7 +360,7 @@ impl VhostUserServerHandler {
             }
             VhostUserMsgReq::SetVringNum => {
                 let vringstate = self
-                    .get_msg_body::<VhostUserVringState>(&hdr, buf, len)
+                    .get_msg_body::<VhostUserVringState>(hdr, buf, len)
                     .chain_err(|| "Failed to get msg body for setting vring num")?;
                 self.backend
                     .lock()
@@ -371,7 +369,7 @@ impl VhostUserServerHandler {
             }
             VhostUserMsgReq::SetVringAddr => {
                 let vringaddr = self
-                    .get_msg_body::<VhostUserVringAddr>(&hdr, buf, len)
+                    .get_msg_body::<VhostUserVringAddr>(hdr, buf, len)
                     .chain_err(|| "Failed to get msg body for setting vring addr")?;
                 self.backend.lock().unwrap().set_vring_addr(
                     vringaddr.index as usize,
@@ -384,7 +382,7 @@ impl VhostUserServerHandler {
             }
             VhostUserMsgReq::SetVringBase => {
                 let vringstate = self
-                    .get_msg_body::<VhostUserVringState>(&hdr, buf, len)
+                    .get_msg_body::<VhostUserVringState>(hdr, buf, len)
                     .chain_err(|| "Failed to get msg body for setting vring base")?;
                 self.backend
                     .lock()
@@ -393,7 +391,7 @@ impl VhostUserServerHandler {
             }
             VhostUserMsgReq::SetVringEnable => {
                 let vringstate = self
-                    .get_msg_body::<VhostUserVringState>(&hdr, buf, len)
+                    .get_msg_body::<VhostUserVringState>(hdr, buf, len)
                     .chain_err(|| "Failed to get msg body for setting vring enable")?;
                 self.backend
                     .lock()
@@ -402,7 +400,7 @@ impl VhostUserServerHandler {
             }
             VhostUserMsgReq::SetVringKick => {
                 let index = self
-                    .get_msg_body::<u64>(&hdr, buf, len)
+                    .get_msg_body::<u64>(hdr, buf, len)
                     .chain_err(|| "Failed to get msg body for setting vring kick")?;
                 if let Some(fds) = rfds {
                     let fds_len = fds.len();
@@ -420,7 +418,7 @@ impl VhostUserServerHandler {
             }
             VhostUserMsgReq::SetVringCall => {
                 let index = self
-                    .get_msg_body::<u64>(&hdr, buf, len)
+                    .get_msg_body::<u64>(hdr, buf, len)
                     .chain_err(|| "Failed to get msg body for setting vring call")?;
                 if let Some(fds) = rfds {
                     let fds_len = fds.len();

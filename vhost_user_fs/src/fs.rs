@@ -123,7 +123,7 @@ impl<T> Map<T> {
 
     fn get_value(&self, id: usize) -> Option<&T> {
         if let Some(e) = self.list.get(id) {
-            e.value.as_ref().map(|v| v)
+            e.value.as_ref()
         } else {
             None
         }
@@ -131,7 +131,7 @@ impl<T> Map<T> {
 
     fn get_value_mut(&mut self, id: usize) -> Option<&mut T> {
         if let Some(e) = self.list.get_mut(id) {
-            e.value.as_mut().map(|v| v)
+            e.value.as_mut()
         } else {
             None
         }
@@ -562,7 +562,7 @@ impl FileSystem {
             if attr.valid & FATTR_FH != 0 {
                 match self.file_map.get_value(attr.fh as usize) {
                     Some(file) => {
-                        let ret = fchmod(&file, attr.mode);
+                        let ret = fchmod(file, attr.mode);
                         if ret != FUSE_OK {
                             return ret;
                         }
@@ -626,7 +626,7 @@ impl FileSystem {
             if attr.valid & FATTR_FH != 0 {
                 match self.file_map.get_value(attr.fh as usize) {
                     Some(file) => {
-                        let ret = ftruncate(&file, attr.size);
+                        let ret = ftruncate(file, attr.size);
                         if ret != FUSE_OK {
                             return ret;
                         }
@@ -686,7 +686,7 @@ impl FileSystem {
             if attr.valid & FATTR_FH != 0 {
                 match self.file_map.get_value(attr.fh as usize) {
                     Some(file) => {
-                        let ret = futimens(&file, a_sec, a_nsec, m_sec, m_nsec);
+                        let ret = futimens(file, a_sec, a_nsec, m_sec, m_nsec);
                         if ret != FUSE_OK {
                             return ret;
                         }
