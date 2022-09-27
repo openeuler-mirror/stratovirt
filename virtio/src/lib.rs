@@ -24,7 +24,8 @@
 //!
 //! - `x86_64`
 //! - `aarch64`
-
+#[macro_use]
+extern crate log;
 pub mod errors {
     use error_chain::error_chain;
 
@@ -107,7 +108,7 @@ mod gpu;
 mod net;
 mod queue;
 mod rng;
-mod vhost;
+pub mod vhost;
 mod virtio_mmio;
 #[allow(dead_code)]
 mod virtio_pci;
@@ -147,7 +148,7 @@ pub const VIRTIO_TYPE_RNG: u32 = 4;
 pub const VIRTIO_TYPE_BALLOON: u32 = 5;
 pub const VIRTIO_TYPE_GPU: u32 = 16;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
-pub const _VIRTIO_TYPE_FS: u32 = 26;
+pub const VIRTIO_TYPE_FS: u32 = 26;
 
 // The Status of Virtio Device.
 const CONFIG_STATUS_ACKNOWLEDGE: u32 = 0x01;
