@@ -12,13 +12,23 @@
 
 #[macro_use]
 extern crate error_chain;
-
+#[macro_use]
+extern crate log;
 extern crate address_space;
 extern crate machine_manager;
 extern crate util;
 extern crate virtio;
 
 pub mod cmdline;
+pub mod fs;
+pub mod fs_ops;
+pub mod fuse_msg;
+pub mod fuse_proc;
+pub mod fuse_req;
+pub mod vhost_user_fs;
+pub mod vhost_user_server;
+pub mod virtio_fs;
+
 pub mod errors {
     error_chain! {
         links {

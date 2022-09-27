@@ -145,9 +145,8 @@ use std::ffi::CString;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use error_chain::ChainedError;
-
 use address_space::AddressSpace;
+use error_chain::ChainedError;
 use util::byte_code::ByteCode;
 
 use crate::errors::{Result, ResultExt};
@@ -302,7 +301,7 @@ impl FuseBuffer {
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn read_obj<T: ByteCode>(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<T> {
         let mut obj = T::default();
-        self.read_slice(sys_mem, &mut obj.as_mut_bytes(), size_of::<T>())?;
+        self.read_slice(sys_mem, obj.as_mut_bytes(), size_of::<T>())?;
         Ok(obj)
     }
 
