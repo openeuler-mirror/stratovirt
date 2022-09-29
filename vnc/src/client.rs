@@ -49,7 +49,7 @@ const NUM_OF_COLORMAP: u16 = 256;
 
 // VNC encodings types.
 pub const ENCODING_RAW: i32 = 0;
-const ENCODING_HEXTILE: i32 = 5;
+pub const ENCODING_HEXTILE: i32 = 5;
 const ENCODING_ZLIB: i32 = 6;
 const ENCODING_TIGHT: i32 = 7;
 const ENCODING_ZRLE: i32 = 16;
@@ -152,22 +152,48 @@ impl Rectangle {
     }
 }
 
+/// Display Output mode information of client.
+#[derive(Clone)]
+pub struct DisplayMode {
+    /// Encoding type.
+    pub enc: i32,
+    /// Data storage type for client.
+    pub client_be: bool,
+    /// The pixel need to convert.
+    pub convert: bool,
+    /// Image pixel format in pixman.
+    pub pf: PixelFormat,
+}
+
+impl DisplayMode {
+    pub fn new(enc: i32, client_be: bool, convert: bool, pf: PixelFormat) -> Self {
+        DisplayMode {
+            enc,
+            client_be,
+            convert,
+            pf,
+        }
+    }
+}
+
+impl Default for DisplayMode {
+    fn default() -> Self {
+        Self::new(0, false, false, PixelFormat::default())
+    }
+}
+
 unsafe impl Send for RectInfo {}
 pub struct RectInfo {
     /// TcpStream address.
     pub addr: String,
     /// Dirty area of image.
     pub rects: Vec<Rectangle>,
+    /// Width of Client image.
     pub width: i32,
+    /// Height of Client image.
     pub height: i32,
-    /// Encoding type.
-    pub encoding: i32,
-    /// The pixel need to convert.
-    pub convert: bool,
-    /// Data storage type for client.
-    pub big_endian: bool,
-    /// Image pixel format in pixman.
-    pub pixel_format: PixelFormat,
+    /// Output mod information of client display.
+    pub dpm: DisplayMode,
     /// Image
     pub image: *mut pixman_image_t,
 }
@@ -179,10 +205,7 @@ impl RectInfo {
             rects,
             width: client.width,
             height: client.height,
-            encoding: client.encoding,
-            convert: client.pixel_convert,
-            big_endian: client.big_endian,
-            pixel_format: client.pixel_format.clone(),
+            dpm: client.client_dpm.clone(),
             image: client.server_image,
         }
     }
@@ -199,10 +222,7 @@ impl Clone for RectInfo {
             rects,
             width: self.width,
             height: self.height,
-            encoding: self.encoding,
-            convert: self.convert,
-            big_endian: self.big_endian,
-            pixel_format: self.pixel_format.clone(),
+            dpm: self.dpm.clone(),
             image: self.image,
         }
     }
@@ -238,16 +258,12 @@ pub struct VncClient {
     pub tls_conn: Option<rustls::ServerConnection>,
     /// Configuration for sasl authentication.
     pub sasl: Sasl,
-    /// Data storage type for client.
-    pub big_endian: bool,
     /// State flags whether the image needs to be updated for the client.
     state: UpdateState,
     /// Identify the image update area.
     pub dirty_bitmap: Bitmap<u64>,
     /// Number of dirty data.
     dirty_num: i32,
-    /// Image pixel format in pixman.
-    pub pixel_format: PixelFormat,
     /// Image pointer.
     pub server_image: *mut pixman_image_t,
     /// Tcp listening address.
@@ -256,12 +272,10 @@ pub struct VncClient {
     pub width: i32,
     /// Image height.
     pub height: i32,
-    /// Encoding type.
-    encoding: i32,
+    /// Display output mod information of client.
+    pub client_dpm: DisplayMode,
     /// Image display feature.
     feature: i32,
-    /// The pixel need to convert.
-    pixel_convert: bool,
 }
 
 impl VncClient {
@@ -286,21 +300,18 @@ impl VncClient {
             server,
             tls_conn: None,
             sasl: Sasl::default(),
-            big_endian: false,
             state: UpdateState::No,
             dirty_bitmap: Bitmap::<u64>::new(
                 MAX_WINDOW_HEIGHT as usize
                     * round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) as usize,
             ),
             dirty_num: 0,
-            pixel_format: PixelFormat::default(),
             server_image: image,
             addr,
             width: 0,
             height: 0,
-            encoding: 0,
+            client_dpm: DisplayMode::default(),
             feature: 0,
-            pixel_convert: false,
         }
     }
 
@@ -683,24 +694,28 @@ impl VncClient {
             buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
             self.pixel_format_message(&mut buf);
             self.write_msg(&buf);
-        } else if !self.pixel_format.is_default_pixel_format() {
-            self.pixel_convert = true;
+        } else if !self.client_dpm.pf.is_default_pixel_format() {
+            self.client_dpm.convert = true;
         }
     }
 
     /// Set pixformat for client.
     pub fn pixel_format_message(&mut self, buf: &mut Vec<u8>) {
-        self.pixel_format.init_pixelformat();
-        buf.append(&mut (self.pixel_format.pixel_bits as u8).to_be_bytes().to_vec()); // Bit per pixel.
-        buf.append(&mut (self.pixel_format.depth as u8).to_be_bytes().to_vec()); // Depth.
+        self.client_dpm.pf.init_pixelformat();
+        buf.append(&mut (self.client_dpm.pf.pixel_bits as u8).to_be_bytes().to_vec()); // Bit per pixel.
+        buf.append(&mut (self.client_dpm.pf.depth as u8).to_be_bytes().to_vec()); // Depth.
         buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Big-endian flag.
         buf.append(&mut (1_u8).to_be_bytes().to_vec()); // True-color flag.
-        buf.append(&mut (self.pixel_format.red.max as u16).to_be_bytes().to_vec()); // Red max.
-        buf.append(&mut (self.pixel_format.green.max as u16).to_be_bytes().to_vec()); // Green max.
-        buf.append(&mut (self.pixel_format.blue.max as u16).to_be_bytes().to_vec()); // Blue max.
-        buf.append(&mut (self.pixel_format.red.shift as u8).to_be_bytes().to_vec()); // Red shift.
-        buf.append(&mut (self.pixel_format.green.shift as u8).to_be_bytes().to_vec()); // Green shift.
-        buf.append(&mut (self.pixel_format.blue.shift as u8).to_be_bytes().to_vec()); // Blue shift.
+        buf.append(&mut (self.client_dpm.pf.red.max as u16).to_be_bytes().to_vec()); // Red max.
+        buf.append(&mut (self.client_dpm.pf.green.max as u16).to_be_bytes().to_vec()); // Green max.
+        buf.append(&mut (self.client_dpm.pf.blue.max as u16).to_be_bytes().to_vec()); // Blue max.
+        buf.append(&mut (self.client_dpm.pf.red.shift as u8).to_be_bytes().to_vec()); // Red shift.
+        buf.append(
+            &mut (self.client_dpm.pf.green.shift as u8)
+                .to_be_bytes()
+                .to_vec(),
+        ); // Green shift.
+        buf.append(&mut (self.client_dpm.pf.blue.shift as u8).to_be_bytes().to_vec()); // Blue shift.
         buf.append(&mut [0; 3].to_vec()); // Padding.
     }
 
@@ -748,7 +763,7 @@ impl VncClient {
         // Number of colors.
         buf.append(&mut (NUM_OF_COLORMAP as u16).to_be_bytes().to_vec());
 
-        let pf = self.pixel_format.clone();
+        let pf = self.client_dpm.pf.clone();
         for i in 0..NUM_OF_COLORMAP as u16 {
             let r = ((i >> pf.red.shift) & pf.red.max as u16) << (16 - pf.red.bits);
             let g = ((i >> pf.green.shift) & pf.green.max as u16) << (16 - pf.green.bits);
@@ -798,27 +813,29 @@ impl VncClient {
             ))));
         }
 
-        self.pixel_format.red.set_color_info(red_shift, red_max);
-        self.pixel_format
+        self.client_dpm.pf.red.set_color_info(red_shift, red_max);
+        self.client_dpm
+            .pf
             .green
             .set_color_info(green_shift, green_max);
-        self.pixel_format.blue.set_color_info(blue_shift, blue_max);
-        self.pixel_format.pixel_bits = bit_per_pixel;
-        self.pixel_format.pixel_bytes = bit_per_pixel / BIT_PER_BYTE as u8;
+        self.client_dpm.pf.blue.set_color_info(blue_shift, blue_max);
+        self.client_dpm.pf.pixel_bits = bit_per_pixel;
+        self.client_dpm.pf.pixel_bytes = bit_per_pixel / BIT_PER_BYTE as u8;
         // Standard pixel format, depth is equal to 24.
-        self.pixel_format.depth = if bit_per_pixel == 32 {
+        self.client_dpm.pf.depth = if bit_per_pixel == 32 {
             24
         } else {
             bit_per_pixel
         };
-        self.big_endian = big_endian_flag != 0;
+        self.client_dpm.client_be = big_endian_flag != 0;
         if true_color_flag == 0 {
             self.send_color_map();
         }
-        if !self.pixel_format.is_default_pixel_format() {
-            self.pixel_convert = true;
+        if !self.client_dpm.pf.is_default_pixel_format() {
+            self.client_dpm.convert = true;
         }
 
+        VNC_RECT_INFO.lock().unwrap().clear();
         self.update_event_handler(1, VncClient::handle_protocol_msg);
         Ok(())
     }
@@ -883,30 +900,30 @@ impl VncClient {
             ]);
             match enc {
                 ENCODING_RAW => {
-                    self.encoding = enc;
+                    self.client_dpm.enc = enc;
                 }
                 ENCODING_HEXTILE => {
                     self.feature |= 1 << VncFeatures::VncFeatureHextile as usize;
-                    self.encoding = enc;
+                    self.client_dpm.enc = enc;
                 }
                 ENCODING_TIGHT => {
                     self.feature |= 1 << VncFeatures::VncFeatureTight as usize;
-                    self.encoding = enc;
+                    self.client_dpm.enc = enc;
                 }
                 ENCODING_ZLIB => {
                     // ZRLE compress better than ZLIB, so prioritize ZRLE.
                     if self.feature & (1 << VncFeatures::VncFeatureZrle as usize) == 0 {
                         self.feature |= 1 << VncFeatures::VncFeatureZlib as usize;
-                        self.encoding = enc;
+                        self.client_dpm.enc = enc;
                     }
                 }
                 ENCODING_ZRLE => {
                     self.feature |= 1 << VncFeatures::VncFeatureZrle as usize;
-                    self.encoding = enc;
+                    self.client_dpm.enc = enc;
                 }
                 ENCODING_ZYWRLE => {
                     self.feature |= 1 << VncFeatures::VncFeatureZywrle as usize;
-                    self.encoding = enc;
+                    self.client_dpm.enc = enc;
                 }
                 ENCODING_DESKTOPRESIZE => {
                     self.feature |= 1 << VncFeatures::VncFeatureResize as usize;
@@ -935,7 +952,6 @@ impl VncClient {
             num_encoding -= 1;
         }
 
-        self.encoding = 0;
         self.desktop_resize();
         // VNC display cursor define.
         let mut cursor: DisplayMouse = DisplayMouse::default();
