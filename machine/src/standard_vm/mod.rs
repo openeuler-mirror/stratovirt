@@ -794,6 +794,8 @@ impl StdMachine {
                 boot_index: args.boot_index,
                 chardev: None,
                 socket_path: None,
+                // TODO Add aio option by qmp.
+                aio: None,
             };
             dev.check()?;
             dev
@@ -1173,6 +1175,7 @@ impl DeviceInterface for StdMachine {
             read_only,
             direct,
             iops: args.iops,
+            aio: None,
         };
 
         if let Err(e) = config.check() {

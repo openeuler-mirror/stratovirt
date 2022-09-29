@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::Result;
+use super::{AioContext, IoEvent, Result};
 use error_chain::bail;
 use kvm_bindings::__IncompleteArrayField;
 
@@ -54,16 +54,6 @@ pub enum IoCmd {
     Pwritev = 8,
 }
 
-#[repr(C)]
-#[allow(non_camel_case_types)]
-#[derive(Default)]
-pub struct IoEvent {
-    pub data: u64,
-    pub obj: u64,
-    pub res: i64,
-    pub res2: i64,
-}
-
 #[allow(non_camel_case_types)]
 pub enum IoContext {}
 
@@ -104,8 +94,12 @@ impl LibaioContext {
 
         Ok(LibaioContext { ctx, max_size })
     }
+}
 
-    pub fn submit(&self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()> {
+/// Implements the AioContext for libaio.
+impl AioContext for LibaioContext {
+    /// Submit requests.
+    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()> {
         let ret = unsafe { libc::syscall(libc::SYS_io_submit, self.ctx, nr, iocbp.as_ptr()) };
         if ret < 0 {
             bail!("Failed to submit aio, return {}.", ret);
@@ -114,7 +108,8 @@ impl LibaioContext {
         Ok(())
     }
 
-    pub fn get_events(&self) -> (&[IoEvent], u32, u32) {
+    /// Get the IO events.
+    fn get_events(&mut self) -> (&[IoEvent], u32, u32) {
         let ring = self.ctx as *mut AioRing;
         let head = unsafe { (*ring).head };
         let tail = unsafe { (*ring).tail };

@@ -1179,6 +1179,8 @@ impl DeviceInterface for LightMachine {
             boot_index: None,
             chardev: None,
             socket_path: None,
+            // TODO Add aio option by qmp.
+            aio: None,
         };
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),

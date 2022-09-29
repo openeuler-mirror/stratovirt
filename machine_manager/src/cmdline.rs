@@ -149,7 +149,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("drive")
             .multiple(true)
             .long("drive")
-            .value_name("file=path,id=str[,readonly=][,direct=][,serial=][,iothread=][iops=]")
+            .value_name("file=path,id=str[,readonly=][,direct=][,serial=][,iothread=][iops=][,aio=native|io_uring]")
             .help("use 'file' as a drive image")
             .takes_values(true),
         )

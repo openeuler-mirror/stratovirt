@@ -413,3 +413,9 @@ Copyright notice:
 Copyright (c) Aleksey Kladov <aleksey.kladov@gmail.com>
 License: MIT OR Apache-2.0
 Please see above.
+
+Software: io-uring 0.5.7
+Copyright notice:
+Copyright (c) tokio-rs
+License: MIT OR Apache-2.0
+Please see above.

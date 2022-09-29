@@ -12,21 +12,46 @@
 
 mod libaio;
 mod raw;
+mod uring;
 
 use std::clone::Clone;
 use std::marker::{Send, Sync};
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use vmm_sys_util::eventfd::EventFd;
 
-use super::errors::Result;
+use super::errors::{Result, ResultExt};
 use super::link_list::{List, Node};
 pub use libaio::*;
 pub use raw::*;
+use uring::IoUringContext;
 
 type CbList<T> = List<AioCb<T>>;
 type CbNode<T> = Node<AioCb<T>>;
+
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Default)]
+pub struct IoEvent {
+    pub data: u64,
+    pub obj: u64,
+    pub res: i64,
+    pub res2: i64,
+}
+
+/// Io-uring aio type.
+pub const AIO_IOURING: &str = "io_uring";
+/// Native aio type.
+pub const AIO_NATIVE: &str = "native";
+
+/// The trait for Asynchronous IO operation.
+trait AioContext {
+    /// Submit IO requests to the OS.
+    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()>;
+    /// Get the IO events of the requests sumbitted earlier.
+    fn get_events(&mut self) -> (&[IoEvent], u32, u32);
+}
 
 pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) + Sync + Send>;
 
@@ -57,7 +82,7 @@ impl<T: Clone> AioCb<T> {
 }
 
 pub struct Aio<T: Clone + 'static> {
-    pub ctx: Arc<LibaioContext>,
+    ctx: Arc<Mutex<dyn AioContext>>,
     pub fd: EventFd,
     pub aio_in_queue: CbList<T>,
     pub aio_in_flight: CbList<T>,
@@ -66,12 +91,28 @@ pub struct Aio<T: Clone + 'static> {
 }
 
 impl<T: Clone + 'static> Aio<T> {
-    pub fn new(func: Arc<AioCompleteFunc<T>>) -> Result<Self> {
-        let max_events = 128;
+    pub fn new(func: Arc<AioCompleteFunc<T>>, engine: Option<&String>) -> Result<Self> {
+        let max_events: usize = 128;
+        let fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let aio = if let Some(engine) = engine {
+            engine
+        } else {
+            AIO_NATIVE
+        };
+
+        let ctx: Arc<Mutex<dyn AioContext>> = if aio == AIO_IOURING {
+            Arc::new(Mutex::new(IoUringContext::new(
+                max_events as u32,
+                &fd,
+                func.clone(),
+            )?))
+        } else {
+            Arc::new(Mutex::new(LibaioContext::new(max_events as i32)?))
+        };
 
         Ok(Aio {
-            ctx: Arc::new(LibaioContext::new(max_events as i32)?),
-            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            ctx,
+            fd,
             aio_in_queue: List::new(),
             aio_in_flight: List::new(),
             max_events,
@@ -80,12 +121,14 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     pub fn handle(&mut self) -> Result<bool> {
-        let (evts, start, end) = self.ctx.get_events();
         let mut done = false;
+        let mut ctx = self.ctx.lock().unwrap();
+        let (evts, start, end) = ctx.get_events();
+
         for e in start..end {
             if evts[e as usize].res2 == 0 {
+                done = true;
                 unsafe {
-                    done = true;
                     let node = evts[e as usize].data as *mut CbNode<T>;
 
                     (self.complete_func)(&(*node).value, evts[e as usize].res);
@@ -100,6 +143,8 @@ impl<T: Clone + 'static> Aio<T> {
                 }
             }
         }
+        // Drop reference of 'ctx', so below 'process_list' can work.
+        drop(ctx);
         self.process_list().map(|_v| Ok(done))?
     }
 
@@ -118,7 +163,11 @@ impl<T: Clone + 'static> Aio<T> {
             }
 
             if !iocbs.is_empty() {
-                return self.ctx.submit(iocbs.len() as i64, &mut iocbs);
+                return self
+                    .ctx
+                    .lock()
+                    .unwrap()
+                    .submit(iocbs.len() as i64, &mut iocbs);
             }
         }
 
