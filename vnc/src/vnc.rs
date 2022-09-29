@@ -13,12 +13,13 @@
 use crate::VncError;
 use crate::{
     client::{
-        RectInfo, Rectangle, ServerMsg, VncClient, VncFeatures, ENCODING_ALPHA_CURSOR,
-        ENCODING_RAW, ENCODING_RICH_CURSOR,
+        DisplayMode, RectInfo, Rectangle, ServerMsg, VncClient, VncFeatures, ENCODING_ALPHA_CURSOR,
+        ENCODING_HEXTILE, ENCODING_RAW, ENCODING_RICH_CURSOR,
     },
+    encoding::enc_hextile::hextile_send_framebuffer_update,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width,
-        unref_pixman_image, PixelFormat,
+        unref_pixman_image,
     },
     round_up, round_up_div,
     server::VncServer,
@@ -165,27 +166,22 @@ fn start_vnc_thread() -> Result<()> {
 
             let mut num_rects: i32 = 0;
             let mut buf = Vec::new();
+            buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
+            buf.append(&mut (0_u8).to_be_bytes().to_vec());
             buf.append(&mut [0_u8; 2].to_vec());
 
             let locked_server = server.lock().unwrap();
             for rect in rect_info.rects.iter_mut() {
                 if check_rect(rect, rect_info.width, rect_info.height) {
-                    let n = send_framebuffer_update(
-                        rect_info.image,
-                        rect_info.encoding,
-                        rect,
-                        rect_info.convert,
-                        rect_info.big_endian,
-                        &rect_info.pixel_format,
-                        &mut buf,
-                    );
+                    let n =
+                        send_framebuffer_update(rect_info.image, rect, &rect_info.dpm, &mut buf);
                     if n >= 0 {
                         num_rects += n;
                     }
                 }
             }
-            buf.insert(2, num_rects as u8);
-            buf.insert(2, (num_rects >> 8) as u8);
+            buf[2] = (num_rects >> 8) as u8;
+            buf[3] = num_rects as u8;
 
             let client = if let Some(client) = locked_server.clients.get(&rect_info.addr) {
                 client.clone()
@@ -383,73 +379,95 @@ pub fn framebuffer_upadate(x: i32, y: i32, w: i32, h: i32, encoding: i32, buf: &
     buf.append(&mut encoding.to_be_bytes().to_vec());
 }
 
+/// Write pixel to client.
+///
+/// # Arguments
+///
+/// * `data_ptr` - pointer to the data need.
+/// * `copy_bytes` - total pixel to write.
+/// * `client_dpm` - Output mod of client display.
+/// * `buf` - send buffer.
+pub fn write_pixel(
+    data_ptr: *mut u8,
+    copy_bytes: usize,
+    client_dpm: &DisplayMode,
+    buf: &mut Vec<u8>,
+) {
+    if !client_dpm.convert {
+        let mut con = vec![0; copy_bytes];
+        unsafe {
+            ptr::copy(data_ptr as *mut u8, con.as_mut_ptr(), copy_bytes);
+        }
+        buf.append(&mut con);
+    } else if client_dpm.convert && bytes_per_pixel() == 4 {
+        let num = copy_bytes >> 2;
+        let ptr = data_ptr as *mut u32;
+        for i in 0..num {
+            let color = unsafe { *ptr.add(i) };
+            convert_pixel(client_dpm, buf, color);
+        }
+    }
+}
+
 /// Convert the sent information to a format supported  
 /// by the client depend on byte arrangement
 ///
 /// # Arguments
 ///
-/// * `ptr` = pointer to the data need to be convert
-/// * `big_endian` - byte arrangement
-/// * `pf` - pixelformat
-/// * `buf` - send buffer
-/// * `size` - total number of bytes need to convert
-fn convert_pixel(ptr: *mut u32, big_endian: bool, pf: &PixelFormat, buf: &mut Vec<u8>, size: u32) {
-    let num = size >> 2;
-    for i in 0..num {
-        let value = unsafe { *ptr.offset(i as isize) };
-        let mut ret = [0u8; 4];
-        let red = (((value >> 16) & 0xff) << pf.red.bits) >> 8;
-        let green = (((value >> 8) & 0xff) << pf.green.bits) >> 8;
-        let blue = ((value & 0xff) << pf.blue.bits) >> 8;
-        let v = (red << pf.red.shift) | (green << pf.green.shift) | (blue << pf.blue.shift);
-        match pf.pixel_bytes {
-            1 => {
+/// * `client_dpm` - Output mod of client display.
+/// * `buf` - send buffer.
+/// * `color` - the pixel value need to be convert.
+pub fn convert_pixel(client_dpm: &DisplayMode, buf: &mut Vec<u8>, color: u32) {
+    let mut ret = [0u8; 4];
+    let r = ((color & 0x00ff0000) >> 16) << client_dpm.pf.red.bits >> 8;
+    let g = ((color & 0x0000ff00) >> 8) << client_dpm.pf.green.bits >> 8;
+    let b = (color & 0x000000ff) << client_dpm.pf.blue.bits >> 8;
+    let v = (r << client_dpm.pf.red.shift)
+        | (g << client_dpm.pf.green.shift)
+        | (b << client_dpm.pf.blue.shift);
+    match client_dpm.pf.pixel_bytes {
+        1 => {
+            ret[0] = v as u8;
+        }
+        2 => {
+            if client_dpm.client_be {
+                ret[0] = (v >> 8) as u8;
+                ret[1] = v as u8;
+            } else {
+                ret[1] = (v >> 8) as u8;
                 ret[0] = v as u8;
             }
-            2 => {
-                if big_endian {
-                    ret[0] = (v >> 8) as u8;
-                    ret[1] = v as u8;
-                } else {
-                    ret[1] = (v >> 8) as u8;
-                    ret[0] = v as u8;
-                }
-            }
-            4 => {
-                if big_endian {
-                    ret = (v as u32).to_be_bytes();
-                } else {
-                    ret = (v as u32).to_le_bytes();
-                }
-            }
-            _ => {
-                if big_endian {
-                    ret = (v as u32).to_be_bytes();
-                } else {
-                    ret = (v as u32).to_le_bytes();
-                }
+        }
+        4 => {
+            if client_dpm.client_be {
+                ret = (v as u32).to_be_bytes();
+            } else {
+                ret = (v as u32).to_le_bytes();
             }
         }
-        buf.append(&mut ret[..pf.pixel_bytes as usize].to_vec());
+        _ => {
+            if client_dpm.client_be {
+                ret = (v as u32).to_be_bytes();
+            } else {
+                ret = (v as u32).to_le_bytes();
+            }
+        }
     }
+    buf.append(&mut ret[..client_dpm.pf.pixel_bytes as usize].to_vec());
 }
 
 /// Send raw data directly without compression
 ///
 /// # Arguments
 ///
-/// * `image` = pointer to the data need to be send
-/// * `rect` - dirty area of image
-/// * `convert` - is need to be convert
-/// * `big_endian` - send buffer
-/// * `pixel_format` - pixelformat
-/// * `buf` - send buffer
-fn raw_send_framebuffer_update(
+/// * `image` - pointer to the data need to be send.
+/// * `rect` - dirty area of image.
+/// * `client_dpm` - Output mod information of client display.
+/// * `buf` - send buffer.
+pub fn raw_send_framebuffer_update(
     image: *mut pixman_image_t,
     rect: &Rectangle,
-    convert: bool,
-    big_endian: bool,
-    pixel_format: &PixelFormat,
+    client_dpm: &DisplayMode,
     buf: &mut Vec<u8>,
 ) -> i32 {
     let mut data_ptr = get_image_data(image) as *mut u8;
@@ -461,22 +479,7 @@ fn raw_send_framebuffer_update(
     let copy_bytes = rect.w as usize * bytes_per_pixel();
 
     for _i in 0..rect.h {
-        if !convert {
-            let mut con = vec![0; copy_bytes];
-            unsafe {
-                ptr::copy(data_ptr, con.as_mut_ptr(), copy_bytes);
-            }
-            buf.append(&mut con);
-        } else {
-            convert_pixel(
-                data_ptr as *mut u32,
-                big_endian,
-                pixel_format,
-                buf,
-                copy_bytes as u32,
-            );
-        }
-
+        write_pixel(data_ptr, copy_bytes as usize, client_dpm, buf);
         data_ptr = (data_ptr as usize + stride as usize) as *mut u8;
     }
 
@@ -487,32 +490,26 @@ fn raw_send_framebuffer_update(
 ///
 /// # Arguments
 ///
-/// * `image` = pointer to the data need to be send
-/// * `rect` - dirty area of image
-/// * `convert` - is need to be convert
-/// * `big_endian` - send buffer
-/// * `pixel_format` - pixelformat
-/// * `buf` - send buffer
+/// * `image` = pointer to the data need to be send.
+/// * `rect` - dirty area of image.
+/// * `client_dpm` - Output mod information of client display.
+/// * `buf` - send buffer.
 fn send_framebuffer_update(
     image: *mut pixman_image_t,
-    encoding: i32,
     rect: &Rectangle,
-    convert: bool,
-    big_endian: bool,
-    pixel_format: &PixelFormat,
+    client_dpm: &DisplayMode,
     buf: &mut Vec<u8>,
 ) -> i32 {
-    framebuffer_upadate(rect.x, rect.y, rect.w, rect.h, encoding, buf);
-    /*
-    match encoding {
-        ENCODING_ZLIB => { /* ing... */ }
+    match client_dpm.enc {
+        ENCODING_HEXTILE => {
+            framebuffer_upadate(rect.x, rect.y, rect.w, rect.h, ENCODING_HEXTILE, buf);
+            hextile_send_framebuffer_update(image, rect, client_dpm, buf)
+        }
         _ => {
-            VncServer::framebuffer_upadate(rect, encoding, buf);
-            n = VncServer::raw_send_framebuffer_update(image, rect, buf);
+            framebuffer_upadate(rect.x, rect.y, rect.w, rect.h, ENCODING_RAW, buf);
+            raw_send_framebuffer_update(image, rect, client_dpm, buf)
         }
     }
-    */
-    raw_send_framebuffer_update(image, rect, convert, big_endian, pixel_format, buf)
 }
 
 /// Initialize a default image
@@ -679,11 +676,9 @@ pub fn display_cursor_define(
             ENCODING_RICH_CURSOR as i32,
             &mut buf,
         );
-        let big_endian = client.big_endian;
-        let pixel_format = &client.pixel_format;
-        let size = cursor.width * cursor.height * pixel_format.pixel_bytes as u32;
-        let ptr = cursor.data.as_ptr() as *mut u32;
-        convert_pixel(ptr, big_endian, pixel_format, &mut buf, size);
+        let data_size = cursor.width * cursor.height * client.client_dpm.pf.pixel_bytes as u32;
+        let data_ptr = cursor.data.as_ptr() as *mut u8;
+        write_pixel(data_ptr, data_size as usize, &client.client_dpm, &mut buf);
         buf.append(mask);
         client.write_msg(&buf);
     }
