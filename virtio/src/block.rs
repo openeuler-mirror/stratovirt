@@ -559,7 +559,7 @@ impl BlockIoHandler {
         Ok(done)
     }
 
-    fn build_aio(&self) -> Result<Box<Aio<AioCompleteCb>>> {
+    fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
         let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
             let status = if ret < 0 {
                 ret
@@ -610,7 +610,7 @@ impl BlockIoHandler {
             }
         }) as AioCompleteFunc<AioCompleteCb>);
 
-        Ok(Box::new(Aio::new(complete_func)?))
+        Ok(Box::new(Aio::new(complete_func, engine)?))
     }
 
     fn update_evt_handler(&mut self) {
@@ -1133,7 +1133,7 @@ impl VirtioDevice for Block {
                 leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
             };
 
-            handler.aio = Some(handler.build_aio()?);
+            handler.aio = Some(handler.build_aio(self.blk_cfg.aio.as_ref())?);
 
             EventLoop::update_event(
                 EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),

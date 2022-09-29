@@ -17,6 +17,7 @@ use std::path::Path;
 use error_chain::bail;
 use log::error;
 use serde::{Deserialize, Serialize};
+use util::aio::{AIO_IOURING, AIO_NATIVE};
 
 use super::{
     errors::{ErrorKind, Result},
@@ -45,6 +46,7 @@ pub struct BlkDevConfig {
     pub boot_index: Option<u8>,
     pub chardev: Option<String>,
     pub socket_path: Option<String>,
+    pub aio: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +70,7 @@ impl Default for BlkDevConfig {
             boot_index: None,
             chardev: None,
             socket_path: None,
+            aio: None,
         }
     }
 }
@@ -82,6 +85,7 @@ pub struct DriveConfig {
     pub read_only: bool,
     pub direct: bool,
     pub iops: Option<u64>,
+    pub aio: Option<String>,
 }
 
 impl Default for DriveConfig {
@@ -92,6 +96,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             iops: None,
+            aio: None,
         }
     }
 }
@@ -245,6 +250,14 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         drive.direct = direct.into();
     }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
+    drive.aio = if let Some(aio) = cmd_parser.get_value::<String>("aio")? {
+        if aio != AIO_NATIVE && aio != AIO_IOURING {
+            bail!("Invalid aio configure")
+        }
+        Some(aio)
+    } else {
+        Some(AIO_NATIVE.to_string())
+    };
     Ok(drive)
 }
 
@@ -300,6 +313,7 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         blkdevcfg.read_only = drive_arg.read_only;
         blkdevcfg.direct = drive_arg.direct;
         blkdevcfg.iops = drive_arg.iops;
+        blkdevcfg.aio = drive_arg.aio.clone();
     } else {
         bail!("No drive configured matched for blk device");
     }
@@ -413,7 +427,8 @@ impl VmConfig {
             .push("format")
             .push("if")
             .push("throttling.iops-total")
-            .push("serial");
+            .push("serial")
+            .push("aio");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;

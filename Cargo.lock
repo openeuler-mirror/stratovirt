@@ -267,6 +267,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-uring"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d32c9c053ad47572e11da8bce622ed4c9ae9dedac5b7f678a2e876d1494d4c4"
+dependencies = [
+ "bitflags",
+ "libc",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -709,6 +719,7 @@ dependencies = [
  "arc-swap",
  "byteorder",
  "error-chain",
+ "io-uring",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
