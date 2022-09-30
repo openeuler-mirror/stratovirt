@@ -950,6 +950,8 @@ impl MachineLifecycle for StdMachine {
         if !self.notify_lifecycle(vmstate, KvmVmState::Shutdown) {
             return false;
         }
+
+        self.power_button.write(1).unwrap();
         true
     }
 
