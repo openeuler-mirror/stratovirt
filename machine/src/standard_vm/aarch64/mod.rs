@@ -242,6 +242,46 @@ impl StdMachine {
 
         Ok(())
     }
+
+    fn build_pptt_cores(&self, pptt: &mut AcpiTable, cluster_offset: u32, uid: &mut u32) {
+        for core in 0..self.cpu_topo.cores {
+            if self.cpu_topo.threads > 1 {
+                let core_offset = pptt.table_len();
+                let core_hierarchy_node =
+                    ProcessorHierarchyNode::new(0, 0x0, cluster_offset, core as u32);
+                pptt.append_child(&core_hierarchy_node.aml_bytes());
+                for _thread in 0..self.cpu_topo.threads {
+                    let thread_hierarchy_node =
+                        ProcessorHierarchyNode::new(0, 0xE, core_offset as u32, *uid);
+                    pptt.append_child(&thread_hierarchy_node.aml_bytes());
+                    (*uid) += 1;
+                }
+            } else {
+                let core_hierarchy_node = ProcessorHierarchyNode::new(0, 0xA, cluster_offset, *uid);
+                pptt.append_child(&core_hierarchy_node.aml_bytes());
+                (*uid) += 1;
+            }
+        }
+    }
+
+    fn build_pptt_clusters(&self, pptt: &mut AcpiTable, socket_offset: u32, uid: &mut u32) {
+        for cluster in 0..self.cpu_topo.clusters {
+            let cluster_offset = pptt.table_len();
+            let cluster_hierarchy_node =
+                ProcessorHierarchyNode::new(0, 0x0, socket_offset, cluster as u32);
+            pptt.append_child(&cluster_hierarchy_node.aml_bytes());
+            self.build_pptt_cores(pptt, cluster_offset as u32, uid);
+        }
+    }
+
+    fn build_pptt_sockets(&self, pptt: &mut AcpiTable, uid: &mut u32) {
+        for socket in 0..self.cpu_topo.sockets {
+            let socket_offset = pptt.table_len();
+            let socket_hierarchy_node = ProcessorHierarchyNode::new(0, 0x1, 0, socket as u32);
+            pptt.append_child(&socket_hierarchy_node.aml_bytes());
+            self.build_pptt_clusters(pptt, socket_offset as u32, uid);
+        }
+    }
 }
 
 impl StdMachineOps for StdMachine {
@@ -881,39 +921,8 @@ impl AcpiBuilder for StdMachine {
     ) -> super::errors::Result<u64> {
         use super::errors::ResultExt;
         let mut pptt = AcpiTable::new(*b"PPTT", 2, *b"STRATO", *b"VIRTPPTT", 1);
-        let pptt_start = 0;
         let mut uid = 0;
-        for socket in 0..self.cpu_topo.sockets {
-            let socket_offset = pptt.table_len() - pptt_start;
-            let socket_hierarchy_node = ProcessorHierarchyNode::new(0, 0x2, 0, socket as u32);
-            pptt.append_child(&socket_hierarchy_node.aml_bytes());
-            for cluster in 0..self.cpu_topo.clusters {
-                let cluster_offset = pptt.table_len() - pptt_start;
-                let cluster_hierarchy_node =
-                    ProcessorHierarchyNode::new(0, 0x0, socket_offset as u32, cluster as u32);
-                pptt.append_child(&cluster_hierarchy_node.aml_bytes());
-                for core in 0..self.cpu_topo.cores {
-                    let core_offset = pptt.table_len() - pptt_start;
-                    if self.cpu_topo.threads > 1 {
-                        let core_hierarchy_node =
-                            ProcessorHierarchyNode::new(0, 0x0, cluster_offset as u32, core as u32);
-                        pptt.append_child(&core_hierarchy_node.aml_bytes());
-                        for _thread in 0..self.cpu_topo.threads {
-                            let thread_hierarchy_node =
-                                ProcessorHierarchyNode::new(0, 0xE, core_offset as u32, uid as u32);
-                            pptt.append_child(&thread_hierarchy_node.aml_bytes());
-                            uid += 1;
-                        }
-                    } else {
-                        let thread_hierarchy_node =
-                            ProcessorHierarchyNode::new(0, 0xA, cluster_offset as u32, uid as u32);
-                        pptt.append_child(&thread_hierarchy_node.aml_bytes());
-                        uid += 1;
-                    }
-                }
-            }
-        }
-        pptt.set_table_len(pptt.table_len());
+        self.build_pptt_sockets(&mut pptt, &mut uid);
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
             .chain_err(|| "Fail to add PPTT table to loader")?;
         Ok(pptt_begin as u64)
