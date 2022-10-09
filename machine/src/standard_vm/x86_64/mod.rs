@@ -812,10 +812,6 @@ impl AcpiBuilder for StdMachine {
         loader: &mut TableLoader,
     ) -> super::errors::Result<u64> {
         use super::errors::ResultExt;
-        if self.numa_nodes.is_none() {
-            return Ok(0);
-        }
-
         let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
         srat.append_child(&[1_u8; 4_usize]);
         srat.append_child(&[0_u8; 8_usize]);
