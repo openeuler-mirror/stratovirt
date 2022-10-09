@@ -40,10 +40,14 @@ pub const SCSI_TYPE_NOT_PRESENT: u32 = 0x1f;
 pub const SCSI_TYPE_INACTIVE: u32 = 0x20;
 pub const SCSI_TYPE_NO_LUN: u32 = 0x7f;
 
+pub const SCSI_DISK_F_REMOVABLE: u32 = 0;
+pub const SCSI_DISK_F_DPOFUA: u32 = 1;
+
 /// Used to compute the number of sectors.
 const SECTOR_SHIFT: u8 = 9;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
+pub const DEFAULT_SECTOR_SIZE: u32 = 1_u32 << SECTOR_SHIFT;
 
 #[derive(Clone, Default)]
 pub struct ScsiDevState {

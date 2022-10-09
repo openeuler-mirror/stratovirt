@@ -10,8 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp;
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -21,9 +23,13 @@ use crate::ScsiCntlr::{
     ScsiCntlr, ScsiCompleteCb, ScsiXferMode, VirtioScsiCmdReq, VirtioScsiCmdResp,
     VirtioScsiRequest, VIRTIO_SCSI_CDB_DEFAULT_SIZE, VIRTIO_SCSI_S_OK,
 };
-use crate::ScsiDisk::ScsiDevice;
+use crate::ScsiDisk::{
+    ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
+    SCSI_TYPE_ROM,
+};
+use address_space::AddressSpace;
 use byteorder::{BigEndian, ByteOrder};
-use log::{debug, info};
+use log::{debug, error, info};
 use util::aio::{Aio, AioCb, IoCmd, Iovec};
 
 /// Scsi Operation code.
@@ -169,12 +175,14 @@ pub const SCSI_CMD_BUF_SIZE: usize = 16;
 pub const SCSI_SENSE_BUF_SIZE: usize = 252;
 
 /// SERVICE ACTION IN subcodes.
-pub const SAI_READ_CAPACITY_16: u8 = 0x10;
+pub const SUBCODE_READ_CAPACITY_16: u8 = 0x10;
 
 /// Used to compute the number of sectors.
 const SECTOR_SHIFT: u8 = 9;
 /// Size of a sector of the block device.
 const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
+
+const SCSI_DEFAULT_BLOCK_SIZE: i32 = 512;
 
 /// Sense Keys.
 pub const NO_SENSE: u8 = 0x00;
@@ -248,6 +256,24 @@ pub struct ScsiSense {
 }
 
 pub const SCSI_SENSE_LEN: u32 = 18;
+
+/// Mode page codes for mode sense/set.
+pub const MODE_PAGE_R_W_ERROR: u8 = 0x01;
+pub const MODE_PAGE_HD_GEOMETRY: u8 = 0x04;
+pub const MODE_PAGE_FLEXIBLE_DISK_GEOMETRY: u8 = 0x05;
+pub const MODE_PAGE_CACHING: u8 = 0x08;
+pub const MODE_PAGE_AUDIO_CTL: u8 = 0x0e;
+pub const MODE_PAGE_POWER: u8 = 0x1a;
+pub const MODE_PAGE_FAULT_FAIL: u8 = 0x1c;
+pub const MODE_PAGE_TO_PROTECT: u8 = 0x1d;
+pub const MODE_PAGE_CAPABILITIES: u8 = 0x2a;
+pub const MODE_PAGE_ALLS: u8 = 0x3f;
+
+pub const SCSI_MAX_INQUIRY_LEN: u32 = 256;
+pub const SCSI_INQUIRY_PRODUCT_MAX_LEN: usize = 16;
+pub const SCSI_INQUIRY_VENDOR_MAX_LEN: usize = 8;
+pub const SCSI_INQUIRY_VERSION_MAX_LEN: usize = 4;
+pub const SCSI_INQUIRY_VPD_SERIAL_NUMBER_MAX_LEN: usize = 32;
 
 pub struct ScsiBus {
     /// Bus name.
@@ -341,7 +367,7 @@ pub struct ScsiRequest {
     _resid: u32,
     pub opstype: u32,
     pub virtioscsireq: Arc<Mutex<VirtioScsiRequest<VirtioScsiCmdReq, VirtioScsiCmdResp>>>,
-    _dev: Arc<Mutex<ScsiDevice>>,
+    dev: Arc<Mutex<ScsiDevice>>,
 }
 
 impl ScsiRequest {
@@ -366,7 +392,7 @@ impl ScsiRequest {
                 _resid,
                 opstype,
                 virtioscsireq: req.clone(),
-                _dev: scsidevice,
+                dev: scsidevice,
             })
         } else {
             bail!("Error CDB!");
@@ -438,9 +464,155 @@ impl ScsiRequest {
         Ok(0)
     }
 
-    pub fn emulate_execute(&self, iocompletecb: ScsiCompleteCb) -> Result<u32> {
+    pub fn emulate_execute(&self, iocompletecb: ScsiCompleteCb) -> Result<()> {
         debug!("scsi command is {:#x}", self.cmd.command);
         match self.cmd.command {
+            REQUEST_SENSE => {
+                self.cmd_complete(
+                    &iocompletecb.mem_space,
+                    VIRTIO_SCSI_S_OK,
+                    GOOD,
+                    Some(SCSI_SENSE_NO_SENSE),
+                    &Vec::new(),
+                )?;
+            }
+            TEST_UNIT_READY => {
+                let dev_lock = self.dev.lock().unwrap();
+                if dev_lock.disk_image.is_none() {
+                    error!("error in processing scsi command TEST_UNIT_READY, no scsi backend");
+                }
+                self.cmd_complete(
+                    &iocompletecb.mem_space,
+                    VIRTIO_SCSI_S_OK,
+                    GOOD,
+                    None,
+                    &Vec::new(),
+                )?;
+            }
+            INQUIRY => match scsi_command_emulate_inquiry(&self.cmd, &self.dev) {
+                Ok(outbuf) => {
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        GOOD,
+                        None,
+                        &outbuf,
+                    )?;
+                }
+                Err(ref e) => {
+                    error!("error in Processing scsi command INQUIRY: {:?}", e);
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        CHECK_CONDITION,
+                        Some(SCSI_SENSE_INVALID_FIELD),
+                        &Vec::new(),
+                    )?;
+                }
+            },
+            READ_CAPACITY_10 => match scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev) {
+                Ok(outbuf) => {
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        GOOD,
+                        None,
+                        &outbuf,
+                    )?;
+                }
+                Err(ref e) => {
+                    error!("error in Processing scsi command READ_CAPACITY_10: {:?}", e);
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        CHECK_CONDITION,
+                        Some(SCSI_SENSE_INVALID_FIELD),
+                        &Vec::new(),
+                    )?;
+                }
+            },
+            MODE_SENSE | MODE_SENSE_10 => {
+                match scsi_command_emulate_mode_sense(&self.cmd, &self.dev) {
+                    Ok(outbuf) => {
+                        self.cmd_complete(
+                            &iocompletecb.mem_space,
+                            VIRTIO_SCSI_S_OK,
+                            GOOD,
+                            None,
+                            &outbuf,
+                        )?;
+                    }
+                    Err(ref e) => {
+                        error!(
+                            "error in processing scsi command MODE_SENSE / MODE_SENSE_10: {:?}",
+                            e
+                        );
+                        self.cmd_complete(
+                            &iocompletecb.mem_space,
+                            VIRTIO_SCSI_S_OK,
+                            CHECK_CONDITION,
+                            Some(SCSI_SENSE_INVALID_FIELD),
+                            &Vec::new(),
+                        )?;
+                    }
+                }
+            }
+            REPORT_LUNS => match scsi_command_emulate_report_luns(&self.cmd, &self.dev) {
+                Ok(outbuf) => {
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        GOOD,
+                        None,
+                        &outbuf,
+                    )?;
+                }
+                Err(ref e) => {
+                    error!("error in processing scsi command REPORT_LUNS: {:?}", e);
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        CHECK_CONDITION,
+                        Some(SCSI_SENSE_INVALID_FIELD),
+                        &Vec::new(),
+                    )?;
+                }
+            },
+            SERVICE_ACTION_IN_16 => {
+                match scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev) {
+                    Ok(outbuf) => {
+                        self.cmd_complete(
+                            &iocompletecb.mem_space,
+                            VIRTIO_SCSI_S_OK,
+                            GOOD,
+                            None,
+                            &outbuf,
+                        )?;
+                    }
+                    Err(ref e) => {
+                        error!(
+                            "error in processing scsi command SERVICE_ACTION_IN(16): {:?}",
+                            e
+                        );
+                        self.cmd_complete(
+                            &iocompletecb.mem_space,
+                            VIRTIO_SCSI_S_OK,
+                            CHECK_CONDITION,
+                            Some(SCSI_SENSE_INVALID_FIELD),
+                            &Vec::new(),
+                        )?;
+                    }
+                }
+            }
+            WRITE_SAME_10 | WRITE_SAME_16 | SYNCHRONIZE_CACHE => {
+                self.cmd_complete(
+                    &iocompletecb.mem_space,
+                    VIRTIO_SCSI_S_OK,
+                    GOOD,
+                    None,
+                    &Vec::new(),
+                )?;
+            }
             _ => {
                 info!(
                     "emulation scsi command {:#x} is not supported",
@@ -457,18 +629,69 @@ impl ScsiRequest {
             }
         }
 
-        Ok(0)
+        Ok(())
     }
 
     fn set_scsi_sense(&self, sense: ScsiSense) {
         let mut req = self.virtioscsireq.lock().unwrap();
-        req.resp.sense[0] = 0x70; // Response code: current errors(0x70).
+        // Response code: current errors(0x70).
+        req.resp.sense[0] = 0x70;
         req.resp.sense[2] = sense.key;
-        req.resp.sense[7] = 10; // Additional sense length: sense len - 8.
+        // Additional sense length: sense len - 8.
+        req.resp.sense[7] = SCSI_SENSE_LEN as u8 - 8;
         req.resp.sense[12] = sense.asc;
         req.resp.sense[13] = sense.ascq;
         req.resp.sense_len = SCSI_SENSE_LEN;
     }
+
+    fn cmd_complete(
+        &self,
+        mem_space: &Arc<AddressSpace>,
+        response: u8,
+        status: u8,
+        scsisense: Option<ScsiSense>,
+        outbuf: &[u8],
+    ) -> Result<()> {
+        if let Some(sense) = scsisense {
+            self.set_scsi_sense(sense);
+        }
+        let mut req = self.virtioscsireq.lock().unwrap();
+        req.resp.response = response;
+        req.resp.status = status;
+        req.resp.resid = 0;
+
+        if !outbuf.is_empty() {
+            for (idx, iov) in req.iovec.iter().enumerate() {
+                if outbuf.len() as u64 > iov.iov_len as u64 {
+                    debug!(
+                        "cmd is {:x}, outbuf len is {}, iov_len is {}, idx is {}, iovec size is {}",
+                        self.cmd.command,
+                        outbuf.len(),
+                        iov.iov_len,
+                        idx,
+                        req.iovec.len()
+                    );
+                }
+
+                write_buf_mem(outbuf, iov.iov_len, iov.iov_base)
+                    .with_context(|| "Failed to write buf for virtio scsi iov")?;
+            }
+        }
+
+        req.complete(mem_space);
+        Ok(())
+    }
+}
+
+fn write_buf_mem(buf: &[u8], max: u64, hva: u64) -> Result<()> {
+    let mut slice = unsafe {
+        std::slice::from_raw_parts_mut(hva as *mut u8, cmp::min(buf.len(), max as usize))
+    };
+    (&mut slice)
+        .write(buf)
+        .with_context(|| format!("Failed to write buf(hva:{})", hva))?;
+
+    Ok(())
 }
 
 pub const EMULATE_SCSI_OPS: u32 = 0;
@@ -491,6 +714,16 @@ pub fn virtio_scsi_get_lun(lun: [u8; 8]) -> u16 {
 
 fn scsi_cdb_length(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
     match cdb[0] >> 5 {
+        // CDB[0]: Operation Code Byte. Bits[0-4]: Command Code. Bits[5-7]: Group Code.
+        // Group Code |  Meaning            |
+        // 000b       |  6 bytes commands.  |
+        // 001b       |  10 bytes commands. |
+        // 010b       |  10 bytes commands. |
+        // 011b       |  reserved.          |
+        // 100b       |  16 bytes commands. |
+        // 101b       |  12 bytes commands. |
+        // 110b       |  vendor specific.   |
+        // 111b       |  vendor specific.   |
         0 => 6,
         1 | 2 => 10,
         4 => 16,
@@ -501,6 +734,12 @@ fn scsi_cdb_length(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
 
 fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
     let mut xfer = match cdb[0] >> 5 {
+        // Group Code  |  Transfer length. |
+        // 000b        |  Byte[4].         |
+        // 001b        |  Bytes[7-8].      |
+        // 010b        |  Bytes[7-8].      |
+        // 100b        |  Bytes[10-13].    |
+        // 101b        |  Bytes[6-9].      |
         0 => cdb[4] as i32,
         1 | 2 => BigEndian::read_u16(&cdb[7..]) as i32,
         4 => BigEndian::read_u32(&cdb[10..]) as i32,
@@ -522,14 +761,13 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
             } else if cdb[1] & 4 != 0 {
                 xfer = 1;
             }
-            // 512 : blocksize
-            xfer *= 512;
+            xfer *= SCSI_DEFAULT_BLOCK_SIZE;
         }
         WRITE_SAME_10 | WRITE_SAME_16 => {
-            if cdb[1] & 1 == 0 {
+            if cdb[1] & 1 != 0 {
                 xfer = 0;
             } else {
-                xfer = 512;
+                xfer = SCSI_DEFAULT_BLOCK_SIZE;
             }
         }
         READ_CAPACITY_10 => {
@@ -541,21 +779,15 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
         SEND_VOLUME_TAG => {
             xfer = i32::from(cdb[9]) | i32::from(cdb[8]) << 8;
         }
-        WRITE_6 => {
+        WRITE_6 | READ_6 | READ_REVERSE => {
+            // length 0 means 256 blocks.
             if xfer == 0 {
-                xfer = 256 * 512;
+                xfer = 256 * SCSI_DEFAULT_BLOCK_SIZE;
             }
         }
-        WRITE_10 | WRITE_VERIFY_10 | WRITE_12 | WRITE_VERIFY_12 | WRITE_16 | WRITE_VERIFY_16 => {
-            xfer *= 512;
-        }
-        READ_6 | READ_REVERSE => {
-            if xfer == 0 {
-                xfer = 256 * 512;
-            }
-        }
-        READ_10 | READ_12 | READ_16 => {
-            xfer *= 512;
+        WRITE_10 | WRITE_VERIFY_10 | WRITE_12 | WRITE_VERIFY_12 | WRITE_16 | WRITE_VERIFY_16
+        | READ_10 | READ_12 | READ_16 => {
+            xfer *= SCSI_DEFAULT_BLOCK_SIZE;
         }
         FORMAT_UNIT => {
             xfer = match cdb[1] & 16 {
@@ -586,6 +818,12 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
 
 fn scsi_cdb_lba(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i64 {
     match cdb[0] >> 5 {
+        // Group Code  |  Logical Block Address.       |
+        // 000b        |  Byte[1].bits[0-4]~Byte[3].   |
+        // 001b        |  Bytes[2-5].                  |
+        // 010b        |  Bytes[2-5].                  |
+        // 100b        |  Bytes[2-9].                  |
+        // 101b        |  Bytes[2-5].                  |
         0 => (BigEndian::read_u32(&cdb[0..]) & 0x1fffff) as i64,
         1 | 2 | 5 => BigEndian::read_u32(&cdb[2..]) as i64,
         4 => BigEndian::read_u64(&cdb[2..]) as i64,
@@ -643,4 +881,404 @@ fn scsi_cdb_xfer_mode(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> ScsiXferMode 
 
         _ => ScsiXferMode::ScsiXferFromDev,
     }
+}
+
+/// VPD: Virtual Product Data.
+fn scsi_command_emulate_vpd_page(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    let buflen: usize;
+    let mut outbuf: Vec<u8> = vec![0; 4];
+
+    let dev_lock = dev.lock().unwrap();
+    let page_code = cmd.buf[2];
+
+    outbuf[0] = dev_lock.scsi_type as u8 & 0x1f;
+    outbuf[1] = page_code;
+
+    match page_code {
+        0x00 => {
+            // Supported VPD Pages.
+            outbuf.push(0_u8);
+            if !dev_lock.state.serial.is_empty() {
+                // 0x80: Unit Serial Number.
+                outbuf.push(0x80);
+            }
+            // 0x83: Device Identification.
+            outbuf.push(0x83);
+            if dev_lock.scsi_type == SCSI_TYPE_DISK {
+                // 0xb0: Block Limits.
+                outbuf.push(0xb0);
+                // 0xb1: Block Device Characteristics.
+                outbuf.push(0xb1);
+                // 0xb2: Logical Block Provisioning.
+                outbuf.push(0xb2);
+            }
+            buflen = outbuf.len();
+        }
+        0x80 => {
+            // Unit Serial Number.
+            let len = dev_lock.state.serial.len();
+            if len == 0 {
+                bail!("Missed serial number!");
+            }
+
+            let l = cmp::min(SCSI_INQUIRY_VPD_SERIAL_NUMBER_MAX_LEN, len);
+            let mut serial_vec = dev_lock.state.serial.as_bytes().to_vec();
+            serial_vec.truncate(l);
+            outbuf.append(&mut serial_vec);
+            buflen = outbuf.len();
+        }
+        0x83 => {
+            // Device Identification.
+            let mut len: u8 = dev_lock.state.device_id.len() as u8;
+            if len > (255 - 8) {
+                len = 255 - 8;
+            }
+
+            if len > 0 {
+                // 0x2: Code Set: ASCII, Protocol Identifier: FCP-4.
+                // 0: Identifier Type, Association, Reserved, Piv.
+                // 0: Reserved.
+                // len: identifier length.
+                outbuf.append(&mut [0x2_u8, 0_u8, 0_u8, len].to_vec());
+
+                let mut device_id_vec = dev_lock.state.device_id.as_bytes().to_vec();
+                device_id_vec.truncate(len as usize);
+                outbuf.append(&mut device_id_vec);
+            }
+            buflen = outbuf.len();
+        }
+        0xb0 => {
+            // Block Limits.
+            if dev_lock.scsi_type == SCSI_TYPE_ROM {
+                bail!("Invalid scsi type: SCSI_TYPE_ROM !");
+            }
+            outbuf.resize(64, 0);
+
+            // Byte[4]: bit 0: wsnz: Write Same Non-zero.
+            // Byte[5] = 0: Maximum compare and write length (COMPARE_AND_WRITE not supported).
+            // Byte[6-7] = 0: Optimal transfer length granularity.
+            // Byte[8-11]: Maximum transfer length.
+            // Byte[12-15] = 0: Optimal Transfer Length.
+            // Byte[16-19] = 0: Maxium Prefetch Length.
+            // Byte[20-23]: Maximum unmap lba count.
+            // Byte[24-27]: Maximum unmap block descriptor count.
+            // Byte[28-31]: Optimal unmap granulatity.
+            // Byte[32-35] = 0: Unmap Granularity alignment.
+            // Byte[36-43]: Maximum write same length.
+            // Bytes[44-47] = 0: Maximum atomic Transfer length.
+            // Bytes[48-51] = 0: Atomic Alignment.
+            // Bytes[52-55] = 0: Atomic Transfer Length Granularity.
+            // Bytes[56-59] = 0: Maximum Atomic Transfer Length With Atomic Boundary.
+            // Bytes[60-63] = 0: Maximum Atomic Boundary Size.
+            outbuf[4] = 1;
+            let max_xfer_length: u32 = u32::MAX / 512;
+            BigEndian::write_u32(&mut outbuf[8..12], max_xfer_length);
+            let max_unmap_sectors: u32 = (1_u32 << 30) / 512;
+            BigEndian::write_u32(&mut outbuf[20..24], max_unmap_sectors);
+            let max_unmap_block_desc: u32 = 255;
+            BigEndian::write_u32(&mut outbuf[24..28], max_unmap_block_desc);
+            let opt_unmap_granulatity: u32 = (1_u32 << 12) / 512;
+            BigEndian::write_u32(&mut outbuf[28..32], opt_unmap_granulatity);
+            BigEndian::write_u64(&mut outbuf[36..44], max_xfer_length as u64);
+            buflen = outbuf.len();
+        }
+        0xb1 => {
+            // Block Device Characteristics.
+            // 0: Medium Rotation Rate: 2Bytes.
+            // 0: Medium Rotation Rate: 2Bytes.
+            // 0: Product Type.
+            // 0: Nominal Form Factor, Wacereq, Wabereq.
+            // 0: Vbuls, Fuab, Bocs, Reserved, Zoned, Reserved.
+            outbuf.append(&mut [0_u8, 0_u8, 0_u8, 0_u8, 0_u8].to_vec());
+            buflen = 0x40;
+        }
+        0xb2 => {
+            // Logical Block Provisioning.
+            // 0: Threshold exponent.
+            // 0xe0: LBPU | LBPWS | LBPWS10 | LBPRZ | ANC_SUP | DP.
+            // 0: Threshold percentage | Provisioning Type.
+            // 0: Threshold percentage.
+            outbuf.append(&mut [0_u8, 0xe0_u8, 1_u8, 0_u8].to_vec());
+            buflen = 8;
+        }
+        _ => {
+            bail!("Invalid INQUIRY pagecode {}", page_code);
+        }
+    }
+
+    // It's OK for just using outbuf bit 3, because all page_code's buflen in stratovirt is less than 255 now.
+    outbuf[3] = buflen as u8 - 4;
+    Ok(outbuf)
+}
+
+fn scsi_command_emulate_inquiry(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    if cmd.buf[1] == 0x1 {
+        return scsi_command_emulate_vpd_page(cmd, dev);
+    }
+
+    if cmd.buf[2] != 0 {
+        bail!("Invalid INQUIRY!");
+    }
+
+    let buflen = cmp::min(cmd.xfer, SCSI_MAX_INQUIRY_LEN);
+    let mut outbuf: Vec<u8> = vec![0; buflen as usize];
+
+    let dev_lock = dev.lock().unwrap();
+
+    outbuf[0] = (dev_lock.scsi_type & 0x1f) as u8;
+    outbuf[1] = match dev_lock.state.features & SCSI_DISK_F_REMOVABLE {
+        1 => 0x80,
+        _ => 0,
+    };
+
+    let product_bytes = dev_lock.state.product.as_bytes();
+    let product_len = cmp::min(product_bytes.len(), SCSI_INQUIRY_PRODUCT_MAX_LEN);
+    let vendor_bytes = dev_lock.state.vendor.as_bytes();
+    let vendor_len = cmp::min(vendor_bytes.len(), SCSI_INQUIRY_VENDOR_MAX_LEN);
+    let version_bytes = dev_lock.state.version.as_bytes();
+    let vension_len = cmp::min(version_bytes.len(), SCSI_INQUIRY_VERSION_MAX_LEN);
+
+    outbuf[16..16 + product_len].copy_from_slice(product_bytes);
+    outbuf[8..8 + vendor_len].copy_from_slice(vendor_bytes);
+    outbuf[32..32 + vension_len].copy_from_slice(version_bytes);
+
+    drop(dev_lock);
+
+    // scsi version: 5.
+    outbuf[2] = 5;
+    outbuf[3] = (2 | 0x10) as u8;
+
+    if buflen > 36 {
+        outbuf[4] = (buflen - 5) as u8;
+    } else {
+        outbuf[4] = 36 - 5;
+    }
+
+    // TCQ.
+    outbuf[7] = 0x12;
+
+    Ok(outbuf)
+}
+
+fn scsi_command_emulate_read_capacity_10(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    if cmd.buf[8] & 1 == 0 && cmd.lba != 0 {
+        // PMI(Partial Medium Indicator)
+        bail!("Invalid scsi cmd READ_CAPACITY_10!");
+    }
+
+    let dev_lock = dev.lock().unwrap();
+    let mut outbuf: Vec<u8> = vec![0; 8];
+    let nb_sectors = cmp::min(dev_lock.disk_sectors as u32, u32::MAX);
+
+    // Bytes[0-3]: Returned Logical Block Address.
+    // Bytes[4-7]: Logical Block Length In Bytes.
+    BigEndian::write_u32(&mut outbuf[0..4], nb_sectors);
+    BigEndian::write_u32(&mut outbuf[4..8], DEFAULT_SECTOR_SIZE);
+
+    Ok(outbuf)
+}
+
+fn scsi_command_emulate_mode_sense(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    // disable block descriptors(DBD) bit.
+    let mut dbd: bool = cmd.buf[1] & 0x8 != 0;
+    let page_code = cmd.buf[2] & 0x3f;
+    let page_control = (cmd.buf[2] & 0xc0) >> 6;
+    let mut outbuf: Vec<u8> = vec![0];
+    let dev_lock = dev.lock().unwrap();
+    let mut dev_specific_parameter: u8 = 0;
+    let nb_sectors = dev_lock.disk_sectors;
+
+    debug!(
+        "MODE SENSE page_code {:x}, page_control {:x}, subpage {:x}, dbd bit {:x}, Allocation length {}",
+        page_code,
+        page_control,
+        cmd.buf[3],
+        cmd.buf[1] & 0x8,
+        cmd.buf[4]
+    );
+
+    if dev_lock.scsi_type == SCSI_TYPE_DISK {
+        if dev_lock.state.features & (1 << SCSI_DISK_F_DPOFUA) != 0 {
+            dev_specific_parameter = 0x10;
+        }
+    } else {
+        dbd = true;
+    }
+    drop(dev_lock);
+
+    if cmd.command == MODE_SENSE {
+        outbuf.resize(4, 0);
+        // Device Specific Parameter.
+        outbuf[2] = dev_specific_parameter;
+    } else {
+        // MODE_SENSE_10.
+        outbuf.resize(8, 0);
+        // Device Specific Parameter.
+        outbuf[3] = dev_specific_parameter;
+    }
+
+    if !dbd && nb_sectors > 0 {
+        if cmd.command == MODE_SENSE {
+            // Block Descriptor Length.
+            outbuf[3] = 8;
+        } else {
+            // Block Descriptor Length.
+            outbuf[7] = 8;
+        }
+
+        // Block descriptors.
+        // Byte[0]: density code.
+        // Bytes[1-3]: number of blocks.
+        // Byte[4]: Reserved.
+        // Byte[5-7]: Block Length.
+        let mut block_desc: Vec<u8> = vec![0; 8];
+        BigEndian::write_u32(&mut block_desc[0..4], nb_sectors as u32 & 0xffffff);
+        BigEndian::write_u32(&mut block_desc[4..8], DEFAULT_SECTOR_SIZE);
+        outbuf.append(&mut block_desc);
+    }
+
+    if page_control == 3 {
+        bail!("Invalid Mode Sense command, Page control 0x11 is not supported!");
+    }
+
+    if page_code == 0x3f {
+        // 3Fh Return all pages not including subpages.
+        for pg in 0..page_code {
+            let _ = scsi_command_emulate_mode_sense_page(pg, page_control, &mut outbuf);
+        }
+    } else {
+        scsi_command_emulate_mode_sense_page(page_code, page_control, &mut outbuf)?;
+    }
+
+    // The Mode Data Length field indicates the length in bytes of the following data
+    // that is available to be transferred. The Mode data length does not include the
+    // number of bytes in the Mode Data Length field.
+    let buflen = outbuf.len();
+    if cmd.command == MODE_SENSE {
+        outbuf[0] = (buflen - 1) as u8;
+    } else {
+        outbuf[0] = (((buflen - 2) >> 8) & 0xff) as u8;
+        outbuf[1] = ((buflen - 2) & 0xff) as u8;
+    }
+
+    Ok(outbuf)
+}
+
+fn scsi_command_emulate_mode_sense_page(
+    page: u8,
+    page_control: u8,
+    outbuf: &mut Vec<u8>,
+) -> Result<Vec<u8>> {
+    let buflen = outbuf.len();
+    match page {
+        MODE_PAGE_CACHING => {
+            // Caching Mode Page.
+            outbuf.resize(buflen + 20, 0);
+            outbuf[buflen] = page;
+            outbuf[buflen + 1] = 18;
+            // 0x4: WCE(Write Cache Enable).
+            outbuf[buflen + 2] = 0x4;
+        }
+        MODE_PAGE_R_W_ERROR => {
+            // Read-Write Error Recovery mode page.
+            outbuf.resize(buflen + 12, 0);
+            outbuf[buflen] = page;
+            outbuf[buflen + 1] = 10;
+
+            if page_control != 1 {
+                // 0x80: AWRE(Automatic Write Reallocation Enabled).
+                outbuf[buflen + 2] = 0x80;
+            }
+        }
+        _ => {
+            bail!(
+                "Invalid Mode Sense command, page control ({:x}), page ({:x})",
+                page_control,
+                page
+            );
+        }
+    }
+
+    Ok(outbuf.to_vec())
+}
+
+fn scsi_command_emulate_report_luns(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    let dev_lock = dev.lock().unwrap();
+    // Byte 0-3: Lun List Length. Byte 4-7: Reserved.
+    let mut outbuf: Vec<u8> = vec![0; 8];
+
+    if cmd.xfer < 16 {
+        bail!("scsi REPORT LUNS xfer {} too short!", cmd.xfer);
+    }
+
+    if cmd.buf[2] > 2 {
+        bail!("Invalid REPORT LUNS cmd, buf[2] is {}", cmd.buf[2]);
+    }
+
+    let scsi_bus = dev_lock.parent_bus.upgrade().unwrap();
+    let scsi_bus_clone = scsi_bus.lock().unwrap();
+
+    drop(dev_lock);
+
+    for (_pos, device) in scsi_bus_clone.devices.iter() {
+        let device_lock = device.lock().unwrap();
+        let len = outbuf.len();
+        if device_lock.config.lun < 256 {
+            outbuf.push(0);
+            outbuf.push(device_lock.config.lun as u8);
+        } else {
+            outbuf.push(0x40 | ((device_lock.config.lun >> 8) & 0xff) as u8);
+            outbuf.push((device_lock.config.lun & 0xff) as u8);
+        }
+        outbuf.resize(len + 8, 0);
+        drop(device_lock);
+    }
+
+    let len: u32 = outbuf.len() as u32 - 8;
+    BigEndian::write_u32(&mut outbuf[0..4], len);
+    Ok(outbuf)
+}
+
+fn scsi_command_emulate_service_action_in_16(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    // Read Capacity(16) Command.
+    // Byte 0: Operation Code(0x9e)
+    // Byte 1: bit0 - bit4: Service Action(0x10), bit 5 - bit 7: Reserved.
+    if cmd.buf[1] & 0x1f == SUBCODE_READ_CAPACITY_16 {
+        let dev_lock = dev.lock().unwrap();
+        let mut outbuf: Vec<u8> = vec![0; 32];
+        let nb_sectors = dev_lock.disk_sectors;
+
+        drop(dev_lock);
+
+        // Byte[0-7]: Returned Logical BLock Address.
+        // Byte[8-11]: Logical Block Length in Bytes.
+        BigEndian::write_u64(&mut outbuf[0..8], nb_sectors);
+        BigEndian::write_u32(&mut outbuf[8..12], DEFAULT_SECTOR_SIZE);
+
+        return Ok(outbuf);
+    }
+
+    bail!(
+        "Invalid combination Scsi Command, operation code ({:x}), service action ({:x})",
+        SERVICE_ACTION_IN_16,
+        cmd.buf[1] & 31
+    );
 }
