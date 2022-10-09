@@ -31,7 +31,7 @@ use acpi::{
     ACPI_GTDT_INTERRUPT_MODE_LEVEL, ACPI_IORT_NODE_ITS_GROUP, ACPI_IORT_NODE_PCI_ROOT_COMPLEX,
     ACPI_MADT_GENERIC_CPU_INTERFACE, ACPI_MADT_GENERIC_DISTRIBUTOR,
     ACPI_MADT_GENERIC_REDISTRIBUTOR, ACPI_MADT_GENERIC_TRANSLATOR, ARCH_GIC_MAINT_IRQ,
-    INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT,
+    ID_MAPPING_ENTRY_SIZE, INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT, ROOT_COMPLEX_ENTRY_SIZE,
 };
 use address_space::{AddressSpace, GuestAddress, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
@@ -648,7 +648,7 @@ impl AcpiBuilder for StdMachine {
     ) -> super::errors::Result<u64> {
         use super::errors::ResultExt;
         let mut iort = AcpiTable::new(*b"IORT", 2, *b"STRATO", *b"VIRTIORT", 1);
-        iort.set_table_len(124);
+        iort.set_table_len(128);
 
         // Number of IORT nodes is 2: ITS group node and Root Complex Node.
         iort.set_field(36, 2_u32);
@@ -665,19 +665,20 @@ impl AcpiBuilder for StdMachine {
         // Root Complex Node
         iort.set_field(72, ACPI_IORT_NODE_PCI_ROOT_COMPLEX);
         // Length of Root Complex node
-        iort.set_field(73, 52_u16);
+        let len = ROOT_COMPLEX_ENTRY_SIZE + ID_MAPPING_ENTRY_SIZE;
+        iort.set_field(73, len);
         // Mapping counts of Root Complex Node
         iort.set_field(80, 1_u32);
         // Mapping offset of Root Complex Node
-        iort.set_field(84, 32_u32);
+        iort.set_field(84, ROOT_COMPLEX_ENTRY_SIZE as u32);
         // Cache of coherent device
         iort.set_field(88, 1_u32);
         // Memory flags of coherent device
         iort.set_field(95, 3_u8);
         // Identity RID mapping
-        iort.set_field(108, 0xffff_u32);
+        iort.set_field(112, 0xffff_u32);
         // Without SMMU, id mapping is the first node in ITS group node
-        iort.set_field(116, 48_u32);
+        iort.set_field(120, 48_u32);
 
         let iort_begin = StdMachine::add_table_to_loader(acpi_data, loader, &iort)
             .chain_err(|| "Fail to add IORT table to loader")?;
