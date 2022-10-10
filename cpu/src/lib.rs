@@ -420,8 +420,9 @@ impl CPUInterface for CPU {
         let (cpu_state, cvar) = &*self.state;
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Stopping;
-        } else {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Stopped {
+            *cpu_state.lock().unwrap() = CpuLifecycleState::Nothing;
+            return Ok(());
         }
 
         self.kick()?;
