@@ -45,9 +45,9 @@ use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
     Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH,
-    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
+    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_BLOCK,
 };
 
 /// Number of virtqueues.
@@ -976,7 +976,6 @@ impl VirtioDevice for Block {
             self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
         self.state.device_features |= 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
         self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
         self.state.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
 
