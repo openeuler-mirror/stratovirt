@@ -84,6 +84,7 @@ pub use boot_source::*;
 pub use chardev::*;
 pub use devices::*;
 pub use drive::*;
+pub use fs::*;
 pub use gpu::*;
 pub use incoming::*;
 pub use iothread::*;
@@ -101,6 +102,7 @@ mod boot_source;
 mod chardev;
 mod devices;
 mod drive;
+mod fs;
 mod gpu;
 mod incoming;
 mod iothread;
@@ -131,6 +133,7 @@ pub const MAX_PATH_LENGTH: usize = 4096;
 pub const MAX_VIRTIO_QUEUE: usize = 32;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
+pub const MAX_TAG_LENGTH: usize = 36;
 pub const MAX_NODES: u32 = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

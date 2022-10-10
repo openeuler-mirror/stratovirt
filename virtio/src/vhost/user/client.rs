@@ -683,14 +683,12 @@ impl VhostOps for VhostUserClient {
                     queue.desc_table.0
                 ))
             })?;
-
         let used_user_addr = self.mem_info.addr_to_host(queue.used_ring).ok_or_else(|| {
             ErrorKind::Msg(format!(
                 "Failed to transform used ring address {}",
                 queue.used_ring.0
             ))
         })?;
-
         let avail_user_addr = self
             .mem_info
             .addr_to_host(queue.avail_ring)
@@ -700,7 +698,7 @@ impl VhostOps for VhostUserClient {
                     queue.avail_ring.0
                 ))
             })?;
-        let vring_addr = VhostUserVringAddr {
+        let _vring_addr = VhostUserVringAddr {
             index: index as u32,
             flags,
             desc_user_addr,
@@ -710,7 +708,7 @@ impl VhostOps for VhostUserClient {
         };
         client
             .sock
-            .send_msg(Some(&hdr), Some(&vring_addr), payload_opt, &[])
+            .send_msg(Some(&hdr), Some(&_vring_addr), payload_opt, &[])
             .chain_err(|| "Failed to send msg for setting vring addr")?;
 
         Ok(())

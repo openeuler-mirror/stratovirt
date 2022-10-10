@@ -126,7 +126,7 @@ use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::parse_gpu;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_device_id,
-    parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
+    parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
     parse_usb_keyboard, parse_usb_tablet, parse_vfio, parse_vhost_user_blk_pci, parse_virtconsole,
     parse_virtio_serial, parse_vsock, parse_xhci, BootIndexInfo, Incoming, MachineMemConfig,
     MigrateMode, NumaConfig, NumaDistance, NumaNode, NumaNodes, ObjConfig, PFlashConfig, PciBdf,
@@ -154,8 +154,8 @@ use vfio::{VfioDevice, VfioPciDevice};
 #[cfg(not(target_env = "musl"))]
 use virtio::Gpu;
 use virtio::{
-    balloon_allow_list, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern, VhostUser,
-    VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    balloon_allow_list, vhost, Balloon, Block, BlockState, Console, Rng, RngState, VhostKern,
+    VhostUser, VirtioConsoleState, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
     VirtioPciDevice,
 };
 
@@ -501,6 +501,39 @@ pub trait MachineOps {
 
     fn get_pci_host(&mut self) -> StdResult<&Arc<Mutex<PciHost>>> {
         bail!("No pci host found");
+    }
+
+    /// Add virtioFs device.
+    ///
+    /// # Arguments
+    ///
+    /// * 'vm_config' - VM configuration.
+    /// * 'cfg_args' - Device configuration arguments.
+    fn add_virtio_fs(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let dev_cfg = parse_fs(vm_config, cfg_args)?;
+        let id_clone = dev_cfg.id.clone();
+        let sys_mem = self.get_sys_mem().clone();
+        let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
+        if cfg_args.contains("vhost-user-fs-device") {
+            let device = VirtioMmioDevice::new(&sys_mem, device);
+            self.realize_virtio_mmio_device(device)
+                .chain_err(|| "Failed to add vhost user fs device")?;
+        } else if cfg_args.contains("vhost-user-fs-pci") {
+            let bdf = get_pci_bdf(cfg_args)?;
+            let multi_func = get_multi_function(cfg_args)?;
+            let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
+
+            let mut vitio_pci_device =
+                VirtioPciDevice::new(id_clone, devfn, sys_mem, device, parent_bus, multi_func);
+            vitio_pci_device.enable_need_irqfd();
+            vitio_pci_device
+                .realize()
+                .chain_err(|| "Failed to add pci fs device")?;
+        } else {
+            bail!("error device type");
+        }
+
+        Ok(())
     }
 
     fn get_sys_bus(&mut self) -> &SysBus;
@@ -1100,6 +1133,9 @@ pub trait MachineOps {
                 }
                 "vhost-user-blk-pci" => {
                     self.add_vhost_user_blk_pci(vm_config, cfg_args)?;
+                }
+                "vhost-user-fs-pci" | "vhost-user-fs-device" => {
+                    self.add_virtio_fs(vm_config, cfg_args)?;
                 }
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;

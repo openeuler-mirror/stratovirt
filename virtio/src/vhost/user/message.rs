@@ -63,6 +63,47 @@ pub enum VhostUserMsgReq {
     MaxCmd = 33,
 }
 
+impl From<u32> for VhostUserMsgReq {
+    fn from(t: u32) -> Self {
+        match t {
+            0 => VhostUserMsgReq::None,
+            1 => VhostUserMsgReq::GetFeatures,
+            2 => VhostUserMsgReq::SetFeatures,
+            3 => VhostUserMsgReq::SetOwner,
+            4 => VhostUserMsgReq::ResetOwner,
+            5 => VhostUserMsgReq::SetMemTable,
+            6 => VhostUserMsgReq::SetLogBase,
+            7 => VhostUserMsgReq::SetLogFd,
+            8 => VhostUserMsgReq::SetVringNum,
+            9 => VhostUserMsgReq::SetVringAddr,
+            10 => VhostUserMsgReq::SetVringBase,
+            11 => VhostUserMsgReq::GetVringBase,
+            12 => VhostUserMsgReq::SetVringKick,
+            13 => VhostUserMsgReq::SetVringCall,
+            14 => VhostUserMsgReq::SetVringErr,
+            15 => VhostUserMsgReq::GetProtocolFeatures,
+            16 => VhostUserMsgReq::SetProtocolFeatures,
+            17 => VhostUserMsgReq::GetQueueNum,
+            18 => VhostUserMsgReq::SetVringEnable,
+            19 => VhostUserMsgReq::SendRarp,
+            20 => VhostUserMsgReq::NetSetMtu,
+            21 => VhostUserMsgReq::SetSlaveReqFd,
+            22 => VhostUserMsgReq::IotlbMsg,
+            23 => VhostUserMsgReq::SetVringEndian,
+            24 => VhostUserMsgReq::GetConfig,
+            25 => VhostUserMsgReq::SetConfig,
+            26 => VhostUserMsgReq::CreateCryptoSession,
+            27 => VhostUserMsgReq::CloseCryptoSession,
+            28 => VhostUserMsgReq::PostcopyAdvise,
+            29 => VhostUserMsgReq::PostcopyListen,
+            30 => VhostUserMsgReq::PostcopyEnd,
+            31 => VhostUserMsgReq::GetInflightFd,
+            32 => VhostUserMsgReq::SetInflightFd,
+            _ => VhostUserMsgReq::MaxCmd,
+        }
+    }
+}
+
 /// The meaning of flag bits for header of vhost user message.
 pub enum VhostUserHdrFlag {
     /// Bits[0..1] is message version number.
@@ -107,7 +148,7 @@ impl VhostUserMsgHdr {
     }
 
     /// Check whether reply for this message is requested.
-    fn need_reply(&self) -> bool {
+    pub fn need_reply(&self) -> bool {
         (self.flags & VhostUserHdrFlag::NeedReply as u32) != 0
     }
 
