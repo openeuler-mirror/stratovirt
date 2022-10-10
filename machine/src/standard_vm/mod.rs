@@ -159,12 +159,12 @@ trait StdMachineOps: AcpiBuilder {
             .chain_err(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
 
-        let srat_addr = self
-            .build_srat_table(&acpi_tables, &mut loader)
-            .chain_err(|| "Failed to build ACPI SRAT table")?;
-        xsdt_entries.push(srat_addr);
-
         if let Some(numa_nodes) = self.get_numa_nodes() {
+            let srat_addr = self
+                .build_srat_table(&acpi_tables, &mut loader)
+                .chain_err(|| "Failed to build ACPI SRAT table")?;
+            xsdt_entries.push(srat_addr);
+
             let slit_addr = Self::build_slit_table(numa_nodes, &acpi_tables, &mut loader)
                 .chain_err(|| "Failed to build ACPI SLIT table")?;
             xsdt_entries.push(slit_addr);
