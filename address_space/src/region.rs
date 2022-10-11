@@ -639,6 +639,11 @@ impl Region {
     /// * The child-region does not exist in sub-regions array.
     /// * Failed to generate flat view (topology changed after removing sub-region).
     pub fn delete_subregion(&self, child: &Region) -> Result<()> {
+        // check parent Region's property, and check if child Region's offset is valid or not
+        if self.region_type() != RegionType::Container {
+            return Err(ErrorKind::RegionType(self.region_type()).into());
+        }
+
         let mut sub_regions = self.subregions.write().unwrap();
         let mut removed = false;
         for (index, sub_r) in sub_regions.iter().enumerate() {
