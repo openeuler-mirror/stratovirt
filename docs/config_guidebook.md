@@ -67,8 +67,12 @@ Default VM memory size is 256M. The supported VM memory size is among [256M, 512
 ```
 
 #### 1.3.2 Memory Prealloc
-Memory prealloc is supported by StratoVirt, users can use the following cmdline to configure
-memory prealloc.
+Memory Prealloc feature is used to preallocate VM physical memory in advance and create its page tables.
+Using this feature, the number of page faults will decrease, and the memory access performance of the VM will improve.
+
+Note: This option will take effect the VM startup time.
+
+You can use the following cmdline to configure memory prealloc.
 
 ```shell
 -mem-prealloc
@@ -130,8 +134,8 @@ The following command shows how to set NUMA node:
 # The memory size must be set to be the same as numa node mem.
 -m 4G
 
--object memory-backend-ram,size=2G,id=mem0,[host-nodes=0-1,policy=bind]
--object memory-backend-ram,size=2G,id=mem1,[host-nodes=0-1,policy=bind]
+-object memory-backend-ram,size=2G,id=mem0,host-nodes=0-1,policy=bind
+-object memory-backend-ram,size=2G,id=mem1,host-nodes=0-1,policy=bind
 -numa node,nodeid=0,cpus=0-1:4-5,memdev=mem0
 -numa node,nodeid=1,cpus=2-3:6-7,memdev=mem1
 [-numa dist,src=0,dst=0,val=10]
