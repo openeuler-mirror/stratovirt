@@ -22,7 +22,7 @@ use crate::{
     RegionType,
 };
 
-/// Contain an array of `FlatRange`.
+/// Contains an array of `FlatRange`.
 #[derive(Default, Clone, Debug)]
 pub(crate) struct FlatView(pub Vec<FlatRange>);
 
@@ -62,8 +62,8 @@ type ListenerObj = Arc<Mutex<dyn Listener>>;
 pub struct AddressSpace {
     /// Root Region of this AddressSpace.
     root: Region,
-    /// Flat_view is the output of rendering all regions in parent address-space,
-    /// every time the topology changed (add/delete region), flat_view would be updated.
+    /// `flat_view` is the output of rendering all regions in parent `address-space`,
+    /// every time the topology changed (add/delete region), `flat_view` would be updated.
     flat_view: Arc<ArcSwap<FlatView>>,
     /// The triggered call-backs when flat_view changed.
     listeners: Arc<Mutex<Vec<ListenerObj>>>,
@@ -391,7 +391,7 @@ impl AddressSpace {
         None
     }
 
-    /// Return the end address of memory  according to all Ram regions in AddressSpace.
+    /// Return the end address of memory according to all Ram regions in AddressSpace.
     pub fn memory_end_address(&self) -> GuestAddress {
         self.flat_view
             .load()
@@ -491,7 +491,7 @@ impl AddressSpace {
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
         let mut dst = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>() as usize)
+            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };
         dst.write_all(data.as_bytes())
             .chain_err(|| "Failed to write object via host address")
@@ -528,7 +528,7 @@ impl AddressSpace {
         let mut obj = T::default();
         let mut dst = obj.as_mut_bytes();
         let src = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>() as usize)
+            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };
         dst.write_all(src)
             .chain_err(|| "Failed to read object via host address")?;
