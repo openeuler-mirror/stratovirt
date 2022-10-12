@@ -418,7 +418,7 @@ $ ip tuntap add tap0 mode tap
 $ brctl addif qbr0 tap0
 $ ip link set qbr0 up
 $ ip link set tap0 up
-$ ip address add 1.1.1.1 dev qbr0
+$ ip address add 1.1.1.1/24 dev qbr0
 
 # Run StratoVirt
 ... -netdev tap,id=netdevid,ifname=tap0 ...
@@ -439,7 +439,7 @@ $ ip tuntap add tap1 mode tap multi_queue
 $ brctl addif qbr0 tap1
 $ ip link set qbr0 up
 $ ip link set tap1 up
-$ ip address add 1.1.1.1 dev qbr0
+$ ip address add 1.1.1.1/24 dev qbr0
 ```
 
 *How to create port by ovs-dpdk?*
