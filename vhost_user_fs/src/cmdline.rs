@@ -77,6 +77,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true)
                 .possible_values(vec!["namespace", "chroot"]),
         )
+        .arg(
+            Arg::with_name("modcaps")
+                .opt_long("modcaps")
+                .value_name("add or delete modcaps")
+                .help("--modcaps=-LEASE,+KILL")
+                .takes_value(true),
+        )
 }
 
 /// Filesystem configuration parsed from command line for the process.
