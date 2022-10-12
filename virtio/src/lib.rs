@@ -191,6 +191,8 @@ pub const VIRTIO_NET_F_MRG_RXBUF: u32 = 15;
 pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
 /// Device supports multi queue with automatic receive steering.
 pub const VIRTIO_NET_F_MQ: u32 = 22;
+/// Set Mac Address through control channel.
+pub const VIRTIO_NET_F_CTRL_MAC_ADDR: u32 = 23;
 /// Configuration cols and rows are valid.
 pub const VIRTIO_CONSOLE_F_SIZE: u64 = 0;
 /// Maximum size of any single segment is in size_max.

@@ -29,15 +29,16 @@ use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::super::{
-    net::{build_device_config_space, create_tap, VirtioNetConfig},
+    net::{build_device_config_space, create_tap, VirtioNetConfig, MAC_ADDR_LEN},
     CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_ACCESS_PLATFORM,
     VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4,
-    VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MQ,
-    VIRTIO_TYPE_NET,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
+    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
+    VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
 };
 use super::super::{VhostNotify, VhostOps};
 use super::{VhostBackend, VhostIoHandler, VhostVringFile, VHOST_NET_SET_BACKEND};
+use crate::virtio_has_feature;
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
@@ -234,12 +235,15 @@ impl VirtioDevice for Net {
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
         let config_slice = self.device_config.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
-        }
 
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        if !virtio_has_feature(self.driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
+            && !virtio_has_feature(self.driver_features, VIRTIO_F_VERSION_1)
+            && offset == 0
+            && data_len == MAC_ADDR_LEN
+            && *data != config_slice[0..data_len]
+        {
+            config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        }
 
         Ok(())
     }
@@ -498,11 +502,11 @@ mod tests {
 
         let mut read_data: Vec<u8> = vec![0; len as usize];
         assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), true);
-        assert_eq!(read_data, data);
+        assert_ne!(read_data, data);
 
         let offset: u64 = 1;
         let data: Vec<u8> = vec![1; len as usize];
-        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), false);
+        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), true);
 
         let offset: u64 = len + 1;
         let mut read_data: Vec<u8> = vec![0; len as usize];
