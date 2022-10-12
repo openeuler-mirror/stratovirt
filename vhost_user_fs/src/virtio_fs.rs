@@ -17,6 +17,7 @@ const VIRTIO_FS_REQ_QUEUES_NUM: u64 = 1;
 /// The max queue size.
 const VIRTIO_FS_MAX_QUEUE_SIZE: u16 = 1024;
 
+use crate::cmdline::FsConfig;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::{Arc, Mutex};
@@ -211,7 +212,7 @@ impl VirtioFs {
     /// # Arguments
     ///
     /// * `source_dir` - The path of source directory shared in host.
-    pub fn new(source_dir: &str) -> Result<Self> {
+    pub fn new(fs_config: FsConfig) -> Result<Self> {
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
             .with_context(|| "Failed to create address space")?;
 
@@ -220,9 +221,9 @@ impl VirtioFs {
             fs_handlers.push(None);
         }
 
-        let fs = Arc::new(Mutex::new(FileSystem::new(source_dir).with_context(
-            || format!("Failed to create file system, source dir: {}", source_dir),
-        )?));
+        let fs = Arc::new(Mutex::new(
+            FileSystem::new(fs_config).with_context(|| "Failed to create file system")?,
+        ));
 
         Ok(VirtioFs {
             config: VirtioFsConfig::new(),
