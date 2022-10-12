@@ -7,6 +7,8 @@ name = "StratoVirt"
 version = "2.2.0"
 dependencies = [
  "anyhow",
+ "capng",
+ "error-chain",
  "hypervisor",
  "kvm-ioctls",
  "libc",

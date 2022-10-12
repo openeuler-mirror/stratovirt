@@ -18,10 +18,11 @@ use std::io::Write;
 use std::process;
 
 use crate::UtilError;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
 const PREFIX_CHARS_SHORT: &str = "-";
 const PREFIX_CHARS_LONG: &str = "-";
+const PREFIX_OPT_LONG: &str = "--";
 const ARG_SEPARATOR: &str = "--";
 const HELP_SHORT: &str = "h";
 const HELP_LONG: &str = "help";
@@ -99,6 +100,7 @@ pub struct Arg<'a> {
     name: &'a str,
     long: Option<&'a str>,
     short: Option<&'a str>,
+    opt_long: Option<&'a str>,
     help: Option<&'a str>,
     value_name: Option<&'a str>,
     value: Option<String>,
@@ -174,6 +176,10 @@ impl<'a> ArgParser<'a> {
         if arg.short.is_some() {
             self.allow_list
                 .push(format!("{}{}", PREFIX_CHARS_SHORT, arg.short.unwrap()));
+        }
+        if arg.opt_long.is_some() {
+            self.allow_list
+                .push(format!("{}{}", PREFIX_OPT_LONG, arg.opt_long.unwrap()));
         }
         self.args.insert(arg.name, arg);
         self
@@ -298,6 +304,12 @@ impl<'a> Arg<'a> {
         self
     }
 
+    /// Set opt long argument for arg.
+    pub fn opt_long(mut self, opt_long: &'a str) -> Self {
+        self.opt_long = Some(opt_long);
+        self
+    }
+
     /// Set help message for arg.
     pub fn help(mut self, help: &'a str) -> Self {
         self.help = Some(help);
@@ -373,51 +385,55 @@ impl<'a> Arg<'a> {
 
     /// Parse argument from a hashset.
     fn parse_from_hash(&mut self, arg_hash: &ArgsMap, multi_vec: &[String]) -> Result<()> {
-        let long_name = self.long.unwrap().to_string();
+        let name = if let Some(long) = self.long {
+            long.to_string()
+        } else if let Some(opt_long) = self.opt_long {
+            opt_long.to_string()
+        } else {
+            bail!("Invalid argument, long and opt_long are None")
+        };
 
-        if arg_hash.contains_key(&long_name) {
-            if !self.multiple && multi_vec.contains(&long_name) {
-                return Err(anyhow!(UtilError::DuplicateArgument(long_name)));
+        if arg_hash.contains_key(&name) {
+            if !self.multiple && multi_vec.contains(&name) {
+                return Err(anyhow!(UtilError::DuplicateArgument(name)));
             }
 
-            if self.value.is_some() && (arg_hash[&long_name].len() > 1) && !self.multiple {
-                return Err(anyhow!(UtilError::DuplicateValue(long_name)));
+            if self.value.is_some() && (arg_hash[&name].len() > 1) && !self.multiple {
+                return Err(anyhow!(UtilError::DuplicateValue(name)));
             }
 
-            if (self.value.is_some() || self.values.is_some()) && (arg_hash[&long_name].is_empty())
-            {
+            if (self.value.is_some() || self.values.is_some()) && (arg_hash[&name].is_empty()) {
                 if self.can_no_value {
                     self.value = Some(Default::default());
                     self.presented = true;
                     return Ok(());
                 } else {
-                    return Err(anyhow!(UtilError::MissingValue(long_name)));
+                    return Err(anyhow!(UtilError::MissingValue(name)));
                 }
             }
 
-            if (self.value.is_none() && self.values.is_none()) && (!arg_hash[&long_name].is_empty())
-            {
+            if (self.value.is_none() && self.values.is_none()) && (!arg_hash[&name].is_empty()) {
                 return Err(anyhow!(UtilError::IllegelValue(
-                    arg_hash[&long_name][0].to_string(),
-                    long_name.to_string(),
+                    arg_hash[&name][0].to_string(),
+                    name.to_string(),
                 )));
             }
 
             if self.value.is_some() {
-                if self.possible_value_check(&arg_hash[&long_name][0]) {
-                    self.value = Some(arg_hash[&long_name][0].clone());
+                if self.possible_value_check(&arg_hash[&name][0]) {
+                    self.value = Some(arg_hash[&name][0].clone());
                 } else {
                     return Err(anyhow!(UtilError::ValueOutOfPossible(
-                        long_name,
+                        name,
                         format!("{:?}", self.possible_values),
                     )));
                 }
             } else if self.values.is_some() {
-                if self.possible_values_check(arg_hash[&long_name].clone()) {
-                    self.values = Some(arg_hash[&long_name].clone());
+                if self.possible_values_check(arg_hash[&name].clone()) {
+                    self.values = Some(arg_hash[&name].clone());
                 } else {
                     return Err(anyhow!(UtilError::ValueOutOfPossible(
-                        long_name,
+                        name,
                         format!("{:?}", self.possible_values),
                     )));
                 }
@@ -425,7 +441,7 @@ impl<'a> Arg<'a> {
 
             self.presented = true;
         } else if self.required {
-            return Err(anyhow!(UtilError::MissingArgument(long_name)));
+            return Err(anyhow!(UtilError::MissingArgument(name)));
         }
 
         if self.short.is_some() {
@@ -596,11 +612,33 @@ fn parse_cmdline(
     let mut i = (0, "");
     let mut j = 1;
     for cmd_arg in &cmd_args[1..] {
-        if !allow_list.contains(cmd_arg) && cmd_arg.starts_with(PREFIX_CHARS_SHORT) {
+        if !allow_list.contains(cmd_arg)
+            && cmd_arg.starts_with(PREFIX_CHARS_SHORT)
+            && !cmd_arg.starts_with(PREFIX_OPT_LONG)
+        {
             return Err(anyhow!(UtilError::UnexpectedArguments(cmd_arg.to_string())));
         }
 
-        if cmd_arg.starts_with(PREFIX_CHARS_LONG) {
+        if cmd_arg.starts_with(PREFIX_OPT_LONG) {
+            let splits = cmd_arg.split('=').collect::<Vec<&str>>();
+            // It has two arguments. e.g. "--modcaps=+sys_admin".
+            if splits.len() != 2 {
+                return Err(anyhow!(UtilError::UnexpectedArguments(cmd_arg.to_string())));
+            }
+            if !allow_list.contains(&splits[0].to_string()) {
+                return Err(anyhow!(UtilError::UnexpectedArguments(cmd_arg.to_string())));
+            }
+            let arg_str = split_arg(splits[0], PREFIX_OPT_LONG);
+            if let Entry::Vacant(e) = arg_map.entry(arg_str.to_string()) {
+                e.insert(Vec::new());
+            } else {
+                multi_vec.push(arg_str.to_string());
+            }
+            arg_map
+                .get_mut(arg_str.as_str())
+                .unwrap()
+                .push(splits[1].to_string());
+        } else if cmd_arg.starts_with(PREFIX_CHARS_LONG) {
             let arg_str = split_arg(cmd_arg, PREFIX_CHARS_LONG);
 
             if let Entry::Vacant(e) = arg_map.entry(arg_str.clone()) {
