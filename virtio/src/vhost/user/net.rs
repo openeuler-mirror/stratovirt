@@ -25,12 +25,12 @@ use vmm_sys_util::eventfd::EventFd;
 use super::super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::super::virtio_has_feature;
 use super::super::super::{
-    net::{build_device_config_space, VirtioNetConfig},
+    net::{build_device_config_space, VirtioNetConfig, MAC_ADDR_LEN},
     CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
-    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
-    VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
+    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
+    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
+    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
 };
 use super::super::VhostOps;
 use super::VhostUserClient;
@@ -218,12 +218,15 @@ impl VirtioDevice for Net {
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
         let config_slice = self.device_config.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
-        }
 
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        if !virtio_has_feature(self.driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
+            && !virtio_has_feature(self.driver_features, VIRTIO_F_VERSION_1)
+            && offset == 0
+            && data_len == MAC_ADDR_LEN
+            && *data != config_slice[0..data_len]
+        {
+            config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        }
 
         Ok(())
     }

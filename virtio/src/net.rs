@@ -39,16 +39,19 @@ use super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_VQ,
-    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
+    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
     VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
+use crate::virtio_has_feature;
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
 /// Size of each virtqueue.
 const QUEUE_SIZE_NET: u16 = 256;
+/// The Mac Address length.
+pub const MAC_ADDR_LEN: usize = 6;
 
 type SenderConfig = Option<Tap>;
 
@@ -57,7 +60,7 @@ type SenderConfig = Option<Tap>;
 #[derive(Copy, Clone, Debug, Default)]
 pub struct VirtioNetConfig {
     /// Mac Address.
-    pub mac: [u8; 6],
+    pub mac: [u8; MAC_ADDR_LEN],
     /// Device status.
     pub status: u16,
     /// Maximum number of each of transmit and receive queues.
@@ -926,12 +929,15 @@ impl VirtioDevice for Net {
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
         let config_slice = self.state.config_space.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
-        }
 
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        if !virtio_has_feature(self.state.driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
+            && !virtio_has_feature(self.state.driver_features, VIRTIO_F_VERSION_1)
+            && offset == 0
+            && data_len == MAC_ADDR_LEN
+            && *data != config_slice[0..data_len]
+        {
+            config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        }
 
         Ok(())
     }
@@ -1111,7 +1117,7 @@ mod tests {
 
         net.write_config(0x00, &write_data).unwrap();
         net.read_config(0x00, &mut random_data).unwrap();
-        assert_eq!(random_data, write_data);
+        assert_ne!(random_data, write_data);
 
         net.write_config(0x00, &origin_data).unwrap();
 
@@ -1131,7 +1137,7 @@ mod tests {
 
         let offset: u64 = len;
         let mut data: Vec<u8> = vec![0; 1];
-        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
+        assert_eq!(net.write_config(offset, &mut data).is_ok(), true);
 
         let offset: u64 = len - 1;
         let mut data: Vec<u8> = vec![0; 1];
