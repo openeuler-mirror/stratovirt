@@ -15,12 +15,15 @@ extern crate log;
 extern crate vhost_user_fs;
 use anyhow::{Context, Result};
 use machine_manager::event_loop::EventLoop;
+use machine_manager::signal_handler;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use util::{arg_parser, logger};
 use vhost_user_fs::cmdline::{create_args_parser, create_fs_config, FsConfig};
+use vhost_user_fs::sandbox::Sandbox;
+use vhost_user_fs::securecomputing::{seccomp_filter, string_to_seccompopt, SeccompOpt};
 use vhost_user_fs::vhost_user_fs::VhostUserFs;
 
 #[derive(Error, Debug)]
@@ -77,6 +80,7 @@ fn run() -> Result<()> {
     if let Some(logfile_path) = cmd_args.value_of("display log") {
         init_log(logfile_path)?;
     }
+    signal_handler::register_kill_signal();
     set_panic_hook();
     match real_main(&cmd_args) {
         Ok(()) => info!("EventLoop over, Vm exit"),
@@ -89,8 +93,29 @@ fn run() -> Result<()> {
 }
 
 fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
-    let fsconfig: FsConfig = create_fs_config(cmd_args)?;
+    let mut fsconfig: FsConfig = create_fs_config(cmd_args)?;
     info!("FsConfig is {:?}", fsconfig);
+
+    let source_dir = cmd_args.value_of("source dir").unwrap();
+    let mut sandbox = Sandbox::new(source_dir);
+    if let Some(sandbox_value) = cmd_args.value_of("sandbox") {
+        match sandbox_value.as_str() {
+            "chroot" => sandbox.enable_chroot(),
+            "namespace" => sandbox.enable_namespace(),
+            _ => Ok(()),
+        }?;
+    };
+    if sandbox.proc_self_fd.is_some() {
+        fsconfig.proc_dir_opt = sandbox.proc_self_fd;
+    }
+
+    if let Some(seccomp) = cmd_args.value_of("seccomp") {
+        let seccomp_opt = string_to_seccompopt(seccomp);
+        match seccomp_opt {
+            SeccompOpt::Allow => {}
+            _ => seccomp_filter(seccomp_opt).unwrap(),
+        }
+    }
 
     EventLoop::object_init(&None)?;
 

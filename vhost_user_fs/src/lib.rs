@@ -23,6 +23,8 @@ pub mod fs_ops;
 pub mod fuse_msg;
 pub mod fuse_proc;
 pub mod fuse_req;
+pub mod sandbox;
+pub mod securecomputing;
 pub mod vhost_user_fs;
 pub mod vhost_user_server;
 pub mod virtio_fs;

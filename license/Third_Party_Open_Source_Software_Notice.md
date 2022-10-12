@@ -425,3 +425,15 @@ Copyright notice:
 Copyright (c) tokio-rs
 License: MIT OR Apache-2.0
 Please see above.
+
+Software: libseccomp-sys 0.2.1
+Copyright notice:
+Copyright (c) 2021 Sony Group Corporation
+License: MIT OR Apache-2.0
+Please see above.
+
+Software: capng 0.2.2
+Copyright notice:
+Copyright (C) 2020 Red Hat, Inc. All rights reserved.
+License: Apache License Version 2.0 or BSD 3-Clause License
+Please see above.
