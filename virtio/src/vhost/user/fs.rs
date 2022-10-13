@@ -187,6 +187,11 @@ impl VirtioDevice for Fs {
         self.acked_features |= features;
     }
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.acked_features, features_select)
+    }
+
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.config.as_bytes();
         let config_size = config_slice.len() as u64;

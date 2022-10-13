@@ -217,6 +217,11 @@ impl VirtioDevice for Net {
         self.driver_features |= features;
     }
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.driver_features, features_select)
+    }
+
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.device_config.as_bytes();
@@ -482,6 +487,7 @@ mod tests {
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
+        assert_eq!(vhost_net.get_driver_features(page) as u64, 0_u64);
         let new_page = vhost_net.get_device_features(page);
         assert_eq!(new_page, page);
 
@@ -489,6 +495,7 @@ mod tests {
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
+        assert_eq!(vhost_net.get_driver_features(page) as u64, 0xff_u64);
         let new_page = vhost_net.get_device_features(page);
         assert_ne!(new_page, page);
 

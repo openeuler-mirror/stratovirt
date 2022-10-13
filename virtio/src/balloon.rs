@@ -875,6 +875,11 @@ impl VirtioDevice for Balloon {
         self.driver_features |= v;
     }
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.driver_features, features_select)
+    }
+
     /// Read configuration.
     ///
     /// # Arguments
@@ -1135,9 +1140,14 @@ mod tests {
         bln.device_features = 1;
         bln.set_driver_features(0, 1);
         assert_eq!(bln.driver_features, 1);
+        assert_eq!(bln.driver_features, bln.get_driver_features(0) as u64);
         bln.driver_features = 1 << 32;
         bln.set_driver_features(1, 1);
         assert_eq!(bln.driver_features, 1 << 32);
+        assert_eq!(
+            bln.driver_features,
+            (bln.get_driver_features(1) as u64) << 32
+        );
 
         // Test realize function.
         bln.realize().unwrap();

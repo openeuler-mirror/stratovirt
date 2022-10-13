@@ -208,6 +208,10 @@ impl VirtioPciCommonConfig {
                 .unwrap()
                 .get_device_features(self.features_select),
             COMMON_GFSELECT_REG => self.acked_features_select,
+            COMMON_GF_REG => device
+                .lock()
+                .unwrap()
+                .get_driver_features(self.acked_features_select),
             COMMON_MSIX_REG => self.msix_config.load(Ordering::SeqCst) as u32,
             COMMON_NUMQ_REG => self.queues_config.len() as u32,
             COMMON_STATUS_REG => self.device_status,
@@ -1518,6 +1522,10 @@ mod tests {
                 v &= !unrequested_features;
             }
             self.driver_features |= v;
+        }
+
+        fn get_driver_features(&self, features_select: u32) -> u32 {
+            read_u32(self.driver_features, features_select)
         }
 
         fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {
