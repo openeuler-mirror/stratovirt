@@ -36,7 +36,7 @@ pub enum RegionType {
     RamDevice,
 }
 
-/// Represents a memory region, used by mem-mapped IO or Ram.
+/// Represents a memory region, used by mem-mapped IO, Ram or Rom.
 #[derive(Clone)]
 pub struct Region {
     /// Type of Region, won't be changed once initialized.
@@ -47,7 +47,7 @@ pub struct Region {
     size: Arc<AtomicU64>,
     /// Offset in parent Container-type region. It won't be changed once initialized.
     offset: Arc<Mutex<GuestAddress>>,
-    /// If not Ram-type Region, `mem_mapping` is None. It won't be changed once initialized.
+    /// If not Ram, RomDevice, RamDevice Region type, `mem_mapping` is None. It won't be changed once initialized.
     mem_mapping: Option<Arc<HostMemMapping>>,
     /// `ops` provides read/write function.
     ops: Option<RegionOps>,
@@ -55,7 +55,7 @@ pub struct Region {
     io_evtfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
     /// Weak pointer pointing to the father address-spaces.
     space: Arc<RwLock<Weak<AddressSpace>>>,
-    /// Sub-regions array, keep sorted
+    /// Sub-regions array, keep sorted.
     subregions: Arc<RwLock<Vec<Region>>>,
     /// This field is useful for RomDevice-type Region. If true, in read-only mode, otherwise in IO mode.
     rom_dev_romd: Arc<AtomicBool>,
@@ -125,7 +125,7 @@ impl RegionIoEventFd {
         false
     }
 
-    /// Return the cloned IoEvent,
+    /// Return the cloned Region IoEventFd,
     /// return error if failed to clone EventFd.
     pub(crate) fn try_clone(&self) -> Result<RegionIoEventFd> {
         let fd = self.fd.try_clone().or(Err(ErrorKind::IoEventFd))?;
@@ -366,6 +366,7 @@ impl Region {
         self.mem_mapping.as_ref().and_then(|r| r.file_backend())
     }
 
+    /// Get the region file backend page size.
     pub fn get_region_page_size(&self) -> Option<u64> {
         self.mem_mapping
             .as_ref()
@@ -553,12 +554,13 @@ impl Region {
         Ok(())
     }
 
+    /// Set the ioeventfds within this Region,
     /// Return the IoEvent of a `Region`.
     pub fn set_ioeventfds(&self, new_fds: &[RegionIoEventFd]) {
         *self.io_evtfds.lock().unwrap() = new_fds.iter().map(|e| e.try_clone().unwrap()).collect();
     }
 
-    /// Set the ioeventfds within this Region,
+    /// Get the ioeventfds within this Region,
     /// these fds will be register to `KVM` and used for guest notifier.
     pub fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         self.io_evtfds
@@ -639,6 +641,11 @@ impl Region {
     /// * The child-region does not exist in sub-regions array.
     /// * Failed to generate flat view (topology changed after removing sub-region).
     pub fn delete_subregion(&self, child: &Region) -> Result<()> {
+        // check parent Region's property, and check if child Region's offset is valid or not
+        if self.region_type() != RegionType::Container {
+            return Err(ErrorKind::RegionType(self.region_type()).into());
+        }
+
         let mut sub_regions = self.subregions.write().unwrap();
         let mut removed = false;
         for (index, sub_r) in sub_regions.iter().enumerate() {

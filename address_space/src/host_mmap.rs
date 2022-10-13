@@ -75,6 +75,8 @@ impl FileBackend {
     pub fn new_mem(file_path: &str, file_len: u64) -> Result<FileBackend> {
         let path = std::path::Path::new(&file_path);
         let file = if path.is_dir() {
+            // The last six characters of template file must be "XXXXXX" for `mkstemp`
+            // function to create unique temporary file.
             let fs_path = format!("{}{}", file_path, "/stratovirt_backmem_XXXXXX");
             let fs_cstr = std::ffi::CString::new(fs_path.clone()).unwrap().into_raw();
 
