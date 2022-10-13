@@ -584,6 +584,9 @@ pub trait MachineOps {
         // unwrap is safe because stand machine always make sure it not return null.
         let boot_order_vec = self.get_boot_order_list().unwrap();
         let mut locked_boot_order_vec = boot_order_vec.lock().unwrap().clone();
+        if locked_boot_order_vec.is_empty() {
+            return Ok(());
+        }
         locked_boot_order_vec.sort_by(|x, y| x.boot_index.cmp(&y.boot_index));
         let mut fwcfg_boot_order_string = String::new();
         for item in &locked_boot_order_vec {
