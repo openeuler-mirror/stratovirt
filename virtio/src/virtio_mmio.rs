@@ -819,6 +819,10 @@ mod tests {
             self.driver_features |= v;
         }
 
+        fn get_driver_features(&self, features_select: u32) -> u32 {
+            read_u32(self.driver_features, features_select)
+        }
+
         fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
             let config_len = self.config_space.len() as u64;
             if offset >= config_len {

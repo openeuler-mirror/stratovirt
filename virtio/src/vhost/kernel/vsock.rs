@@ -197,6 +197,11 @@ impl VirtioDevice for Vsock {
         self.state.driver_features |= features;
     }
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.state.driver_features, features_select)
+    }
+
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
         match offset {
@@ -428,9 +433,11 @@ mod tests {
         vsock.state.device_features = 0x0123_4567_89ab_cdef;
         // check for unsupported feature
         vsock.set_driver_features(0, 0x7000_0000);
+        assert_eq!(vsock.get_driver_features(0) as u64, 0_u64);
         assert_eq!(vsock.state.device_features, 0x0123_4567_89ab_cdef);
         // check for supported feature
         vsock.set_driver_features(0, 0x8000_0000);
+        assert_eq!(vsock.get_driver_features(0) as u64, 0x8000_0000_u64);
         assert_eq!(vsock.state.device_features, 0x0123_4567_89ab_cdef);
 
         // test vsock read_config

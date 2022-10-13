@@ -42,7 +42,7 @@ use crate::{
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
-    VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET,
+    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
@@ -109,6 +109,11 @@ const COMMON_Q_AVAILHI_REG: u64 = 0x2c;
 const COMMON_Q_USEDLO_REG: u64 = 0x30;
 /// The high 32bit of queue's Used Ring address - Read Write.
 const COMMON_Q_USEDHI_REG: u64 = 0x34;
+
+/// The max features select num, only 0 or 1 is valid:
+///   0: select feature bits 0 to 31.
+///   1: select feature bits 32 to 63.
+const MAX_FEATURES_SELECT_NUM: u32 = 2;
 
 /// Get class id according to device type.
 ///
@@ -203,11 +208,25 @@ impl VirtioPciCommonConfig {
     ) -> PciResult<u32> {
         let value = match offset {
             COMMON_DFSELECT_REG => self.features_select,
-            COMMON_DF_REG => device
-                .lock()
-                .unwrap()
-                .get_device_features(self.features_select),
+            COMMON_DF_REG => {
+                if self.features_select >= MAX_FEATURES_SELECT_NUM {
+                    return Err(ErrorKind::FeaturesSelect(self.features_select).into());
+                }
+                device
+                    .lock()
+                    .unwrap()
+                    .get_device_features(self.features_select)
+            }
             COMMON_GFSELECT_REG => self.acked_features_select,
+            COMMON_GF_REG => {
+                if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
+                    return Err(ErrorKind::FeaturesSelect(self.acked_features_select).into());
+                }
+                device
+                    .lock()
+                    .unwrap()
+                    .get_driver_features(self.acked_features_select)
+            }
             COMMON_MSIX_REG => self.msix_config.load(Ordering::SeqCst) as u32,
             COMMON_NUMQ_REG => self.queues_config.len() as u32,
             COMMON_STATUS_REG => self.device_status,
@@ -274,6 +293,9 @@ impl VirtioPciCommonConfig {
                 self.acked_features_select = value;
             }
             COMMON_GF_REG => {
+                if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
+                    return Err(ErrorKind::FeaturesSelect(self.acked_features_select).into());
+                }
                 device
                     .lock()
                     .unwrap()
@@ -291,6 +313,15 @@ impl VirtioPciCommonConfig {
                 self.interrupt_status.store(0_u32, Ordering::SeqCst);
             }
             COMMON_STATUS_REG => {
+                if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
+                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
+                    if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
+                        error!(
+                            "Device is modern only, but the driver not support VIRTIO_F_VERSION_1"
+                        );
+                        return Ok(());
+                    }
+                }
                 self.device_status = value;
                 if self.device_status == 0 {
                     self.queues_config.iter_mut().for_each(|q| {
@@ -1518,6 +1549,10 @@ mod tests {
                 v &= !unrequested_features;
             }
             self.driver_features |= v;
+        }
+
+        fn get_driver_features(&self, features_select: u32) -> u32 {
+            read_u32(self.driver_features, features_select)
         }
 
         fn read_config(&self, _offset: u64, mut _data: &mut [u8]) -> VirtioResult<()> {

@@ -33,6 +33,9 @@ pub mod errors {
             PciRegister(offset: u64) {
                 display("Unsupported pci register, 0x{:x}", offset)
             }
+            FeaturesSelect(select: u32) {
+                display("Invalid features select 0x{:x}", select)
+            }
         }
     }
 }

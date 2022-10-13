@@ -912,6 +912,11 @@ impl VirtioDevice for Net {
         self.state.driver_features |= v;
     }
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.state.driver_features, features_select)
+    }
+
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.state.config_space.as_bytes();

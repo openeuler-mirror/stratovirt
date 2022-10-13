@@ -297,6 +297,9 @@ pub trait VirtioDevice: Send {
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32);
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32;
+
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()>;
 
