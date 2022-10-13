@@ -27,7 +27,7 @@ BLOB_SIZE = 2000
 
 
 def _check_vsock_enable(standvm):
-    """Check virtio rng device in Guest"""
+    """Check vhost vsock device in Guest"""
     _cmd = "ls /dev/vsock"
     status, _ = standvm.serial_cmd(_cmd)
     if status != 0:
@@ -77,13 +77,13 @@ def _get_recv_data_from_guest(standvm):
             ssh_session.close()
 
 @pytest.mark.acceptance
-def test_standvm_virtio_vsock(standvm, nc_vsock_path, test_session_root_path):
-    """Test virtio-rng device"""
+def test_standvm_vhost_vsock(standvm, nc_vsock_path, test_session_root_path):
+    """Test vhost vsock device"""
     test_vm = standvm
     test_vm.basic_config(vsocknums=1)
     test_vm.launch()
 
-    # check virtio-vsock device
+    # check vhost vsock device
     if not _check_vsock_enable(test_vm):
         pytest.skip("vhost-vsock init failed, skip this testcase")
 
