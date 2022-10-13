@@ -625,7 +625,6 @@ impl CPUThreadWorker {
                         ) {
                             error!("Failed to reset vcpu state: {}", e.to_string())
                         }
-                        fence(Ordering::Release)
                     });
                 }
                 _ => {}
