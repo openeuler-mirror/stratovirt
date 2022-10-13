@@ -110,6 +110,11 @@ const COMMON_Q_USEDLO_REG: u64 = 0x30;
 /// The high 32bit of queue's Used Ring address - Read Write.
 const COMMON_Q_USEDHI_REG: u64 = 0x34;
 
+/// The max features select num, only 0 or 1 is valid:
+///   0: select feature bits 0 to 31.
+///   1: select feature bits 32 to 63.
+const MAX_FEATURES_SELECT_NUM: u32 = 2;
+
 /// Get class id according to device type.
 ///
 /// # Arguments
@@ -203,15 +208,25 @@ impl VirtioPciCommonConfig {
     ) -> PciResult<u32> {
         let value = match offset {
             COMMON_DFSELECT_REG => self.features_select,
-            COMMON_DF_REG => device
-                .lock()
-                .unwrap()
-                .get_device_features(self.features_select),
+            COMMON_DF_REG => {
+                if self.features_select >= MAX_FEATURES_SELECT_NUM {
+                    return Err(ErrorKind::FeaturesSelect(self.features_select).into());
+                }
+                device
+                    .lock()
+                    .unwrap()
+                    .get_device_features(self.features_select)
+            }
             COMMON_GFSELECT_REG => self.acked_features_select,
-            COMMON_GF_REG => device
-                .lock()
-                .unwrap()
-                .get_driver_features(self.acked_features_select),
+            COMMON_GF_REG => {
+                if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
+                    return Err(ErrorKind::FeaturesSelect(self.acked_features_select).into());
+                }
+                device
+                    .lock()
+                    .unwrap()
+                    .get_driver_features(self.acked_features_select)
+            }
             COMMON_MSIX_REG => self.msix_config.load(Ordering::SeqCst) as u32,
             COMMON_NUMQ_REG => self.queues_config.len() as u32,
             COMMON_STATUS_REG => self.device_status,
@@ -278,6 +293,9 @@ impl VirtioPciCommonConfig {
                 self.acked_features_select = value;
             }
             COMMON_GF_REG => {
+                if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
+                    return Err(ErrorKind::FeaturesSelect(self.acked_features_select).into());
+                }
                 device
                     .lock()
                     .unwrap()
