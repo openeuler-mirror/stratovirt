@@ -42,7 +42,7 @@ use crate::{
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
-    VIRTIO_F_RING_PACKED, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET,
+    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
@@ -313,6 +313,15 @@ impl VirtioPciCommonConfig {
                 self.interrupt_status.store(0_u32, Ordering::SeqCst);
             }
             COMMON_STATUS_REG => {
+                if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
+                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
+                    if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
+                        error!(
+                            "Device is modern only, but the driver not support VIRTIO_F_VERSION_1"
+                        );
+                        return Ok(());
+                    }
+                }
                 self.device_status = value;
                 if self.device_status == 0 {
                     self.queues_config.iter_mut().for_each(|q| {
