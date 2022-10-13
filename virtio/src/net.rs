@@ -618,7 +618,7 @@ impl EventNotifierHelper for NetIoHandler {
                             NotifierOperation::Park,
                             tap.as_raw_fd(),
                             None,
-                            EventSet::IN,
+                            EventSet::IN | EventSet::EDGE_TRIGGERED,
                             Vec::new(),
                         )];
                         locked_net_io.is_listening = false;
