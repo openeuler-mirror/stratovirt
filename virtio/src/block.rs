@@ -1066,6 +1066,11 @@ impl VirtioDevice for Block {
         self.state.driver_features |= v;
     }
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.state.driver_features, features_select)
+    }
+
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.state.config_space.as_bytes();
@@ -1325,12 +1330,14 @@ mod tests {
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.state.driver_features, 0_u64);
+        assert_eq!(block.get_driver_features(page) as u64, 0_u64);
         assert_eq!(block.get_device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.state.driver_features, 0_u64);
+        assert_eq!(block.get_driver_features(page) as u64, 0_u64);
         assert_eq!(block.get_device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
@@ -1345,6 +1352,10 @@ mod tests {
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
         );
         assert_eq!(
+            block.get_driver_features(page) as u64,
+            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        assert_eq!(
             block.get_device_features(page),
             (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
         );
@@ -1355,6 +1366,7 @@ mod tests {
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.state.driver_features, 0);
+        assert_eq!(block.get_driver_features(page), 0);
         assert_eq!(block.get_device_features(page), 0_u32);
         block.state.driver_features = 0;
     }

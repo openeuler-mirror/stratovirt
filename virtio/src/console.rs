@@ -380,6 +380,11 @@ impl VirtioDevice for Console {
         self.state.driver_features |= v;
     }
 
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.state.driver_features, features_select)
+    }
+
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.state.config_space.as_bytes();
@@ -495,11 +500,13 @@ mod tests {
         let page = 0_u32;
         console.set_driver_features(page, driver_feature);
         assert_eq!(console.state.driver_features, 0_u64);
+        assert_eq!(console.get_driver_features(page) as u64, 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         console.set_driver_features(page, driver_feature);
         assert_eq!(console.state.driver_features, 0_u64);
+        assert_eq!(console.get_driver_features(page) as u64, 0_u64);
 
         //If both the device feature bit and the front-end driver feature bit are
         //supported at the same time,  this driver feature bit is supported.
@@ -510,6 +517,10 @@ mod tests {
         console.set_driver_features(page, driver_feature);
         assert_eq!(
             console.state.driver_features,
+            (1_u64 << VIRTIO_CONSOLE_F_SIZE)
+        );
+        assert_eq!(
+            console.get_driver_features(page) as u64,
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         console.state.driver_features = 0;
