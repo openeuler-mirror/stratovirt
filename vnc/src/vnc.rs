@@ -49,7 +49,7 @@ pub const VNC_BITMAP_WIDTH: u64 =
     round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) * u64::BITS as u64;
 
 const DEFAULT_REFRESH_INTERVAL: u64 = 30;
-const BIT_PER_BYTE: u32 = 8;
+pub const BIT_PER_BYTE: u32 = 8;
 const MILLI_PER_SEC: u64 = 1_000_000;
 pub const DISPLAY_UPDATE_INTERVAL_DEFAULT: u32 = 30;
 pub const DISPLAY_UPDATE_INTERVAL_INC: u32 = 50;
