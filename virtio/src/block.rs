@@ -953,8 +953,8 @@ impl Block {
         // capacity: 64bits
         let num_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
         self.state.config_space.capacity = num_sectors;
-        // seg_max = 128-2: 32bits
-        self.state.config_space.seg_max = 126;
+        // seg_max = queue_size - 2: 32bits
+        self.state.config_space.seg_max = self.queue_size() as u32 - 2;
     }
 }
 
