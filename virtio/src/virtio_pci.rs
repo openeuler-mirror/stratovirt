@@ -209,23 +209,25 @@ impl VirtioPciCommonConfig {
         let value = match offset {
             COMMON_DFSELECT_REG => self.features_select,
             COMMON_DF_REG => {
-                if self.features_select >= MAX_FEATURES_SELECT_NUM {
-                    return Err(ErrorKind::FeaturesSelect(self.features_select).into());
+                if self.features_select < MAX_FEATURES_SELECT_NUM {
+                    device
+                        .lock()
+                        .unwrap()
+                        .get_device_features(self.features_select)
+                } else {
+                    0
                 }
-                device
-                    .lock()
-                    .unwrap()
-                    .get_device_features(self.features_select)
             }
             COMMON_GFSELECT_REG => self.acked_features_select,
             COMMON_GF_REG => {
-                if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
-                    return Err(ErrorKind::FeaturesSelect(self.acked_features_select).into());
+                if self.acked_features_select < MAX_FEATURES_SELECT_NUM {
+                    device
+                        .lock()
+                        .unwrap()
+                        .get_driver_features(self.acked_features_select)
+                } else {
+                    0
                 }
-                device
-                    .lock()
-                    .unwrap()
-                    .get_driver_features(self.acked_features_select)
             }
             COMMON_MSIX_REG => self.msix_config.load(Ordering::SeqCst) as u32,
             COMMON_NUMQ_REG => self.queues_config.len() as u32,
@@ -260,9 +262,7 @@ impl VirtioPciCommonConfig {
             COMMON_Q_USEDHI_REG => self
                 .get_queue_config()
                 .map(|config| (config.used_ring.0 >> 32) as u32)?,
-            _ => {
-                return Err(ErrorKind::PciRegister(offset).into());
-            }
+            _ => 0,
         };
 
         Ok(value)
