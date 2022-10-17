@@ -310,13 +310,12 @@ impl StdMachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self) -> StdResult<Arc<Mutex<dyn FwCfgOps>>> {
+    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> StdResult<Arc<Mutex<dyn FwCfgOps>>> {
         use super::errors::ResultExt;
 
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
-        let ncpus = self.cpus.len();
         fwcfg
-            .add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())
+            .add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())
             .chain_err(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
 
         let cmdline = self.boot_source.lock().unwrap().kernel_cmdline.to_string();
@@ -468,6 +467,7 @@ impl MachineOps for StdMachine {
         use super::errors::ErrorKind as StdErrorKind;
         use crate::errors::ResultExt;
 
+        let nr_cpus = vm_config.machine_config.nr_cpus;
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
@@ -478,12 +478,12 @@ impl MachineOps for StdMachine {
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_mem,
-            vm_config.machine_config.nr_cpus,
+            nr_cpus,
         )?;
 
         let vcpu_fds = {
             let mut fds = vec![];
-            for vcpu_id in 0..vm_config.machine_config.nr_cpus {
+            for vcpu_id in 0..nr_cpus {
                 fds.push(Arc::new(
                     KVM_FDS
                         .load()
@@ -497,11 +497,11 @@ impl MachineOps for StdMachine {
         };
 
         // Interrupt Controller Chip init
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
         locked_vm
             .init_pci_host()
             .chain_err(|| StdErrorKind::InitPCIeHostErr)?;
-        let fwcfg = locked_vm.add_fwcfg_device()?;
+        let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
         locked_vm
             .add_devices(vm_config)
             .chain_err(|| "Failed to add devices")?;
@@ -522,7 +522,7 @@ impl MachineOps for StdMachine {
 
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
-            vm_config.machine_config.nr_cpus,
+            nr_cpus,
             &CPUTopology::new(),
             &vcpu_fds,
             &boot_config,
