@@ -237,7 +237,7 @@ impl VirtioPciCommonConfig {
             COMMON_Q_SELECT_REG => self.queue_select as u32,
             COMMON_Q_SIZE_REG => self
                 .get_queue_config()
-                .map(|config| u32::from(config.max_size))?,
+                .map(|config| u32::from(config.size))?,
             COMMON_Q_MSIX_REG => self
                 .get_queue_config()
                 .map(|config| u32::from(config.vector))?,
