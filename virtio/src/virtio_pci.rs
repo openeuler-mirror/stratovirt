@@ -304,11 +304,13 @@ impl VirtioPciCommonConfig {
                     .unwrap()
                     .set_driver_features(self.acked_features_select, value);
 
-                if self.acked_features_select == 1
-                    && virtio_has_feature(u64::from(value) << 32, VIRTIO_F_RING_PACKED)
-                {
-                    error!("Set packed virtqueue, which is not supported");
-                    self.queue_type = QUEUE_TYPE_PACKED_VRING;
+                if self.acked_features_select == 1 {
+                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
+                    if virtio_has_feature(features, VIRTIO_F_RING_PACKED) {
+                        self.queue_type = QUEUE_TYPE_PACKED_VRING;
+                    } else {
+                        self.queue_type = QUEUE_TYPE_SPLIT_VRING;
+                    }
                 }
             }
             COMMON_MSIX_REG => {
