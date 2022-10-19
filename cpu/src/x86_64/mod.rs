@@ -17,9 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use error_chain::bail;
 use kvm_bindings::{
-    kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry, kvm_regs, kvm_segment,
-    kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, Msrs, KVM_MAX_CPUID_ENTRIES,
-    KVM_MP_STATE_RUNNABLE, KVM_MP_STATE_UNINITIALIZED,
+    kvm_cpuid_entry2, kvm_debugregs, kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_msr_entry,
+    kvm_regs, kvm_segment, kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, CpuId, Msrs,
+    KVM_CPUID_FLAG_SIGNIFCANT_INDEX, KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE,
+    KVM_MP_STATE_UNINITIALIZED,
 };
 use kvm_ioctls::{Kvm, VcpuFd};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -390,6 +391,33 @@ impl X86CPUState {
         }
     }
 
+    fn adjust_cpuid(&self, cpuid: &mut CpuId) {
+        if self.nr_dies < 2 {
+            return;
+        }
+
+        // Intel CPU topology with multi-dies support requies CPUID[0x1f].
+        let entries = cpuid.as_mut_slice();
+        for entry in entries.iter_mut() {
+            if entry.function == 0 {
+                if entry.eax >= 0x1f {
+                    return;
+                } else {
+                    entry.eax = 0x1f;
+                }
+                break;
+            }
+        }
+        (0..4).for_each(|index| {
+            let entry = kvm_cpuid_entry2 {
+                function: 0x1f,
+                index,
+                ..Default::default()
+            };
+            cpuid.push(entry).unwrap();
+        });
+    }
+
     fn setup_cpuid(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         let core_offset = 32u32 - (self.nr_threads - 1).leading_zeros();
         let die_offset = (32u32 - (self.nr_cores - 1).leading_zeros()) + core_offset;
@@ -401,6 +429,9 @@ impl X86CPUState {
         let mut cpuid = sys_fd
             .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
             .chain_err(|| format!("Failed to get supported cpuid for CPU {}/KVM", self.apic_id))?;
+
+        self.adjust_cpuid(&mut cpuid);
+
         let entries = cpuid.as_mut_slice();
 
         for entry in entries.iter_mut() {
@@ -483,6 +514,7 @@ impl X86CPUState {
 
                     entry.edx = self.apic_id as u32;
                     entry.ecx = entry.index & 0xff;
+                    entry.flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
 
                     match entry.index {
                         0 => {
