@@ -310,13 +310,12 @@ impl StdMachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
+    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
         use super::errors::ResultExt;
 
         let mut fwcfg = FwCfgIO::new(self.sys_mem.clone());
-        let ncpus = self.cpus.len();
-        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
-        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, nr_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
 
         let boot_order = Vec::<u8>::new();
@@ -448,6 +447,7 @@ impl MachineOps for StdMachine {
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
         use crate::errors::ResultExt;
 
+        let nr_cpus = vm_config.machine_config.nr_cpus;
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
@@ -456,13 +456,12 @@ impl MachineOps for StdMachine {
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
-            vm_config.machine_config.nr_cpus,
+            nr_cpus,
         )?;
 
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nr_cpus {
             vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id as u64)?));
@@ -478,7 +477,7 @@ impl MachineOps for StdMachine {
         #[cfg(not(target_env = "musl"))]
         vnc::vnc_init(&vm_config.vnc, &vm_config.object)
             .chain_err(|| "Failed to init VNC server!")?;
-        let fwcfg = locked_vm.add_fwcfg_device()?;
+        let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.0 == MigrateMode::Unknown {
@@ -493,7 +492,7 @@ impl MachineOps for StdMachine {
         ));
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
-            vm_config.machine_config.nr_cpus,
+            nr_cpus,
             &topology,
             &vcpu_fds,
             &boot_config,
