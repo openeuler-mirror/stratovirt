@@ -840,6 +840,11 @@ impl AcpiBuilder for StdMachine {
         gic_redist.base_addr = MEM_LAYOUT[LayoutEntryType::GicRedist as usize].0;
         gic_redist.length = 16;
         madt.append_child(&gic_redist.aml_bytes());
+        if self.irq_chip.as_ref().unwrap().get_redist_count() > 1 {
+            gic_redist.range_length = MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].1 as u32;
+            gic_redist.base_addr = MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].0;
+            madt.append_child(&gic_redist.aml_bytes());
+        }
 
         // 4. GIC Its.
         let mut gic_its = AcpiGicIts::default();
