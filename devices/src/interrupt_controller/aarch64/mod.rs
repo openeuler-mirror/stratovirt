@@ -129,6 +129,11 @@ pub trait GICDevice: MachineLifecycle {
     ///
     /// * `fdt` - Device tree presented by bytes.
     fn generate_fdt(&self, fdt: &mut FdtBuilder) -> UtilResult<()>;
+
+    /// Get GIC redistributor number.
+    fn get_redist_count(&self) -> u8 {
+        0
+    }
 }
 
 /// A wrapper around creating and using a kvm-based interrupt controller.
@@ -165,6 +170,10 @@ impl InterruptController {
     pub fn stop(&self) {
         self.gic
             .notify_lifecycle(KvmVmState::Running, KvmVmState::Paused);
+    }
+
+    pub fn get_redist_count(&self) -> u8 {
+        self.gic.get_redist_count()
     }
 }
 
