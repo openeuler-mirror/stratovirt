@@ -440,6 +440,10 @@ impl GICDevice for GICv3 {
 
         Ok(())
     }
+
+    fn get_redist_count(&self) -> u8 {
+        self.redist_regions.len() as u8
+    }
 }
 
 pub struct GICv3Its {
