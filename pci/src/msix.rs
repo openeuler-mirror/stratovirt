@@ -24,7 +24,8 @@ use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};
 use crate::errors::{Result, ResultExt};
 use crate::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
+    ranges_overlap, PciBus,
 };
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
@@ -458,16 +459,24 @@ pub fn init_msix(
     )?;
     offset = msix_cap_offset + MSIX_CAP_TABLE as usize;
     let table_size = vector_nr * MSIX_TABLE_ENTRY_SIZE as u32;
+    let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
     let (table_offset, pba_offset) = if let Some((table, pba)) = offset_opt {
         (table, pba)
     } else {
         (0, table_size)
     };
+    if ranges_overlap(
+        table_offset.try_into().unwrap(),
+        table_size.try_into().unwrap(),
+        pba_offset.try_into().unwrap(),
+        pba_size.try_into().unwrap(),
+    ) {
+        bail!("msix table and pba table overlapped.");
+    }
     le_write_u32(&mut config.config, offset, table_offset | bar_id as u32)?;
     offset = msix_cap_offset + MSIX_CAP_PBA as usize;
     le_write_u32(&mut config.config, offset, pba_offset | bar_id as u32)?;
 
-    let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
     let msix = Arc::new(Mutex::new(Msix::new(
         table_size,
         pba_size,
