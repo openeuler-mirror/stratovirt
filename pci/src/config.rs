@@ -103,14 +103,20 @@ pub const PCI_EXP_SLTCTL_ABPE: u16 = 0x0001;
 pub const PCI_EXP_SLTCTL_PDCE: u16 = 0x0008;
 /// Command Completed Interrupt Enable
 pub const PCI_EXP_SLTCTL_CCIE: u16 = 0x0010;
+/// Hot-Plug Interrupt Enable
+pub const PCI_EXP_SLTCTL_HPIE: u16 = 0x0020;
 /// Power Indicator off
 pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
 /// Power Indicator on
 pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
 /// Slot Status
 pub const PCI_EXP_SLTSTA: u16 = 26;
+/// Attention Button Pressed
+pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
 /// Presence Detect Changed
 pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
+/// Command Completed
+pub const PCI_EXP_SLTSTA_CC: u16 = 0x0010;
 /// Presence Detect State
 pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
 
@@ -219,14 +225,7 @@ const PCIE_CAP_SLOT_AIC_OFF: u16 = 0x00c0;
 // Power Indicator Control.
 const PCIE_CAP_SLOT_PIC_MASK: u16 = 0x0300;
 const PCIE_CAP_SLOT_PIC_OFF: u16 = 0x0300;
-// Attention button pressed enable.
-const PCIE_CAP_SLOT_ABP: u16 = 0x0001;
-// Presence detect changed enable.
-const PCIE_CAP_SLOT_PDC: u16 = 0x0008;
-// Command completed interrupt enable.
-const PCIE_CAP_SLOT_CCI: u16 = 0x0010;
-// Hot-Plug interrupt enable.
-const PCIE_CAP_SLOT_HPI: u16 = 0x0020;
+
 // Power controller control.
 const PCIE_CAP_SLOT_PCC: u16 = 0x0400;
 // Electromechanical interlock control.
@@ -798,10 +797,10 @@ impl PciConfig {
         le_write_u16(
             &mut self.write_mask,
             offset,
-            PCIE_CAP_SLOT_ABP
-                | PCIE_CAP_SLOT_PDC
-                | PCIE_CAP_SLOT_CCI
-                | PCIE_CAP_SLOT_HPI
+            PCI_EXP_SLTCTL_ABPE
+                | PCI_EXP_SLTCTL_PDCE
+                | PCI_EXP_SLTCTL_CCIE
+                | PCI_EXP_SLTCTL_HPIE
                 | PCIE_CAP_SLOT_AIC_MASK
                 | PCIE_CAP_SLOT_PIC_MASK
                 | PCIE_CAP_SLOT_PCC
@@ -811,7 +810,7 @@ impl PciConfig {
         le_write_u16(
             &mut self.write_clear_mask,
             offset,
-            PCIE_CAP_SLOT_ABP | PCIE_CAP_SLOT_PDC | PCIE_CAP_SLOT_CCI,
+            PCI_EXP_SLTSTA_ABP | PCI_EXP_SLTSTA_PDC | PCI_EXP_SLTSTA_CC,
         )?;
 
         offset = cap_offset + PcieCap::RootCtl as usize;
