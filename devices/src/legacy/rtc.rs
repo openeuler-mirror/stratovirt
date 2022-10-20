@@ -18,6 +18,7 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use anyhow::Result;
+use hypervisor::kvm::KVM_FDS;
 use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
@@ -98,7 +99,7 @@ pub struct RTC {
     /// Index of Selected register.
     cur_index: u8,
     /// Interrupt eventfd.
-    interrupt_evt: EventFd,
+    interrupt_evt: Option<EventFd>,
     /// Resource of RTC.
     res: SysRes,
     /// Guest memory size.
@@ -113,7 +114,7 @@ impl RTC {
         let mut rtc = RTC {
             cmos_data: [0_u8; 128],
             cur_index: 0_u8,
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK)?,
+            interrupt_evt: Some(EventFd::new(libc::EFD_NONBLOCK)?),
             res: SysRes {
                 region_base: RTC_PORT_INDEX,
                 region_size: 8,
@@ -239,6 +240,16 @@ impl RTC {
         sysbus.attach_device(&dev, region_base, region_size)?;
         Ok(())
     }
+
+    fn inject_interrupt(&self) {
+        if let Some(evt_fd) = self.interrupt_evt() {
+            if let Err(e) = evt_fd.write(1) {
+                error!("cmos rtc: failed to write interrupt eventfd ({}).", e);
+            }
+            return;
+        }
+        error!("cmos rtc: failed to get interrupt event fd.");
+    }
 }
 
 impl SysBusDevOps for RTC {
@@ -265,7 +276,16 @@ impl SysBusDevOps for RTC {
     }
 
     fn interrupt_evt(&self) -> Option<&EventFd> {
-        Some(&self.interrupt_evt)
+        self.interrupt_evt.as_ref()
+    }
+
+    fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
+        let mut irq: i32 = -1;
+        if let Some(e) = self.interrupt_evt() {
+            irq = RTC_IRQ as i32;
+            KVM_FDS.load().register_irqfd(e, irq as u32)?;
+        }
+        Ok(irq)
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
