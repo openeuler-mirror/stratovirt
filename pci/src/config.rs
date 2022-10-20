@@ -792,7 +792,7 @@ impl PciConfig {
         le_write_u16(
             &mut self.config,
             offset,
-            PCIE_CAP_SLOT_AIC_OFF | PCIE_CAP_SLOT_PIC_OFF | PCIE_CAP_SLOT_PCC,
+            PCIE_CAP_SLOT_AIC_OFF | PCIE_CAP_SLOT_PIC_OFF,
         )?;
         le_write_u16(
             &mut self.write_mask,
