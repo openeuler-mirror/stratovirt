@@ -260,6 +260,11 @@ impl RTC {
         }
 
         match self.cur_index {
+            RTC_SECONDS | RTC_MINUTES | RTC_HOURS | RTC_DAY_OF_WEEK | RTC_DAY_OF_MONTH
+            | RTC_MONTH | RTC_YEAR => {
+                self.cmos_data[self.cur_index as usize] = data[0];
+                self.update_rtc_time();
+            }
             RTC_REG_C | RTC_REG_D => {
                 warn!(
                     "Failed to write: read-only register, index {}, data {}",
@@ -297,6 +302,35 @@ impl RTC {
     /// Get current clock value.
     fn get_current_value(&self) -> u64 {
         self.base_time.elapsed().as_secs() + self.tick_offset
+    }
+
+    fn update_rtc_time(&mut self) {
+        let sec = bcd_to_bin(self.cmos_data[RTC_SECONDS as usize]);
+        let min = bcd_to_bin(self.cmos_data[RTC_MINUTES as usize]);
+        let hour = bcd_to_bin(self.cmos_data[RTC_HOURS as usize]);
+        let day = bcd_to_bin(self.cmos_data[RTC_DAY_OF_MONTH as usize]);
+        let mut mon = bcd_to_bin(self.cmos_data[RTC_MONTH as usize]);
+        let mut year = bcd_to_bin(self.cmos_data[RTC_YEAR as usize])
+            + bcd_to_bin(self.cmos_data[RTC_CENTURY_BCD as usize]) * 100;
+
+        // Converts date to seconds since 1970-01-01 00:00:00.
+        if mon <= 2 {
+            mon += 10;
+            year -= 1;
+        } else {
+            mon -= 2;
+        }
+
+        self.tick_offset =
+            ((((year / 4 - year / 100 + year / 400 + 367 * mon / 12 + day) + year * 365 - 719499)
+                * 24
+                + hour)
+                * 60
+                + min)
+                * 60
+                + sec;
+
+        self.base_time = Instant::now();
     }
 
     fn update_in_progress(&self) -> bool {
