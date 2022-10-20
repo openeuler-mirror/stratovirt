@@ -32,6 +32,7 @@ pub mod reader;
 pub mod seccomp;
 pub mod syscall;
 pub mod tap;
+pub mod time;
 pub mod trace;
 pub mod unix;
 pub use anyhow::Result;
