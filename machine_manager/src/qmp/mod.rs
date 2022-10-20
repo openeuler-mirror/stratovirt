@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use util::leak_bucket::LeakBucket;
 use util::set_termi_canon_mode;
+use util::time::NANOSECONDS_PER_SECOND;
 
 use self::qmp_schema::{self as schema, QmpCommand};
 use crate::event_loop::EventLoop;
@@ -333,7 +334,8 @@ pub fn create_timestamp() -> TimeStamp {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards");
     let seconds = u128::from(since_the_epoch.as_secs());
-    let microseconds = (since_the_epoch.as_nanos() - seconds * 1_000_000_000) / (1_000_u128);
+    let microseconds =
+        (since_the_epoch.as_nanos() - seconds * (NANOSECONDS_PER_SECOND as u128)) / (1_000_u128);
     TimeStamp {
         seconds: seconds as u64,
         microseconds: microseconds as u64,
