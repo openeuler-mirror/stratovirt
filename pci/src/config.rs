@@ -216,8 +216,6 @@ const PCIE_CAP_SLOTCAP_PIP: u32 = 0x0000_0010;
 const PCIE_CAP_SLOTCAP_HPS: u32 = 0x0000_0020;
 // Hot-Plug capable.
 const PCIE_CAP_SLOTCAP_HPC: u32 = 0x0000_0040;
-// Electromechanical interlock present.
-const PCIE_CAP_SLOTCAP_EIP: u32 = 0x0002_0000;
 const PCIE_CAP_SLOT_NUM_SHIFT: u32 = 19;
 // Attention Indicator Control.
 const PCIE_CAP_SLOT_AIC_MASK: u16 = 0x00c0;
@@ -785,7 +783,6 @@ impl PciConfig {
                 | PCIE_CAP_SLOTCAP_PIP
                 | PCIE_CAP_SLOTCAP_HPS
                 | PCIE_CAP_SLOTCAP_HPC
-                | PCIE_CAP_SLOTCAP_EIP
                 | ((slot as u32) << PCIE_CAP_SLOT_NUM_SHIFT),
         )?;
         offset = cap_offset + PcieCap::SlotCtl as usize;
