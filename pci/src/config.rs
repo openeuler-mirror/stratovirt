@@ -149,7 +149,11 @@ const BRIDGE_CTL_ISA_ENABLE: u16 = 0x0004;
 const BRIDGE_CTL_VGA_ENABLE: u16 = 0x0008;
 const BRIDGE_CTL_VGA_16BIT_DEC: u16 = 0x0010;
 const BRIDGE_CTL_SEC_BUS_RESET: u16 = 0x0040;
+const BRIDGE_CTL_FAST_BACK: u16 = 0x0080;
+const BRIDGE_CTL_DISCARD_TIMER: u16 = 0x0100;
+const BRIDGE_CTL_SEC_DISCARD_TIMER: u16 = 0x0200;
 const BRIDGE_CTL_DISCARD_TIMER_STATUS: u16 = 0x0400;
+const BRIDGE_CTL_DISCARD_TIMER_SERR_E: u16 = 0x0800;
 
 pub const COMMAND_BUS_MASTER: u16 = 0x0004;
 const COMMAND_SERR_ENABLE: u16 = 0x0100;
@@ -406,7 +410,11 @@ impl PciConfig {
                 | BRIDGE_CTL_ISA_ENABLE
                 | BRIDGE_CTL_VGA_ENABLE
                 | BRIDGE_CTL_VGA_16BIT_DEC
-                | BRIDGE_CTL_SEC_BUS_RESET,
+                | BRIDGE_CTL_SEC_BUS_RESET
+                | BRIDGE_CTL_FAST_BACK
+                | BRIDGE_CTL_DISCARD_TIMER
+                | BRIDGE_CTL_SEC_DISCARD_TIMER
+                | BRIDGE_CTL_DISCARD_TIMER_SERR_E,
         )?;
         Ok(())
     }
