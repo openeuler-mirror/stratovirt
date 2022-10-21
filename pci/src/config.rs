@@ -201,7 +201,7 @@ const PCIE_CAP_LINK_LBNC: u32 = 0x0020_0000;
 const PCIE_CAP_LINK_DLLLARC: u32 = 0x0010_0000;
 const PCIE_CAP_PORT_NUM_SHIFT: u8 = 24;
 // Current link speed.
-const PCIE_CAP_CLS_2_5G: u16 = 0x0001;
+pub const PCIE_CAP_CLS_2_5G: u16 = 0x0001;
 // Negotiated link width.
 pub const PCIE_CAP_NLW_X1: u16 = 0x0010;
 // Attention button present.
