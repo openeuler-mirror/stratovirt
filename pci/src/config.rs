@@ -203,7 +203,7 @@ const PCIE_CAP_PORT_NUM_SHIFT: u8 = 24;
 // Current link speed.
 const PCIE_CAP_CLS_2_5G: u16 = 0x0001;
 // Negotiated link width.
-const PCIE_CAP_NLW_X1: u16 = 0x0010;
+pub const PCIE_CAP_NLW_X1: u16 = 0x0010;
 // Attention button present.
 const PCIE_CAP_SLOTCAP_ABP: u32 = 0x0000_0001;
 // Power controller present.
