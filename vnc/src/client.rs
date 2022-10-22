@@ -10,7 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
+use crate::{
+    auth::{AuthState, SubAuthState},
+    errors::{ErrorKind, Result},
+    pixman::{get_image_height, get_image_width, PixelFormat},
+    round_up_div,
+    server::VncServer,
+    utils::BuffPool,
+    vnc::{
+        framebuffer_upadate, set_area_dirty, update_client_surface, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
+        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
+    },
+};
 use error_chain::ChainedError;
 use machine_manager::event_loop::EventLoop;
 use sscanf::scanf;
@@ -27,13 +38,6 @@ use util::{
     pixman::pixman_image_t,
 };
 use vmm_sys_util::epoll::EventSet;
-
-use crate::{
-    framebuffer_upadate, get_image_height, get_image_width, round_up_div, set_area_dirty,
-    update_client_surface, AuthState, BuffPool, PixelFormat, SubAuthState, VncServer, BIT_PER_BYTE,
-    DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO,
-    VNC_SERVERS,
-};
 
 const MAX_RECVBUF_LEN: usize = 1024;
 const NUM_OF_COLORMAP: u16 = 256;
