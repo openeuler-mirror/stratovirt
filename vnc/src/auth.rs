@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::errors::Result;
-use crate::VncClient;
+use crate::client::VncClient;
 
 /// Authentication type
 #[derive(Clone, Copy)]

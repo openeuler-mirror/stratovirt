@@ -43,7 +43,7 @@ use util::pixman::{
 };
 use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-use vnc::{
+use vnc::vnc::{
     vnc_display_cursor, vnc_display_switch, vnc_display_update, DisplayMouse, DisplaySurface,
 };
 

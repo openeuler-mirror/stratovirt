@@ -10,7 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
+use crate::{
+    client::{
+        RectInfo, Rectangle, ServerMsg, VncClient, VncFeatures, ENCODING_ALPHA_CURSOR,
+        ENCODING_RAW, ENCODING_RICH_CURSOR,
+    },
+    errors::{ErrorKind, Result},
+    pixman::{
+        bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width,
+        unref_pixman_image, PixelFormat,
+    },
+    round_up, round_up_div,
+    server::VncServer,
+};
 use core::time;
 use machine_manager::{
     config::{ObjConfig, VncConfig},
@@ -31,12 +43,6 @@ use util::{
     pixman::{pixman_format_code_t, pixman_image_create_bits, pixman_image_ref, pixman_image_t},
 };
 use vmm_sys_util::eventfd::EventFd;
-
-use crate::{
-    bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width, round_up,
-    round_up_div, unref_pixman_image, PixelFormat, RectInfo, Rectangle, ServerMsg, VncClient,
-    VncFeatures, VncServer, ENCODING_ALPHA_CURSOR, ENCODING_RAW, ENCODING_RICH_CURSOR,
-};
 
 /// The number of dirty pixels represented bt one bit in dirty bitmap.
 pub const DIRTY_PIXELS_NUM: u16 = 16;
