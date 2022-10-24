@@ -33,7 +33,7 @@ use machine_manager::{
 };
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
 use super::super::{VhostNotify, VhostOps};
@@ -175,16 +175,7 @@ impl VirtioDevice for Fs {
     }
 
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut features = write_u32(value, page);
-        let unsupported_features = features & !self.avail_features;
-        if unsupported_features != 0 {
-            warn!(
-                "Received acknowledge request with unsupported feature for virtio fs: 0x{:x}",
-                features
-            );
-            features &= !unsupported_features;
-        }
-        self.acked_features |= features;
+        self.acked_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.

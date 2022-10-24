@@ -34,7 +34,7 @@ use util::{
     loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
-    num_ops::{read_u32, round_down, write_u32},
+    num_ops::{read_u32, round_down},
     seccomp::BpfRule,
     unix::host_page_size,
 };
@@ -912,13 +912,7 @@ impl VirtioDevice for Balloon {
     /// * `page` - Selector of feature.
     /// * `value` - Value to be set.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.device_features;
-        if unrequested_features != 0 {
-            warn!("Received acknowledge request for unknown feature: {:x}", v);
-            v &= !unrequested_features;
-        }
-        self.driver_features |= v;
+        self.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.
@@ -1182,7 +1176,7 @@ mod tests {
         let fts = bln.get_device_features(1);
         assert_eq!(fts, (feature >> 32) as u32);
         bln.driver_features = 0;
-        bln.device_features = 1;
+        bln.device_features = 1 | 1 << 32;
         bln.set_driver_features(0, 1);
         assert_eq!(bln.driver_features, 1);
         assert_eq!(bln.driver_features, bln.get_driver_features(0) as u64);
