@@ -103,14 +103,20 @@ pub const PCI_EXP_SLTCTL_ABPE: u16 = 0x0001;
 pub const PCI_EXP_SLTCTL_PDCE: u16 = 0x0008;
 /// Command Completed Interrupt Enable
 pub const PCI_EXP_SLTCTL_CCIE: u16 = 0x0010;
+/// Hot-Plug Interrupt Enable
+pub const PCI_EXP_SLTCTL_HPIE: u16 = 0x0020;
 /// Power Indicator off
 pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
 /// Power Indicator on
 pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
 /// Slot Status
 pub const PCI_EXP_SLTSTA: u16 = 26;
+/// Attention Button Pressed
+pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
 /// Presence Detect Changed
 pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
+/// Command Completed
+pub const PCI_EXP_SLTSTA_CC: u16 = 0x0010;
 /// Presence Detect State
 pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
 
@@ -149,7 +155,11 @@ const BRIDGE_CTL_ISA_ENABLE: u16 = 0x0004;
 const BRIDGE_CTL_VGA_ENABLE: u16 = 0x0008;
 const BRIDGE_CTL_VGA_16BIT_DEC: u16 = 0x0010;
 const BRIDGE_CTL_SEC_BUS_RESET: u16 = 0x0040;
+const BRIDGE_CTL_FAST_BACK: u16 = 0x0080;
+const BRIDGE_CTL_DISCARD_TIMER: u16 = 0x0100;
+const BRIDGE_CTL_SEC_DISCARD_TIMER: u16 = 0x0200;
 const BRIDGE_CTL_DISCARD_TIMER_STATUS: u16 = 0x0400;
+const BRIDGE_CTL_DISCARD_TIMER_SERR_E: u16 = 0x0800;
 
 pub const COMMAND_BUS_MASTER: u16 = 0x0004;
 const COMMAND_SERR_ENABLE: u16 = 0x0100;
@@ -191,9 +201,9 @@ const PCIE_CAP_LINK_LBNC: u32 = 0x0020_0000;
 const PCIE_CAP_LINK_DLLLARC: u32 = 0x0010_0000;
 const PCIE_CAP_PORT_NUM_SHIFT: u8 = 24;
 // Current link speed.
-const PCIE_CAP_CLS_X1: u16 = 0x0001;
+pub const PCIE_CAP_CLS_2_5G: u16 = 0x0001;
 // Negotiated link width.
-const PCIE_CAP_NLW_2_5GT: u16 = 0x0010;
+pub const PCIE_CAP_NLW_X1: u16 = 0x0010;
 // Attention button present.
 const PCIE_CAP_SLOTCAP_ABP: u32 = 0x0000_0001;
 // Power controller present.
@@ -206,8 +216,6 @@ const PCIE_CAP_SLOTCAP_PIP: u32 = 0x0000_0010;
 const PCIE_CAP_SLOTCAP_HPS: u32 = 0x0000_0020;
 // Hot-Plug capable.
 const PCIE_CAP_SLOTCAP_HPC: u32 = 0x0000_0040;
-// Electromechanical interlock present.
-const PCIE_CAP_SLOTCAP_EIP: u32 = 0x0002_0000;
 const PCIE_CAP_SLOT_NUM_SHIFT: u32 = 19;
 // Attention Indicator Control.
 const PCIE_CAP_SLOT_AIC_MASK: u16 = 0x00c0;
@@ -215,14 +223,7 @@ const PCIE_CAP_SLOT_AIC_OFF: u16 = 0x00c0;
 // Power Indicator Control.
 const PCIE_CAP_SLOT_PIC_MASK: u16 = 0x0300;
 const PCIE_CAP_SLOT_PIC_OFF: u16 = 0x0300;
-// Attention button pressed enable.
-const PCIE_CAP_SLOT_ABP: u16 = 0x0001;
-// Presence detect changed enable.
-const PCIE_CAP_SLOT_PDC: u16 = 0x0008;
-// Command completed interrupt enable.
-const PCIE_CAP_SLOT_CCI: u16 = 0x0010;
-// Hot-Plug interrupt enable.
-const PCIE_CAP_SLOT_HPI: u16 = 0x0020;
+
 // Power controller control.
 const PCIE_CAP_SLOT_PCC: u16 = 0x0400;
 // Electromechanical interlock control.
@@ -406,7 +407,11 @@ impl PciConfig {
                 | BRIDGE_CTL_ISA_ENABLE
                 | BRIDGE_CTL_VGA_ENABLE
                 | BRIDGE_CTL_VGA_16BIT_DEC
-                | BRIDGE_CTL_SEC_BUS_RESET,
+                | BRIDGE_CTL_SEC_BUS_RESET
+                | BRIDGE_CTL_FAST_BACK
+                | BRIDGE_CTL_DISCARD_TIMER
+                | BRIDGE_CTL_SEC_DISCARD_TIMER
+                | BRIDGE_CTL_DISCARD_TIMER_SERR_E,
         )?;
         Ok(())
     }
@@ -764,7 +769,7 @@ impl PciConfig {
         le_write_u16(
             &mut self.config,
             offset,
-            PCIE_CAP_CLS_X1 | PCIE_CAP_NLW_2_5GT,
+            PCIE_CAP_CLS_2_5G | PCIE_CAP_NLW_X1,
         )?;
 
         let slot: u8 = devfn >> BDF_FUNC_SHIFT;
@@ -778,22 +783,21 @@ impl PciConfig {
                 | PCIE_CAP_SLOTCAP_PIP
                 | PCIE_CAP_SLOTCAP_HPS
                 | PCIE_CAP_SLOTCAP_HPC
-                | PCIE_CAP_SLOTCAP_EIP
                 | ((slot as u32) << PCIE_CAP_SLOT_NUM_SHIFT),
         )?;
         offset = cap_offset + PcieCap::SlotCtl as usize;
         le_write_u16(
             &mut self.config,
             offset,
-            PCIE_CAP_SLOT_AIC_OFF | PCIE_CAP_SLOT_PIC_OFF | PCIE_CAP_SLOT_PCC,
+            PCIE_CAP_SLOT_AIC_OFF | PCIE_CAP_SLOT_PIC_OFF,
         )?;
         le_write_u16(
             &mut self.write_mask,
             offset,
-            PCIE_CAP_SLOT_ABP
-                | PCIE_CAP_SLOT_PDC
-                | PCIE_CAP_SLOT_CCI
-                | PCIE_CAP_SLOT_HPI
+            PCI_EXP_SLTCTL_ABPE
+                | PCI_EXP_SLTCTL_PDCE
+                | PCI_EXP_SLTCTL_CCIE
+                | PCI_EXP_SLTCTL_HPIE
                 | PCIE_CAP_SLOT_AIC_MASK
                 | PCIE_CAP_SLOT_PIC_MASK
                 | PCIE_CAP_SLOT_PCC
@@ -803,7 +807,7 @@ impl PciConfig {
         le_write_u16(
             &mut self.write_clear_mask,
             offset,
-            PCIE_CAP_SLOT_ABP | PCIE_CAP_SLOT_PDC | PCIE_CAP_SLOT_CCI,
+            PCI_EXP_SLTSTA_ABP | PCI_EXP_SLTSTA_PDC | PCI_EXP_SLTSTA_CC,
         )?;
 
         offset = cap_offset + PcieCap::RootCtl as usize;
