@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use util::byte_code::ByteCode;
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
-use vnc::{vnc_display_switch, vnc_loop_update_display, DisplaySurface};
+use vnc::vnc::{vnc_display_switch, vnc_loop_update_display, DisplaySurface};
 
 const BYTES_PER_PIXELS: u32 = 8;
 const WIDTH_MAX: u32 = 16_000;
@@ -112,7 +112,7 @@ impl RamfbState {
             }
         };
 
-        let mut ds = vnc::DisplaySurface {
+        let mut ds = DisplaySurface {
             format,
             ..Default::default()
         };

@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::VncClient;
+use crate::client::VncClient;
 use usb::{
     keyboard::keyboard_event,
     tablet::{pointer_event, pointer_sync},

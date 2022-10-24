@@ -10,7 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
+use crate::{
+    client::{
+        RectInfo, Rectangle, ServerMsg, VncClient, VncFeatures, ENCODING_ALPHA_CURSOR,
+        ENCODING_RAW, ENCODING_RICH_CURSOR,
+    },
+    errors::{ErrorKind, Result},
+    pixman::{
+        bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width,
+        unref_pixman_image, PixelFormat,
+    },
+    round_up, round_up_div,
+    server::VncServer,
+};
 use core::time;
 use machine_manager::{
     config::{ObjConfig, VncConfig},
@@ -32,12 +44,6 @@ use util::{
 };
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::{
-    bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width, round_up,
-    round_up_div, unref_pixman_image, PixelFormat, RectInfo, Rectangle, ServerMsg, VncClient,
-    VncFeatures, VncServer, ENCODING_ALPHA_CURSOR, ENCODING_RAW, ENCODING_RICH_CURSOR,
-};
-
 /// The number of dirty pixels represented bt one bit in dirty bitmap.
 pub const DIRTY_PIXELS_NUM: u16 = 16;
 /// The default max window width.
@@ -49,7 +55,7 @@ pub const VNC_BITMAP_WIDTH: u64 =
     round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) * u64::BITS as u64;
 
 const DEFAULT_REFRESH_INTERVAL: u64 = 30;
-const BIT_PER_BYTE: u32 = 8;
+pub const BIT_PER_BYTE: u32 = 8;
 const MILLI_PER_SEC: u64 = 1_000_000;
 pub const DISPLAY_UPDATE_INTERVAL_DEFAULT: u32 = 30;
 pub const DISPLAY_UPDATE_INTERVAL_INC: u32 = 50;

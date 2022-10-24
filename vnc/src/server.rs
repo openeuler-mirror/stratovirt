@@ -10,7 +10,23 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::Result;
+use crate::{
+    auth::{AuthState, SubAuthState},
+    client::VncClient,
+    data::keycode::KEYSYM2KEYCODE,
+    errors::Result,
+    pixman::{
+        bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
+        get_image_width, unref_pixman_image,
+    },
+    round_up_div,
+    vnc::{
+        update_client_surface, DisplayMouse, DIRTY_PIXELS_NUM, DISPLAY_UPDATE_INTERVAL_DEFAULT,
+        DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX, MAX_WINDOW_HEIGHT,
+        MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
+    },
+};
+
 use machine_manager::{
     config::{ObjConfig, VncConfig},
     event_loop::EventLoop,
@@ -32,14 +48,6 @@ use util::{
     },
 };
 use vmm_sys_util::epoll::EventSet;
-
-use crate::{
-    bytes_per_pixel, data::keycode::KEYSYM2KEYCODE, get_image_data, get_image_format,
-    get_image_height, get_image_stride, get_image_width, round_up_div, unref_pixman_image,
-    update_client_surface, AuthState, DisplayMouse, SubAuthState, VncClient, DIRTY_PIXELS_NUM,
-    DISPLAY_UPDATE_INTERVAL_DEFAULT, DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX,
-    MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
-};
 
 /// Info of image.
 /// stride is not always equal to stride because of memory alignment.

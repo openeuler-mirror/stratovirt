@@ -10,7 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
+use crate::{
+    auth::{AuthState, SubAuthState},
+    errors::{ErrorKind, Result},
+    pixman::{get_image_height, get_image_width, PixelFormat},
+    round_up_div,
+    server::VncServer,
+    utils::BuffPool,
+    vnc::{
+        framebuffer_upadate, set_area_dirty, update_client_surface, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
+        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
+    },
+};
 use error_chain::ChainedError;
 use machine_manager::event_loop::EventLoop;
 use sscanf::scanf;
@@ -28,14 +39,8 @@ use util::{
 };
 use vmm_sys_util::epoll::EventSet;
 
-use crate::{
-    framebuffer_upadate, get_image_height, get_image_width, round_up_div, set_area_dirty,
-    update_client_surface, AuthState, BuffPool, PixelFormat, SubAuthState, VncServer,
-    DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO,
-    VNC_SERVERS,
-};
-
 const MAX_RECVBUF_LEN: usize = 1024;
+const NUM_OF_COLORMAP: u16 = 256;
 
 // VNC encodings types.
 pub const ENCODING_RAW: i32 = 0;
@@ -85,6 +90,7 @@ pub enum ClientMsg {
 /// Server to client message in Remote Framebuffer Protocol.
 pub enum ServerMsg {
     FramebufferUpdate = 0,
+    SetColourMapEntries = 1,
 }
 
 impl From<u8> for ClientMsg {
@@ -646,6 +652,34 @@ impl VncClient {
         Ok(())
     }
 
+    /// Tell the client that the specified pixel values should be
+    /// mapped to the given RGB intensities.
+    fn send_color_map(&mut self) {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.append(
+            &mut (ServerMsg::SetColourMapEntries as u8)
+                .to_be_bytes()
+                .to_vec(),
+        );
+        buf.append(&mut (0_u8).to_be_bytes().to_vec());
+        // First color.
+        buf.append(&mut (0_u16).to_be_bytes().to_vec());
+        // Number of colors.
+        buf.append(&mut (NUM_OF_COLORMAP as u16).to_be_bytes().to_vec());
+
+        let pf = self.pixel_format.clone();
+        for i in 0..NUM_OF_COLORMAP as u16 {
+            let r = ((i >> pf.red.shift) & pf.red.max as u16) << (16 - pf.red.bits);
+            let g = ((i >> pf.green.shift) & pf.green.max as u16) << (16 - pf.green.bits);
+            let b = ((i >> pf.blue.shift) & pf.blue.max as u16) << (16 - pf.blue.bits);
+            buf.append(&mut (r as u16).to_be_bytes().to_vec());
+            buf.append(&mut (g as u16).to_be_bytes().to_vec());
+            buf.append(&mut (b as u16).to_be_bytes().to_vec());
+        }
+
+        self.write_msg(&buf);
+    }
+
     /// Set image format.
     fn set_pixel_format(&mut self) -> Result<()> {
         if self.expect == 1 {
@@ -653,46 +687,51 @@ impl VncClient {
             return Ok(());
         }
 
-        info!("Set pixel format");
-        let mut buf = self.buffpool.read_front(self.expect).to_vec();
-        if buf[7] == 0 {
-            // Set a default 256 color map.
-            // Bit per pixel.
-            buf[4] = 8;
-            // Max bit of red.
-            buf[8] = 7;
-            // Max bit of green.
-            buf[10] = 7;
-            // Max bit of blue.
-            buf[12] = 3;
-            // Red shift.
-            buf[14] = 0;
-            // Green shift.
-            buf[15] = 3;
-            // Blue shift.
-            buf[16] = 6;
+        let buf = self.buffpool.read_front(self.expect).to_vec();
+        let mut bit_per_pixel: u8 = buf[4];
+        let big_endian_flag = buf[6];
+        let true_color_flag: u8 = buf[7];
+        let mut red_max: u16 = u16::from_be_bytes([buf[8], buf[9]]);
+        let mut green_max: u16 = u16::from_be_bytes([buf[10], buf[11]]);
+        let mut blue_max: u16 = u16::from_be_bytes([buf[12], buf[13]]);
+        let mut red_shift: u8 = buf[14];
+        let mut green_shift: u8 = buf[15];
+        let mut blue_shift: u8 = buf[16];
+        if true_color_flag == 0 {
+            bit_per_pixel = 8;
+            red_max = 7;
+            green_max = 7;
+            blue_max = 3;
+            red_shift = 0;
+            green_shift = 3;
+            blue_shift = 6;
         }
 
-        if ![8, 16, 32].contains(&buf[4]) {
+        // Verify the validity of pixel format.
+        // bit_per_pixel: Bits occupied by each pixel.
+        if ![8, 16, 32].contains(&bit_per_pixel) {
             self.dis_conn = true;
             error!("Worng format of bits_per_pixel");
             return Err(ErrorKind::ProtocolMessageFailed(String::from("set pixel format")).into());
         }
 
-        self.pixel_format
-            .red
-            .set_color_info(buf[14], u16::from_be_bytes([buf[8], buf[9]]));
+        self.pixel_format.red.set_color_info(red_shift, red_max);
         self.pixel_format
             .green
-            .set_color_info(buf[15], u16::from_be_bytes([buf[10], buf[11]]));
-        self.pixel_format
-            .blue
-            .set_color_info(buf[16], u16::from_be_bytes([buf[12], buf[13]]));
-        self.pixel_format.pixel_bits = buf[4];
-        self.pixel_format.pixel_bytes = buf[4] / 8;
-        self.pixel_format.depth = if buf[4] == 32 { 24 } else { buf[4] };
-        self.big_endian = buf[6] != 0;
-
+            .set_color_info(green_shift, green_max);
+        self.pixel_format.blue.set_color_info(blue_shift, blue_max);
+        self.pixel_format.pixel_bits = bit_per_pixel;
+        self.pixel_format.pixel_bytes = bit_per_pixel / BIT_PER_BYTE as u8;
+        // Standard pixel format, depth is equal to 24.
+        self.pixel_format.depth = if bit_per_pixel == 32 {
+            24
+        } else {
+            bit_per_pixel
+        };
+        self.big_endian = big_endian_flag != 0;
+        if true_color_flag == 0 {
+            self.send_color_map();
+        }
         if !self.pixel_format.is_default_pixel_format() {
             self.pixel_convert = true;
         }
