@@ -47,6 +47,7 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::num_ops::read_u32;
+use util::offset_of;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
@@ -1057,31 +1058,38 @@ impl VirtioDevice for Block {
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
-        let config_len = config_slice.len() as u64;
-        if offset >= config_len {
+        // F_DISCARD is not supported for now, so related config does not exist.
+        let config_len = offset_of!(VirtioBlkConfig, max_discard_sectors) as u64;
+        let read_end = offset as usize + data.len();
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
-        }
+
+        let config_slice = self.state.config_space.as_bytes();
+        data.write_all(&config_slice[(offset as usize)..read_end])?;
 
         Ok(())
     }
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let data_len = data.len();
-        let config_slice = self.state.config_space.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset,
-                config_len as u64
-            )));
+        // F_DISCARD is not supported for now, so related config does not exist.
+        let config_len = offset_of!(VirtioBlkConfig, max_discard_sectors) as u64;
+        let write_end = offset as usize + data.len();
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
 
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        let config_slice = self.state.config_space.as_mut_bytes();
+        config_slice[(offset as usize)..write_end].copy_from_slice(data);
 
         Ok(())
     }
