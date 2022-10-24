@@ -42,7 +42,8 @@ use crate::{
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
-    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
+    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG, VIRTIO_TYPE_BLOCK,
+    VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
@@ -593,11 +594,18 @@ impl VirtioPciDevice {
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, queue: Option<&Queue>| {
                 let vector = match int_type {
-                    VirtioInterruptType::Config => cloned_common_cfg
-                        .lock()
-                        .unwrap()
-                        .msix_config
-                        .load(Ordering::SeqCst),
+                    VirtioInterruptType::Config => {
+                        cloned_common_cfg
+                            .lock()
+                            .unwrap()
+                            .interrupt_status
+                            .fetch_or(VIRTIO_MMIO_INT_CONFIG, Ordering::SeqCst);
+                        cloned_common_cfg
+                            .lock()
+                            .unwrap()
+                            .msix_config
+                            .load(Ordering::SeqCst)
+                    }
                     VirtioInterruptType::Vring => {
                         queue.map_or(0, |q| q.vring.get_queue_config().vector)
                     }
