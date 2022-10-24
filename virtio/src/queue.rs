@@ -158,6 +158,9 @@ impl Element {
 
 /// Vring operations.
 pub trait VringOps {
+    /// Return true if the vring is enable by driver.
+    fn is_enabled(&self) -> bool;
+
     /// Return true if the configuration of vring is valid.
     ///
     /// # Arguments
@@ -841,6 +844,10 @@ impl SplitVring {
 }
 
 impl VringOps for SplitVring {
+    fn is_enabled(&self) -> bool {
+        self.ready
+    }
+
     fn is_valid(&self, sys_mem: &Arc<AddressSpace>) -> bool {
         let size = u64::from(self.actual_size());
         if !self.ready {
@@ -987,6 +994,11 @@ impl Queue {
         };
 
         Ok(Queue { vring })
+    }
+
+    /// Return true if the virtqueue is enabled by driver.
+    pub fn is_enabled(&self) -> bool {
+        self.vring.is_enabled()
     }
 
     /// Return true if the memory layout of the virqueue is valid.

@@ -429,6 +429,10 @@ impl BlockIoHandler {
         let mut done = false;
 
         let mut queue = self.queue.lock().unwrap();
+        if !queue.is_enabled() {
+            done = true;
+            return Ok(done);
+        }
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             // limit io operations if iops is configured
