@@ -17,12 +17,11 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use log::warn;
 use machine_manager::config::BlkDevConfig;
 use machine_manager::event_loop::EventLoop;
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
@@ -244,16 +243,7 @@ impl VirtioDevice for Block {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut features = write_u32(value, page);
-        let unsupported_features = features & !self.state.device_features;
-        if unsupported_features != 0 {
-            warn!(
-                "Received acknowledge request with unsupported feature for vhost-user blk: 0x{:x}",
-                features
-            );
-            features &= !unsupported_features;
-        }
-        self.state.driver_features |= features;
+        self.state.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.

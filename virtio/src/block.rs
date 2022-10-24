@@ -46,7 +46,7 @@ use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
@@ -1047,12 +1047,7 @@ impl VirtioDevice for Block {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.state.device_features;
-        if unrequested_features != 0 {
-            v &= !unrequested_features;
-        }
-        self.state.driver_features |= v;
+        self.state.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.

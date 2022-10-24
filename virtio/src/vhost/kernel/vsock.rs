@@ -15,13 +15,12 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
-use log::warn;
 use machine_manager::{config::VsockConfig, event_loop::EventLoop};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
@@ -193,13 +192,7 @@ impl VirtioDevice for Vsock {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut features = write_u32(value, page);
-        let unsupported_features = features & !self.state.device_features;
-        if unsupported_features != 0 {
-            warn!("Unsupported feature ack (Vsock): {:x}", features);
-            features &= !unsupported_features;
-        }
-        self.state.driver_features |= features;
+        self.state.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.

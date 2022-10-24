@@ -30,7 +30,7 @@ use crate::virtio_has_feature;
 use crate::VirtioError;
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
-use log::{error, warn};
+use log::error;
 use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
     event_loop::EventLoop,
@@ -41,7 +41,7 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use util::tap::{
     Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
 };
@@ -932,13 +932,7 @@ impl VirtioDevice for Net {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.state.device_features;
-        if unrequested_features != 0 {
-            warn!("Received acknowledge request with unknown feature: {:x}", v);
-            v &= !unrequested_features;
-        }
-        self.state.driver_features |= v;
+        self.state.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.
