@@ -111,6 +111,10 @@ impl QueueConfig {
             last_signal_used: 0,
         }
     }
+
+    pub fn reset(&mut self) {
+        *self = Self::new(self.max_size);
+    }
 }
 
 /// IO vector element which contains the information of a descriptor.

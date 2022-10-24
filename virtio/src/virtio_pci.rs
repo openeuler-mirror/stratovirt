@@ -172,6 +172,18 @@ impl VirtioPciCommonConfig {
         }
     }
 
+    fn reset(&mut self) {
+        self.features_select = 0;
+        self.acked_features_select = 0;
+        self.interrupt_status.store(0_u32, Ordering::SeqCst);
+        self.device_status = 0;
+        self.config_generation = 0;
+        self.queue_select = 0;
+        self.msix_config.store(0_u16, Ordering::SeqCst);
+        self.queue_type = QUEUE_TYPE_SPLIT_VRING;
+        self.queues_config.iter_mut().for_each(|q| q.reset());
+    }
+
     fn check_device_status(&self, set: u32, clr: u32) -> bool {
         self.device_status & (set | clr) == set
     }
@@ -329,14 +341,7 @@ impl VirtioPciCommonConfig {
                 }
                 self.device_status = value;
                 if self.device_status == 0 {
-                    self.queues_config.iter_mut().for_each(|q| {
-                        q.ready = false;
-                        q.vector = 0;
-                        q.avail_ring = GuestAddress(0);
-                        q.desc_table = GuestAddress(0);
-                        q.used_ring = GuestAddress(0);
-                    });
-                    self.msix_config.store(0_u16, Ordering::SeqCst)
+                    self.reset();
                 }
             }
             COMMON_Q_SELECT_REG => {
