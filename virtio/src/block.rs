@@ -1079,7 +1079,6 @@ impl VirtioDevice for Block {
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         // F_DISCARD is not supported for now, so related config does not exist.
         let config_len = offset_of!(VirtioBlkConfig, max_discard_sectors) as u64;
-        let write_end = offset as usize + data.len();
         if offset
             .checked_add(data.len() as u64)
             .filter(|&end| end <= config_len)
@@ -1087,9 +1086,8 @@ impl VirtioDevice for Block {
         {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-
-        let config_slice = self.state.config_space.as_mut_bytes();
-        config_slice[(offset as usize)..write_end].copy_from_slice(data);
+        // The only writable field is "writeback", but it's not supported for now,
+        // so do nothing here.
 
         Ok(())
     }
@@ -1290,7 +1288,7 @@ mod tests {
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and
-    // read date are same; Input invalid offset or date length, it will failed.
+    // read data are not same; Input invalid offset or data length, it will failed.
     #[test]
     fn test_read_write_config() {
         let mut block = Block::default();
@@ -1300,7 +1298,7 @@ mod tests {
         let mut read_config_space = [0u8; 8];
         block.write_config(0, &expect_config_space).unwrap();
         block.read_config(0, &mut read_config_space).unwrap();
-        assert_eq!(read_config_space, expect_config_space);
+        assert_ne!(read_config_space, expect_config_space);
 
         // Invalid write
         assert!(block
