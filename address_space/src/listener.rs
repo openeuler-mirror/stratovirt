@@ -41,15 +41,13 @@ pub trait Listener: Send + Sync {
     fn priority(&self) -> i32;
 
     /// Is this listener enabled to call.
-    fn enabled(&self) -> bool {
-        true
-    }
+    fn enabled(&self) -> bool;
 
     /// Enable listener for address space.
-    fn enable(&mut self) {}
+    fn enable(&mut self);
 
     /// Disable listener for address space.
-    fn disable(&mut self) {}
+    fn disable(&mut self);
 
     /// Function that handle request according to request-type.
     ///
@@ -92,6 +90,8 @@ pub struct KvmMemoryListener {
     as_id: Arc<AtomicU32>,
     /// Record all MemSlots.
     slots: Arc<Mutex<Vec<MemSlot>>>,
+    /// Whether enabled as a memory listener.
+    enabled: bool,
 }
 
 impl KvmMemoryListener {
@@ -104,6 +104,7 @@ impl KvmMemoryListener {
         KvmMemoryListener {
             as_id: Arc::new(AtomicU32::new(0)),
             slots: Arc::new(Mutex::new(vec![MemSlot::default(); nr_slots as usize])),
+            enabled: false,
         }
     }
 
@@ -426,6 +427,21 @@ impl Listener for KvmMemoryListener {
         10_i32
     }
 
+    /// Is this listener enabled to call.
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable listener for address space.
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Disable listener for address space.
+    fn disable(&mut self) {
+        self.enabled = false;
+    }
+
     /// Deal with the request.
     ///
     /// # Arguments
@@ -462,13 +478,10 @@ impl Listener for KvmMemoryListener {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub struct KvmIoListener;
-
-#[cfg(target_arch = "x86_64")]
-impl Default for KvmIoListener {
-    fn default() -> Self {
-        Self
-    }
+#[derive(Default)]
+pub struct KvmIoListener {
+    /// Whether enabled as a IO listener.
+    enabled: bool,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -558,6 +571,21 @@ impl Listener for KvmIoListener {
     /// Get the default priority.
     fn priority(&self) -> i32 {
         10_i32
+    }
+
+    /// Is this listener enabled to call.
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable listener for address space.
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Disable listener for address space.
+    fn disable(&mut self) {
+        self.enabled = false;
     }
 
     /// Deal with the request.

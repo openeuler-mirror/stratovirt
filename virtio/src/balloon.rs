@@ -343,12 +343,14 @@ struct BlnMemoryRegion {
 
 struct BlnMemInfo {
     regions: Mutex<Vec<BlnMemoryRegion>>,
+    enabled: bool,
 }
 
 impl BlnMemInfo {
     fn new() -> BlnMemInfo {
         BlnMemInfo {
             regions: Mutex::new(Vec::new()),
+            enabled: false,
         }
     }
 
@@ -438,6 +440,18 @@ impl BlnMemInfo {
 impl Listener for BlnMemInfo {
     fn priority(&self) -> i32 {
         0
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    fn disable(&mut self) {
+        self.enabled = false;
     }
 
     fn handle_request(

@@ -191,6 +191,7 @@ struct RegionInfo {
 #[derive(Clone)]
 struct VhostUserMemInfo {
     regions: Arc<Mutex<Vec<RegionInfo>>>,
+    enabled: bool,
 }
 
 #[allow(dead_code)]
@@ -198,6 +199,7 @@ impl VhostUserMemInfo {
     fn new() -> Self {
         VhostUserMemInfo {
             regions: Arc::new(Mutex::new(Vec::new())),
+            enabled: false,
         }
     }
 
@@ -283,6 +285,18 @@ impl VhostUserMemInfo {
 impl Listener for VhostUserMemInfo {
     fn priority(&self) -> i32 {
         0
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    fn disable(&mut self) {
+        self.enabled = false;
     }
 
     fn handle_request(
