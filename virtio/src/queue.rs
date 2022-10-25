@@ -852,6 +852,9 @@ impl VringOps for SplitVring {
             bail!("failed to pop avail: empty!");
         }
 
+        // Make sure descriptor read does not bypass avail index read.
+        fence(Ordering::Acquire);
+
         let mut element = Element::new(0);
         self.get_vring_element(sys_mem, features, &mut element)
             .with_context(|| "Failed to get vring element")?;
