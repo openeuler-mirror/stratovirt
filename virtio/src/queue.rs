@@ -423,7 +423,7 @@ impl SplitVringDesc {
 
         loop {
             if elem.desc_num >= desc_size {
-                break;
+                bail!("The element desc number exceeds max allowed");
             }
 
             if desc.is_indirect_desc() {
