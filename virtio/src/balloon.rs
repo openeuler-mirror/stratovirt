@@ -71,10 +71,10 @@ struct Iovec {
 /// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
 #[derive(Copy, Clone, Default)]
 struct VirtioBalloonConfig {
-    /// Number of pages host wants Guest to give up.
+    /// The target page numbers of balloon device.
     #[allow(dead_code)]
     pub num_pages: u32,
-    /// Number of pages we've actually got in balloon.
+    /// Number of pages we've actually got in balloon device.
     #[allow(dead_code)]
     pub actual: u32,
 }
@@ -749,9 +749,9 @@ pub struct Balloon {
     device_features: u64,
     /// Driver features.
     driver_features: u64,
-    /// Actual memory pages.
+    /// Actual memory pages of balloon device.
     actual: Arc<AtomicU32>,
-    /// Target memory pages.
+    /// Target memory pages of balloon device.
     num_pages: u32,
     /// Interrupt callback function.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
@@ -832,10 +832,10 @@ impl Balloon {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
         }
         let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let current_ram_size =
+        let address_space_ram_size =
             (self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let vm_target = cmp::min(target, current_ram_size);
-        self.num_pages = current_ram_size - vm_target;
+        let vm_target = cmp::min(target, address_space_ram_size);
+        self.num_pages = address_space_ram_size - vm_target;
         self.signal_config_change().with_context(|| {
             "Failed to notify about configuration change after setting balloon memory"
         })?;
