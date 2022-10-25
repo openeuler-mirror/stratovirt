@@ -571,9 +571,8 @@ Or you can simply use `-serial dev` to bind serial with character device.
 Balloon is a virtio device, it offers a flex memory mechanism for VM.
 
 Two properties are supported for virtio-balloon.
-* deflate_on_oom: whether to deflate balloon when there is no enough memory in guest.
-This feature can prevent OOM occur in guest.
-* free_page_reporting: whether to release free pages from kernel reporting. This feature can be used to reuse memory.
+* deflate_on_oom: Deflate balloon on guest out of memory condition. If deflate_on_oom has not been negotiated, the driver MUST NOT use pages from the balloon when num_pages is less than or equal to the actual number of pages in the balloon. If deflate_on_oom has been negotiated, the driver MAY use pages from the balloon when num_pages is less than or equal to the actual number of pages in the balloon if this is required for system stability (e.g. if memory is required by applications running within the guest). This feature may prevent OOM occur in guest.
+* free_page_reporting: whether to release free guest pages. This feature can be used to reuse memory.
 
 For virtio-balloon-pci, two more properties are required.
 * bus: name of bus which to attach.
