@@ -544,6 +544,20 @@ impl BlockIoHandler {
                         }
                         Err(ref e) => {
                             error!("Failed to execute block request, {:?}", e);
+                            self.mem_space
+                                .write_object(&VIRTIO_BLK_S_IOERR, req.in_header)
+                                .with_context(|| {
+                                    "Failed to write result, when block request execute failed"
+                                })?;
+                            self.queue
+                                .lock()
+                                .unwrap()
+                                .vring
+                                .add_used(&self.mem_space, req.desc_index, 1)
+                                .with_context(|| {
+                                    "Failed to add used ring, when block request execute failed"
+                                })?;
+                            need_interrupt = true;
                         }
                     }
                     req_index += 1;
@@ -551,6 +565,11 @@ impl BlockIoHandler {
             }
         } else if !merge_req_queue.is_empty() {
             for req in merge_req_queue.iter() {
+                self.mem_space
+                    .write_object(&VIRTIO_BLK_S_IOERR, req.in_header)
+                    .with_context(|| {
+                        "Failed to write result, when block request queue isn't empty"
+                    })?;
                 self.queue
                     .lock()
                     .unwrap()
@@ -583,7 +602,7 @@ impl BlockIoHandler {
     fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
         let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
             let mut status = if ret < 0 {
-                ret
+                i64::from(VIRTIO_BLK_S_IOERR)
             } else {
                 i64::from(VIRTIO_BLK_S_OK)
             };
