@@ -670,6 +670,15 @@ impl SplitVring {
         (new - used_event_idx - Wrapping(1)) < (new - old)
     }
 
+    fn is_overlap(
+        start1: GuestAddress,
+        end1: GuestAddress,
+        start2: GuestAddress,
+        end2: GuestAddress,
+    ) -> bool {
+        !(start1 >= end2 || start2 >= end1)
+    }
+
     fn is_invalid_memory(&self, sys_mem: &Arc<AddressSpace>, actual_size: u64) -> bool {
         let desc_table_end =
             match checked_offset_mem(sys_mem, self.desc_table, DESCRIPTOR_LEN * actual_size) {
@@ -702,25 +711,39 @@ impl SplitVring {
             }
         };
 
-        if let Err(ref e) = checked_offset_mem(
+        let desc_used_end = match checked_offset_mem(
             sys_mem,
             self.used_ring,
             VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * actual_size,
         ) {
-            error!(
-                "used ring is out of bounds: start:0x{:X} size:{} {:?}",
-                self.used_ring.raw_value(),
-                VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * actual_size,
-                e
-            );
-            return true;
-        }
+            Ok(addr) => addr,
+            Err(ref e) => {
+                error!(
+                    "used ring is out of bounds: start:0x{:X} size:{} {:?}",
+                    self.used_ring.raw_value(),
+                    VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * actual_size,
+                    e,
+                );
+                return true;
+            }
+        };
 
-        if self.desc_table >= self.avail_ring
-            || self.avail_ring >= self.used_ring
-            || desc_table_end > self.avail_ring
-            || desc_avail_end > self.used_ring
-        {
+        if SplitVring::is_overlap(
+            self.desc_table,
+            desc_table_end,
+            self.avail_ring,
+            desc_avail_end,
+        ) || SplitVring::is_overlap(
+            self.avail_ring,
+            desc_avail_end,
+            self.used_ring,
+            desc_used_end,
+        ) || SplitVring::is_overlap(
+            self.desc_table,
+            desc_table_end,
+            self.used_ring,
+            desc_used_end,
+        ) {
             error!("The memory of descriptor table: 0x{:X}, avail ring: 0x{:X} or used ring: 0x{:X} is overlapped. queue size:{}",
                    self.desc_table.raw_value(), self.avail_ring.raw_value(), self.used_ring.raw_value(), actual_size);
             return true;
