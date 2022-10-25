@@ -390,10 +390,6 @@ impl SplitVringDesc {
             error!("The indirect descriptor is invalid, len: {}", self.len);
             return false;
         }
-        if self.write_only() {
-            error!("Unexpected descriptor for writing only for popping avail ring");
-            return false;
-        }
         if self.has_next() {
             error!("INDIRECT and NEXT flag should not be used together");
             return false;
