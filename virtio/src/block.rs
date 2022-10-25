@@ -23,9 +23,9 @@ use std::sync::{Arc, Mutex};
 use super::{
     virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
     VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH,
-    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
+    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
@@ -175,10 +175,6 @@ impl Request {
                     out_iov_elem.addr.0
                 ))
             })?;
-
-        if !out_header.is_valid() {
-            bail!("Unsupported block request type");
-        }
 
         let pos = elem.in_iovec.len() - 1;
         let in_iov_elem = elem.in_iovec.get(pos).unwrap();
@@ -453,6 +449,19 @@ impl BlockIoHandler {
 
             match Request::new(&self.mem_space, &elem) {
                 Ok(req) => {
+                    if !req.out_header.is_valid() {
+                        self.mem_space
+                            .write_object(&VIRTIO_BLK_S_UNSUPP, req.in_header)
+                            .with_context(|| {
+                                "Failed to write result for the unsupport request for block"
+                            })?;
+                        queue
+                            .vring
+                            .add_used(&self.mem_space, req.desc_index, 1)
+                            .with_context(|| "Failed to add used ring")?;
+                        need_interrupt = true;
+                        continue;
+                    }
                     match req.out_header.request_type {
                         VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
                             last_aio_req_index = req_index;
