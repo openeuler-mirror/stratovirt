@@ -15,15 +15,13 @@ use std::sync::{Arc, Mutex};
 
 use error_chain::{bail, ChainedError};
 use hypervisor::kvm::KVM_FDS;
-use kvm_bindings::kvm_userspace_memory_region;
+use kvm_bindings::{kvm_userspace_memory_region, KVM_MEM_READONLY};
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
 use log::{debug, warn};
 use util::{num_ops::round_down, unix::host_page_size};
 
 use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{AddressRange, FlatRange, RegionIoEventFd, RegionType};
-
-const MEM_READ_ONLY: u32 = 1 << 1;
 
 /// Request type of listener.
 #[derive(Debug, Copy, Clone)]
@@ -251,7 +249,7 @@ impl KvmMemoryListener {
 
         let mut flags = 0_u32;
         if flat_range.owner.get_rom_device_romd().unwrap_or(false) {
-            flags |= MEM_READ_ONLY;
+            flags |= KVM_MEM_READONLY;
         }
         let kvm_region = kvm_userspace_memory_region {
             slot: slot_idx | (self.as_id.load(Ordering::SeqCst) << 16),
