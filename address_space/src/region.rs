@@ -305,9 +305,13 @@ impl Region {
     }
 
     /// Returns the minimum address managed by the region.
-    /// If this region is not `Ram` type, this function will return `None`.
+    /// If this region is not `Ram`, `RamDevice`, `RomDevice` type,
+    /// this function will return `None`.
     pub fn start_addr(&self) -> Option<GuestAddress> {
-        if self.region_type != RegionType::Ram {
+        if self.region_type != RegionType::Ram
+            && self.region_type != RegionType::RamDevice
+            && self.region_type != RegionType::RomDevice
+        {
             return None;
         }
 
