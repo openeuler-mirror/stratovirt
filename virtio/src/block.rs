@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::convert::TryFrom;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
@@ -145,6 +144,7 @@ struct Request {
     out_header: RequestOutHeader,
     iovec: Vec<Iovec>,
     data_len: u64,
+    in_len: u32,
     in_header: GuestAddress,
 }
 
@@ -190,6 +190,7 @@ impl Request {
             out_header,
             iovec: Vec::with_capacity(elem.desc_num as usize),
             data_len: 0,
+            in_len: 0,
             in_header: in_iov_elem.addr,
         };
 
@@ -225,6 +226,11 @@ impl Request {
                 }
             }
             _ => (),
+        }
+
+        // We always write the last status byte, so count all in_iovs.
+        for in_iov in elem.in_iovec.iter() {
+            request.in_len += in_iov.len;
         }
 
         Ok(request)
@@ -457,7 +463,7 @@ impl BlockIoHandler {
                             })?;
                         queue
                             .vring
-                            .add_used(&self.mem_space, req.desc_index, 1)
+                            .add_used(&self.mem_space, req.desc_index, req.in_len)
                             .with_context(|| "Failed to add used ring")?;
                         need_interrupt = true;
                         continue;
@@ -494,17 +500,11 @@ impl BlockIoHandler {
             req_index = 0;
             for req in merge_req_queue.iter() {
                 if let Some(ref mut aio) = self.aio {
-                    let rw_len = match req.out_header.request_type {
-                        VIRTIO_BLK_T_IN => u32::try_from(req.data_len)
-                            .with_context(|| "Convert block request len to u32 with overflow.")?,
-                        _ => 0u32,
-                    };
-
                     let aiocompletecb = AioCompleteCb::new(
                         self.queue.clone(),
                         self.mem_space.clone(),
                         req.desc_index,
-                        rw_len,
+                        req.in_len,
                         req.in_header,
                         Some(self.interrupt_cb.clone()),
                         self.driver_features,
@@ -528,7 +528,7 @@ impl BlockIoHandler {
                                 self.queue.lock().unwrap().vring.add_used(
                                     &self.mem_space,
                                     req.desc_index,
-                                    1,
+                                    req.in_len,
                                 ).with_context(|| "Failed to add the request for block with device id to used ring")?;
 
                                 if self
@@ -553,7 +553,7 @@ impl BlockIoHandler {
                                 .lock()
                                 .unwrap()
                                 .vring
-                                .add_used(&self.mem_space, req.desc_index, 1)
+                                .add_used(&self.mem_space, req.desc_index, req.in_len)
                                 .with_context(|| {
                                     "Failed to add used ring, when block request execute failed"
                                 })?;
@@ -574,7 +574,7 @@ impl BlockIoHandler {
                     .lock()
                     .unwrap()
                     .vring
-                    .add_used(&self.mem_space, req.desc_index, 1)
+                    .add_used(&self.mem_space, req.desc_index, req.in_len)
                     .with_context(|| {
                         "Failed to add used ring, when block request queue isn't empty"
                     })?;
