@@ -189,6 +189,8 @@ pub const VIRTIO_BLK_T_GET_ID: u32 = 8;
 pub const VIRTIO_BLK_ID_BYTES: u32 = 20;
 /// Success
 pub const VIRTIO_BLK_S_OK: u32 = 0;
+/// IO Error.
+pub const VIRTIO_BLK_S_IOERR: u32 = 1;
 
 /// Interrupt status: Used Buffer Notification
 pub const VIRTIO_MMIO_INT_VRING: u32 = 0x01;

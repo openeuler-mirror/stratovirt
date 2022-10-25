@@ -43,7 +43,7 @@ pub struct IoCb {
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum IoCmd {
     Pread = 0,
     Pwrite = 1,
