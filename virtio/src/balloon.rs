@@ -236,7 +236,11 @@ impl Request {
             }
             hvaset.sort_by_key(|&b| Reverse(b));
             let host_page_size = host_page_size();
-            if host_page_size == BALLOON_PAGE_SIZE {
+            // If host_page_size equals BALLOON_PAGE_SIZE, we can directly call the
+            // madvise function without any problem. And if the advice is MADV_WILLNEED,
+            // we just hint the whole host page it lives on, since we can't do anything
+            // smaller.
+            if host_page_size == BALLOON_PAGE_SIZE || advice == libc::MADV_WILLNEED {
                 while let Some(hva) = hvaset.pop() {
                     if last_addr == 0 {
                         free_len += 1;
