@@ -616,6 +616,7 @@ mod test {
     #[test]
     fn test_listeners() {
         // define an array of listeners in order to check the priority order
+        #[derive(Default)]
         struct ListenerPrior0 {
             enabled: bool,
         }
@@ -636,6 +637,7 @@ mod test {
                 self.enabled = false;
             }
         }
+        #[derive(Default)]
         struct ListenerPrior3 {
             enabled: bool,
         }
@@ -656,8 +658,9 @@ mod test {
                 self.enabled = false;
             }
         }
+        #[derive(Default)]
         struct ListenerPrior4 {
-            enable: bool,
+            enabled: bool,
         }
         impl Listener for ListenerPrior4 {
             fn priority(&self) -> i32 {
@@ -676,8 +679,9 @@ mod test {
                 self.enabled = false;
             }
         }
+        #[derive(Default)]
         struct ListenerNeg {
-            enable: bool,
+            enabled: bool,
         }
         impl Listener for ListenerNeg {
             fn priority(&self) -> i32 {
@@ -699,22 +703,66 @@ mod test {
 
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root).unwrap();
-        let listener1 = Arc::new(Mutex::new(ListenerPrior0));
-        let listener2 = Arc::new(Mutex::new(ListenerPrior0));
-        let listener3 = Arc::new(Mutex::new(ListenerPrior3));
-        let listener4 = Arc::new(Mutex::new(ListenerPrior4));
-        let listener5 = Arc::new(Mutex::new(ListenerNeg));
-        space.register_listener(listener1).unwrap();
-        space.register_listener(listener3).unwrap();
-        space.register_listener(listener5).unwrap();
-        space.register_listener(listener2).unwrap();
-        space.register_listener(listener4).unwrap();
+        let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
+        let listener4 = Arc::new(Mutex::new(ListenerPrior4::default()));
+        let listener5 = Arc::new(Mutex::new(ListenerNeg::default()));
+        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener3.clone()).unwrap();
+        space.register_listener(listener5.clone()).unwrap();
+        space.register_listener(listener2.clone()).unwrap();
+        space.register_listener(listener4.clone()).unwrap();
 
         let mut pre_prior = std::i32::MIN;
         for listener in space.listeners.lock().unwrap().iter() {
             let curr = listener.lock().unwrap().priority();
             assert!(pre_prior <= curr);
             pre_prior = curr;
+        }
+
+        space.unregister_listener(listener4).unwrap();
+        assert_eq!(space.listeners.lock().unwrap().len(), 4);
+        space.unregister_listener(listener3).unwrap();
+        // It only contains listener1, listener5, listener2.
+        assert_eq!(space.listeners.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_unregister_listener() {
+        #[derive(Default)]
+        struct ListenerPrior0 {
+            enabled: bool,
+        }
+        impl Listener for ListenerPrior0 {
+            fn priority(&self) -> i32 {
+                0
+            }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
+        }
+
+        let root = Region::init_container_region(8000);
+        let space = AddressSpace::new(root).unwrap();
+        let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener2.clone()).unwrap();
+
+        space.unregister_listener(listener2).unwrap();
+        assert_eq!(space.listeners.lock().unwrap().len(), 1);
+        for listener in space.listeners.lock().unwrap().iter() {
+            assert_eq!(listener.lock().unwrap().enabled(), true);
         }
     }
 
