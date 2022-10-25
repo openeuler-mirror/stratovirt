@@ -893,6 +893,9 @@ impl VringOps for SplitVring {
             )
             .with_context(|| "Failed to write next used idx")?;
 
+        // Make sure used index is exposed before notifying guest.
+        fence(Ordering::SeqCst);
+
         Ok(())
     }
 
