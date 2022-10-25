@@ -568,11 +568,24 @@ mod test {
     #[derive(Default, Clone)]
     struct TestListener {
         reqs: Arc<Mutex<Vec<(ListenerReqType, AddressRange)>>>,
+        enabled: bool,
     }
 
     impl Listener for TestListener {
         fn priority(&self) -> i32 {
             2
+        }
+
+        fn enabled(&self) -> bool {
+            self.enabled
+        }
+
+        fn enable(&mut self) {
+            self.enabled = true;
+        }
+
+        fn disable(&mut self) {
+            self.enabled = false;
         }
 
         fn handle_request(
@@ -603,28 +616,84 @@ mod test {
     #[test]
     fn test_listeners() {
         // define an array of listeners in order to check the priority order
-        struct ListenerPrior0;
+        struct ListenerPrior0 {
+            enabled: bool,
+        }
         impl Listener for ListenerPrior0 {
             fn priority(&self) -> i32 {
                 0
             }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
         }
-        struct ListenerPrior3;
+        struct ListenerPrior3 {
+            enabled: bool,
+        }
         impl Listener for ListenerPrior3 {
             fn priority(&self) -> i32 {
                 3
             }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
         }
-        struct ListenerPrior4;
+        struct ListenerPrior4 {
+            enable: bool,
+        }
         impl Listener for ListenerPrior4 {
             fn priority(&self) -> i32 {
                 4
             }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
         }
-        struct ListenerNeg;
+        struct ListenerNeg {
+            enable: bool,
+        }
         impl Listener for ListenerNeg {
             fn priority(&self) -> i32 {
                 -1
+            }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
             }
         }
 
