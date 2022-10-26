@@ -602,9 +602,9 @@ impl BlockIoHandler {
     fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
         let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
             let mut status = if ret < 0 {
-                i64::from(VIRTIO_BLK_S_IOERR)
+                VIRTIO_BLK_S_IOERR
             } else {
-                i64::from(VIRTIO_BLK_S_OK)
+                VIRTIO_BLK_S_OK
             };
 
             let complete_cb = &aiocb.iocompletecb;
@@ -616,7 +616,7 @@ impl BlockIoHandler {
             {
                 if let Err(ref e) = raw_datasync(aiocb.file_fd) {
                     error!("Failed to flush data before send response to guest {:?}", e);
-                    status = i64::from(VIRTIO_BLK_S_IOERR);
+                    status = VIRTIO_BLK_S_IOERR;
                 }
             }
 
