@@ -321,20 +321,20 @@ impl Request {
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
-                if let Some(serial) = serial_num {
-                    let serial_vec = get_serial_num_config(serial);
+                let serial = serial_num.clone().unwrap_or_else(|| String::from(""));
+                let serial_vec = get_serial_num_config(&serial);
+                let mut start: usize = 0;
+                let mut end: usize;
 
-                    for iov in self.iovec.iter() {
-                        if (iov.iov_len as usize) < serial_vec.len() {
-                            bail!(
-                                "The buffer length {} is less than the length {} of serial num",
-                                iov.iov_len,
-                                serial_vec.len()
-                            );
-                        }
-                        write_buf_mem(&serial_vec, iov.iov_base)
-                            .with_context(|| "Failed to write buf for virtio block id")?;
+                for iov in self.iovec.iter() {
+                    end = cmp::min(start + iov.iov_len as usize, serial_vec.len());
+                    write_buf_mem(&serial_vec[start..end], iov.iov_base)
+                        .with_context(|| "Failed to write buf for virtio block id")?;
+
+                    if end >= serial_vec.len() {
+                        break;
                     }
+                    start = end;
                 }
 
                 return Ok(1);
