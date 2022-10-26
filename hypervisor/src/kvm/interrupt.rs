@@ -19,7 +19,7 @@ use util::bitmap::Bitmap;
 use vmm_sys_util::ioctl::ioctl_with_val;
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{Context, Result};
 
 pub(crate) type IrqRoute = kvm_bindings::kvm_irq_routing;
 pub(crate) type IrqRouteEntry = kvm_bindings::kvm_irq_routing_entry;
@@ -177,7 +177,7 @@ impl IrqRouteTable {
     pub fn update_msi_route(&mut self, gsi: u32, msi_vector: MsiVector) -> Result<()> {
         self.remove_irq_route(gsi);
         self.add_msi_route(gsi, msi_vector)
-            .chain_err(|| "Failed to add msi route")?;
+            .with_context(|| "Failed to add msi route")?;
 
         Ok(())
     }
@@ -187,7 +187,7 @@ impl IrqRouteTable {
         let free_gsi = self
             .gsi_bitmap
             .find_next_zero(0)
-            .chain_err(|| "Failed to get new free gsi")?;
+            .with_context(|| "Failed to get new free gsi")?;
         self.gsi_bitmap.set(free_gsi)?;
         Ok(free_gsi as u32)
     }
@@ -200,7 +200,7 @@ impl IrqRouteTable {
     pub fn release_gsi(&mut self, gsi: u32) -> Result<()> {
         self.gsi_bitmap
             .clear(gsi as usize)
-            .chain_err(|| "Failed to release gsi")?;
+            .with_context(|| "Failed to release gsi")?;
         self.remove_irq_route(gsi);
         Ok(())
     }

@@ -10,14 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    errors::{ErrorKind, Result, ResultExt},
-    get_pci_bdf, pci_args_check, PciBdf,
-};
+use super::{error::ConfigError, get_pci_bdf, pci_args_check, PciBdf};
 use crate::config::{CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
 use crate::qmp::qmp_schema;
 
@@ -54,11 +51,10 @@ pub struct ChardevConfig {
 impl ConfigCheck for ChardevConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "chardev id".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         let len = match &self.backend {
@@ -67,9 +63,10 @@ impl ConfigCheck for ChardevConfig {
             _ => 0,
         };
         if len > MAX_PATH_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("socket path".to_string(), MAX_PATH_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "socket path".to_string(),
+                MAX_PATH_LENGTH
+            )));
         }
 
         Ok(())
@@ -118,7 +115,7 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
     let chardev_id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
         chardev_id
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "chardev").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "chardev")));
     };
     let backend = cmd_parser.get_value::<String>("")?;
     let path = cmd_parser.get_value::<String>("path")?;
@@ -151,20 +148,31 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
                         nowait,
                     }
                 } else {
-                    return Err(ErrorKind::FieldIsMissing("path", "socket-type chardev").into());
+                    return Err(anyhow!(ConfigError::FieldIsMissing(
+                        "path",
+                        "socket-type chardev"
+                    )));
                 }
             }
             "file" => {
                 if let Some(path) = path {
                     ChardevType::File(path)
                 } else {
-                    return Err(ErrorKind::FieldIsMissing("path", "file-type chardev").into());
+                    return Err(anyhow!(ConfigError::FieldIsMissing(
+                        "path",
+                        "file-type chardev"
+                    )));
                 }
             }
-            _ => return Err(ErrorKind::InvalidParam(backend, "chardev".to_string()).into()),
+            _ => {
+                return Err(anyhow!(ConfigError::InvalidParam(
+                    backend,
+                    "chardev".to_string()
+                )))
+            }
         }
     } else {
-        return Err(ErrorKind::FieldIsMissing("backend", "chardev").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("backend", "chardev")));
     };
 
     Ok(ChardevConfig {
@@ -181,19 +189,28 @@ pub fn parse_chardev(cmd_parser: CmdParser) -> Result<ChardevConfig> {
 pub fn get_chardev_config(args: qmp_schema::CharDevAddArgument) -> Result<ChardevConfig> {
     let backend = args.backend;
     if backend.backend_type.as_str() != "socket" {
-        return Err(ErrorKind::InvalidParam("backend".to_string(), backend.backend_type).into());
+        return Err(anyhow!(ConfigError::InvalidParam(
+            "backend".to_string(),
+            backend.backend_type
+        )));
     }
 
     let data = backend.backend_data;
     if data.server {
         error!("Not support chardev socket as server now.");
-        return Err(ErrorKind::InvalidParam("backend".to_string(), "server".to_string()).into());
+        return Err(anyhow!(ConfigError::InvalidParam(
+            "backend".to_string(),
+            "server".to_string()
+        )));
     }
 
     let addr = data.addr;
     if addr.addr_type.as_str() != "unix" {
         error!("Just support \"unix\" addr type option now.");
-        return Err(ErrorKind::InvalidParam("backend".to_string(), "addr".to_string()).into());
+        return Err(anyhow!(ConfigError::InvalidParam(
+            "backend".to_string(),
+            "addr".to_string()
+        )));
     }
 
     Ok(ChardevConfig {
@@ -245,13 +262,16 @@ pub fn parse_virtconsole(vm_config: &mut VmConfig, config_args: &str) -> Result<
     let chardev_name = if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
         chardev
     } else {
-        return Err(ErrorKind::FieldIsMissing("chardev", "virtconsole").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "chardev",
+            "virtconsole"
+        )));
     };
 
     let id = if let Some(chardev_id) = cmd_parser.get_value::<String>("id")? {
         chardev_id
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "virtconsole").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "virtconsole")));
     };
 
     if let Some(char_dev) = vm_config.chardev.remove(&chardev_name) {
@@ -335,17 +355,16 @@ impl VmConfig {
                 if parse_vec.len() == 2 {
                     parse_vec[1]
                 } else {
-                    return Err(ErrorKind::InvalidParam(
+                    return Err(anyhow!(ConfigError::InvalidParam(
                         serial_config.to_string(),
                         "serial".to_string(),
-                    )
-                    .into());
+                    )));
                 }
             }
             _ => {
                 let chardev_config = serial_config.to_string() + ",id=serial_chardev";
                 self.add_chardev(&chardev_config)
-                    .chain_err(|| "Failed to add chardev")?;
+                    .with_context(|| "Failed to add chardev")?;
                 "serial_chardev"
             }
         };
@@ -368,20 +387,20 @@ pub struct VsockConfig {
 impl ConfigCheck for VsockConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("vsock id".to_string(), MAX_STRING_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "vsock id".to_string(),
+                MAX_STRING_LENGTH
+            )));
         }
 
         if self.guest_cid < MIN_GUEST_CID || self.guest_cid >= MAX_GUEST_CID {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "Vsock guest-cid".to_string(),
                 MIN_GUEST_CID,
                 true,
                 MAX_GUEST_CID,
                 false,
-            )
-            .into());
+            )));
         }
 
         Ok(())
@@ -403,13 +422,13 @@ pub fn parse_vsock(vsock_config: &str) -> Result<VsockConfig> {
     let id = if let Some(vsock_id) = cmd_parser.get_value::<String>("id")? {
         vsock_id
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "vsock").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "vsock")));
     };
 
     let guest_cid = if let Some(cid) = cmd_parser.get_value::<u64>("guest-cid")? {
         cid
     } else {
-        return Err(ErrorKind::FieldIsMissing("guest-cid", "vsock").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("guest-cid", "vsock")));
     };
 
     let vhost_fd = cmd_parser.get_value::<i32>("vhostfd")?;
@@ -431,11 +450,10 @@ pub struct VirtioSerialInfo {
 impl ConfigCheck for VirtioSerialInfo {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "virtio-serial id".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         Ok(())

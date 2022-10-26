@@ -17,7 +17,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use error_chain::bail;
+use anyhow::{bail, Context, Result};
 use libc::{cfmakeraw, tcgetattr, tcsetattr, termios};
 use log::{error, info};
 use machine_manager::machine::{PathInfo, PTY_PATH};
@@ -29,8 +29,6 @@ use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, N
 use util::set_termi_raw_mode;
 use util::unix::limit_permission;
 use vmm_sys_util::epoll::EventSet;
-
-use super::errors::{Result, ResultExt};
 
 /// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {
@@ -76,13 +74,13 @@ impl Chardev {
     pub fn realize(&mut self) -> Result<()> {
         match &self.backend {
             ChardevType::Stdio => {
-                set_termi_raw_mode().chain_err(|| "Failed to set terminal to raw mode")?;
+                set_termi_raw_mode().with_context(|| "Failed to set terminal to raw mode")?;
                 self.input = Some(Arc::new(Mutex::new(std::io::stdin())));
                 self.output = Some(Arc::new(Mutex::new(std::io::stdout())));
             }
             ChardevType::Pty => {
                 let (master, path) =
-                    set_pty_raw_mode().chain_err(|| "Failed to set pty to raw mode")?;
+                    set_pty_raw_mode().with_context(|| "Failed to set pty to raw mode")?;
                 info!("Pty path is: {:?}", path);
                 let path_info = PathInfo {
                     path: format!("pty:{:?}", &path),
@@ -106,11 +104,11 @@ impl Chardev {
                     );
                 }
                 let sock = UnixListener::bind(path.clone())
-                    .chain_err(|| format!("Failed to bind socket for chardev, path:{}", path))?;
+                    .with_context(|| format!("Failed to bind socket for chardev, path:{}", path))?;
                 self.listener = Some(sock);
                 // add file to temporary pool, so it could be cleaned when vm exit.
                 TempCleaner::add_path(path.clone());
-                limit_permission(path).chain_err(|| {
+                limit_permission(path).with_context(|| {
                     format!(
                         "Failed to change file permission for chardev, path:{}",
                         path
@@ -167,7 +165,7 @@ fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
         )
     }
     let proc_path = PathBuf::from(format!("/proc/self/fd/{}", slave));
-    let path = read_link(proc_path).chain_err(|| "Failed to read slave pty link")?;
+    let path = read_link(proc_path).with_context(|| "Failed to read slave pty link")?;
     // Safe because this only set the `old_termios` struct to zero.
     let mut old_termios: termios = unsafe { std::mem::zeroed() };
     // Safe because this only get the current mode of slave pty and save it.

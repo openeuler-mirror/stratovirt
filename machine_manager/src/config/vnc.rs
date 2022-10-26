@@ -12,8 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use crate::config::ConfigError;
 use crate::config::{CmdParser, VmConfig};
+use anyhow::{anyhow, Result};
 use std::net::Ipv4Addr;
 
 /// Configuration of vnc.
@@ -52,7 +53,7 @@ impl VmConfig {
                 return Err(e);
             }
         } else {
-            return Err(ErrorKind::FieldIsMissing("ip", "port").into());
+            return Err(anyhow!(ConfigError::FieldIsMissing("ip", "port")));
         }
 
         // VNC Security Type.
@@ -77,17 +78,20 @@ impl VmConfig {
 fn parse_port(vnc_config: &mut VncConfig, addr: String) -> Result<()> {
     let v: Vec<&str> = addr.split(':').collect();
     if v.len() != 2 {
-        return Err(ErrorKind::FieldIsMissing("ip", "port").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("ip", "port")));
     }
     let ip = v[0]
         .parse::<Ipv4Addr>()
-        .map_err(|_| "Invalid Ip param for vnc!")?;
+        .map_err(|_| anyhow!("Invalid Ip param for vnc!"))?;
     let base_port = v[1]
         .parse::<i32>()
-        .map_err(|_| "Invalid Port param for vnc!")?;
+        .map_err(|_| anyhow!("Invalid Port param for vnc!"))?;
     // Prevent the base_port out of bounds.
     if !(0..=VNC_MAX_PORT_NUM - VNC_PORT_OFFSET).contains(&base_port) {
-        return Err(ErrorKind::InvalidParam(base_port.to_string(), "port".to_string()).into());
+        return Err(anyhow!(ConfigError::InvalidParam(
+            base_port.to_string(),
+            "port".to_string()
+        )));
     }
     vnc_config.ip = ip.to_string();
     vnc_config.port = ((base_port + VNC_PORT_OFFSET) as u16).to_string();

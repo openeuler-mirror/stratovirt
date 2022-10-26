@@ -14,7 +14,6 @@ use crate::{
     auth::{AuthState, SubAuthState},
     client::VncClient,
     data::keycode::KEYSYM2KEYCODE,
-    errors::Result,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
         get_image_width, unref_pixman_image,
@@ -26,7 +25,7 @@ use crate::{
         MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
 };
-
+use anyhow::Result;
 use machine_manager::{
     config::{ObjConfig, VncConfig},
     event_loop::EventLoop,

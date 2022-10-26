@@ -146,10 +146,9 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use address_space::AddressSpace;
-use error_chain::ChainedError;
 use util::byte_code::ByteCode;
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{bail, Context, Result};
 use virtio::ElemIovec;
 
 /// Get the buffers from the element of virtio queue to parse fuse message or
@@ -200,7 +199,7 @@ impl FuseBuffer {
             let read_count = cmp::min(slice.len(), buf.len as usize);
             sys_mem
                 .read(&mut slice, buf.addr, read_count as u64)
-                .chain_err(|| "Failed to read buffer for fuse req")?;
+                .with_context(|| "Failed to read buffer for fuse req")?;
             offset += read_count;
         }
 
@@ -271,7 +270,7 @@ impl FuseBuffer {
 
             sys_mem
                 .read(&mut slice, buf.addr, read_count as u64)
-                .chain_err(|| "Failed to read buffer for fuse req")?;
+                .with_context(|| "Failed to read buffer for fuse req")?;
             self.bytes_processed += read_count;
             offset += read_count;
 
@@ -335,7 +334,7 @@ impl FuseBuffer {
 
             sys_mem
                 .write(&mut slice, buf.addr, write_count as u64)
-                .chain_err(|| "Failed to read buffer for fuse req")?;
+                .with_context(|| "Failed to read buffer for fuse req")?;
             self.bytes_processed += write_count;
             offset += write_count;
 
@@ -523,9 +522,8 @@ pub fn reply_fuse_msg(
 
     if let Err(e) = writer.write_obj(sys_mem, &fuse_out_header) {
         error!(
-            "Failed to write out_header of fuse msg {}, {}",
-            in_header.opcode,
-            e.display_chain(),
+            "Failed to write out_header of fuse msg {}, {:?}",
+            in_header.opcode, e,
         );
         written_len = 0_u32;
     };
@@ -535,9 +533,8 @@ pub fn reply_fuse_msg(
         for fuse_iov in body.iter() {
             if let Err(e) = writer.write_slice(sys_mem, fuse_iov.body, fuse_iov.len) {
                 error!(
-                    "Failed to write the body of fuse msg {}, {}",
-                    in_header.opcode,
-                    e.display_chain(),
+                    "Failed to write the body of fuse msg {}, {:?}",
+                    in_header.opcode, e,
                 );
                 written_len = 0_u32;
             }

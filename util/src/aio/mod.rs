@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 
 use vmm_sys_util::eventfd::EventFd;
 
-use super::errors::{Result, ResultExt};
 use super::link_list::{List, Node};
+use anyhow::Result;
 pub use libaio::*;
 pub use raw::*;
 use uring::IoUringContext;

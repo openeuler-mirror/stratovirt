@@ -14,12 +14,12 @@ use libc;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
-use error_chain::bail;
+use anyhow::{bail, Context};
 use io_uring::{opcode, squeue, types, IoUring};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::libaio::{IoCb, IoCmd};
-use super::{AioCb, AioCompleteFunc, AioContext, CbNode, IoEvent, Result, ResultExt};
+use super::{AioCb, AioCompleteFunc, AioContext, CbNode, IoEvent, Result};
 
 /// The io-uring context.
 pub(crate) struct IoUringContext<T: Clone + 'static> {
@@ -39,11 +39,11 @@ impl<T: Clone + 'static> IoUringContext<T> {
             bail!("Entries must be the power of 2 and larger than 0");
         }
         let ring =
-            IoUring::new(entries as u32).chain_err(|| "Failed to create io_uring instance")?;
+            IoUring::new(entries as u32).with_context(|| "Failed to create io_uring instance")?;
 
         ring.submitter()
             .register_eventfd(eventfd.as_raw_fd())
-            .chain_err(|| "Failed to register event fd")?;
+            .with_context(|| "Failed to register event fd")?;
         let events = Vec::with_capacity(entries as usize);
         Ok(IoUringContext { ring, func, events })
     }
@@ -86,12 +86,12 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
                 self.ring
                     .submission()
                     .push(&entry)
-                    .chain_err(|| "Failed to push entry")?;
+                    .with_context(|| "Failed to push entry")?;
             }
         }
         self.ring
             .submit_and_wait(nr as usize)
-            .chain_err(|| "Failed to submit sqe")?;
+            .with_context(|| "Failed to submit sqe")?;
         Ok(())
     }
 

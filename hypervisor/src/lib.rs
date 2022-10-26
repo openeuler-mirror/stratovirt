@@ -12,18 +12,7 @@
 
 //! This crate offers interfaces for different kinds of hypervisors, such as KVM.
 
-#[allow(clippy::upper_case_acronyms)]
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-        }
-        foreign_links {
-            KVMIoctl(kvm_ioctls::Error);
-        }
-    }
-}
+pub mod error;
+pub use error::HypervisorError;
 
 pub mod kvm;

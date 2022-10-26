@@ -76,6 +76,7 @@
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
+pub mod error;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
@@ -85,6 +86,7 @@ pub use aarch64::load_linux;
 pub use aarch64::AArch64BootLoader as BootLoader;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoaderConfig as BootLoaderConfig;
+pub use error::BootLoaderError;
 
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::load_linux;
@@ -92,59 +94,3 @@ pub use x86_64::load_linux;
 pub use x86_64::X86BootLoader as BootLoader;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86BootLoaderConfig as BootLoaderConfig;
-
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        foreign_links {
-            Io(std::io::Error);
-        }
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-            FwCfg(devices::legacy::errors::Error, devices::legacy::errors::ErrorKind);
-        }
-        errors {
-            #[allow(clippy::upper_case_acronyms)]
-            #[cfg(target_arch = "aarch64")] DTBOverflow(size: u64) {
-                display(
-                    "guest memory size {} should bigger than {}",
-                    size,
-                    util::device_tree::FDT_MAX_SIZE
-                )
-            }
-            KernelOverflow(addr: u64, size: u64) {
-                display(
-                    "Failed to load kernel image {} to memory {}.",
-                     size,
-                     addr
-                )
-            }
-            InitrdOverflow(addr: u64, size: u64) {
-                display(
-                    "Failed to load initrd image {} to memory {}.",
-                     size,
-                     addr
-                )
-            }
-            BootLoaderOpenKernel {
-                display("Failed to open kernel image")
-            }
-            BootLoaderOpenInitrd {
-                display("Failed to open initrd image")
-            }
-            MaxCpus(cpus: u8) {
-                display("Configure cpu number({}) above supported max cpu numbers(254)", cpus)
-            }
-            #[cfg(target_arch = "x86_64")] InvalidBzImage {
-                display("Invalid bzImage kernel file")
-            }
-            #[cfg(target_arch = "x86_64")] OldVersionKernel {
-                display("Kernel version is too old.")
-            }
-            #[cfg(target_arch = "x86_64")] ElfKernel {
-                display("ELF-format kernel is not supported")
-            }
-        }
-    }
-}

@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, Weak};
 
 use once_cell::sync::Lazy;
 
-use super::errors::Result;
 use crate::config::*;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
@@ -30,6 +29,7 @@ use crate::usb::{
     UsbEndpoint, UsbPacket,
 };
 use crate::xhci::xhci_controller::XhciDevice;
+use anyhow::Result;
 
 /// USB Keyboard Descriptor
 static DESC_KEYBOARD: Lazy<Arc<UsbDesc>> = Lazy::new(|| {

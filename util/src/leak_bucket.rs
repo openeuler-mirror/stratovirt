@@ -87,7 +87,7 @@ impl LeakBucket {
             let func = Box::new(move || {
                 wakeup_clone
                     .write(1)
-                    .unwrap_or_else(|e| error!("LeakBucket send event to device failed {}", e));
+                    .unwrap_or_else(|e| error!("LeakBucket send event to device failed {:?}", e));
             });
 
             loop_context.delay_call(

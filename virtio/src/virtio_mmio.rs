@@ -13,9 +13,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::error::VirtioError;
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::bail;
 use log::{error, warn};
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::{BootSource, Param};
@@ -31,7 +31,7 @@ use super::{
     CONFIG_STATUS_FEATURES_OK, NOTIFY_REG_OFFSET, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
     VIRTIO_F_RING_PACKED, VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING,
 };
-use crate::errors::{ErrorKind, Result, ResultExt};
+use anyhow::{anyhow, bail, Context, Result};
 
 /// Registers of virtio-mmio device refer to Virtio Spec.
 /// Magic value - Read Only.
@@ -175,14 +175,13 @@ impl VirtioMmioCommonConfig {
             self.queues_config
                 .get_mut(queue_select as usize)
                 .ok_or_else(|| {
-                    format!(
+                    anyhow!(
                         "Mmio-reg queue_select {} overflows for mutable queue config",
                         queue_select,
                     )
-                    .into()
                 })
         } else {
-            Err(ErrorKind::DevStatErr(self.device_status).into())
+            Err(anyhow!(VirtioError::DevStatErr(self.device_status)))
         }
     }
 
@@ -192,11 +191,10 @@ impl VirtioMmioCommonConfig {
         self.queues_config
             .get(queue_select as usize)
             .ok_or_else(|| {
-                format!(
+                anyhow!(
                     "Mmio-reg queue_select overflows {} for immutable queue config",
                     queue_select,
                 )
-                .into()
             })
     }
 
@@ -238,7 +236,7 @@ impl VirtioMmioCommonConfig {
             STATUS_REG => self.device_status,
             CONFIG_GENERATION_REG => self.config_generation,
             _ => {
-                return Err(ErrorKind::MmioRegErr(offset).into());
+                return Err(anyhow!(VirtioError::MmioRegErr(offset)));
             }
         };
 
@@ -280,7 +278,7 @@ impl VirtioMmioCommonConfig {
                         self.queue_type = QUEUE_TYPE_PACKED_VRING;
                     }
                 } else {
-                    return Err(ErrorKind::DevStatErr(self.device_status).into());
+                    return Err(anyhow!(VirtioError::DevStatErr(self.device_status)));
                 }
             }
             DRIVER_FEATURES_SEL_REG => self.acked_features_select = value,
@@ -316,7 +314,7 @@ impl VirtioMmioCommonConfig {
                 config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
             })?,
             _ => {
-                return Err(ErrorKind::MmioRegErr(offset).into());
+                return Err(anyhow!(VirtioError::MmioRegErr(offset)));
             }
         };
         Ok(())
@@ -374,7 +372,7 @@ impl VirtioMmioDevice {
             .lock()
             .unwrap()
             .realize()
-            .chain_err(|| "Failed to realize virtio.")?;
+            .with_context(|| "Failed to realize virtio.")?;
 
         if region_base >= sysbus.mmio_region.1 {
             bail!("Mmio region space exhausted.");
@@ -424,7 +422,7 @@ impl VirtioMmioDevice {
             let evt_fd_clone = match fd.try_clone() {
                 Ok(fd) => fd,
                 Err(e) => {
-                    error!("Failed to clone IoEventFd, {}", e);
+                    error!("Failed to clone IoEventFd, {:?}", e);
                     continue;
                 }
             };
@@ -442,7 +440,7 @@ impl VirtioMmioDevice {
                 interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .chain_err(|| ErrorKind::EventFdWrite)?;
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
 
                 Ok(())
             },
@@ -472,10 +470,10 @@ impl SysBusDevOps for VirtioMmioDevice {
                     Ok(v) => v,
                     Err(ref e) => {
                         error!(
-                            "Failed to read mmio register {}, type: {}, {}",
+                            "Failed to read mmio register {}, type: {}, {:?}",
                             offset,
                             self.device.lock().unwrap().device_type(),
-                            error_chain::ChainedError::display_chain(e),
+                            e,
                         );
                         return false;
                     }
@@ -490,10 +488,10 @@ impl SysBusDevOps for VirtioMmioDevice {
                     .read_config(offset as u64 - 0x100, data)
                 {
                     error!(
-                        "Failed to read virtio-dev config space {} type: {} {}",
+                        "Failed to read virtio-dev config space {} type: {} {:?}",
                         offset as u64 - 0x100,
                         self.device.lock().unwrap().device_type(),
-                        error_chain::ChainedError::display_chain(e),
+                        e,
                     );
                     return false;
                 }
@@ -521,10 +519,10 @@ impl SysBusDevOps for VirtioMmioDevice {
                     value,
                 ) {
                     error!(
-                        "Failed to write mmio register {}, type: {}, {}",
+                        "Failed to write mmio register {}, type: {}, {:?}",
                         offset,
                         self.device.lock().unwrap().device_type(),
-                        error_chain::ChainedError::display_chain(e),
+                        e,
                     );
                     return false;
                 }
@@ -540,9 +538,9 @@ impl SysBusDevOps for VirtioMmioDevice {
                     let ret = self.activate().map(|_| self.state.activated = true);
                     if let Err(ref e) = ret {
                         error!(
-                            "Failed to activate dev, type: {}, {}",
+                            "Failed to activate dev, type: {}, {:?}",
                             self.device.lock().unwrap().device_type(),
-                            error_chain::ChainedError::display_chain(e),
+                            e,
                         );
                     }
                 }
@@ -560,10 +558,10 @@ impl SysBusDevOps for VirtioMmioDevice {
                         .write_config(offset as u64 - 0x100, data)
                     {
                         error!(
-                            "Failed to write virtio-dev config space {}, type: {}, {}",
+                            "Failed to write virtio-dev config space {}, type: {}, {:?}",
                             offset as u64 - 0x100,
                             self.device.lock().unwrap().device_type(),
-                            error_chain::ChainedError::display_chain(e),
+                            e,
                         );
                         return false;
                     }
@@ -593,7 +591,7 @@ impl SysBusDevOps for VirtioMmioDevice {
             let addr = u64::from(NOTIFY_REG_OFFSET);
             let eventfd_clone = match eventfd.try_clone() {
                 Err(e) => {
-                    error!("Failed to clone ioeventfd, error is {}", e);
+                    error!("Failed to clone ioeventfd, error is {:?}", e);
                     continue;
                 }
                 Ok(fd) => fd,
@@ -628,7 +626,7 @@ impl acpi::AmlBuilder for VirtioMmioDevice {
 }
 
 impl StateTransfer for VirtioMmioDevice {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut state = self.state;
 
         for (index, queue) in self.queues.iter().enumerate() {
@@ -640,9 +638,12 @@ impl StateTransfer for VirtioMmioDevice {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
-        self.state = *VirtioMmioState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("MMIO_DEVICE"))?;
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+        self.state = *VirtioMmioState::from_bytes(state).ok_or_else(|| {
+            anyhow!(migration::error::MigrationError::FromBytesError(
+                "MMIO_DEVICE"
+            ))
+        })?;
         let cloned_mem_space = self.mem_space.clone();
         let mut queue_states =
             self.state.config_space.queues_config[0..self.state.config_space.queue_num].to_vec();
@@ -678,14 +679,14 @@ impl StateTransfer for VirtioMmioDevice {
 }
 
 impl MigrationHook for VirtioMmioDevice {
-    fn resume(&mut self) -> migration::errors::Result<()> {
+    fn resume(&mut self) -> migration::Result<()> {
         if self.state.activated {
             let mut queue_evts = Vec::<EventFd>::new();
             for fd in self.host_notify_info.events.iter() {
                 let evt_fd_clone = match fd.try_clone() {
                     Ok(fd) => fd,
                     Err(e) => {
-                        error!("Failed to clone IoEventFd, {}", e);
+                        error!("Failed to clone IoEventFd, {:?}", e);
                         continue;
                     }
                 };
@@ -703,7 +704,7 @@ impl MigrationHook for VirtioMmioDevice {
                     interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
                     interrupt_evt
                         .write(1)
-                        .chain_err(|| ErrorKind::EventFdWrite)?;
+                        .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
 
                     Ok(())
                 },

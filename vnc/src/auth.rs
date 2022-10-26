@@ -10,8 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::Result;
 use crate::client::VncClient;
+use anyhow::Result;
 
 /// Authentication type
 #[derive(Clone, Copy)]

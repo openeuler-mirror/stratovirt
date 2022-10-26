@@ -23,7 +23,7 @@ use vmm_sys_util::{
     eventfd::EventFd, ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr,
 };
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{Context, Result};
 pub use interrupt::MsiVector;
 use interrupt::{refact_vec_with_field, IrqRoute, IrqRouteEntry, IrqRouteTable};
 
@@ -144,7 +144,7 @@ impl KVMFds {
                 .as_ref()
                 .unwrap()
                 .set_gsi_routing(&*irq_routing)
-                .chain_err(|| "Failed to set gsi routing")
+                .with_context(|| "Failed to set gsi routing")
         }
     }
 
@@ -153,7 +153,7 @@ impl KVMFds {
             .as_ref()
             .unwrap()
             .register_irqfd(fd, gsi)
-            .chain_err(|| format!("Failed to register irqfd: gsi {}.", gsi))
+            .with_context(|| format!("Failed to register irqfd: gsi {}.", gsi))
     }
 
     pub fn unregister_irqfd(&self, fd: &EventFd, gsi: u32) -> Result<()> {
@@ -161,7 +161,7 @@ impl KVMFds {
             .as_ref()
             .unwrap()
             .unregister_irqfd(fd, gsi)
-            .chain_err(|| format!("Failed to unregister irqfd: gsi {}.", gsi))
+            .with_context(|| format!("Failed to unregister irqfd: gsi {}.", gsi))
     }
 
     /// Start dirty page tracking in kvm.
@@ -174,7 +174,7 @@ impl KVMFds {
                     .as_ref()
                     .unwrap()
                     .set_user_memory_region(*region)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to start dirty log, error is {}",
                             std::io::Error::last_os_error()
@@ -196,7 +196,7 @@ impl KVMFds {
                     .as_ref()
                     .unwrap()
                     .set_user_memory_region(*region)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to stop dirty log, error is {}",
                             std::io::Error::last_os_error()
@@ -215,7 +215,7 @@ impl KVMFds {
             .as_ref()
             .unwrap()
             .get_dirty_log(slot, mem_size as usize)
-            .chain_err(|| {
+            .with_context(|| {
                 format!(
                     "Failed to get dirty log, error is {}",
                     std::io::Error::last_os_error()

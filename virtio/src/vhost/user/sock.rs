@@ -13,12 +13,12 @@
 use std::mem::size_of;
 use std::os::unix::io::RawFd;
 
-use error_chain::bail;
 use libc::{c_void, iovec};
 use util::unix::UnixSock;
 
-use super::super::super::errors::Result;
 use super::message::{MAX_ATTACHED_FD_ENTRIES, VHOST_USER_MSG_MAX_SIZE};
+use anyhow::bail;
+use anyhow::Result;
 
 #[derive(Clone)]
 pub struct VhostUserSock {

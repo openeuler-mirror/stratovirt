@@ -10,10 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
 use std::sync::{Arc, Mutex};
 
-use crate::{errors::Result, PciBus, PciDevOps};
+use crate::{PciBus, PciDevOps};
+use anyhow::{bail, Result};
 
 pub trait HotplugOps: Send {
     /// Plug device, usually called when hot plug device in device_add.

@@ -13,19 +13,17 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{Region, RegionOps};
-use error_chain::{bail, ChainedError};
+use anyhow::{bail, Result};
 use log::{debug, error};
 use pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
         VENDOR_ID,
     },
-    errors::Result as PciResult,
-    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevOps,
+    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevOps, Result as PciResult,
 };
 
 use super::VENDOR_ID_INTEL;
-use crate::standard_vm::errors::Result;
 
 const DEVICE_ID_INTEL_Q35_MCH: u16 = 0x29c0;
 
@@ -180,7 +178,7 @@ impl PciDevOps for Mch {
         self.config.write(offset, data, 0);
         if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8) {
             if let Err(e) = self.update_pciexbar_mapping() {
-                error!("{}", e.display_chain());
+                error!("{:?}", e);
             }
         }
     }

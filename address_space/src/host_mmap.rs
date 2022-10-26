@@ -16,7 +16,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 
-use error_chain::bail;
+use anyhow::{bail, Context, Result};
 use log::{error, info};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
 use util::{
@@ -24,7 +24,6 @@ use util::{
     unix::{do_mmap, host_page_size},
 };
 
-use crate::errors::{Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
@@ -82,8 +81,9 @@ impl FileBackend {
 
             let raw_fd = unsafe { libc::mkstemp(fs_cstr) };
             if raw_fd < 0 {
-                return Err(std::io::Error::last_os_error())
-                    .chain_err(|| format!("Failed to create file in directory: {} ", file_path));
+                return Err(std::io::Error::last_os_error()).with_context(|| {
+                    format!("Failed to create file in directory: {} ", file_path)
+                });
             }
 
             if unsafe { libc::unlink(fs_cstr) } != 0 {
@@ -102,7 +102,7 @@ impl FileBackend {
                 .write(true)
                 .create(true)
                 .open(path)
-                .chain_err(|| format!("Failed to open file: {}", file_path))?;
+                .with_context(|| format!("Failed to open file: {}", file_path))?;
 
             if existed
                 && unsafe { libc::unlink(std::ffi::CString::new(file_path).unwrap().into_raw()) }
@@ -130,7 +130,7 @@ impl FileBackend {
         let old_file_len = file.metadata().unwrap().len();
         if old_file_len == 0 {
             file.set_len(file_len)
-                .chain_err(|| format!("Failed to set length of file: {}", file_path))?;
+                .with_context(|| format!("Failed to set length of file: {}", file_path))?;
         } else if old_file_len < file_len {
             bail!(
             "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
@@ -210,7 +210,7 @@ fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     // join all threads to wait for pre-allocating.
     while let Some(thread) = threads_join.pop() {
         if let Err(ref e) = thread.join() {
-            error!("Failed to join thread: {:?}", e);
+            error!("{}", format!("Failed to join thread: {:?}", e));
         }
     }
 }
@@ -232,7 +232,7 @@ pub fn create_host_mmaps(
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
         f_back = Some(
             FileBackend::new_mem(path, file_len)
-                .chain_err(|| "Failed to create file that backs memory")?,
+                .with_context(|| "Failed to create file that backs memory")?,
         );
     } else if mem_config.mem_share {
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
@@ -241,13 +241,13 @@ pub fn create_host_mmaps(
         let anon_fd =
             unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
         if anon_fd < 0 {
-            return Err(std::io::Error::last_os_error()).chain_err(|| "Failed to create memfd");
+            return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(file_len)
-            .chain_err(|| "Failed to set the length of anonymous file that backs memory")?;
+            .with_context(|| "Failed to set the length of anonymous file that backs memory")?;
 
         f_back = Some(FileBackend {
             file: Arc::new(anon_file),
@@ -335,7 +335,7 @@ pub fn set_host_memory_policy(
             max_node as u64,
             MPOL_MF_STRICT | MPOL_MF_MOVE,
         )
-        .chain_err(|| "Failed to call mbind")?;
+        .with_context(|| "Failed to call mbind")?;
         host_addr_start += zone.size;
     }
 

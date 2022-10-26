@@ -14,19 +14,20 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{GuestAddress, Region, RegionOps};
-use error_chain::bail;
 use hypervisor::kvm::{MsiVector, KVM_FDS};
 use log::error;
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 
 use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};
-use crate::errors::{Result, ResultExt};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     ranges_overlap, PciBus,
 };
+use anyhow::{anyhow, bail, Context, Result};
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
 pub const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
@@ -223,7 +224,7 @@ impl Msix {
         let table_region = Region::init_io_region(table_size, table_region_ops);
         region
             .add_subregion(table_region, table_offset)
-            .chain_err(|| "Failed to register MSI-X table region.")?;
+            .with_context(|| "Failed to register MSI-X table region.")?;
 
         let cloned_msix = msix.clone();
         let pba_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
@@ -247,7 +248,7 @@ impl Msix {
         let pba_region = Region::init_io_region(pba_size, pba_region_ops);
         region
             .add_subregion(pba_region, pba_offset)
-            .chain_err(|| "Failed to register MSI-X PBA region.")?;
+            .with_context(|| "Failed to register MSI-X PBA region.")?;
 
         Ok(())
     }
@@ -301,7 +302,7 @@ impl Msix {
 }
 
 impl StateTransfer for Msix {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut state = MsixState::default();
 
         for (idx, table_byte) in self.table.iter().enumerate() {
@@ -318,9 +319,9 @@ impl StateTransfer for Msix {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let msix_state = *MsixState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("MSIX_DEVICE"))?;
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("MSIX_DEVICE")))?;
 
         let table_length = self.table.len();
         let pba_length = self.pba.len();
@@ -344,7 +345,7 @@ impl StateTransfer for Msix {
 }
 
 impl MigrationHook for Msix {
-    fn resume(&mut self) -> migration::errors::Result<()> {
+    fn resume(&mut self) -> migration::Result<()> {
         if self.enabled && !self.func_masked {
             for vector in 0..self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
                 if self.is_vector_masked(vector) {
@@ -421,7 +422,7 @@ fn send_msix(msg: Message, dev_id: u16) {
         pad: [0; 12],
     };
     if let Err(e) = KVM_FDS.load().vm_fd.as_ref().unwrap().signal_msi(kvm_msi) {
-        error!("Send msix error: {}", e);
+        error!("Send msix error: {:?}", e);
     };
 }
 

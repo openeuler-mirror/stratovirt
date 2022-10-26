@@ -15,9 +15,9 @@ use std::io::{Read, Write};
 use std::mem::size_of;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use migration::{
-    errors::{ErrorKind, Result},
-    DeviceStateDesc, FieldDesc, MemBlock, MigrationHook, StateTransfer,
+    error::MigrationError, DeviceStateDesc, FieldDesc, MemBlock, MigrationHook, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -91,7 +91,7 @@ impl MigrationHook for AddressSpace {
             if let Some(base_addr) = region.start_addr() {
                 region
                     .read(fd, base_addr, 0, region.size())
-                    .map_err(|e| ErrorKind::SaveVmMemoryErr(e.to_string()))?;
+                    .map_err(|e| anyhow!(MigrationError::SaveVmMemoryErr(e.to_string())))?;
             }
         }
 
@@ -101,7 +101,7 @@ impl MigrationHook for AddressSpace {
     fn restore_memory(&self, memory: Option<&File>, state: &[u8]) -> Result<()> {
         let address_space_state: &AddressSpaceState =
             AddressSpaceState::from_bytes(&state[0..size_of::<AddressSpaceState>()])
-                .ok_or(ErrorKind::FromBytesError("MEMORY"))?;
+                .ok_or_else(|| anyhow!(MigrationError::FromBytesError("MEMORY")))?;
         let memfile_arc = Arc::new(memory.unwrap().try_clone().unwrap());
 
         for ram_state in address_space_state.ram_region_state
@@ -123,14 +123,14 @@ impl MigrationHook for AddressSpace {
                     false,
                     false,
                 )
-                .map_err(|e| ErrorKind::RestoreVmMemoryErr(e.to_string()))?,
+                .map_err(|e| anyhow!(MigrationError::RestoreVmMemoryErr(e.to_string())))?,
             );
             self.root()
                 .add_subregion(
                     Region::init_ram_region(host_mmap.clone()),
                     host_mmap.start_address().raw_value(),
                 )
-                .map_err(|e| ErrorKind::RestoreVmMemoryErr(e.to_string()))?;
+                .map_err(|e| anyhow!(MigrationError::RestoreVmMemoryErr(e.to_string())))?;
         }
 
         Ok(())
@@ -138,14 +138,14 @@ impl MigrationHook for AddressSpace {
 
     fn send_memory(&self, fd: &mut dyn Write, range: MemBlock) -> Result<()> {
         self.read(fd, GuestAddress(range.gpa), range.len)
-            .map_err(|e| ErrorKind::SendVmMemoryErr(e.to_string()))?;
+            .map_err(|e| anyhow!(MigrationError::SendVmMemoryErr(e.to_string())))?;
 
         Ok(())
     }
 
     fn recv_memory(&self, fd: &mut dyn Read, range: MemBlock) -> Result<()> {
         self.write(fd, GuestAddress(range.gpa), range.len)
-            .map_err(|e| ErrorKind::RecvVmMemoryErr(e.to_string()))?;
+            .map_err(|e| anyhow!(MigrationError::RecvVmMemoryErr(e.to_string())))?;
 
         Ok(())
     }

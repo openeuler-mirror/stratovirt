@@ -11,23 +11,11 @@
 // See the Mulan PSL v2 for more details.
 
 #[macro_use]
-extern crate error_chain;
-#[macro_use]
 extern crate log;
 
-pub mod errors {
-    error_chain! {
-        links {
-            PciErr(pci::errors::Error, pci::errors::ErrorKind);
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-        }
-        foreign_links {
-            Io(std::io::Error);
-        }
-        errors {
-        }
-    }
-}
+pub mod error;
+pub use anyhow::Result;
+pub use error::UsbError;
 
 pub mod bus;
 pub mod config;

@@ -16,11 +16,10 @@ use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress};
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
-use error_chain::bail;
 use util::byte_code::ByteCode;
 use util::num_ops::round_up;
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{anyhow, bail, Context, Result};
 
 const EI_MAG0: usize = 0;
 const EI_MAG1: usize = 1;
@@ -145,11 +144,11 @@ pub fn load_elf_kernel(
     kernel_image.read_exact(elf_header.as_mut_bytes())?;
     elf_header
         .is_valid()
-        .chain_err(|| "ELF header is invalid")?;
+        .with_context(|| "ELF header is invalid")?;
 
     let ep_hdrs = elf_header
         .parse_prog_hdrs(kernel_image)
-        .chain_err(|| "Failed to parse ELF program header")?;
+        .with_context(|| "Failed to parse ELF program header")?;
 
     let mut pvh_start_addr: Option<u64> = None;
     let mut addr_low = u64::MAX;
@@ -185,10 +184,13 @@ pub fn load_elf_kernel(
                 offset += note_size;
 
                 let p_align = ph.p_align;
-                let aligned_namesz = round_up(note_hdr.namesz as u64, p_align).ok_or(format!(
-                    "Overflows when align up: num 0x{:x}, alignment 0x{:x}",
-                    note_hdr.namesz as u64, p_align,
-                ))?;
+                let aligned_namesz =
+                    round_up(note_hdr.namesz as u64, p_align).ok_or_else(|| {
+                        anyhow!(format!(
+                            "Overflows when align up: num 0x{:x}, alignment 0x{:x}",
+                            note_hdr.namesz as u64, p_align,
+                        ))
+                    })?;
                 if note_hdr.type_ == XEN_ELFNOTE_PHYS32_ENTRY {
                     kernel_image.seek(SeekFrom::Current(aligned_namesz as i64))?;
 
@@ -198,10 +200,12 @@ pub fn load_elf_kernel(
                     break;
                 } else {
                     let aligned_descsz =
-                        round_up(note_hdr.descsz as u64, p_align).ok_or(format!(
-                            "Overflows when align up, num 0x{:x}, alignment 0x{:x}",
-                            note_hdr.descsz as u64, p_align,
-                        ))?;
+                        round_up(note_hdr.descsz as u64, p_align).ok_or_else(|| {
+                            anyhow!(format!(
+                                "Overflows when align up, num 0x{:x}, alignment 0x{:x}",
+                                note_hdr.descsz as u64, p_align,
+                            ))
+                        })?;
                     let tail_size = aligned_namesz + aligned_descsz;
 
                     kernel_image.seek(SeekFrom::Current(tail_size as i64))?;

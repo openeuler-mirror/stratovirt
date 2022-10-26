@@ -18,8 +18,7 @@ use pci::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
         REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
-    errors::Result as PciResult,
-    le_write_u16, PciBus, PciDevOps,
+    le_write_u16, PciBus, PciDevOps, Result as PciResult,
 };
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;

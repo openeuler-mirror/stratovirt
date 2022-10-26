@@ -12,11 +12,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use error_chain::bail;
 use util::byte_code::ByteCode;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::AcpiError;
 use crate::AmlBuilder;
+use anyhow::{anyhow, bail, Context, Result};
 
 const TABLE_LOADER_FILE_NAME_SZ: usize = 56;
 const TABLE_LOADER_ENTRY_SZ: usize = 124;
@@ -235,10 +235,10 @@ impl TableLoader {
     ) -> Result<()> {
         let file = file.to_string();
         if align & (align - 1) != 0 {
-            return Err(ErrorKind::Alignment(align).into());
+            return Err(anyhow!(AcpiError::Alignment(align)));
         }
         if self.find_matched_file(&file).is_some() {
-            return Err(ErrorKind::FileEntryExist(file).into());
+            return Err(anyhow!(AcpiError::FileEntryExist(file)));
         }
 
         self.files.push(TableLoaderFileEntry {
@@ -271,15 +271,23 @@ impl TableLoader {
         let file = file.to_string();
         let file_entry = self
             .find_matched_file(&file)
-            .chain_err(|| ErrorKind::NoMatchedFile(file.clone()))?;
+            .with_context(|| anyhow!(AcpiError::NoMatchedFile(file.clone())))?;
 
         let file_entry_len = file_entry.file_blob.lock().unwrap().len();
 
         if cksum_offset as usize + 1 > file_entry_len {
-            return Err(ErrorKind::AddrOverflow(cksum_offset, 1, file_entry_len).into());
+            return Err(anyhow!(AcpiError::AddrOverflow(
+                cksum_offset,
+                1,
+                file_entry_len
+            )));
         }
         if start as usize >= file_entry_len || (start + length) as usize > file_entry_len {
-            return Err(ErrorKind::AddrOverflow(start, length, file_entry_len).into());
+            return Err(anyhow!(AcpiError::AddrOverflow(
+                start,
+                length,
+                file_entry_len
+            )));
         }
         if cksum_offset < start {
             bail!("The offset of checksum should larger offset of start of range in file blob");
@@ -322,23 +330,31 @@ impl TableLoader {
         let src_file = src_file.to_string();
         let dst_file_entry = self
             .find_matched_file(&dst_file)
-            .chain_err(|| ErrorKind::NoMatchedFile(dst_file.clone()))?;
+            .with_context(|| anyhow!(AcpiError::NoMatchedFile(dst_file.clone())))?;
         let src_file_entry = self
             .find_matched_file(&src_file)
-            .chain_err(|| ErrorKind::NoMatchedFile(src_file.clone()))?;
+            .with_context(|| anyhow!(AcpiError::NoMatchedFile(src_file.clone())))?;
 
         let dst_file_len = dst_file_entry.file_blob.lock().unwrap().len();
         let src_file_len = src_file_entry.file_blob.lock().unwrap().len();
         if src_offset as usize >= src_file_len
             || (src_offset + u32::from(size)) as usize > src_file_len
         {
-            return Err(ErrorKind::AddrOverflow(src_offset, u32::from(size), src_file_len).into());
+            return Err(anyhow!(AcpiError::AddrOverflow(
+                src_offset,
+                u32::from(size),
+                src_file_len
+            )));
         }
         if offset as usize >= dst_file_len || (offset + u32::from(size)) as usize > dst_file_len {
-            return Err(ErrorKind::AddrOverflow(offset, u32::from(size), dst_file_len).into());
+            return Err(anyhow!(AcpiError::AddrOverflow(
+                offset,
+                u32::from(size),
+                dst_file_len
+            )));
         }
         if size != 1 && size != 2 && size != 4 && size != 8 {
-            return Err(ErrorKind::AddPointerLength(size).into());
+            return Err(anyhow!(AcpiError::AddPointerLength(size)));
         }
 
         dst_file_entry.file_blob.lock().unwrap()

@@ -7,13 +7,14 @@ license = "Mulan PSL v2"
 description = "provide memory management for VM"
 
 [dependencies]
-error-chain = "0.12.4"
 libc = "0.2"
 log = "0.4"
 kvm-bindings = { version = ">=0.5.0", features = ["fam-wrappers"] }
 kvm-ioctls = ">=0.11.0"
 vmm-sys-util = ">=0.10.0"
 arc-swap = ">=1.5.0"
+thiserror = "1.0"
+anyhow = "1.0"
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }

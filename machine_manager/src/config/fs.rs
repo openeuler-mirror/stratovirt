@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
+use super::error::ConfigError;
 use crate::config::{
     pci_args_check, ChardevType, CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH,
     MAX_STRING_LENGTH, MAX_TAG_LENGTH,
 };
-use error_chain::bail;
+use anyhow::{anyhow, bail, Result};
 
 /// Config struct for `fs`.
 /// Contains fs device's attr.
@@ -42,27 +42,24 @@ impl Default for FsConfig {
 impl ConfigCheck for FsConfig {
     fn check(&self) -> Result<()> {
         if self.tag.len() >= MAX_TAG_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "fs device tag".to_string(),
                 MAX_TAG_LENGTH - 1,
-            )
-            .into());
+            )));
         }
 
         if self.id.len() >= MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "fs device id".to_string(),
                 MAX_STRING_LENGTH - 1,
-            )
-            .into());
+            )));
         }
 
         if self.sock.len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "fs sock path".to_string(),
                 MAX_PATH_LENGTH,
-            )
-            .into());
+            )));
         }
 
         Ok(())
@@ -85,13 +82,13 @@ pub fn parse_fs(vm_config: &mut VmConfig, fs_config: &str) -> Result<FsConfig> {
     if let Some(tag) = cmd_parser.get_value::<String>("tag")? {
         fs_cfg.tag = tag;
     } else {
-        return Err(ErrorKind::FieldIsMissing("tag", "virtio-fs").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("tag", "virtio-fs")));
     }
 
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         fs_cfg.id = id;
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "virtio-fs").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "virtio-fs")));
     }
 
     if let Some(name) = cmd_parser.get_value::<String>("chardev")? {
@@ -108,7 +105,7 @@ pub fn parse_fs(vm_config: &mut VmConfig, fs_config: &str) -> Result<FsConfig> {
             bail!("Chardev {:?} not found or is in use", &name);
         }
     } else {
-        return Err(ErrorKind::FieldIsMissing("chardev", "virtio-fs").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("chardev", "virtio-fs")));
     }
     fs_cfg.check()?;
 

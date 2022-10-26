@@ -21,7 +21,6 @@ use util::num_ops::{read_u32, write_u64_low};
 
 use crate::bus::UsbBus;
 use crate::config::*;
-use crate::errors::{Result, ResultExt};
 use crate::usb::{
     Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus, UsbPort,
 };
@@ -30,6 +29,7 @@ use crate::xhci::xhci_ring::{
     TRBCCode, TRBType, XhciEventRingSeg, XhciRing, XhciTRB, TRB_EV_ED, TRB_SIZE, TRB_TR_IDT,
     TRB_TR_IOC, TRB_TR_ISP, TRB_TYPE_SHIFT,
 };
+use anyhow::{bail, Context, Result};
 
 pub const MAX_INTRS: u16 = 16;
 pub const MAX_SLOTS: u32 = 64;
@@ -397,13 +397,13 @@ impl XhciDevice {
         self.oper.reset();
         for i in 0..self.slots.len() as u32 {
             if let Err(e) = self.disable_slot(i + 1) {
-                error!("Failed to disable slot {}", e);
+                error!("Failed to disable slot {:?}", e);
             }
         }
         for i in 0..self.ports.len() {
             let port = self.ports[i].clone();
             if let Err(e) = self.port_update(&port) {
-                error!("Failed to update port: {}", e);
+                error!("Failed to update port: {:?}", e);
             }
         }
         for i in 0..self.intrs.len() {
@@ -614,7 +614,7 @@ impl XhciDevice {
                     self.send_event(&event, 0)?;
                 }
                 Err(e) => {
-                    error!("Failed to fetch ring: {}", e);
+                    error!("Failed to fetch ring: {:?}", e);
                     event.ccode = TRBCCode::TrbError;
                     break;
                 }
@@ -1010,7 +1010,7 @@ impl XhciDevice {
             let len = match epctx.ring.get_transfer_len() {
                 Ok(len) => len,
                 Err(e) => {
-                    error!("Failed to get transfer len: {}", e);
+                    error!("Failed to get transfer len: {:?}", e);
                     break;
                 }
             };
@@ -1038,7 +1038,7 @@ impl XhciDevice {
                 }
             }
             if let Err(e) = self.endpoint_do_transfer(&mut xfer, &mut epctx) {
-                error!("Failed to transfer {}", e);
+                error!("Failed to transfer {:?}", e);
             }
             if xfer.complete {
                 epctx.set_state(&self.mem_space, epctx.state)?;
@@ -1565,7 +1565,7 @@ pub fn dma_read_bytes(
     mut buf: &mut [u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.read(&mut buf, addr, len).chain_err(|| {
+    addr_space.read(&mut buf, addr, len).with_context(|| {
         format!(
             "Failed to read dma memory at gpa=0x{:x} len=0x{:x}",
             addr.0, len
@@ -1580,7 +1580,7 @@ pub fn dma_write_bytes(
     mut buf: &[u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.write(&mut buf, addr, len).chain_err(|| {
+    addr_space.write(&mut buf, addr, len).with_context(|| {
         format!(
             "Failed to write dma memory at gpa=0x{:x} len=0x{:x}",
             addr.0, len

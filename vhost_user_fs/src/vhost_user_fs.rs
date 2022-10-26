@@ -13,7 +13,6 @@
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
-use error_chain::ChainedError;
 use vmm_sys_util::epoll::EventSet;
 
 use machine_manager::event_loop::EventLoop;
@@ -26,7 +25,7 @@ use super::fs::set_rlimit_nofile;
 use super::vhost_user_server::VhostUserServerHandler;
 use super::virtio_fs::VirtioFs;
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{Context, Result};
 
 /// The vhost-user filesystem device contains virtio fs device and the vhost-user
 /// server which can be connected with the vhost-user client in StratoVirt.
@@ -51,17 +50,11 @@ impl CreateEventNotifier for VhostUserServerHandler {
         let mut notifiers = Vec::new();
         if self.sock.domain.is_accepted() {
             if let Err(e) = self.sock.domain.server_connection_refuse() {
-                error!(
-                    "Failed to refuse socket for vhost user server, {}",
-                    e.display_chain()
-                );
+                error!("Failed to refuse socket for vhost user server, {:?}", e);
             }
             return None;
         } else if let Err(e) = self.sock.domain.accept() {
-            error!(
-                "Failed to accept the socket for vhost user server, {}",
-                e.display_chain()
-            );
+            error!("Failed to accept the socket for vhost user server, {:?}", e);
             return None;
         }
 
@@ -70,10 +63,7 @@ impl CreateEventNotifier for VhostUserServerHandler {
             if event == EventSet::IN {
                 let mut lock_server_handler = server_handler.lock().unwrap();
                 if let Err(e) = lock_server_handler.handle_request() {
-                    error!(
-                        "Failed to handle request for vhost user server, {}",
-                        e.display_chain()
-                    );
+                    error!("Failed to handle request for vhost user server, {:?}", e);
                 }
             }
 
@@ -142,16 +132,18 @@ impl VhostUserFs {
     pub fn new(fs_config: FsConfig) -> Result<Self> {
         if let Some(limit) = fs_config.rlimit_nofile {
             set_rlimit_nofile(limit)
-                .chain_err(|| format!("Failed to set rlimit nofile {}", limit))?;
+                .with_context(|| format!("Failed to set rlimit nofile {}", limit))?;
         }
 
         let virtio_fs = Arc::new(Mutex::new(
             VirtioFs::new(&fs_config.source_dir)
-                .chain_err(|| format!("Failed to create virtio fs {}", fs_config.source_dir))?,
+                .with_context(|| format!("Failed to create virtio fs {}", fs_config.source_dir))?,
         ));
 
         let server_handler = VhostUserServerHandler::new(&fs_config.sock_path, virtio_fs)
-            .chain_err(|| format!("Failed to create vhost user server {}", fs_config.sock_path))?;
+            .with_context(|| {
+                format!("Failed to create vhost user server {}", fs_config.sock_path)
+            })?;
         Ok(VhostUserFs { server_handler })
     }
 
@@ -173,7 +165,7 @@ impl EventLoopManager for VhostUserFs {
         false
     }
 
-    fn loop_cleanup(&self) -> util::errors::Result<()> {
+    fn loop_cleanup(&self) -> util::Result<()> {
         Ok(())
     }
 }

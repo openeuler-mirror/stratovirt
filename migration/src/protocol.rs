@@ -18,9 +18,9 @@ use std::slice::{from_raw_parts, from_raw_parts_mut};
 use kvm_ioctls::Kvm;
 use serde::{Deserialize, Serialize};
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::MigrationError;
+use anyhow::{anyhow, bail, Context, Result};
 use util::byte_code::ByteCode;
-
 /// This status for migration in migration process.
 ///
 /// # Notes
@@ -72,27 +72,37 @@ impl MigrationStatus {
         match self {
             MigrationStatus::None => match new_status {
                 MigrationStatus::Setup => Ok(new_status),
-                _ => Err(ErrorKind::InvalidStatusTransfer(self, new_status).into()),
+                _ => Err(anyhow!(MigrationError::InvalidStatusTransfer(
+                    self, new_status
+                ))),
             },
             MigrationStatus::Setup => match new_status {
                 MigrationStatus::Active | MigrationStatus::Failed | MigrationStatus::Canceled => {
                     Ok(new_status)
                 }
-                _ => Err(ErrorKind::InvalidStatusTransfer(self, new_status).into()),
+                _ => Err(anyhow!(MigrationError::InvalidStatusTransfer(
+                    self, new_status
+                ))),
             },
             MigrationStatus::Active => match new_status {
                 MigrationStatus::Completed
                 | MigrationStatus::Failed
                 | MigrationStatus::Canceled => Ok(new_status),
-                _ => Err(ErrorKind::InvalidStatusTransfer(self, new_status).into()),
+                _ => Err(anyhow!(MigrationError::InvalidStatusTransfer(
+                    self, new_status
+                ))),
             },
             MigrationStatus::Completed => match new_status {
                 MigrationStatus::Active => Ok(new_status),
-                _ => Err(ErrorKind::InvalidStatusTransfer(self, new_status).into()),
+                _ => Err(anyhow!(MigrationError::InvalidStatusTransfer(
+                    self, new_status
+                ))),
             },
             MigrationStatus::Failed => match new_status {
                 MigrationStatus::Setup | MigrationStatus::Active => Ok(new_status),
-                _ => Err(ErrorKind::InvalidStatusTransfer(self, new_status).into()),
+                _ => Err(anyhow!(MigrationError::InvalidStatusTransfer(
+                    self, new_status
+                ))),
             },
             MigrationStatus::Canceled => Ok(new_status),
         }
@@ -178,7 +188,7 @@ impl Request {
         let data =
             unsafe { from_raw_parts(&request as *const Self as *const u8, size_of::<Self>()) };
         fd.write_all(data)
-            .chain_err(|| format!("Failed to write request data {:?}", data))?;
+            .with_context(|| format!("Failed to write request data {:?}", data))?;
 
         Ok(())
     }
@@ -198,7 +208,7 @@ impl Request {
             from_raw_parts_mut(&mut request as *mut Request as *mut u8, size_of::<Self>())
         };
         fd.read_exact(data)
-            .chain_err(|| format!("Failed to read request data {:?}", data))?;
+            .with_context(|| format!("Failed to read request data {:?}", data))?;
 
         Ok(request)
     }
@@ -230,7 +240,7 @@ impl Response {
         let data =
             unsafe { from_raw_parts(&response as *const Self as *const u8, size_of::<Self>()) };
         fd.write_all(data)
-            .chain_err(|| format!("Failed to write response data {:?}", data))?;
+            .with_context(|| format!("Failed to write response data {:?}", data))?;
 
         Ok(())
     }
@@ -250,7 +260,7 @@ impl Response {
             from_raw_parts_mut(&mut response as *mut Response as *mut u8, size_of::<Self>())
         };
         fd.read_exact(data)
-            .chain_err(|| format!("Failed to read response data {:?}", data))?;
+            .with_context(|| format!("Failed to read response data {:?}", data))?;
 
         Ok(response)
     }
@@ -393,11 +403,16 @@ impl MigrationHeader {
     /// Check parsed `MigrationHeader` is illegal or not.
     pub fn check_header(&self) -> Result<()> {
         if self.magic_num != MAGIC_NUMBER {
-            return Err(ErrorKind::HeaderItemNotFit("Magic_number".to_string()).into());
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Magic_number".to_string()
+            )));
         }
 
         if self.compat_version > CURRENT_VERSION {
-            return Err(ErrorKind::VersionNotFit(self.compat_version, CURRENT_VERSION).into());
+            return Err(anyhow!(MigrationError::VersionNotFit(
+                self.compat_version,
+                CURRENT_VERSION
+            )));
         }
 
         #[cfg(target_arch = "x86_64")]
@@ -405,27 +420,37 @@ impl MigrationHeader {
         #[cfg(target_arch = "aarch64")]
         let current_arch = [b'a', b'a', b'r', b'c', b'h', b'6', b'4', b'0'];
         if self.arch != current_arch {
-            return Err(ErrorKind::HeaderItemNotFit("Arch".to_string()).into());
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Arch".to_string()
+            )));
         }
 
         if self.byte_order != EndianType::get_endian_type() {
-            return Err(ErrorKind::HeaderItemNotFit("Byte order".to_string()).into());
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Byte order".to_string()
+            )));
         }
 
         #[cfg(target_arch = "x86_64")]
         if self.cpu_model != cpu_model() {
-            return Err(ErrorKind::HeaderItemNotFit("Cpu model".to_string()).into());
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Cpu model".to_string()
+            )));
         }
 
         #[cfg(target_os = "linux")]
         let current_os_type = [b'l', b'i', b'n', b'u', b'x', b'0', b'0', b'0'];
         if self.os_type != current_os_type {
-            return Err(ErrorKind::HeaderItemNotFit("Os type".to_string()).into());
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Os type".to_string()
+            )));
         }
 
         let current_kvm_version = Kvm::new().unwrap().get_api_version() as u32;
         if current_kvm_version < self.hypervisor_version {
-            return Err(ErrorKind::HeaderItemNotFit("Hypervisor version".to_string()).into());
+            return Err(anyhow!(MigrationError::HeaderItemNotFit(
+                "Hypervisor version".to_string()
+            )));
         }
 
         Ok(())

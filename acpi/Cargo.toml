@@ -7,9 +7,10 @@ license = "Mulan PSL v2"
 description = "acpi module"
 
 [dependencies]
-error-chain = "0.12.4"
 log = "0.4"
 byteorder = "1.4.3"
+thiserror = "1.0"
+anyhow = "1.0"
 
 address_space = { path = "../address_space" }
 util = {path = "../util"}

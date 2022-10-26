@@ -10,12 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::VncError;
 use crate::{
     client::{
         RectInfo, Rectangle, ServerMsg, VncClient, VncFeatures, ENCODING_ALPHA_CURSOR,
         ENCODING_RAW, ENCODING_RICH_CURSOR,
     },
-    errors::{ErrorKind, Result},
     pixman::{
         bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width,
         unref_pixman_image, PixelFormat,
@@ -23,6 +23,7 @@ use crate::{
     round_up, round_up_div,
     server::VncServer,
 };
+use anyhow::{anyhow, Result};
 use core::time;
 use machine_manager::{
     config::{ObjConfig, VncConfig},
@@ -109,7 +110,7 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &HashMap<String, ObjConfig>) ->
         Err(e) => {
             let msg = format!("Bind {} failed {}", addr, e);
             error!("{}", e);
-            return Err(ErrorKind::TcpBindFailed(msg).into());
+            return Err(anyhow!(VncError::TcpBindFailed(msg)));
         }
     }
 

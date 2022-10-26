@@ -12,8 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::error::ConfigError;
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH};
+use anyhow::{anyhow, Result};
 
 const MAX_IOTHREAD_NUM: usize = 8;
 
@@ -26,11 +27,10 @@ pub struct IothreadConfig {
 impl ConfigCheck for IothreadConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "iothread id".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         Ok(())
@@ -52,21 +52,21 @@ impl VmConfig {
 
         if self.iothreads.is_some() {
             if self.iothreads.as_ref().unwrap().len() >= MAX_IOTHREAD_NUM {
-                return Err(ErrorKind::IllegalValue(
+                return Err(anyhow!(ConfigError::IllegalValue(
                     "Iothread number".to_string(),
                     0,
                     true,
                     MAX_IOTHREAD_NUM as u64,
                     true,
-                )
-                .into());
+                )));
             }
 
             for t in self.iothreads.as_ref().unwrap() {
                 if t.id == iothread.id {
-                    return Err(
-                        ErrorKind::IdRepeat("iothread".to_string(), t.id.to_string()).into(),
-                    );
+                    return Err(anyhow!(ConfigError::IdRepeat(
+                        "iothread".to_string(),
+                        t.id.to_string()
+                    )));
                 }
             }
 

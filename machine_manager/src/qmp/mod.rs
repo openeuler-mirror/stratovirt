@@ -48,10 +48,8 @@ use self::qmp_schema::{self as schema, QmpCommand};
 use crate::event_loop::EventLoop;
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
-use crate::{
-    errors::{Result, ResultExt},
-    temp_cleaner::TempCleaner,
-};
+use crate::temp_cleaner::TempCleaner;
+use anyhow::{Context, Result};
 
 static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 
@@ -369,7 +367,7 @@ pub fn handle_qmp(
             .send_str(&serde_json::to_string(&Response::create_error_response(
                 err_resp, None,
             ))?)
-            .chain_err(|| "Failed to send message to qmp client.")?;
+            .with_context(|| "Failed to send message to qmp client.")?;
         return Ok(());
     }
 

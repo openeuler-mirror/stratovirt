@@ -22,7 +22,7 @@ use std::{
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use error_chain::{bail, ChainedError};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use machine_manager::{
     config::BalloonConfig, event, event_loop::EventLoop, qmp::qmp_schema::BalloonInfo,
@@ -41,7 +41,7 @@ use util::{
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use super::{
-    errors::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
+    error::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
     VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
@@ -107,7 +107,7 @@ impl BalloonedPageBitmap {
         match self.bitmap.count_front_bits(bits as usize) {
             Ok(nr) => nr == bits as usize,
             Err(ref e) => {
-                error!("Failed to count bits: {}", e);
+                error!("Failed to count bits: {:?}", e);
                 false
             }
         }
@@ -135,10 +135,7 @@ fn iov_to_buf<T: ByteCode>(
     match address_space.read_object::<T>(GuestAddress(iov.iov_base.raw_value() + offset)) {
         Ok(dat) => Some(dat),
         Err(ref e) => {
-            error!(
-                "Read virtioqueue failed: {}",
-                error_chain::ChainedError::display_chain(e)
-            );
+            error!("Read virtioqueue failed: {:?}", e);
             None
         }
     }
@@ -154,7 +151,7 @@ fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int
         };
         let e = std::io::Error::last_os_error();
         error!(
-            "Mark memory address: {} to {} failed: {}",
+            "Mark memory address: {} to {} failed: {:?}",
             addr as u64, evt_type, e
         );
     }
@@ -188,7 +185,7 @@ impl Request {
             &elem.out_iovec
         };
         if iovec.is_empty() {
-            return Err(ErrorKind::ElementEmpty.into());
+            return Err(anyhow!(VirtioError::ElementEmpty));
         }
         for elem_iov in iovec {
             request.iovec.push(Iovec {
@@ -289,7 +286,7 @@ impl Request {
                         host_page_bitmap.set_bit((hva % host_page_size) / BALLOON_PAGE_SIZE)
                     {
                         error!(
-                            "Failed to set bit with index: {} :{}",
+                            "Failed to set bit with index: {} :{:?}",
                             (hva % host_page_size) / BALLOON_PAGE_SIZE,
                             e
                         );
@@ -312,7 +309,7 @@ impl Request {
         for iov in self.iovec.iter() {
             let gpa: GuestAddress = iov.iov_base;
             let hva = match mem.lock().unwrap().get_host_address(gpa) {
-                Some(addr) => (addr),
+                Some(addr) => addr,
                 None => {
                     error!("Can not get host address, gpa: {}", gpa.raw_value());
                     continue;
@@ -445,7 +442,7 @@ impl Listener for BlnMemInfo {
         range: Option<&FlatRange>,
         _evtfd: Option<&RegionIoEventFd>,
         req_type: ListenerReqType,
-    ) -> std::result::Result<(), address_space::errors::Error> {
+    ) -> Result<(), anyhow::Error> {
         match req_type {
             ListenerReqType::AddRegion => {
                 let fr = range.unwrap();
@@ -517,26 +514,31 @@ impl BalloonIoHandler {
             .pop_avail(&self.mem_space, self.driver_features)
         {
             let req = Request::parse(&elem, OUT_IOVEC)
-                .chain_err(|| "Fail to parse available descriptor chain")?;
+                .with_context(|| "Fail to parse available descriptor chain")?;
             if !self.mem_info.lock().unwrap().has_huge_page() {
                 req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
             }
             locked_queue
                 .vring
                 .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
-                .chain_err(|| "Failed to add balloon response into used queue")?;
+                .with_context(|| "Failed to add balloon response into used queue")?;
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
-            .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
-        self.trace_send_interrupt("Balloon".to_string());
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue)).with_context(
+            || {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "balloon",
+                    VirtioInterruptType::Vring
+                ))
+            },
+        )?;
         Ok(())
     }
 
     fn reporting_evt_handler(&mut self) -> Result<()> {
         let queue = &self.report_queue;
         if queue.is_none() {
-            return Err(ErrorKind::VirtQueueIsNone.into());
+            return Err(anyhow!(VirtioError::VirtQueueIsNone));
         }
         let unwraped_queue = queue.as_ref().unwrap();
         let mut locked_queue = unwraped_queue.lock().unwrap();
@@ -545,17 +547,23 @@ impl BalloonIoHandler {
             .pop_avail(&self.mem_space, self.driver_features)
         {
             let req = Request::parse(&elem, IN_IOVEC)
-                .chain_err(|| "Fail to parse available descriptor chain")?;
+                .with_context(|| "Fail to parse available descriptor chain")?;
             if !self.mem_info.lock().unwrap().has_huge_page() {
                 req.release_pages(&self.mem_info);
             }
             locked_queue
                 .vring
                 .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
-                .chain_err(|| "Failed to add balloon response into used queue")?;
+                .with_context(|| "Failed to add balloon response into used queue")?;
 
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
-                .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue)).with_context(
+                || {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "balloon",
+                        VirtioInterruptType::Vring
+                    ))
+                },
+            )?;
         }
         Ok(())
     }
@@ -642,7 +650,7 @@ impl EventNotifierHelper for BalloonIoHandler {
                 .unwrap()
                 .process_balloon_queue(BALLOON_INFLATE_EVENT)
             {
-                error!("Failed to inflate balloon: {}", e.display_chain());
+                error!("Failed to inflate balloon: {:?}", e);
             };
             None
         });
@@ -660,7 +668,7 @@ impl EventNotifierHelper for BalloonIoHandler {
                 .unwrap()
                 .process_balloon_queue(BALLOON_DEFLATE_EVENT)
             {
-                error!("Failed to deflate balloon: {}", e.display_chain());
+                error!("Failed to deflate balloon: {:?}", e);
             };
             None
         });
@@ -675,7 +683,7 @@ impl EventNotifierHelper for BalloonIoHandler {
             let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 if let Err(e) = cloned_balloon_io.lock().unwrap().reporting_evt_handler() {
-                    error!("Failed to report free pages: {}", e.display_chain());
+                    error!("Failed to report free pages: {:?}", e);
                 }
                 None
             });
@@ -781,10 +789,16 @@ impl Balloon {
     /// Notify configuration changes to VM.
     fn signal_config_change(&self) -> Result<()> {
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Config, None)
-                .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))
+            interrupt_cb(&VirtioInterruptType::Config, None).with_context(|| {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "balloon",
+                    VirtioInterruptType::Vring
+                ))
+            })
         } else {
-            Err(ErrorKind::DeviceNotActivated("balloon".to_string()).into())
+            Err(anyhow!(VirtioError::DeviceNotActivated(
+                "balloon".to_string()
+            )))
         }
     }
 
@@ -804,7 +818,7 @@ impl Balloon {
             (self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
         let vm_target = cmp::min(target, current_ram_size);
         self.num_pages = current_ram_size - vm_target;
-        self.signal_config_change().chain_err(|| {
+        self.signal_config_change().with_context(|| {
             "Failed to notify about configuration change after setting balloon memory"
         })?;
         let msg = BalloonInfo {
@@ -831,7 +845,7 @@ impl VirtioDevice for Balloon {
         self.mem_info = Arc::new(Mutex::new(BlnMemInfo::new()));
         self.mem_space
             .register_listener(self.mem_info.clone())
-            .chain_err(|| "Failed to register memory listener defined by balloon device.")?;
+            .with_context(|| "Failed to register memory listener defined by balloon device.")?;
         Ok(())
     }
 
@@ -892,7 +906,7 @@ impl VirtioDevice for Balloon {
             actual: self.actual.load(Ordering::Acquire),
         };
         if offset != 0 {
-            return Err(ErrorKind::IncorrectOffset(0, offset).into());
+            return Err(anyhow!(VirtioError::IncorrectOffset(0, offset)));
         }
         data.write_all(
             &new_config.as_bytes()[offset as usize
@@ -901,7 +915,7 @@ impl VirtioDevice for Balloon {
                     size_of::<VirtioBalloonConfig>(),
                 )],
         )
-        .chain_err(|| "Failed to write data to 'data' while reading balloon config")?;
+        .with_context(|| "Failed to write data to 'data' while reading balloon config")?;
         Ok(())
     }
 
@@ -917,7 +931,7 @@ impl VirtioDevice for Balloon {
         let new_actual = match unsafe { data.align_to::<u32>() } {
             (_, [new_config], _) => *new_config,
             _ => {
-                return Err(ErrorKind::FailedToWriteConfig.into());
+                return Err(anyhow!(VirtioError::FailedToWriteConfig));
             }
         };
         if old_actual != new_actual {
@@ -926,7 +940,7 @@ impl VirtioDevice for Balloon {
                 if !ret {
                     timer
                         .reset(Duration::new(1, 0), None)
-                        .chain_err(|| "Failed to reset timer for qmp event during ballooning")?;
+                        .with_context(|| "Failed to reset timer for qmp event during ballooning")?;
                 }
             }
         }
@@ -952,7 +966,10 @@ impl VirtioDevice for Balloon {
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         if queues.len() != self.queue_num() {
-            return Err(ErrorKind::IncorrectQueueNum(QUEUE_NUM_BALLOON, queues.len()).into());
+            return Err(anyhow!(VirtioError::IncorrectQueueNum(
+                QUEUE_NUM_BALLOON,
+                queues.len()
+            )));
         }
 
         let inf_queue = queues[0].clone();
@@ -1003,7 +1020,7 @@ impl VirtioDevice for Balloon {
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
         )
-        .chain_err(|| "Failed to register balloon event notifier to MainLoop")?;
+        .with_context(|| "Failed to register balloon event notifier to MainLoop")?;
 
         Ok(())
     }
@@ -1011,7 +1028,7 @@ impl VirtioDevice for Balloon {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 
     fn update_config(
@@ -1031,11 +1048,7 @@ pub fn qmp_balloon(target: u64) -> bool {
                 return true;
             }
             Err(ref e) => {
-                error!(
-                    "Failed to set balloon memory size: {}, :{}",
-                    target,
-                    error_chain::ChainedError::display_chain(e)
-                );
+                error!("Failed to set balloon memory size: {}, :{:?}", target, e);
                 return false;
             }
         }
@@ -1224,7 +1237,9 @@ mod tests {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 
@@ -1360,7 +1375,9 @@ mod tests {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 

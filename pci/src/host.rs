@@ -24,7 +24,8 @@ use acpi::{
 #[cfg(target_arch = "x86_64")]
 use acpi::{AmlIoDecode, AmlIoResource};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
-use sysbus::{errors::Result as SysBusResult, SysBusDevOps};
+use anyhow::Context;
+use sysbus::SysBusDevOps;
 
 use crate::{bus::PciBus, PciDevOps};
 #[cfg(target_arch = "x86_64")]
@@ -250,11 +251,9 @@ impl SysBusDevOps for PciHost {
         }
     }
 
-    fn reset(&mut self) -> SysBusResult<()> {
-        use sysbus::errors::ResultExt as SysBusResultExt;
-
+    fn reset(&mut self) -> sysbus::Result<()> {
         for (_id, pci_dev) in self.root_bus.lock().unwrap().devices.iter_mut() {
-            SysBusResultExt::chain_err(pci_dev.lock().unwrap().reset(true), || {
+            sysbus::Result::with_context(pci_dev.lock().unwrap().reset(true), || {
                 "Fail to reset pci device under pci host"
             })?;
         }
@@ -465,8 +464,8 @@ pub mod tests {
     use super::*;
     use crate::bus::PciBus;
     use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
-    use crate::errors::Result;
     use crate::root_port::RootPort;
+    use crate::Result;
 
     struct PciDevice {
         devfn: u8,

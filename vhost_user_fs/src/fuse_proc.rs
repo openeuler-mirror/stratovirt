@@ -15,7 +15,6 @@ const MAX_WRITE_SIZE: u32 = 1 << 20;
 use super::fs::FileSystem;
 use super::fuse_msg::*;
 use address_space::AddressSpace;
-use error_chain::ChainedError;
 use std::convert::TryInto;
 use std::ffi::CString;
 use std::mem;
@@ -59,7 +58,7 @@ pub fn do_fuse_lookup(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for lookup, {}", e.display_chain());
+            error!("Failed to read name for lookup, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -113,7 +112,7 @@ pub fn do_fuse_forget(
     let forget_in = match reader.read_obj::<FuseForgetIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for forget_in, {}", e.display_chain());
+            error!("Failed to read object for forget_in, {:?}", e);
             return 0_u32;
         }
     };
@@ -183,10 +182,7 @@ pub fn do_fuse_setattr(
     let setattr_in = match reader.read_obj::<FuseSetattrIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for setattr_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for setattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -270,7 +266,7 @@ pub fn do_fuse_symlink(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for symlink, {}", e.display_chain());
+            error!("Failed to read name for symlink, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -278,10 +274,7 @@ pub fn do_fuse_symlink(
     let link_name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!(
-                "Failed to read link name for symlink, {}",
-                e.display_chain()
-            );
+            error!("Failed to read link name for symlink, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -339,7 +332,7 @@ pub fn do_fuse_mknod(
     let mknod_in = match reader.read_obj::<FuseMknodIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for mknod_in, {}", e.display_chain());
+            error!("Failed to read object for mknod_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -347,7 +340,7 @@ pub fn do_fuse_mknod(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for mknod, {}", e.display_chain());
+            error!("Failed to read name for mknod, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -405,7 +398,7 @@ pub fn do_fuse_mkdir(
     let mkdir_in = match reader.read_obj::<FuseMkdirIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for mkdir_in, {}", e.display_chain());
+            error!("Failed to read object for mkdir_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -413,7 +406,7 @@ pub fn do_fuse_mkdir(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for mkdir, {}", e.display_chain());
+            error!("Failed to read name for mkdir, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -471,7 +464,7 @@ pub fn do_fuse_unlink(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for unlink, {}", e.display_chain());
+            error!("Failed to read name for unlink, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -504,7 +497,7 @@ pub fn do_fuse_rmdir(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for rmdir, {}", e.display_chain());
+            error!("Failed to read name for rmdir, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -537,7 +530,7 @@ pub fn do_fuse_rename(
     let rename_in = match reader.read_obj::<FuseRenameIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for rename_in, {}", e.display_chain());
+            error!("Failed to read object for rename_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -545,7 +538,7 @@ pub fn do_fuse_rename(
     let oldname = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read old name for rename, {}", e.display_chain());
+            error!("Failed to read old name for rename, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -553,7 +546,7 @@ pub fn do_fuse_rename(
     let newname = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read new name for rename, {}", e.display_chain());
+            error!("Failed to read new name for rename, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -590,7 +583,7 @@ pub fn do_fuse_link(
     let link_in = match reader.read_obj::<FuseLinkIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for link_in, {}", e.display_chain());
+            error!("Failed to read object for link_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -598,7 +591,7 @@ pub fn do_fuse_link(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for link, {}", e.display_chain());
+            error!("Failed to read name for link, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -659,7 +652,7 @@ pub fn do_fuse_open(
     let open_in = match reader.read_obj::<FuseOpenIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for open_in, {}", e.display_chain());
+            error!("Failed to read object for open_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -708,7 +701,7 @@ pub fn do_fuse_read(
     let read_in = match reader.read_obj::<FuseReadIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for read_in, {}", e.display_chain());
+            error!("Failed to read object for read_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -733,7 +726,7 @@ pub fn do_fuse_read(
                 sys_mem.write_object(&f_ret, buf_header.addr).unwrap();
             }
             Err(e) => {
-                error!("Failed to access file for reading, {}", e.display_chain());
+                error!("Failed to access file for reading, {:?}", e);
             }
         };
 
@@ -762,7 +755,7 @@ pub fn do_fuse_write(
     let write_in = match reader.read_obj::<FuseWriteIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for write_in, {}", e.display_chain());
+            error!("Failed to read object for write_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -784,7 +777,7 @@ pub fn do_fuse_write(
                 )
             }
             Err(e) => {
-                error!("Failed to access file for writing, {}", e.display_chain());
+                error!("Failed to access file for writing, {:?}", e);
                 reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize)
             }
         }
@@ -845,10 +838,7 @@ pub fn do_fuse_release(
     let release_in = match reader.read_obj::<FuseReleaseIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for release_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for release_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -876,7 +866,7 @@ pub fn do_fuse_fsync(
     let fsync_in = match reader.read_obj::<FuseFsyncIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read name for fsync_in, {}", e.display_chain());
+            error!("Failed to read name for fsync_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -906,10 +896,7 @@ pub fn do_fuse_setxattr(
     let setxattr_in = match reader.read_obj::<FuseSetxattrIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for setxattr_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for setxattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -917,7 +904,7 @@ pub fn do_fuse_setxattr(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for setxattr_in, {}", e.display_chain());
+            error!("Failed to read name for setxattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -925,10 +912,7 @@ pub fn do_fuse_setxattr(
     let value = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!(
-                "Failed to read value for setxattr_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read value for setxattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -963,10 +947,7 @@ pub fn do_fuse_getxattr(
     let getxattr_in = match reader.read_obj::<FuseGetxattrIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for getxattr_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for getxattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -974,7 +955,7 @@ pub fn do_fuse_getxattr(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read name for getxattr_in, {}", e.display_chain());
+            error!("Failed to read name for getxattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1017,10 +998,7 @@ pub fn do_fuse_listxattr(
     let getxattr_in = match reader.read_obj::<FuseGetxattrIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for listxattr_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for listxattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1063,10 +1041,7 @@ pub fn do_fuse_removexattr(
     let name = match reader.read_cstring(sys_mem) {
         Ok(s) => s,
         Err(e) => {
-            error!(
-                "Failed to read name for removexattr_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read name for removexattr_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1098,7 +1073,7 @@ pub fn do_fuse_flush(
     let flush_in = match reader.read_obj::<FuseFlushIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for flush_in, {}", e.display_chain());
+            error!("Failed to read object for flush_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1130,7 +1105,7 @@ pub fn do_fuse_init(
     let init_in = match reader.read_obj::<FuseInitIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for init_in, {}", e.display_chain());
+            error!("Failed to read object for init_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1182,10 +1157,7 @@ pub fn do_fuse_opendir(
     let _open_in = match reader.read_obj::<FuseOpenIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for opendir_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for opendir_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1234,10 +1206,7 @@ pub fn do_fuse_readdir(
     let read_in = match reader.read_obj::<FuseReadIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for readdir_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for readdir_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1284,10 +1253,7 @@ pub fn do_fuse_releasedir(
     let release_in = match reader.read_obj::<FuseReleaseIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for releasedir_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for releasedir_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1315,7 +1281,7 @@ pub fn do_fuse_fsyncdir(
     let fsync_in = match reader.read_obj::<FuseFsyncIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for fsync_in, {}", e.display_chain());
+            error!("Failed to read object for fsync_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1344,7 +1310,7 @@ pub fn do_fuse_getlk(
     let lk_in = match reader.read_obj::<FuseLkIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for get_lk_in, {}", e.display_chain());
+            error!("Failed to read object for get_lk_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1427,7 +1393,7 @@ pub fn do_fuse_setlk(
     let lk_in = match reader.read_obj::<FuseLkIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for set_lk_in, {}", e.display_chain());
+            error!("Failed to read object for set_lk_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1458,7 +1424,7 @@ pub fn do_fuse_setlkw(
     let lk_in = match reader.read_obj::<FuseLkIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for setlkw_in, {}", e.display_chain());
+            error!("Failed to read object for setlkw_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1489,7 +1455,7 @@ pub fn do_fuse_create(
     let create_in = match reader.read_obj::<FuseCreateIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for create_in, {}", e.display_chain());
+            error!("Failed to read object for create_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1497,10 +1463,7 @@ pub fn do_fuse_create(
     let name = match reader.read_cstring(sys_mem) {
         Ok(string) => string,
         Err(e) => {
-            error!(
-                "Failed to read name for creating file, {}",
-                e.display_chain()
-            );
+            error!("Failed to read name for creating file, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1587,10 +1550,7 @@ pub fn do_fuse_batch_forget(
     let batch_forget_in = match reader.read_obj::<FuseBatchForgetIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for batch_forget_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for batch_forget_in, {:?}", e);
             return 0_u32;
         }
     };
@@ -1599,10 +1559,7 @@ pub fn do_fuse_batch_forget(
         let forget_data_in = match reader.read_obj::<FuseForgetDataIn>(sys_mem) {
             Ok(data) => data,
             Err(e) => {
-                error!(
-                    "Failed to read object for forget_date_in, {}",
-                    e.display_chain()
-                );
+                error!("Failed to read object for forget_date_in, {:?}", e);
                 return 0;
             }
         };
@@ -1634,10 +1591,7 @@ pub fn do_fuse_fallocate(
     let fallocate_in = match reader.read_obj::<FuseFallocateIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for fallocate_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for fallocate_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1671,10 +1625,7 @@ pub fn do_fuse_readdirplus(
     let read_in = match reader.read_obj::<FuseReadIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!(
-                "Failed to read object for readdirplus_in, {}",
-                e.display_chain()
-            );
+            error!("Failed to read object for readdirplus_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };
@@ -1721,7 +1672,7 @@ pub fn do_fuse_lseek(
     let lseek_in = match reader.read_obj::<FuseLseekIn>(sys_mem) {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to read object for lseek_in, {}", e.display_chain());
+            error!("Failed to read object for lseek_in, {:?}", e);
             return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
         }
     };

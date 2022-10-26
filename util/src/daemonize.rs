@@ -39,7 +39,8 @@ use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::process::exit;
 
-use crate::errors::{ErrorKind, Result};
+use crate::UtilError;
+use anyhow::{anyhow, Result};
 
 /// Write process id to pid file.
 fn create_pid_file(path: &str) -> Result<()> {
@@ -71,7 +72,7 @@ fn fork() -> Result<()> {
     let ret = unsafe { libc::fork() };
 
     match ret.cmp(&0) {
-        Ordering::Less => Err(ErrorKind::DaemonFork.into()),
+        Ordering::Less => Err(anyhow!(UtilError::DaemonFork)),
         Ordering::Greater => exit(0),
         Ordering::Equal => Ok(()),
     }
@@ -92,7 +93,7 @@ fn set_sid() -> Result<()> {
     let ret = unsafe { libc::setsid() };
 
     if ret == -1 {
-        Err(ErrorKind::DaemonSetsid.into())
+        Err(anyhow!(UtilError::DaemonSetsid))
     } else {
         Ok(())
     }
@@ -115,15 +116,15 @@ fn redirect_stdio(fd: RawFd) -> Result<()> {
         let devnull_fd = libc::open(b"/dev/null\0" as *const [u8; 10] as _, libc::O_RDWR);
 
         if devnull_fd == -1 {
-            return Err(ErrorKind::DaemonRedirectStdio.into());
+            return Err(anyhow!(UtilError::DaemonRedirectStdio));
         }
 
         if libc::dup2(devnull_fd, fd) == -1 {
-            return Err(ErrorKind::DaemonRedirectStdio.into());
+            return Err(anyhow!(UtilError::DaemonRedirectStdio));
         }
 
         if libc::close(devnull_fd) == -1 {
-            return Err(ErrorKind::DaemonRedirectStdio.into());
+            return Err(anyhow!(UtilError::DaemonRedirectStdio));
         }
     }
 
@@ -146,7 +147,7 @@ fn redirect_stdio(fd: RawFd) -> Result<()> {
 pub fn daemonize(pid_file: Option<String>) -> Result<()> {
     if let Some(path) = pid_file.as_ref() {
         if Path::new(path).exists() {
-            return Err(ErrorKind::PidFileExist.into());
+            return Err(anyhow!(UtilError::PidFileExist));
         }
     }
 

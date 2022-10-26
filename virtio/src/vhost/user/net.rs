@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::virtio_has_feature;
 use std::cmp;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -22,8 +23,6 @@ use util::loop_context::EventNotifierHelper;
 use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::super::super::errors::{ErrorKind, Result, ResultExt};
-use super::super::super::virtio_has_feature;
 use super::super::super::{
     net::{build_device_config_space, VirtioNetConfig, MAC_ADDR_LEN},
     CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
@@ -34,6 +33,8 @@ use super::super::super::{
 };
 use super::super::VhostOps;
 use super::VhostUserClient;
+use crate::error::VirtioError;
+use anyhow::{anyhow, Context, Result};
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
@@ -81,14 +82,14 @@ impl Net {
                     .lock()
                     .unwrap()
                     .delete_event()
-                    .chain_err(|| "Failed to delete vhost-user net event")?;
+                    .with_context(|| "Failed to delete vhost-user net event")?;
             }
-            None => return Err("Failed to get client when stoping event".into()),
+            None => return Err(anyhow!("Failed to get client when stoping event")),
         };
         if ((self.driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && self.net_cfg.mq {
             self.de_ctrl_evt
                 .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
         }
 
         Ok(())
@@ -113,9 +114,9 @@ impl VirtioDevice for Net {
             .socket_path
             .as_ref()
             .map(|path| path.to_string())
-            .chain_err(|| "vhost-user: socket path is not found")?;
+            .with_context(|| "vhost-user: socket path is not found")?;
         let client = VhostUserClient::new(&self.mem_space, &socket_path, self.queue_num() as u64)
-            .chain_err(|| {
+            .with_context(|| {
             "Failed to create the client which communicates with the server for vhost-user net"
         })?;
         let client = Arc::new(Mutex::new(client));
@@ -124,13 +125,13 @@ impl VirtioDevice for Net {
             EventNotifierHelper::internal_notifiers(client.clone()),
             None,
         )
-        .chain_err(|| "Failed to update event for client sock")?;
+        .with_context(|| "Failed to update event for client sock")?;
 
         self.device_features = client
             .lock()
             .unwrap()
             .get_features()
-            .chain_err(|| "Failed to get features for vhost-user net")?;
+            .with_context(|| "Failed to get features for vhost-user net")?;
 
         let features = 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_NET_F_GUEST_CSUM
@@ -210,7 +211,7 @@ impl VirtioDevice for Net {
         let config_slice = self.device_config.as_bytes();
         let config_size = config_slice.len() as u64;
         if offset >= config_size {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_size).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
         }
         if let Some(end) = offset.checked_add(data.len() as u64) {
             data.write_all(&config_slice[offset as usize..cmp::min(end, config_size) as usize])?;
@@ -266,7 +267,7 @@ impl VirtioDevice for Net {
 
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
-            None => return Err("Failed to get client for vhost-user net".into()),
+            None => return Err(anyhow!("Failed to get client for vhost-user net")),
         };
 
         let features = self.driver_features & !(1 << VIRTIO_NET_F_MAC);
@@ -287,7 +288,7 @@ impl VirtioDevice for Net {
 
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
-            None => return Err("Failed to get client for vhost-user net".into()),
+            None => return Err(anyhow!("Failed to get client for vhost-user net")),
         };
 
         Ok(())

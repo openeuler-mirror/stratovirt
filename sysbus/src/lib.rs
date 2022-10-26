@@ -10,30 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
-        }
-        foreign_links {
-            KvmIoctl(kvm_ioctls::Error);
-        }
-    }
-}
-
+pub mod error;
+pub use error::SysBusError;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use error_chain::bail;
+pub use anyhow::{bail, Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
-
-use crate::errors::{Result, ResultExt};
 
 pub struct SysBus {
     #[cfg(target_arch = "x86_64")]
@@ -124,7 +110,7 @@ impl SysBus {
                 self.sys_io
                     .root()
                     .add_subregion(region, region_base)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to register region in I/O space: offset={},size={}",
                             region_base, region_size
@@ -136,7 +122,7 @@ impl SysBus {
                 self.sys_io
                     .root()
                     .add_subregion(region, region_base)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to register region in I/O space: offset 0x{:x}, size {}",
                             region_base, region_size
@@ -148,7 +134,7 @@ impl SysBus {
                 self.sys_io
                     .root()
                     .add_subregion(region, region_base)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to register region in I/O space: offset 0x{:x}, size {}",
                             region_base, region_size
@@ -159,7 +145,7 @@ impl SysBus {
                 .sys_mem
                 .root()
                 .add_subregion(region, region_base)
-                .chain_err(|| {
+                .with_context(|| {
                     format!(
                         "Failed to register region in memory space: offset={},size={}",
                         region_base, region_size

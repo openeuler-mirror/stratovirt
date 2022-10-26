@@ -13,8 +13,8 @@
 use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
 
-use super::errors::Result;
 use crate::usb::{UsbDeviceOps, UsbPort};
+use anyhow::{bail, Result};
 
 /// The key is bus name, the value is the device which can attach other devices.
 pub type BusDeviceMap = Arc<Mutex<HashMap<String, Arc<Mutex<dyn BusDeviceOps>>>>>;

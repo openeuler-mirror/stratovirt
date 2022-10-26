@@ -9,17 +9,19 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
-use std::fmt;
+
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
-use error_chain::bail;
-use log::{debug, warn};
-
 use crate::address_space::FlatView;
-use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::{AddressRange, AddressSpace, FileBackend, GuestAddress, HostMemMapping, RegionOps};
-
+use crate::{
+    AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress, HostMemMapping,
+    RegionOps,
+};
+use anyhow::{anyhow, bail, Context, Result};
+use log::{debug, warn};
+use std::fmt;
+use std::fmt::Debug;
 /// Types of Region.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -128,7 +130,10 @@ impl RegionIoEventFd {
     /// Return the cloned Region IoEventFd,
     /// return error if failed to clone EventFd.
     pub(crate) fn try_clone(&self) -> Result<RegionIoEventFd> {
-        let fd = self.fd.try_clone().or(Err(ErrorKind::IoEventFd))?;
+        let fd = self
+            .fd
+            .try_clone()
+            .map_err(|_| anyhow!(AddressSpaceError::IoEventFd))?;
         Ok(RegionIoEventFd {
             fd,
             addr_range: self.addr_range,
@@ -321,7 +326,7 @@ impl Region {
     /// * `read_only` - Set region to read-only mode or not.
     pub fn set_rom_device_romd(&self, read_only: bool) -> Result<()> {
         if self.region_type != RegionType::RomDevice {
-            return Err(ErrorKind::RegionType(self.region_type).into());
+            return Err(anyhow!(AddressSpaceError::RegionType(self.region_type)));
         }
 
         let old_mode = self.rom_dev_romd.as_ref().load(Ordering::SeqCst);
@@ -414,7 +419,7 @@ impl Region {
             .filter(|end| *end <= self.size())
             .is_none()
         {
-            return Err(ErrorKind::Overflow(addr).into());
+            return Err(anyhow!(AddressSpaceError::Overflow(addr)));
         }
         Ok(())
     }
@@ -443,18 +448,20 @@ impl Region {
     ) -> Result<()> {
         match self.region_type {
             RegionType::Ram | RegionType::RamDevice => {
-                self.check_valid_offset(offset, count)
-                    .chain_err(|| ErrorKind::InvalidOffset(offset, count, self.size()))?;
+                self.check_valid_offset(offset, count).with_context(|| {
+                    anyhow!(AddressSpaceError::InvalidOffset(offset, count, self.size()))
+                })?;
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                 let slice = unsafe {
                     std::slice::from_raw_parts((host_addr + offset) as *const u8, count as usize)
                 };
                 dst.write_all(slice)
-                    .chain_err(|| "Failed to write content of Ram to mutable buffer")?;
+                    .with_context(|| "Failed to write content of Ram to mutable buffer")?;
             }
             RegionType::RomDevice => {
-                self.check_valid_offset(offset, count)
-                    .chain_err(|| ErrorKind::InvalidOffset(offset, count, self.size()))?;
+                self.check_valid_offset(offset, count).with_context(|| {
+                    anyhow!(AddressSpaceError::InvalidOffset(offset, count, self.size()))
+                })?;
                 if self.rom_dev_romd.as_ref().load(Ordering::SeqCst) {
                     let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
                     let read_ret = unsafe {
@@ -469,25 +476,34 @@ impl Region {
 
                     let read_ops = self.ops.as_ref().unwrap().read.as_ref();
                     if !read_ops(&mut read_ret, base, offset) {
-                        return Err(ErrorKind::IoAccess(base.raw_value(), offset, count).into());
+                        return Err(anyhow!(AddressSpaceError::IoAccess(
+                            base.raw_value(),
+                            offset,
+                            count
+                        )));
                     }
                     dst.write_all(&read_ret)?;
                 }
             }
             RegionType::IO => {
                 if count >= std::usize::MAX as u64 {
-                    return Err(ErrorKind::Overflow(count).into());
+                    return Err(anyhow!(AddressSpaceError::Overflow(count)));
                 }
                 let mut slice = vec![0_u8; count as usize];
                 let read_ops = self.ops.as_ref().unwrap().read.as_ref();
                 if !read_ops(&mut slice, base, offset) {
-                    return Err(ErrorKind::IoAccess(base.raw_value(), offset, count).into());
+                    return Err(anyhow!(AddressSpaceError::IoAccess(
+                        base.raw_value(),
+                        offset,
+                        count
+                    )));
                 }
-                dst.write_all(&slice)
-                    .chain_err(|| "Failed to write slice provided by device to mutable buffer")?;
+                dst.write_all(&slice).with_context(|| {
+                    "Failed to write slice provided by device to mutable buffer"
+                })?;
             }
             _ => {
-                return Err(ErrorKind::RegionType(self.region_type()).into());
+                return Err(anyhow!(AddressSpaceError::RegionType(self.region_type())));
             }
         }
         Ok(())
@@ -515,7 +531,7 @@ impl Region {
         offset: u64,
         count: u64,
     ) -> Result<()> {
-        self.check_valid_offset(offset, count).chain_err(|| {
+        self.check_valid_offset(offset, count).with_context(|| {
             format!(
                 "Invalid offset: offset 0x{:X}, data length 0x{:X}, region size 0x{:X}",
                 offset,
@@ -531,24 +547,28 @@ impl Region {
                     std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, count as usize)
                 };
                 src.read_exact(slice)
-                    .chain_err(|| "Failed to write buffer to Ram")?;
+                    .with_context(|| "Failed to write buffer to Ram")?;
             }
             RegionType::RomDevice | RegionType::IO => {
                 if count >= std::usize::MAX as u64 {
-                    return Err(ErrorKind::Overflow(count).into());
+                    return Err(anyhow!(AddressSpaceError::Overflow(count)));
                 }
                 let mut slice = vec![0_u8; count as usize];
-                src.read_exact(&mut slice).chain_err(|| {
+                src.read_exact(&mut slice).with_context(|| {
                     "Failed to write buffer to slice, which will be provided for device"
                 })?;
 
                 let write_ops = self.ops.as_ref().unwrap().write.as_ref();
                 if !write_ops(&slice, base, offset) {
-                    return Err(ErrorKind::IoAccess(base.raw_value(), offset, count).into());
+                    return Err(anyhow!(AddressSpaceError::IoAccess(
+                        base.raw_value(),
+                        offset,
+                        count
+                    )));
                 }
             }
             _ => {
-                return Err(ErrorKind::RegionType(self.region_type()).into());
+                return Err(anyhow!(AddressSpaceError::RegionType(self.region_type())));
             }
         }
         Ok(())
@@ -588,10 +608,10 @@ impl Region {
     pub fn add_subregion(&self, child: Region, offset: u64) -> Result<()> {
         // check parent Region's property, and check if child Region's offset is valid or not
         if self.region_type() != RegionType::Container {
-            return Err(ErrorKind::RegionType(self.region_type()).into());
+            return Err(anyhow!(AddressSpaceError::RegionType(self.region_type())));
         }
         self.check_valid_offset(offset, child.size())
-            .chain_err(|| {
+            .with_context(|| {
                 format!(
                     "Invalid offset: offset 0x{:X}, child length 0x{:X}, region size 0x{:X}",
                     offset,
@@ -621,7 +641,7 @@ impl Region {
         if let Some(space) = self.space.read().unwrap().upgrade() {
             space
                 .update_topology()
-                .chain_err(|| "Failed to update topology for address_space")?;
+                .with_context(|| "Failed to update topology for address_space")?;
         } else {
             debug!("add subregion to container region, which has no belonged address-space");
         }
@@ -643,7 +663,7 @@ impl Region {
     pub fn delete_subregion(&self, child: &Region) -> Result<()> {
         // check parent Region's property, and check if child Region's offset is valid or not
         if self.region_type() != RegionType::Container {
-            return Err(ErrorKind::RegionType(self.region_type()).into());
+            return Err(anyhow!(AddressSpaceError::RegionType(self.region_type())));
         }
 
         let mut sub_regions = self.subregions.write().unwrap();
@@ -659,14 +679,16 @@ impl Region {
 
         if !removed {
             warn!("Failed to delete subregion from parent region: not found");
-            return Err(ErrorKind::RegionNotFound(child.offset().raw_value()).into());
+            return Err(anyhow!(AddressSpaceError::RegionNotFound(
+                child.offset().raw_value()
+            )));
         }
 
         // get father address-space and update topology
         if let Some(space) = self.space.read().unwrap().upgrade() {
             space
                 .update_topology()
-                .chain_err(|| "Failed to update topology for address_space")?;
+                .with_context(|| "Failed to update topology for address_space")?;
         } else {
             debug!("add subregion to container region, which has no belonged address-space");
         }
@@ -709,7 +731,7 @@ impl Region {
                 for sub_r in self.subregions.read().unwrap().iter() {
                     sub_r
                         .render_region_pass(region_base, intersect, flat_view)
-                        .chain_err(|| {
+                        .with_context(|| {
                             format!(
                                 "Failed to render subregion, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
                                 base.raw_value(),
@@ -721,7 +743,7 @@ impl Region {
             }
             RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
                 self.render_terminate_region(base, addr_range, flat_view)
-                    .chain_err(||
+                    .with_context(||
                         format!(
                             "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
                             base.raw_value(), addr_range.base.raw_value(),
@@ -832,7 +854,7 @@ impl Region {
         match self.region_type {
             RegionType::Container => {
                 self.render_region_pass(base, addr_range, &mut flat_view)
-                .chain_err(|| {
+                .with_context(|| {
                     format!(
                         "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
                         base.raw_value(),
@@ -843,7 +865,7 @@ impl Region {
             }
             RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
                 self.render_terminate_region(base, addr_range, &mut flat_view)
-                .chain_err(|| {
+                .with_context(|| {
                     format!(
                         "Failed to render terminate region, base 0x{:X}, addr_range (0x{:X}, 0x{:X})",
                         base.raw_value(),
