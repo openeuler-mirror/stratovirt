@@ -71,10 +71,10 @@ struct Iovec {
 /// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
 #[derive(Copy, Clone, Default)]
 struct VirtioBalloonConfig {
-    /// Number of pages host wants Guest to give up.
+    /// The target page numbers of balloon device.
     #[allow(dead_code)]
     pub num_pages: u32,
-    /// Number of pages we've actually got in balloon.
+    /// Number of pages we've actually got in balloon device.
     #[allow(dead_code)]
     pub actual: u32,
 }
@@ -236,7 +236,11 @@ impl Request {
             }
             hvaset.sort_by_key(|&b| Reverse(b));
             let host_page_size = host_page_size();
-            if host_page_size == BALLOON_PAGE_SIZE {
+            // If host_page_size equals BALLOON_PAGE_SIZE, we can directly call the
+            // madvise function without any problem. And if the advice is MADV_WILLNEED,
+            // we just hint the whole host page it lives on, since we can't do anything
+            // smaller.
+            if host_page_size == BALLOON_PAGE_SIZE || advice == libc::MADV_WILLNEED {
                 while let Some(hva) = hvaset.pop() {
                     if last_addr == 0 {
                         free_len += 1;
@@ -569,16 +573,16 @@ impl BalloonIoHandler {
                 .vring
                 .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
                 .with_context(|| "Failed to add balloon response into used queue")?;
-
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue)).with_context(
-                || {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "balloon",
-                        VirtioInterruptType::Vring
-                    ))
-                },
-            )?;
         }
+
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue)).with_context(
+            || {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "balloon",
+                    VirtioInterruptType::Vring
+                ))
+            },
+        )?;
         Ok(())
     }
 
@@ -745,9 +749,9 @@ pub struct Balloon {
     device_features: u64,
     /// Driver features.
     driver_features: u64,
-    /// Actual memory pages.
+    /// Actual memory pages of balloon device.
     actual: Arc<AtomicU32>,
-    /// Target memory pages.
+    /// Target memory pages of balloon device.
     num_pages: u32,
     /// Interrupt callback function.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
@@ -828,10 +832,10 @@ impl Balloon {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
         }
         let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let current_ram_size =
+        let address_space_ram_size =
             (self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let vm_target = cmp::min(target, current_ram_size);
-        self.num_pages = current_ram_size - vm_target;
+        let vm_target = cmp::min(target, address_space_ram_size);
+        self.num_pages = address_space_ram_size - vm_target;
         self.signal_config_change().with_context(|| {
             "Failed to notify about configuration change after setting balloon memory"
         })?;
