@@ -61,6 +61,8 @@ pub struct Region {
     subregions: Arc<RwLock<Vec<Region>>>,
     /// This field is useful for RomDevice-type Region. If true, in read-only mode, otherwise in IO mode.
     rom_dev_romd: Arc<AtomicBool>,
+    /// Max access size supported by the device.
+    max_access_size: Option<u64>,
 }
 
 impl fmt::Debug for Region {
@@ -75,6 +77,7 @@ impl fmt::Debug for Region {
             .field("space", &self.space)
             .field("subregions", &self.subregions)
             .field("rom_dev_romd", &self.rom_dev_romd)
+            .field("max_access_size", &self.max_access_size)
             .finish()
     }
 }
@@ -180,6 +183,58 @@ impl PartialEq for Region {
 
 impl Eq for Region {}
 
+/// Used for read/write for multi times.
+struct MultiOpsArgs {
+    /// The base address of the read/write ops.
+    base: GuestAddress,
+    /// The offset of the read/write ops.
+    offset: u64,
+    /// the number of the read/write ops in bytes.
+    count: u64,
+    /// The access size for one read/write in bytes.
+    access_size: u64,
+}
+
+/// Read/Write for multi times.
+macro_rules! rw_multi_ops {
+    ( $ops: ident, $slice: expr, $args: ident ) => {
+        // The data size is larger than the max access size, we split to read/write for multiple times.
+        let base = $args.base;
+        let offset = $args.offset;
+        let cnt = $args.count;
+        let access_size = $args.access_size;
+        let mut pos = 0;
+        for _ in 0..(cnt / access_size) {
+            if !$ops(
+                &mut $slice[pos as usize..(pos + access_size) as usize],
+                base,
+                offset + pos,
+            ) {
+                return Err(anyhow!(AddressSpaceError::IoAccess(
+                    base.raw_value(),
+                    offset + pos,
+                    access_size,
+                )));
+            }
+            pos += access_size;
+        }
+        // Unaligned memory access.
+        if cnt % access_size > 0
+            && !$ops(
+                &mut $slice[pos as usize..cnt as usize],
+                base,
+                offset + pos,
+            )
+        {
+            return Err(anyhow!(AddressSpaceError::IoAccess(
+                base.raw_value(),
+                offset + pos,
+                cnt - pos
+            )));
+        }
+    };
+}
+
 impl Region {
     /// The core function of initialization.
     ///
@@ -206,6 +261,7 @@ impl Region {
             space: Arc::new(RwLock::new(Weak::new())),
             subregions: Arc::new(RwLock::new(Vec::new())),
             rom_dev_romd: Arc::new(AtomicBool::new(false)),
+            max_access_size: None,
         }
     }
 
@@ -226,6 +282,15 @@ impl Region {
     /// * `ops` - Operation of Region.
     pub fn init_io_region(size: u64, ops: RegionOps) -> Region {
         Region::init_region_internal(size, RegionType::IO, None, Some(ops))
+    }
+
+    /// Set the access size limit of the IO region.
+    ///
+    /// # Arguments
+    ///
+    /// * `access_size` - Max access size supported in bytes.
+    pub fn set_access_size(&mut self, access_size: u64) {
+        self.max_access_size = Some(access_size);
     }
 
     /// Initialize Container-type region.
@@ -495,7 +560,15 @@ impl Region {
                 }
                 let mut slice = vec![0_u8; count as usize];
                 let read_ops = self.ops.as_ref().unwrap().read.as_ref();
-                if !read_ops(&mut slice, base, offset) {
+                if matches!(self.max_access_size, Some(access_size) if count > access_size) {
+                    let args = MultiOpsArgs {
+                        base,
+                        offset,
+                        count,
+                        access_size: self.max_access_size.unwrap(),
+                    };
+                    rw_multi_ops!(read_ops, slice, args);
+                } else if !read_ops(&mut slice, base, offset) {
                     return Err(anyhow!(AddressSpaceError::IoAccess(
                         base.raw_value(),
                         offset,
@@ -563,7 +636,15 @@ impl Region {
                 })?;
 
                 let write_ops = self.ops.as_ref().unwrap().write.as_ref();
-                if !write_ops(&slice, base, offset) {
+                if matches!(self.max_access_size, Some(access_size) if count > access_size) {
+                    let args = MultiOpsArgs {
+                        base,
+                        offset,
+                        count,
+                        access_size: self.max_access_size.unwrap(),
+                    };
+                    rw_multi_ops!(write_ops, slice, args);
+                } else if !write_ops(&slice, base, offset) {
                     return Err(anyhow!(AddressSpaceError::IoAccess(
                         base.raw_value(),
                         offset,

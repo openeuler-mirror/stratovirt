@@ -95,18 +95,20 @@ impl XhciPciDevice {
             || "Failed to register cap region.",
         )?;
 
-        let oper_region =
+        let mut oper_region =
             Region::init_io_region(XHCI_PCI_OPER_LENGTH as u64, build_oper_ops(&self.xhci));
+        oper_region.set_access_size(4);
         pci::Result::with_context(
             self.mem_region
                 .add_subregion(oper_region, XHCI_PCI_OPER_OFFSET as u64),
             || "Failed to register oper region.",
         )?;
 
-        let runtime_region = Region::init_io_region(
+        let mut runtime_region = Region::init_io_region(
             XHCI_PCI_RUNTIME_LENGTH as u64,
             build_runtime_ops(&self.xhci),
         );
+        runtime_region.set_access_size(4);
         pci::Result::with_context(
             self.mem_region
                 .add_subregion(runtime_region, XHCI_PCI_RUNTIME_OFFSET as u64),
