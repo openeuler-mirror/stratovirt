@@ -129,12 +129,14 @@ impl ByteCode for VhostMemory {}
 #[derive(Clone)]
 struct VhostMemInfo {
     regions: Arc<Mutex<Vec<VhostMemoryRegion>>>,
+    enabled: bool,
 }
 
 impl VhostMemInfo {
     fn new() -> VhostMemInfo {
         VhostMemInfo {
             regions: Arc::new(Mutex::new(Vec::new())),
+            enabled: false,
         }
     }
 
@@ -192,6 +194,18 @@ impl VhostMemInfo {
 impl Listener for VhostMemInfo {
     fn priority(&self) -> i32 {
         0
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    fn disable(&mut self) {
+        self.enabled = false;
     }
 
     fn handle_request(
