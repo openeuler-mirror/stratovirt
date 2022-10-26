@@ -22,9 +22,9 @@ use super::{
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
-    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
-    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
-    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
+    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 use crate::virtio_has_feature;
 use crate::VirtioError;
@@ -42,7 +42,9 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::num_ops::{read_u32, write_u32};
-use util::tap::{Tap, IFF_MULTI_QUEUE, TUN_F_VIRTIO};
+use util::tap::{
+    Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
+};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
@@ -799,9 +801,6 @@ pub fn create_tap(
             })?
         };
 
-        tap.set_offload(TUN_F_VIRTIO)
-            .with_context(|| "Failed to set tap offload")?;
-
         let vnet_hdr_size = mem::size_of::<VirtioNetHdr>() as u32;
         tap.set_hdr_size(vnet_hdr_size)
             .with_context(|| "Failed to set tap hdr size")?;
@@ -810,6 +809,31 @@ pub fn create_tap(
     }
 
     Ok(Some(taps))
+}
+
+/// Get the tap offload flags from driver features.
+///
+/// # Arguments
+///
+/// * `features` - The driver features.
+fn get_tap_offload_flags(features: u64) -> u32 {
+    let mut flags: u32 = 0;
+    if virtio_has_feature(features, VIRTIO_NET_F_GUEST_CSUM) {
+        flags |= TUN_F_CSUM;
+    }
+    if virtio_has_feature(features, VIRTIO_NET_F_GUEST_TSO4) {
+        flags |= TUN_F_TSO4;
+    }
+    if virtio_has_feature(features, VIRTIO_NET_F_GUEST_TSO6) {
+        flags |= TUN_F_TSO6;
+    }
+    if virtio_has_feature(features, VIRTIO_NET_F_GUEST_ECN) {
+        flags |= TUN_F_TSO_ECN;
+    }
+    if virtio_has_feature(features, VIRTIO_NET_F_GUEST_UFO) {
+        flags |= TUN_F_UFO;
+    }
+    flags
 }
 
 impl VirtioDevice for Net {
@@ -979,6 +1003,10 @@ impl VirtioDevice for Net {
             )?;
         }
 
+        // The features about offload is included in bits 0 to 31.
+        let features = self.get_driver_features(0_u32);
+        let flags = get_tap_offload_flags(features as u64);
+
         let mut senders = Vec::new();
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
@@ -989,6 +1017,11 @@ impl VirtioDevice for Net {
 
             let (sender, receiver) = channel();
             senders.push(sender);
+
+            if let Some(tap) = self.taps.as_ref().map(|t| t[index].clone()) {
+                tap.set_offload(flags)
+                    .with_context(|| "Failed to set tap offload")?;
+            }
 
             let mut handler = NetIoHandler {
                 rx: RxVirtio::new(rx_queue, rx_queue_evt),
@@ -1024,6 +1057,17 @@ impl VirtioDevice for Net {
                 .downcast_ref::<NetworkInterfaceConfig>()
                 .unwrap()
                 .clone();
+
+            // Set tap offload.
+            // The features about offload is included in bits 0 to 31.
+            let features = self.get_driver_features(0_u32);
+            let flags = get_tap_offload_flags(features as u64);
+            if let Some(taps) = &self.taps {
+                for (_, tap) in taps.iter().enumerate() {
+                    tap.set_offload(flags)
+                        .with_context(|| "Failed to set tap offload")?;
+                }
+            }
         } else {
             self.net_cfg = Default::default();
         }

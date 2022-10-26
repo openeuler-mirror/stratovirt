@@ -23,6 +23,7 @@ use anyhow::Result;
 pub const TUN_F_CSUM: u32 = 1;
 pub const TUN_F_TSO4: u32 = 2;
 pub const TUN_F_TSO6: u32 = 4;
+pub const TUN_F_TSO_ECN: u32 = 8;
 pub const TUN_F_UFO: u32 = 16;
 pub const TUN_F_VIRTIO: u32 = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 | TUN_F_UFO;
 

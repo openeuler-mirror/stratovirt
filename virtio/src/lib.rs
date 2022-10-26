@@ -112,6 +112,10 @@ pub const VIRTIO_NET_F_GUEST_CSUM: u32 = 1;
 pub const VIRTIO_NET_F_MAC: u32 = 5;
 /// Driver can receive TSOv4.
 pub const VIRTIO_NET_F_GUEST_TSO4: u32 = 7;
+/// Driver can receive TSOv6.
+pub const VIRTIO_NET_F_GUEST_TSO6: u32 = 8;
+/// Driver can receive TSO with ECN.
+pub const VIRTIO_NET_F_GUEST_ECN: u32 = 9;
 /// Driver can receive UFO.
 pub const VIRTIO_NET_F_GUEST_UFO: u32 = 10;
 /// Device can receive TSOv4.
