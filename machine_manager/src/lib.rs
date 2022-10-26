@@ -23,23 +23,11 @@
 
 pub mod cmdline;
 pub mod config;
+pub mod error;
 pub mod event_loop;
 pub mod machine;
 pub mod qmp;
 pub mod signal_handler;
 pub mod socket;
 pub mod temp_cleaner;
-
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            ConfigParser(crate::config::errors::Error, crate::config::errors::ErrorKind);
-        }
-        foreign_links {
-            Io(std::io::Error);
-            Json(serde_json::Error);
-        }
-    }
-}
+pub use error::MachineManagerError;

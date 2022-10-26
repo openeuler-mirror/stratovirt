@@ -14,7 +14,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
 
-use error_chain::{bail, error_chain, quick_main};
+use anyhow::{bail, Context, Result};
 use log::{error, info};
 use machine::{LightMachine, MachineOps, StdMachine};
 use machine_manager::{
@@ -30,18 +30,60 @@ use machine_manager::{
 use util::loop_context::EventNotifierHelper;
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
-error_chain! {
-    links {
-       Manager(machine_manager::errors::Error, machine_manager::errors::ErrorKind);
-       Util(util::errors::Error, util::errors::ErrorKind);
-       Machine(machine::errors::Error, machine::errors::ErrorKind);
-    }
-    foreign_links {
-        Io(std::io::Error);
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum MainError {
+    #[error("Manager")]
+    Manager {
+        #[from]
+        source: machine_manager::error::MachineManagerError,
+    },
+    #[error("Util")]
+    Util {
+        #[from]
+        source: util::error::UtilError,
+    },
+    #[error("Machine")]
+    Machine {
+        #[from]
+        source: machine::error::MachineError,
+    },
+    #[error("Io")]
+    Io {
+        #[from]
+        source: std::io::Error,
+    },
+}
+
+pub trait ExitCode {
+    /// Returns the value to use as the exit status.
+    fn code(self) -> i32;
+}
+
+impl ExitCode for i32 {
+    fn code(self) -> i32 {
+        self
     }
 }
 
-quick_main!(run);
+impl ExitCode for () {
+    fn code(self) -> i32 {
+        0
+    }
+}
+
+fn main() {
+    ::std::process::exit(match run() {
+        Ok(ret) => ExitCode::code(ret),
+        Err(ref e) => {
+            write!(&mut ::std::io::stderr(), "{}", format!("{:?}", e))
+                .expect("Error writing to stderr");
+
+            1
+        }
+    });
+}
 
 fn run() -> Result<()> {
     let cmd_args = create_args_parser().get_matches()?;
@@ -49,7 +91,7 @@ fn run() -> Result<()> {
     if let Some(logfile_path) = cmd_args.value_of("display log") {
         if logfile_path.is_empty() {
             logger::init_logger_with_env(Some(Box::new(std::io::stdout())))
-                .chain_err(|| "Failed to init logger.")?;
+                .with_context(|| "Failed to init logger.")?;
         } else {
             let logfile = std::fs::OpenOptions::new()
                 .read(false)
@@ -58,9 +100,9 @@ fn run() -> Result<()> {
                 .create(true)
                 .mode(0o640)
                 .open(logfile_path)
-                .chain_err(|| "Failed to open log file")?;
+                .with_context(|| "Failed to open log file")?;
             logger::init_logger_with_env(Some(Box::new(logfile)))
-                .chain_err(|| "Failed to init logger.")?;
+                .with_context(|| "Failed to init logger.")?;
         }
     }
 
@@ -92,14 +134,10 @@ fn run() -> Result<()> {
         Err(ref e) => {
             set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
             if cmd_args.is_present("display log") {
-                error!("{}", error_chain::ChainedError::display_chain(e));
+                error!("{}", format!("{:?}", e));
             } else {
-                write!(
-                    &mut std::io::stderr(),
-                    "{}",
-                    error_chain::ChainedError::display_chain(e)
-                )
-                .expect("Failed to write to stderr");
+                write!(&mut std::io::stderr(), "{}", format!("{:?}", e))
+                    .expect("Failed to write to stderr");
             }
             // clean temporary file
             TempCleaner::clean();
@@ -136,9 +174,9 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     let vm: Arc<Mutex<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
         MachineType::MicroVm => {
             let vm = Arc::new(Mutex::new(
-                LightMachine::new(vm_config).chain_err(|| "Failed to init MicroVM")?,
+                LightMachine::new(vm_config).with_context(|| "Failed to init MicroVM")?,
             ));
-            MachineOps::realize(&vm, vm_config).chain_err(|| "Failed to realize micro VM.")?;
+            MachineOps::realize(&vm, vm_config).with_context(|| "Failed to realize micro VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             for listener in listeners {
@@ -148,9 +186,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
         MachineType::StandardVm => {
             let vm = Arc::new(Mutex::new(
-                StdMachine::new(vm_config).chain_err(|| "Failed to init StandardVM")?,
+                StdMachine::new(vm_config).with_context(|| "Failed to init StandardVM")?,
             ));
-            MachineOps::realize(&vm, vm_config).chain_err(|| "Failed to realize standard VM.")?;
+            MachineOps::realize(&vm, vm_config)
+                .with_context(|| "Failed to realize standard VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
             for listener in listeners {
@@ -160,7 +199,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
         MachineType::None => {
             let vm = Arc::new(Mutex::new(
-                StdMachine::new(vm_config).chain_err(|| "Failed to init NoneVM")?,
+                StdMachine::new(vm_config).with_context(|| "Failed to init NoneVM")?,
             ));
             EventLoop::set_manager(vm.clone(), None);
             for listener in listeners {
@@ -175,19 +214,19 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(socket))),
             None,
         )
-        .chain_err(|| "Failed to add api event to MainLoop")?;
+        .with_context(|| "Failed to add api event to MainLoop")?;
     }
 
-    machine::vm_run(&vm, cmd_args).chain_err(|| "Failed to start VM.")?;
+    machine::vm_run(&vm, cmd_args).with_context(|| "Failed to start VM.")?;
 
     let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
     if !cmd_args.is_present("disable-seccomp") {
         vm.lock()
             .unwrap()
             .register_seccomp(balloon_switch_on)
-            .chain_err(|| "Failed to register seccomp rules.")?;
+            .with_context(|| "Failed to register seccomp rules.")?;
     }
 
-    EventLoop::loop_run().chain_err(|| "MainLoop exits unexpectedly: error occurs")?;
+    EventLoop::loop_run().with_context(|| "MainLoop exits unexpectedly: error occurs")?;
     Ok(())
 }

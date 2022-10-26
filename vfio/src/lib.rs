@@ -10,25 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            PciErr(pci::errors::Error, pci::errors::ErrorKind);
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
-        }
-        errors {
-            AddRegBar(id: usize) {
-                display("Failed to add sub region at the BAR {} in memory space.", id)
-            }
-            VfioIoctl(ioctl: String, error: std::io::Error) {
-                display("Vfio ioctl failed: {}, error is: {:?}", ioctl, error)
-            }
-        }
-    }
-}
+pub mod error;
+pub use error::VfioError;
 
 mod vfio_dev;
 mod vfio_pci;
@@ -73,7 +56,7 @@ fn create_kvm_vfio_device() -> Option<DeviceFd> {
     {
         Ok(fd) => Some(fd),
         Err(e) => {
-            error!("{}", e);
+            error!("{:?}", e);
             None
         }
     }

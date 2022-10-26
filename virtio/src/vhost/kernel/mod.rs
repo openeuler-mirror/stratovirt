@@ -24,7 +24,6 @@ use std::sync::{Arc, Mutex};
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use error_chain::ChainedError;
 use log::{debug, error};
 use util::byte_code::ByteCode;
 use util::loop_context::{
@@ -35,9 +34,10 @@ use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
 use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
-use super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::{QueueConfig, VirtioInterrupt, VirtioInterruptType};
 use super::{VhostNotify, VhostOps};
+use crate::VirtioError;
+use anyhow::{anyhow, Context, Result};
 
 /// Refer to VHOST_VIRTIO in
 /// https://github.com/torvalds/linux/blob/master/include/uapi/linux/vhost.h.
@@ -213,7 +213,7 @@ impl Listener for VhostMemInfo {
         range: Option<&FlatRange>,
         _evtfd: Option<&RegionIoEventFd>,
         req_type: ListenerReqType,
-    ) -> std::result::Result<(), address_space::errors::Error> {
+    ) -> std::result::Result<(), anyhow::Error> {
         match req_type {
             ListenerReqType::AddRegion => {
                 if Self::check_vhost_mem_range(range.unwrap()) {
@@ -250,7 +250,7 @@ impl VhostBackend {
                 .write(true)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
                 .open(path)
-                .chain_err(|| format!("Failed to open {} for vhost backend.", path))?,
+                .with_context(|| format!("Failed to open {} for vhost backend.", path))?,
         };
         let mem_info = Arc::new(Mutex::new(VhostMemInfo::new()));
         mem_space.register_listener(mem_info.clone())?;
@@ -269,7 +269,9 @@ impl VhostOps for VhostBackend {
     fn set_owner(&self) -> Result<()> {
         let ret = unsafe { ioctl(self, VHOST_SET_OWNER()) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_OWNER".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_OWNER".to_string()
+            )));
         }
         Ok(())
     }
@@ -277,7 +279,9 @@ impl VhostOps for VhostBackend {
     fn reset_owner(&self) -> Result<()> {
         let ret = unsafe { ioctl(self, VHOST_RESET_OWNER()) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_RESET_OWNER".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_RESET_OWNER".to_string()
+            )));
         }
         Ok(())
     }
@@ -286,7 +290,9 @@ impl VhostOps for VhostBackend {
         let mut avail_features: u64 = 0;
         let ret = unsafe { ioctl_with_mut_ref(self, VHOST_GET_FEATURES(), &mut avail_features) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_GET_FEATURES".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_GET_FEATURES".to_string()
+            )));
         }
         Ok(avail_features)
     }
@@ -294,7 +300,9 @@ impl VhostOps for VhostBackend {
     fn set_features(&self, features: u64) -> Result<()> {
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_FEATURES(), &features) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_FEATURES".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_FEATURES".to_string()
+            )));
         }
         Ok(())
     }
@@ -322,7 +330,9 @@ impl VhostOps for VhostBackend {
 
         let ret = unsafe { ioctl_with_ptr(self, VHOST_SET_MEM_TABLE(), bytes.as_ptr()) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_MEM_TABLE".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_MEM_TABLE".to_string()
+            )));
         }
         Ok(())
     }
@@ -334,7 +344,9 @@ impl VhostOps for VhostBackend {
         };
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_NUM(), &vring_state) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_VRING_NUM".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_VRING_NUM".to_string()
+            )));
         }
         Ok(())
     }
@@ -344,7 +356,7 @@ impl VhostOps for VhostBackend {
         let desc_user_addr = locked_mem_info
             .addr_to_host(queue_config.desc_table)
             .ok_or_else(|| {
-                ErrorKind::Msg(format!(
+                anyhow!(anyhow!(
                     "Failed to transform desc-table address {}",
                     queue_config.desc_table.0
                 ))
@@ -352,7 +364,7 @@ impl VhostOps for VhostBackend {
         let used_user_addr = locked_mem_info
             .addr_to_host(queue_config.used_ring)
             .ok_or_else(|| {
-                ErrorKind::Msg(format!(
+                anyhow!(anyhow!(
                     "Failed to transform used ring address {}",
                     queue_config.used_ring.0
                 ))
@@ -360,10 +372,10 @@ impl VhostOps for VhostBackend {
         let avail_user_addr = locked_mem_info
             .addr_to_host(queue_config.avail_ring)
             .ok_or_else(|| {
-                ErrorKind::Msg(format!(
+                anyhow!(
                     "Failed to transform avail ring address {}",
                     queue_config.avail_ring.0
-                ))
+                )
             })?;
 
         let vring_addr = VhostVringAddr {
@@ -377,7 +389,9 @@ impl VhostOps for VhostBackend {
 
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_ADDR(), &vring_addr) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_VRING_ADDR".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_VRING_ADDR".to_string()
+            )));
         }
         Ok(())
     }
@@ -389,7 +403,9 @@ impl VhostOps for VhostBackend {
         };
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_BASE(), &vring_state) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_VRING_BASE".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_VRING_BASE".to_string()
+            )));
         }
         Ok(())
     }
@@ -402,7 +418,9 @@ impl VhostOps for VhostBackend {
 
         let ret = unsafe { ioctl_with_ref(self, VHOST_GET_VRING_BASE(), &vring_state) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_GET_VRING_BASE".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_GET_VRING_BASE".to_string()
+            )));
         }
         Ok(vring_state.num as u16)
     }
@@ -414,7 +432,9 @@ impl VhostOps for VhostBackend {
         };
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_CALL(), &vring_file) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_VRING_CALL".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_VRING_CALL".to_string()
+            )));
         }
         Ok(())
     }
@@ -426,7 +446,9 @@ impl VhostOps for VhostBackend {
         };
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_VRING_KICK(), &vring_file) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_SET_VRING_KICK".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_SET_VRING_KICK".to_string()
+            )));
         }
         Ok(())
     }
@@ -480,8 +502,8 @@ impl EventNotifierHelper for VhostIoHandler {
                         Some(&host_notify.queue.lock().unwrap()),
                     ) {
                         error!(
-                            "Failed to trigger interrupt for vhost device, error is {}",
-                            e.display_chain()
+                            "Failed to trigger interrupt for vhost device, error is {:?}",
+                            e
                         );
                     }
                 }

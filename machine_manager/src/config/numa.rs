@@ -13,9 +13,9 @@
 use std::cmp::max;
 use std::collections::{BTreeMap, HashSet};
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Result};
 
-use super::errors::{ErrorKind, Result};
+use super::error::ConfigError;
 use crate::config::{CmdParser, IntegerList, VmConfig, MAX_NODES};
 
 const MIN_NUMA_DISTANCE: u8 = 10;
@@ -125,33 +125,37 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
     let mut config: NumaConfig = NumaConfig::default();
     if let Some(node_id) = cmd_parser.get_value::<u32>("nodeid")? {
         if node_id >= MAX_NODES {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "nodeid".to_string(),
                 0,
                 true,
                 MAX_NODES as u64,
                 false,
-            )
-            .into());
+            )));
         }
         config.numa_id = node_id;
     } else {
-        return Err(ErrorKind::FieldIsMissing("nodeid", "numa").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("nodeid", "numa")));
     }
     if let Some(mut cpus) = cmd_parser
         .get_value::<IntegerList>("cpus")
-        .map_err(|_| ErrorKind::ConvertValueFailed(String::from("u8"), "cpus".to_string()))?
+        .map_err(|_| {
+            anyhow!(ConfigError::ConvertValueFailed(
+                String::from("u8"),
+                "cpus".to_string()
+            ))
+        })?
         .map(|v| v.0.iter().map(|e| *e as u8).collect::<Vec<u8>>())
     {
         cpus.sort_unstable();
         config.cpus = cpus;
     } else {
-        return Err(ErrorKind::FieldIsMissing("cpus", "numa").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("cpus", "numa")));
     }
     if let Some(mem_dev) = cmd_parser.get_value::<String>("memdev")? {
         config.mem_dev = mem_dev;
     } else {
-        return Err(ErrorKind::FieldIsMissing("memdev", "numa").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("memdev", "numa")));
     }
 
     Ok(config)
@@ -170,33 +174,31 @@ pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
     let mut dist: NumaDistance = NumaDistance::default();
     let numa_id = if let Some(src) = cmd_parser.get_value::<u32>("src")? {
         if src >= MAX_NODES {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "src".to_string(),
                 0,
                 true,
                 MAX_NODES as u64,
                 false,
-            )
-            .into());
+            )));
         }
         src
     } else {
-        return Err(ErrorKind::FieldIsMissing("src", "numa").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("src", "numa")));
     };
     if let Some(dst) = cmd_parser.get_value::<u32>("dst")? {
         if dst >= MAX_NODES {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "dst".to_string(),
                 0,
                 true,
                 MAX_NODES as u64,
                 false,
-            )
-            .into());
+            )));
         }
         dist.destination = dst;
     } else {
-        return Err(ErrorKind::FieldIsMissing("dst", "numa").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("dst", "numa")));
     }
     if let Some(val) = cmd_parser.get_value::<u8>("val")? {
         if val < MIN_NUMA_DISTANCE {
@@ -214,7 +216,7 @@ pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
 
         dist.distance = val;
     } else {
-        return Err(ErrorKind::FieldIsMissing("val", "numa").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("val", "numa")));
     }
 
     Ok((numa_id, dist))

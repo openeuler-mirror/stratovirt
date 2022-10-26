@@ -21,7 +21,7 @@ const ROOT_INODE: usize = 1;
 
 use super::fs_ops::*;
 use super::fuse_msg::*;
-use crate::errors::{Result, ResultExt};
+use anyhow::{bail, Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CString;
 use std::fs::{read_to_string, File};
@@ -268,21 +268,21 @@ pub fn set_rlimit_nofile(limit: u64) -> Result<()> {
     }
 
     let max_file_str =
-        read_to_string("/proc/sys/fs/file-max").chain_err(|| "Failed to read file-max")?;
+        read_to_string("/proc/sys/fs/file-max").with_context(|| "Failed to read file-max")?;
     let max_file = max_file_str
         .trim()
         .parse::<u64>()
-        .chain_err(|| "Failed to convert the string of max files")?;
+        .with_context(|| "Failed to convert the string of max files")?;
     if limit > max_file {
         bail!("The limit {} exceeds maximum of files {}", limit, max_file);
     }
 
     let nr_open_str =
-        read_to_string("/proc/sys/fs/nr_open").chain_err(|| "Failed to read nr_open")?;
+        read_to_string("/proc/sys/fs/nr_open").with_context(|| "Failed to read nr_open")?;
     let max_file = nr_open_str
         .trim()
         .parse::<u64>()
-        .chain_err(|| "Failed to convert the string of nr_open")?;
+        .with_context(|| "Failed to convert the string of nr_open")?;
     if limit > max_file {
         bail!(
             "The limit {} exceeds maximum of nr_open {}",

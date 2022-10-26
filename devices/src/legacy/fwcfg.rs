@@ -12,6 +12,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::legacy::error::LegacyError;
 use acpi::{
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlResTemplate, AmlScopeBuilder, AmlString,
 };
@@ -20,18 +21,15 @@ use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
 use address_space::{AddressSpace, GuestAddress};
+use anyhow::{anyhow, bail, Context, Result};
 #[cfg(target_arch = "x86_64")]
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
-use error_chain::{bail, ChainedError};
 use log::{error, warn};
-use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::offset_of;
-
-use crate::legacy::errors::{ErrorKind, Result, ResultExt};
-
 #[cfg(target_arch = "x86_64")]
 const FW_CFG_IO_BASE: u64 = 0x510;
 // Size of ioports including control/data registers and DMA.
@@ -261,7 +259,7 @@ fn write_dma_memory(
     mut buf: &[u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.write(&mut buf, addr, len).chain_err(|| {
+    addr_space.write(&mut buf, addr, len).with_context(|| {
         format!(
             "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
             addr.0, len
@@ -278,7 +276,7 @@ fn read_dma_memory(
     mut buf: &mut [u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.read(&mut buf, addr, len).chain_err(|| {
+    addr_space.read(&mut buf, addr, len).with_context(|| {
         format!(
             "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
             addr.0, len
@@ -297,7 +295,7 @@ fn write_dma_result(addr_space: &Arc<AddressSpace>, addr: GuestAddress, value: u
         &dma_buf,
         dma_buf.len() as u64,
     )
-    .chain_err(|| {
+    .with_context(|| {
         format!(
             "Failed to write dma result of fwcfg at gpa=0x{:x} value=0x{:x}",
             addr.0, value
@@ -362,9 +360,9 @@ impl FwCfgCommon {
     fn get_entry_mut(&mut self) -> Result<&mut FwCfgEntry> {
         let key = self.cur_entry & FW_CFG_ENTRY_MASK;
         if key >= self.max_entry() || self.cur_entry == FW_CFG_INVALID {
-            return Err(
-                ErrorKind::EntryNotFound(get_key_name(self.cur_entry as usize).to_owned()).into(),
-            );
+            return Err(anyhow!(LegacyError::EntryNotFound(
+                get_key_name(self.cur_entry as usize).to_owned()
+            )));
         };
 
         // unwrap is safe because the count of arch_entries and entries is initialized
@@ -404,7 +402,7 @@ impl FwCfgCommon {
         let key = (key as u16) & FW_CFG_ENTRY_MASK;
 
         if key >= self.max_entry() || data.len() >= std::u32::MAX as usize {
-            return Err(ErrorKind::InvalidFwCfgEntry(key).into());
+            return Err(anyhow!(LegacyError::InvalidFwCfgEntry(key)));
         }
 
         let entry = if self.is_arch_local() {
@@ -433,7 +431,7 @@ impl FwCfgCommon {
     // Update a FwCfgEntry
     fn update_entry_data(&mut self, key: u16, mut data: Vec<u8>) -> Result<()> {
         if key >= self.max_entry() || data.len() >= std::u32::MAX as usize {
-            return Err(ErrorKind::InvalidFwCfgEntry(key).into());
+            return Err(anyhow!(LegacyError::InvalidFwCfgEntry(key)));
         }
 
         let entry = if self.is_arch_local() {
@@ -447,7 +445,9 @@ impl FwCfgCommon {
             e.data.append(&mut data);
             Ok(())
         } else {
-            Err(ErrorKind::EntryNotFound(get_key_name(key as usize).to_owned()).into())
+            Err(anyhow!(LegacyError::EntryNotFound(
+                get_key_name(key as usize).to_owned()
+            )))
         }
     }
 
@@ -460,7 +460,9 @@ impl FwCfgCommon {
         allow_write: bool,
     ) -> Result<()> {
         if self.files.len() >= self.file_slots as usize {
-            return Err(ErrorKind::FileSlotsNotAvailable(filename.to_owned()).into());
+            return Err(anyhow!(LegacyError::FileSlotsNotAvailable(
+                filename.to_owned()
+            )));
         }
 
         let file_name_bytes = filename.to_string().as_bytes().to_vec();
@@ -470,7 +472,7 @@ impl FwCfgCommon {
             .iter()
             .any(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
         {
-            return Err(ErrorKind::DuplicateFile(filename.to_owned()).into());
+            return Err(anyhow!(LegacyError::DuplicateFile(filename.to_owned())));
         }
 
         let mut index = self.files.len();
@@ -515,7 +517,9 @@ impl FwCfgCommon {
         allow_write: bool,
     ) -> Result<()> {
         if self.files.len() >= self.file_slots as usize {
-            return Err(ErrorKind::FileSlotsNotAvailable(filename.to_owned()).into());
+            return Err(anyhow!(LegacyError::FileSlotsNotAvailable(
+                filename.to_owned()
+            )));
         }
 
         let file_name_bytes = filename.to_string().as_bytes().to_vec();
@@ -524,7 +528,7 @@ impl FwCfgCommon {
             .files
             .iter()
             .position(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
-            .ok_or_else(|| ErrorKind::EntryNotFound(filename.to_owned()))?;
+            .ok_or_else(|| anyhow!(LegacyError::EntryNotFound(filename.to_owned())))?;
         self.files[index].size = data.len() as u32;
 
         // Update FileDir entry
@@ -557,7 +561,7 @@ impl FwCfgCommon {
         let size = std::mem::size_of::<FwCfgDmaAccess>() as u64;
         if let Err(_e) = read_dma_memory(&self.mem_space, dma_addr, dma_request, size) {
             write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)?;
-            return Err(ErrorKind::ReadDmaRequest(dma_addr.0, size).into());
+            return Err(anyhow!(LegacyError::ReadDmaRequest(dma_addr.0, size)));
         }
 
         // Build `FwCfgDmaAccess` object from dma_request here
@@ -715,7 +719,7 @@ impl FwCfgCommon {
             ((8 - addr - size as u64) * 8) as u32,
             (size * 8) as u32,
         )
-        .ok_or_else(|| ErrorKind::Msg("Failed to extract bits from u64".to_string()).into())
+        .ok_or_else(|| anyhow!("Failed to extract bits from u64"))
     }
 
     /// Read data register
@@ -864,12 +868,12 @@ impl FwCfgMem {
     ) -> Result<Arc<Mutex<Self>>> {
         self.fwcfg.common_realize()?;
         self.set_sys_resource(sysbus, region_base, region_size)
-            .chain_err(|| "Failed to allocate system resource for FwCfg.")?;
+            .with_context(|| "Failed to allocate system resource for FwCfg.")?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
             .attach_device(&dev, region_base, region_size)
-            .chain_err(|| "Failed to attach FwCfg device to system bus.")?;
+            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
     }
 }
@@ -886,8 +890,8 @@ fn read_bytes(
             Ok(val) => val,
             Err(e) => {
                 error!(
-                    "Failed to read from FwCfg data register, error is {}",
-                    e.display_chain()
+                    "{}",
+                    format!("Failed to read from FwCfg data register, error is {:?}", e)
                 );
                 return false;
             }
@@ -910,7 +914,10 @@ fn read_bytes(
             {
                 Ok(val) => val,
                 Err(e) => {
-                    error!("Failed to handle FwCfg DMA-read, error is {}", e);
+                    error!(
+                        "{}",
+                        format!("Failed to handle FwCfg DMA-read, error is {:?}", e)
+                    );
                     return false;
                 }
             }
@@ -988,7 +995,7 @@ impl SysBusDevOps for FwCfgMem {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> SysBusResult<()> {
+    ) -> sysbus::Result<()> {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
@@ -1000,7 +1007,7 @@ impl SysBusDevOps for FwCfgMem {
         SysBusDevType::FwCfg
     }
 
-    fn reset(&mut self) -> SysBusResult<()> {
+    fn reset(&mut self) -> sysbus::Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }
@@ -1032,12 +1039,12 @@ impl FwCfgIO {
         let region_base = self.res.region_base;
         let region_size = self.res.region_size;
         self.set_sys_resource(sysbus, region_base, region_size)
-            .chain_err(|| "Failed to allocate system resource for FwCfg.")?;
+            .with_context(|| "Failed to allocate system resource for FwCfg.")?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus
             .attach_device(&dev, region_base, region_size)
-            .chain_err(|| "Failed to attach FwCfg device to system bus.")?;
+            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
         Ok(dev)
     }
 }
@@ -1047,10 +1054,7 @@ fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, off
     let value: u64 = match offset {
         0..=1 => match fwcfg_arch.fwcfg.read_data_reg(offset, data.len() as u32) {
             Err(e) => {
-                error!(
-                    "Failed to read from FwCfg data register, error is {}",
-                    e.display_chain()
-                );
+                error!("Failed to read from FwCfg data register, error is {:?}", e);
                 return false;
             }
             Ok(val) => val,
@@ -1065,7 +1069,10 @@ fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, off
             }
             match fwcfg_arch.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
                 Err(e) => {
-                    error!("Failed to handle FwCfg DMA-read, error is {}", e);
+                    error!(
+                        "{}",
+                        format!("Failed to handle FwCfg DMA-read, error is {:?}", e)
+                    );
                     return false;
                 }
                 Ok(val) => val,
@@ -1133,8 +1140,8 @@ impl SysBusDevOps for FwCfgIO {
                 };
                 if let Err(e) = self.fwcfg.dma_mem_write(offset - 4, value, size) {
                     error!(
-                        "Failed to handle FwCfg DMA-write, error is {}",
-                        e.display_chain()
+                        "{}",
+                        format!("Failed to handle FwCfg DMA-write, error is {:?}", e)
                     );
                     return false;
                 }
@@ -1160,7 +1167,7 @@ impl SysBusDevOps for FwCfgIO {
         _sysbus: &mut SysBus,
         region_base: u64,
         region_size: u64,
-    ) -> SysBusResult<()> {
+    ) -> sysbus::Result<()> {
         let mut res = self.get_sys_resource().unwrap();
         res.region_base = region_base;
         res.region_size = region_size;
@@ -1171,7 +1178,7 @@ impl SysBusDevOps for FwCfgIO {
         SysBusDevType::FwCfg
     }
 
-    fn reset(&mut self) -> SysBusResult<()> {
+    fn reset(&mut self) -> sysbus::Result<()> {
         self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
         Ok(())
     }

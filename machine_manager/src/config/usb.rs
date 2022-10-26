@@ -10,9 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
-
-use error_chain::bail;
+use super::error::ConfigError;
+use anyhow::{anyhow, bail, Result};
 
 use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 
@@ -113,7 +112,10 @@ pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
 
 fn check_id(id: &str) -> Result<()> {
     if id.len() > MAX_STRING_LENGTH {
-        return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
+        return Err(anyhow!(ConfigError::StringLengthTooLong(
+            "id".to_string(),
+            MAX_STRING_LENGTH
+        )));
     }
     Ok(())
 }

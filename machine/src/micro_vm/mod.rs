@@ -28,37 +28,15 @@
 //! - `x86_64`
 //! - `aarch64`
 
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-            Virtio(virtio::errors::Error, virtio::errors::ErrorKind);
-        }
-        foreign_links {
-            Io(std::io::Error);
-            Kvm(kvm_ioctls::Error);
-            Nul(std::ffi::NulError);
-        }
-        errors {
-            RplDevLmtErr(dev: String, nr: usize) {
-                display("A maximum of {} {} replaceable devices are supported.", nr, dev)
-            }
-            UpdCfgErr(id: String) {
-                display("{}: failed to update config.", id)
-            }
-            RlzVirtioMmioErr {
-                display("Failed to realize virtio mmio.")
-            }
-        }
-    }
-}
+pub mod error;
+pub use error::MicroVmError;
 
 mod mem_layout;
 mod syscall;
 extern crate util;
 
+use super::Result as MachineResult;
+use log::error;
 use std::fmt;
 use std::fmt::Debug;
 use std::fs::metadata;
@@ -68,9 +46,6 @@ use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
-
-use error_chain::{bail, ChainedError};
-use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, Region};
@@ -112,13 +87,10 @@ use virtio::{
     VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 
-use self::errors::{ErrorKind, Result};
-use super::{
-    errors::{ErrorKind as MachineErrorKind, Result as MachineResult},
-    MachineOps,
-};
+use super::{error::MachineError, MachineOps};
 #[cfg(target_arch = "x86_64")]
 use crate::vm_state;
+use anyhow::{anyhow, bail, Context, Result};
 
 // The replaceable block device maximum count.
 const MMIO_REPLACEABLE_BLK_NR: usize = 4;
@@ -213,13 +185,11 @@ impl LightMachine {
     ///
     /// * `vm_config` - Represents the configuration for VM.
     pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
-        use crate::errors::ResultExt;
-
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .chain_err(|| MachineErrorKind::CrtMemSpaceErr)?;
+            .with_context(|| anyhow!(MachineError::CrtMemSpaceErr))?;
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
-            .chain_err(|| MachineErrorKind::CrtIoSpaceErr)?;
+            .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
         #[cfg(target_arch = "x86_64")]
         let free_irqs: (i32, i32) = (5, 15);
         #[cfg(target_arch = "aarch64")]
@@ -239,7 +209,7 @@ impl LightMachine {
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
         let power_button = EventFd::new(libc::EFD_NONBLOCK)
-            .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?;
+            .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
 
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(
@@ -268,13 +238,11 @@ impl LightMachine {
 
     #[cfg(target_arch = "x86_64")]
     fn arch_init() -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         vm_fd
             .set_tss_address(0xfffb_d000_usize)
-            .chain_err(|| MachineErrorKind::SetTssErr)?;
+            .with_context(|| anyhow!(MachineError::SetTssErr))?;
 
         let pit_config = kvm_pit_config {
             flags: KVM_PIT_SPEAKER_DUMMY,
@@ -282,14 +250,12 @@ impl LightMachine {
         };
         vm_fd
             .create_pit2(pit_config)
-            .chain_err(|| MachineErrorKind::CrtPitErr)?;
+            .with_context(|| anyhow!(MachineError::CrtPitErr))?;
 
         Ok(())
     }
 
     fn create_replaceable_devices(&mut self) -> Result<()> {
-        use errors::ResultExt;
-
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for id in 0..MMIO_REPLACEABLE_BLK_NR {
             let block = Arc::new(Mutex::new(Block::default()));
@@ -337,7 +303,7 @@ impl LightMachine {
                     #[cfg(target_arch = "x86_64")]
                     &self.boot_source,
                 )
-                .chain_err(|| ErrorKind::RlzVirtioMmioErr)?,
+                .with_context(|| anyhow!(MicroVmError::RlzVirtioMmioErr))?,
                 &id.to_string(),
             );
             region_base += region_size;
@@ -352,8 +318,6 @@ impl LightMachine {
         dev_config: Arc<dyn ConfigCheck>,
         index: usize,
     ) -> Result<()> {
-        use errors::ResultExt;
-
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
         if let Some(device_info) = replaceable_devices.get_mut(index) {
             if device_info.used {
@@ -367,7 +331,7 @@ impl LightMachine {
                 .lock()
                 .unwrap()
                 .update_config(Some(dev_config.clone()))
-                .chain_err(|| ErrorKind::UpdCfgErr(id.to_string()))?;
+                .with_context(|| anyhow!(MicroVmError::UpdCfgErr(id.to_string())))?;
         }
 
         self.add_replaceable_config(id, dev_config)?;
@@ -378,7 +342,7 @@ impl LightMachine {
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         let limit = MMIO_REPLACEABLE_BLK_NR + MMIO_REPLACEABLE_NET_NR;
         if configs_lock.len() >= limit {
-            return Err(ErrorKind::RplDevLmtErr("".to_string(), limit).into());
+            return Err(anyhow!(MicroVmError::RplDevLmtErr("".to_string(), limit)));
         }
 
         for config in configs_lock.iter() {
@@ -398,20 +362,20 @@ impl LightMachine {
     }
 
     fn add_replaceable_device(&self, id: &str, driver: &str, slot: usize) -> Result<()> {
-        use errors::ResultExt;
-
         let index = if driver.contains("net") {
             if slot >= MMIO_REPLACEABLE_NET_NR {
-                return Err(
-                    ErrorKind::RplDevLmtErr("net".to_string(), MMIO_REPLACEABLE_NET_NR).into(),
-                );
+                return Err(anyhow!(MicroVmError::RplDevLmtErr(
+                    "net".to_string(),
+                    MMIO_REPLACEABLE_NET_NR
+                )));
             }
             slot + MMIO_REPLACEABLE_BLK_NR
         } else if driver.contains("blk") {
             if slot >= MMIO_REPLACEABLE_BLK_NR {
-                return Err(
-                    ErrorKind::RplDevLmtErr("block".to_string(), MMIO_REPLACEABLE_BLK_NR).into(),
-                );
+                return Err(anyhow!(MicroVmError::RplDevLmtErr(
+                    "block".to_string(),
+                    MMIO_REPLACEABLE_BLK_NR
+                )));
             }
             slot
         } else {
@@ -444,14 +408,12 @@ impl LightMachine {
                 .lock()
                 .unwrap()
                 .update_config(dev_config)
-                .chain_err(|| ErrorKind::UpdCfgErr(id.to_string()))?;
+                .with_context(|| anyhow!(MicroVmError::UpdCfgErr(id.to_string())))?;
         }
         Ok(())
     }
 
     fn del_replaceable_device(&self, id: &str) -> Result<String> {
-        use errors::ResultExt;
-
         // find the index of configuration by name and remove it
         let mut is_exist = false;
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
@@ -474,7 +436,7 @@ impl LightMachine {
                     .lock()
                     .unwrap()
                     .update_config(None)
-                    .chain_err(|| ErrorKind::UpdCfgErr(id.to_string()))?;
+                    .with_context(|| anyhow!(MicroVmError::UpdCfgErr(id.to_string())))?;
             }
         }
 
@@ -510,15 +472,13 @@ impl MachineOps for LightMachine {
 
     #[cfg(target_arch = "x86_64")]
     fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
         KVM_FDS
             .load()
             .vm_fd
             .as_ref()
             .unwrap()
             .create_irq_chip()
-            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
+            .with_context(|| anyhow!(MachineError::CrtIrqchipErr))?;
         Ok(())
     }
 
@@ -559,8 +519,6 @@ impl MachineOps for LightMachine {
         &self,
         fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
     ) -> MachineResult<CPUBootConfig> {
-        use crate::errors::ResultExt;
-
         let boot_source = self.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
@@ -579,7 +537,7 @@ impl MachineOps for LightMachine {
             prot64_mode: true,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .chain_err(|| MachineErrorKind::LoadKernErr)?;
+            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
 
         Ok(CPUBootConfig {
             prot64_mode: true,
@@ -602,8 +560,6 @@ impl MachineOps for LightMachine {
         &self,
         fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
     ) -> MachineResult<CPUBootConfig> {
-        use crate::errors::ResultExt;
-
         let mut boot_source = self.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
@@ -613,7 +569,7 @@ impl MachineOps for LightMachine {
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .chain_err(|| MachineErrorKind::LoadKernErr)?;
+            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
             rd.initrd_size = layout.initrd_size;
@@ -629,8 +585,6 @@ impl MachineOps for LightMachine {
         &mut self,
         dev: VirtioMmioDevice,
     ) -> MachineResult<Arc<Mutex<VirtioMmioDevice>>> {
-        use errors::ResultExt;
-
         let region_base = self.sysbus.min_free_base;
         let region_size = MEM_LAYOUT[LayoutEntryType::Mmio as usize].1;
         let realized_virtio_mmio_device = VirtioMmioDevice::realize(
@@ -641,7 +595,7 @@ impl MachineOps for LightMachine {
             #[cfg(target_arch = "x86_64")]
             &self.boot_source,
         )
-        .chain_err(|| ErrorKind::RlzVirtioMmioErr)?;
+        .with_context(|| anyhow!(MicroVmError::RlzVirtioMmioErr))?;
         self.sysbus.min_free_base += region_size;
         Ok(realized_virtio_mmio_device)
     }
@@ -668,15 +622,13 @@ impl MachineOps for LightMachine {
 
     #[cfg(target_arch = "aarch64")]
     fn add_rtc_device(&mut self) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
         PL031::realize(
             PL031::default(),
             &mut self.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )
-        .chain_err(|| "Failed to realize pl031.")?;
+        .with_context(|| "Failed to realize pl031.")?;
         Ok(())
     }
 
@@ -686,8 +638,6 @@ impl MachineOps for LightMachine {
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
         #[cfg(target_arch = "x86_64")]
         let region_base: u64 = SERIAL_ADDR;
         #[cfg(target_arch = "aarch64")]
@@ -706,7 +656,7 @@ impl MachineOps for LightMachine {
                 #[cfg(target_arch = "aarch64")]
                 &self.boot_source,
             )
-            .chain_err(|| "Failed to realize serial device.")?;
+            .with_context(|| "Failed to realize serial device.")?;
         Ok(())
     }
 
@@ -757,8 +707,6 @@ impl MachineOps for LightMachine {
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
         let mut locked_vm = vm.lock().unwrap();
 
         //trace for lightmachine
@@ -795,7 +743,7 @@ impl MachineOps for LightMachine {
         // Add mmio devices
         locked_vm
             .create_replaceable_devices()
-            .chain_err(|| "Failed to create replaceable devices.")?;
+            .with_context(|| "Failed to create replaceable devices.")?;
         locked_vm.add_devices(vm_config)?;
         trace_replaceable_info(&locked_vm.replaceable_info);
 
@@ -824,7 +772,7 @@ impl MachineOps for LightMachine {
             let mut fdt_helper = FdtBuilder::new();
             locked_vm
                 .generate_fdt_node(&mut fdt_helper)
-                .chain_err(|| MachineErrorKind::GenFdtErr)?;
+                .with_context(|| anyhow!(MachineError::GenFdtErr))?;
             let fdt_vec = fdt_helper.finish()?;
             locked_vm
                 .sys_mem
@@ -833,11 +781,13 @@ impl MachineOps for LightMachine {
                     GuestAddress(boot_cfg.fdt_addr as u64),
                     fdt_vec.len() as u64,
                 )
-                .chain_err(|| MachineErrorKind::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+                .with_context(|| {
+                    anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
+                })?;
         }
         locked_vm
             .register_power_event(&locked_vm.power_button)
-            .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?;
+            .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
 
         MigrationManager::register_vm_instance(vm.clone());
         #[cfg(target_arch = "x86_64")]
@@ -1083,7 +1033,7 @@ impl DeviceInterface for LightMachine {
         match self.add_replaceable_device(&args.id, &args.driver, slot) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
-                error!("{}", e.display_chain());
+                error!("{:?}", e);
                 error!("Failed to add device: id {}, type {}", args.id, args.driver);
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1105,7 +1055,7 @@ impl DeviceInterface for LightMachine {
                 Response::create_empty_response()
             }
             Err(ref e) => {
-                error!("Failed to delete device: {}", e.display_chain());
+                error!("Failed to delete device: {:?}", e);
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
@@ -1185,7 +1135,7 @@ impl DeviceInterface for LightMachine {
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
-                error!("{}", e.display_chain());
+                error!("{:?}", e);
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
@@ -1259,7 +1209,7 @@ impl DeviceInterface for LightMachine {
         match self.add_replaceable_config(&args.id, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
-                error!("{}", e.display_chain());
+                error!("{:?}", e);
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
@@ -1338,10 +1288,8 @@ impl EventLoopManager for LightMachine {
         *vmstate == KvmVmState::Shutdown
     }
 
-    fn loop_cleanup(&self) -> util::errors::Result<()> {
-        use util::errors::ResultExt;
-
-        set_termi_canon_mode().chain_err(|| "Failed to set terminal to canonical mode")?;
+    fn loop_cleanup(&self) -> util::Result<()> {
+        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
 }
@@ -1353,7 +1301,7 @@ impl EventLoopManager for LightMachine {
 // * `dev_info` - Device resource info of serial device.
 // * `fdt` - Flatted device-tree blob where serial node will be filled into.
 #[cfg(target_arch = "aarch64")]
-fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors::Result<()> {
+fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
     let node = format!("uart@{:x}", res.region_base);
     let serial_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "ns16550a")?;
@@ -1380,7 +1328,7 @@ fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::erro
 // * `dev_info` - Device resource info of RTC device.
 // * `fdt` - Flatted device-tree blob where RTC node will be filled into.
 #[cfg(target_arch = "aarch64")]
-fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors::Result<()> {
+fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
     let node = format!("pl031@{:x}", res.region_base);
     let rtc_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "arm,pl031\0arm,primecell\0")?;
@@ -1407,7 +1355,7 @@ fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors:
 // * `dev_info` - Device resource info of Virtio-Mmio device.
 // * `fdt` - Flatted device-tree blob where node will be filled into.
 #[cfg(target_arch = "aarch64")]
-fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors::Result<()> {
+fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
     let node = format!("virtio_mmio@{:x}", res.region_base);
     let virtio_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "virtio,mmio")?;
@@ -1430,18 +1378,18 @@ fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::err
 #[cfg(target_arch = "aarch64")]
 trait CompileFDTHelper {
     /// Function that helps to generate cpu nodes.
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate memory nodes.
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate Virtio-mmio devices' nodes.
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate the chosen node.
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
 }
 
 #[cfg(target_arch = "aarch64")]
 impl CompileFDTHelper for LightMachine {
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node = "cpus";
 
         let cpus_node_dep = fdt.begin_node(node)?;
@@ -1508,7 +1456,7 @@ impl CompileFDTHelper for LightMachine {
         Ok(())
     }
 
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
         let mem_size = self.sys_mem.memory_end_address().raw_value()
             - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
@@ -1521,7 +1469,7 @@ impl CompileFDTHelper for LightMachine {
         Ok(())
     }
 
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         // timer
         let mut cells: Vec<u32> = Vec::new();
         for &irq in [13, 14, 11, 10].iter() {
@@ -1567,7 +1515,7 @@ impl CompileFDTHelper for LightMachine {
         Ok(())
     }
 
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node = "chosen";
         let boot_source = self.boot_source.lock().unwrap();
 
@@ -1590,7 +1538,7 @@ impl CompileFDTHelper for LightMachine {
 
 #[cfg(target_arch = "aarch64")]
 impl device_tree::CompileFDT for LightMachine {
-    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node_dep = fdt.begin_node("")?;
 
         fdt.set_property_string("compatible", "linux,dummy-virt")?;

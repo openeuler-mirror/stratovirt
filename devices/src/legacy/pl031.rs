@@ -13,8 +13,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use super::error::LegacyError;
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
+use anyhow::{anyhow, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 use migration::{
@@ -25,8 +27,6 @@ use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
-
-use super::errors::{ErrorKind, Result, ResultExt};
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
@@ -104,7 +104,7 @@ impl PL031 {
     ) -> Result<()> {
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
         self.set_sys_resource(sysbus, region_base, region_size)
-            .chain_err(|| ErrorKind::SetSysResErr)?;
+            .with_context(|| anyhow!(LegacyError::SetSysResErr))?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
@@ -215,15 +215,15 @@ impl AmlBuilder for PL031 {
 }
 
 impl StateTransfer for PL031 {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let state = self.state;
 
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *PL031State::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("PL031"))?;
+            .ok_or_else(|| anyhow!(migration::MigrationError::FromBytesError("PL031")))?;
 
         Ok(())
     }

@@ -26,80 +26,6 @@
 //! - `aarch64`
 #[macro_use]
 extern crate log;
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        foreign_links {
-            Io(std::io::Error);
-        }
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-            SysBus(sysbus::errors::Error, sysbus::errors::ErrorKind);
-        }
-        errors {
-            EventFdCreate {
-                display("Failed to create eventfd.")
-            }
-            EventFdWrite {
-                display("Failed to write eventfd.")
-            }
-            ThreadCreate(name: String) {
-                display("Failed to create {} thread", name)
-            }
-            ChannelSend(value: String) {
-                display("Failed to send {} on the channel", value)
-            }
-            QueueIndex(index: u16, size: u16) {
-                display("Queue index {} invalid, queue size is {}", index, size)
-            }
-            QueueDescInvalid {
-                display("Vring descriptor is invalid")
-            }
-            AddressOverflow(value: &'static str, address: u64, offset: u64) {
-                display("Address overflows for {}, address: 0x{:x}, offset: {}", value, address, offset)
-            }
-            DevConfigOverflow(offset: u64, size: u64) {
-                display("Failed to r/w dev config space: overflows, offset {}, space size {}", offset, size)
-            }
-            InterruptTrigger(dev_ty: &'static str, int_type: super::VirtioInterruptType) {
-                display("Failed to trigger interrupt for {}, int-type {:#?}", dev_ty, int_type)
-            }
-            VhostIoctl(ioctl: String) {
-                display("Vhost ioctl failed: {}", ioctl)
-            }
-            ElementEmpty {
-                display("Failed to get iovec from element!")
-            }
-            VirtQueueIsNone {
-                display("Virt queue is none!")
-            }
-            IncorrectQueueNum(expect: usize, actual: usize) {
-                display("Cannot perform activate. Expected {} queue(s), got {}", expect, actual)
-            }
-            IncorrectOffset(expect: u64, actual: u64) {
-                display("Incorrect offset, expected {}, got {}", expect, actual)
-            }
-            DeviceNotActivated(devname: String) {
-                display("Device {} not activated", devname)
-            }
-            FailedToWriteConfig {
-                display("Failed to write config")
-            }
-            ReadObjectErr(object: &'static str, address: u64) {
-                display("Failed to read object for {}, address: 0x{:x}", object, address)
-            }
-            DevStatErr(status: u32) {
-                display("Invalid device status: 0x{:x}.", status)
-            }
-            MmioRegErr(offset: u64) {
-                display("Unsupported mmio register at offset 0x{:x}.", offset)
-            }
-        }
-    }
-}
-
 mod balloon;
 mod block;
 mod console;
@@ -113,11 +39,13 @@ mod virtio_mmio;
 #[allow(dead_code)]
 mod virtio_pci;
 extern crate util;
-
+pub mod error;
+pub use anyhow::Result;
 pub use balloon::*;
 pub use block::{Block, BlockState};
 pub use console::{Console, VirtioConsoleState};
-pub use errors::*;
+pub use error::VirtioError;
+pub use error::*;
 #[cfg(not(target_env = "musl"))]
 pub use gpu::*;
 pub use net::*;
@@ -131,7 +59,7 @@ pub use virtio_pci::VirtioPciDevice;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use error_chain::bail;
+use anyhow::bail;
 use machine_manager::config::ConfigCheck;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -209,8 +137,6 @@ pub const VIRTIO_BLK_F_BLK_SIZE: u32 = 6;
 pub const VIRTIO_BLK_F_FLUSH: u32 = 9;
 /// Topology information is available.
 pub const VIRTIO_BLK_F_TOPOLOGY: u32 = 10;
-/// Support more than one virtqueue.
-pub const VIRTIO_BLK_F_MQ: u32 = 12;
 /// DISCARD is supported.
 pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 /// WRITE ZEROES is supported.
@@ -226,6 +152,8 @@ pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: u16 = 0;
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN: u16 = 1;
 /// The maximum pairs of multiple queue.
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX: u16 = 0x8000;
+/// Support more than one virtqueue.
+pub const VIRTIO_BLK_F_MQ: u32 = 12;
 
 /// The IO type of virtio block, refer to Virtio Spec.
 /// Read.

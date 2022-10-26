@@ -11,28 +11,65 @@
 // See the Mulan PSL v2 for more details.
 
 #[macro_use]
-extern crate error_chain;
-#[macro_use]
 extern crate log;
 extern crate vhost_user_fs;
+use anyhow::{Context, Result};
 use machine_manager::event_loop::EventLoop;
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex};
+use thiserror::Error;
 use util::{arg_parser, logger};
 use vhost_user_fs::cmdline::{create_args_parser, create_fs_config, FsConfig};
 use vhost_user_fs::vhost_user_fs::VhostUserFs;
 
-error_chain! {
-    links {
-        VhostUserFs(vhost_user_fs::errors::Error, vhost_user_fs::errors::ErrorKind);
-        Util(util::errors::Error, util::errors::ErrorKind);
-    }
-    foreign_links {
-        Io(std::io::Error);
+#[derive(Error, Debug)]
+pub enum MainError {
+    #[error("VhostUserFs")]
+    VhostUserFs {
+        #[from]
+        source: vhost_user_fs::error::VhostUserFsError,
+    },
+    #[error("Util")]
+    Util {
+        #[from]
+        source: util::error::UtilError,
+    },
+    #[error("Io")]
+    Io {
+        #[from]
+        source: std::io::Error,
+    },
+}
+
+pub trait ExitCode {
+    /// Returns the value to use as the exit status.
+    fn code(self) -> i32;
+}
+
+impl ExitCode for i32 {
+    fn code(self) -> i32 {
+        self
     }
 }
 
-quick_main!(run);
+impl ExitCode for () {
+    fn code(self) -> i32 {
+        0
+    }
+}
+
+fn main() {
+    ::std::process::exit(match run() {
+        Ok(ret) => ExitCode::code(ret),
+        Err(ref e) => {
+            write!(&mut ::std::io::stderr(), "{}", format!("{:?}", e))
+                .expect("Error writing to stderr");
+
+            1
+        }
+    });
+}
 
 fn run() -> Result<()> {
     let cmd_args = create_args_parser().get_matches()?;
@@ -44,7 +81,7 @@ fn run() -> Result<()> {
     match real_main(&cmd_args) {
         Ok(()) => info!("EventLoop over, Vm exit"),
         Err(ref e) => {
-            error!("{}", error_chain::ChainedError::display_chain(e));
+            error!("{:?}", e);
         }
     }
 
@@ -58,7 +95,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
     EventLoop::object_init(&None)?;
 
     let vhost_user_fs = Arc::new(Mutex::new(
-        VhostUserFs::new(fsconfig).chain_err(|| "Failed to create vhost use fs")?,
+        VhostUserFs::new(fsconfig).with_context(|| "Failed to create vhost use fs")?,
     ));
     EventLoop::set_manager(vhost_user_fs.clone(), None);
 
@@ -66,16 +103,16 @@ fn real_main(cmd_args: &arg_parser::ArgMatches) -> Result<()> {
         .lock()
         .unwrap()
         .add_event_notifier()
-        .chain_err(|| "Failed to add event")?;
+        .with_context(|| "Failed to add event")?;
 
-    EventLoop::loop_run().chain_err(|| "EventLoop exits unexpectedly: error occurs")?;
+    EventLoop::loop_run().with_context(|| "EventLoop exits unexpectedly: error occurs")?;
     Ok(())
 }
 
 fn init_log(logfile_path: String) -> Result<()> {
     if logfile_path.is_empty() {
         logger::init_logger_with_env(Some(Box::new(std::io::stdout())))
-            .chain_err(|| "Failed to init logger")?;
+            .with_context(|| "Failed to init logger")?;
     } else {
         let logfile = std::fs::OpenOptions::new()
             .read(false)
@@ -84,9 +121,9 @@ fn init_log(logfile_path: String) -> Result<()> {
             .create(true)
             .mode(0o640)
             .open(logfile_path.clone())
-            .chain_err(|| format!("Failed to open log file {}", logfile_path))?;
+            .with_context(|| format!("Failed to open log file {}", logfile_path))?;
         logger::init_logger_with_env(Some(Box::new(logfile)))
-            .chain_err(|| format!("Failed to init logger {}", logfile_path))?;
+            .with_context(|| format!("Failed to init logger {}", logfile_path))?;
     }
 
     Ok(())

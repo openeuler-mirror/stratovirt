@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use crate::VirtioError;
+use anyhow::{anyhow, bail, Context, Result};
 use std::cmp;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -26,7 +27,6 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
 use crate::block::VirtioBlkConfig;
-use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::vhost::VhostOps;
 use crate::VhostUser::client::{VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ};
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
@@ -78,9 +78,9 @@ impl Block {
                     .lock()
                     .unwrap()
                     .delete_event()
-                    .chain_err(|| "Failed to delete vhost-user blk event")?;
+                    .with_context(|| "Failed to delete vhost-user blk event")?;
             }
-            None => return Err("Failed to get client when stoping event".into()),
+            None => return Err(anyhow!("Failed to get client when stoping event")),
         };
 
         Ok(())
@@ -103,9 +103,9 @@ impl Block {
             .socket_path
             .as_ref()
             .map(|path| path.to_string())
-            .chain_err(|| "vhost-user: socket path is not found")?;
+            .with_context(|| "vhost-user: socket path is not found")?;
         let client = VhostUserClient::new(&self.mem_space, &socket_path, self.queue_num() as u64)
-            .chain_err(|| {
+            .with_context(|| {
             "Failed to create the client which communicates with the server for vhost-user blk"
         })?;
         let client = Arc::new(Mutex::new(client));
@@ -113,7 +113,7 @@ impl Block {
             EventNotifierHelper::internal_notifiers(client.clone()),
             None,
         )
-        .chain_err(|| "Failed to update event for client sock")?;
+        .with_context(|| "Failed to update event for client sock")?;
         self.client = Some(client);
         Ok(())
     }
@@ -128,14 +128,14 @@ impl Block {
                 .lock()
                 .unwrap()
                 .get_protocol_features()
-                .chain_err(|| "Failed to get protocol features for vhost-user blk")?;
+                .with_context(|| "Failed to get protocol features for vhost-user blk")?;
 
             if virtio_has_feature(protocol_feature, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
                 let config = client
                     .lock()
                     .unwrap()
                     .get_virtio_blk_config()
-                    .chain_err(|| "Failed to get config for vhost-user blk")?;
+                    .with_context(|| "Failed to get config for vhost-user blk")?;
                 self.state.config_space = config;
             } else {
                 bail!(
@@ -149,7 +149,7 @@ impl Block {
                     .lock()
                     .unwrap()
                     .get_max_queue_num()
-                    .chain_err(|| "Failed to get queue num for vhost-user blk")?;
+                    .with_context(|| "Failed to get queue num for vhost-user blk")?;
                 if self.queue_num() > max_queue_num as usize {
                     bail!(
                         "Exceed the max queue num that spdk supported ({} queues)",
@@ -171,7 +171,7 @@ impl Block {
             .lock()
             .unwrap()
             .set_virtio_blk_config(self.state.config_space)
-            .chain_err(|| "Failed to set config for vhost-user blk")?;
+            .with_context(|| "Failed to set config for vhost-user blk")?;
         Ok(())
     }
 
@@ -183,7 +183,7 @@ impl Block {
             .lock()
             .unwrap()
             .get_features()
-            .chain_err(|| "Failed to get features for vhost-user blk")?;
+            .with_context(|| "Failed to get features for vhost-user blk")?;
 
         feature |= 1_u64 << VIRTIO_F_VERSION_1;
         feature |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
@@ -208,7 +208,7 @@ impl Block {
             .lock()
             .unwrap()
             .set_features(feature)
-            .chain_err(|| "Failed to set features for vhost-user blk")?;
+            .with_context(|| "Failed to set features for vhost-user blk")?;
         Ok(())
     }
 }
@@ -267,7 +267,10 @@ impl VirtioDevice for Block {
         let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len();
         if offset >= config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset as u64, config_len as u64).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(
+                offset as u64,
+                config_len as u64
+            )));
         }
         if let Some(end) = offset.checked_add(data.len()) {
             data.write_all(&config_slice[offset..cmp::min(end, config_len)])?;
@@ -285,7 +288,10 @@ impl VirtioDevice for Block {
         let config_len = config_slice.len();
         if let Some(end) = offset.checked_add(data.len()) {
             if end > config_len {
-                return Err(ErrorKind::DevConfigOverflow(offset as u64, config_len as u64).into());
+                return Err(anyhow!(VirtioError::DevConfigOverflow(
+                    offset as u64,
+                    config_len as u64
+                )));
             }
             config_slice[offset..end].copy_from_slice(data);
         } else {
@@ -305,7 +311,7 @@ impl VirtioDevice for Block {
     ) -> Result<()> {
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
-            None => return Err("Failed to get client for vhost-user blk".into()),
+            None => return Err(anyhow!("Failed to get client for vhost-user blk")),
         };
         client.features = self.state.driver_features;
         client.set_queues(queues);
@@ -334,7 +340,7 @@ impl VirtioDevice for Block {
 
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
-            None => return Err("Failed to get client for vhost-user blk".into()),
+            None => return Err(anyhow!("Failed to get client for vhost-user blk")),
         };
 
         Ok(())

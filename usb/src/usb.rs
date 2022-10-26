@@ -15,7 +15,6 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
-use super::errors::Result;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
     UsbInterfaceDescriptor,
@@ -25,6 +24,7 @@ use crate::{
     config::*,
     xhci::xhci_controller::{get_field, set_field},
 };
+use anyhow::{bail, Result};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;
@@ -801,7 +801,7 @@ fn write_mem(hva: u64, buf: &[u8]) {
     use std::io::Write;
     let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
     if let Err(e) = (&mut slice).write(buf) {
-        error!("Failed to write mem {}", e);
+        error!("Failed to write mem {:?}", e);
     }
 }
 

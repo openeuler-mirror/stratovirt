@@ -12,11 +12,11 @@
 
 use std::sync::Arc;
 
+use crate::error::BootLoaderError;
 use address_space::{AddressSpace, GuestAddress};
+use anyhow::{anyhow, Result};
 use util::byte_code::ByteCode;
 use util::checksum::obj_checksum;
-
-use crate::errors::{ErrorKind, Result};
 
 const SPEC_VERSION: u8 = 4; // version 1.4
 const APIC_VERSION: u8 = 0x14;
@@ -285,7 +285,7 @@ pub fn setup_isa_mptable(
     const MPTABLE_IOAPIC_NR: u8 = 16;
 
     if u32::from(num_cpus) > MPTABLE_MAX_CPUS {
-        return Err(ErrorKind::MaxCpus(num_cpus).into());
+        return Err(anyhow!(BootLoaderError::MaxCpus(num_cpus)));
     }
 
     let ioapic_id: u8 = num_cpus + 1;

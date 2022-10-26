@@ -20,8 +20,16 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+use super::{
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
+    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_BLOCK,
+};
+use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
-use error_chain::{bail, ChainedError};
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use machine_manager::{
     config::{BlkDevConfig, ConfigCheck},
@@ -40,16 +48,6 @@ use util::loop_context::{
 };
 use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-
-use super::errors::{ErrorKind, Result, ResultExt};
-use super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_BLOCK,
-};
-
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
 /// Size of each virtqueue.
@@ -76,7 +74,7 @@ fn write_buf_mem(buf: &[u8], hva: u64) -> Result<()> {
     let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
     (&mut slice)
         .write(buf)
-        .chain_err(|| format!("Failed to write buf(hva:{})", hva))?;
+        .with_context(|| format!("Failed to write buf(hva:{})", hva))?;
 
     Ok(())
 }
@@ -169,8 +167,11 @@ impl Request {
 
         let out_header = mem_space
             .read_object::<RequestOutHeader>(out_iov_elem.addr)
-            .chain_err(|| {
-                ErrorKind::ReadObjectErr("the block's request header", out_iov_elem.addr.0)
+            .with_context(|| {
+                anyhow!(VirtioError::ReadObjectErr(
+                    "the block's request header",
+                    out_iov_elem.addr.0
+                ))
             })?;
 
         if !out_header.is_valid() {
@@ -248,7 +249,7 @@ impl Request {
         }
         top.checked_add(self.out_header.sector)
             .filter(|off| off <= &disk_sectors)
-            .chain_err(|| {
+            .with_context(|| {
                 format!(
                     "offset {} invalid, disk sector {}",
                     self.out_header.sector, disk_sectors
@@ -281,11 +282,14 @@ impl Request {
                     for iov in self.iovec.iter() {
                         MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
                     }
-                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
-                        "Failed to process block request for reading asynchronously"
-                    })?;
+                    (*aio)
+                        .as_mut()
+                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .with_context(|| {
+                            "Failed to process block request for reading asynchronously"
+                        })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for reading synchronously"
                     })?;
                 }
@@ -293,11 +297,14 @@ impl Request {
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::Pwritev;
                 if direct {
-                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
-                        "Failed to process block request for writing asynchronously"
-                    })?;
+                    (*aio)
+                        .as_mut()
+                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .with_context(|| {
+                            "Failed to process block request for writing asynchronously"
+                        })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for writing synchronously"
                     })?;
                 }
@@ -307,7 +314,7 @@ impl Request {
                 (*aio)
                     .as_mut()
                     .rw_sync(aiocb)
-                    .chain_err(|| "Failed to process block request for flushing")?;
+                    .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
                 if let Some(serial) = serial_num {
@@ -322,7 +329,7 @@ impl Request {
                             );
                         }
                         write_buf_mem(&serial_vec, iov.iov_base)
-                            .chain_err(|| "Failed to write buf for virtio block id")?;
+                            .with_context(|| "Failed to write buf for virtio block id")?;
                     }
                 }
 
@@ -455,13 +462,10 @@ impl BlockIoHandler {
                     queue
                         .vring
                         .add_used(&self.mem_space, elem.index, 0)
-                        .chain_err(|| "Failed to add used ring")?;
+                        .with_context(|| "Failed to add used ring")?;
                     need_interrupt = true;
 
-                    error!(
-                        "failed to create block request, {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
+                    error!("failed to create block request, {:?}", e);
                 }
             };
         }
@@ -477,7 +481,7 @@ impl BlockIoHandler {
                 if let Some(ref mut aio) = self.aio {
                     let rw_len = match req.out_header.request_type {
                         VIRTIO_BLK_T_IN => u32::try_from(req.data_len)
-                            .chain_err(|| "Convert block request len to u32 with overflow.")?,
+                            .with_context(|| "Convert block request len to u32 with overflow.")?,
                         _ => 0u32,
                     };
 
@@ -505,12 +509,12 @@ impl BlockIoHandler {
                                 // get device id
                                 self.mem_space
                                     .write_object(&VIRTIO_BLK_S_OK, req.in_header)
-                                    .chain_err(|| "Failed to write result for the request for block with device id")?;
+                                    .with_context(|| "Failed to write result for the request for block with device id")?;
                                 self.queue.lock().unwrap().vring.add_used(
                                     &self.mem_space,
                                     req.desc_index,
                                     1,
-                                ).chain_err(|| "Failed to add the request for block with device id to used ring")?;
+                                ).with_context(|| "Failed to add the request for block with device id to used ring")?;
 
                                 if self
                                     .queue
@@ -524,10 +528,7 @@ impl BlockIoHandler {
                             }
                         }
                         Err(ref e) => {
-                            error!(
-                                "Failed to execute block request, {}",
-                                error_chain::ChainedError::display_chain(e)
-                            );
+                            error!("Failed to execute block request, {:?}", e);
                         }
                     }
                     req_index += 1;
@@ -540,7 +541,7 @@ impl BlockIoHandler {
                     .unwrap()
                     .vring
                     .add_used(&self.mem_space, req.desc_index, 1)
-                    .chain_err(|| {
+                    .with_context(|| {
                         "Failed to add used ring, when block request queue isn't empty"
                     })?;
             }
@@ -552,7 +553,12 @@ impl BlockIoHandler {
                 &VirtioInterruptType::Vring,
                 Some(&self.queue.lock().unwrap()),
             )
-            .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Vring))?;
+            .with_context(|| {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "block",
+                    VirtioInterruptType::Vring
+                ))
+            })?;
             self.trace_send_interrupt("Block".to_string());
         }
 
@@ -572,10 +578,7 @@ impl BlockIoHandler {
                 .mem_space
                 .write_object(&status, complete_cb.req_status_addr)
             {
-                error!(
-                    "Failed to write the status (aio completion) {}",
-                    error_chain::ChainedError::display_chain(e)
-                );
+                error!("Failed to write the status (aio completion) {:?}", e);
                 return;
             }
 
@@ -586,10 +589,8 @@ impl BlockIoHandler {
                 complete_cb.rw_len,
             ) {
                 error!(
-                    "Failed to add used ring(aio completion), index {}, len {} {}",
-                    complete_cb.desc_index,
-                    complete_cb.rw_len,
-                    error_chain::ChainedError::display_chain(e),
+                    "Failed to add used ring(aio completion), index {}, len {} {:?}",
+                    complete_cb.desc_index, complete_cb.rw_len, e,
                 );
                 return;
             }
@@ -603,8 +604,8 @@ impl BlockIoHandler {
                     Some(&queue_lock),
                 ) {
                     error!(
-                        "Failed to trigger interrupt(aio completion) for block device, error is {}",
-                        e.display_chain()
+                        "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
+                        e
                     );
                 }
             }
@@ -630,10 +631,7 @@ impl BlockIoHandler {
         };
 
         if let Err(ref e) = self.process_queue() {
-            error!(
-                "Failed to handle block IO for updating handler {}",
-                error_chain::ChainedError::display_chain(e)
-            );
+            error!("Failed to handle block IO for updating handler {:?}", e);
         }
     }
 
@@ -725,10 +723,7 @@ impl EventNotifierHelper for BlockIoHandler {
             read_fd(fd);
 
             if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
-                error!(
-                    "Failed to handle block IO {}",
-                    error_chain::ChainedError::display_chain(e)
-                );
+                error!("Failed to handle block IO {:?}", e);
             }
             None
         });
@@ -739,7 +734,7 @@ impl EventNotifierHelper for BlockIoHandler {
                 .lock()
                 .unwrap()
                 .process_queue()
-                .chain_err(|| "Failed to handle block IO")
+                .with_context(|| "Failed to handle block IO")
                 .ok()?;
             if done {
                 Some(Vec::new())
@@ -773,10 +768,7 @@ impl EventNotifierHelper for BlockIoHandler {
                 }
 
                 if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
-                    error!(
-                        "Failed to handle block IO {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
+                    error!("Failed to handle block IO {:?}", e);
                 }
                 None
             });
@@ -791,10 +783,7 @@ impl EventNotifierHelper for BlockIoHandler {
 
                 if let Some(aio) = &mut h_clone.lock().unwrap().aio {
                     if let Err(ref e) = aio.handle() {
-                        error!(
-                            "Failed to handle aio, {}",
-                            error_chain::ChainedError::display_chain(e)
-                        );
+                        error!("Failed to handle aio, {:?}", e);
                     }
                 }
                 None
@@ -804,7 +793,7 @@ impl EventNotifierHelper for BlockIoHandler {
             let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
                 let mut done = false;
                 if let Some(aio) = &mut h_clone.lock().unwrap().aio {
-                    done = aio.handle().chain_err(|| "Failed to handle aio").ok()?;
+                    done = aio.handle().with_context(|| "Failed to handle aio").ok()?;
                 }
                 if done {
                     Some(Vec::new())
@@ -997,7 +986,7 @@ impl VirtioDevice for Block {
                     .write(!self.blk_cfg.read_only)
                     .custom_flags(libc::O_DIRECT)
                     .open(&self.blk_cfg.path_on_host)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "failed to open the file by O_DIRECT for block {}",
                             self.blk_cfg.path_on_host
@@ -1008,7 +997,7 @@ impl VirtioDevice for Block {
                     .read(true)
                     .write(!self.blk_cfg.read_only)
                     .open(&self.blk_cfg.path_on_host)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "failed to open the file for block {}",
                             self.blk_cfg.path_on_host
@@ -1016,9 +1005,9 @@ impl VirtioDevice for Block {
                     })?
             };
 
-            disk_size = file
-                .seek(SeekFrom::End(0))
-                .chain_err(|| "Failed to seek the end for block")? as u64;
+            disk_size =
+                file.seek(SeekFrom::End(0))
+                    .with_context(|| "Failed to seek the end for block")? as u64;
 
             self.disk_image = Some(Arc::new(file));
         } else {
@@ -1076,7 +1065,7 @@ impl VirtioDevice for Block {
         let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
         if let Some(end) = offset.checked_add(data.len() as u64) {
             data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
@@ -1091,7 +1080,10 @@ impl VirtioDevice for Block {
         let config_slice = self.state.config_space.as_mut_bytes();
         let config_len = config_slice.len();
         if offset as usize + data_len > config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(
+                offset,
+                config_len as u64
+            )));
         }
 
         config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
@@ -1149,7 +1141,7 @@ impl VirtioDevice for Block {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
@@ -1176,17 +1168,21 @@ impl VirtioDevice for Block {
                         self.blk_cfg.serial_num.clone(),
                         self.blk_cfg.direct,
                     ))
-                    .chain_err(|| ErrorKind::ChannelSend("image fd".to_string()))?;
+                    .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
             }
 
             self.update_evt
                 .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
         }
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Config, None)
-                .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Config))?;
+            interrupt_cb(&VirtioInterruptType::Config, None).with_context(|| {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "block",
+                    VirtioInterruptType::Config
+                ))
+            })?;
         }
 
         Ok(())
@@ -1199,13 +1195,13 @@ impl VirtioDevice for Block {
 unsafe impl Sync for Block {}
 
 impl StateTransfer for Block {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *BlockState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("BLOCK"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("BLOCK")))?;
 
         Ok(())
     }
@@ -1425,7 +1421,7 @@ mod tests {
                 interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .chain_err(|| ErrorKind::EventFdWrite)?;
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
 
                 Ok(())
             },

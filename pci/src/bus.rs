@@ -14,13 +14,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
-use error_chain::bail;
 use log::debug;
 
 use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
 use super::hotplug::HotplugOps;
 use super::PciDevOps;
-use crate::errors::{Result, ResultExt};
+use anyhow::{bail, Context, Result};
 
 type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
 
@@ -187,11 +186,11 @@ impl PciBus {
         let mut dev_locked = dev.lock().unwrap();
         dev_locked
             .unrealize()
-            .chain_err(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
+            .with_context(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
 
         let devfn = dev_locked
             .devfn()
-            .chain_err(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
+            .with_context(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
 
         let mut locked_bus = bus.lock().unwrap();
         if locked_bus.devices.get(&devfn).is_some() {
@@ -209,7 +208,7 @@ impl PciBus {
                 .lock()
                 .unwrap()
                 .reset(false)
-                .chain_err(|| "Fail to reset pci dev")?;
+                .with_context(|| "Fail to reset pci dev")?;
         }
 
         for child_bus in self.child_buses.iter_mut() {
@@ -217,7 +216,7 @@ impl PciBus {
                 .lock()
                 .unwrap()
                 .reset()
-                .chain_err(|| "Fail to reset child bus")?;
+                .with_context(|| "Fail to reset child bus")?;
         }
 
         Ok(())
@@ -231,9 +230,9 @@ mod tests {
     use super::*;
     use crate::bus::PciBus;
     use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
-    use crate::errors::Result;
     use crate::root_port::RootPort;
     use crate::PciHost;
+    use anyhow::Result;
 
     #[derive(Clone)]
     struct PciDevice {

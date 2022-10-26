@@ -18,19 +18,18 @@ use pci::config::{
     PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, PCI_CLASS_SERIAL_USB,
     PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS, SUB_CLASS_CODE, VENDOR_ID,
 };
-use pci::errors::{Result as PciResult, ResultExt as PciResultExt};
 use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
 use util::num_ops::round_up;
 use util::unix::host_page_size;
 
 use crate::bus::{BusDeviceMap, BusDeviceOps};
-use crate::errors::Result;
 use crate::usb::UsbDeviceOps;
 use crate::xhci::xhci_controller::{XhciDevice, XhciOps, MAX_INTRS, MAX_SLOTS};
 use crate::xhci::xhci_regs::{
     build_cap_ops, build_doorbell_ops, build_oper_ops, build_port_ops, build_runtime_ops,
     XHCI_CAP_LENGTH, XHCI_OFF_DOORBELL, XHCI_OFF_RUNTIME,
 };
+use anyhow::{bail, Context, Result};
 
 const PCI_VENDOR_ID_NEC: u16 = 0x1033;
 const PCU_DEVICE_ID_NEC_UPD720200: u16 = 0x0194;
@@ -87,10 +86,10 @@ impl XhciPciDevice {
         }
     }
 
-    fn mem_region_init(&mut self) -> PciResult<()> {
+    fn mem_region_init(&mut self) -> pci::Result<()> {
         let cap_region =
             Region::init_io_region(XHCI_PCI_CAP_LENGTH as u64, build_cap_ops(&self.xhci));
-        PciResultExt::chain_err(
+        pci::Result::with_context(
             self.mem_region
                 .add_subregion(cap_region, XHCI_PCI_CAP_OFFSET as u64),
             || "Failed to register cap region.",
@@ -98,7 +97,7 @@ impl XhciPciDevice {
 
         let oper_region =
             Region::init_io_region(XHCI_PCI_OPER_LENGTH as u64, build_oper_ops(&self.xhci));
-        PciResultExt::chain_err(
+        pci::Result::with_context(
             self.mem_region
                 .add_subregion(oper_region, XHCI_PCI_OPER_OFFSET as u64),
             || "Failed to register oper region.",
@@ -108,7 +107,7 @@ impl XhciPciDevice {
             XHCI_PCI_RUNTIME_LENGTH as u64,
             build_runtime_ops(&self.xhci),
         );
-        PciResultExt::chain_err(
+        pci::Result::with_context(
             self.mem_region
                 .add_subregion(runtime_region, XHCI_PCI_RUNTIME_OFFSET as u64),
             || "Failed to register runtime region.",
@@ -118,7 +117,7 @@ impl XhciPciDevice {
             XHCI_PCI_DOORBELL_LENGTH as u64,
             build_doorbell_ops(&self.xhci),
         );
-        PciResultExt::chain_err(
+        pci::Result::with_context(
             self.mem_region
                 .add_subregion(doorbell_region, XHCI_PCI_DOORBELL_OFFSET as u64),
             || "Failed to register doorbell region.",
@@ -130,7 +129,7 @@ impl XhciPciDevice {
             let port_region =
                 Region::init_io_region(XHCI_PCI_PORT_LENGTH as u64, build_port_ops(port));
             let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i) as u64;
-            PciResultExt::chain_err(self.mem_region.add_subregion(port_region, offset), || {
+            pci::Result::with_context(self.mem_region.add_subregion(port_region, offset), || {
                 "Failed to register port region."
             })?;
         }
@@ -139,15 +138,15 @@ impl XhciPciDevice {
 }
 
 impl PciDevOps for XhciPciDevice {
-    fn init_write_mask(&mut self) -> PciResult<()> {
+    fn init_write_mask(&mut self) -> pci::Result<()> {
         self.pci_config.init_common_write_mask()
     }
 
-    fn init_write_clear_mask(&mut self) -> PciResult<()> {
+    fn init_write_clear_mask(&mut self) -> pci::Result<()> {
         self.pci_config.init_common_write_clear_mask()
     }
 
-    fn realize(mut self) -> PciResult<()> {
+    fn realize(mut self) -> pci::Result<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
         le_write_u16(
@@ -223,7 +222,7 @@ impl PciDevOps for XhciPciDevice {
         Ok(())
     }
 
-    fn unrealize(&mut self) -> PciResult<()> {
+    fn unrealize(&mut self) -> pci::Result<()> {
         Ok(())
     }
 
@@ -271,7 +270,7 @@ impl PciDevOps for XhciPciDevice {
                 &locked_parent_bus.io_region,
                 &locked_parent_bus.mem_region,
             ) {
-                error!("Failed to update bar, error is {}", e);
+                error!("Failed to update bar, error is {:?}", e);
             }
         }
     }
@@ -280,7 +279,7 @@ impl PciDevOps for XhciPciDevice {
         self.name.clone()
     }
 
-    fn reset(&mut self, _reset_child_device: bool) -> PciResult<()> {
+    fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
         Ok(())
     }
 }

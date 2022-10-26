@@ -16,6 +16,9 @@ mod aarch64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
+pub mod error;
+pub use error::StandardVmError;
+
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::StdMachine;
 use log::error;
@@ -26,46 +29,13 @@ use vmm_sys_util::eventfd::EventFd;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
-#[allow(clippy::upper_case_acronyms)]
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-            Cpu(cpu::errors::Error, cpu::errors::ErrorKind);
-            Legacy(devices::LegacyErrs::Error, devices::LegacyErrs::ErrorKind);
-            PciErr(pci::errors::Error, pci::errors::ErrorKind);
-            Acpi(acpi::errors::Error, acpi::errors::ErrorKind);
-            MachineManager(machine_manager::config::errors::Error, machine_manager::config::errors::ErrorKind);
-        }
-        foreign_links{
-            Io(std::io::Error);
-        }
-        errors {
-            InitPCIeHostErr {
-                display("Failed to init PCIe host.")
-            }
-            OpenFileErr(path: String) {
-                display("Failed to open file: {}.", path)
-            }
-            InitPflashErr {
-                display("Failed to init pflash device.")
-            }
-            RlzPflashErr {
-                display("Failed to realize pflash device.")
-            }
-        }
-    }
-}
-
 use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
 use std::sync::{Arc, Condvar, Mutex};
 
-use crate::errors::Result as MachineResult;
+use super::Result as MachineResult;
 use crate::MachineOps;
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
@@ -73,10 +43,10 @@ use acpi::{
     AcpiRsdp, AcpiTable, AmlBuilder, TableLoader, ACPI_RSDP_FILE, ACPI_TABLE_FILE,
     ACPI_TABLE_LOADER_FILE, TABLE_CHECKSUM_OFFSET,
 };
+pub use anyhow::Result;
+use anyhow::{bail, Context};
 use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
-use error_chain::{bail, ChainedError};
-use errors::{Result, ResultExt};
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
     DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, VmConfig,
@@ -121,52 +91,52 @@ trait StdMachineOps: AcpiBuilder {
         #[cfg(target_arch = "x86_64")]
         {
             let facs_addr = Self::build_facs_table(&acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI FACS table")?;
+                .with_context(|| "Failed to build ACPI FACS table")?;
             xsdt_entries.push(facs_addr);
         }
 
         let dsdt_addr = self
             .build_dsdt_table(&acpi_tables, &mut loader)
-            .chain_err(|| "Failed to build ACPI DSDT table")?;
+            .with_context(|| "Failed to build ACPI DSDT table")?;
         let fadt_addr = Self::build_fadt_table(&acpi_tables, &mut loader, dsdt_addr)
-            .chain_err(|| "Failed to build ACPI FADT table")?;
+            .with_context(|| "Failed to build ACPI FADT table")?;
         xsdt_entries.push(fadt_addr);
 
         let madt_addr = self
             .build_madt_table(&acpi_tables, &mut loader)
-            .chain_err(|| "Failed to build ACPI MADT table")?;
+            .with_context(|| "Failed to build ACPI MADT table")?;
         xsdt_entries.push(madt_addr);
 
         #[cfg(target_arch = "aarch64")]
         {
             let gtdt_addr = self
                 .build_gtdt_table(&acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI GTDT table")?;
+                .with_context(|| "Failed to build ACPI GTDT table")?;
             xsdt_entries.push(gtdt_addr);
 
             let iort_addr = self
                 .build_iort_table(&acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI IORT table")?;
+                .with_context(|| "Failed to build ACPI IORT table")?;
             xsdt_entries.push(iort_addr);
 
             let spcr_addr = self
                 .build_spcr_table(&acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI SPCR table")?;
+                .with_context(|| "Failed to build ACPI SPCR table")?;
             xsdt_entries.push(spcr_addr);
         }
 
         let mcfg_addr = Self::build_mcfg_table(&acpi_tables, &mut loader)
-            .chain_err(|| "Failed to build ACPI MCFG table")?;
+            .with_context(|| "Failed to build ACPI MCFG table")?;
         xsdt_entries.push(mcfg_addr);
 
         if let Some(numa_nodes) = self.get_numa_nodes() {
             let srat_addr = self
                 .build_srat_table(&acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI SRAT table")?;
+                .with_context(|| "Failed to build ACPI SRAT table")?;
             xsdt_entries.push(srat_addr);
 
             let slit_addr = Self::build_slit_table(numa_nodes, &acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI SLIT table")?;
+                .with_context(|| "Failed to build ACPI SLIT table")?;
             xsdt_entries.push(slit_addr);
         }
 
@@ -174,7 +144,7 @@ trait StdMachineOps: AcpiBuilder {
         {
             let pptt_addr = self
                 .build_pptt_table(&acpi_tables, &mut loader)
-                .chain_err(|| "Failed to build ACPI PPTT table")?;
+                .with_context(|| "Failed to build ACPI PPTT table")?;
             xsdt_entries.push(pptt_addr);
         }
 
@@ -186,14 +156,14 @@ trait StdMachineOps: AcpiBuilder {
             &mut *locked_fw_cfg as &mut dyn FwCfgOps,
             xsdt_addr,
         )
-        .chain_err(|| "Failed to build ACPI RSDP")?;
+        .with_context(|| "Failed to build ACPI RSDP")?;
 
         locked_fw_cfg
             .add_file_entry(ACPI_TABLE_LOADER_FILE, loader.cmd_entries())
-            .chain_err(|| "Failed to add ACPI table loader file entry")?;
+            .with_context(|| "Failed to add ACPI table loader file entry")?;
         locked_fw_cfg
             .add_file_entry(ACPI_TABLE_FILE, acpi_tables.lock().unwrap().to_vec())
-            .chain_err(|| "Failed to add ACPI-tables file entry")?;
+            .with_context(|| "Failed to add ACPI-tables file entry")?;
 
         Ok(())
     }
@@ -227,10 +197,7 @@ trait StdMachineOps: AcpiBuilder {
             Arc::new(Mutex::new(Box::new(move |_, _| {
                 let _ret = reset_req.read().unwrap();
                 if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
-                    error!(
-                        "Fail to reboot standard VM, {}",
-                        error_chain::ChainedError::display_chain(&e)
-                    );
+                    error!("Fail to reboot standard VM, {:?}", e);
                 }
 
                 None
@@ -243,7 +210,7 @@ trait StdMachineOps: AcpiBuilder {
             vec![reset_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
-            .chain_err(|| "Failed to register event notifier.")?;
+            .with_context(|| "Failed to register event notifier.")?;
         Ok(())
     }
 
@@ -276,7 +243,7 @@ trait StdMachineOps: AcpiBuilder {
             vec![shutdown_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
-            .chain_err(|| "Failed to register event notifier.")?;
+            .with_context(|| "Failed to register event notifier.")?;
         Ok(())
     }
 }
@@ -667,7 +634,7 @@ trait AcpiBuilder {
         }
 
         let slit_begin = StdMachine::add_table_to_loader(acpi_data, loader, &slit)
-            .chain_err(|| "Fail to add SLIT table to loader")?;
+            .with_context(|| "Fail to add SLIT table to loader")?;
         Ok(slit_begin as u64)
     }
 
@@ -764,7 +731,7 @@ fn get_device_bdf(bus: Option<String>, addr: Option<String>) -> Result<PciBdf> {
         addr: (0, 0),
     };
     let addr = addr.unwrap_or_else(|| String::from("0x0"));
-    pci_bdf.addr = get_pci_df(&addr).chain_err(|| "Failed to get device num or function num")?;
+    pci_bdf.addr = get_pci_df(&addr).with_context(|| "Failed to get device num or function num")?;
     Ok(pci_bdf)
 }
 
@@ -805,14 +772,14 @@ impl StdMachine {
 
         if let Some(bootindex) = args.boot_index {
             self.check_bootindex(bootindex)
-                .chain_err(|| "Fail to add virtio pci blk device for invalid bootindex")?;
+                .with_context(|| "Fail to add virtio pci blk device for invalid bootindex")?;
         }
 
         let blk_id = blk.id.clone();
         let blk = Arc::new(Mutex::new(Block::new(blk)));
         let pci_dev = self
             .add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
-            .chain_err(|| "Failed to add virtio pci block device")?;
+            .with_context(|| "Failed to add virtio pci block device")?;
 
         if let Some(bootindex) = args.boot_index {
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
@@ -871,7 +838,7 @@ impl StdMachine {
             if let Some(chardev) = &conf.chardev {
                 socket_path = self
                     .get_socket_path(&vm_config, (&chardev).to_string())
-                    .chain_err(|| "Failed to get socket path")?;
+                    .with_context(|| "Failed to get socket path")?;
             }
             let dev = NetworkInterfaceConfig {
                 id: args.id.clone(),
@@ -902,12 +869,12 @@ impl StdMachine {
                     Arc::new(Mutex::new(VhostUser::Net::new(&dev, self.get_sys_mem())))
                 };
             self.add_virtio_pci_device(&args.id, pci_bdf, net, multifunction, need_irqfd)
-                .chain_err(|| "Failed to add vhost-kernel/vhost-user net device")?;
+                .with_context(|| "Failed to add vhost-kernel/vhost-user net device")?;
         } else {
             let net_id = dev.id.clone();
             let net = Arc::new(Mutex::new(virtio::Net::new(dev)));
             self.add_virtio_pci_device(&args.id, pci_bdf, net.clone(), multifunction, false)
-                .chain_err(|| "Failed to add virtio net device")?;
+                .with_context(|| "Failed to add virtio net device")?;
             MigrationManager::register_device_instance(VirtioNetState::descriptor(), net, &net_id);
         }
 
@@ -949,7 +916,7 @@ impl StdMachine {
             sysfsdev,
             args.multifunction.map_or(false, |m| m),
         ) {
-            error!("{}", e.display_chain());
+            error!("{:?}", e);
             bail!("Failed to plug vfio-pci device.");
         }
         Ok(())
@@ -1068,7 +1035,7 @@ impl DeviceInterface for StdMachine {
         match driver {
             "virtio-blk-pci" => {
                 if let Err(e) = self.plug_virtio_pci_blk(&pci_bdf, args.as_ref()) {
-                    error!("{}", e.display_chain());
+                    error!("{:?}", e);
                     let err_str = format!("Failed to add virtio pci blk: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1078,7 +1045,7 @@ impl DeviceInterface for StdMachine {
             }
             "virtio-net-pci" => {
                 if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
-                    error!("{}", e.display_chain());
+                    error!("{:?}", e);
                     let err_str = format!("Failed to add virtio pci net: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1110,7 +1077,7 @@ impl DeviceInterface for StdMachine {
                 Ok(()) => Response::create_empty_response(),
                 Err(e) => {
                     if let Err(e) = PciBus::detach_device(&bus, &dev) {
-                        error!("{}", e.display_chain());
+                        error!("{:?}", e);
                         error!("Failed to detach device");
                     }
                     let err_str = format!("Failed to plug device: {}", e);

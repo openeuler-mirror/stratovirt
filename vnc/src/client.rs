@@ -10,9 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::VncError;
 use crate::{
     auth::{AuthState, SubAuthState},
-    errors::{ErrorKind, Result},
     pixman::{get_image_height, get_image_width, PixelFormat},
     round_up_div,
     server::VncServer,
@@ -22,7 +22,7 @@ use crate::{
         DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
     },
 };
-use error_chain::ChainedError;
+use anyhow::{anyhow, Result};
 use machine_manager::event_loop::EventLoop;
 use sscanf::scanf;
 use std::{
@@ -424,7 +424,7 @@ impl VncClient {
                 len = ret;
             }
             Err(e) => {
-                error!("read msg error: {}", e);
+                error!("read msg error: {:?}", e);
             }
         }
 
@@ -500,7 +500,7 @@ impl VncClient {
             Err(e) => {
                 let msg = format!("Unsupport RFB version: {}", e);
                 error!("{}", msg);
-                return Err(ErrorKind::UnsupportRFBProtocolVersion.into());
+                return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
             }
         }
         self.version.major = ver.0 as u16;
@@ -509,7 +509,7 @@ impl VncClient {
             let mut buf = Vec::new();
             buf.append(&mut (AuthState::Invalid as u32).to_be_bytes().to_vec());
             self.write_msg(&buf);
-            return Err(ErrorKind::UnsupportRFBProtocolVersion.into());
+            return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         }
 
         if [4, 5].contains(&self.version.minor) {
@@ -527,9 +527,9 @@ impl VncClient {
                 }
                 _ => {
                     self.auth_failed("Unsupported auth method");
-                    return Err(
-                        ErrorKind::AuthFailed(String::from("Unsupported auth method")).into(),
-                    );
+                    return Err(anyhow!(VncError::AuthFailed(String::from(
+                        "Unsupported auth method"
+                    ))));
                 }
             }
         } else {
@@ -562,7 +562,7 @@ impl VncClient {
         if buf[0] != self.auth as u8 {
             self.auth_failed("Authentication failed");
             error!("handle_auth");
-            return Err(ErrorKind::AuthFailed(String::from("handle_auth")).into());
+            return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
         }
 
         match self.auth {
@@ -585,7 +585,7 @@ impl VncClient {
             _ => {
                 self.auth_failed("Unhandled auth method");
                 error!("handle_auth");
-                return Err(ErrorKind::AuthFailed(String::from("handle_auth")).into());
+                return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
             }
         }
         Ok(())
@@ -630,13 +630,13 @@ impl VncClient {
         self.width = get_image_width(self.server_image);
         if self.width < 0 || self.width > MAX_WINDOW_WIDTH as i32 {
             error!("Invalid Image Size!");
-            return Err(ErrorKind::InvalidImageSize.into());
+            return Err(anyhow!(VncError::InvalidImageSize));
         }
         buf.append(&mut (self.width as u16).to_be_bytes().to_vec());
         self.height = get_image_height(self.server_image);
         if self.height < 0 || self.height > MAX_WINDOW_HEIGHT as i32 {
             error!("Invalid Image Size!");
-            return Err(ErrorKind::InvalidImageSize.into());
+            return Err(anyhow!(VncError::InvalidImageSize));
         }
         buf.append(&mut (self.height as u16).to_be_bytes().to_vec());
         self.pixel_format_message(&mut buf);
@@ -712,7 +712,9 @@ impl VncClient {
         if ![8, 16, 32].contains(&bit_per_pixel) {
             self.dis_conn = true;
             error!("Worng format of bits_per_pixel");
-            return Err(ErrorKind::ProtocolMessageFailed(String::from("set pixel format")).into());
+            return Err(anyhow!(VncError::ProtocolMessageFailed(String::from(
+                "set pixel format"
+            ))));
         }
 
         self.pixel_format.red.set_color_info(red_shift, red_max);
@@ -946,7 +948,7 @@ impl VncClient {
     /// Clear the data when disconnected from client.
     pub fn disconnect(&mut self) {
         if let Err(e) = self.modify_event(NotifierOperation::Delete, 0) {
-            error!("Failed to delete event, error is {}", e.display_chain());
+            error!("Failed to delete event, error is {}", format!("{:?}", e));
         }
 
         if let Err(e) = self.stream.shutdown(Shutdown::Both) {
@@ -968,7 +970,7 @@ impl EventNotifierHelper for VncClient {
                 } else if event == EventSet::IN {
                     let mut locked_client = client.lock().unwrap();
                     if let Err(e) = locked_client.from_tcpstream_to_buff() {
-                        error!("Failed to read_msg, error is {}", e.display_chain());
+                        error!("Failed to read_msg, error is {}", format!("{:?}", e));
                         dis_conn = true;
                     }
                 }
@@ -977,7 +979,7 @@ impl EventNotifierHelper for VncClient {
                     let mut locked_client = client.lock().unwrap();
                     while locked_client.buffpool.len() >= locked_client.expect {
                         if let Err(e) = (locked_client.handle_msg)(&mut locked_client) {
-                            error!("Failed to read_msg, error is {}", e.display_chain());
+                            error!("Failed to read_msg, error is {}", format!("{:?}", e));
                             dis_conn = true;
                             break;
                         }

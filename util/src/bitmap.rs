@@ -13,7 +13,8 @@
 use std::cmp::Ord;
 use std::mem::size_of;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::UtilError;
+use anyhow::{anyhow, Context, Result};
 
 /// This struct is used to offer bitmap.
 pub struct Bitmap<T: BitOps> {
@@ -52,7 +53,10 @@ impl<T: BitOps> Bitmap<T> {
     pub fn set(&mut self, num: usize) -> Result<()> {
         let index = self.bit_index(num);
         if index >= self.size() {
-            return Err(ErrorKind::OutOfBound(index as u64, self.vol() as u64).into());
+            return Err(anyhow!(UtilError::OutOfBound(
+                index as u64,
+                self.vol() as u64
+            )));
         }
         self.data[index] = T::bit_or(self.data[index], T::one().rhs(self.bit_pos(num)));
         Ok(())
@@ -66,7 +70,10 @@ impl<T: BitOps> Bitmap<T> {
     pub fn clear(&mut self, num: usize) -> Result<()> {
         let index = self.bit_index(num);
         if index >= self.size() {
-            return Err(ErrorKind::OutOfBound(index as u64, self.vol() as u64).into());
+            return Err(anyhow!(UtilError::OutOfBound(
+                index as u64,
+                self.vol() as u64
+            )));
         }
         self.data[index] = T::bit_and(
             self.data[index],
@@ -82,11 +89,10 @@ impl<T: BitOps> Bitmap<T> {
     /// * `num` - the input number.
     pub fn contain(&self, num: usize) -> Result<bool> {
         if num > self.vol() {
-            return Err(ErrorKind::OutOfBound(
+            return Err(anyhow!(UtilError::OutOfBound(
                 num as u64,
                 (self.size() as u64 * T::len() as u64) as u64,
-            )
-            .into());
+            )));
         }
         Ok(T::bit_and(
             self.data[self.bit_index(num)],
@@ -102,13 +108,16 @@ impl<T: BitOps> Bitmap<T> {
     /// * `offset` - the input offset as the query's start.
     pub fn count_front_bits(&self, offset: usize) -> Result<usize> {
         if offset > self.vol() {
-            return Err(ErrorKind::OutOfBound(offset as u64, self.size() as u64).into());
+            return Err(anyhow!(UtilError::OutOfBound(
+                offset as u64,
+                self.size() as u64
+            )));
         }
         let mut num = 0;
         for i in 0..self.bit_index(offset) + 1 {
             if i == self.bit_index(offset) {
                 for j in i * T::len()..offset {
-                    let ret = self.contain(j).chain_err(|| "count front bits failed")?;
+                    let ret = self.contain(j).with_context(|| "count front bits failed")?;
                     if ret {
                         num += 1;
                     }

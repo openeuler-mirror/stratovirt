@@ -17,11 +17,10 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
+use anyhow::Result;
 use log::{debug, error, warn};
-use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
-
-use super::errors::Result;
 
 /// IO port of RTC device to select Register to read/write.
 pub const RTC_PORT_INDEX: u64 = 0x70;
@@ -277,7 +276,7 @@ impl SysBusDevOps for RTC {
         SysBusDevType::Rtc
     }
 
-    fn reset(&mut self) -> SysBusResult<()> {
+    fn reset(&mut self) -> sysbus::Result<()> {
         self.cmos_data.fill(0);
         self.cmos_data[RTC_REG_D as usize] = 0x80;
         self.set_memory(self.mem_size, self.gap_start);

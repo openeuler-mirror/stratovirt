@@ -10,36 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-        }
-        errors {
-            AddPciCap(id: u8, size: usize) {
-                display("Failed to add PCI capability: id 0x{:x}, size: 0x{:x}.", id, size)
-            }
-            AddPcieExtCap(id: u16, size: usize) {
-                display("Failed to add PCIe extended capability: id 0x{:x}, size: 0x{:x}.", id, size)
-            }
-            UnregMemBar(id: usize) {
-                display("Failed to unmap BAR {} in memory space.", id)
-            }
-            DeviceStatus(status: u32) {
-                display("Invalid device status 0x{:x}", status)
-            }
-            PciRegister(offset: u64) {
-                display("Unsupported pci register, 0x{:x}", offset)
-            }
-            FeaturesSelect(select: u32) {
-                display("Invalid features select 0x{:x}", select)
-            }
-        }
-    }
-}
-
+pub mod error;
+pub use error::PciError;
 pub mod config;
 pub mod hotplug;
 pub mod msix;
@@ -58,11 +30,10 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
+pub use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::bail;
 
 use crate::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
-use crate::errors::Result;
 
 const BDF_FUNC_SHIFT: u8 = 3;
 

@@ -18,11 +18,11 @@ use std::time::{Duration, Instant};
 
 use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::general::Lifecycle;
 use crate::manager::MIGRATION_MANAGER;
 use crate::protocol::{MemBlock, MigrationStatus, Request, Response, TransStatus};
-use crate::MigrationManager;
+use crate::{MigrationError, MigrationManager};
+use anyhow::{anyhow, bail, Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{get_pci_bdf, PciBdf, VmConfig};
 use util::unix::host_page_size;
@@ -40,16 +40,16 @@ impl MigrationManager {
         T: Read + Write,
     {
         // Activate the migration status of source and destination virtual machine.
-        Self::active_migration(fd).chain_err(|| "Failed to active migration")?;
+        Self::active_migration(fd).with_context(|| "Failed to active migration")?;
 
         // Send source virtual machine configuration.
-        Self::send_vm_config(fd).chain_err(|| "Failed to send vm config")?;
+        Self::send_vm_config(fd).with_context(|| "Failed to send vm config")?;
 
         // Start logging dirty pages.
-        Self::start_dirty_log().chain_err(|| "Failed to start logging dirty page")?;
+        Self::start_dirty_log().with_context(|| "Failed to start logging dirty page")?;
 
         // Send all memory of virtual machine itself to destination.
-        Self::send_vm_memory(fd).chain_err(|| "Failed to send VM memory")?;
+        Self::send_vm_memory(fd).with_context(|| "Failed to send VM memory")?;
 
         // Iteratively send virtual machine dirty memory.
         let iterations = MIGRATION_MANAGER.limit.read().unwrap().max_dirty_iterations;
@@ -67,7 +67,7 @@ impl MigrationManager {
         // Check whether the migration is canceled.
         if Self::is_canceled() {
             // Cancel the migration of source and destination.
-            Self::cancel_migration(fd).chain_err(|| "Failed to cancel migration")?;
+            Self::cancel_migration(fd).with_context(|| "Failed to cancel migration")?;
             return Ok(());
         }
 
@@ -75,19 +75,19 @@ impl MigrationManager {
         Self::pause()?;
 
         // Send remaining virtual machine dirty memory.
-        Self::send_dirty_memory(fd).chain_err(|| "Failed to send dirty memory")?;
+        Self::send_dirty_memory(fd).with_context(|| "Failed to send dirty memory")?;
 
         // Stop logging dirty pages.
-        Self::stop_dirty_log().chain_err(|| "Failed to stop logging dirty page")?;
+        Self::stop_dirty_log().with_context(|| "Failed to stop logging dirty page")?;
 
         // Get virtual machine state and send it to destination VM.
-        Self::send_vmstate(fd).chain_err(|| "Failed to send vm state")?;
+        Self::send_vmstate(fd).with_context(|| "Failed to send vm state")?;
 
         // Complete the migration.
-        Self::complete_migration(fd).chain_err(|| "Failed to completing migration")?;
+        Self::complete_migration(fd).with_context(|| "Failed to completing migration")?;
 
         // Destroy virtual machine.
-        Self::clear_migration().chain_err(|| "Failed to clear migration")?;
+        Self::clear_migration().with_context(|| "Failed to clear migration")?;
 
         Ok(())
     }
@@ -111,25 +111,24 @@ impl MigrationManager {
             Response::send_msg(fd, TransStatus::Ok)?;
         } else {
             Response::send_msg(fd, TransStatus::Error)?;
-            return Err(ErrorKind::MigrationStatusErr(
+            return Err(anyhow!(MigrationError::MigrationStatusErr(
                 request.status.to_string(),
                 TransStatus::Active.to_string(),
-            )
-            .into());
+            )));
         }
 
         // Check source and destination virtual machine configuration.
         let request = Request::recv_msg(fd)?;
         if request.status == TransStatus::VmConfig {
             info!("Receive VmConfig status");
-            Self::check_vm_config(fd, request.length).chain_err(|| "Failed to check vm config")?;
+            Self::check_vm_config(fd, request.length)
+                .with_context(|| "Failed to check vm config")?;
         } else {
             Response::send_msg(fd, TransStatus::Error)?;
-            return Err(ErrorKind::MigrationStatusErr(
+            return Err(anyhow!(MigrationError::MigrationStatusErr(
                 request.status.to_string(),
                 TransStatus::VmConfig.to_string(),
-            )
-            .into());
+            )));
         }
 
         loop {
@@ -172,7 +171,7 @@ impl MigrationManager {
 
         let result = Response::recv_msg(fd)?;
         if result.is_err() {
-            return Err(ErrorKind::ResponseErr.into());
+            return Err(anyhow!(MigrationError::ResponseErr));
         }
 
         Ok(())
@@ -204,12 +203,11 @@ impl MigrationManager {
         let src_cpu = src_config.machine_config.nr_cpus;
         let dest_cpu = dest_config.machine_config.nr_cpus;
         if src_cpu != dest_cpu {
-            return Err(ErrorKind::MigrationConfigErr(
+            return Err(anyhow!(MigrationError::MigrationConfigErr(
                 "vCPU number".to_string(),
                 src_cpu.to_string(),
                 dest_cpu.to_string(),
-            )
-            .into());
+            )));
         }
 
         Ok(())
@@ -220,12 +218,11 @@ impl MigrationManager {
         let src_mem = src_config.machine_config.mem_config.mem_size;
         let dest_mem = dest_config.machine_config.mem_config.mem_size;
         if src_mem != dest_mem {
-            return Err(ErrorKind::MigrationConfigErr(
+            return Err(anyhow!(MigrationError::MigrationConfigErr(
                 "memory size".to_string(),
                 src_mem.to_string(),
                 dest_mem.to_string(),
-            )
-            .into());
+            )));
         }
 
         Ok(())
@@ -244,12 +241,11 @@ impl MigrationManager {
                 match dest_devices.get(&src_bdf) {
                     Some(dest_type) => {
                         if !src_type.eq(dest_type) {
-                            return Err(ErrorKind::MigrationConfigErr(
+                            return Err(anyhow!(MigrationError::MigrationConfigErr(
                                 "device type".to_string(),
                                 src_type.to_string(),
                                 dest_type.to_string(),
-                            )
-                            .into());
+                            )));
                         }
                     }
                     None => bail!(
@@ -274,7 +270,8 @@ impl MigrationManager {
     where
         T: Write + Read,
     {
-        let mut state = Self::send_dirty_memory(fd).chain_err(|| "Failed to send dirty memory")?;
+        let mut state =
+            Self::send_dirty_memory(fd).with_context(|| "Failed to send dirty memory")?;
 
         // Check the virtual machine downtime.
         if MIGRATION_MANAGER
@@ -363,7 +360,7 @@ impl MigrationManager {
 
         let result = Response::recv_msg(fd)?;
         if result.is_err() {
-            return Err(ErrorKind::ResponseErr.into());
+            return Err(anyhow!(MigrationError::ResponseErr));
         }
 
         Ok(())
@@ -431,7 +428,7 @@ impl MigrationManager {
 
         let result = Response::recv_msg(fd)?;
         if result.is_err() {
-            return Err(ErrorKind::ResponseErr.into());
+            return Err(anyhow!(MigrationError::ResponseErr));
         }
 
         Ok(())
@@ -449,8 +446,8 @@ impl MigrationManager {
         let header = Self::restore_header(fd)?;
         header.check_header()?;
         let desc_db = Self::restore_desc_db(fd, header.desc_len)
-            .chain_err(|| "Failed to load device descriptor db")?;
-        Self::restore_vmstate(desc_db, fd).chain_err(|| "Failed to load snapshot device")?;
+            .with_context(|| "Failed to load device descriptor db")?;
+        Self::restore_vmstate(desc_db, fd).with_context(|| "Failed to load snapshot device")?;
         Self::resume()?;
 
         Response::send_msg(fd, TransStatus::Ok)?;
@@ -471,7 +468,7 @@ impl MigrationManager {
         Request::send_msg(fd, TransStatus::Active, 0)?;
         let result = Response::recv_msg(fd)?;
         if result.is_err() {
-            return Err(ErrorKind::ResponseErr.into());
+            return Err(anyhow!(MigrationError::ResponseErr));
         }
 
         Ok(())
@@ -490,7 +487,7 @@ impl MigrationManager {
         Request::send_msg(fd, TransStatus::Complete, 0)?;
         let result = Response::recv_msg(fd)?;
         if result.is_err() {
-            return Err(ErrorKind::ResponseErr.into());
+            return Err(anyhow!(MigrationError::ResponseErr));
         }
 
         Ok(())
@@ -512,11 +509,10 @@ impl MigrationManager {
             Self::set_status(MigrationStatus::Completed)?;
             Response::send_msg(fd, TransStatus::Ok)?;
         } else {
-            return Err(ErrorKind::MigrationStatusErr(
+            return Err(anyhow!(MigrationError::MigrationStatusErr(
                 request.status.to_string(),
                 TransStatus::Complete.to_string(),
-            )
-            .into());
+            )));
         }
 
         Ok(())
@@ -532,12 +528,12 @@ impl MigrationManager {
         T: Write + Read,
     {
         // Stop logging dirty pages.
-        Self::stop_dirty_log().chain_err(|| "Failed to stop logging dirty page")?;
+        Self::stop_dirty_log().with_context(|| "Failed to stop logging dirty page")?;
 
         Request::send_msg(fd, TransStatus::Cancel, 0)?;
         let result = Response::recv_msg(fd)?;
         if result.is_err() {
-            return Err(ErrorKind::ResponseErr.into());
+            return Err(anyhow!(MigrationError::ResponseErr));
         }
 
         Ok(())

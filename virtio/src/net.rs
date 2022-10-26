@@ -17,8 +17,19 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fs, mem};
 
+use super::{
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
+    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+};
+use crate::virtio_has_feature;
+use crate::VirtioError;
 use address_space::AddressSpace;
-use error_chain::bail;
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
@@ -33,19 +44,6 @@ use util::loop_context::{
 use util::num_ops::{read_u32, write_u32};
 use util::tap::{Tap, IFF_MULTI_QUEUE, TUN_F_VIRTIO};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-
-use super::errors::{ErrorKind, Result, ResultExt};
-use super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
-    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_UFO,
-    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
-    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
-};
-use crate::virtio_has_feature;
-
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
 /// Size of each virtqueue.
@@ -120,7 +118,7 @@ impl NetCtrlHandler {
             .unwrap()
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
-            .chain_err(|| "Failed to pop avail ring for net control queue")?;
+            .with_context(|| "Failed to pop avail ring for net control queue")?;
 
         let mut used_len = 0;
         if let Some(ctrl_desc) = elem.out_iovec.get(0) {
@@ -128,7 +126,7 @@ impl NetCtrlHandler {
             let ctrl_hdr = self
                 .mem_space
                 .read_object::<CrtlHdr>(ctrl_desc.addr)
-                .chain_err(|| "Failed to get control queue descriptor")?;
+                .with_context(|| "Failed to get control queue descriptor")?;
             match ctrl_hdr.class as u16 {
                 VIRTIO_NET_CTRL_MQ => {
                     if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
@@ -142,7 +140,7 @@ impl NetCtrlHandler {
                         let queue_pairs = self
                             .mem_space
                             .read_object::<u16>(mq_desc.addr)
-                            .chain_err(|| "Failed to read multi queue descriptor")?;
+                            .with_context(|| "Failed to read multi queue descriptor")?;
                         if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                             .contains(&queue_pairs)
                         {
@@ -170,13 +168,18 @@ impl NetCtrlHandler {
             .unwrap()
             .vring
             .add_used(&self.mem_space, elem.index, used_len)
-            .chain_err(|| format!("Failed to add used ring {}", elem.index))?;
+            .with_context(|| format!("Failed to add used ring {}", elem.index))?;
 
         (self.interrupt_cb)(
             &VirtioInterruptType::Vring,
             Some(&self.ctrl.queue.lock().unwrap()),
         )
-        .chain_err(|| ErrorKind::InterruptTrigger("ctrl", VirtioInterruptType::Vring))?;
+        .with_context(|| {
+            anyhow!(VirtioError::InterruptTrigger(
+                "ctrl",
+                VirtioInterruptType::Vring
+            ))
+        })?;
 
         Ok(())
     }
@@ -297,7 +300,7 @@ impl NetIoHandler {
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
-                .chain_err(|| "Failed to pop avail ring for net rx")?;
+                .with_context(|| "Failed to pop avail ring for net rx")?;
             let mut iovecs = Vec::new();
             for elem_iov in elem.in_iovec.iter() {
                 let host_addr = queue
@@ -344,7 +347,7 @@ impl NetIoHandler {
             queue
                 .vring
                 .add_used(&self.mem_space, elem.index, write_count as u32)
-                .chain_err(|| {
+                .with_context(|| {
                     format!(
                         "Failed to add used ring for net rx, index: {}, len: {}",
                         elem.index, write_count
@@ -355,8 +358,12 @@ impl NetIoHandler {
 
         if self.rx.need_irqs {
             self.rx.need_irqs = false;
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
-                .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "net",
+                    VirtioInterruptType::Vring
+                ))
+            })?;
             self.trace_send_interrupt("Net".to_string());
         }
 
@@ -404,14 +411,18 @@ impl NetIoHandler {
             queue
                 .vring
                 .add_used(&self.mem_space, elem.index, 0)
-                .chain_err(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
+                .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
 
             need_irq = true;
         }
 
         if need_irq {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
-                .chain_err(|| ErrorKind::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "net",
+                    VirtioInterruptType::Vring
+                ))
+            })?;
             self.trace_send_interrupt("Net".to_string());
         }
 
@@ -588,10 +599,7 @@ impl EventNotifierHelper for NetIoHandler {
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
             if let Err(ref e) = cloned_net_io.lock().unwrap().handle_tx() {
-                error!(
-                    "Failed to handle tx(tx event) for net, {}",
-                    error_chain::ChainedError::display_chain(e)
-                );
+                error!("Failed to handle tx(tx event) for net, {:?}", e);
             }
             None
         });
@@ -609,10 +617,7 @@ impl EventNotifierHelper for NetIoHandler {
             let handler: Box<NotifierCallback> = Box::new(move |_, _| {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
                 if let Err(ref e) = locked_net_io.handle_rx() {
-                    error!(
-                        "Failed to handle rx(tap event), {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
+                    error!("Failed to handle rx(tap event), {:?}", e);
                 }
 
                 if let Some(tap) = locked_net_io.tap.as_ref() {
@@ -736,10 +741,10 @@ fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
     }
 
     let is_mq = queue_pair > 1;
-    let ifr_flag =
-        fs::read_to_string(tap_path).chain_err(|| "Failed to read content from tun_flags file")?;
+    let ifr_flag = fs::read_to_string(tap_path)
+        .with_context(|| "Failed to read content from tun_flags file")?;
     let flags = u16::from_str_radix(ifr_flag.trim().trim_start_matches("0x"), 16)
-        .chain_err(|| "Failed to parse tap ifr flag")?;
+        .with_context(|| "Failed to parse tap ifr flag")?;
     if (flags & IFF_MULTI_QUEUE != 0) && !is_mq {
         bail!(format!(
             "Tap device supports mq, but command set queue pairs {}.",
@@ -779,14 +784,14 @@ pub fn create_tap(
         let tap = if let Some(fds) = net_fds {
             let fd = fds
                 .get(index as usize)
-                .chain_err(|| format!("Failed to get fd from index {}", index))?;
+                .with_context(|| format!("Failed to get fd from index {}", index))?;
             Tap::new(None, Some(*fd), queue_pairs)
-                .chain_err(|| format!("Failed to create tap, index is {}", index))?
+                .with_context(|| format!("Failed to create tap, index is {}", index))?
         } else {
             // `unwrap()` won't fail because the arguments have been checked
             let dev_name = host_dev_name.unwrap();
             check_mq(dev_name, queue_pairs)?;
-            Tap::new(Some(dev_name), None, queue_pairs).chain_err(|| {
+            Tap::new(Some(dev_name), None, queue_pairs).with_context(|| {
                 format!(
                     "Failed to create tap with name {}, index is {}",
                     dev_name, index
@@ -795,11 +800,11 @@ pub fn create_tap(
         };
 
         tap.set_offload(TUN_F_VIRTIO)
-            .chain_err(|| "Failed to set tap offload")?;
+            .with_context(|| "Failed to set tap offload")?;
 
         let vnet_hdr_size = mem::size_of::<VirtioNetHdr>() as u32;
         tap.set_hdr_size(vnet_hdr_size)
-            .chain_err(|| "Failed to set tap hdr size")?;
+            .with_context(|| "Failed to set tap hdr size")?;
 
         taps.push(tap);
     }
@@ -842,7 +847,7 @@ impl VirtioDevice for Net {
         if !self.net_cfg.host_dev_name.is_empty() {
             self.taps = None;
             self.taps = create_tap(None, Some(&self.net_cfg.host_dev_name), queue_pairs)
-                .chain_err(|| "Failed to open tap with file path")?;
+                .with_context(|| "Failed to open tap with file path")?;
         } else if let Some(fds) = self.net_cfg.tap_fds.as_mut() {
             let mut created_fds = 0;
             if let Some(taps) = &self.taps {
@@ -854,8 +859,8 @@ impl VirtioDevice for Net {
             }
 
             if created_fds != fds.len() {
-                self.taps =
-                    create_tap(Some(fds), None, queue_pairs).chain_err(|| "Failed to open tap")?;
+                self.taps = create_tap(Some(fds), None, queue_pairs)
+                    .with_context(|| "Failed to open tap")?;
             }
         } else {
             self.taps = None;
@@ -922,7 +927,7 @@ impl VirtioDevice for Net {
         let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
         if let Some(end) = offset.checked_add(data.len() as u64) {
             data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
@@ -934,7 +939,6 @@ impl VirtioDevice for Net {
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
         let config_slice = self.state.config_space.as_mut_bytes();
-
         if !virtio_has_feature(self.state.driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
             && !virtio_has_feature(self.state.driver_features, VIRTIO_F_VERSION_1)
             && offset == 0
@@ -1033,20 +1037,20 @@ impl VirtioDevice for Net {
                         let tap = taps
                             .get(index)
                             .cloned()
-                            .chain_err(|| format!("Failed to get index {} tap", index))?;
-                        sender
-                            .send(Some(tap))
-                            .chain_err(|| ErrorKind::ChannelSend("tap fd".to_string()))?;
+                            .with_context(|| format!("Failed to get index {} tap", index))?;
+                        sender.send(Some(tap)).with_context(|| {
+                            anyhow!(VirtioError::ChannelSend("tap fd".to_string()))
+                        })?;
                     }
                     None => sender
                         .send(None)
-                        .chain_err(|| "Failed to send status of None to channel".to_string())?,
+                        .with_context(|| "Failed to send status of None to channel".to_string())?,
                 }
             }
 
             self.update_evt
                 .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
         }
 
         Ok(())
@@ -1055,7 +1059,7 @@ impl VirtioDevice for Net {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 }
 
@@ -1065,13 +1069,13 @@ impl VirtioDevice for Net {
 unsafe impl Sync for Net {}
 
 impl StateTransfer for Net {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VirtioNetState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("NET"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("NET")))?;
 
         Ok(())
     }

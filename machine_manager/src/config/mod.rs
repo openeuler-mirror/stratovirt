@@ -10,80 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-        }
-        foreign_links {
-            JsonSerde(serde_json::Error);
-        }
-        errors {
-            InvalidJsonField(field: String) {
-                display("Invalid json field \'{}\'", field)
-            }
-            InvalidParam(param: String, name: String) {
-                display("Invalid parameter \'{}\' for \'{}\'", param, name)
-            }
-            ConvertValueFailed(param: String, value: String) {
-                display("Unable to parse \'{}\' for \'{}\'", value, param)
-            }
-            StringLengthTooLong(t: String, len: usize) {
-                display("Input {} string's length must be no more than {}.", t, len)
-            }
-            FieldRepeat(param: String, field: String) {
-                display("Input field \'{}\' in {} is offered more than once.", field, param)
-            }
-            IdRepeat(param: String, id: String) {
-                display("Input id \'{}\' for {} repeat.", id, param)
-            }
-            IntegerOverflow(item: String) {
-                display("Integer overflow occurred during parse {}!", item)
-            }
-            UnknownDeviceType(item: String) {
-                display("Unknown device type: {}!", item)
-            }
-            FieldIsMissing(field: &'static str, device: &'static str) {
-                display("\'{}\' is missing for \'{}\' device.", field, device)
-            }
-            IllegalValue(name: String, min: u64, min_include: bool, max: u64, max_include: bool) {
-                display(
-                    "{} must >{} {} and <{} {}.",
-                    name,
-                    if *min_include {"="} else {""},
-                    min,
-                    if *max_include {"="} else {""},
-                    max
-                )
-            }
-            MacFormatError {
-                display("Mac address is illegal.")
-            }
-            UnknownVhostType {
-                display("Unknown vhost type.")
-            }
-            UnRegularFile(t: String) {
-                display("{} is not a regular File.", t)
-            }
-            Unaligned(param: String, value: u64, align: u64) {
-                display("Input value {} is unaligned with {} for {}.", value, align, param)
-            }
-            UnitIdError(id: usize, max: usize){
-                description("Check unit id of pflash device.")
-                display("PFlash unit id given {} should not be more than {}", id, max)
-            }
-        }
-    }
-}
-
-pub use self::errors::{ErrorKind, Result, ResultExt};
 pub use balloon::*;
 pub use boot_source::*;
 pub use chardev::*;
 pub use devices::*;
 pub use drive::*;
+pub use error::ConfigError;
 pub use fs::*;
 pub use gpu::*;
 pub use incoming::*;
@@ -102,6 +34,7 @@ mod boot_source;
 mod chardev;
 mod devices;
 mod drive;
+pub mod error;
 mod fs;
 mod gpu;
 mod incoming;
@@ -121,7 +54,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
@@ -150,12 +83,15 @@ fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
     let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
         obj_id
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "rng-object").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rng-object")));
     };
     let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
         name
     } else {
-        return Err(ErrorKind::FieldIsMissing("filename", "rng-object").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "filename",
+            "rng-object"
+        )));
     };
     let rng_obj_cfg = RngObjConfig { id, filename };
 
@@ -191,11 +127,10 @@ impl VmConfig {
         self.machine_config.check()?;
 
         if self.guest_name.len() > MAX_STRING_LENGTH {
-            return Err(self::errors::ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "name".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
         if self.boot_source.kernel_file.is_none()
             && self.machine_config.mach_type == MachineType::MicroVm
@@ -256,7 +191,7 @@ impl VmConfig {
         match device_type.as_str() {
             "iothread" => {
                 self.add_iothread(object_args)
-                    .chain_err(|| "Failed to add iothread")?;
+                    .with_context(|| "Failed to add iothread")?;
             }
             "rng-random" => {
                 let rng_cfg = parse_rng_obj(object_args)?;
@@ -316,7 +251,7 @@ impl VmConfig {
 
 #[cfg(target_arch = "aarch64")]
 impl device_tree::CompileFDT for VmConfig {
-    fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> util::Result<()> {
         Ok(())
     }
 }
@@ -380,14 +315,18 @@ impl CmdParser {
     /// * `cmd_param`: The whole cmdline parameter string.
     pub fn parse(&mut self, cmd_param: &str) -> Result<()> {
         if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
-            return Err(ErrorKind::InvalidParam(cmd_param.to_string(), self.name.clone()).into());
+            return Err(anyhow!(ConfigError::InvalidParam(
+                cmd_param.to_string(),
+                self.name.clone()
+            )));
         }
         let param_items = cmd_param.split(',').collect::<Vec<&str>>();
         for (i, param_item) in param_items.iter().enumerate() {
             if param_item.starts_with('=') || param_item.ends_with('=') {
-                return Err(
-                    ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
-                );
+                return Err(anyhow!(ConfigError::InvalidParam(
+                    param_item.to_string(),
+                    self.name.clone()
+                )));
             }
             let param = param_item.splitn(2, '=').collect::<Vec<&str>>();
             let (param_key, param_value) = match param.len() {
@@ -400,9 +339,10 @@ impl CmdParser {
                 }
                 2 => (param[0], param[1]),
                 _ => {
-                    return Err(
-                        ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
-                    );
+                    return Err(anyhow!(ConfigError::InvalidParam(
+                        param_item.to_string(),
+                        self.name.clone()
+                    )));
                 }
             };
 
@@ -411,14 +351,16 @@ impl CmdParser {
                 if field_value.is_none() {
                     *field_value = Some(String::from(param_value));
                 } else {
-                    return Err(
-                        ErrorKind::FieldRepeat(self.name.clone(), param_key.to_string()).into(),
-                    );
+                    return Err(anyhow!(ConfigError::FieldRepeat(
+                        self.name.clone(),
+                        param_key.to_string()
+                    )));
                 }
             } else {
-                return Err(
-                    ErrorKind::InvalidParam(param[0].to_string(), self.name.clone()).into(),
-                );
+                return Err(anyhow!(ConfigError::InvalidParam(
+                    param[0].to_string(),
+                    self.name.clone()
+                )));
             }
         }
 
@@ -432,7 +374,10 @@ impl CmdParser {
     /// * `cmd_param`: The whole cmdline parameter string.
     fn get_parameters(&mut self, cmd_param: &str) -> Result<()> {
         if cmd_param.starts_with(',') || cmd_param.ends_with(',') {
-            return Err(ErrorKind::InvalidParam(cmd_param.to_string(), self.name.clone()).into());
+            return Err(anyhow!(ConfigError::InvalidParam(
+                cmd_param.to_string(),
+                self.name.clone()
+            )));
         }
         let param_items = cmd_param.split(',').collect::<Vec<&str>>();
         for param_item in param_items {
@@ -441,9 +386,10 @@ impl CmdParser {
                 1 => ("", param[0]),
                 2 => (param[0], param[1]),
                 _ => {
-                    return Err(
-                        ErrorKind::InvalidParam(param_item.to_string(), self.name.clone()).into(),
-                    );
+                    return Err(anyhow!(ConfigError::InvalidParam(
+                        param_item.to_string(),
+                        self.name.clone()
+                    )));
                 }
             };
 
@@ -452,9 +398,10 @@ impl CmdParser {
                 if field_value.is_none() {
                     *field_value = Some(String::from(param_value));
                 } else {
-                    return Err(
-                        ErrorKind::FieldRepeat(self.name.clone(), param_key.to_string()).into(),
-                    );
+                    return Err(anyhow!(ConfigError::FieldRepeat(
+                        self.name.clone(),
+                        param_key.to_string()
+                    )));
                 }
             }
         }
@@ -478,7 +425,10 @@ impl CmdParser {
 
                 if let Some(raw_value) = value {
                     Ok(Some(raw_value.parse().map_err(|_| {
-                        ErrorKind::ConvertValueFailed(field_msg.to_string(), raw_value.clone())
+                        anyhow!(ConfigError::ConvertValueFailed(
+                            field_msg.to_string(),
+                            raw_value.clone()
+                        ))
                     })?))
                 } else {
                     Ok(None)

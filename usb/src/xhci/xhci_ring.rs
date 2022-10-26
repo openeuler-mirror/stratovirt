@@ -16,8 +16,8 @@ use std::sync::Arc;
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 
-use crate::errors::Result;
 use crate::xhci::xhci_controller::dma_read_bytes;
+use anyhow::{bail, Result};
 
 /// Transfer Request Block
 pub const TRB_SIZE: u32 = 16;

@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use super::{AioContext, IoEvent, Result};
-use error_chain::bail;
+use anyhow::bail;
 use kvm_bindings::__IncompleteArrayField;
 
 pub const IOCB_FLAG_RESFD: u32 = 1;

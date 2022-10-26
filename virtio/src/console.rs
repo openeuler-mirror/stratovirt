@@ -15,9 +15,14 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 use std::{cmp, usize};
 
+use super::{
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_SIZE,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
+};
+use crate::VirtioError;
 use address_space::AddressSpace;
+use anyhow::{anyhow, bail, Context, Result};
 use devices::legacy::{Chardev, InputReceiver};
-use error_chain::{bail, ChainedError};
 use log::{debug, error, warn};
 use machine_manager::{
     config::{ChardevType, VirtioConsole},
@@ -30,12 +35,6 @@ use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOp
 use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
-
-use super::errors::{ErrorKind, Result, ResultExt};
-use super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_SIZE,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
-};
 
 /// Number of virtqueues.
 const QUEUE_NUM_CONSOLE: usize = 2;
@@ -104,10 +103,10 @@ impl InputReceiver for ConsoleHandler {
                     }
                     Err(ref e) => {
                         error!(
-                            "Failed to write slice for input console: addr {:X} len {} {}",
+                            "Failed to write slice for input console: addr {:X} len {} {:?}",
                             elem_iov.addr.0,
                             source_slice.len(),
-                            e.display_chain()
+                            e
                         );
                         break;
                     }
@@ -120,10 +119,8 @@ impl InputReceiver for ConsoleHandler {
                     .add_used(&self.mem_space, elem.index, write_count as u32)
             {
                 error!(
-                    "Failed to add used ring for input console, index: {} len: {} {}",
-                    elem.index,
-                    write_count,
-                    e.display_chain()
+                    "Failed to add used ring for input console, index: {} len: {} {:?}",
+                    elem.index, write_count, e
                 );
                 break;
             }
@@ -135,9 +132,9 @@ impl InputReceiver for ConsoleHandler {
 
         if let Err(ref e) = (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock)) {
             error!(
-                "Failed to trigger interrupt for console, int-type {:?} {} ",
+                "Failed to trigger interrupt for console, int-type {:?} {:?} ",
                 VirtioInterruptType::Vring,
-                e.display_chain()
+                e
             )
         }
     }
@@ -173,10 +170,10 @@ impl ConsoleHandler {
                     }
                     Err(ref e) => {
                         error!(
-                            "Failed to read buffer for output console: addr: {:X}, len: {} {}",
+                            "Failed to read buffer for output console: addr: {:X}, len: {} {:?}",
                             elem_iov.addr.0,
                             allow_read_count - read_count,
-                            e.display_chain()
+                            e
                         );
                         break;
                     }
@@ -185,10 +182,10 @@ impl ConsoleHandler {
             if let Some(output) = &mut self.chardev.lock().unwrap().output {
                 let mut locked_output = output.lock().unwrap();
                 if let Err(e) = locked_output.write_all(&buffer[..read_count as usize]) {
-                    error!("Failed to write to console output: {}", e);
+                    error!("Failed to write to console output: {:?}", e);
                 }
                 if let Err(e) = locked_output.flush() {
-                    error!("Failed to flush console output: {}", e);
+                    error!("Failed to flush console output: {:?}", e);
                 }
             } else {
                 debug!("Failed to get output fd");
@@ -196,10 +193,8 @@ impl ConsoleHandler {
 
             if let Err(ref e) = queue_lock.vring.add_used(&self.mem_space, elem.index, 0) {
                 error!(
-                    "Failed to add used ring for output console, index: {} len: {} {}",
-                    elem.index,
-                    0,
-                    e.display_chain()
+                    "Failed to add used ring for output console, index: {} len: {} {:?}",
+                    elem.index, 0, e
                 );
                 break;
             }
@@ -345,7 +340,7 @@ impl VirtioDevice for Console {
             .lock()
             .unwrap()
             .realize()
-            .chain_err(|| "Failed to realize chardev")?;
+            .with_context(|| "Failed to realize chardev")?;
         Ok(())
     }
 
@@ -390,7 +385,7 @@ impl VirtioDevice for Console {
         let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
 
         if let Some(end) = offset.checked_add(data.len() as u64) {
@@ -441,18 +436,18 @@ impl VirtioDevice for Console {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 }
 
 impl StateTransfer for Console {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VirtioConsoleState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("CONSOLE"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("CONSOLE")))?;
 
         Ok(())
     }

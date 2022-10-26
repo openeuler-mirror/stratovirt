@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, Weak};
 
 use once_cell::sync::Lazy;
 
-use super::errors::Result;
 use crate::config::*;
 use crate::descriptor::{UsbConfigDescriptor, UsbDeviceDescriptor, UsbEndpointDescriptor};
 use crate::descriptor::{UsbDescriptorOps, UsbInterfaceDescriptor};
@@ -32,6 +31,7 @@ use crate::{
     },
     xhci::xhci_controller::XhciDevice,
 };
+use anyhow::Result;
 
 const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
 const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;

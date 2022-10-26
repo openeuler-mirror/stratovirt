@@ -12,13 +12,12 @@
 
 use std::os::unix::net::UnixListener;
 
-use error_chain::bail;
+use anyhow::{bail, Context, Result};
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 use util::unix::{limit_permission, parse_unix_uri};
 
 use crate::{
     config::{add_trace_events, ChardevType, CmdParser, MachineType, VmConfig},
-    errors::{Result, ResultExt},
     temp_cleaner::TempCleaner,
 };
 
@@ -454,7 +453,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     if vm_cfg.machine_config.mach_type != MachineType::None {
         vm_cfg
             .check_vmconfig(args.is_present("daemonize"))
-            .chain_err(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
+            .with_context(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
     }
     Ok(vm_cfg)
 }
@@ -476,7 +475,8 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 
         cmd_parser.parse(&qmp_config)?;
         if let Some(uri) = cmd_parser.get_value::<String>("")? {
-            let api_path = parse_unix_uri(&uri).chain_err(|| "Failed to parse qmp socket path")?;
+            let api_path =
+                parse_unix_uri(&uri).with_context(|| "Failed to parse qmp socket path")?;
             sock_paths.push(api_path);
         } else {
             bail!("No uri found for qmp");
@@ -537,7 +537,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
     for path in sock_paths {
         listeners.push(
             bind_socket(path.clone())
-                .chain_err(|| format!("Failed to bind socket for path: {:?}", &path))?,
+                .with_context(|| format!("Failed to bind socket for path: {:?}", &path))?,
         )
     }
 
@@ -545,11 +545,11 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 }
 
 fn bind_socket(path: String) -> Result<UnixListener> {
-    let listener =
-        UnixListener::bind(&path).chain_err(|| format!("Failed to bind socket file {}", &path))?;
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("Failed to bind socket file {}", &path))?;
     // Add file to temporary pool, so it could be cleaned when vm exits.
     TempCleaner::add_path(path.clone());
     limit_permission(&path)
-        .chain_err(|| format!("Failed to limit permission for socket file {}", &path))?;
+        .with_context(|| format!("Failed to limit permission for socket file {}", &path))?;
     Ok(listener)
 }

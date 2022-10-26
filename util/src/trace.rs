@@ -8,7 +8,7 @@ use arc_swap::ArcSwap;
 use log::error;
 use once_cell::sync::Lazy;
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{Context, Result};
 
 static TRACE_MARKER_FD: Lazy<Option<File>> = Lazy::new(open_trace_marker);
 static TRACE_EVENTS: Lazy<ArcSwap<HashSet<String>>> =
@@ -19,7 +19,7 @@ fn open_trace_marker() -> Option<File> {
     let proc_mounts_fd = match File::open(file) {
         Ok(fd) => fd,
         Err(e) => {
-            error!("Failed to open {}: {}", file, e);
+            error!("Failed to open {}: {:?}", file, e);
             return None;
         }
     };
@@ -34,7 +34,7 @@ fn open_trace_marker() -> Option<File> {
                 }
             }
             Err(e) => {
-                error!("Read {} error: {}.", &file, e);
+                error!("Read {} error: {:?}.", &file, e);
                 return None;
             }
         }
@@ -50,12 +50,12 @@ fn open_trace_marker() -> Option<File> {
     let mut tracing_on_fd = match OpenOptions::new().write(true).open(&tracing_on) {
         Ok(fd) => fd,
         Err(e) => {
-            error!("Failed to open {}: {}", tracing_on, e);
+            error!("Failed to open {}: {:?}", tracing_on, e);
             return None;
         }
     };
     if let Err(e) = tracing_on_fd.write(b"1") {
-        error!("Failed to enable tracing_on: {}", e);
+        error!("Failed to enable tracing_on: {:?}", e);
         return None;
     }
 
@@ -63,7 +63,7 @@ fn open_trace_marker() -> Option<File> {
     match OpenOptions::new().write(true).open(&trace_marker) {
         Ok(fd) => Some(fd),
         Err(e) => {
-            error!("Failed to open {}: {}", trace_marker, e);
+            error!("Failed to open {}: {:?}", trace_marker, e);
             None
         }
     }
@@ -76,7 +76,7 @@ pub fn write_trace_marker(event: &str, msg: &str) {
 
     let msg = format!("[{}] {}", event, msg);
     if let Err(e) = TRACE_MARKER_FD.as_ref().unwrap().write(msg.as_bytes()) {
-        error!("Write trace_marker error: {}", e);
+        error!("Write trace_marker error: {:?}", e);
     }
 }
 
@@ -95,14 +95,14 @@ macro_rules! ftrace {
 }
 
 pub fn enable_trace_events(file: &str) -> Result<()> {
-    let fd = File::open(file).chain_err(|| format!("Failed to open {}.", file))?;
+    let fd = File::open(file).with_context(|| format!("Failed to open {}.", file))?;
     let mut reader = BufReader::new(fd);
 
     loop {
         let mut buf = String::new();
         let size = reader
             .read_line(&mut buf)
-            .chain_err(|| format!("Read {} error.", file))?;
+            .with_context(|| format!("Read {} error.", file))?;
 
         if size == 0 {
             return Ok(());

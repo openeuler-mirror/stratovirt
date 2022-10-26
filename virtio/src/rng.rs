@@ -27,17 +27,17 @@ use util::loop_context::{
 };
 use util::num_ops::{read_u32, write_u32};
 
-use error_chain::bail;
 use log::{error, warn};
 use migration_derive::{ByteCode, Desc};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
     ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
+use crate::error::VirtioError;
+use anyhow::{anyhow, bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
 const QUEUE_SIZE_RNG: u16 = 256;
@@ -71,7 +71,7 @@ impl RngHandler {
         for iov in in_iov {
             self.mem_space
                 .write(&mut buffer[offset..].as_ref(), iov.addr, iov.len as u64)
-                .chain_err(|| "Failed to write request data for virtio rng")?;
+                .with_context(|| "Failed to write request data for virtio rng")?;
             offset += iov.len as usize;
         }
 
@@ -88,7 +88,7 @@ impl RngHandler {
             .pop_avail(&self.mem_space, self.driver_features)
         {
             let size =
-                get_req_data_size(&elem.in_iovec).chain_err(|| "Failed to get request size")?;
+                get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(None) {
@@ -108,14 +108,14 @@ impl RngHandler {
                 size as usize,
                 0,
             )
-            .chain_err(|| format!("Failed to read random file, size: {}", size))?;
+            .with_context(|| format!("Failed to read random file, size: {}", size))?;
 
             self.write_req_data(&elem.in_iovec, &mut buffer)?;
 
             queue_lock
                 .vring
                 .add_used(&self.mem_space, elem.index, size)
-                .chain_err(|| {
+                .with_context(|| {
                     format!(
                         "Failed to add used ring, index: {}, size: {}",
                         elem.index, size
@@ -126,8 +126,14 @@ impl RngHandler {
         }
 
         if need_interrupt {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock))
-                .chain_err(|| ErrorKind::InterruptTrigger("rng", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock)).with_context(
+                || {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "rng",
+                        VirtioInterruptType::Vring
+                    ))
+                },
+            )?;
             self.trace_send_interrupt("Rng".to_string());
         }
 
@@ -175,10 +181,7 @@ impl EventNotifierHelper for RngHandler {
             read_fd(fd);
 
             if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
-                error!(
-                    "Failed to process queue for virtio rng, err: {}",
-                    error_chain::ChainedError::display_chain(e),
-                );
+                error!("Failed to process queue for virtio rng, err: {:?}", e,);
             }
 
             None
@@ -216,10 +219,7 @@ impl EventNotifierHelper for RngHandler {
                 }
 
                 if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
-                    error!(
-                        "Failed to process queue for virtio rng, err: {}",
-                        error_chain::ChainedError::display_chain(e),
-                    );
+                    error!("Failed to process queue for virtio rng, err: {:?}", e,);
                 }
 
                 None
@@ -298,9 +298,9 @@ impl VirtioDevice for Rng {
     /// Realize virtio rng device.
     fn realize(&mut self) -> Result<()> {
         self.check_random_file()
-            .chain_err(|| "Failed to check random file")?;
+            .with_context(|| "Failed to check random file")?;
         let file = File::open(&self.rng_cfg.random_file)
-            .chain_err(|| "Failed to open file of random number generator")?;
+            .with_context(|| "Failed to open file of random number generator")?;
 
         self.random_file = Some(file);
         self.state.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
@@ -380,7 +380,7 @@ impl VirtioDevice for Rng {
                 .as_ref()
                 .unwrap()
                 .try_clone()
-                .chain_err(|| "Failed to clone random file for virtio rng")?,
+                .with_context(|| "Failed to clone random file for virtio rng")?,
             leak_bucket: self.rng_cfg.bytes_per_sec.map(LeakBucket::new),
         };
 
@@ -395,18 +395,18 @@ impl VirtioDevice for Rng {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 }
 
 impl StateTransfer for Rng {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *RngState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("RNG"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("RNG")))?;
 
         Ok(())
     }
@@ -597,7 +597,9 @@ mod tests {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 
@@ -680,7 +682,9 @@ mod tests {
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 

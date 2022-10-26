@@ -15,12 +15,13 @@ use std::sync::{Arc, Mutex};
 
 use address_space::Region;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::msix::Msix;
+use crate::PciError;
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
 };
+use anyhow::{anyhow, Context, Result};
 
 /// Size in bytes of the configuration space of legacy PCI device.
 pub const PCI_CONFIG_SPACE_SIZE: usize = 256;
@@ -588,7 +589,7 @@ impl PciConfig {
                         locked_bus
                             .io_region
                             .delete_subregion(region)
-                            .chain_err(|| "Failed to unregister io bar")?;
+                            .with_context(|| "Failed to unregister io bar")?;
                     }
                 }
                 _ => {
@@ -596,7 +597,7 @@ impl PciConfig {
                         locked_bus
                             .mem_region
                             .delete_subregion(region)
-                            .chain_err(|| "Failed to unregister mem bar")?;
+                            .with_context(|| "Failed to unregister mem bar")?;
                     }
                 }
             }
@@ -631,11 +632,11 @@ impl PciConfig {
                         #[cfg(target_arch = "x86_64")]
                         io_region
                             .delete_subregion(self.bars[id].region.as_ref().unwrap())
-                            .chain_err(|| format!("Failed to unmap BAR{} in I/O space.", id))?;
+                            .with_context(|| format!("Failed to unmap BAR{} in I/O space.", id))?;
                     }
                     _ => mem_region
                         .delete_subregion(self.bars[id].region.as_ref().unwrap())
-                        .chain_err(|| ErrorKind::UnregMemBar(id))?,
+                        .with_context(|| anyhow!(PciError::UnregMemBar(id)))?,
                 }
                 self.bars[id].address = BAR_SPACE_UNMAPPED;
             }
@@ -645,11 +646,11 @@ impl PciConfig {
                         #[cfg(target_arch = "x86_64")]
                         io_region
                             .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
-                            .chain_err(|| format!("Failed to map BAR{} in I/O space.", id))?;
+                            .with_context(|| format!("Failed to map BAR{} in I/O space.", id))?;
                     }
                     _ => mem_region
                         .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
-                        .chain_err(|| ErrorKind::UnregMemBar(id))?,
+                        .with_context(|| anyhow!(PciError::UnregMemBar(id)))?,
                 }
                 self.bars[id].address = new_addr;
             }
@@ -666,7 +667,7 @@ impl PciConfig {
     pub fn add_pci_cap(&mut self, id: u8, size: usize) -> Result<usize> {
         let offset = self.last_cap_end as usize;
         if offset + size > PCI_CONFIG_SPACE_SIZE {
-            return Err(ErrorKind::AddPciCap(id, size).into());
+            return Err(anyhow!(PciError::AddPciCap(id, size)));
         }
 
         self.config[offset] = id;
@@ -697,7 +698,7 @@ impl PciConfig {
     pub fn add_pcie_ext_cap(&mut self, id: u16, size: usize, version: u32) -> Result<usize> {
         let offset = self.last_ext_cap_end as usize;
         if offset + size > PCIE_CONFIG_SPACE_SIZE {
-            return Err(ErrorKind::AddPcieExtCap(id, size).into());
+            return Err(anyhow!(PciError::AddPcieExtCap(id, size)));
         }
 
         let regs_num = if size % REG_SIZE == 0 {

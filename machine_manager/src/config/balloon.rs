@@ -10,13 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    errors::{ErrorKind, Result},
-    pci_args_check, ConfigCheck, MAX_STRING_LENGTH,
-};
+use super::{error::ConfigError, pci_args_check, ConfigCheck, MAX_STRING_LENGTH};
 use crate::config::{CmdParser, ExBool, VmConfig};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -29,11 +26,10 @@ pub struct BalloonConfig {
 impl ConfigCheck for BalloonConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "balloon id".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         Ok(())

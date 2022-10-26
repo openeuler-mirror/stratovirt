@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
@@ -19,7 +18,8 @@ use std::{
     process,
 };
 
-use crate::{ErrorKind, Result, ResultExt};
+use crate::OzoneError;
+use anyhow::{bail, Context, Result};
 
 const MOUNT_DIR: &str = "/proc/mounts";
 const CGROUP_ALLOW_LIST: [&str; 2] = ["cpuset.cpus", "memory.limit_in_bytes"];
@@ -69,8 +69,9 @@ pub fn clean_cgroup(cmd_parser: &CgroupCfg, exec_file: String, name: String) -> 
             let split: Vec<&str> = file.split('.').collect();
             let base_path = get_base_location(split[0], &exec_file, &name)?;
             if base_path.exists() {
-                std::fs::remove_dir(&base_path)
-                    .chain_err(|| format!("Failed to remove cgroup directory {:?}", &base_path))?;
+                std::fs::remove_dir(&base_path).with_context(|| {
+                    format!("Failed to remove cgroup directory {:?}", &base_path)
+                })?;
             }
         }
     }
@@ -82,7 +83,7 @@ pub fn clean_node(exec_file: String, name: String) -> Result<()> {
     let base_path = get_base_location("cpuset", &exec_file, &name)?;
     if base_path.exists() {
         std::fs::remove_dir(&base_path)
-            .chain_err(|| format!("Failed to remove cgroup directory {:?}", &base_path))?;
+            .with_context(|| format!("Failed to remove cgroup directory {:?}", &base_path))?;
     }
 
     Ok(())
@@ -94,10 +95,10 @@ fn get_base_location(controller: &str, exec_file: &str, name: &str) -> Result<Pa
         .read(true)
         .write(true)
         .open(MOUNT_DIR)
-        .chain_err(|| "Failed to open '/proc/mounts' ")?;
+        .with_context(|| "Failed to open '/proc/mounts' ")?;
     let dir_bufs = BufReader::new(dir);
     for dir in dir_bufs.lines() {
-        let dir = dir.chain_err(|| "Failed to read directory in directory buf")?;
+        let dir = dir.with_context(|| "Failed to read directory in directory buf")?;
         if dir.starts_with("cgroup") && dir.contains(controller) {
             let split: Vec<&str> = dir.split(' ').collect();
             target_path = PathBuf::from(split[1]);
@@ -115,12 +116,12 @@ fn get_base_location(controller: &str, exec_file: &str, name: &str) -> Result<Pa
 pub fn set_numa_node(node: &str, exec_file: &str, name: &str) -> Result<()> {
     let write_path = get_base_location("cpuset", exec_file, name)?;
     write_cgroup_value(&write_path, "cpuset.mems", node)
-        .chain_err(|| ErrorKind::WriteError("cpuset.mems".to_string(), node.to_string()))?;
+        .with_context(|| OzoneError::WriteError("cpuset.mems".to_string(), node.to_string()))?;
 
     let mut upper_path = write_path.clone();
     upper_path.pop();
     upper_path.push("cpuset.cpus");
-    inherit_config(&write_path, "cpuset.cpus").chain_err(|| {
+    inherit_config(&write_path, "cpuset.cpus").with_context(|| {
         format!(
             "Failed to inherit configuration for path: {:?}",
             &write_path
@@ -129,13 +130,13 @@ pub fn set_numa_node(node: &str, exec_file: &str, name: &str) -> Result<()> {
     let value = read_file_value(upper_path.clone());
     if let Ok(val) = value {
         write_cgroup_value(&write_path, "cpuset.cpus", &val)
-            .chain_err(|| ErrorKind::WriteError("cpuset.cpus".to_string(), val.to_string()))?;
+            .with_context(|| OzoneError::WriteError("cpuset.cpus".to_string(), val.to_string()))?;
     } else {
         bail!("Can not read value from: {:?}", &upper_path);
     }
     let pid = process::id();
     write_cgroup_value(&write_path, "tasks", &pid.to_string())
-        .chain_err(|| "Failed to attach pid")?;
+        .with_context(|| "Failed to attach pid")?;
     Ok(())
 }
 
@@ -143,16 +144,16 @@ fn write_cgroup_value(path: &Path, file: &str, value: &str) -> Result<()> {
     if file != "tasks" {
         if !path.exists() {
             fs::create_dir_all(path)
-                .chain_err(|| format!("Failed to create directory: {:?}", path))?;
+                .with_context(|| format!("Failed to create directory: {:?}", path))?;
         }
         inherit_config(path, file)
-            .chain_err(|| format!("Failed to inherit configuration for path: {:?}", &path))?;
+            .with_context(|| format!("Failed to inherit configuration for path: {:?}", &path))?;
     }
 
     let mut path_to_write = path.to_path_buf();
     path_to_write.push(&file);
-    fs::write(&path_to_write, format!("{}\n", value)).chain_err(|| {
-        ErrorKind::WriteError(
+    fs::write(&path_to_write, format!("{}\n", value)).with_context(|| {
+        OzoneError::WriteError(
             (&path_to_write.to_string_lossy()).to_string(),
             value.to_string(),
         )
@@ -163,7 +164,7 @@ fn write_cgroup_value(path: &Path, file: &str, value: &str) -> Result<()> {
 
 fn read_file_value(path: PathBuf) -> Result<String> {
     let mut value =
-        fs::read_to_string(&path).chain_err(|| format!("Failed to read path: {:?}", &path))?;
+        fs::read_to_string(&path).with_context(|| format!("Failed to read path: {:?}", &path))?;
     value.pop();
     Ok(value)
 }
@@ -188,8 +189,8 @@ fn inherit_config(path: &Path, file: &str) -> Result<()> {
             if upper_value.is_empty() {
                 bail!("File: {:?} is empty", &grand_parent_file);
             }
-            fs::write(upper_file.clone(), format!("{}\n", upper_value)).chain_err(|| {
-                ErrorKind::WriteError(
+            fs::write(upper_file.clone(), format!("{}\n", upper_value)).with_context(|| {
+                OzoneError::WriteError(
                     (&upper_file.to_string_lossy()).to_string(),
                     upper_value.to_string(),
                 )

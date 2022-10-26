@@ -11,47 +11,15 @@
 // See the Mulan PSL v2 for more details.
 
 #[macro_use]
-extern crate error_chain;
-#[macro_use]
 extern crate log;
 //#[macro_use]
 extern crate sscanf;
 //#[macro_use]
 extern crate vmm_sys_util;
 
-pub mod errors {
-    error_chain! {
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-        }
-        errors {
-            UnsupportRFBProtocolVersion {
-                display("Unsupported RFB Protocol Version!")
-            }
-            InvalidImageSize {
-                display("Invalid Image Size!")
-            }
-            TcpBindFailed(reason: String) {
-                display("Tcp bind failed: {}", reason)
-            }
-            MakeTlsConnectionFailed(reason: String) {
-                display("Make tls connection failed: {}", reason)
-            }
-            ProtocolMessageFailed(reason: String) {
-                display("ProtocolMessage failed: {}", reason)
-            }
-            ReadMessageFailed(reason: String) {
-                display("Read buf form tcpstream failed: {}", reason)
-            }
-            AuthFailed(reason: String){
-                display("Authentication failed: {}", reason)
-            }
-            ParseKeyBoardFailed(reason: String) {
-                display("ParseKeyBoardFailed: {}", reason)
-            }
-        }
-    }
-}
+pub mod error;
+pub use anyhow::Result;
+pub use error::VncError;
 
 pub mod auth;
 pub mod client;
