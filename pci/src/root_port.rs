@@ -14,11 +14,13 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
-use error_chain::{bail, ChainedError};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
 use machine_manager::event;
 use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use once_cell::sync::OnceCell;
 use util::byte_code::ByteCode;
@@ -33,7 +35,6 @@ use super::config::{
     PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
-use crate::errors::{Result, ResultExt};
 use crate::hotplug::HotplugOps;
 use crate::init_multifunction;
 use crate::msix::init_msix;
@@ -122,7 +123,7 @@ impl RootPort {
             (self.config.ext_cap_offset + PCI_EXP_SLTSTA) as usize,
             PCI_EXP_HP_EV_CCI,
         ) {
-            error!("{}", e.display_chain());
+            error!("{}", format!("{:?}", e));
             error!("Failed to write command completed");
         }
     }
@@ -167,7 +168,7 @@ impl RootPort {
         for dev in devices.values() {
             let mut locked_dev = dev.lock().unwrap();
             if let Err(e) = locked_dev.unrealize() {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
                 error!("Failed to unrealize device {}.", locked_dev.name());
             }
             info!("Device {} unplug from {}", locked_dev.name(), self.name);
@@ -196,9 +197,9 @@ impl RootPort {
                 .unwrap()
                 .io_region
                 .add_subregion(self.io_region.clone(), 0)
-                .chain_err(|| "Failed to add IO container region.")
+                .with_context(|| "Failed to add IO container region.")
             {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
             }
         }
         if command & COMMAND_MEMORY_SPACE != 0 {
@@ -210,9 +211,9 @@ impl RootPort {
                 .unwrap()
                 .mem_region
                 .add_subregion(self.mem_region.clone(), 0)
-                .chain_err(|| "Failed to add memory container region.")
+                .with_context(|| "Failed to add memory container region.")
             {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
             }
         }
     }
@@ -243,7 +244,7 @@ impl RootPort {
             self.remove_devices();
 
             if let Err(e) = self.update_register_status() {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
                 error!("Failed to update register status");
             }
         }
@@ -307,11 +308,11 @@ impl PciDevOps for RootPort {
         locked_parent_bus
             .io_region
             .add_subregion(self.sec_bus.lock().unwrap().io_region.clone(), 0)
-            .chain_err(|| "Failed to register subregion in I/O space.")?;
+            .with_context(|| "Failed to register subregion in I/O space.")?;
         locked_parent_bus
             .mem_region
             .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
-            .chain_err(|| "Failed to register subregion in memory space.")?;
+            .with_context(|| "Failed to register subregion in memory space.")?;
 
         let name = self.name.clone();
         let root_port = Arc::new(Mutex::new(self));
@@ -381,7 +382,7 @@ impl PciDevOps for RootPort {
                 &self.io_region,
                 &self.mem_region,
             ) {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
             }
         }
         if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
@@ -410,7 +411,7 @@ impl PciDevOps for RootPort {
                 .lock()
                 .unwrap()
                 .reset()
-                .chain_err(|| "Fail to reset sec_bus in root port")
+                .with_context(|| "Fail to reset sec_bus in root port")
         } else {
             let cap_offset = self.config.ext_cap_offset;
             le_write_u16(
@@ -446,7 +447,7 @@ impl HotplugOps for RootPort {
             .lock()
             .unwrap()
             .devfn()
-            .chain_err(|| "Failed to get devfn")?;
+            .with_context(|| "Failed to get devfn")?;
         // Only if devfn is equal to 0, hot plugging is supported.
         if devfn == 0 {
             let offset = self.config.ext_cap_offset;
@@ -470,7 +471,7 @@ impl HotplugOps for RootPort {
             .lock()
             .unwrap()
             .devfn()
-            .chain_err(|| "Failed to get devfn")?;
+            .with_context(|| "Failed to get devfn")?;
         if devfn != 0 {
             return self.unplug(dev);
         }
@@ -500,7 +501,7 @@ impl HotplugOps for RootPort {
             .lock()
             .unwrap()
             .devfn()
-            .chain_err(|| "Failed to get devfn")?;
+            .with_context(|| "Failed to get devfn")?;
         let mut locked_dev = dev.lock().unwrap();
         locked_dev.unrealize()?;
         self.sec_bus.lock().unwrap().devices.remove(&devfn);
@@ -509,7 +510,7 @@ impl HotplugOps for RootPort {
 }
 
 impl StateTransfer for RootPort {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = RootPortState::default();
 
         for idx in 0..self.config.config.len() {
@@ -524,9 +525,9 @@ impl StateTransfer for RootPort {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let root_port_state = *RootPortState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("ROOT_PORT"))?;
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("ROOT_PORT")))?;
 
         let length = self.config.config.len();
         self.config.config = root_port_state.config_space[..length].to_vec();

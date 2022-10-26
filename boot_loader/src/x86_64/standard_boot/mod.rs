@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use address_space::AddressSpace;
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
-use error_chain::bail;
 use log::{error, info};
 use util::byte_code::ByteCode;
 
@@ -27,9 +26,10 @@ use self::elf::load_elf_kernel;
 use super::bootparam::RealModeKernelHeader;
 use super::X86BootLoaderConfig;
 use super::{BOOT_HDR_START, CMDLINE_START};
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::error::BootLoaderError;
 use crate::x86_64::bootparam::{E820Entry, E820_RAM, E820_RESERVED, UEFI_OVMF_ID};
 use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
+use anyhow::{anyhow, bail, Context, Result};
 
 fn load_image(
     image: &mut File,
@@ -71,18 +71,18 @@ fn load_kernel_image(
 
     let kernel_size = kernel_image.metadata().unwrap().len() - setup_size;
     load_image(kernel_image, setup_size, FwCfgEntryType::KernelData, fwcfg)
-        .chain_err(|| "Failed to load kernel image")?;
+        .with_context(|| "Failed to load kernel image")?;
 
     let kernel_start = header.code32_start; // boot_hdr.code32_start = 0x100000
     fwcfg
         .add_data_entry(FwCfgEntryType::KernelAddr, kernel_start.as_bytes().to_vec())
-        .chain_err(|| "Failed to add kernel-addr entry to FwCfg")?;
+        .with_context(|| "Failed to add kernel-addr entry to FwCfg")?;
     fwcfg
         .add_data_entry(
             FwCfgEntryType::KernelSize,
             (kernel_size as u32).as_bytes().to_vec(),
         )
-        .chain_err(|| "Failed to add kernel-size entry to FwCfg")?;
+        .with_context(|| "Failed to add kernel-size entry to FwCfg")?;
 
     Ok(setup_data)
 }
@@ -103,24 +103,24 @@ fn load_initrd(
     };
 
     let mut initrd_image = File::open(config.initrd.as_ref().unwrap())
-        .chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+        .with_context(|| anyhow!(BootLoaderError::BootLoaderOpenInitrd))?;
     let initrd_size = initrd_image.metadata().unwrap().len() as u64;
     let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
 
     load_image(&mut initrd_image, 0, FwCfgEntryType::InitrdData, fwcfg)
-        .chain_err(|| "Failed to load initrd")?;
+        .with_context(|| "Failed to load initrd")?;
     fwcfg
         .add_data_entry(
             FwCfgEntryType::InitrdAddr,
             (initrd_addr as u32).as_bytes().to_vec(),
         )
-        .chain_err(|| "Failed to add initrd-addr entry to FwCfg")?;
+        .with_context(|| "Failed to add initrd-addr entry to FwCfg")?;
     fwcfg
         .add_data_entry(
             FwCfgEntryType::InitrdSize,
             (initrd_size as u32).as_bytes().to_vec(),
         )
-        .chain_err(|| "Failed to add initrd-size to FwCfg")?;
+        .with_context(|| "Failed to add initrd-size to FwCfg")?;
 
     header.set_ramdisk(initrd_addr as u32, initrd_size as u32);
     Ok(())
@@ -158,7 +158,7 @@ fn setup_e820_table(
     });
     fwcfg
         .add_file_entry("etc/e820", bytes)
-        .chain_err(|| "Failed to add e820 file entry to FwCfg")?;
+        .with_context(|| "Failed to add e820 file entry to FwCfg")?;
     Ok(())
 }
 
@@ -175,17 +175,17 @@ fn load_kernel_cmdline(
             FwCfgEntryType::CmdlineAddr,
             (CMDLINE_START as u32).as_bytes().to_vec(),
         )
-        .chain_err(|| "Failed to add cmdline-addr entry to FwCfg")?;
+        .with_context(|| "Failed to add cmdline-addr entry to FwCfg")?;
     // The length of cmdline should add the tailing `\0`.
     fwcfg
         .add_data_entry(
             FwCfgEntryType::CmdlineSize,
             (cmdline_len + 1).as_bytes().to_vec(),
         )
-        .chain_err(|| "Failed to add cmdline-size entry to FwCfg")?;
+        .with_context(|| "Failed to add cmdline-size entry to FwCfg")?;
     fwcfg
         .add_string_entry(FwCfgEntryType::CmdlineData, config.kernel_cmdline.as_ref())
-        .chain_err(|| "Failed to add cmdline-data entry to FwCfg")?;
+        .with_context(|| "Failed to add cmdline-data entry to FwCfg")?;
 
     Ok(())
 }
@@ -208,7 +208,7 @@ pub fn load_linux(
     }
 
     let mut kernel_image = File::open(config.kernel.as_ref().unwrap().clone())
-        .chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+        .with_context(|| anyhow!(BootLoaderError::BootLoaderOpenKernel))?;
 
     let mut boot_header = RealModeKernelHeader::default();
     kernel_image.seek(SeekFrom::Start(BOOT_HDR_START))?;
@@ -219,12 +219,14 @@ pub fn load_linux(
     setup_e820_table(config, sys_mem, fwcfg)?;
     load_initrd(config, sys_mem, &mut boot_header, fwcfg)?;
     if let Err(e) = boot_header.check_valid_kernel() {
-        match e.kind() {
-            ErrorKind::ElfKernel => {
-                load_elf_kernel(&mut kernel_image, sys_mem, fwcfg)?;
-                return Ok(());
+        if let Some(err) = e.downcast_ref::<BootLoaderError>() {
+            match err {
+                BootLoaderError::ElfKernel => {
+                    load_elf_kernel(&mut kernel_image, sys_mem, fwcfg)?;
+                    return Ok(());
+                }
+                _ => return Err(e),
             }
-            _ => return Err(e),
         }
     }
 
@@ -241,16 +243,16 @@ pub fn load_linux(
             FwCfgEntryType::SetupAddr,
             (SETUP_START as u32).as_bytes().to_vec(),
         )
-        .chain_err(|| "Failed to add setup-addr to FwCfg")?;
+        .with_context(|| "Failed to add setup-addr to FwCfg")?;
     fwcfg
         .add_data_entry(
             FwCfgEntryType::SetupSize,
             (setup_data.len() as u32).as_bytes().to_vec(),
         )
-        .chain_err(|| "Failed to add setup-size entry to FwCfg")?;
+        .with_context(|| "Failed to add setup-size entry to FwCfg")?;
     fwcfg
         .add_data_entry(FwCfgEntryType::SetupData, setup_data)
-        .chain_err(|| "Failed to add setup-data entry to FwCfg")?;
+        .with_context(|| "Failed to add setup-data entry to FwCfg")?;
 
     Ok(())
 }

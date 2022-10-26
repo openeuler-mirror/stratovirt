@@ -16,8 +16,9 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
+use crate::error::VirtioError;
 use address_space::AddressSpace;
-use error_chain::bail;
+use anyhow::{anyhow, bail, Context, Result};
 use log::warn;
 use machine_manager::{config::NetworkInterfaceConfig, event_loop::EventLoop};
 use util::byte_code::ByteCode;
@@ -27,7 +28,6 @@ use util::tap::Tap;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
-use super::super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::super::{
     net::{build_device_config_space, create_tap, VirtioNetConfig, MAC_ADDR_LEN},
     CtrlVirtio, NetCtrlHandler, Queue, VirtioDevice, VirtioInterrupt, VIRTIO_F_ACCESS_PLATFORM,
@@ -69,7 +69,9 @@ impl VhostNetBackend for VhostBackend {
 
         let ret = unsafe { ioctl_with_ref(self, VHOST_NET_SET_BACKEND(), &vring_file) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_NET_SET_BACKEND".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_NET_SET_BACKEND".to_string()
+            )));
         }
         Ok(())
     }
@@ -126,16 +128,16 @@ impl VirtioDevice for Net {
             };
 
             let backend = VhostBackend::new(&self.mem_space, "/dev/vhost-net", fd)
-                .chain_err(|| "Failed to create backend for vhost net")?;
+                .with_context(|| "Failed to create backend for vhost net")?;
             backend
                 .set_owner()
-                .chain_err(|| "Failed to set owner for vhost net")?;
+                .with_context(|| "Failed to set owner for vhost net")?;
             backends.push(backend);
         }
 
         let mut vhost_features = backends[0]
             .get_features()
-            .chain_err(|| "Failed to get features for vhost net")?;
+            .with_context(|| "Failed to get features for vhost net")?;
         vhost_features &= !(1_u64 << VHOST_NET_F_VIRTIO_NET_HDR);
         vhost_features &= !(1_u64 << VIRTIO_F_ACCESS_PLATFORM);
 
@@ -167,7 +169,7 @@ impl VirtioDevice for Net {
         };
 
         self.taps = create_tap(self.net_cfg.tap_fds.as_ref(), host_dev_name, queue_pairs)
-            .chain_err(|| "Failed to create tap for vhost net")?;
+            .with_context(|| "Failed to create tap for vhost net")?;
         self.backends = Some(backends);
         self.device_features = device_features;
         self.vhost_features = vhost_features;
@@ -227,7 +229,7 @@ impl VirtioDevice for Net {
         let config_slice = self.device_config.as_bytes();
         let config_size = config_slice.len() as u64;
         if offset >= config_size {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_size).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
         }
         if let Some(end) = offset.checked_add(data.len() as u64) {
             data.write_all(&config_slice[offset as usize..cmp::min(end, config_size) as usize])?;
@@ -285,18 +287,18 @@ impl VirtioDevice for Net {
         for index in 0..queue_pairs {
             let mut host_notifies = Vec::new();
             let backend = match &self.backends {
-                None => return Err("Failed to get backend for vhost net".into()),
+                None => return Err(anyhow!("Failed to get backend for vhost net")),
                 Some(backends) => backends
                     .get(index)
-                    .chain_err(|| format!("Failed to get index {} vhost backend", index))?,
+                    .with_context(|| format!("Failed to get index {} vhost backend", index))?,
             };
 
             backend
                 .set_features(self.vhost_features)
-                .chain_err(|| "Failed to set features for vhost net")?;
+                .with_context(|| "Failed to set features for vhost net")?;
             backend
                 .set_mem_table()
-                .chain_err(|| "Failed to set mem table for vhost net")?;
+                .with_context(|| "Failed to set mem table for vhost net")?;
 
             for queue_index in 0..2 {
                 let queue_mutex = queues[index * 2 + queue_index].clone();
@@ -306,7 +308,7 @@ impl VirtioDevice for Net {
 
                 backend
                     .set_vring_num(queue_index, actual_size)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to set vring num for vhost net, index: {} size: {}",
                             queue_index, actual_size,
@@ -314,13 +316,13 @@ impl VirtioDevice for Net {
                     })?;
                 backend
                     .set_vring_addr(&queue_config, queue_index, 0)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to set vring addr for vhost net, index: {}",
                             queue_index,
                         )
                     })?;
-                backend.set_vring_base(queue_index, 0).chain_err(|| {
+                backend.set_vring_base(queue_index, 0).with_context(|| {
                     format!(
                         "Failed to set vring base for vhost net, index: {}",
                         queue_index,
@@ -328,7 +330,7 @@ impl VirtioDevice for Net {
                 })?;
                 backend
                     .set_vring_kick(queue_index, &queue_evts[index * 2 + queue_index])
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to set vring kick for vhost net, index: {}",
                             index * 2 + queue_index,
@@ -339,12 +341,12 @@ impl VirtioDevice for Net {
 
                 let host_notify = VhostNotify {
                     notify_evt: EventFd::new(libc::EFD_NONBLOCK)
-                        .chain_err(|| ErrorKind::EventFdCreate)?,
+                        .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
                     queue: queue_mutex.clone(),
                 };
                 backend
                     .set_vring_call(queue_index, &host_notify.notify_evt)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to set vring call for vhost net, index: {}",
                             queue_index,
@@ -356,12 +358,14 @@ impl VirtioDevice for Net {
                     None => bail!("Failed to get tap for vhost net"),
                     Some(taps) => taps[index].clone(),
                 };
-                backend.set_backend(queue_index, &tap.file).chain_err(|| {
-                    format!(
-                        "Failed to set tap device for vhost net, index: {}",
-                        queue_index,
-                    )
-                })?;
+                backend
+                    .set_backend(queue_index, &tap.file)
+                    .with_context(|| {
+                        format!(
+                            "Failed to set tap device for vhost net, index: {}",
+                            queue_index,
+                        )
+                    })?;
             }
 
             let handler = VhostIoHandler {
@@ -381,7 +385,7 @@ impl VirtioDevice for Net {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)?;
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
 
         Ok(())
     }

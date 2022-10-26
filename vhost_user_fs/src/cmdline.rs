@@ -14,7 +14,7 @@
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 const MAX_STRING_LENGTH: usize = 255;
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
@@ -114,13 +114,13 @@ pub fn create_fs_config(args: &ArgMatches) -> Result<FsConfig> {
     if let Some(rlimit_nofile) = args.value_of("rlimit nofile") {
         let limit = rlimit_nofile
             .parse::<u64>()
-            .chain_err(|| "Failed to parse rlimit nofile")?;
+            .with_context(|| "Failed to parse rlimit nofile")?;
         fs_config.rlimit_nofile = Some(limit);
     }
 
     fs_config
         .check_config()
-        .chain_err(|| "Precheck failed, Config is unhealthy, stop running")?;
+        .with_context(|| "Precheck failed, Config is unhealthy, stop running")?;
 
     Ok(fs_config)
 }

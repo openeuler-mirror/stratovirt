@@ -25,10 +25,12 @@ use kvm_ioctls::VcpuFd;
 pub use self::caps::ArmCPUCaps;
 use self::caps::CpregListEntry;
 use self::core_regs::{get_core_regs, set_core_regs};
-use crate::errors::{Result, ResultExt};
 use crate::CPU;
+use anyhow::{anyhow, Context, Result};
 
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
@@ -156,7 +158,7 @@ impl ArmCPUState {
             .as_ref()
             .unwrap()
             .get_preferred_target(&mut self.kvi)
-            .chain_err(|| "Failed to get kvm vcpu preferred target")?;
+            .with_context(|| "Failed to get kvm vcpu preferred target")?;
 
         // support PSCI 0.2
         // We already checked that the capability is supported.
@@ -170,10 +172,10 @@ impl ArmCPUState {
 
         vcpu_fd
             .vcpu_init(&self.kvi)
-            .chain_err(|| "Failed to init kvm vcpu")?;
+            .with_context(|| "Failed to init kvm vcpu")?;
         self.mpidr = vcpu_fd
             .get_one_reg(SYS_MPIDR_EL1)
-            .chain_err(|| "Failed to get mpidr")?;
+            .with_context(|| "Failed to get mpidr")?;
 
         Ok(())
     }
@@ -194,18 +196,18 @@ impl ArmCPUState {
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         set_core_regs(vcpu_fd, self.core_regs)
-            .chain_err(|| format!("Failed to set core register for CPU {}", self.apic_id))?;
+            .with_context(|| format!("Failed to set core register for CPU {}", self.apic_id))?;
         vcpu_fd
             .set_mp_state(self.mp_state)
-            .chain_err(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
+            .with_context(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
         for cpreg in self.cpreg_list[0..self.cpreg_len].iter() {
             cpreg
                 .set_cpreg(&vcpu_fd.clone())
-                .chain_err(|| format!("Failed to set cpreg for CPU {}", self.apic_id))?;
+                .with_context(|| format!("Failed to set cpreg for CPU {}", self.apic_id))?;
         }
         vcpu_fd
             .set_vcpu_events(&self.cpu_events)
-            .chain_err(|| format!("Failed to set vcpu event for CPU {}", self.apic_id))?;
+            .with_context(|| format!("Failed to set vcpu event for CPU {}", self.apic_id))?;
 
         Ok(())
     }
@@ -241,7 +243,7 @@ impl ArmCPUState {
 }
 
 impl StateTransfer for CPU {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
 
         cpu_state_locked.core_regs = get_core_regs(&self.fd)?;
@@ -272,9 +274,9 @@ impl StateTransfer for CPU {
         Ok(cpu_state_locked.as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
         let cpu_state = *ArmCPUState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("CPU"))?;
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("CPU")))?;
 
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
         *cpu_state_locked = cpu_state;

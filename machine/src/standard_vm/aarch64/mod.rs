@@ -13,13 +13,12 @@
 mod pci_host_root;
 mod syscall;
 
+pub use crate::error::MachineError;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
-
-use error_chain::bail;
 use vmm_sys_util::eventfd::EventFd;
 
 use acpi::{
@@ -39,7 +38,7 @@ use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
 #[cfg(not(target_env = "musl"))]
 use devices::legacy::Ramfb;
 use devices::legacy::{
-    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgMem, FwCfgOps, PFlash, PL011, PL031,
+    FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 
 use devices::{ICGICConfig, ICGICv3Config, InterruptController};
@@ -68,9 +67,9 @@ use util::set_termi_canon_mode;
 #[cfg(not(target_env = "musl"))]
 use vnc::vnc;
 
-use super::{errors::Result as StdResult, AcpiBuilder, StdMachineOps};
-use crate::errors::{ErrorKind, Result};
+use super::{AcpiBuilder, Result as StdResult, StdMachineOps};
 use crate::MachineOps;
+use anyhow::{anyhow, bail, Context, Result};
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {
@@ -151,8 +150,6 @@ pub struct StdMachine {
 
 impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
-        use crate::errors::ResultExt;
-
         let cpu_topo = CpuTopology::new(
             vm_config.machine_config.nr_cpus,
             vm_config.machine_config.nr_sockets,
@@ -163,7 +160,7 @@ impl StdMachine {
             vm_config.machine_config.max_cpus,
         );
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .chain_err(|| ErrorKind::CrtIoSpaceErr)?;
+            .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
         let sysbus = SysBus::new(
             &sys_mem,
             (32, 192),
@@ -187,11 +184,12 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
-            power_button: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| ErrorKind::InitEventFdErr("power_button".to_string()))?,
+            power_button: EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
+            })?,
             vm_config: Mutex::new(vm_config.clone()),
             reset_req: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| ErrorKind::InitEventFdErr("reset_req".to_string()))?,
+                .with_context(|| anyhow!(MachineError::InitEventFdErr("reset_req".to_string())))?,
             dtb_vec: Vec::new(),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
@@ -201,14 +199,12 @@ impl StdMachine {
     }
 
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
-        use crate::errors::ResultExt;
-
         let mut locked_vm = vm.lock().unwrap();
         let mut fdt_addr: u64 = 0;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             cpu.pause()
-                .chain_err(|| format!("Failed to pause vcpu{}", cpu_index))?;
+                .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
             cpu.set_to_boot_state();
             if cpu_index == 0 {
@@ -216,7 +212,7 @@ impl StdMachine {
             }
             cpu.fd()
                 .vcpu_init(&cpu.arch().lock().unwrap().kvi())
-                .chain_err(|| "Failed to init vcpu fd")?;
+                .with_context(|| "Failed to init vcpu fd")?;
         }
 
         locked_vm
@@ -226,18 +222,18 @@ impl StdMachine {
                 GuestAddress(fdt_addr as u64),
                 locked_vm.dtb_vec.len() as u64,
             )
-            .chain_err(|| "Fail to write dtb into sysmem")?;
+            .with_context(|| "Fail to write dtb into sysmem")?;
 
         locked_vm
             .reset_all_devices()
-            .chain_err(|| "Fail to reset all devices")?;
+            .with_context(|| "Fail to reset all devices")?;
         locked_vm
             .reset_fwcfg_boot_order()
-            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
+            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             cpu.resume()
-                .chain_err(|| format!("Failed to resume vcpu{}", cpu_index))?;
+                .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }
 
         Ok(())
@@ -286,8 +282,6 @@ impl StdMachine {
 
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self) -> StdResult<()> {
-        use super::errors::ResultExt;
-
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
@@ -300,23 +294,21 @@ impl StdMachineOps for StdMachine {
                 mmconfig_region,
                 MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0,
             )
-            .chain_err(|| "Failed to register ECAM in memory space.")?;
+            .with_context(|| "Failed to register ECAM in memory space.")?;
 
         let pcihost_root = PciHostRoot::new(root_bus);
         pcihost_root
             .realize()
-            .chain_err(|| "Failed to realize pcihost root device.")?;
+            .with_context(|| "Failed to realize pcihost root device.")?;
 
         Ok(())
     }
 
     fn add_fwcfg_device(&mut self, nr_cpus: u8) -> StdResult<Arc<Mutex<dyn FwCfgOps>>> {
-        use super::errors::ResultExt;
-
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
         fwcfg
             .add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())
-            .chain_err(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
+            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("NbCpus".to_string())))?;
 
         let cmdline = self.boot_source.lock().unwrap().kernel_cmdline.to_string();
         fwcfg
@@ -324,20 +316,20 @@ impl StdMachineOps for StdMachine {
                 FwCfgEntryType::CmdlineSize,
                 (cmdline.len() + 1).as_bytes().to_vec(),
             )
-            .chain_err(|| DevErrorKind::AddEntryErr("CmdlineSize".to_string()))?;
+            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("CmdlineSize".to_string())))?;
         fwcfg
             .add_string_entry(FwCfgEntryType::CmdlineData, cmdline.as_str())
-            .chain_err(|| DevErrorKind::AddEntryErr("CmdlineData".to_string()))?;
+            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("CmdlineData".to_string())))?;
 
         let boot_order = Vec::<u8>::new();
         fwcfg
             .add_file_entry("bootorder", boot_order)
-            .chain_err(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
+            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("bootorder".to_string())))?;
 
         let bios_geometry = Vec::<u8>::new();
         fwcfg
             .add_file_entry("bios-geometry", bios_geometry)
-            .chain_err(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
+            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("bios-geometry".to_string())))?;
 
         let fwcfg_dev = FwCfgMem::realize(
             fwcfg,
@@ -345,7 +337,7 @@ impl StdMachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
             MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
         )
-        .chain_err(|| "Failed to realize fwcfg device")?;
+        .with_context(|| "Failed to realize fwcfg device")?;
         self.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(fwcfg_dev)
@@ -404,8 +396,6 @@ impl MachineOps for StdMachine {
     }
 
     fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
-        use crate::errors::ResultExt;
-
         let mut boot_source = self.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
@@ -415,7 +405,7 @@ impl MachineOps for StdMachine {
             mem_start: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .chain_err(|| ErrorKind::LoadKernErr)?;
+            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
             rd.initrd_size = layout.initrd_size;
@@ -428,8 +418,6 @@ impl MachineOps for StdMachine {
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
-        use crate::errors::ResultExt;
-
         let rtc = PL031::default();
         PL031::realize(
             rtc,
@@ -437,17 +425,15 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
         )
-        .chain_err(|| "Failed to realize PL031")?;
+        .with_context(|| "Failed to realize PL031")?;
         Ok(())
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
-        use crate::errors::ResultExt;
-
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
 
-        let pl011 = PL011::new(config.clone()).chain_err(|| "Failed to create PL011")?;
+        let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
         pl011
             .realize(
                 &mut self.sysbus,
@@ -455,7 +441,7 @@ impl MachineOps for StdMachine {
                 region_size,
                 &self.boot_source,
             )
-            .chain_err(|| "Failed to realize PL011")?;
+            .with_context(|| "Failed to realize PL011")?;
         Ok(())
     }
 
@@ -464,8 +450,7 @@ impl MachineOps for StdMachine {
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
-        use super::errors::ErrorKind as StdErrorKind;
-        use crate::errors::ResultExt;
+        use super::error::StandardVmError as StdErrorKind;
 
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let clone_vm = vm.clone();
@@ -473,7 +458,7 @@ impl MachineOps for StdMachine {
         locked_vm.init_global_config(vm_config)?;
         locked_vm
             .register_reset_event(&locked_vm.reset_req, clone_vm)
-            .chain_err(|| "Fail to register reset event")?;
+            .with_context(|| "Fail to register reset event")?;
         locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
@@ -500,14 +485,14 @@ impl MachineOps for StdMachine {
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
         locked_vm
             .init_pci_host()
-            .chain_err(|| StdErrorKind::InitPCIeHostErr)?;
+            .with_context(|| anyhow!(StdErrorKind::InitPCIeHostErr))?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
         locked_vm
             .add_devices(vm_config)
-            .chain_err(|| "Failed to add devices")?;
+            .with_context(|| "Failed to add devices")?;
         #[cfg(not(target_env = "musl"))]
         vnc::vnc_init(&vm_config.vnc, &vm_config.object)
-            .chain_err(|| "Failed to init VNC server!")?;
+            .with_context(|| "Failed to init VNC server!")?;
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.0 == MigrateMode::Unknown {
@@ -518,7 +503,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .reset_fwcfg_boot_order()
-            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
+            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
@@ -532,7 +517,7 @@ impl MachineOps for StdMachine {
             let mut fdt_helper = FdtBuilder::new();
             locked_vm
                 .generate_fdt_node(&mut fdt_helper)
-                .chain_err(|| ErrorKind::GenFdtErr)?;
+                .with_context(|| anyhow!(MachineError::GenFdtErr))?;
             let fdt_vec = fdt_helper.finish()?;
             locked_vm.dtb_vec = fdt_vec.clone();
             locked_vm
@@ -542,13 +527,15 @@ impl MachineOps for StdMachine {
                     GuestAddress(boot_cfg.fdt_addr as u64),
                     fdt_vec.len() as u64,
                 )
-                .chain_err(|| ErrorKind::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+                .with_context(|| {
+                    anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
+                })?;
         }
 
         if migrate.0 == MigrateMode::Unknown {
             locked_vm
                 .build_acpi_tables(&fwcfg)
-                .chain_err(|| "Failed to create ACPI tables")?;
+                .with_context(|| "Failed to create ACPI tables")?;
         }
 
         locked_vm.register_power_event(&locked_vm.power_button)?;
@@ -562,9 +549,7 @@ impl MachineOps for StdMachine {
     }
 
     fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
-        use super::errors::ErrorKind as StdErrorKind;
-        use crate::errors::ResultExt;
-
+        use super::error::StandardVmError as StdErrorKind;
         let mut configs_vec = configs.to_vec();
         configs_vec.sort_by_key(|c| c.unit);
         let sector_len: u32 = 1024 * 256;
@@ -578,16 +563,16 @@ impl MachineOps for StdMachine {
                     .read(true)
                     .write(!read_only)
                     .open(path)
-                    .chain_err(|| StdErrorKind::OpenFileErr(path.to_string()))?;
+                    .with_context(|| anyhow!(StdErrorKind::OpenFileErr(path.to_string())))?;
                 (Some(fd), read_only)
             } else {
                 (None, false)
             };
 
             let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only)
-                .chain_err(|| StdErrorKind::InitPflashErr)?;
+                .with_context(|| anyhow!(StdErrorKind::InitPflashErr))?;
             PFlash::realize(pflash, &mut self.sysbus, flash_base, flash_size, fd)
-                .chain_err(|| StdErrorKind::RlzPflashErr)?;
+                .with_context(|| anyhow!(StdErrorKind::RlzPflashErr))?;
             flash_base += flash_size;
         }
 
@@ -651,8 +636,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut gtdt = AcpiTable::new(*b"GTDT", 2, *b"STRATO", *b"VIRTGTDT", 1);
         gtdt.set_table_len(96);
 
@@ -677,7 +661,7 @@ impl AcpiBuilder for StdMachine {
         gtdt.set_field(76, ACPI_GTDT_INTERRUPT_MODE_LEVEL);
 
         let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
-            .chain_err(|| "Fail to add GTDT table to loader")?;
+            .with_context(|| "Fail to add GTDT table to loader")?;
         Ok(gtdt_begin as u64)
     }
 
@@ -685,8 +669,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut iort = AcpiTable::new(*b"IORT", 2, *b"STRATO", *b"VIRTIORT", 1);
         iort.set_table_len(128);
 
@@ -721,7 +704,7 @@ impl AcpiBuilder for StdMachine {
         iort.set_field(120, 48_u32);
 
         let iort_begin = StdMachine::add_table_to_loader(acpi_data, loader, &iort)
-            .chain_err(|| "Fail to add IORT table to loader")?;
+            .with_context(|| "Fail to add IORT table to loader")?;
         Ok(iort_begin as u64)
     }
 
@@ -729,8 +712,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut spcr = AcpiTable::new(*b"SPCR", 2, *b"STRATO", *b"VIRTSPCR", 1);
         spcr.set_table_len(80);
 
@@ -766,7 +748,7 @@ impl AcpiBuilder for StdMachine {
         spcr.set_field(66, 0xffff_u16);
 
         let spcr_begin = StdMachine::add_table_to_loader(acpi_data, loader, &spcr)
-            .chain_err(|| "Fail to add SPCR table to loader")?;
+            .with_context(|| "Fail to add SPCR table to loader")?;
         Ok(spcr_begin as u64)
     }
 
@@ -774,8 +756,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
         // 1. CPU info.
@@ -796,7 +777,7 @@ impl AcpiBuilder for StdMachine {
         dsdt.append_child(self.sysbus.aml_bytes().as_slice());
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
-            .chain_err(|| "Fail to add DSDT table to loader")?;
+            .with_context(|| "Fail to add DSDT table to loader")?;
         Ok(dsdt_begin as u64)
     }
 
@@ -804,8 +785,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
         madt.set_table_len(44);
 
@@ -854,7 +834,7 @@ impl AcpiBuilder for StdMachine {
         madt.append_child(&gic_its.aml_bytes());
 
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
-            .chain_err(|| "Fail to add MADT table to loader")?;
+            .with_context(|| "Fail to add MADT table to loader")?;
         Ok(madt_begin as u64)
     }
 
@@ -900,8 +880,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
         // Reserved
         srat.append_child(&[1_u8; 4_usize]);
@@ -915,7 +894,7 @@ impl AcpiBuilder for StdMachine {
         }
 
         let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
-            .chain_err(|| "Fail to add SRAT table to loader")?;
+            .with_context(|| "Fail to add SRAT table to loader")?;
         Ok(srat_begin as u64)
     }
 
@@ -923,13 +902,12 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut pptt = AcpiTable::new(*b"PPTT", 2, *b"STRATO", *b"VIRTPPTT", 1);
         let mut uid = 0;
         self.build_pptt_sockets(&mut pptt, &mut uid);
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
-            .chain_err(|| "Fail to add PPTT table to loader")?;
+            .with_context(|| "Fail to add PPTT table to loader")?;
         Ok(pptt_begin as u64)
     }
 }
@@ -1031,10 +1009,8 @@ impl EventLoopManager for StdMachine {
         *vmstate == KvmVmState::Shutdown
     }
 
-    fn loop_cleanup(&self) -> util::errors::Result<()> {
-        use util::errors::ResultExt;
-
-        set_termi_canon_mode().chain_err(|| "Failed to set terminal to canonical mode")?;
+    fn loop_cleanup(&self) -> util::Result<()> {
+        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
 }
@@ -1044,7 +1020,7 @@ impl EventLoopManager for StdMachine {
 // # Arguments
 //
 // * `fdt` - Flatted device-tree blob where node will be filled into.
-fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::Result<()> {
     let pcie_ecam_base = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].0;
     let pcie_ecam_size = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1;
     let pcie_buses_num = MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1 >> 20;
@@ -1105,7 +1081,7 @@ fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::errors::Result<()> {
 //
 // * `dev_info` - Device resource info of Virtio-Mmio device.
 // * `fdt` - Flatted device-tree blob where node will be filled into.
-fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors::Result<()> {
+fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
     let node = format!("virtio_mmio@{:x}", res.region_base);
     let virtio_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "virtio,mmio")?;
@@ -1129,7 +1105,7 @@ fn generate_virtio_devices_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::err
 ///
 /// * `dev_info` - Device resource info of fw-cfg device.
 /// * `flash` - Flatted device-tree blob where fw-cfg node will be filled into.
-fn generate_flash_device_node(fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+fn generate_flash_device_node(fdt: &mut FdtBuilder) -> util::Result<()> {
     let flash_base = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
     let flash_size = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
     let node = format!("flash@{:x}", flash_base);
@@ -1150,7 +1126,7 @@ fn generate_flash_device_node(fdt: &mut FdtBuilder) -> util::errors::Result<()> 
 ///
 /// * `dev_info` - Device resource info of fw-cfg device.
 /// * `fdt` - Flatted device-tree blob where fw-cfg node will be filled into.
-fn generate_fwcfg_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors::Result<()> {
+fn generate_fwcfg_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
     let node = format!("fw-cfg@{:x}", res.region_base);
     let fwcfg_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "qemu,fw-cfg-mmio")?;
@@ -1166,7 +1142,7 @@ fn generate_fwcfg_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::error
 //
 // * `dev_info` - Device resource info of serial device.
 // * `fdt` - Flatted device-tree blob where serial node will be filled into.
-fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors::Result<()> {
+fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
     let node = format!("pl011@{:x}", res.region_base);
     let serial_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "arm,pl011\0arm,primecell")?;
@@ -1195,7 +1171,7 @@ fn generate_serial_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::erro
 //
 // * `dev_info` - Device resource info of RTC device.
 // * `fdt` - Flatted device-tree blob where RTC node will be filled into.
-fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors::Result<()> {
+fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::Result<()> {
     let node = format!("pl031@{:x}", res.region_base);
     let rtc_node_dep = fdt.begin_node(&node)?;
     fdt.set_property_string("compatible", "arm,pl031\0arm,primecell\0")?;
@@ -1219,19 +1195,19 @@ fn generate_rtc_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> util::errors:
 #[allow(clippy::upper_case_acronyms)]
 trait CompileFDTHelper {
     /// Function that helps to generate cpu nodes.
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate memory nodes.
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate Virtio-mmio devices' nodes.
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate the chosen node.
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
     /// Function that helps to generate numa node distances.
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()>;
+    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::Result<()>;
 }
 
 impl CompileFDTHelper for StdMachine {
-    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_cpu_nodes(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node = "cpus";
 
         let cpus_node_dep = fdt.begin_node(node)?;
@@ -1294,7 +1270,7 @@ impl CompileFDTHelper for StdMachine {
         Ok(())
     }
 
-    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         if self.numa_nodes.is_none() {
             let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
             let mem_size = self.sys_mem.memory_end_address().raw_value()
@@ -1324,7 +1300,7 @@ impl CompileFDTHelper for StdMachine {
         Ok(())
     }
 
-    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_devices_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         // timer
         let mut cells: Vec<u32> = Vec::new();
         for &irq in [13, 14, 11, 10].iter() {
@@ -1381,7 +1357,7 @@ impl CompileFDTHelper for StdMachine {
         Ok(())
     }
 
-    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node = "chosen";
 
         let boot_source = self.boot_source.lock().unwrap();
@@ -1406,7 +1382,7 @@ impl CompileFDTHelper for StdMachine {
         Ok(())
     }
 
-    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_distance_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         if self.numa_nodes.is_none() {
             return Ok(());
         }
@@ -1441,7 +1417,7 @@ impl CompileFDTHelper for StdMachine {
 }
 
 impl device_tree::CompileFDT for StdMachine {
-    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::errors::Result<()> {
+    fn generate_fdt_node(&self, fdt: &mut FdtBuilder) -> util::Result<()> {
         let node_dep = fdt.begin_node("")?;
 
         fdt.set_property_string("compatible", "linux,dummy-virt")?;

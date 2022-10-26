@@ -18,7 +18,7 @@ use super::config::IothreadConfig;
 use crate::machine::IOTHREADS;
 use crate::qmp::qmp_schema::IothreadInfo;
 
-use error_chain::bail;
+use anyhow::bail;
 use log::info;
 use util::loop_context::{EventLoopContext, EventLoopManager, EventNotifier};
 
@@ -43,7 +43,7 @@ impl EventLoop {
     /// # Arguments
     ///
     /// * `iothreads` - refer to `-iothread` params
-    pub fn object_init(iothreads: &Option<Vec<IothreadConfig>>) -> util::errors::Result<()> {
+    pub fn object_init(iothreads: &Option<Vec<IothreadConfig>>) -> util::Result<()> {
         let mut io_threads = HashMap::new();
         if let Some(thrs) = iothreads {
             for thr in thrs {
@@ -122,10 +122,7 @@ impl EventLoop {
     ///
     /// * `notifiers` - The wrapper of events will be handled in the event loop specified by name.
     /// * `name` - specify which event loop to manage
-    pub fn update_event(
-        notifiers: Vec<EventNotifier>,
-        name: Option<&String>,
-    ) -> util::errors::Result<()> {
+    pub fn update_event(notifiers: Vec<EventNotifier>, name: Option<&String>) -> util::Result<()> {
         if let Some(ctx) = Self::get_ctx(name) {
             ctx.update_events(notifiers)
         } else {
@@ -139,7 +136,7 @@ impl EventLoop {
     ///
     /// Once run main loop, `epoll` in `MainLoopContext` will execute
     /// `epoll_wait()` function to wait for events.
-    pub fn loop_run() -> util::errors::Result<()> {
+    pub fn loop_run() -> util::Result<()> {
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 loop {

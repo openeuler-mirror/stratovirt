@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -20,7 +19,10 @@ use libc::{c_void, read};
 use log::{error, warn};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::UtilError;
+use anyhow::{anyhow, Context, Result};
+use std::fmt;
+use std::fmt::Debug;
 
 const READY_EVENT_MAX: usize = 256;
 const AIO_PRFETCH_CYCLE_TIME: usize = 100;
@@ -196,7 +198,7 @@ impl EventLoopContext {
         let mut events_map = self.events.write().unwrap();
         if let Some(notifier) = events_map.get_mut(&event.raw_fd) {
             if let NotifierOperation::AddExclusion = event.op {
-                return Err(ErrorKind::BadNotifierOperation.into());
+                return Err(anyhow!(UtilError::BadNotifierOperation));
             }
 
             let mut event = event;
@@ -222,7 +224,7 @@ impl EventLoopContext {
                     .ctl(ControlOperation::Delete, parked_fd, EpollEvent::default())?;
                 parked.status = EventStatus::Parked;
             } else {
-                return Err(ErrorKind::NoParkedFd(parked_fd).into());
+                return Err(anyhow!(UtilError::NoParkedFd(parked_fd)));
             }
         }
 
@@ -245,7 +247,7 @@ impl EventLoopContext {
                     ) {
                         let error_num = error.raw_os_error().unwrap();
                         if error_num != libc::EBADF && error_num != libc::ENOENT {
-                            return Err(ErrorKind::BadSyscall(error).into());
+                            return Err(anyhow!(UtilError::BadSyscall(error)));
                         }
                     }
                 }
@@ -261,7 +263,7 @@ impl EventLoopContext {
                         )?;
                         parked.status = EventStatus::Alive;
                     } else {
-                        return Err(ErrorKind::NoParkedFd(parked_fd).into());
+                        return Err(anyhow!(UtilError::NoParkedFd(parked_fd)));
                     }
                 }
 
@@ -269,7 +271,7 @@ impl EventLoopContext {
                 self.gc.write().unwrap().push(event);
             }
             _ => {
-                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+                return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
             }
         }
 
@@ -286,7 +288,7 @@ impl EventLoopContext {
                 notifier.handlers.append(&mut event.handlers);
             }
             _ => {
-                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+                return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
             }
         }
         Ok(())
@@ -302,11 +304,13 @@ impl EventLoopContext {
                         notifier.raw_fd,
                         EpollEvent::default(),
                     )
-                    .chain_err(|| format!("Failed to park event, event fd:{}", notifier.raw_fd))?;
+                    .with_context(|| {
+                        format!("Failed to park event, event fd:{}", notifier.raw_fd)
+                    })?;
                 notifier.status = EventStatus::Parked;
             }
             _ => {
-                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+                return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
             }
         }
         Ok(())
@@ -322,13 +326,13 @@ impl EventLoopContext {
                         notifier.raw_fd,
                         EpollEvent::new(notifier.event, &**notifier as *const _ as u64),
                     )
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!("Failed to resume event, event fd: {}", notifier.raw_fd)
                     })?;
                 notifier.status = EventStatus::Alive;
             }
             _ => {
-                return Err(ErrorKind::NoRegisterFd(event.raw_fd).into());
+                return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
             }
         }
         Ok(())
@@ -465,7 +469,7 @@ impl EventLoopContext {
         let ev_count = match self.epoll.wait(time_out, &mut self.ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
-            Err(e) => return Err(ErrorKind::EpollWait(e).into()),
+            Err(e) => return Err(anyhow!(UtilError::EpollWait(e))),
         };
 
         for i in 0..ev_count {

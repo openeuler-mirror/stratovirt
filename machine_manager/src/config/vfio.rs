@@ -10,9 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::{ErrorKind, Result};
+use super::error::ConfigError;
 use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
-
+use anyhow::{anyhow, Result};
 #[derive(Default, Debug)]
 pub struct VfioConfig {
     pub sysfsdev: String,
@@ -23,13 +23,17 @@ pub struct VfioConfig {
 impl ConfigCheck for VfioConfig {
     fn check(&self) -> Result<()> {
         if self.host.len() > MAX_STRING_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("host".to_string(), MAX_STRING_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "host".to_string(),
+                MAX_STRING_LENGTH
+            )));
         }
 
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "id".to_string(),
+                MAX_STRING_LENGTH
+            )));
         }
 
         Ok(())
@@ -58,13 +62,17 @@ pub fn parse_vfio(vfio_config: &str) -> Result<VfioConfig> {
     }
 
     if vfio.host.is_empty() && vfio.sysfsdev.is_empty() {
-        return Err(ErrorKind::FieldIsMissing("host nor sysfsdev", "vfio").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "host nor sysfsdev",
+            "vfio"
+        )));
     }
 
     if !vfio.host.is_empty() && !vfio.sysfsdev.is_empty() {
-        return Err(
-            ErrorKind::InvalidParam("host and sysfsdev".to_string(), "vfio".to_string()).into(),
-        );
+        return Err(anyhow!(ConfigError::InvalidParam(
+            "host and sysfsdev".to_string(),
+            "vfio".to_string()
+        )));
     }
 
     if let Some(id) = cmd_parser.get_value::<String>("id")? {

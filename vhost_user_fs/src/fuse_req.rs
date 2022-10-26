@@ -14,7 +14,6 @@ use super::fs::FileSystem;
 use super::fuse_msg::*;
 use super::fuse_proc::*;
 use address_space::AddressSpace;
-use error_chain::ChainedError;
 use std::sync::{Arc, Mutex};
 use virtio::Element;
 
@@ -53,10 +52,7 @@ impl FuseReq {
         let in_header = match self.reader.read_obj::<FuseInHeader>(sys_mem) {
             Ok(data) => data,
             Err(err) => {
-                error!(
-                    "Failed to read the header of fuse msg, {}",
-                    err.display_chain(),
-                );
+                error!("Failed to read the header of fuse msg, {:?}", err,);
                 return (self.desc_index, 0);
             }
         };

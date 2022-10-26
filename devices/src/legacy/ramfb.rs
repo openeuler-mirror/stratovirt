@@ -11,15 +11,16 @@
 // See the Mulan PSL v2 for more details.
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
-use crate::legacy::errors::{Result, ResultExt};
+use crate::legacy::Result;
 use acpi::AmlBuilder;
 use address_space::{AddressSpace, GuestAddress};
+use anyhow::Context;
 use drm_fourcc::DrmFourcc;
 use log::error;
 use migration_derive::ByteCode;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
-use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
+use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use util::byte_code::ByteCode;
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 use vnc::vnc::{vnc_display_switch, vnc_loop_update_display, DisplaySurface};
@@ -83,7 +84,7 @@ impl RamfbState {
                 Some(Arc::new(Mutex::new(ramfb_state_cb))),
                 true,
             )
-            .chain_err(|| "Failed to set fwcfg")?;
+            .with_context(|| "Failed to set fwcfg")?;
         Ok(())
     }
 

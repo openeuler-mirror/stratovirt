@@ -19,10 +19,10 @@ use byteorder::{ByteOrder, LittleEndian};
 use util::num_ops::{read_u32, write_u64_high, write_u64_low};
 
 use crate::config::*;
-use crate::errors::Result;
 use crate::usb::UsbPort;
 use crate::xhci::xhci_controller::{set_field, XhciDevice, XhciEvent};
 use crate::xhci::xhci_ring::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
+use anyhow::{bail, Result};
 
 /// Capability offset or size.
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;
@@ -290,7 +290,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
         };
         if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read oper registers: {}", e);
+            error!("Failed to write data when read oper registers: {:?}", e);
             return false;
         }
         true
@@ -335,7 +335,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
         };
         if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read oper registers: {}", e);
+            error!("Failed to write data when read oper registers: {:?}", e);
             return false;
         }
         true
@@ -347,7 +347,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         let value = match read_data(data) {
             Ok(v) => v,
             Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
+                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
                 return false;
             }
         };
@@ -401,7 +401,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     locked_xhci.oper.cmd_ring_ctrl =
                         write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
                     if let Err(e) = locked_xhci.send_event(&event, 0) {
-                        error!("Failed to send event: {}", e);
+                        error!("Failed to send event: {:?}", e);
                     }
                 } else {
                     let crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0) & !0x3f;
@@ -471,7 +471,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             };
         }
         if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read runtime registers: {}", e);
+            error!("Failed to write data when read runtime registers: {:?}", e);
             return false;
         }
         true
@@ -482,7 +482,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         let value = match read_data(data) {
             Ok(v) => v,
             Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
+                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
                 return false;
             }
         };
@@ -516,7 +516,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             XHCI_INTR_REG_ERSTBA_HI => {
                 intr.erstba = write_u64_high(intr.erstba, value);
                 if let Err(e) = xhci.reset_event_ring(idx) {
-                    error!("Failed to reset event ring: {}", e);
+                    error!("Failed to reset event ring: {:?}", e);
                 }
             }
             XHCI_INTR_REG_ERDP_LO => {
@@ -561,7 +561,7 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let doorbell_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
         debug!("doorbell read addr {:x} offset {:x}", addr.0, offset);
         if let Err(e) = write_data(data, 0) {
-            error!("Failed to write data: {}", e);
+            error!("Failed to write data: {:?}", e);
             return false;
         }
         true
@@ -571,7 +571,7 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         let value = match read_data(data) {
             Ok(v) => v,
             Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
+                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
                 return false;
             }
         };
@@ -585,7 +585,7 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         if slot_id == 0 {
             if value == 0 {
                 if let Err(e) = xhci.handle_command() {
-                    error!("Failed to process commands: {}", e);
+                    error!("Failed to process commands: {:?}", e);
                 }
             } else {
                 error!("Invalid doorbell write: value {:x}", value)
@@ -597,7 +597,7 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             } else if ep_id == 0 || ep_id > 31 {
                 error!("Invalid epid {}", ep_id,);
             } else if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
-                error!("Failed to kick endpoint: {}", e);
+                error!("Failed to kick endpoint: {:?}", e);
             }
         }
         true
@@ -626,7 +626,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
             }
         };
         if let Err(e) = write_data(data, value) {
-            error!("Failed to write data: {}", e);
+            error!("Failed to write data: {:?}", e);
             return false;
         }
         true
@@ -637,7 +637,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
         let value = match read_data(data) {
             Ok(v) => v,
             Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
+                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
                 return false;
             }
         };
@@ -656,13 +656,13 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
                 XHCI_PORTSC => {
                     if value & PORTSC_WPR == PORTSC_WPR {
                         if let Err(e) = locked_xhci.reset_port(&port, true) {
-                            error!("Failed to warn reset port {}", e);
+                            error!("Failed to warn reset port {:?}", e);
                         }
                         break;
                     }
                     if value & PORTSC_PR == PORTSC_PR {
                         if let Err(e) = locked_xhci.reset_port(&port, false) {
-                            error!("Failed to reset port {}", e);
+                            error!("Failed to reset port {:?}", e);
                         }
                         break;
                     }
@@ -714,7 +714,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
                     drop(locked_port);
                     if notify != 0 {
                         if let Err(e) = locked_xhci.port_notify(&port, notify) {
-                            error!("Failed to notify: {}", e);
+                            error!("Failed to notify: {:?}", e);
                         }
                     }
                 }

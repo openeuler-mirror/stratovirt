@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::bail;
 use log::warn;
 use machine_manager::{config::VsockConfig, event_loop::EventLoop};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -26,7 +25,9 @@ use util::num_ops::{read_u32, write_u32};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
-use super::super::super::errors::{ErrorKind, Result, ResultExt};
+use crate::VirtioError;
+use anyhow::{anyhow, bail, Context, Result};
+
 use super::super::super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_TYPE_VSOCK,
 };
@@ -53,7 +54,9 @@ impl VhostVsockBackend for VhostBackend {
     fn set_guest_cid(&self, cid: u64) -> Result<()> {
         let ret = unsafe { ioctl_with_ref(&self.fd, VHOST_VSOCK_SET_GUEST_CID(), &cid) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_VSOCK_SET_GUEST_CID".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_VSOCK_SET_GUEST_CID".to_string()
+            )));
         }
         Ok(())
     }
@@ -62,7 +65,9 @@ impl VhostVsockBackend for VhostBackend {
         let on: u32 = if start { 1 } else { 0 };
         let ret = unsafe { ioctl_with_ref(&self.fd, VHOST_VSOCK_SET_RUNNING(), &on) };
         if ret < 0 {
-            return Err(ErrorKind::VhostIoctl("VHOST_VSOCK_SET_RUNNING".to_string()).into());
+            return Err(anyhow!(VirtioError::VhostIoctl(
+                "VHOST_VSOCK_SET_RUNNING".to_string()
+            )));
         }
         Ok(())
     }
@@ -122,14 +127,14 @@ impl Vsock {
             let element = event_queue_locked
                 .vring
                 .pop_avail(&self.mem_space, self.state.driver_features)
-                .chain_err(|| "Failed to get avail ring element.")?;
+                .with_context(|| "Failed to get avail ring element.")?;
 
             self.mem_space
                 .write_object(
                     &VIRTIO_VSOCK_EVENT_TRANSPORT_RESET,
                     element.in_iovec[0].addr,
                 )
-                .chain_err(|| "Failed to write buf for virtio vsock event")?;
+                .with_context(|| "Failed to write buf for virtio vsock event")?;
             event_queue_locked
                 .vring
                 .add_used(
@@ -137,11 +142,11 @@ impl Vsock {
                     element.index,
                     VIRTIO_VSOCK_EVENT_TRANSPORT_RESET.as_bytes().len() as u32,
                 )
-                .chain_err(|| format!("Failed to add used ring {}", element.index))?;
+                .with_context(|| format!("Failed to add used ring {}", element.index))?;
 
             if let Some(interrupt_cb) = &self.interrupt_cb {
                 interrupt_cb(&VirtioInterruptType::Vring, Some(&*event_queue_locked))
-                    .chain_err(|| ErrorKind::EventFdWrite)?;
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
             }
         }
 
@@ -154,13 +159,13 @@ impl VirtioDevice for Vsock {
     fn realize(&mut self) -> Result<()> {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
         let backend = VhostBackend::new(&self.mem_space, VHOST_PATH, vhost_fd)
-            .chain_err(|| "Failed to create backend for vsock")?;
+            .with_context(|| "Failed to create backend for vsock")?;
         backend
             .set_owner()
-            .chain_err(|| "Failed to set owner for vsock")?;
+            .with_context(|| "Failed to set owner for vsock")?;
         self.state.device_features = backend
             .get_features()
-            .chain_err(|| "Failed to get features for vsock")?;
+            .with_context(|| "Failed to get features for vsock")?;
         self.backend = Some(backend);
 
         Ok(())
@@ -223,7 +228,10 @@ impl VirtioDevice for Vsock {
         let data_len = data.len();
         let config_len = self.state.config_space.len();
         if offset as usize + data_len > config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(
+                offset,
+                config_len as u64
+            )));
         }
 
         self.state.config_space[(offset as usize)..(offset as usize + data_len)]
@@ -250,15 +258,15 @@ impl VirtioDevice for Vsock {
 
         // Preliminary setup for vhost net.
         let backend = match &self.backend {
-            None => return Err("Failed to get backend for vsock".into()),
+            None => return Err(anyhow!("Failed to get backend for vsock")),
             Some(backend_) => backend_,
         };
         backend
             .set_features(self.state.driver_features)
-            .chain_err(|| "Failed to set features for vsock")?;
+            .with_context(|| "Failed to set features for vsock")?;
         backend
             .set_mem_table()
-            .chain_err(|| "Failed to set mem table for vsock")?;
+            .with_context(|| "Failed to set mem table for vsock")?;
 
         for (queue_index, queue_mutex) in vhost_queues.iter().enumerate() {
             let queue = queue_mutex.lock().unwrap();
@@ -267,34 +275,34 @@ impl VirtioDevice for Vsock {
 
             backend
                 .set_vring_num(queue_index, actual_size)
-                .chain_err(|| {
+                .with_context(|| {
                     format!("Failed to set vring num for vsock, index: {}", queue_index)
                 })?;
             backend
                 .set_vring_addr(&queue_config, queue_index, 0)
-                .chain_err(|| {
+                .with_context(|| {
                     format!("Failed to set vring addr for vsock, index: {}", queue_index)
                 })?;
             backend
                 .set_vring_base(queue_index, self.state.last_avail_idx[queue_index])
-                .chain_err(|| {
+                .with_context(|| {
                     format!("Failed to set vring base for vsock, index: {}", queue_index)
                 })?;
             backend
                 .set_vring_kick(queue_index, &queue_evts[queue_index])
-                .chain_err(|| {
+                .with_context(|| {
                     format!("Failed to set vring kick for vsock, index: {}", queue_index)
                 })?;
             drop(queue);
 
             let host_notify = VhostNotify {
                 notify_evt: EventFd::new(libc::EFD_NONBLOCK)
-                    .chain_err(|| ErrorKind::EventFdCreate)?,
+                    .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
                 queue: queue_mutex.clone(),
             };
             backend
                 .set_vring_call(queue_index, &host_notify.notify_evt)
-                .chain_err(|| {
+                .with_context(|| {
                     format!("Failed to set vring call for vsock, index: {}", queue_index)
                 })?;
             host_notifies.push(host_notify);
@@ -320,7 +328,7 @@ impl VirtioDevice for Vsock {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)?;
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
 
         Ok(())
     }
@@ -338,28 +346,26 @@ impl VirtioDevice for Vsock {
 }
 
 impl StateTransfer for Vsock {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut state = self.state;
-        migration::errors::ResultExt::chain_err(
-            self.backend.as_ref().unwrap().set_running(false),
-            || "Failed to set vsock backend stopping",
-        )?;
+        migration::Result::with_context(self.backend.as_ref().unwrap().set_running(false), || {
+            "Failed to set vsock backend stopping"
+        })?;
         state.last_avail_idx[0] = self.backend.as_ref().unwrap().get_vring_base(0).unwrap();
         state.last_avail_idx[1] = self.backend.as_ref().unwrap().get_vring_base(1).unwrap();
-        migration::errors::ResultExt::chain_err(
-            self.backend.as_ref().unwrap().set_running(true),
-            || "Failed to set vsock backend running",
-        )?;
-        migration::errors::ResultExt::chain_err(self.transport_reset(), || {
+        migration::Result::with_context(self.backend.as_ref().unwrap().set_running(true), || {
+            "Failed to set vsock backend running"
+        })?;
+        migration::Result::with_context(self.transport_reset(), || {
             "Failed to send vsock transport reset event"
         })?;
 
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VsockState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("VSOCK"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("VSOCK")))?;
 
         Ok(())
     }
@@ -375,8 +381,8 @@ impl StateTransfer for Vsock {
 
 impl MigrationHook for Vsock {
     #[cfg(target_arch = "aarch64")]
-    fn resume(&mut self) -> migration::errors::Result<()> {
-        migration::errors::ResultExt::chain_err(self.transport_reset(), || {
+    fn resume(&mut self) -> migration::Result<()> {
+        migration::Result::with_context(self.transport_reset(), || {
             "Failed to resume virtio vsock device"
         })?;
 

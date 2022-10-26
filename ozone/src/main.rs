@@ -10,7 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::{error_chain, quick_main};
+pub mod error;
+use anyhow::{Context, Result};
+pub use error::OzoneError;
 
 use crate::args::create_args_parser;
 use crate::handler::OzoneHandler;
@@ -22,34 +24,40 @@ mod handler;
 mod namespace;
 mod syscall;
 
-error_chain! {
-    links {
-        Util(util::errors::Error, util::errors::ErrorKind);
-    }
-    foreign_links {
-        Io(std::io::Error);
-    }
-    errors {
-        ExecError(e: std::io::Error) {
-            display("Failed to run binary file in ozone environment: {}", e)
-        }
-        DigitalParseError(column: &'static str, item: String) {
-            display("Failed to parse {} to {}", item, column)
-        }
-        CapsError(cap_option: &'static str) {
-            display("Failed to execute {}", cap_option)
-        }
-        WriteError(path: String, value: String) {
-            display("Failed to write {} to {}", value, path)
-        }
+pub trait ExitCode {
+    /// Returns the value to use as the exit status.
+    fn code(self) -> i32;
+}
+
+impl ExitCode for i32 {
+    fn code(self) -> i32 {
+        self
     }
 }
 
-quick_main!(run);
+impl ExitCode for () {
+    fn code(self) -> i32 {
+        0
+    }
+}
+
+fn main() {
+    use std::io::Write;
+
+    ::std::process::exit(match run() {
+        Ok(ret) => ExitCode::code(ret),
+        Err(ref e) => {
+            write!(&mut ::std::io::stderr(), "{}", format!("{:?}", e))
+                .expect("Error writing to stderr");
+
+            1
+        }
+    });
+}
 
 fn run() -> Result<()> {
     let args = create_args_parser().get_matches()?;
-    let handler = OzoneHandler::new(&args).chain_err(|| "Failed to parse cmdline args")?;
+    let handler = OzoneHandler::new(&args).with_context(|| "Failed to parse cmdline args")?;
 
     if args.is_present("clean_resource") {
         handler.teardown()?;

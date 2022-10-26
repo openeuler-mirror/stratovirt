@@ -14,7 +14,7 @@ use std::fs::File;
 use std::os::unix::prelude::IntoRawFd;
 
 use crate::syscall;
-use crate::{Result, ResultExt};
+use anyhow::{Context, Result};
 
 const ROOT_DIR_NAME: &str = "/";
 const OLD_ROOT_DIR_NAME: &str = "old_root";
@@ -26,15 +26,16 @@ const CURRENT_DIR_NAME: &str = ".";
 ///
 /// * `hostname` - Host name.
 pub fn set_uts_namespace(hostname: &str) -> Result<()> {
-    syscall::unshare(libc::CLONE_NEWUTS).chain_err(|| "Failed to unshare into a new namespace")?;
-    syscall::set_host_name(hostname).chain_err(|| "Failed to set new hostname")?;
+    syscall::unshare(libc::CLONE_NEWUTS)
+        .with_context(|| "Failed to unshare into a new namespace")?;
+    syscall::set_host_name(hostname).with_context(|| "Failed to set new hostname")?;
     Ok(())
 }
 
 /// Set namespace for ipc.
 pub fn set_ipc_namespace() -> Result<()> {
     syscall::unshare(libc::CLONE_NEWIPC)
-        .chain_err(|| "Failed to share into a new ipc namespace")?;
+        .with_context(|| "Failed to share into a new ipc namespace")?;
     Ok(())
 }
 
@@ -45,10 +46,10 @@ pub fn set_ipc_namespace() -> Result<()> {
 /// * `path` - Path of network namespace.
 pub fn set_network_namespace(path: &str) -> Result<()> {
     let network_ns_fd = File::open(path)
-        .chain_err(|| format!("Failed to open netns path: {}", path))?
+        .with_context(|| format!("Failed to open netns path: {}", path))?
         .into_raw_fd();
     syscall::setns(network_ns_fd, libc::CLONE_NEWNET)
-        .chain_err(|| "Failed to set network namespace")?;
+        .with_context(|| "Failed to set network namespace")?;
     syscall::close(network_ns_fd)?;
     Ok(())
 }
@@ -59,25 +60,26 @@ pub fn set_network_namespace(path: &str) -> Result<()> {
 ///
 /// * `mount_dir` - Path of mount directory .
 pub fn set_mount_namespace(mount_dir: &str) -> Result<()> {
-    syscall::unshare(libc::CLONE_NEWNS).chain_err(|| "Failed to unshare into a new namespace")?;
+    syscall::unshare(libc::CLONE_NEWNS)
+        .with_context(|| "Failed to unshare into a new namespace")?;
     syscall::mount(None, ROOT_DIR_NAME, libc::MS_SLAVE | libc::MS_REC)
-        .chain_err(|| "Failed to mount root path as slave and rec")?;
+        .with_context(|| "Failed to mount root path as slave and rec")?;
 
     syscall::mount(Some(mount_dir), mount_dir, libc::MS_BIND | libc::MS_REC)
-        .chain_err(|| "Failed to mount target path as bind and rec")?;
+        .with_context(|| "Failed to mount target path as bind and rec")?;
 
     std::env::set_current_dir(mount_dir)
-        .chain_err(|| "Failed to change current dir to mount dir path")?;
+        .with_context(|| "Failed to change current dir to mount dir path")?;
 
-    syscall::mkdir(OLD_ROOT_DIR_NAME).chain_err(|| "Failed to create old root dir")?;
+    syscall::mkdir(OLD_ROOT_DIR_NAME).with_context(|| "Failed to create old root dir")?;
 
     syscall::pivot_root(CURRENT_DIR_NAME, OLD_ROOT_DIR_NAME)
-        .chain_err(|| "Failed to call pivot_root")?;
+        .with_context(|| "Failed to call pivot_root")?;
 
-    syscall::chdir(ROOT_DIR_NAME).chain_err(|| "Failed to call chdir to change dir")?;
+    syscall::chdir(ROOT_DIR_NAME).with_context(|| "Failed to call chdir to change dir")?;
 
-    syscall::umount(OLD_ROOT_DIR_NAME).chain_err(|| "Failed to umount old root path dir")?;
+    syscall::umount(OLD_ROOT_DIR_NAME).with_context(|| "Failed to umount old root path dir")?;
 
-    std::fs::remove_dir(OLD_ROOT_DIR_NAME).chain_err(|| "Failed to remove old root path dir")?;
+    std::fs::remove_dir(OLD_ROOT_DIR_NAME).with_context(|| "Failed to remove old root path dir")?;
     Ok(())
 }

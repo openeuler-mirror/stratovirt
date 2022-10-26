@@ -21,7 +21,6 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
-use error_chain::ChainedError;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
@@ -32,7 +31,7 @@ use super::fs::FileSystem;
 use super::fuse_req::FuseReq;
 use super::vhost_user_server::VhostUserReqHandler;
 
-use crate::errors::{Result, ResultExt};
+use anyhow::{anyhow, bail, Context, Result};
 use virtio::vhost::user::RegionMemInfo;
 use virtio::{
     Queue, QueueConfig, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_EVENT_IDX,
@@ -58,7 +57,7 @@ impl FsIoHandler {
         fs: Arc<Mutex<FileSystem>>,
     ) -> Result<Self> {
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING)
-            .chain_err(|| "Failed to create virtual queue")?;
+            .with_context(|| "Failed to create virtual queue")?;
         if !queue.is_valid(mem_space) {
             bail!("Invalid queue for fs handler");
         }
@@ -91,7 +90,7 @@ impl FsIoHandler {
         {
             self.call_evt
                 .write(1)
-                .chain_err(|| "Failed to write call fd")?;
+                .with_context(|| "Failed to write call fd")?;
         }
 
         Ok(())
@@ -117,7 +116,7 @@ impl EventNotifierHelper for FsIoHandler {
             read_fd(fd);
 
             if let Err(e) = fs_handler_clone.lock().unwrap().process_queue() {
-                error!("Failed to process fuse msg, {}", e.display_chain());
+                error!("Failed to process fuse msg, {:?}", e);
             }
 
             None
@@ -180,7 +179,7 @@ impl VirtioFsConfig {
     fn get_mut_queue_config(&mut self, queue_index: usize) -> Result<&mut QueueInfo> {
         self.queues_info
             .get_mut(queue_index)
-            .ok_or_else(|| format!("The select index of queue {} overflows", queue_index).into())
+            .ok_or_else(|| anyhow!("The select index of queue {} overflows", queue_index))
     }
 }
 
@@ -208,16 +207,16 @@ impl VirtioFs {
     /// * `source_dir` - The path of source directory shared in host.
     pub fn new(source_dir: &str) -> Result<Self> {
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .chain_err(|| "Failed to create address space")?;
+            .with_context(|| "Failed to create address space")?;
 
         let mut fs_handlers = Vec::new();
         for _i in 0..(VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM) {
             fs_handlers.push(None);
         }
 
-        let fs = Arc::new(Mutex::new(FileSystem::new(source_dir).chain_err(|| {
-            format!("Failed to create file system, source dir: {}", source_dir)
-        })?));
+        let fs = Arc::new(Mutex::new(FileSystem::new(source_dir).with_context(
+            || format!("Failed to create file system, source dir: {}", source_dir),
+        )?));
 
         Ok(VirtioFs {
             config: VirtioFsConfig::new(),
@@ -257,10 +256,7 @@ impl VhostUserReqHandler for VirtioFs {
         if !self.config.mem_regions.is_empty() {
             for region in &self.config.mem_regions {
                 if let Err(e) = self.sys_mem.root().delete_subregion(region) {
-                    error!(
-                        "Failed to delete subregion for setting mem table, {}",
-                        e.display_chain()
-                    );
+                    error!("Failed to delete subregion for setting mem table, {:?}", e);
                 }
             }
             self.config.mem_regions = Vec::new();
@@ -286,7 +282,7 @@ impl VhostUserReqHandler for VirtioFs {
                     true,
                     false,
                 )
-                    .chain_err(||
+                    .with_context(||
                         format!("Failed to create the mapping of host memory for setting mem table, addr: 0x{:X}, size: {}, offset: {}",
                                 region_config.guest_phys_addr, region_config.memory_size, region_config.mmap_offset,
                         )
@@ -297,7 +293,7 @@ impl VhostUserReqHandler for VirtioFs {
             self.sys_mem
                 .root()
                 .add_subregion(region.clone(), mmap.start_address().raw_value())
-                .chain_err(|| "Failed to add subregion for setting mem table")?;
+                .with_context(|| "Failed to add subregion for setting mem table")?;
 
             self.config.mem_regions.push(region);
         }
@@ -311,7 +307,7 @@ impl VhostUserReqHandler for VirtioFs {
             .map(|queue_info| {
                 queue_info.config.size = num;
             })
-            .chain_err(|| {
+            .with_context(|| {
                 format!(
                     "Failed to set vring num, index: {}, num: {}",
                     queue_index, num,
@@ -352,7 +348,7 @@ impl VhostUserReqHandler for VirtioFs {
                 queue_info.config.addr_cache.used_ring_host = cloned_mem_space
                     .get_host_address(GuestAddress(used_addr))
                     .unwrap_or(0);
-            }).chain_err(||
+            }).with_context(||
             format!("Failed to set vring addr, index: {}, desc: 0x{:X}, avail: 0x{:X}, used: 0x{:X}",
                     queue_index, desc_addr, avail_addr, used_addr,
             )
@@ -371,7 +367,7 @@ impl VhostUserReqHandler for VirtioFs {
                 let call_evt = unsafe { EventFd::from_raw_fd(fd) };
                 queue_info.call_evt = Some(call_evt);
             })
-            .chain_err(|| format!("Failed to set vring call, index: {}", queue_index))?;
+            .with_context(|| format!("Failed to set vring call, index: {}", queue_index))?;
         Ok(())
     }
 
@@ -382,7 +378,7 @@ impl VhostUserReqHandler for VirtioFs {
                 let kick_evt = unsafe { EventFd::from_raw_fd(fd) };
                 queue_info.kick_evt = Some(kick_evt);
             })
-            .chain_err(|| format!("Failed to set vring kick, index: {}", queue_index))?;
+            .with_context(|| format!("Failed to set vring kick, index: {}", queue_index))?;
         Ok(())
     }
 
@@ -410,15 +406,15 @@ impl VhostUserReqHandler for VirtioFs {
                     driver_features,
                     self.fs.clone(),
                 )
-                .chain_err(|| "Failed to create fs handler")?,
+                .with_context(|| "Failed to create fs handler")?,
             ));
 
             self.fs_handlers[queue_index] = Some(fs_handler.clone());
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(fs_handler), None)
-                .chain_err(|| "Failed to update event for queue status which is ready")?;
+                .with_context(|| "Failed to update event for queue status which is ready")?;
         } else if let Some(fs_handler) = self.fs_handlers.get_mut(queue_index).unwrap().take() {
             EventLoop::update_event(fs_handler.lock().unwrap().delete_notifiers(), None)
-                .chain_err(|| "Failed to update event for queue status which is not ready")?;
+                .with_context(|| "Failed to update event for queue status which is not ready")?;
         }
         Ok(())
     }

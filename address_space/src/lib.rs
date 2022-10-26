@@ -79,6 +79,7 @@
 
 mod address;
 mod address_space;
+pub mod error;
 mod host_mmap;
 mod listener;
 mod region;
@@ -86,66 +87,14 @@ mod state;
 
 pub use crate::address_space::{AddressSpace, RegionCache};
 pub use address::{AddressRange, GuestAddress};
+pub use anyhow::Result;
+pub use error::AddressSpaceError;
 pub use host_mmap::{create_host_mmaps, set_host_memory_policy, FileBackend, HostMemMapping};
 #[cfg(target_arch = "x86_64")]
 pub use listener::KvmIoListener;
 pub use listener::KvmMemoryListener;
 pub use listener::{Listener, ListenerReqType};
 pub use region::{FlatRange, Region, RegionIoEventFd, RegionType};
-
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-        }
-        foreign_links {
-            Io(std::io::Error);
-        }
-        errors {
-            ListenerRequest(req_type: crate::listener::ListenerReqType) {
-                display("Failed to call listener, request type is {:#?}", req_type)
-            }
-            UpdateTopology(base: u64, size: u64, reg_ty: crate::RegionType) {
-                display("Failed to update topology, base 0x{:X}, size 0x{:X}, region type is {:#?}", base, size, reg_ty)
-            }
-            IoEventFd {
-                display("Failed to clone EventFd")
-            }
-            AddrAlignUp(addr: u64, align: u64) {
-                display("Failed to align-up address, overflows: addr 0x{:X}, align 0x{:X}", addr, align)
-            }
-            RegionNotFound(addr: u64) {
-                display("Failed to find matched region, addr 0x{:X}", addr)
-            }
-            Overflow(addr: u64) {
-                display("Address overflows, addr is 0x{:X}", addr)
-            }
-            Mmap {
-                display("Failed to mmap")
-            }
-            IoAccess(base: u64, offset: u64, count: u64) {
-                display("Failed to access IO-type region, region base 0x{:X}, offset 0x{:X}, size 0x{:X}", base, offset, count)
-            }
-            RegionType(t: crate::RegionType) {
-                display("Wrong region type, {:#?}", t)
-            }
-            NoAvailKvmSlot(cnt: usize) {
-                display("No available kvm_mem_slot, total count is {}", cnt)
-            }
-            NoMatchedKvmSlot(addr: u64, sz: u64) {
-                display("Failed to find matched kvm_mem_slot, addr 0x{:X}, size 0x{:X}", addr, sz)
-            }
-            KvmSlotOverlap(add: (u64, u64), exist: (u64, u64)) {
-                display("Added KVM mem range (0x{:X}, 0x{:X}) overlaps with exist one (0x{:X}, 0x{:X})", add.0, add.1, exist.0, exist.1)
-            }
-            InvalidOffset(offset: u64, count: u64, region_size: u64) {
-                display("Invalid offset: offset 0x{:X}, data length 0x{:X}, region size 0x{:X}", offset, count, region_size)
-            }
-        }
-    }
-}
 
 /// Provide Some operations of `Region`, mainly used by Vm's devices.
 #[derive(Clone)]

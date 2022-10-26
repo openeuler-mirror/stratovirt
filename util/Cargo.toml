@@ -9,7 +9,8 @@ license = "Mulan PSL v2"
 
 [dependencies]
 arc-swap = ">=1.5.0"
-error-chain = "0.12.4"
+thiserror = "1.0"
+anyhow = "1.0"
 kvm-bindings = { version = ">=0.5.0", features = ["fam-wrappers"] }
 kvm-ioctls = ">=0.11.0"
 libc = "0.2"

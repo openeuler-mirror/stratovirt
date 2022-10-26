@@ -17,12 +17,12 @@ const VIRTIO_FS_REQ_QUEUES_NUM: usize = 1;
 // The size of queue for virtio fs
 const VIRTIO_FS_QUEUE_SIZE: u16 = 1024;
 
+use crate::VirtioError;
 use std::cmp;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
-use error_chain::ChainedError;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -35,11 +35,11 @@ use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::num_ops::{read_u32, write_u32};
 
-use super::super::super::errors::{ErrorKind, Result, ResultExt};
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
 use super::super::{VhostNotify, VhostOps};
 use super::VhostUserClient;
 use crate::{VirtioInterrupt, VirtioInterruptType};
+use anyhow::{anyhow, Context, Result};
 
 #[derive(Copy, Clone)]
 #[repr(C, packed)]
@@ -81,8 +81,8 @@ impl EventNotifierHelper for VhostUserFsHandler {
                         Some(&host_notify.queue.lock().unwrap()),
                     ) {
                         error!(
-                            "Failed to trigger interrupt for vhost user device, error is {}",
-                            e.display_chain()
+                            "Failed to trigger interrupt for vhost user device, error is {:?}",
+                            e
                         );
                     }
                 }
@@ -138,7 +138,7 @@ impl VirtioDevice for Fs {
 
         let queues_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
         let client = VhostUserClient::new(&self.mem_space, &self.fs_cfg.sock, queues_num as u64)
-            .chain_err(|| {
+            .with_context(|| {
                 "Failed to create the client which communicates with the server for virtio fs"
             })?;
         let client = Arc::new(Mutex::new(client));
@@ -147,12 +147,12 @@ impl VirtioDevice for Fs {
             EventNotifierHelper::internal_notifiers(client.clone()),
             None,
         )
-        .chain_err(|| "Failed to update event for client sock")?;
+        .with_context(|| "Failed to update event for client sock")?;
         self.avail_features = client
             .lock()
             .unwrap()
             .get_features()
-            .chain_err(|| "Failed to get features for virtio fs")?;
+            .with_context(|| "Failed to get features for virtio fs")?;
         self.client = Some(client);
 
         Ok(())
@@ -196,7 +196,7 @@ impl VirtioDevice for Fs {
         let config_slice = self.config.as_bytes();
         let config_size = config_slice.len() as u64;
         if offset >= config_size {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_size).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_size)));
         }
         if let Some(end) = offset.checked_add(data.len() as u64) {
             data.write_all(&config_slice[offset as usize..cmp::min(end, config_size) as usize])?;
@@ -210,7 +210,10 @@ impl VirtioDevice for Fs {
         let config_slice = self.config.as_mut_bytes();
         let config_len = config_slice.len();
         if offset as usize + data_len > config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(
+                offset,
+                config_len as u64
+            )));
         }
 
         config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
@@ -227,7 +230,7 @@ impl VirtioDevice for Fs {
     ) -> Result<()> {
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
-            None => return Err("Failed to get client for virtio fs".into()),
+            None => return Err(anyhow!("Failed to get client for virtio fs")),
         };
         client.features = self.acked_features;
         client.set_queues(queues);
@@ -244,7 +247,7 @@ impl VirtioDevice for Fs {
         }
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
-            None => return Err("Failed to get client for vhost-user net".into()),
+            None => return Err(anyhow!("Failed to get client for vhost-user net")),
         }
         Ok(())
     }

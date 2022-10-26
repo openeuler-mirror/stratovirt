@@ -10,10 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
+use super::error::ConfigError;
 use super::{pci_args_check, ObjConfig};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 
@@ -37,29 +37,28 @@ pub struct RngConfig {
 impl ConfigCheck for RngConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_PATH_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("rng id".to_string(), MAX_PATH_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "rng id".to_string(),
+                MAX_PATH_LENGTH
+            )));
         }
 
         if self.random_file.len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "rng random file".to_string(),
                 MAX_PATH_LENGTH,
-            )
-            .into());
+            )));
         }
 
         if let Some(bytes_per_sec) = self.bytes_per_sec {
             if !(MIN_BYTES_PER_SEC..=MAX_BYTES_PER_SEC).contains(&bytes_per_sec) {
-                return Err(ErrorKind::IllegalValue(
+                return Err(anyhow!(ConfigError::IllegalValue(
                     "The bytes per second of rng device".to_string(),
                     MIN_BYTES_PER_SEC,
                     true,
                     MAX_BYTES_PER_SEC,
                     true,
-                )
-                .into());
+                )));
             }
         }
 
@@ -85,7 +84,7 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
     let rng = if let Some(rng_id) = cmd_parser.get_value::<String>("rng")? {
         rng_id
     } else {
-        return Err(ErrorKind::FieldIsMissing("rng", "rng").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("rng", "rng")));
     };
 
     rng_cfg.id = if let Some(rng_id) = cmd_parser.get_value::<String>("id")? {

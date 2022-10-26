@@ -11,7 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::cgroup::{self, init_cgroup, parse_cgroup, CgroupCfg};
-use crate::{capability, namespace, syscall, ErrorKind, Result, ResultExt};
+use crate::OzoneError;
+use crate::{capability, namespace, syscall};
+use anyhow::{anyhow, bail, Context, Result};
 
 use std::process::Command;
 use std::{
@@ -21,7 +23,6 @@ use std::{
     process::Stdio,
 };
 
-use error_chain::bail;
 use util::arg_parser::ArgMatches;
 
 const BASE_OZONE_PATH: &str = "/srv/ozone";
@@ -80,7 +81,7 @@ impl OzoneHandler {
         if let Some(uid) = args.value_of("uid") {
             let user_id = (&uid)
                 .parse::<u32>()
-                .map_err(|_| ErrorKind::DigitalParseError("uid", uid))?;
+                .map_err(|_| anyhow!(OzoneError::DigitalParseError("uid", uid)))?;
             if user_id > MAX_ID_NUMBER {
                 bail!("Input uid should be no more than 65535");
             }
@@ -89,7 +90,7 @@ impl OzoneHandler {
         if let Some(gid) = args.value_of("gid") {
             let group_id = (&gid)
                 .parse::<u32>()
-                .map_err(|_| ErrorKind::DigitalParseError("gid", gid))?;
+                .map_err(|_| anyhow!(OzoneError::DigitalParseError("gid", gid)))?;
             if group_id > MAX_ID_NUMBER {
                 bail!("Input gid should be no more than 65535");
             }
@@ -97,28 +98,28 @@ impl OzoneHandler {
         }
         if let Some(exec_file) = args.value_of("exec_file") {
             handler.exec_file_path = canonicalize(exec_file)
-                .chain_err(|| "Failed to parse exec file path to PathBuf")?;
+                .with_context(|| "Failed to parse exec file path to PathBuf")?;
         }
         if let Some(source_paths) = args.values_of("source_files") {
             for path in source_paths.iter() {
-                handler.source_file_paths.push(
-                    canonicalize(path).chain_err(|| {
+                handler
+                    .source_file_paths
+                    .push(canonicalize(path).with_context(|| {
                         format!("Failed to parse source path {:?} to PathBuf", &path)
-                    })?,
-                );
+                    })?);
             }
         }
         if let Some(node) = args.value_of("numa") {
             handler.node = Some(
                 (&node)
                     .parse::<String>()
-                    .map_err(|_| ErrorKind::DigitalParseError("numa", node))?,
+                    .map_err(|_| anyhow!(OzoneError::DigitalParseError("numa", node)))?,
             );
         }
         if let Some(config) = args.values_of("cgroup") {
             let mut cgroup_cfg = init_cgroup();
             for cfg in config {
-                parse_cgroup(&mut cgroup_cfg, &cfg).chain_err(|| "Failed to parse cgroup")?
+                parse_cgroup(&mut cgroup_cfg, &cfg).with_context(|| "Failed to parse cgroup")?
             }
             handler.cgroup = Some(cgroup_cfg);
         }
@@ -142,7 +143,7 @@ impl OzoneHandler {
             );
         }
         std::fs::create_dir_all(&self.chroot_dir)
-            .chain_err(|| format!("Failed to create folder {:?}", &self.chroot_dir))?;
+            .with_context(|| format!("Failed to create folder {:?}", &self.chroot_dir))?;
         Ok(())
     }
 
@@ -152,7 +153,7 @@ impl OzoneHandler {
         let mut chroot_dir = self.chroot_dir.clone();
         chroot_dir.push(&exec_file_name);
         std::fs::copy(&self.exec_file_path, chroot_dir)
-            .chain_err(|| format!("Failed to copy {:?} to new chroot dir", exec_file_name))?;
+            .with_context(|| format!("Failed to copy {:?} to new chroot dir", exec_file_name))?;
         Ok(())
     }
 
@@ -171,10 +172,10 @@ impl OzoneHandler {
         new_root_dir.push(file_name);
         if file_path.is_dir() {
             std::fs::create_dir_all(&new_root_dir)
-                .chain_err(|| format!("Failed to create directory: {:?}", &new_root_dir))?;
+                .with_context(|| format!("Failed to create directory: {:?}", &new_root_dir))?;
         } else {
             std::fs::File::create(&new_root_dir)
-                .chain_err(|| format!("Failed to create file: {:?}", &new_root_dir))?;
+                .with_context(|| format!("Failed to create file: {:?}", &new_root_dir))?;
         }
         // new_root_dir.to_str().unwrap() is safe, because new_root_dir is not empty.
         syscall::mount(
@@ -182,7 +183,7 @@ impl OzoneHandler {
             new_root_dir.to_str().unwrap(),
             libc::MS_BIND | libc::MS_SLAVE,
         )
-        .chain_err(|| format!("Failed to mount file: {:?}", &file_path))?;
+        .with_context(|| format!("Failed to mount file: {:?}", &file_path))?;
 
         let data = std::fs::metadata(&new_root_dir)?;
         if !file_path.is_dir() && data.len() == 0 {
@@ -190,7 +191,7 @@ impl OzoneHandler {
         }
 
         syscall::chown(new_root_dir.to_str().unwrap(), self.uid, self.gid)
-            .chain_err(|| format!("Failed to change owner for source: {:?}", &file_path))?;
+            .with_context(|| format!("Failed to change owner for source: {:?}", &file_path))?;
         Ok(())
     }
 
@@ -205,11 +206,11 @@ impl OzoneHandler {
 
     fn create_newroot_folder(&self, folder: &str) -> Result<()> {
         std::fs::create_dir_all(folder)
-            .chain_err(|| format!("Failed to create folder: {:?}", &folder))?;
+            .with_context(|| format!("Failed to create folder: {:?}", &folder))?;
         syscall::chmod(folder, 0o700)
-            .chain_err(|| format!("Failed to chmod to 0o700 for folder: {:?}", &folder))?;
+            .with_context(|| format!("Failed to chmod to 0o700 for folder: {:?}", &folder))?;
         syscall::chown(folder, self.uid, self.gid)
-            .chain_err(|| format!("Failed to change owner for folder: {:?}", &folder))?;
+            .with_context(|| format!("Failed to change owner for folder: {:?}", &folder))?;
         Ok(())
     }
 
@@ -222,11 +223,11 @@ impl OzoneHandler {
     ) -> Result<()> {
         let dev = syscall::makedev(dev_major, dev_minor)?;
         syscall::mknod(dev_path, libc::S_IFCHR | libc::S_IWUSR | libc::S_IRUSR, dev)
-            .chain_err(|| format!("Failed to call mknod for device: {:?}", &dev_path))?;
+            .with_context(|| format!("Failed to call mknod for device: {:?}", &dev_path))?;
         syscall::chmod(dev_path, mode)
-            .chain_err(|| format!("Failed to change mode for device: {:?}", &dev_path))?;
+            .with_context(|| format!("Failed to change mode for device: {:?}", &dev_path))?;
         syscall::chown(dev_path, self.uid, self.gid)
-            .chain_err(|| format!("Failed to change owner for device: {:?}", &dev_path))?;
+            .with_context(|| format!("Failed to change owner for device: {:?}", &dev_path))?;
 
         Ok(())
     }
@@ -234,7 +235,7 @@ impl OzoneHandler {
     /// Realize OzoneHandler.
     pub fn realize(&self) -> Result<()> {
         // First, disinfect the process.
-        disinfect_process().chain_err(|| "Failed to disinfect process")?;
+        disinfect_process().with_context(|| "Failed to disinfect process")?;
 
         self.create_chroot_dir()?;
         self.copy_exec_file()?;
@@ -245,11 +246,11 @@ impl OzoneHandler {
         let exec_file = self.exec_file_name()?;
         if let Some(node) = self.node.clone() {
             cgroup::set_numa_node(&node, &exec_file, &self.name)
-                .chain_err(|| "Failed to set numa node")?;
+                .with_context(|| "Failed to set numa node")?;
         }
         if let Some(cgroup) = &self.cgroup {
             cgroup::realize_cgroup(cgroup, exec_file, self.name.clone())
-                .chain_err(|| "Failed to realize cgroup")?;
+                .with_context(|| "Failed to realize cgroup")?;
         }
 
         namespace::set_uts_namespace("Ozone")?;
@@ -273,15 +274,15 @@ impl OzoneHandler {
         }
         if let Some(capability) = &self.capability {
             capability::set_capability_for_ozone(capability)
-                .chain_err(|| "Failed to set capability for ozone.")?;
+                .with_context(|| "Failed to set capability for ozone.")?;
         } else {
             capability::clear_all_capabilities()
-                .chain_err(|| "Failed to clean all capability for ozone.")?;
+                .with_context(|| "Failed to clean all capability for ozone.")?;
         }
 
         let mut chroot_exec_file = PathBuf::from("/");
         chroot_exec_file.push(self.exec_file_name()?);
-        Err(ErrorKind::ExecError(
+        Err(anyhow!(OzoneError::ExecError(
             Command::new(chroot_exec_file)
                 .gid(self.gid)
                 .uid(self.uid)
@@ -290,8 +291,7 @@ impl OzoneHandler {
                 .stderr(Stdio::inherit())
                 .args(&self.extra_args)
                 .exec(),
-        )
-        .into())
+        )))
     }
 
     /// Clean the environment.
@@ -309,19 +309,19 @@ impl OzoneHandler {
 
             if chroot_path.exists() {
                 syscall::umount(chroot_path.to_str().unwrap())
-                    .chain_err(|| format!("Failed to umount resource: {:?}", file_name))?
+                    .with_context(|| format!("Failed to umount resource: {:?}", file_name))?
             }
         }
 
         std::fs::remove_dir_all(&self.chroot_dir)
-            .chain_err(|| "Failed to remove chroot dir path")?;
+            .with_context(|| "Failed to remove chroot dir path")?;
         if self.node.is_some() {
             cgroup::clean_node(self.exec_file_name()?, self.name.clone())
-                .chain_err(|| "Failed to clean numa node")?;
+                .with_context(|| "Failed to clean numa node")?;
         }
         if let Some(cgroup) = &self.cgroup {
             cgroup::clean_cgroup(cgroup, self.exec_file_name()?, self.name.clone())
-                .chain_err(|| "Failed to remove cgroup directory")?;
+                .with_context(|| "Failed to remove cgroup directory")?;
         }
         Ok(())
     }
@@ -329,7 +329,7 @@ impl OzoneHandler {
 
 /// Disinfect the process before launching the ozone process.
 fn disinfect_process() -> Result<()> {
-    let fd_entries = read_dir(SELF_FD).chain_err(|| "Failed to open process fd proc")?;
+    let fd_entries = read_dir(SELF_FD).with_context(|| "Failed to open process fd proc")?;
     for entry in fd_entries {
         if entry.is_err() {
             break;
@@ -339,7 +339,7 @@ fn disinfect_process() -> Result<()> {
         let fd = file_name.parse::<libc::c_int>().unwrap_or(0);
 
         if fd > 2 {
-            syscall::close(fd).chain_err(|| format!("Failed to close fd: {}", fd))?;
+            syscall::close(fd).with_context(|| format!("Failed to close fd: {}", fd))?;
         }
     }
     Ok(())

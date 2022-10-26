@@ -5,7 +5,7 @@ Warranty Disclaimer
 THE OPEN SOURCE SOFTWARE IN THIS SOFTWARE IS DISTRIBUTED IN THE HOPE THAT IT WILL BE USEFUL, BUT WITHOUT ANY WARRANTY, WITHOUT EVEN THE IMPLIED WARRANTY OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. SEE THE APPLICABLE LICENSES FOR MORE DETAILS.
 
 Copyright Notice and License Texts
-Software: libc 0.2.94
+Software: libc 0.2.133
 Copyright notice:
 Copyright (c) 2014-2020 The Rust Project Developers
 License: MIT or Apache License Version 2.0
@@ -282,23 +282,29 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <http://unlicense.org/>
 
-Software: serde 1.0.143
+Software: serde 1.0.145
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: serde_json 1.0.143
+Software: serde_json 1.0.145
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Erick Tryzelaar <erick.tryzelaar@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: error-chain 0.12.4
+Software: anyhow 1.0
 Copyright notice:
-Copyright (c) 2017 The Error-Chain Project Developers
+Copyright (c) David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache License Version 2.0
+Please see above.
+
+Software: thiserror 1.0
+Copyright notice:
+Copyright (c) David Tolnay <dtolnay@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
@@ -371,7 +377,7 @@ Copyright (c) 2018 Tom Parker-Shemilt
 License: MIT
 Please see above.
 
-Software: syn 1.0.99
+Software: syn 1.0.100
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 License: MIT or Apache License Version 2.0
@@ -383,7 +389,7 @@ Copyright (c) David Tolnay <dtolnay@gmail.com>
 License: MIT or Apache License Version 2.0
 Please see above.
 
-Software: proc-macro2 1.0.43
+Software: proc-macro2 1.0.44
 Copyright notice:
 Copyright (c) David Tolnay <dtolnay@gmail.com>
 Copyright (c) Alex Crichton <alex@alexcrichton.com>
@@ -408,7 +414,7 @@ Copyright (c) 2019 Intel Corporation. All Rights Reserved.
 License: Apache License Version 2.0 or BSD 3-Clause License
 Please see above.
 
-Software: once_cell 1.13.0
+Software: once_cell 1.15.0
 Copyright notice:
 Copyright (c) Aleksey Kladov <aleksey.kladov@gmail.com>
 License: MIT OR Apache-2.0

@@ -10,10 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use super::VmConfig;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-
-use super::{errors::Result, VmConfig};
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum MigrateMode {

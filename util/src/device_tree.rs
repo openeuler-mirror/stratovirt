@@ -12,7 +12,8 @@
 
 use std::mem::size_of;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
+use crate::UtilError;
+use anyhow::{anyhow, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
 
 pub const CLK_PHANDLE: u32 = 1;
@@ -117,7 +118,7 @@ impl FdtBuilder {
 
     pub fn finish(mut self) -> Result<Vec<u8>> {
         if self.subnode_depth > 0 {
-            return Err(ErrorKind::NodeUnclosed(self.subnode_depth).into());
+            return Err(anyhow!(UtilError::NodeUnclosed(self.subnode_depth)));
         }
         self.structure_blk
             .extend_from_slice(&FDT_END.to_be_bytes()[..]);
@@ -158,7 +159,7 @@ impl FdtBuilder {
 
     pub fn add_mem_reserve(&mut self, mem_reservations: &[FdtReserveEntry]) -> Result<()> {
         if !check_mem_reserve_overlap(mem_reservations) {
-            return Err(ErrorKind::MemReserveOverlap.into());
+            return Err(anyhow!(UtilError::MemReserveOverlap));
         }
 
         for mem_reser in mem_reservations {
@@ -174,7 +175,7 @@ impl FdtBuilder {
 
     pub fn begin_node(&mut self, node_name: &str) -> Result<u32> {
         if !check_string_legality(node_name) {
-            return Err(ErrorKind::IllegalString(node_name.to_string()).into());
+            return Err(anyhow!(UtilError::IllegalString(node_name.to_string())));
         }
 
         self.structure_blk
@@ -196,7 +197,10 @@ impl FdtBuilder {
 
     pub fn end_node(&mut self, begin_node_depth: u32) -> Result<()> {
         if begin_node_depth != self.subnode_depth {
-            return Err(ErrorKind::NodeDepthMismatch(begin_node_depth, self.subnode_depth).into());
+            return Err(anyhow!(UtilError::NodeDepthMismatch(
+                begin_node_depth,
+                self.subnode_depth
+            )));
         }
 
         self.structure_blk
@@ -215,17 +219,17 @@ impl FdtBuilder {
         // The string property should end with null('\0').
         val_array.push(0x0_u8);
         self.set_property(prop, &val_array)
-            .chain_err(|| ErrorKind::SetPropertyErr("string".to_string()))
+            .with_context(|| anyhow!(UtilError::SetPropertyErr("string".to_string())))
     }
 
     pub fn set_property_u32(&mut self, prop: &str, val: u32) -> Result<()> {
         self.set_property(prop, &val.to_be_bytes()[..])
-            .chain_err(|| ErrorKind::SetPropertyErr("u32".to_string()))
+            .with_context(|| anyhow!(UtilError::SetPropertyErr("u32".to_string())))
     }
 
     pub fn set_property_u64(&mut self, prop: &str, val: u64) -> Result<()> {
         self.set_property(prop, &val.to_be_bytes()[..])
-            .chain_err(|| ErrorKind::SetPropertyErr("u64".to_string()))
+            .with_context(|| anyhow!(UtilError::SetPropertyErr("u64".to_string())))
     }
 
     pub fn set_property_array_u32(&mut self, prop: &str, array: &[u32]) -> Result<()> {
@@ -234,7 +238,7 @@ impl FdtBuilder {
             prop_array.extend_from_slice(&element.to_be_bytes()[..]);
         }
         self.set_property(prop, &prop_array)
-            .chain_err(|| ErrorKind::SetPropertyErr("u32 array".to_string()))
+            .with_context(|| anyhow!(UtilError::SetPropertyErr("u32 array".to_string())))
     }
 
     pub fn set_property_array_u64(&mut self, prop: &str, array: &[u64]) -> Result<()> {
@@ -243,16 +247,16 @@ impl FdtBuilder {
             prop_array.extend_from_slice(&element.to_be_bytes()[..]);
         }
         self.set_property(prop, &prop_array)
-            .chain_err(|| ErrorKind::SetPropertyErr("u64 array".to_string()))
+            .with_context(|| anyhow!(UtilError::SetPropertyErr("u64 array".to_string())))
     }
 
     pub fn set_property(&mut self, property_name: &str, property_val: &[u8]) -> Result<()> {
         if !check_string_legality(property_name) {
-            return Err(ErrorKind::IllegalString(property_name.to_string()).into());
+            return Err(anyhow!(UtilError::IllegalString(property_name.to_string())));
         }
 
         if !self.begin_node {
-            return Err(ErrorKind::IllegelPropertyPos.into());
+            return Err(anyhow!(UtilError::IllegelPropertyPos));
         }
 
         let len = property_val.len() as u32;

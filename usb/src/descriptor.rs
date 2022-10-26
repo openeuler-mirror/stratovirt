@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use util::byte_code::ByteCode;
 
-use super::errors::Result;
 use crate::config::*;
 use crate::usb::{UsbDescConfig, UsbDescEndpoint, UsbDescIface, UsbDevice};
+use anyhow::{bail, Result};
 
 /// USB device descriptor for transfer
 #[allow(non_snake_case)]

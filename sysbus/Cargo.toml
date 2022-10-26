@@ -7,7 +7,8 @@ license = "Mulan PSL v2"
 description = "Emulate system bus"
 
 [dependencies]
-error-chain = "0.12.4"
+thiserror = "1.0"
+anyhow = "1.0"
 kvm-ioctls = ">=0.11.0"
 vmm-sys-util = ">=0.10.0"
 acpi = { path = "../acpi" }

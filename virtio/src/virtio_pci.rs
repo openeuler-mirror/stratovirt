@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use anyhow::{anyhow, bail, Context};
 use byteorder::{ByteOrder, LittleEndian};
-use error_chain::{bail, ChainedError};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
 use log::{error, warn};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -27,11 +27,11 @@ use pci::config::{
     ROM_ADDRESS, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE,
     VENDOR_ID,
 };
-use pci::errors::{ErrorKind, Result as PciResult, ResultExt};
 use pci::msix::{update_dev_id, Message, MsixState, MsixUpdate};
+use pci::Result as PciResult;
 use pci::{
     config::PciConfig, init_msix, init_multifunction, le_write_u16, ranges_overlap, PciBus,
-    PciDevOps,
+    PciDevOps, PciError,
 };
 use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
 use vmm_sys_util::eventfd::EventFd;
@@ -182,16 +182,16 @@ impl VirtioPciCommonConfig {
         ) {
             self.queues_config
                 .get_mut(self.queue_select as usize)
-                .ok_or_else(|| "pci-reg queue_select overflows".into())
+                .ok_or_else(|| anyhow!("pci-reg queue_select overflows"))
         } else {
-            Err(ErrorKind::DeviceStatus(self.device_status).into())
+            Err(anyhow!(PciError::DeviceStatus(self.device_status)))
         }
     }
 
     fn get_queue_config(&self) -> PciResult<&QueueConfig> {
         self.queues_config
             .get(self.queue_select as usize)
-            .ok_or_else(|| "pci-reg queue_select overflows".into())
+            .ok_or_else(|| anyhow!("pci-reg queue_select overflows"))
     }
 
     /// Read data from the common config of virtio device.
@@ -294,7 +294,9 @@ impl VirtioPciCommonConfig {
             }
             COMMON_GF_REG => {
                 if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
-                    return Err(ErrorKind::FeaturesSelect(self.acked_features_select).into());
+                    return Err(anyhow!(PciError::FeaturesSelect(
+                        self.acked_features_select
+                    )));
                 }
                 device
                     .lock()
@@ -367,7 +369,7 @@ impl VirtioPciCommonConfig {
                 config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
             })?,
             _ => {
-                return Err(ErrorKind::PciRegister(offset).into());
+                return Err(anyhow!(PciError::PciRegister(offset)));
             }
         };
 
@@ -654,8 +656,8 @@ impl VirtioPciDevice {
                 Ok(v) => v,
                 Err(e) => {
                     error!(
-                        "Failed to read common config of virtio-pci device, error is {}",
-                        e.display_chain(),
+                        "Failed to read common config of virtio-pci device, error is {:?}",
+                        e,
                     );
                     return false;
                 }
@@ -710,8 +712,8 @@ impl VirtioPciDevice {
                 .write_common_config(&cloned_pci_device.device.clone(), offset, value)
             {
                 error!(
-                    "Failed to write common config of virtio-pci device, error is {}",
-                    e.display_chain(),
+                    "Failed to write common config of virtio-pci device, error is {:?}",
+                    e,
                 );
                 return false;
             }
@@ -777,10 +779,7 @@ impl VirtioPciDevice {
                             .unwrap()
                             .set_guest_notifiers(&call_evts.events)
                         {
-                            error!(
-                                "Failed to set guest notifiers, error is {}",
-                                e.display_chain()
-                            );
+                            error!("Failed to set guest notifiers, error is {:?}", e);
                         }
                     }
                     if let Err(e) = cloned_pci_device.device.lock().unwrap().activate(
@@ -789,7 +788,7 @@ impl VirtioPciDevice {
                         &locked_queues,
                         queue_evts,
                     ) {
-                        error!("Failed to activate device, error is {}", e.display_chain());
+                        error!("Failed to activate device, error is {:?}", e);
                     }
                 } else {
                     error!("Failed to activate device: No interrupt callback");
@@ -838,10 +837,7 @@ impl VirtioPciDevice {
                     let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
                     cloned_msix.lock().unwrap().reset();
                     if let Err(e) = cloned_pci_device.device.lock().unwrap().deactivate() {
-                        error!(
-                            "Failed to deactivate virtio device, error is {}",
-                            e.display_chain()
-                        );
+                        error!("Failed to deactivate virtio device, error is {:?}", e);
                     }
                 }
                 update_dev_id(
@@ -867,7 +863,7 @@ impl VirtioPciDevice {
             Region::init_io_region(u64::from(VIRTIO_PCI_CAP_COMMON_LENGTH), common_region_ops);
         modern_mem_region
             .add_subregion(common_region, u64::from(VIRTIO_PCI_CAP_COMMON_OFFSET))
-            .chain_err(|| "Failed to register pci-common-cap region.")?;
+            .with_context(|| "Failed to register pci-common-cap region.")?;
 
         // 2. PCI ISR cap sub-region.
         let cloned_common_cfg = self.common_config.clone();
@@ -890,16 +886,13 @@ impl VirtioPciDevice {
             Region::init_io_region(u64::from(VIRTIO_PCI_CAP_ISR_LENGTH), isr_region_ops);
         modern_mem_region
             .add_subregion(isr_region, u64::from(VIRTIO_PCI_CAP_ISR_OFFSET))
-            .chain_err(|| "Failed to register pci-isr-cap region.")?;
+            .with_context(|| "Failed to register pci-isr-cap region.")?;
 
         // 3. PCI dev cap sub-region.
         let cloned_virtio_dev = self.device.clone();
         let device_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
             if let Err(e) = cloned_virtio_dev.lock().unwrap().read_config(offset, data) {
-                error!(
-                    "Failed to read virtio-dev config space, error is {}",
-                    e.display_chain()
-                );
+                error!("Failed to read virtio-dev config space, error is {:?}", e);
                 return false;
             }
             true
@@ -908,10 +901,7 @@ impl VirtioPciDevice {
         let cloned_virtio_dev = self.device.clone();
         let device_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
             if let Err(e) = cloned_virtio_dev.lock().unwrap().write_config(offset, data) {
-                error!(
-                    "Failed to write virtio-dev config space, error is {}",
-                    e.display_chain()
-                );
+                error!("Failed to write virtio-dev config space, error is {:?}", e);
                 return false;
             }
             true
@@ -924,7 +914,7 @@ impl VirtioPciDevice {
             Region::init_io_region(u64::from(VIRTIO_PCI_CAP_DEVICE_LENGTH), device_region_ops);
         modern_mem_region
             .add_subregion(device_region, u64::from(VIRTIO_PCI_CAP_DEVICE_OFFSET))
-            .chain_err(|| "Failed to register pci-dev-cap region.")?;
+            .with_context(|| "Failed to register pci-dev-cap region.")?;
 
         // 4. PCI notify cap sub-region.
         let notify_read = move |_: &mut [u8], _: GuestAddress, _: u64| -> bool { true };
@@ -938,7 +928,7 @@ impl VirtioPciDevice {
         notify_region.set_ioeventfds(&self.ioeventfds());
         modern_mem_region
             .add_subregion(notify_region, u64::from(VIRTIO_PCI_CAP_NOTIFY_OFFSET))
-            .chain_err(|| "Failed to register pci-notify-cap region.")?;
+            .with_context(|| "Failed to register pci-notify-cap region.")?;
 
         Ok(())
     }
@@ -1061,7 +1051,7 @@ impl PciDevOps for VirtioPciDevice {
             .lock()
             .unwrap()
             .realize()
-            .chain_err(|| "Failed to realize virtio device")?;
+            .with_context(|| "Failed to realize virtio device")?;
 
         let name = self.name.clone();
         let devfn = self.devfn;
@@ -1088,7 +1078,7 @@ impl PciDevOps for VirtioPciDevice {
             .lock()
             .unwrap()
             .unrealize()
-            .chain_err(|| "Failed to unrealize the virtio device")?;
+            .with_context(|| "Failed to unrealize the virtio device")?;
 
         let bus = self.parent_bus.upgrade().unwrap();
         self.config.unregister_bars(&bus)?;
@@ -1144,7 +1134,7 @@ impl PciDevOps for VirtioPciDevice {
                 &locked_parent_bus.io_region,
                 &locked_parent_bus.mem_region,
             ) {
-                error!("Failed to update bar, error is {}", e.display_chain());
+                error!("Failed to update bar, error is {:?}", e);
             }
         }
     }
@@ -1162,7 +1152,7 @@ impl PciDevOps for VirtioPciDevice {
             .lock()
             .unwrap()
             .reset()
-            .chain_err(|| "Fail to reset virtio device")
+            .with_context(|| "Fail to reset virtio device")
     }
 
     fn get_dev_path(&self) -> Option<String> {
@@ -1182,7 +1172,7 @@ impl PciDevOps for VirtioPciDevice {
 }
 
 impl StateTransfer for VirtioPciDevice {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut state = VirtioPciState::default();
 
         // Save virtio pci config state.
@@ -1226,9 +1216,12 @@ impl StateTransfer for VirtioPciDevice {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
-        let mut pci_state = *VirtioPciState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("PCI_DEVICE"))?;
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
+        let mut pci_state = *VirtioPciState::from_bytes(state).ok_or_else(|| {
+            anyhow!(migration::error::MigrationError::FromBytesError(
+                "PCI_DEVICE"
+            ),)
+        })?;
 
         // Set virtio pci config state.
         let config_length = self.config.config.len();
@@ -1292,7 +1285,7 @@ impl StateTransfer for VirtioPciDevice {
 }
 
 impl MigrationHook for VirtioPciDevice {
-    fn resume(&mut self) -> migration::errors::Result<()> {
+    fn resume(&mut self) -> migration::Result<()> {
         if self.device_activated.load(Ordering::Relaxed) {
             // Reregister ioevents for notifies.
             let parent_bus = self.parent_bus.upgrade().unwrap();
@@ -1302,7 +1295,7 @@ impl MigrationHook for VirtioPciDevice {
                 &locked_parent_bus.io_region,
                 &locked_parent_bus.mem_region,
             ) {
-                bail!("Failed to update bar, error is {}", e.display_chain());
+                bail!("Failed to update bar, error is {:?}", e);
             }
 
             let queue_evts = self.notify_eventfds.clone().events;
@@ -1313,7 +1306,7 @@ impl MigrationHook for VirtioPciDevice {
                     &self.queues.lock().unwrap(),
                     queue_evts,
                 ) {
-                    error!("Failed to resume device, error is {}", e.display_chain());
+                    error!("Failed to resume device, error is {}", e);
                 }
             } else {
                 error!("Failed to resume device: No interrupt callback");
@@ -1354,7 +1347,7 @@ impl MsixUpdate for VirtioPciDevice {
                 .as_ref()
                 .unwrap()
                 .unregister_irqfd(route.irq_fd.as_ref().unwrap(), route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to unregister irq, error is {}", e));
+                .unwrap_or_else(|e| error!("Failed to unregister irq, error is {:?}", e));
         } else {
             let msg = &route.msg;
             if msg.data != entry.data
@@ -1367,11 +1360,11 @@ impl MsixUpdate for VirtioPciDevice {
                     .lock()
                     .unwrap()
                     .update_msi_route(route.gsi as u32, msix_vector)
-                    .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {}", e));
+                    .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {:?}", e));
                 KVM_FDS
                     .load()
                     .commit_irq_routing()
-                    .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
+                    .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {:?}", e));
                 route.msg = *entry;
             }
 
@@ -1381,7 +1374,7 @@ impl MsixUpdate for VirtioPciDevice {
                 .as_ref()
                 .unwrap()
                 .register_irqfd(route.irq_fd.as_ref().unwrap(), route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to register irq, error is {}", e));
+                .unwrap_or_else(|e| error!("Failed to register irq, error is {:?}", e));
         }
     }
 }
@@ -1428,7 +1421,7 @@ fn virtio_pci_register_irqfd(
         {
             Ok(g) => g as i32,
             Err(e) => {
-                error!("Failed to allocate gsi, error is {}", e);
+                error!("Failed to allocate gsi, error is {:?}", e);
                 return false;
             }
         };
@@ -1439,12 +1432,12 @@ fn virtio_pci_register_irqfd(
             .lock()
             .unwrap()
             .add_msi_route(gsi as u32, msix_vector)
-            .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {}", e));
+            .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {:?}", e));
 
         KVM_FDS
             .load()
             .commit_irq_routing()
-            .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {}", e));
+            .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {:?}", e));
 
         KVM_FDS
             .load()
@@ -1452,7 +1445,7 @@ fn virtio_pci_register_irqfd(
             .as_ref()
             .unwrap()
             .register_irqfd(&call_fds[queue_index], gsi as u32)
-            .unwrap_or_else(|e| error!("Failed to register irq, error is {}", e));
+            .unwrap_or_else(|e| error!("Failed to register irq, error is {:?}", e));
 
         let gsi_route = GsiMsiRoute {
             irq_fd: Some(call_fds[queue_index].try_clone().unwrap()),
@@ -1472,7 +1465,7 @@ fn virtio_pci_unregister_irqfd(gsi_routes: Arc<Mutex<HashMap<u16, GsiMsiRoute>>>
             KVM_FDS
                 .load()
                 .unregister_irqfd(fd, route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to unregister irq, error is {}", e));
+                .unwrap_or_else(|e| error!("Failed to unregister irq, error is {:?}", e));
 
             KVM_FDS
                 .load()
@@ -1480,7 +1473,7 @@ fn virtio_pci_unregister_irqfd(gsi_routes: Arc<Mutex<HashMap<u16, GsiMsiRoute>>>
                 .lock()
                 .unwrap()
                 .release_gsi(route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to release gsi, error is {}", e));
+                .unwrap_or_else(|e| error!("Failed to release gsi, error is {:?}", e));
         }
     }
     locked_gsi_routes.clear();

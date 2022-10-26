@@ -11,8 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 #[macro_use]
-extern crate error_chain;
-#[macro_use]
 extern crate log;
 extern crate address_space;
 extern crate machine_manager;
@@ -29,15 +27,5 @@ pub mod vhost_user_fs;
 pub mod vhost_user_server;
 pub mod virtio_fs;
 
-pub mod errors {
-    error_chain! {
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-            Virtio(virtio::errors::Error, virtio::errors::ErrorKind);
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-        }
-        foreign_links {
-            Io(std::io::Error);
-        }
-    }
-}
+pub mod error;
+pub use error::VhostUserFsError;

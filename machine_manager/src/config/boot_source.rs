@@ -13,10 +13,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
-
-use super::errors::{ErrorKind, Result};
+use super::error::ConfigError;
 use crate::config::{ConfigCheck, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH};
+use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 
 /// Config struct for boot-source.
 /// Contains `kernel_file`, `kernel_cmdline` and `initrd`.
@@ -41,14 +41,15 @@ impl ConfigCheck for BootSource {
     fn check(&self) -> Result<()> {
         if let Some(kernel_file) = &self.kernel_file {
             if kernel_file.to_str().unwrap().len() > MAX_PATH_LENGTH {
-                return Err(ErrorKind::StringLengthTooLong(
+                return Err(anyhow!(ConfigError::StringLengthTooLong(
                     "kernel_file path".to_string(),
                     MAX_PATH_LENGTH,
-                )
-                .into());
+                )));
             }
             if !kernel_file.is_file() {
-                return Err(ErrorKind::UnRegularFile("Input kernel_file".to_string()).into());
+                return Err(anyhow!(ConfigError::UnRegularFile(
+                    "Input kernel_file".to_string()
+                )));
             }
         }
 
@@ -82,15 +83,16 @@ impl InitrdConfig {
 impl ConfigCheck for InitrdConfig {
     fn check(&self) -> Result<()> {
         if self.initrd_file.to_str().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "initrd_file".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         if !self.initrd_file.is_file() {
-            return Err(ErrorKind::UnRegularFile("Input initrd_file".to_string()).into());
+            return Err(anyhow!(ConfigError::UnRegularFile(
+                "Input initrd_file".to_string()
+            )));
         }
 
         Ok(())
@@ -109,11 +111,10 @@ impl ConfigCheck for KernelParams {
     fn check(&self) -> Result<()> {
         for param in self.params.clone() {
             if param.value.len() > MAX_STRING_LENGTH {
-                return Err(ErrorKind::StringLengthTooLong(
+                return Err(anyhow!(ConfigError::StringLengthTooLong(
                     "kernel params".to_string(),
                     MAX_STRING_LENGTH,
-                )
-                .into());
+                )));
             }
         }
 

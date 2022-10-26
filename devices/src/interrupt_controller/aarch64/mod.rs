@@ -22,13 +22,13 @@ pub use gicv3::{GICv3, GICv3Config};
 
 use std::sync::Arc;
 
+use crate::interrupt_controller::error::InterruptError;
+use anyhow::{anyhow, Context, Result};
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::{
     device_tree::{self, FdtBuilder},
-    errors::Result as UtilResult,
+    Result as UtilResult,
 };
-
-use super::errors::{ErrorKind, Result, ResultExt};
 
 // First 32 are private to each CPU (SGIs and PPIs).
 pub(crate) const GIC_IRQ_INTERNAL: u32 = 32;
@@ -51,7 +51,7 @@ impl KvmDevice {
             flags: 0,
         };
         fd.has_device_attr(&attr)
-            .chain_err(|| "Failed to check device attributes for GIC.")?;
+            .with_context(|| "Failed to check device attributes for GIC.")?;
         Ok(())
     }
 
@@ -71,11 +71,11 @@ impl KvmDevice {
 
         if write {
             fd.set_device_attr(&attr)
-                .chain_err(|| "Failed to set device attributes for GIC.")?;
+                .with_context(|| "Failed to set device attributes for GIC.")?;
         } else {
             let mut attr = attr;
             fd.get_device_attr(&mut attr)
-                .chain_err(|| "Failed to get device attributes for GIC.")?;
+                .with_context(|| "Failed to get device attributes for GIC.")?;
         };
 
         Ok(())
@@ -98,9 +98,9 @@ pub struct GICConfig {
 impl GICConfig {
     fn check_sanity(&self) -> Result<()> {
         if self.max_irq <= GIC_IRQ_INTERNAL {
-            return Err(
-                ErrorKind::InvalidConfig("GIC irq numbers need above 32".to_string()).into(),
-            );
+            return Err(anyhow!(InterruptError::InvalidConfig(
+                "GIC irq numbers need above 32".to_string()
+            )));
         }
         Ok(())
     }
@@ -156,13 +156,15 @@ impl InterruptController {
             None => GICv3::create_device(gic_conf).or_else(|_| GICv2::create_device(gic_conf)),
         };
         let intc = InterruptController {
-            gic: gic.chain_err(|| "Failed to realize GIC")?,
+            gic: gic.with_context(|| "Failed to realize GIC")?,
         };
         Ok(intc)
     }
 
     pub fn realize(&self) -> Result<()> {
-        self.gic.realize().chain_err(|| "Failed to realize GIC")?;
+        self.gic
+            .realize()
+            .with_context(|| "Failed to realize GIC")?;
         Ok(())
     }
 
