@@ -118,7 +118,6 @@ pub struct StdMachine {
     /// `vCPU` devices.
     cpus: Vec<Arc<CPU>>,
     // Interrupt controller device.
-    #[cfg(target_arch = "aarch64")]
     irq_chip: Option<Arc<InterruptController>>,
     /// Memory address space.
     pub sys_mem: Arc<AddressSpace>,
@@ -952,7 +951,6 @@ impl MachineLifecycle for StdMachine {
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
         <Self as MachineOps>::vm_state_transfer(
             &self.cpus,
-            #[cfg(target_arch = "aarch64")]
             &self.irq_chip,
             &mut self.vm_state.0.lock().unwrap(),
             old,
