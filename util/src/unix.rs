@@ -15,6 +15,7 @@ use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
 use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
 use libc::{
@@ -169,7 +170,7 @@ impl UnixSock {
 
     /// Bind assigns a unique listener for the socket.
     pub fn bind(&mut self, unlink: bool) -> Result<()> {
-        if unlink {
+        if unlink && Path::new(self.path.as_str()).exists() {
             std::fs::remove_file(self.path.as_str())
                 .with_context(|| format!("Failed to remove socket file {}.", self.path.as_str()))?;
         }
