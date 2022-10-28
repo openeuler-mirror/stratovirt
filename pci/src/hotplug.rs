@@ -68,12 +68,15 @@ pub fn handle_unplug_request(
     dev: &Arc<Mutex<dyn PciDevOps>>,
 ) -> Result<()> {
     let locked_bus = bus.lock().unwrap();
-    if let Some(hpc) = locked_bus.hotplug_controller.as_ref() {
-        hpc.upgrade().unwrap().lock().unwrap().unplug_request(dev)
+    let hpc = if let Some(hpc) = locked_bus.hotplug_controller.as_ref() {
+        hpc.clone()
     } else {
         bail!(
             "No hot plug controller found for bus {} when unplug request",
             locked_bus.name
         );
-    }
+    };
+    // No need to hold the lock.
+    drop(locked_bus);
+    hpc.upgrade().unwrap().lock().unwrap().unplug_request(dev)
 }
