@@ -753,6 +753,40 @@ One property can be set for USB Tablet.
 
 Note: Only one tablet can be configured.
 
+### 2.16 Virtio Scsi Controller
+Virtio Scsi controller is a pci device which can be attached scsi device.
+
+Four properties can be set for Virtio-Scsi controller.
+
+* id: unique device id.
+* bus: bus number of the device.
+* addr: including slot number and function number.
+* iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
+
+```shell
+-device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1]
+```
+### 2.17 Virtio Scsi HardDisk
+Virtio Scsi HardDisk is a virtual block device, which process read and write requests in virtio queue from guest.
+
+Note: Only support using raw image file as backend now.
+
+Six properties can be set for virtio-scsi hd.
+
+* file: the path of backend image file.
+* id: unique device id.
+* bus: scsi bus name, only support $scsi_controller_name + ".0"
+* scsi-id: id number (target) of scsi four level hierarchical address (host, channel, target, lun). Only support 0 now.
+* lun: lun number (lun) of scsi four level hierarchical address (host, channel, target, lun). Only support starting from 0 now.
+* serial: serial number of virtio scsi device.(optional)
+
+```shell
+-device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1]
+-drive file=path_on_host,id=drive-scsi0-0-0-0
+-device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0
+```
+Note: Only support scsi-id=0 and lun number should start from 0 Now.
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.
