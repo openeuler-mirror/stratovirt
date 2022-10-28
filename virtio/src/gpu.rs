@@ -621,6 +621,10 @@ impl GpuIoHandler {
                     ..Default::default()
                 };
                 scanout.mouse = Some(tmp_mouse);
+            } else {
+                let mut mse = scanout.mouse.as_mut().unwrap();
+                mse.hot_x = info_cursor.hot_x;
+                mse.hot_y = info_cursor.hot_y;
             }
             if info_cursor.resource_id != 0 {
                 if let Some(res_index) = self
