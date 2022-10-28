@@ -188,11 +188,13 @@ fn madvise_rule() -> BpfRule {
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_FREE as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
     #[cfg(not(target_env = "musl"))]
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
 }
 
 fn futex_rule() -> BpfRule {

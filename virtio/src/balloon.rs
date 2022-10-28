@@ -209,8 +209,11 @@ impl Request {
         address_space: &Arc<AddressSpace>,
         mem: &Arc<Mutex<BlnMemInfo>>,
     ) {
-        let advice = if req_type {
+        let mem_share = mem.lock().unwrap().mem_share();
+        let advice = if req_type && !mem_share {
             libc::MADV_DONTNEED
+        } else if req_type {
+            libc::MADV_REMOVE
         } else {
             libc::MADV_WILLNEED
         };
@@ -311,6 +314,11 @@ impl Request {
 
     fn release_pages(&self, mem: &Arc<Mutex<BlnMemInfo>>) {
         for iov in self.iovec.iter() {
+            let advice = if mem.lock().unwrap().mem_share() {
+                libc::MADV_REMOVE
+            } else {
+                libc::MADV_DONTNEED
+            };
             let gpa: GuestAddress = iov.iov_base;
             let hva = match mem.lock().unwrap().get_host_address(gpa) {
                 Some(addr) => addr,
@@ -322,7 +330,7 @@ impl Request {
             memory_advise(
                 hva as *const libc::c_void as *mut _,
                 iov.iov_len as usize,
-                libc::MADV_DONTNEED,
+                advice,
             );
         }
     }
@@ -345,13 +353,15 @@ struct BlnMemoryRegion {
 struct BlnMemInfo {
     regions: Mutex<Vec<BlnMemoryRegion>>,
     enabled: bool,
+    mem_share: bool,
 }
 
 impl BlnMemInfo {
-    fn new() -> BlnMemInfo {
+    fn new(mem_share: bool) -> BlnMemInfo {
         BlnMemInfo {
             regions: Mutex::new(Vec::new()),
             enabled: false,
+            mem_share,
         }
     }
 
@@ -435,6 +445,11 @@ impl BlnMemInfo {
             size += rg.memory_size;
         }
         size
+    }
+
+    /// Get Balloon memory type, shared or private.
+    fn mem_share(&self) -> bool {
+        self.mem_share
     }
 }
 
@@ -771,7 +786,7 @@ impl Balloon {
     /// # Arguments
     ///
     /// * `bln_cfg` - Balloon configuration.
-    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
+    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>, mem_share: bool) -> Balloon {
         let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
         if bln_cfg.deflate_on_oom {
             device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
@@ -786,7 +801,7 @@ impl Balloon {
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
-            mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
+            mem_info: Arc::new(Mutex::new(BlnMemInfo::new(mem_share))),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -860,7 +875,6 @@ impl Balloon {
 impl VirtioDevice for Balloon {
     /// Realize a balloon device.
     fn realize(&mut self) -> Result<()> {
-        self.mem_info = Arc::new(Mutex::new(BlnMemInfo::new()));
         self.mem_space
             .register_listener(self.mem_info.clone())
             .with_context(|| "Failed to register memory listener defined by balloon device.")?;
@@ -1155,7 +1169,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space);
+        let mut bln = Balloon::new(&bln_cfg, mem_space, false);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
@@ -1202,7 +1216,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space);
+        let balloon = Balloon::new(&bln_cfg, mem_space, false);
         let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut random_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
@@ -1221,7 +1235,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut balloon = Balloon::new(&bln_cfg, mem_space);
+        let mut balloon = Balloon::new(&bln_cfg, mem_space, false);
         let write_data = [1, 0, 0, 0];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
@@ -1237,10 +1251,10 @@ mod tests {
             deflate_on_oom: true,
             free_page_reporting: Default::default(),
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone(), false);
         bln.realize().unwrap();
         let ram_fr1 = create_flat_range(0, MEMORY_SIZE, 0);
-        let blninfo = BlnMemInfo::new();
+        let blninfo = BlnMemInfo::new(false);
         assert!(blninfo
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_ok());
@@ -1417,7 +1431,7 @@ mod tests {
             deflate_on_oom: true,
             free_page_reporting: Default::default(),
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone(), false);
         assert!(bln
             .activate(mem_space, interrupt_cb, &queues, queue_evts)
             .is_err());
@@ -1431,7 +1445,7 @@ mod tests {
         blndef.memory_size = 0x8000;
         blndef.userspace_addr = 0;
 
-        let blninfo = BlnMemInfo::new();
+        let blninfo = BlnMemInfo::new(false);
         assert_eq!(blninfo.priority(), 0);
 
         blninfo.regions.lock().unwrap().push(blndef);
@@ -1440,7 +1454,7 @@ mod tests {
 
         let ram_size = 0x800;
         let ram_fr1 = create_flat_range(0, ram_size, 0);
-        let blninfo = BlnMemInfo::new();
+        let blninfo = BlnMemInfo::new(false);
         assert!(blninfo
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_ok());
@@ -1482,7 +1496,7 @@ mod tests {
             free_page_reporting: true,
         };
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space);
+        let mut bln = Balloon::new(&bln_cfg, mem_space, false);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
