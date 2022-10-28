@@ -19,6 +19,7 @@ use byteorder::{BigEndian, ByteOrder};
 pub const CLK_PHANDLE: u32 = 1;
 pub const GIC_PHANDLE: u32 = 2;
 pub const GIC_ITS_PHANDLE: u32 = 3;
+pub const PPI_CLUSTER_PHANDLE: u32 = 4;
 pub const CPU_PHANDLE_START: u32 = 10;
 
 pub const GIC_FDT_IRQ_TYPE_SPI: u32 = 0;

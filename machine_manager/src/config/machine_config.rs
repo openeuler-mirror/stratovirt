@@ -123,6 +123,23 @@ impl Default for MachineMemConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CpuConfig {
+    pub pmu: PmuConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PmuConfig {
+    On,
+    Off,
+}
+
+impl Default for PmuConfig {
+    fn default() -> Self {
+        PmuConfig::Off
+    }
+}
+
 /// Config struct for machine-config.
 /// Contains some basic Vm config about cpu, memory, name.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,6 +153,7 @@ pub struct MachineConfig {
     pub nr_sockets: u8,
     pub max_cpus: u8,
     pub mem_config: MachineMemConfig,
+    pub cpu_config: CpuConfig,
 }
 
 impl Default for MachineConfig {
@@ -151,6 +169,7 @@ impl Default for MachineConfig {
             nr_sockets: DEFAULT_SOCKETS,
             max_cpus: DEFAULT_MAX_CPUS,
             mem_config: MachineMemConfig::default(),
+            cpu_config: CpuConfig::default(),
         }
     }
 }
@@ -334,6 +353,22 @@ impl VmConfig {
         self.machine_config.nr_sockets = sockets as u8;
         self.machine_config.max_cpus = max_cpus as u8;
 
+        Ok(())
+    }
+
+    pub fn add_cpu_feature(&mut self, features: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("cpu");
+        cmd_parser.push("");
+        cmd_parser.push("pmu");
+        cmd_parser.parse(features)?;
+        //Check PMU when actually enabling PMU.
+        if let Some(k) = cmd_parser.get_value::<String>("pmu")? {
+            self.machine_config.cpu_config.pmu = match k.as_ref() {
+                "on" => PmuConfig::On,
+                "off" => PmuConfig::Off,
+                _ => bail!("Invalid PMU option,must be one of \'on\" or \"off\"."),
+            }
+        }
         Ok(())
     }
 
@@ -601,6 +636,7 @@ mod tests {
             nr_sockets: 1,
             max_cpus: MIN_NR_CPUS as u8,
             mem_config: memory_config,
+            cpu_config: CpuConfig::default(),
         };
         assert!(machine_config.check().is_ok());
 
@@ -958,5 +994,22 @@ mod tests {
 
         let policy = HostMemPolicy::from(String::from("error"));
         assert!(policy == HostMemPolicy::NotSupported);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn test_cpu_features() {
+        //Test PMU flags
+        let mut vm_config = VmConfig::default();
+        vm_config.add_cpu_feature("host").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        vm_config.add_cpu_feature("host,pmu=off").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        vm_config.add_cpu_feature("pmu=off").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        vm_config.add_cpu_feature("host,pmu=on").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
+        vm_config.add_cpu_feature("pmu=on").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
     }
 }

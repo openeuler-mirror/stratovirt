@@ -45,6 +45,8 @@
 	chroot .
 	echo "set enable-bracketed-paste off"  > /root/.inputrc
 	yum -y install openssh
+	# For PMU tests
+	yum -y install perf
 	```
 
 - 离开当前目录后，使用umount命令卸载镜像。
