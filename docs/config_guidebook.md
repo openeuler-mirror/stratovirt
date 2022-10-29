@@ -789,6 +789,54 @@ Six properties can be set for virtio-scsi hd.
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0
 ```
 Note: Only support scsi-id=0 and lun number should start from 0 Now.
+### 2.18 VNC
+VNC can provide the users with way to login virtual machines remotely.
+
+In order to use VNC, the ip and port value must be configured. The IP address can be set to a specified value or `0.0.0.0`, which means that all IP addresses on the host network card are monitored
+
+```shell
+-vnc 0.0.0.0:0
+```
+
+Tls encryption is an optional configuration.Three properties can be set for encrypted transmission:
+
+* certificate type.
+* id: unique object id.
+* dir: certificate directory. You should place a legal institutional certificate, a server certificate, and a private key for certificate encryption in this directory.
+
+```shell
+-object tls-creds-x509,id=vnc-tls-creds0,dir=/etc/pki/vnc
+```
+
+Authentication is an optional configuration, it depends on the saslauth service . To use this function, you must ensure that the saslauthd service is running normally, and configure the supported authentication mechanism in `/etc/sasl2/stratovirt. conf`
+
+Sample configuration for file `/etc/sasl2/stratovirt.conf`
+```shell
+# Using the saslauthd service
+pwcheck_method: saslauthd
+# Authentication mechanism
+mech_list: plain
+```
+
+Three properties can be set for Authentication:
+
+- authz-simple
+- id: unique object id.
+- identity: specify the username that can log in.
+
+```shell
+-object authz-simple,id=authz0,identity=username
+```
+
+Sample Configuration：
+
+```shell
+-object authz-simple,id=authz0,identity=username
+-object tls-creds-x509,id=vnc-tls-creds0,dir=/etc/pki/vnc
+-vnc 0.0.0.0:0,tls-creds=vnc-tls-creds0,sasl=on,sasl-authz=authz0
+```
+
+Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
 ## 3. Trace
 
