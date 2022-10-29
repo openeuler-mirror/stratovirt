@@ -72,7 +72,7 @@ StratoVirt supports to set the size of VM's memory in cmdline.
 This allows you to set the size of memory that VM will support.
 You can choose `G` as unit (default unit is `M`).
 
-Default VM memory size is 256M. The supported VM memory size is among [256M, 512G].
+Default VM memory size is 256M. The supported VM memory size is among [128M, 512G].
 
 ```shell
 # cmdline
