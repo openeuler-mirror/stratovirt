@@ -30,6 +30,8 @@ const VRING_AVAIL_F_NO_INTERRUPT: u16 = 1;
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
 /// Packed Virtqueue.
 pub const QUEUE_TYPE_PACKED_VRING: u16 = 2;
+/// Max total len of a descriptor chain.
+const DESC_CHAIN_MAX_TOTAL_LEN: u64 = 1u64 << 32;
 
 fn checked_offset_mem(
     mmio_space: &Arc<AddressSpace>,
@@ -320,6 +322,10 @@ impl SplitVringDesc {
         queue_size: u16,
         cache: &mut Option<RegionCache>,
     ) -> bool {
+        if self.len == 0 {
+            error!("Zero sized buffers are not allowed");
+            return false;
+        }
         let mut miss_cached = true;
         if let Some(reg_cache) = cache {
             let base = self.addr.0;
@@ -416,6 +422,7 @@ impl SplitVringDesc {
         let mut queue_size = desc_size;
         let mut indirect: bool = false;
         let mut write_elem_count: u32 = 0;
+        let mut desc_total_len: u64 = 0;
 
         loop {
             if elem.desc_num >= desc_size {
@@ -455,12 +462,17 @@ impl SplitVringDesc {
                 elem.out_iovec.push(iovec);
             }
             elem.desc_num += 1;
+            desc_total_len += iovec.len as u64;
 
             if desc.has_next() {
                 desc = Self::next_desc(sys_mem, desc_table_host, queue_size, desc.next, cache)?;
             } else {
                 break;
             }
+        }
+
+        if desc_total_len > DESC_CHAIN_MAX_TOTAL_LEN {
+            bail!("Find a descriptor chain longer than 4GB in total");
         }
 
         Ok(())
