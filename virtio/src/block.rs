@@ -241,25 +241,11 @@ impl Request {
         &self,
         aio: &mut Box<Aio<AioCompleteCb>>,
         disk: &File,
-        disk_sectors: u64,
         serial_num: &Option<String>,
         direct: bool,
         last_aio: bool,
         iocompletecb: AioCompleteCb,
     ) -> Result<u32> {
-        let mut top: u64 = self.data_len / SECTOR_SIZE;
-        if self.data_len % SECTOR_SIZE != 0 {
-            top += 1;
-        }
-        top.checked_add(self.out_header.sector)
-            .filter(|off| off <= &disk_sectors)
-            .with_context(|| {
-                format!(
-                    "offset {} invalid, disk sector {}",
-                    self.out_header.sector, disk_sectors
-                )
-            })?;
-
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
@@ -345,6 +331,31 @@ impl Request {
             ),
         };
         Ok(0)
+    }
+
+    fn io_range_valid(&self, disk_sectors: u64) -> bool {
+        match self.out_header.request_type {
+            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
+                if self.data_len % SECTOR_SIZE != 0 {
+                    error!("Failed to process block request with size not aligned to 512B");
+                    return false;
+                }
+                if self
+                    .get_req_sector_num()
+                    .checked_add(self.out_header.sector)
+                    .filter(|&off| off <= disk_sectors)
+                    .is_none()
+                {
+                    error!(
+                        "offset {} invalid, disk sector {}",
+                        self.out_header.sector, disk_sectors
+                    );
+                    return false;
+                }
+                true
+            }
+            _ => true,
+        }
     }
 
     fn get_req_sector_num(&self) -> u64 {
@@ -455,9 +466,14 @@ impl BlockIoHandler {
 
             match Request::new(&self.mem_space, &elem) {
                 Ok(req) => {
-                    if !req.out_header.is_valid() {
+                    if !req.out_header.is_valid() || !req.io_range_valid(self.disk_sectors) {
+                        let status = if !req.out_header.is_valid() {
+                            VIRTIO_BLK_S_UNSUPP
+                        } else {
+                            VIRTIO_BLK_S_IOERR
+                        };
                         self.mem_space
-                            .write_object(&VIRTIO_BLK_S_UNSUPP, req.in_header)
+                            .write_object(&status, req.in_header)
                             .with_context(|| {
                                 "Failed to write result for the unsupport request for block"
                             })?;
@@ -513,7 +529,6 @@ impl BlockIoHandler {
                     match req.execute(
                         aio,
                         disk_img,
-                        self.disk_sectors,
                         &self.serial_num,
                         self.direct,
                         last_aio_req_index == req_index,
