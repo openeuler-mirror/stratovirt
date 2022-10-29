@@ -16,9 +16,10 @@ use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 
+use util::time::NANOSECONDS_PER_SECOND;
+
 // Frequency of PM Timer in HZ.
 const PM_TIMER_FREQUENCY: u128 = 3_579_545;
-const NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
 pub const ACPI_BITMASK_SLEEP_ENABLE: u16 = 0x2000;
 
 /// ACPI Power Management Timer
@@ -49,7 +50,7 @@ impl AcpiPMTimer {
         }
         let now = Instant::now();
         let time_nanos = now.duration_since(self.start).as_nanos();
-        let counter: u128 = (time_nanos * PM_TIMER_FREQUENCY) / NANOSECONDS_PER_SECOND;
+        let counter: u128 = (time_nanos * PM_TIMER_FREQUENCY) / (NANOSECONDS_PER_SECOND as u128);
 
         data.copy_from_slice(&((counter & 0xFFFF_FFFF) as u32).to_le_bytes());
         true

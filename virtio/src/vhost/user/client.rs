@@ -23,6 +23,7 @@ use machine_manager::event_loop::EventLoop;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
+use util::time::NANOSECONDS_PER_SECOND;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::super::super::{Queue, QueueConfig, VIRTIO_NET_F_CTRL_VQ};
@@ -101,7 +102,7 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     {
         if let Some(ctx) = EventLoop::get_ctx(None) {
             // Default reconnecting time: 3s.
-            ctx.delay_call(func, 3 * 1_000_000_000);
+            ctx.delay_call(func, 3 * NANOSECONDS_PER_SECOND);
         } else {
             error!("Failed to get ctx to delay vhost-user reconnecting");
         }
