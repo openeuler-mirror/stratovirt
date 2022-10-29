@@ -578,7 +578,7 @@ pub fn vnc_display_switch(surface: &mut DisplaySurface) {
         // Desktop_resize.
         locked_client.desktop_resize();
         // Cursor define.
-        if !mask.is_empty() {
+        if !cursor.data.is_empty() {
             display_cursor_define(&mut locked_client, &mut cursor, &mut mask);
         }
         locked_client.dirty_bitmap.clear_all();
@@ -600,34 +600,49 @@ pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
     }
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
     let width = cursor.width as u64;
-    let heigt = cursor.height as u64;
-
+    let height = cursor.height as u64;
     let bpl = round_up_div(width as u64, BIT_PER_BYTE as u64);
-    let len = bpl * heigt as u64;
-    let mut mask = Bitmap::<u8>::new(len as usize);
-    for j in 0..heigt {
+    // Set the bit for mask.
+    let bit_mask: u8 = 0x80;
+
+    let mut mask: Vec<u8> = vec![0; (bpl * height) as usize];
+    let first_bit = if cfg!(target_endian = "big") {
+        0_usize
+    } else {
+        (bytes_per_pixel() - 1) as usize
+    };
+
+    for j in 0..height {
+        let mut bit = bit_mask;
         for i in 0..width {
-            let idx = i + j * width;
+            let idx = ((i + j * width) as usize) * bytes_per_pixel() + first_bit;
             if let Some(n) = cursor.data.get(idx as usize) {
                 if *n == 0xff {
-                    mask.set(idx as usize).unwrap();
+                    mask[(j * bpl + i / BIT_PER_BYTE as u64) as usize] |= bit;
                 }
+            }
+            bit >>= 1;
+            if bit == 0 {
+                bit = bit_mask;
             }
         }
     }
-    let mut data = Vec::new();
-    mask.get_data(&mut data);
+
     server.lock().unwrap().cursor = Some(cursor.clone());
-    server.lock().unwrap().mask = Some(data.clone());
+    server.lock().unwrap().mask = Some(mask.clone());
 
     // Send the framebuff for each client.
     for client in server.lock().unwrap().clients.values_mut() {
-        display_cursor_define(&mut client.lock().unwrap(), cursor, &mut data);
+        display_cursor_define(&mut client.lock().unwrap(), cursor, &mut mask);
     }
 }
 
 /// Send framebuf of mouse to the client.
-fn display_cursor_define(client: &mut VncClient, cursor: &mut DisplayMouse, mask: &mut Vec<u8>) {
+pub fn display_cursor_define(
+    client: &mut VncClient,
+    cursor: &mut DisplayMouse,
+    mask: &mut Vec<u8>,
+) {
     let mut buf = Vec::new();
     if client.has_feature(VncFeatures::VncFeatureAlphaCursor) {
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
