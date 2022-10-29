@@ -18,8 +18,9 @@ use crate::{
     server::VncServer,
     utils::BuffPool,
     vnc::{
-        framebuffer_upadate, set_area_dirty, update_client_surface, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
-        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
+        display_cursor_define, framebuffer_upadate, set_area_dirty, update_client_surface,
+        DisplayMouse, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT,
+        MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
     },
 };
 use anyhow::{anyhow, Result};
@@ -856,6 +857,21 @@ impl VncClient {
 
         self.encoding = 0;
         self.desktop_resize();
+        // VNC display cursor define.
+        let mut cursor: DisplayMouse = DisplayMouse::default();
+        let server = VNC_SERVERS.lock().unwrap()[0].clone();
+        let locked_server = server.lock().unwrap();
+        let mut mask: Vec<u8> = Vec::new();
+        if let Some(c) = &locked_server.cursor {
+            cursor = c.clone();
+        }
+        if let Some(m) = &locked_server.mask {
+            mask = m.clone();
+        }
+        drop(locked_server);
+        if !cursor.data.is_empty() {
+            display_cursor_define(self, &mut cursor, &mut mask);
+        }
 
         self.update_event_handler(1, VncClient::handle_protocol_msg);
         Ok(())
