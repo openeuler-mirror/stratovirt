@@ -16,6 +16,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -109,9 +110,8 @@ impl ByteCode for RequestOutHeader {}
 pub struct AioCompleteCb {
     queue: Arc<Mutex<Queue>>,
     mem_space: Arc<AddressSpace>,
-    desc_index: u16,
-    rw_len: u32,
-    req_status_addr: GuestAddress,
+    /// The head of merged Request list.
+    req: Rc<Request>,
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     driver_features: u64,
 }
@@ -120,25 +120,29 @@ impl AioCompleteCb {
     fn new(
         queue: Arc<Mutex<Queue>>,
         mem_space: Arc<AddressSpace>,
-        desc_index: u16,
-        rw_len: u32,
-        req_status_addr: GuestAddress,
+        req: Rc<Request>,
         interrupt_cb: Option<Arc<VirtioInterrupt>>,
         driver_features: u64,
     ) -> Self {
         AioCompleteCb {
             queue,
             mem_space,
-            desc_index,
-            rw_len,
-            req_status_addr,
+            req,
             interrupt_cb,
             driver_features,
         }
     }
 
     fn complete_request(&self, status: u8) {
-        if let Err(ref e) = self.mem_space.write_object(&status, self.req_status_addr) {
+        let mut req = Some(self.req.as_ref());
+        while let Some(req_raw) = req {
+            self.complete_one_request(req_raw, status);
+            req = req_raw.next.as_ref().as_ref();
+        }
+    }
+
+    fn complete_one_request(&self, req: &Request, status: u8) {
+        if let Err(ref e) = self.mem_space.write_object(&status, req.in_header) {
             error!("Failed to write the status (aio completion) {:?}", e);
             return;
         }
@@ -146,11 +150,11 @@ impl AioCompleteCb {
         let mut queue_lock = self.queue.lock().unwrap();
         if let Err(ref e) = queue_lock
             .vring
-            .add_used(&self.mem_space, self.desc_index, self.rw_len)
+            .add_used(&self.mem_space, req.desc_index, req.in_len)
         {
             error!(
                 "Failed to add used ring(aio completion), index {}, len {} {:?}",
-                self.desc_index, self.rw_len, e,
+                req.desc_index, req.in_len, e,
             );
             return;
         }
@@ -182,6 +186,8 @@ struct Request {
     data_len: u64,
     in_len: u32,
     in_header: GuestAddress,
+    /// Point to the next merged Request.
+    next: Box<Option<Request>>,
 }
 
 impl Request {
@@ -228,6 +234,7 @@ impl Request {
             data_len: 0,
             in_len: 0,
             in_header: in_iov_elem.addr,
+            next: Box::new(None),
         };
 
         match out_header.request_type {
@@ -293,19 +300,23 @@ impl Request {
             iocompletecb,
         };
 
-        for iov in self.iovec.iter() {
-            let iovec = Iovec {
-                iov_base: iov.iov_base,
-                iov_len: iov.iov_len,
-            };
-            aiocb.iovec.push(iovec);
+        let mut req = Some(self);
+        while let Some(req_raw) = req {
+            for iov in req_raw.iovec.iter() {
+                let iovec = Iovec {
+                    iov_base: iov.iov_base,
+                    iov_len: iov.iov_len,
+                };
+                aiocb.iovec.push(iovec);
+            }
+            req = req_raw.next.as_ref().as_ref();
         }
 
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
                 if direct {
-                    for iov in self.iovec.iter() {
+                    for iov in aiocb.iovec.iter() {
                         MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
                     }
                     (*aio)
@@ -433,36 +444,39 @@ struct BlockIoHandler {
 }
 
 impl BlockIoHandler {
-    fn merge_req_queue(&self, mut req_queue: Vec<Request>) -> Vec<Request> {
-        if req_queue.len() == 1 {
-            return req_queue;
-        }
-
+    fn merge_req_queue(
+        &self,
+        mut req_queue: Vec<Request>,
+        last_aio_index: &mut usize,
+    ) -> Vec<Request> {
         req_queue.sort_by(|a, b| a.out_header.sector.cmp(&b.out_header.sector));
-        let mut merge_req_queue = Vec::<Request>::new();
-        let mut continue_merge: bool = false;
 
-        for req in &req_queue {
-            if continue_merge {
-                if let Some(last_req) = merge_req_queue.last_mut() {
-                    if last_req.out_header.sector + last_req.get_req_sector_num()
-                        != req.out_header.sector
-                    {
-                        continue_merge = false;
-                        merge_req_queue.push(req.clone());
-                    } else {
-                        for iov in req.iovec.iter() {
-                            let iovec = Iovec {
-                                iov_base: iov.iov_base,
-                                iov_len: iov.iov_len,
-                            };
-                            last_req.data_len += iovec.iov_len;
-                            last_req.iovec.push(iovec);
-                        }
-                    }
+        let mut merge_req_queue = Vec::<Request>::new();
+        let mut last_req: Option<&mut Request> = None;
+
+        *last_aio_index = 0;
+        for req in req_queue {
+            let io = req.out_header.request_type == VIRTIO_BLK_T_IN
+                || req.out_header.request_type == VIRTIO_BLK_T_OUT;
+            let can_merge = match last_req {
+                Some(ref req_ref) => {
+                    io && req_ref.out_header.request_type == req.out_header.request_type
+                        && (req_ref.out_header.sector + req_ref.get_req_sector_num()
+                            == req.out_header.sector)
                 }
+                None => false,
+            };
+
+            if can_merge {
+                let last_req_raw = last_req.unwrap();
+                last_req_raw.next = Box::new(Some(req));
+                last_req = last_req_raw.next.as_mut().as_mut();
             } else {
-                merge_req_queue.push(req.clone());
+                if io {
+                    *last_aio_index = merge_req_queue.len();
+                }
+                merge_req_queue.push(req);
+                last_req = merge_req_queue.last_mut();
             }
         }
 
@@ -472,7 +486,6 @@ impl BlockIoHandler {
     fn process_queue(&mut self) -> Result<bool> {
         self.trace_request("Block".to_string(), "to IO".to_string());
         let mut req_queue = Vec::new();
-        let mut req_index = 0;
         let mut last_aio_req_index = 0;
         let mut done = false;
 
@@ -509,23 +522,14 @@ impl BlockIoHandler {
                         let aiocompletecb = AioCompleteCb::new(
                             self.queue.clone(),
                             self.mem_space.clone(),
-                            req.desc_index,
-                            req.in_len,
-                            req.in_header,
+                            Rc::new(req),
                             Some(self.interrupt_cb.clone()),
                             self.driver_features,
                         );
                         aiocompletecb.complete_request(status);
                         continue;
                     }
-                    match req.out_header.request_type {
-                        VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
-                            last_aio_req_index = req_index;
-                        }
-                        _ => {}
-                    }
                     req_queue.push(req);
-                    req_index += 1;
                     done = true;
                 }
                 Err(ref e) => {
@@ -542,21 +546,23 @@ impl BlockIoHandler {
         // unlock queue, because it will be hold below.
         drop(queue);
 
-        let merge_req_queue = self.merge_req_queue(req_queue);
+        if req_queue.is_empty() {
+            return Ok(done);
+        }
 
-        req_index = 0;
-        for req in merge_req_queue.iter() {
+        let merge_req_queue = self.merge_req_queue(req_queue, &mut last_aio_req_index);
+
+        for (req_index, req) in merge_req_queue.into_iter().enumerate() {
+            let req_rc = Rc::new(req);
             let aiocompletecb = AioCompleteCb::new(
                 self.queue.clone(),
                 self.mem_space.clone(),
-                req.desc_index,
-                req.in_len,
-                req.in_header,
+                req_rc.clone(),
                 Some(self.interrupt_cb.clone()),
                 self.driver_features,
             );
             if let Some(disk_img) = self.disk_image.as_ref() {
-                if let Err(ref e) = req.execute(
+                if let Err(ref e) = req_rc.execute(
                     self.aio.as_mut().unwrap(),
                     disk_img,
                     &self.serial_num,
@@ -571,7 +577,6 @@ impl BlockIoHandler {
                 error!("Failed to execute block request, disk_img not specified");
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
             }
-            req_index += 1;
         }
 
         Ok(done)
