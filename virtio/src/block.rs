@@ -136,6 +136,42 @@ impl AioCompleteCb {
             driver_features,
         }
     }
+
+    fn complete_request(&self, status: u8) {
+        if let Err(ref e) = self.mem_space.write_object(&status, self.req_status_addr) {
+            error!("Failed to write the status (aio completion) {:?}", e);
+            return;
+        }
+
+        let mut queue_lock = self.queue.lock().unwrap();
+        if let Err(ref e) = queue_lock
+            .vring
+            .add_used(&self.mem_space, self.desc_index, self.rw_len)
+        {
+            error!(
+                "Failed to add used ring(aio completion), index {}, len {} {:?}",
+                self.desc_index, self.rw_len, e,
+            );
+            return;
+        }
+
+        if queue_lock
+            .vring
+            .should_notify(&self.mem_space, self.driver_features)
+        {
+            if let Err(e) = (*self.interrupt_cb.as_ref().unwrap())(
+                &VirtioInterruptType::Vring,
+                Some(&queue_lock),
+            ) {
+                error!(
+                    "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
+                    e
+                );
+                return;
+            }
+            self.trace_send_interrupt("Block".to_string());
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -245,7 +281,7 @@ impl Request {
         direct: bool,
         last_aio: bool,
         iocompletecb: AioCompleteCb,
-    ) -> Result<u32> {
+    ) -> Result<()> {
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
@@ -322,15 +358,14 @@ impl Request {
                     }
                     start = end;
                 }
-
-                return Ok(1);
+                aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_OK);
             }
             _ => bail!(
                 "The type {} of block request is not supported",
                 self.out_header.request_type
             ),
         };
-        Ok(0)
+        Ok(())
     }
 
     fn io_range_valid(&self, disk_sectors: u64) -> bool {
@@ -471,28 +506,16 @@ impl BlockIoHandler {
                         } else {
                             VIRTIO_BLK_S_IOERR
                         };
-                        self.mem_space
-                            .write_object(&status, req.in_header)
-                            .with_context(|| {
-                                "Failed to write result for the unsupport request for block"
-                            })?;
-                        queue
-                            .vring
-                            .add_used(&self.mem_space, req.desc_index, req.in_len)
-                            .with_context(|| "Failed to add used ring")?;
-                        if queue
-                            .vring
-                            .should_notify(&self.mem_space, self.driver_features)
-                        {
-                            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
-                                .with_context(|| {
-                                    anyhow!(VirtioError::InterruptTrigger(
-                                        "block",
-                                        VirtioInterruptType::Vring
-                                    ))
-                                })?;
-                            self.trace_send_interrupt("Block".to_string());
-                        }
+                        let aiocompletecb = AioCompleteCb::new(
+                            self.queue.clone(),
+                            self.mem_space.clone(),
+                            req.desc_index,
+                            req.in_len,
+                            req.in_header,
+                            Some(self.interrupt_cb.clone()),
+                            self.driver_features,
+                        );
+                        aiocompletecb.complete_request(status);
                         continue;
                     }
                     match req.out_header.request_type {
@@ -521,134 +544,34 @@ impl BlockIoHandler {
 
         let merge_req_queue = self.merge_req_queue(req_queue);
 
-        if let Some(disk_img) = self.disk_image.as_ref() {
-            req_index = 0;
-            for req in merge_req_queue.iter() {
-                if let Some(ref mut aio) = self.aio {
-                    let aiocompletecb = AioCompleteCb::new(
-                        self.queue.clone(),
-                        self.mem_space.clone(),
-                        req.desc_index,
-                        req.in_len,
-                        req.in_header,
-                        Some(self.interrupt_cb.clone()),
-                        self.driver_features,
-                    );
-
-                    match req.execute(
-                        aio,
-                        disk_img,
-                        &self.serial_num,
-                        self.direct,
-                        last_aio_req_index == req_index,
-                        aiocompletecb,
-                    ) {
-                        Ok(v) => {
-                            if v == 1 {
-                                // get device id
-                                self.mem_space
-                                    .write_object(&VIRTIO_BLK_S_OK, req.in_header)
-                                    .with_context(|| "Failed to write result for the request for block with device id")?;
-                                self.queue.lock().unwrap().vring.add_used(
-                                    &self.mem_space,
-                                    req.desc_index,
-                                    req.in_len,
-                                ).with_context(|| "Failed to add the request for block with device id to used ring")?;
-                                if self
-                                    .queue
-                                    .lock()
-                                    .unwrap()
-                                    .vring
-                                    .should_notify(&self.mem_space, self.driver_features)
-                                {
-                                    (self.interrupt_cb)(
-                                        &VirtioInterruptType::Vring,
-                                        Some(&self.queue.lock().unwrap()),
-                                    )
-                                    .with_context(|| {
-                                        anyhow!(VirtioError::InterruptTrigger(
-                                            "block",
-                                            VirtioInterruptType::Vring
-                                        ))
-                                    })?;
-                                    self.trace_send_interrupt("Block".to_string());
-                                }
-                            }
-                        }
-                        Err(ref e) => {
-                            error!("Failed to execute block request, {:?}", e);
-                            self.mem_space
-                                .write_object(&VIRTIO_BLK_S_IOERR, req.in_header)
-                                .with_context(|| {
-                                    "Failed to write result, when block request execute failed"
-                                })?;
-                            self.queue
-                                .lock()
-                                .unwrap()
-                                .vring
-                                .add_used(&self.mem_space, req.desc_index, req.in_len)
-                                .with_context(|| {
-                                    "Failed to add used ring, when block request execute failed"
-                                })?;
-                            if self
-                                .queue
-                                .lock()
-                                .unwrap()
-                                .vring
-                                .should_notify(&self.mem_space, self.driver_features)
-                            {
-                                (self.interrupt_cb)(
-                                    &VirtioInterruptType::Vring,
-                                    Some(&self.queue.lock().unwrap()),
-                                )
-                                .with_context(|| {
-                                    anyhow!(VirtioError::InterruptTrigger(
-                                        "block",
-                                        VirtioInterruptType::Vring
-                                    ))
-                                })?;
-                                self.trace_send_interrupt("Block".to_string());
-                            }
-                        }
-                    }
-                    req_index += 1;
+        req_index = 0;
+        for req in merge_req_queue.iter() {
+            let aiocompletecb = AioCompleteCb::new(
+                self.queue.clone(),
+                self.mem_space.clone(),
+                req.desc_index,
+                req.in_len,
+                req.in_header,
+                Some(self.interrupt_cb.clone()),
+                self.driver_features,
+            );
+            if let Some(disk_img) = self.disk_image.as_ref() {
+                if let Err(ref e) = req.execute(
+                    self.aio.as_mut().unwrap(),
+                    disk_img,
+                    &self.serial_num,
+                    self.direct,
+                    req_index == last_aio_req_index,
+                    aiocompletecb.clone(),
+                ) {
+                    error!("Failed to execute block request, {:?}", e);
+                    aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
                 }
+            } else {
+                error!("Failed to execute block request, disk_img not specified");
+                aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
             }
-        } else if !merge_req_queue.is_empty() {
-            for req in merge_req_queue.iter() {
-                self.mem_space
-                    .write_object(&VIRTIO_BLK_S_IOERR, req.in_header)
-                    .with_context(|| {
-                        "Failed to write result, when block request queue isn't empty"
-                    })?;
-                self.queue
-                    .lock()
-                    .unwrap()
-                    .vring
-                    .add_used(&self.mem_space, req.desc_index, req.in_len)
-                    .with_context(|| {
-                        "Failed to add used ring, when block request queue isn't empty"
-                    })?;
-                if self
-                    .queue
-                    .lock()
-                    .unwrap()
-                    .vring
-                    .should_notify(&self.mem_space, self.driver_features)
-                {
-                    (self.interrupt_cb)(
-                        &VirtioInterruptType::Vring,
-                        Some(&self.queue.lock().unwrap()),
-                    )
-                    .with_context(|| {
-                        anyhow!(VirtioError::InterruptTrigger(
-                            "block",
-                            VirtioInterruptType::Vring
-                        ))
-                    })?;
-                    self.trace_send_interrupt("Block".to_string());
-                }
-            }
+            req_index += 1;
         }
 
         Ok(done)
@@ -675,41 +598,7 @@ impl BlockIoHandler {
                 }
             }
 
-            if let Err(ref e) = complete_cb
-                .mem_space
-                .write_object(&status, complete_cb.req_status_addr)
-            {
-                error!("Failed to write the status (aio completion) {:?}", e);
-                return;
-            }
-
-            let mut queue_lock = complete_cb.queue.lock().unwrap();
-            if let Err(ref e) = queue_lock.vring.add_used(
-                &complete_cb.mem_space,
-                complete_cb.desc_index,
-                complete_cb.rw_len,
-            ) {
-                error!(
-                    "Failed to add used ring(aio completion), index {}, len {} {:?}",
-                    complete_cb.desc_index, complete_cb.rw_len, e,
-                );
-                return;
-            }
-
-            if queue_lock
-                .vring
-                .should_notify(&complete_cb.mem_space, complete_cb.driver_features)
-            {
-                if let Err(e) = (*complete_cb.interrupt_cb.as_ref().unwrap())(
-                    &VirtioInterruptType::Vring,
-                    Some(&queue_lock),
-                ) {
-                    error!(
-                        "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
-                        e
-                    );
-                }
-            }
+            complete_cb.complete_request(status);
         }) as AioCompleteFunc<AioCompleteCb>);
 
         Ok(Box::new(Aio::new(complete_func, engine)?))
@@ -1319,6 +1208,7 @@ impl StateTransfer for Block {
 impl MigrationHook for Block {}
 
 impl VirtioTrace for BlockIoHandler {}
+impl VirtioTrace for AioCompleteCb {}
 
 #[cfg(test)]
 mod tests {
