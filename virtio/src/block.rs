@@ -439,7 +439,6 @@ impl BlockIoHandler {
         let mut req_queue = Vec::new();
         let mut req_index = 0;
         let mut last_aio_req_index = 0;
-        let mut need_interrupt = false;
         let mut done = false;
 
         let mut queue = self.queue.lock().unwrap();
@@ -481,7 +480,19 @@ impl BlockIoHandler {
                             .vring
                             .add_used(&self.mem_space, req.desc_index, req.in_len)
                             .with_context(|| "Failed to add used ring")?;
-                        need_interrupt = true;
+                        if queue
+                            .vring
+                            .should_notify(&self.mem_space, self.driver_features)
+                        {
+                            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue))
+                                .with_context(|| {
+                                    anyhow!(VirtioError::InterruptTrigger(
+                                        "block",
+                                        VirtioInterruptType::Vring
+                                    ))
+                                })?;
+                            self.trace_send_interrupt("Block".to_string());
+                        }
                         continue;
                     }
                     match req.out_header.request_type {
@@ -500,8 +511,6 @@ impl BlockIoHandler {
                         .vring
                         .add_used(&self.mem_space, elem.index, 0)
                         .with_context(|| "Failed to add used ring")?;
-                    need_interrupt = true;
-
                     error!("failed to create block request, {:?}", e);
                 }
             };
@@ -512,7 +521,7 @@ impl BlockIoHandler {
 
         let merge_req_queue = self.merge_req_queue(req_queue);
 
-        if let Some(disk_img) = self.disk_image.as_mut() {
+        if let Some(disk_img) = self.disk_image.as_ref() {
             req_index = 0;
             for req in merge_req_queue.iter() {
                 if let Some(ref mut aio) = self.aio {
@@ -545,7 +554,6 @@ impl BlockIoHandler {
                                     req.desc_index,
                                     req.in_len,
                                 ).with_context(|| "Failed to add the request for block with device id to used ring")?;
-
                                 if self
                                     .queue
                                     .lock()
@@ -553,7 +561,17 @@ impl BlockIoHandler {
                                     .vring
                                     .should_notify(&self.mem_space, self.driver_features)
                                 {
-                                    need_interrupt = true;
+                                    (self.interrupt_cb)(
+                                        &VirtioInterruptType::Vring,
+                                        Some(&self.queue.lock().unwrap()),
+                                    )
+                                    .with_context(|| {
+                                        anyhow!(VirtioError::InterruptTrigger(
+                                            "block",
+                                            VirtioInterruptType::Vring
+                                        ))
+                                    })?;
+                                    self.trace_send_interrupt("Block".to_string());
                                 }
                             }
                         }
@@ -572,7 +590,25 @@ impl BlockIoHandler {
                                 .with_context(|| {
                                     "Failed to add used ring, when block request execute failed"
                                 })?;
-                            need_interrupt = true;
+                            if self
+                                .queue
+                                .lock()
+                                .unwrap()
+                                .vring
+                                .should_notify(&self.mem_space, self.driver_features)
+                            {
+                                (self.interrupt_cb)(
+                                    &VirtioInterruptType::Vring,
+                                    Some(&self.queue.lock().unwrap()),
+                                )
+                                .with_context(|| {
+                                    anyhow!(VirtioError::InterruptTrigger(
+                                        "block",
+                                        VirtioInterruptType::Vring
+                                    ))
+                                })?;
+                                self.trace_send_interrupt("Block".to_string());
+                            }
                         }
                     }
                     req_index += 1;
@@ -593,22 +629,26 @@ impl BlockIoHandler {
                     .with_context(|| {
                         "Failed to add used ring, when block request queue isn't empty"
                     })?;
+                if self
+                    .queue
+                    .lock()
+                    .unwrap()
+                    .vring
+                    .should_notify(&self.mem_space, self.driver_features)
+                {
+                    (self.interrupt_cb)(
+                        &VirtioInterruptType::Vring,
+                        Some(&self.queue.lock().unwrap()),
+                    )
+                    .with_context(|| {
+                        anyhow!(VirtioError::InterruptTrigger(
+                            "block",
+                            VirtioInterruptType::Vring
+                        ))
+                    })?;
+                    self.trace_send_interrupt("Block".to_string());
+                }
             }
-            need_interrupt = true
-        }
-
-        if need_interrupt {
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.queue.lock().unwrap()),
-            )
-            .with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "block",
-                    VirtioInterruptType::Vring
-                ))
-            })?;
-            self.trace_send_interrupt("Block".to_string());
         }
 
         Ok(done)
