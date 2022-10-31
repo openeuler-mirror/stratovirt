@@ -353,9 +353,14 @@ impl VirtioPciCommonConfig {
             COMMON_Q_SIZE_REG => self
                 .get_mut_queue_config()
                 .map(|config| config.size = value as u16)?,
-            COMMON_Q_ENABLE_REG => self
-                .get_mut_queue_config()
-                .map(|config| config.ready = value == 1)?,
+            COMMON_Q_ENABLE_REG => {
+                if value != 1 {
+                    error!("Driver set illegal value for queue_enable {}", value);
+                    return Ok(());
+                }
+                self.get_mut_queue_config()
+                    .map(|config| config.ready = true)?;
+            }
             COMMON_Q_MSIX_REG => self
                 .get_mut_queue_config()
                 .map(|config| config.vector = value as u16)?,
