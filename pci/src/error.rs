@@ -31,4 +31,6 @@ pub enum PciError {
     PciRegister(u64),
     #[error("Invalid features select 0x{0:x}")]
     FeaturesSelect(u32),
+    #[error("HotPlug is not supported for device with devfn {0}")]
+    HotplugUnsupported(u8),
 }
