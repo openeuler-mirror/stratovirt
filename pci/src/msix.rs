@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::max;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -20,9 +21,9 @@ use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
+use util::{byte_code::ByteCode, num_ops::round_up};
 
-use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};
+use crate::config::{CapId, PciConfig, RegionType, MINMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     ranges_overlap, PciBus,
@@ -504,7 +505,7 @@ pub fn init_msix(
         )?;
     } else {
         let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
-        bar_size = round_up(bar_size, host_page_size()).unwrap();
+        bar_size = max(bar_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
         let region = Region::init_container_region(bar_size);
         Msix::register_memory_region(
             msix.clone(),

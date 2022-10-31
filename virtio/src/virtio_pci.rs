@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::max;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
@@ -23,9 +24,9 @@ use log::{error, warn};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
-    RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
-    ROM_ADDRESS, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE,
-    VENDOR_ID,
+    RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
+    REG_SIZE, REVISION_ID, ROM_ADDRESS, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID,
+    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::{update_dev_id, Message, MsixState, MsixUpdate};
 use pci::Result as PciResult;
@@ -33,7 +34,7 @@ use pci::{
     config::PciConfig, init_msix, init_multifunction, le_write_u16, ranges_overlap, PciBus,
     PciDevOps, PciError,
 };
-use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
+use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
@@ -1065,7 +1066,7 @@ impl PciDevOps for VirtioPciDevice {
         let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
             as u64)
             .next_power_of_two();
-        mem_region_size = round_up(mem_region_size, host_page_size()).unwrap();
+        mem_region_size = max(mem_region_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
         let modern_mem_region = Region::init_container_region(mem_region_size);
         self.modern_mem_region_init(&modern_mem_region)?;
 
