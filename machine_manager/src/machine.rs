@@ -395,6 +395,12 @@ pub trait DeviceInterface {
         Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
     }
 
+    fn query_block_jobs(&self) -> Response {
+        // Fix me: qmp command call, return none temporarily.
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
     fn query_gic_capabilities(&self) -> Response {
         let vec_gic: Vec<GicCap> = Vec::new();
         Response::create_response(serde_json::to_value(&vec_gic).unwrap(), None)
