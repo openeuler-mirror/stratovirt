@@ -340,6 +340,11 @@ impl VirtioPciCommonConfig {
                         return Ok(());
                     }
                 }
+                if value != 0 && (self.device_status & !value) != 0 {
+                    error!("Driver must not clear a device status bit");
+                    return Ok(());
+                }
+
                 self.device_status = value;
                 if self.device_status == 0 {
                     self.reset();
