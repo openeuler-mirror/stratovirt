@@ -76,7 +76,7 @@ def test_microvm_balloon(microvm):
     resp = test_vm.query_balloon()
     ori = int(resp["return"]["actual"])
 
-    resp = test_vm.balloon_set(value=814748368)
+    resp = test_vm.balloon_set(value=814743552)
     time.sleep(5)
     test_vm.event_wait(name='BALLOON_CHANGED', timeout=2.0)
     resp = test_vm.query_balloon()
