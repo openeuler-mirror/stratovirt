@@ -552,16 +552,16 @@ impl PciConfig {
         let offset: usize = BAR_0 as usize + id * REG_SIZE;
         match region_type {
             RegionType::Io => {
-                let write_mask = (!(size - 1) as u32) & 0xffff_fffc;
+                let write_mask = !(size - 1) as u32;
                 le_write_u32(&mut self.write_mask, offset, write_mask).unwrap();
                 self.config[offset] = BAR_IO_SPACE;
             }
             RegionType::Mem32Bit => {
-                let write_mask = (!(size - 1) as u32) & 0xffff_fff0;
+                let write_mask = !(size - 1) as u32;
                 le_write_u32(&mut self.write_mask, offset, write_mask).unwrap();
             }
             RegionType::Mem64Bit => {
-                let write_mask = !(size - 1) & 0xffff_ffff_ffff_fff0;
+                let write_mask = !(size - 1);
                 le_write_u64(&mut self.write_mask, offset, write_mask).unwrap();
                 self.config[offset] = BAR_MEM_64BIT;
             }
