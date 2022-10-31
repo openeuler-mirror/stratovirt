@@ -241,6 +241,17 @@ const VIRTQ_DESC_F_WRITE: u16 = 0x2;
 /// This means the buffer contains a list of buffer descriptors.
 const VIRTQ_DESC_F_INDIRECT: u16 = 0x4;
 
+struct DescInfo {
+    /// The host virtual address of the descriptor table.
+    table_host: u64,
+    /// The size of the descriptor table.
+    size: u16,
+    /// The index of the current descriptor table.
+    index: u16,
+    /// The descriptor table.
+    desc: SplitVringDesc,
+}
+
 /// Descriptor of split vring.
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -371,12 +382,19 @@ impl SplitVringDesc {
     /// Return true if the indirect descriptor is valid.
     /// The len can be divided evenly by the size of descriptor and can not be zero.
     fn is_valid_indirect_desc(&self) -> bool {
-        if u64::from(self.len) % DESCRIPTOR_LEN == 0 && self.len != 0 {
-            true
-        } else {
+        if self.len == 0 || u64::from(self.len) % DESCRIPTOR_LEN != 0 {
             error!("The indirect descriptor is invalid, len: {}", self.len);
-            false
+            return false;
         }
+        if self.write_only() {
+            error!("Unexpected descriptor for writing only for popping avail ring");
+            return false;
+        }
+        if self.has_next() {
+            error!("INDIRECT and NEXT flag should not be used together");
+            return false;
+        }
+        true
     }
 
     /// Get the num of descriptor in the table of indirect descriptor.
@@ -387,18 +405,39 @@ impl SplitVringDesc {
     /// Get element from descriptor chain.
     fn get_element(
         sys_mem: &Arc<AddressSpace>,
-        desc_table_host: u64,
-        queue_size: u16,
-        index: u16,
-        mut desc: SplitVringDesc,
+        desc_info: &DescInfo,
         cache: &mut Option<RegionCache>,
         elem: &mut Element,
     ) -> Result<()> {
-        elem.index = index;
+        let mut desc_table_host = desc_info.table_host;
+        let mut desc_size = desc_info.size;
+        let mut desc = desc_info.desc;
+        elem.index = desc_info.index;
+        let mut queue_size = desc_size;
+        let mut indirect: bool = false;
+        let mut write_elem_count: u32 = 0;
 
         loop {
-            if elem.desc_num >= queue_size {
+            if elem.desc_num >= desc_size {
                 break;
+            }
+
+            if desc.is_indirect_desc() {
+                if !desc.is_valid_indirect_desc() {
+                    return Err(anyhow!(VirtioError::QueueDescInvalid));
+                }
+                if !indirect {
+                    indirect = true;
+                } else {
+                    bail!("Found two indirect descriptor elem in one request");
+                }
+                desc_table_host = match sys_mem.get_host_address(desc.addr) {
+                    Some(addr) => addr,
+                    None => bail!("Failed to get descriptor table entry host address"),
+                };
+                queue_size = desc.get_desc_num();
+                desc = Self::next_desc(sys_mem, desc_table_host, queue_size, 0, cache)?;
+                desc_size = elem.desc_num + queue_size;
             }
 
             let iovec = ElemIovec {
@@ -408,7 +447,11 @@ impl SplitVringDesc {
 
             if desc.write_only() {
                 elem.in_iovec.push(iovec);
+                write_elem_count += 1;
             } else {
+                if write_elem_count > 0 {
+                    bail!("Invalid order of the descriptor elem");
+                }
                 elem.out_iovec.push(iovec);
             }
             elem.desc_num += 1;
@@ -421,49 +464,6 @@ impl SplitVringDesc {
         }
 
         Ok(())
-    }
-
-    /// Get element from indirect descriptor chain.
-    fn get_indirect_desc(
-        &self,
-        sys_mem: &Arc<AddressSpace>,
-        index: u16,
-        cache: &mut Option<RegionCache>,
-        elem: &mut Element,
-    ) -> Result<()> {
-        if !self.is_valid_indirect_desc() {
-            return Err(anyhow!(VirtioError::QueueDescInvalid));
-        }
-
-        let desc_num = self.get_desc_num();
-        let desc_hva = match sys_mem.get_host_address(self.addr) {
-            Some(addr) => addr,
-            None => bail!("Failed to get descriptor table entry host address"),
-        };
-        let desc = Self::next_desc(sys_mem, desc_hva, desc_num, 0, cache)?;
-        Self::get_element(sys_mem, desc_hva, desc_num, index, desc, cache, elem)
-            .with_context(||
-                format!("Failed to get element from indirect descriptor chain {}, table entry addr: 0x{:X}, size: {}",
-                    index, self.addr.0, desc_num)
-            )
-    }
-
-    /// Get element from normal descriptor chain.
-    fn get_nonindirect_desc(
-        &self,
-        sys_mem: &Arc<AddressSpace>,
-        desc_table_host: u64,
-        queue_size: u16,
-        index: u16,
-        cache: &mut Option<RegionCache>,
-        elem: &mut Element,
-    ) -> Result<()> {
-        Self::get_element(sys_mem, desc_table_host, queue_size, index, *self, cache, elem).with_context(|| {
-            format!(
-                "Failed to get element from normal descriptor chain {}, table addr: 0x{:X}, size: {}",
-                index, desc_table_host, queue_size
-            )
-        })
     }
 }
 
@@ -780,31 +780,21 @@ impl SplitVring {
             desc_index,
             &mut self.cache,
         )?;
-        if desc.is_indirect_desc() {
-            if desc.write_only() {
-                bail!("Unexpected descriptor for writing only for popping avail ring");
-            }
-
-            desc.get_indirect_desc(sys_mem, desc_index, &mut self.cache, elem)
-                .map(|elem| {
-                    self.next_avail += Wrapping(1);
-                    elem
-                })
-                .with_context(|| "Failed to get indirect desc for popping avail ring")?
-        } else {
-            desc.get_nonindirect_desc(
-                sys_mem,
-                self.addr_cache.desc_table_host,
-                self.actual_size(),
-                desc_index,
-                &mut self.cache,
-                elem,
-            )
-            .map(|elem| {
-                self.next_avail += Wrapping(1);
-                elem
-            })?
+        let desc_info = DescInfo {
+            table_host: self.addr_cache.desc_table_host,
+            size: self.actual_size(),
+            index: desc_index,
+            desc,
         };
+        SplitVringDesc::get_element(sys_mem, &desc_info, &mut self.cache, elem).with_context(
+            || {
+                format!(
+                    "Failed to get element from descriptor chain {}, table addr: 0x{:X}, size: {}",
+                    desc_info.index, desc_info.table_host, desc_info.size,
+                )
+            },
+        )?;
+        self.next_avail += Wrapping(1);
 
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
             self.set_avail_event(sys_mem)
@@ -1698,6 +1688,215 @@ mod tests {
         } else {
             assert!(false);
         }
+
+        // The INDIRECT and NEXT flag should not be used together.
+        vring
+            .set_desc(
+                &sys_space,
+                0,
+                GuestAddress(SYSTEM_SPACE_SIZE / 2),
+                48,
+                VIRTQ_DESC_F_INDIRECT | VIRTQ_DESC_F_NEXT,
+                0,
+            )
+            .unwrap();
+        if let Err(err) = vring.pop_avail(&sys_space, features) {
+            assert_eq!(err.to_string(), "Failed to get vring element");
+        } else {
+            assert!(false);
+        }
+
+        // The device-writable desc elems must behind the device-readable desc elems.
+        vring
+            .set_desc(
+                &sys_space,
+                0,
+                GuestAddress(SYSTEM_SPACE_SIZE / 2),
+                48,
+                VIRTQ_DESC_F_INDIRECT,
+                0,
+            )
+            .unwrap();
+
+        // Set the information of index 0 for indirect descriptor.
+        set_indirect_desc(
+            &sys_space,
+            GuestAddress(SYSTEM_SPACE_SIZE / 2),
+            GuestAddress(0x444),
+            100,
+            VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE,
+            1,
+        )
+        .unwrap();
+        if let Err(err) = vring.pop_avail(&sys_space, features) {
+            assert_eq!(err.to_string(), "Failed to get vring element");
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn test_pop_avail_04() {
+        let sys_space = address_space_init();
+
+        let mut queue_config = QueueConfig::new(QUEUE_SIZE);
+        queue_config.desc_table = GuestAddress(0);
+        queue_config.addr_cache.desc_table_host =
+            sys_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.addr_cache.avail_ring_host =
+            sys_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.used_ring = GuestAddress(align(
+            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+                + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
+                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+            4096,
+        ));
+        queue_config.addr_cache.used_ring_host =
+            sys_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.ready = true;
+        queue_config.size = QUEUE_SIZE;
+        let mut vring = SplitVring::new(queue_config);
+        assert_eq!(vring.is_valid(&sys_space), true);
+
+        // Set the information of index 0 for normal descriptor.
+        vring
+            .set_desc(&sys_space, 0, GuestAddress(0x111), 16, VIRTQ_DESC_F_NEXT, 1)
+            .unwrap();
+
+        // Set the information of index 1 for normal descriptor.
+        vring
+            .set_desc(&sys_space, 1, GuestAddress(0x222), 32, VIRTQ_DESC_F_NEXT, 2)
+            .unwrap();
+
+        // Set the incorrect information of index 2 for normal descriptor.
+        // The VIRTQ_DESC_F_INDIRECT and VIRTQ_DESC_F_NEXT flag can not be
+        // used together.
+        vring
+            .set_desc(
+                &sys_space,
+                2,
+                GuestAddress(SYSTEM_SPACE_SIZE / 2),
+                32,
+                VIRTQ_DESC_F_INDIRECT | VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT,
+                0,
+            )
+            .unwrap();
+
+        // Set the information of index 0 for indirect descriptor.
+        set_indirect_desc(
+            &sys_space,
+            GuestAddress(SYSTEM_SPACE_SIZE / 2),
+            GuestAddress(0x444),
+            100,
+            VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE,
+            1,
+        )
+        .unwrap();
+
+        // Set the information of index 1 for indirect descriptor.
+        set_indirect_desc(
+            &sys_space,
+            GuestAddress(SYSTEM_SPACE_SIZE / 2 + DESCRIPTOR_LEN),
+            GuestAddress(0x555),
+            200,
+            VIRTQ_DESC_F_WRITE,
+            2,
+        )
+        .unwrap();
+
+        // Set the index 0 of descriptor to the position 0 for the element of avail ring.
+        vring.set_avail_ring_elem(&sys_space, 0, 0).unwrap();
+        // Set 1 to the idx of avail ring.
+        vring.set_avail_ring_idx(&sys_space, 1).unwrap();
+
+        let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
+        if let Err(err) = vring.pop_avail(&sys_space, features) {
+            assert_eq!(err.to_string(), "Failed to get vring element");
+        } else {
+            assert!(false);
+        }
+
+        // Set the correct information of index 2 for normal descriptor.
+        vring
+            .set_desc(
+                &sys_space,
+                2,
+                GuestAddress(SYSTEM_SPACE_SIZE / 2),
+                32,
+                VIRTQ_DESC_F_INDIRECT,
+                0,
+            )
+            .unwrap();
+
+        // Set the incorrect information of index 1 for indirect descriptor.
+        // The VIRTQ_DESC_F_INDIRECT flag can not be used in indirect descriptor
+        // table.
+        set_indirect_desc(
+            &sys_space,
+            GuestAddress(SYSTEM_SPACE_SIZE / 2 + DESCRIPTOR_LEN),
+            GuestAddress(0x555),
+            208,
+            VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_INDIRECT,
+            2,
+        )
+        .unwrap();
+
+        if let Err(err) = vring.pop_avail(&sys_space, features) {
+            assert_eq!(err.to_string(), "Failed to get vring element");
+        } else {
+            assert!(false);
+        }
+
+        // Set the correct information of index 1 for indirect descriptor.
+        set_indirect_desc(
+            &sys_space,
+            GuestAddress(SYSTEM_SPACE_SIZE / 2 + DESCRIPTOR_LEN),
+            GuestAddress(0x555),
+            200,
+            VIRTQ_DESC_F_WRITE,
+            2,
+        )
+        .unwrap();
+
+        // Check the result of pop_avail(), which has normal and indirect
+        // descriptor elem.
+        let elem = match vring.pop_avail(&sys_space, features) {
+            Ok(ret) => ret,
+            Err(_) => Element {
+                index: 1,
+                desc_num: 0,
+                out_iovec: Vec::new(),
+                in_iovec: Vec::new(),
+            },
+        };
+
+        assert_eq!(elem.index, 0);
+        assert_eq!(elem.desc_num, 4);
+
+        // Two elem for reading.
+        assert_eq!(elem.out_iovec.len(), 2);
+        let elem_iov = elem.out_iovec.get(0).unwrap();
+        assert_eq!(elem_iov.addr, GuestAddress(0x111));
+        assert_eq!(elem_iov.len, 16);
+        let elem_iov = elem.out_iovec.get(1).unwrap();
+        assert_eq!(elem_iov.addr, GuestAddress(0x222));
+        assert_eq!(elem_iov.len, 32);
+
+        // Two elem for writing.
+        assert_eq!(elem.in_iovec.len(), 2);
+        let elem_iov = elem.in_iovec.get(0).unwrap();
+        assert_eq!(elem_iov.addr, GuestAddress(0x444));
+        assert_eq!(elem_iov.len, 100);
+        let elem_iov = elem.in_iovec.get(1).unwrap();
+        assert_eq!(elem_iov.addr, GuestAddress(0x555));
+        assert_eq!(elem_iov.len, 200);
+
+        // The event idx of avail ring is equal to get_avail_event.
+        let event_idx = vring.get_avail_event(&sys_space).unwrap();
+        assert_eq!(event_idx, 1);
+        let avail_idx = vring.get_avail_idx(&sys_space).unwrap();
+        assert_eq!(avail_idx, 1);
     }
 
     #[test]
