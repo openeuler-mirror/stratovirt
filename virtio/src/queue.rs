@@ -390,6 +390,10 @@ impl SplitVringDesc {
             error!("Unexpected descriptor for writing only for popping avail ring");
             return false;
         }
+        if self.has_next() {
+            error!("INDIRECT and NEXT flag should not be used together");
+            return false;
+        }
         true
     }
 
@@ -1674,6 +1678,23 @@ mod tests {
             2,
         )
         .unwrap();
+        if let Err(err) = vring.pop_avail(&sys_space, features) {
+            assert_eq!(err.to_string(), "Failed to get vring element");
+        } else {
+            assert!(false);
+        }
+
+        // The INDIRECT and NEXT flag should not be used together.
+        vring
+            .set_desc(
+                &sys_space,
+                0,
+                GuestAddress(SYSTEM_SPACE_SIZE / 2),
+                48,
+                VIRTQ_DESC_F_INDIRECT | VIRTQ_DESC_F_NEXT,
+                0,
+            )
+            .unwrap();
         if let Err(err) = vring.pop_avail(&sys_space, features) {
             assert_eq!(err.to_string(), "Failed to get vring element");
         } else {
