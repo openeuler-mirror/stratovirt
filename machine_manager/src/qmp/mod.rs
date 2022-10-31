@@ -440,6 +440,7 @@ fn qmp_command_exec(
         (query_block, query_block),
         (query_named_block_nodes, query_named_block_nodes),
         (query_blockstats, query_blockstats),
+        (query_block_jobs, query_block_jobs),
         (query_gic_capabilities, query_gic_capabilities),
         (query_iothreads, query_iothreads),
         (query_migrate, query_migrate),
