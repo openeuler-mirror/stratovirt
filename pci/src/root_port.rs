@@ -250,6 +250,9 @@ impl RootPort {
             }
         }
 
+        // According to the PCIe specification 6.7.3, CCI events is different from others.
+        // To avoid mixing them together, trigger a notify for each.
+        self.hotplug_event_notify();
         self.hotplug_command_completed();
         self.hotplug_event_notify();
     }
