@@ -183,6 +183,10 @@ pub const BAR_SPACE_UNMAPPED: u64 = 0xffff_ffff_ffff_ffff;
 pub const BAR_NUM_MAX_FOR_ENDPOINT: u8 = 6;
 /// The maximum Bar ID numbers of a Type 1 device
 pub const BAR_NUM_MAX_FOR_BRIDGE: u8 = 2;
+/// mmio bar's minimum size shall be 4KB
+pub const MINMUM_BAR_SIZE_FOR_MMIO: usize = 0x1000;
+/// pio bar's minimum size shall be 4B
+pub const MINMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
 
 // Role-Based error reporting.
 const PCIE_CAP_RBER: u32 = 0x8000;

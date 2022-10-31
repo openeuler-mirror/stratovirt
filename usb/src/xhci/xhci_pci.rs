@@ -10,17 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::max;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, Region};
 use pci::config::{
-    PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, PCI_CLASS_SERIAL_USB,
-    PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS, SUB_CLASS_CODE, VENDOR_ID,
+    PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
+    PCIE_CONFIG_SPACE_SIZE, PCI_CLASS_SERIAL_USB, PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
+    ROM_ADDRESS, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
-use util::num_ops::round_up;
-use util::unix::host_page_size;
 
 use crate::bus::{BusDeviceMap, BusDeviceOps};
 use crate::usb::UsbDeviceOps;
@@ -187,7 +187,7 @@ impl PciDevOps for XhciPciDevice {
         )?;
 
         let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
-        mem_region_size = round_up(mem_region_size, host_page_size()).unwrap();
+        mem_region_size = max(mem_region_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
         self.pci_config.register_bar(
             0_usize,
             self.mem_region.clone(),
