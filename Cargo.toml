@@ -60,6 +60,7 @@ path = "vhost_user_fs/src/main.rs"
 
 [features]
 default = []
+boot_time = ["machine/boot_time"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]

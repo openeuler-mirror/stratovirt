@@ -87,6 +87,19 @@ const VCPU_RESET_SIGNAL: i32 = 35;
 #[cfg(target_env = "musl")]
 const VCPU_RESET_SIGNAL: i32 = 36;
 
+/// Watch `0x3ff` IO port to record the magic value trapped from guest kernel.
+#[cfg(all(target_arch = "x86_64", feature = "boot_time"))]
+const MAGIC_SIGNAL_GUEST_BOOT: u64 = 0x3ff;
+/// Watch Uart MMIO region to record the magic value trapped from guest kernel.
+#[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
+const MAGIC_SIGNAL_GUEST_BOOT: u64 = 0x9000f00;
+/// The boot start value can be verified before kernel start.
+#[cfg(feature = "boot_time")]
+const MAGIC_VALUE_SIGNAL_GUEST_BOOT_START: u8 = 0x01;
+/// The boot complete value can be verified before init guest userspace.
+#[cfg(feature = "boot_time")]
+const MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE: u8 = 0x02;
+
 /// State for `CPU` lifecycle.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum CpuLifecycleState {
@@ -467,12 +480,18 @@ impl CPUInterface for CPU {
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoOut(addr, data) => {
+                    #[cfg(feature = "boot_time")]
+                    capture_boot_signal(addr as u64, data);
+
                     vm.lock().unwrap().pio_out(u64::from(addr), data);
                 }
                 VcpuExit::MmioRead(addr, data) => {
                     vm.lock().unwrap().mmio_read(addr, data);
                 }
                 VcpuExit::MmioWrite(addr, data) => {
+                    #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
+                    capture_boot_signal(addr, data);
+
                     vm.lock().unwrap().mmio_write(addr, data);
                 }
                 #[cfg(target_arch = "x86_64")]
@@ -799,6 +818,19 @@ impl CpuTopology {
 
 fn trace_cpu_boot_config(cpu_boot_config: &CPUBootConfig) {
     util::ftrace!(trace_CPU_boot_config, "{:#?}", cpu_boot_config);
+}
+
+/// Capture the boot signal that trap from guest kernel, and then record
+/// kernel boot timestamp.
+#[cfg(feature = "boot_time")]
+fn capture_boot_signal(addr: u64, data: &[u8]) {
+    if addr == MAGIC_SIGNAL_GUEST_BOOT {
+        if data[0] == MAGIC_VALUE_SIGNAL_GUEST_BOOT_START {
+            info!("Kernel starts to boot!");
+        } else if data[0] == MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE {
+            info!("Kernel boot complete!");
+        }
+    }
 }
 
 #[cfg(test)]
