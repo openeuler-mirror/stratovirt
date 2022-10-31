@@ -307,6 +307,10 @@ impl VirtioPciCommonConfig {
                 self.acked_features_select = value;
             }
             COMMON_GF_REG => {
+                if self.device_status & CONFIG_STATUS_FEATURES_OK != 0 {
+                    error!("it's not allowed to set features after having been negoiated");
+                    return Ok(());
+                }
                 if self.acked_features_select >= MAX_FEATURES_SELECT_NUM {
                     return Err(anyhow!(PciError::FeaturesSelect(
                         self.acked_features_select
