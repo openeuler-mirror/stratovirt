@@ -78,12 +78,12 @@ pub const CLASS_CODE_HOST_BRIDGE: u16 = 0x0600;
 pub const CLASS_CODE_ISA_BRIDGE: u16 = 0x0601;
 /// Class code of PCI-to-PCI bridge.
 pub const CLASS_CODE_PCI_BRIDGE: u16 = 0x0604;
-
+/// Type 0 configuration Space Header Layout.
+pub const HEADER_TYPE_ENDPOINT: u8 = 0x0;
 /// Type 1 configuration Space Header Layout.
 pub const HEADER_TYPE_BRIDGE: u8 = 0x01;
 /// Multi-function device.
 pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
-
 /// The vendor ID for PCI devices other than virtio.
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
@@ -179,6 +179,10 @@ pub const MEM_BASE_ADDR_MASK: u64 = 0xffff_ffff_ffff_fff0;
 pub const BAR_MEM_64BIT: u8 = 0x04;
 const BAR_PREFETCH: u8 = 0x08;
 pub const BAR_SPACE_UNMAPPED: u64 = 0xffff_ffff_ffff_ffff;
+/// The maximum Bar ID numbers of a Type 0 device
+pub const BAR_NUM_MAX_FOR_ENDPOINT: u8 = 6;
+/// The maximum Bar ID numbers of a Type 1 device
+pub const BAR_NUM_MAX_FOR_BRIDGE: u8 = 2;
 
 // Role-Based error reporting.
 const PCIE_CAP_RBER: u32 = 0x8000;
@@ -543,7 +547,8 @@ impl PciConfig {
         region_type: RegionType,
         prefetchable: bool,
         size: u64,
-    ) {
+    ) -> Result<()> {
+        self.validate_bar_id(id)?;
         let offset: usize = BAR_0 as usize + id * REG_SIZE;
         match region_type {
             RegionType::Io => {
@@ -569,6 +574,7 @@ impl PciConfig {
         self.bars[id].address = BAR_SPACE_UNMAPPED;
         self.bars[id].size = size;
         self.bars[id].region = Some(region);
+        Ok(())
     }
 
     /// Unregister region in PciConfig::bars.
@@ -866,6 +872,20 @@ impl PciConfig {
 
         end_pos - pos
     }
+
+    fn validate_bar_id(&self, id: usize) -> Result<()> {
+        if (self.config[HEADER_TYPE as usize] == HEADER_TYPE_ENDPOINT
+            && id >= BAR_NUM_MAX_FOR_ENDPOINT as usize)
+            || (self.config[HEADER_TYPE as usize] == HEADER_TYPE_BRIDGE
+                && id >= BAR_NUM_MAX_FOR_BRIDGE as usize)
+        {
+            return Err(anyhow!(PciError::InvalidConf(
+                "Bar id".to_string(),
+                id as u32
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -912,21 +932,37 @@ mod tests {
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
 
         #[cfg(target_arch = "x86_64")]
-        pci_config.register_bar(
-            0,
-            region.clone(),
-            RegionType::Io,
-            false,
-            IO_BASE_ADDR_MASK as u64,
-        );
-        pci_config.register_bar(
-            1,
-            region.clone(),
-            RegionType::Mem32Bit,
-            false,
-            (MEM_BASE_ADDR_MASK as u32) as u64,
-        );
-        pci_config.register_bar(2, region, RegionType::Mem64Bit, true, MEM_BASE_ADDR_MASK);
+        assert!(pci_config
+            .register_bar(
+                0,
+                region.clone(),
+                RegionType::Io,
+                false,
+                IO_BASE_ADDR_MASK as u64,
+            )
+            .is_ok());
+        assert!(pci_config
+            .register_bar(
+                1,
+                region.clone(),
+                RegionType::Mem32Bit,
+                false,
+                (MEM_BASE_ADDR_MASK as u32) as u64,
+            )
+            .is_ok());
+        assert!(pci_config
+            .register_bar(
+                2,
+                region.clone(),
+                RegionType::Mem64Bit,
+                true,
+                MEM_BASE_ADDR_MASK
+            )
+            .is_ok());
+        // test when bar id is not valid
+        assert!(pci_config
+            .register_bar(7, region, RegionType::Mem64Bit, true, MEM_BASE_ADDR_MASK)
+            .is_err());
 
         #[cfg(target_arch = "x86_64")]
         le_write_u32(
@@ -986,9 +1022,15 @@ mod tests {
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 6);
 
         #[cfg(target_arch = "x86_64")]
-        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
-        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
-        pci_config.register_bar(2, region, RegionType::Mem64Bit, true, 2048);
+        assert!(pci_config
+            .register_bar(0, region.clone(), RegionType::Io, false, 2048)
+            .is_ok());
+        assert!(pci_config
+            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048)
+            .is_ok());
+        assert!(pci_config
+            .register_bar(2, region, RegionType::Mem64Bit, true, 2048)
+            .is_ok());
 
         #[cfg(target_arch = "x86_64")]
         le_write_u32(
@@ -1126,9 +1168,15 @@ mod tests {
 
         // bar is unmapped
         #[cfg(target_arch = "x86_64")]
-        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
-        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
-        pci_config.register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048);
+        assert!(pci_config
+            .register_bar(0, region.clone(), RegionType::Io, false, 2048)
+            .is_ok());
+        assert!(pci_config
+            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048)
+            .is_ok());
+        assert!(pci_config
+            .register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048)
+            .is_ok());
 
         #[cfg(target_arch = "x86_64")]
         let io_region = Region::init_container_region(1 << 16);
@@ -1144,9 +1192,15 @@ mod tests {
 
         // bar is mapped
         #[cfg(target_arch = "x86_64")]
-        pci_config.register_bar(0, region.clone(), RegionType::Io, false, 2048);
-        pci_config.register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048);
-        pci_config.register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048);
+        assert!(pci_config
+            .register_bar(0, region.clone(), RegionType::Io, false, 2048)
+            .is_ok());
+        assert!(pci_config
+            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048)
+            .is_ok());
+        assert!(pci_config
+            .register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048)
+            .is_ok());
 
         #[cfg(target_arch = "x86_64")]
         le_write_u32(
