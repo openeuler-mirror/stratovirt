@@ -1075,7 +1075,7 @@ impl PciDevOps for VirtioPciDevice {
             RegionType::Mem32Bit,
             false,
             mem_region_size,
-        );
+        )?;
 
         self.device
             .lock()

@@ -513,7 +513,7 @@ pub fn init_msix(
             table_offset as u64,
             pba_offset as u64,
         )?;
-        config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);
+        config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size)?;
     }
 
     config.msix = Some(msix.clone());

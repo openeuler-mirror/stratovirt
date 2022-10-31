@@ -194,7 +194,7 @@ impl PciDevOps for XhciPciDevice {
             RegionType::Mem64Bit,
             false,
             mem_region_size,
-        );
+        )?;
 
         let devfn = self.devfn;
         let dev = Arc::new(Mutex::new(self));
