@@ -179,9 +179,10 @@ impl Msix {
         let table_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
             if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
                 error!(
-                    "Fail to read msi table, illegal data length {}, offset {}",
-                    data.len(),
-                    offset
+                    "It's forbidden to read out of the msix table(size: {}), with offset of {} and size of {}",
+                    cloned_msix.lock().unwrap().table.len(),
+                    offset,
+                    data.len()
                 );
                 return false;
             }
@@ -191,6 +192,15 @@ impl Msix {
         };
         let cloned_msix = msix.clone();
         let table_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
+            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+                error!(
+                    "It's forbidden to write out of the msix table(size: {}), with offset of {} and size of {}",
+                    cloned_msix.lock().unwrap().table.len(),
+                    offset,
+                    data.len()
+                );
+                return false;
+            }
             let mut locked_msix = cloned_msix.lock().unwrap();
             let vector: u16 = offset as u16 / MSIX_TABLE_ENTRY_SIZE;
             let was_masked: bool = locked_msix.is_vector_masked(vector);
