@@ -97,7 +97,7 @@ fn bin_to_bcd(src: u8) -> u8 {
 /// Transfer BCD coded decimal to binary coded decimal.
 fn bcd_to_bin(src: u8) -> u64 {
     if (src >> 4) > 9 || (src & 0x0f) > 9 {
-        error!("RTC: The BCD coded format is wrong.");
+        warn!("RTC: The BCD coded format is wrong.");
         return 0_u64;
     }
 
@@ -146,6 +146,9 @@ impl RTC {
                 .as_secs() as u64,
             base_time: Instant::now(),
         };
+
+        let tm = rtc_time_to_tm(rtc.get_current_value() as i64);
+        rtc.set_rtc_cmos(tm);
 
         // Set Time frequency divider and Rate selection frequency in Register-A.
         // Bits 6-4 = Time frequency divider (010 = 32.768KHz).
@@ -200,39 +203,15 @@ impl RTC {
         }
     }
 
-    fn read_data(&self, data: &mut [u8]) -> bool {
+    fn read_data(&mut self, data: &mut [u8]) -> bool {
         if data.len() != 1 {
             error!("RTC only supports reading data byte by byte.");
             return false;
         }
 
         let tm = rtc_time_to_tm(self.get_current_value() as i64);
+        self.set_rtc_cmos(tm);
         match self.cur_index {
-            RTC_SECONDS => {
-                data[0] = bin_to_bcd(tm.tm_sec as u8);
-            }
-            RTC_MINUTES => {
-                data[0] = bin_to_bcd(tm.tm_min as u8);
-            }
-            RTC_HOURS => {
-                data[0] = bin_to_bcd(tm.tm_hour as u8);
-            }
-            RTC_DAY_OF_WEEK => {
-                data[0] = bin_to_bcd((tm.tm_wday + 1) as u8);
-            }
-            RTC_DAY_OF_MONTH => {
-                data[0] = bin_to_bcd(tm.tm_mday as u8);
-            }
-            RTC_MONTH => {
-                data[0] = bin_to_bcd((tm.tm_mon + 1) as u8);
-            }
-            RTC_YEAR => {
-                let year = tm.tm_year + 1900;
-                data[0] = bin_to_bcd((year % 100) as u8);
-            }
-            RTC_CENTURY_BCD => {
-                data[0] = bin_to_bcd(((tm.tm_year + 1900) % 100) as u8);
-            }
             RTC_REG_A => {
                 data[0] = self.cmos_data[RTC_REG_A as usize];
                 // UIP(update in progress) bit will be set at last 244us of every second.
@@ -304,6 +283,17 @@ impl RTC {
         self.base_time.elapsed().as_secs() + self.tick_offset
     }
 
+    fn set_rtc_cmos(&mut self, tm: libc::tm) {
+        self.cmos_data[RTC_SECONDS as usize] = bin_to_bcd(tm.tm_sec as u8);
+        self.cmos_data[RTC_MINUTES as usize] = bin_to_bcd(tm.tm_min as u8);
+        self.cmos_data[RTC_HOURS as usize] = bin_to_bcd(tm.tm_hour as u8);
+        self.cmos_data[RTC_DAY_OF_WEEK as usize] = bin_to_bcd((tm.tm_wday + 1) as u8);
+        self.cmos_data[RTC_DAY_OF_MONTH as usize] = bin_to_bcd(tm.tm_mday as u8);
+        self.cmos_data[RTC_MONTH as usize] = bin_to_bcd((tm.tm_mon + 1) as u8);
+        self.cmos_data[RTC_YEAR as usize] = bin_to_bcd(((tm.tm_year + 1900) % 100) as u8);
+        self.cmos_data[RTC_CENTURY_BCD as usize] = bin_to_bcd(((tm.tm_year + 1900) / 100) as u8);
+    }
+
     fn update_rtc_time(&mut self) {
         let sec = bcd_to_bin(self.cmos_data[RTC_SECONDS as usize]);
         let min = bcd_to_bin(self.cmos_data[RTC_MINUTES as usize]);
@@ -312,6 +302,15 @@ impl RTC {
         let mut mon = bcd_to_bin(self.cmos_data[RTC_MONTH as usize]);
         let mut year = bcd_to_bin(self.cmos_data[RTC_YEAR as usize])
             + bcd_to_bin(self.cmos_data[RTC_CENTURY_BCD as usize]) * 100;
+
+        // Check rtc time is valid to prevent tick_offset overflow.
+        if year < 1970 || mon > 12 || mon < 1 || day > 31 || day < 1 {
+            warn!(
+                "RTC: the updated rtc time {}-{}-{} may be invalid.",
+                year, mon, day
+            );
+            return;
+        }
 
         // Converts date to seconds since 1970-01-01 00:00:00.
         if mon <= 2 {
