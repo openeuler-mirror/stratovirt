@@ -415,6 +415,7 @@ impl SplitVringDesc {
         elem.index = desc_info.index;
         let mut queue_size = desc_size;
         let mut indirect: bool = false;
+        let mut write_elem_count: u32 = 0;
 
         loop {
             if elem.desc_num >= desc_size {
@@ -446,7 +447,11 @@ impl SplitVringDesc {
 
             if desc.write_only() {
                 elem.in_iovec.push(iovec);
+                write_elem_count += 1;
             } else {
+                if write_elem_count > 0 {
+                    bail!("Invalid order of the descriptor elem");
+                }
                 elem.out_iovec.push(iovec);
             }
             elem.desc_num += 1;
@@ -1695,6 +1700,34 @@ mod tests {
                 0,
             )
             .unwrap();
+        if let Err(err) = vring.pop_avail(&sys_space, features) {
+            assert_eq!(err.to_string(), "Failed to get vring element");
+        } else {
+            assert!(false);
+        }
+
+        // The device-writable desc elems must behind the device-readable desc elems.
+        vring
+            .set_desc(
+                &sys_space,
+                0,
+                GuestAddress(SYSTEM_SPACE_SIZE / 2),
+                48,
+                VIRTQ_DESC_F_INDIRECT,
+                0,
+            )
+            .unwrap();
+
+        // Set the information of index 0 for indirect descriptor.
+        set_indirect_desc(
+            &sys_space,
+            GuestAddress(SYSTEM_SPACE_SIZE / 2),
+            GuestAddress(0x444),
+            100,
+            VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE,
+            1,
+        )
+        .unwrap();
         if let Err(err) = vring.pop_avail(&sys_space, features) {
             assert_eq!(err.to_string(), "Failed to get vring element");
         } else {
