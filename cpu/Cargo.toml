@@ -22,3 +22,7 @@ util = { path = "../util" }
 
 [dev-dependencies]
 serial_test = "0.5.1"
+
+[features]
+default = []
+boot_time = []

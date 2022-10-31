@@ -936,3 +936,10 @@ white list. However, these cmdlines never function.
 Apart from the above commands, some arguments are playing the same roles. Like 'format'
 and 'bootindex' for virtio-blk; 'chassis' for pcie-root-port; 'sockets',
 'cores' and 'threads' for smp; 'accel' and 'usb' for machine; "format" for pflash device.
+
+## 8. Debug boot time
+Currently, measurement of guest boot up time is supported. The guest kernel writes different 
+values to specific IO/MMIO regions, and it will trap to `stratovirt`, we can record the timestamp
+of kernel start or kernel boot complete.
+
+See [Debug_Boot_Time](https://gitee.com/openeuler/stratovirt/wikis/%E6%B5%8B%E8%AF%95%E6%96%87%E6%A1%A3/%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95-%E5%86%B7%E5%90%AF%E5%8A%A8%E6%97%B6%E9%97%B4) for more details.
