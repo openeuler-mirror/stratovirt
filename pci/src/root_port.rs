@@ -28,11 +28,12 @@ use util::byte_code::ByteCode;
 use super::config::{
     PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
     COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE,
-    PCIE_CAP_CLS_2_5G, PCIE_CAP_NLW_X1, PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP,
-    PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC, PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_SLTCTL,
-    PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTSTA,
-    PCI_EXP_SLTSTA_PDC, PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
-    PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    PCIE_CAP_CLS_2_5G, PCIE_CAP_NLW_X1, PCIE_CAP_SLOT_PIC_BLINK, PCIE_CAP_SLOT_PIC_MASK,
+    PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC,
+    PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC,
+    PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTSTA, PCI_EXP_SLTSTA_PDC,
+    PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
+    PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::hotplug::HotplugOps;
@@ -467,6 +468,17 @@ impl HotplugOps for RootPort {
     }
 
     fn unplug_request(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+        let pcie_cap_offset = self.config.ext_cap_offset;
+        let sltctl = le_read_u16(
+            &self.config.config,
+            (pcie_cap_offset + PCI_EXP_SLTCTL) as usize,
+        )
+        .unwrap();
+
+        if (sltctl & PCIE_CAP_SLOT_PIC_MASK) == PCIE_CAP_SLOT_PIC_BLINK {
+            bail!("Guest is still on the fly of another (un)pluging");
+        }
+
         let devfn = dev
             .lock()
             .unwrap()
