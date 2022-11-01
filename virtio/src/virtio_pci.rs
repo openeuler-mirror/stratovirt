@@ -42,7 +42,8 @@ use crate::{
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
     CONFIG_STATUS_FEATURES_OK, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
-    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
+    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG, VIRTIO_TYPE_BLOCK,
+    VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
@@ -172,6 +173,18 @@ impl VirtioPciCommonConfig {
         }
     }
 
+    fn reset(&mut self) {
+        self.features_select = 0;
+        self.acked_features_select = 0;
+        self.interrupt_status.store(0_u32, Ordering::SeqCst);
+        self.device_status = 0;
+        self.config_generation = 0;
+        self.queue_select = 0;
+        self.msix_config.store(0_u16, Ordering::SeqCst);
+        self.queue_type = QUEUE_TYPE_SPLIT_VRING;
+        self.queues_config.iter_mut().for_each(|q| q.reset());
+    }
+
     fn check_device_status(&self, set: u32, clr: u32) -> bool {
         self.device_status & (set | clr) == set
     }
@@ -237,7 +250,7 @@ impl VirtioPciCommonConfig {
             COMMON_Q_SELECT_REG => self.queue_select as u32,
             COMMON_Q_SIZE_REG => self
                 .get_queue_config()
-                .map(|config| u32::from(config.max_size))?,
+                .map(|config| u32::from(config.size))?,
             COMMON_Q_MSIX_REG => self
                 .get_queue_config()
                 .map(|config| u32::from(config.vector))?,
@@ -304,11 +317,13 @@ impl VirtioPciCommonConfig {
                     .unwrap()
                     .set_driver_features(self.acked_features_select, value);
 
-                if self.acked_features_select == 1
-                    && virtio_has_feature(u64::from(value) << 32, VIRTIO_F_RING_PACKED)
-                {
-                    error!("Set packed virtqueue, which is not supported");
-                    self.queue_type = QUEUE_TYPE_PACKED_VRING;
+                if self.acked_features_select == 1 {
+                    let features = (device.lock().unwrap().get_driver_features(1) as u64) << 32;
+                    if virtio_has_feature(features, VIRTIO_F_RING_PACKED) {
+                        self.queue_type = QUEUE_TYPE_PACKED_VRING;
+                    } else {
+                        self.queue_type = QUEUE_TYPE_SPLIT_VRING;
+                    }
                 }
             }
             COMMON_MSIX_REG => {
@@ -325,16 +340,14 @@ impl VirtioPciCommonConfig {
                         return Ok(());
                     }
                 }
+                if value != 0 && (self.device_status & !value) != 0 {
+                    error!("Driver must not clear a device status bit");
+                    return Ok(());
+                }
+
                 self.device_status = value;
                 if self.device_status == 0 {
-                    self.queues_config.iter_mut().for_each(|q| {
-                        q.ready = false;
-                        q.vector = 0;
-                        q.avail_ring = GuestAddress(0);
-                        q.desc_table = GuestAddress(0);
-                        q.used_ring = GuestAddress(0);
-                    });
-                    self.msix_config.store(0_u16, Ordering::SeqCst)
+                    self.reset();
                 }
             }
             COMMON_Q_SELECT_REG => {
@@ -345,9 +358,14 @@ impl VirtioPciCommonConfig {
             COMMON_Q_SIZE_REG => self
                 .get_mut_queue_config()
                 .map(|config| config.size = value as u16)?,
-            COMMON_Q_ENABLE_REG => self
-                .get_mut_queue_config()
-                .map(|config| config.ready = value == 1)?,
+            COMMON_Q_ENABLE_REG => {
+                if value != 1 {
+                    error!("Driver set illegal value for queue_enable {}", value);
+                    return Ok(());
+                }
+                self.get_mut_queue_config()
+                    .map(|config| config.ready = true)?;
+            }
             COMMON_Q_MSIX_REG => self
                 .get_mut_queue_config()
                 .map(|config| config.vector = value as u16)?,
@@ -586,11 +604,18 @@ impl VirtioPciDevice {
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, queue: Option<&Queue>| {
                 let vector = match int_type {
-                    VirtioInterruptType::Config => cloned_common_cfg
-                        .lock()
-                        .unwrap()
-                        .msix_config
-                        .load(Ordering::SeqCst),
+                    VirtioInterruptType::Config => {
+                        cloned_common_cfg
+                            .lock()
+                            .unwrap()
+                            .interrupt_status
+                            .fetch_or(VIRTIO_MMIO_INT_CONFIG, Ordering::SeqCst);
+                        cloned_common_cfg
+                            .lock()
+                            .unwrap()
+                            .msix_config
+                            .load(Ordering::SeqCst)
+                    }
                     VirtioInterruptType::Vring => {
                         queue.map_or(0, |q| q.vring.get_queue_config().vector)
                     }
