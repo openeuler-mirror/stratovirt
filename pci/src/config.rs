@@ -222,7 +222,8 @@ const PCIE_CAP_SLOT_NUM_SHIFT: u32 = 19;
 const PCIE_CAP_SLOT_AIC_MASK: u16 = 0x00c0;
 const PCIE_CAP_SLOT_AIC_OFF: u16 = 0x00c0;
 // Power Indicator Control.
-const PCIE_CAP_SLOT_PIC_MASK: u16 = 0x0300;
+pub(crate) const PCIE_CAP_SLOT_PIC_MASK: u16 = 0x0300;
+pub(crate) const PCIE_CAP_SLOT_PIC_BLINK: u16 = 0x200;
 const PCIE_CAP_SLOT_PIC_OFF: u16 = 0x0300;
 
 // Power controller control.
