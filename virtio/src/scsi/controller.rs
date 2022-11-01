@@ -26,7 +26,7 @@ use super::super::{
 use crate::ScsiBus::{virtio_scsi_get_lun, ScsiBus, ScsiRequest, EMULATE_SCSI_OPS, GOOD};
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
-use log::{error, info, warn};
+use log::{error, info};
 use machine_manager::{
     config::{ConfigCheck, ScsiCntlrConfig},
     event_loop::EventLoop,
@@ -36,7 +36,7 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 /// Virtio Scsi Controller has 1 ctrl queue, 1 event queue and at least 1 cmd queue.
@@ -200,16 +200,7 @@ impl VirtioDevice for ScsiCntlr {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut features = write_u32(value, page);
-        let unrequested_features = features & !self.state.device_features;
-        if unrequested_features != 0 {
-            warn!(
-                "Received acknowledge request with unsupported feature for virtio scsi: 0x{:x}",
-                features
-            );
-            features &= !unrequested_features;
-        }
-        self.state.driver_features |= features;
+        self.state.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.

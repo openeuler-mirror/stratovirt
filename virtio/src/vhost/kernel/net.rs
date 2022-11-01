@@ -19,11 +19,10 @@ use std::sync::{Arc, Mutex};
 use crate::error::VirtioError;
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
-use log::warn;
 use machine_manager::{config::NetworkInterfaceConfig, event_loop::EventLoop};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use util::tap::Tap;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
@@ -207,16 +206,7 @@ impl VirtioDevice for Net {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut features = write_u32(value, page);
-        let unsupported_features = features & !self.device_features;
-        if unsupported_features != 0 {
-            warn!(
-                "Received acknowledge request with unsupported feature for vhost net: 0x{:x}",
-                features
-            );
-            features &= !unsupported_features;
-        }
-        self.driver_features |= features;
+        self.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.

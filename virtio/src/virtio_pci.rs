@@ -1514,7 +1514,7 @@ mod tests {
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
         le_read_u16,
     };
-    use util::num_ops::{read_u32, write_u32};
+    use util::num_ops::read_u32;
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
@@ -1562,12 +1562,7 @@ mod tests {
         }
 
         fn set_driver_features(&mut self, page: u32, value: u32) {
-            let mut v = write_u32(value, page);
-            let unrequested_features = v & !self.device_features;
-            if unrequested_features != 0 {
-                v &= !unrequested_features;
-            }
-            self.driver_features |= v;
+            self.driver_features = self.checked_driver_features(page, value);
         }
 
         fn get_driver_features(&self, features_select: u32) -> u32 {

@@ -17,7 +17,7 @@ use super::{
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
-use log::{error, warn};
+use log::error;
 use machine_manager::config::{GpuConfig, VIRTIO_GPU_MAX_SCANOUTS};
 use machine_manager::event_loop::EventLoop;
 use migration::{DeviceStateDesc, FieldDesc};
@@ -32,7 +32,7 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use util::pixman::{
     pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits, pixman_image_get_data,
     pixman_image_get_format, pixman_image_get_height, pixman_image_get_stride,
@@ -1736,13 +1736,7 @@ impl VirtioDevice for Gpu {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.state.device_features;
-        if unrequested_features != 0 {
-            warn!("Received acknowledge request with unknown feature: {:x}", v);
-            v &= !unrequested_features;
-        }
-        self.state.driver_features |= v;
+        self.state.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.

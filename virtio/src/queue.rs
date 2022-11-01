@@ -30,6 +30,8 @@ const VRING_AVAIL_F_NO_INTERRUPT: u16 = 1;
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
 /// Packed Virtqueue.
 pub const QUEUE_TYPE_PACKED_VRING: u16 = 2;
+/// Max total len of a descriptor chain.
+const DESC_CHAIN_MAX_TOTAL_LEN: u64 = 1u64 << 32;
 
 fn checked_offset_mem(
     mmio_space: &Arc<AddressSpace>,
@@ -320,6 +322,10 @@ impl SplitVringDesc {
         queue_size: u16,
         cache: &mut Option<RegionCache>,
     ) -> bool {
+        if self.len == 0 {
+            error!("Zero sized buffers are not allowed");
+            return false;
+        }
         let mut miss_cached = true;
         if let Some(reg_cache) = cache {
             let base = self.addr.0;
@@ -390,10 +396,6 @@ impl SplitVringDesc {
             error!("The indirect descriptor is invalid, len: {}", self.len);
             return false;
         }
-        if self.write_only() {
-            error!("Unexpected descriptor for writing only for popping avail ring");
-            return false;
-        }
         if self.has_next() {
             error!("INDIRECT and NEXT flag should not be used together");
             return false;
@@ -420,10 +422,11 @@ impl SplitVringDesc {
         let mut queue_size = desc_size;
         let mut indirect: bool = false;
         let mut write_elem_count: u32 = 0;
+        let mut desc_total_len: u64 = 0;
 
         loop {
             if elem.desc_num >= desc_size {
-                break;
+                bail!("The element desc number exceeds max allowed");
             }
 
             if desc.is_indirect_desc() {
@@ -459,12 +462,17 @@ impl SplitVringDesc {
                 elem.out_iovec.push(iovec);
             }
             elem.desc_num += 1;
+            desc_total_len += iovec.len as u64;
 
             if desc.has_next() {
                 desc = Self::next_desc(sys_mem, desc_table_host, queue_size, desc.next, cache)?;
             } else {
                 break;
             }
+        }
+
+        if desc_total_len > DESC_CHAIN_MAX_TOTAL_LEN {
+            bail!("Find a descriptor chain longer than 4GB in total");
         }
 
         Ok(())
@@ -670,6 +678,15 @@ impl SplitVring {
         (new - used_event_idx - Wrapping(1)) < (new - old)
     }
 
+    fn is_overlap(
+        start1: GuestAddress,
+        end1: GuestAddress,
+        start2: GuestAddress,
+        end2: GuestAddress,
+    ) -> bool {
+        !(start1 >= end2 || start2 >= end1)
+    }
+
     fn is_invalid_memory(&self, sys_mem: &Arc<AddressSpace>, actual_size: u64) -> bool {
         let desc_table_end =
             match checked_offset_mem(sys_mem, self.desc_table, DESCRIPTOR_LEN * actual_size) {
@@ -702,25 +719,39 @@ impl SplitVring {
             }
         };
 
-        if let Err(ref e) = checked_offset_mem(
+        let desc_used_end = match checked_offset_mem(
             sys_mem,
             self.used_ring,
             VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * actual_size,
         ) {
-            error!(
-                "used ring is out of bounds: start:0x{:X} size:{} {:?}",
-                self.used_ring.raw_value(),
-                VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * actual_size,
-                e
-            );
-            return true;
-        }
+            Ok(addr) => addr,
+            Err(ref e) => {
+                error!(
+                    "used ring is out of bounds: start:0x{:X} size:{} {:?}",
+                    self.used_ring.raw_value(),
+                    VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * actual_size,
+                    e,
+                );
+                return true;
+            }
+        };
 
-        if self.desc_table >= self.avail_ring
-            || self.avail_ring >= self.used_ring
-            || desc_table_end > self.avail_ring
-            || desc_avail_end > self.used_ring
-        {
+        if SplitVring::is_overlap(
+            self.desc_table,
+            desc_table_end,
+            self.avail_ring,
+            desc_avail_end,
+        ) || SplitVring::is_overlap(
+            self.avail_ring,
+            desc_avail_end,
+            self.used_ring,
+            desc_used_end,
+        ) || SplitVring::is_overlap(
+            self.desc_table,
+            desc_table_end,
+            self.used_ring,
+            desc_used_end,
+        ) {
             error!("The memory of descriptor table: 0x{:X}, avail ring: 0x{:X} or used ring: 0x{:X} is overlapped. queue size:{}",
                    self.desc_table.raw_value(), self.avail_ring.raw_value(), self.used_ring.raw_value(), actual_size);
             return true;
@@ -833,6 +864,9 @@ impl VringOps for SplitVring {
             bail!("failed to pop avail: empty!");
         }
 
+        // Make sure descriptor read does not bypass avail index read.
+        fence(Ordering::Acquire);
+
         let mut element = Element::new(0);
         self.get_vring_element(sys_mem, features, &mut element)
             .with_context(|| "Failed to get vring element")?;
@@ -870,6 +904,9 @@ impl VringOps for SplitVring {
                 self.addr_cache.used_ring_host + VRING_IDX_POSITION,
             )
             .with_context(|| "Failed to write next used idx")?;
+
+        // Make sure used index is exposed before notifying guest.
+        fence(Ordering::SeqCst);
 
         Ok(())
     }

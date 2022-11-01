@@ -65,6 +65,7 @@ use std::sync::{Arc, Mutex};
 use address_space::AddressSpace;
 use anyhow::bail;
 use machine_manager::config::ConfigCheck;
+use util::num_ops::write_u32;
 use vmm_sys_util::eventfd::EventFd;
 
 /// Check if the bit of features is configured.
@@ -241,6 +242,24 @@ pub trait VirtioDevice: Send {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32;
+
+    /// Get checked driver features before set the value at the page.
+    fn checked_driver_features(&mut self, page: u32, value: u32) -> u64 {
+        let mut v = value;
+        let unsupported_features = value & !self.get_device_features(page);
+        if unsupported_features != 0 {
+            warn!(
+                "Receive acknowlege request with unknown feature: {:x}",
+                write_u32(value, page)
+            );
+            v &= !unsupported_features;
+        }
+        if page == 0 {
+            (self.get_driver_features(1) as u64) << 32 | (v as u64)
+        } else {
+            (v as u64) << 32 | (self.get_driver_features(0) as u64)
+        }
+    }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32);

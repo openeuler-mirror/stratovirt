@@ -23,7 +23,7 @@ use crate::VirtioError;
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use devices::legacy::{Chardev, InputReceiver};
-use log::{debug, error, warn};
+use log::{debug, error};
 use machine_manager::{
     config::{ChardevType, VirtioConsole},
     event_loop::EventLoop,
@@ -32,7 +32,7 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -366,13 +366,7 @@ impl VirtioDevice for Console {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.state.device_features;
-        if unrequested_features != 0 {
-            warn!("Received acknowledge request with unknown feature for console.");
-            v &= !unrequested_features;
-        }
-        self.state.driver_features |= v;
+        self.state.driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.
