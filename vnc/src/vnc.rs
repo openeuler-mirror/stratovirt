@@ -229,7 +229,7 @@ pub fn set_area_dirty(
     h = cmp::min(y + h, height);
     while y < h {
         let pos = y * VNC_BITMAP_WIDTH as i32 + x / DIRTY_PIXELS_NUM as i32;
-        for i in 0..w / DIRTY_PIXELS_NUM as i32 {
+        for i in 0..round_up_div(w as u64, DIRTY_PIXELS_NUM as u64) as i32 {
             dirty.set((pos + i) as usize).unwrap();
         }
         y += 1;
