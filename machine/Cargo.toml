@@ -39,3 +39,4 @@ vnc = { path = "../vnc" }
 [features]
 default = ["qmp"]
 qmp = []
+boot_time = ["cpu/boot_time"]
