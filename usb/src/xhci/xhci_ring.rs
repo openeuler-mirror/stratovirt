@@ -39,7 +39,10 @@ pub const TRB_TR_IOC: u32 = 1 << 5;
 pub const TRB_TR_IDT: u32 = 1 << 6;
 
 const TRB_LINK_LIMIT: u32 = 32;
-const RING_LEN_LIMIT: u32 = 32;
+/// The max size of a ring segment in bytes is 64k.
+const RING_SEGMENT_LIMIT: u32 = 0x1_0000;
+/// The max size of ring.
+const RING_LEN_LIMIT: u32 = TRB_LINK_LIMIT * RING_SEGMENT_LIMIT / TRB_SIZE;
 
 /// TRB Type Definitions. See the spec 6.4.6 TRB types.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
