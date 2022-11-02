@@ -28,6 +28,8 @@ use anyhow::{bail, Result};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;
+/// USB max address.
+const USB_MAX_ADDRESS: u8 = 127;
 
 /// USB packet return status.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -366,12 +368,23 @@ impl UsbDevice {
         }
     }
 
+    /// Handle USB control request which is for descriptor.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet`     - USB packet.
+    /// * `device_req` - USB device request.
+    /// * `data`       - USB control transfer data.
+    ///
+    /// # Returns
+    ///
+    /// Return true if request is handled, false is unhandled.
     pub fn handle_control_for_descriptor(
         &mut self,
         packet: &mut UsbPacket,
         device_req: &UsbDeviceRequest,
         data: &mut [u8],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let value = device_req.value as u32;
         let index = device_req.index as u32;
         let length = device_req.length as u32;
@@ -412,19 +425,20 @@ impl UsbDevice {
                     packet.actual_length = 2;
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             USB_DEVICE_OUT_REQUEST => match device_req.request {
                 USB_REQUEST_SET_ADDRESS => {
-                    self.addr = value as u8;
+                    if value as u8 > USB_MAX_ADDRESS {
+                        packet.status = UsbPacketStatus::Stall;
+                        bail!("The address is invalid {}", value);
+                    } else {
+                        self.addr = value as u8;
+                    }
                 }
                 USB_REQUEST_SET_CONFIGURATION => {
-                    return self.set_config_descriptor(value as u8);
+                    self.set_config_descriptor(value as u8)?;
                 }
                 USB_REQUEST_CLEAR_FEATURE => {
                     if value == USB_DEVICE_REMOTE_WAKEUP {
@@ -437,11 +451,7 @@ impl UsbDevice {
                     }
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             USB_INTERFACE_IN_REQUEST => match device_req.request {
@@ -452,30 +462,22 @@ impl UsbDevice {
                     }
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             USB_INTERFACE_OUT_REQUEST => match device_req.request {
                 USB_REQUEST_SET_INTERFACE => {
-                    return self.set_interface_descriptor(index, value);
+                    self.set_interface_descriptor(index, value)?;
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             _ => {
-                bail!("Unhandled request: type {}", device_req.request_type);
+                return Ok(false);
             }
         }
-        Ok(())
+        Ok(true)
     }
 }
 
