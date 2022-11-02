@@ -198,13 +198,7 @@ impl PciDevOps for XhciPciDevice {
 
         let devfn = self.devfn;
         let dev = Arc::new(Mutex::new(self));
-        // Register xhci to bus device.
         let cloned_dev = dev.clone();
-        let locked_dev = dev.lock().unwrap();
-        let mut locked_device = locked_dev.bus_device.lock().unwrap();
-        locked_device.insert(String::from("usb.0"), cloned_dev);
-        drop(locked_device);
-        drop(locked_dev);
         // Register xhci-pci to xhci-device for notify.
         dev.lock().unwrap().xhci.lock().unwrap().ctrl_ops =
             Some(Arc::downgrade(&dev) as Weak<Mutex<dyn XhciOps>>);
@@ -221,6 +215,10 @@ impl PciDevOps for XhciPciDevice {
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
+        // Register xhci to bus device.
+        let locked_dev = dev.lock().unwrap();
+        let mut locked_device = locked_dev.bus_device.lock().unwrap();
+        locked_device.insert(String::from("usb.0"), cloned_dev);
         Ok(())
     }
 
