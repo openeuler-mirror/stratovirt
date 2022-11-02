@@ -153,8 +153,12 @@ impl FileBackend {
 ///
 /// * `nr_vcpus` - Number of vcpus.
 fn max_nr_threads(nr_vcpus: u8) -> u8 {
-    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u8 };
-    min(min(nr_host_cpu, MAX_PREALLOC_THREAD), nr_vcpus)
+    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    if nr_host_cpu > 0 {
+        return min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus);
+    }
+    // If fails to call `sysconf` function, just use a single thread to touch pages.
+    1
 }
 
 /// Touch pages to pre-alloc memory for VM.
@@ -184,7 +188,7 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 ///
 /// # Arguments
 ///
-/// * `host_addr` - The start host address of memory of the virtual machine.
+/// * `host_addr` - The start host address to pre allocate.
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
 fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
