@@ -10,7 +10,7 @@ General configuration of machine, including
 * type: The type of machine, three types of machine are available: "none", "microvm",
 "q35"(x86_64 platform) and "virt" (aarch64 platform).
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
-* mem-share: Guest memory is sharable with other processes or not.
+* mem-share: Guest memory is sharable with other processes or not. By default this option is turned off.
 * accel: accelerate module, supported value `kvm`. (optional). If not set, default is KVM.
 * usb: whether use usb. supported value `off`. (optional). If not set, default is off.
 
@@ -70,7 +70,7 @@ Currently, these options are supported.
 StratoVirt supports to set the size of VM's memory in cmdline.
 
 This allows you to set the size of memory that VM will support.
-You can choose `G` as unit (default unit is `M`).
+You can choose `G` as unit (default unit is `M`). And the memory size needs to be an integer.
 
 Default VM memory size is 256M. The supported VM memory size is among [128M, 512G].
 
@@ -109,7 +109,7 @@ The path has to be absolute path.
 
 ### 1.4.1 hugepages
 
-Memory backend file can be used to let guest use hugetlbfs on host.
+Memory backend file can be used to let guest use hugetlbfs on host. It supports 2M or 1G hugepages memory.
 The following steps show how to use hugepages:
 
 ```shell
@@ -140,6 +140,8 @@ Each NUMA node is given a list of command lines option, there will be described 
 3. -numa dist,src=0,dst=0,val=10
    It describes the distance between source and destination. The default of source to source is 10,
    source to destination is 20. And if you choose not to set these parameters, the VM will set the default values.
+
+Note: The maximum number of numa nodes is not more than 8.
 
 The following command shows how to set NUMA node:
 
@@ -602,7 +604,8 @@ of device and the second one represents function number of it.
 -device virtio-balloon-pci,bus=pcie.0,addr=0x4.0x0,id=balloon-0[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]
 ```
 
-Note: avoid using balloon devices and vfio devices together.
+Note: avoid using balloon devices and vfio devices together, balloon device is invalid when memory is hugepages.
+The balloon memory size must be an integer multiple of guest page size.
 
 ### 2.8 Virtio-rng
 Virtio rng is a paravirtualized random number generator device, it provides a hardware rng device to the guest.
