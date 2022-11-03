@@ -618,7 +618,7 @@ impl GpuIoHandler {
                     width: 64,
                     hot_x: info_cursor.hot_x,
                     hot_y: info_cursor.hot_y,
-                    ..Default::default()
+                    data: vec![0_u8; 64 * 64 * size_of::<u32>() as usize],
                 };
                 scanout.mouse = Some(tmp_mouse);
             } else {
