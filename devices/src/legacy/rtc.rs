@@ -24,7 +24,7 @@ use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
-use util::time::NANOSECONDS_PER_SECOND;
+use util::time::{mktime64, NANOSECONDS_PER_SECOND};
 
 /// IO port of RTC device to select Register to read/write.
 pub const RTC_PORT_INDEX: u64 = 0x70;
@@ -299,8 +299,8 @@ impl RTC {
         let min = bcd_to_bin(self.cmos_data[RTC_MINUTES as usize]);
         let hour = bcd_to_bin(self.cmos_data[RTC_HOURS as usize]);
         let day = bcd_to_bin(self.cmos_data[RTC_DAY_OF_MONTH as usize]);
-        let mut mon = bcd_to_bin(self.cmos_data[RTC_MONTH as usize]);
-        let mut year = bcd_to_bin(self.cmos_data[RTC_YEAR as usize])
+        let mon = bcd_to_bin(self.cmos_data[RTC_MONTH as usize]);
+        let year = bcd_to_bin(self.cmos_data[RTC_YEAR as usize])
             + bcd_to_bin(self.cmos_data[RTC_CENTURY_BCD as usize]) * 100;
 
         // Check rtc time is valid to prevent tick_offset overflow.
@@ -312,22 +312,7 @@ impl RTC {
             return;
         }
 
-        // Converts date to seconds since 1970-01-01 00:00:00.
-        if mon <= 2 {
-            mon += 10;
-            year -= 1;
-        } else {
-            mon -= 2;
-        }
-
-        self.tick_offset =
-            ((((year / 4 - year / 100 + year / 400 + 367 * mon / 12 + day) + year * 365 - 719499)
-                * 24
-                + hour)
-                * 60
-                + min)
-                * 60
-                + sec;
+        self.tick_offset = mktime64(year, mon, day, hour, min, sec);
 
         self.base_time = Instant::now();
     }
