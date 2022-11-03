@@ -11,21 +11,21 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::convert::TryFrom;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
-    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_BLOCK,
+    virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
+    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
@@ -40,6 +40,7 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
+use util::aio::raw_datasync;
 use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
@@ -47,6 +48,7 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::num_ops::read_u32;
+use util::offset_of;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
@@ -108,9 +110,8 @@ impl ByteCode for RequestOutHeader {}
 pub struct AioCompleteCb {
     queue: Arc<Mutex<Queue>>,
     mem_space: Arc<AddressSpace>,
-    desc_index: u16,
-    rw_len: u32,
-    req_status_addr: GuestAddress,
+    /// The head of merged Request list.
+    req: Rc<Request>,
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     driver_features: u64,
 }
@@ -119,20 +120,60 @@ impl AioCompleteCb {
     fn new(
         queue: Arc<Mutex<Queue>>,
         mem_space: Arc<AddressSpace>,
-        desc_index: u16,
-        rw_len: u32,
-        req_status_addr: GuestAddress,
+        req: Rc<Request>,
         interrupt_cb: Option<Arc<VirtioInterrupt>>,
         driver_features: u64,
     ) -> Self {
         AioCompleteCb {
             queue,
             mem_space,
-            desc_index,
-            rw_len,
-            req_status_addr,
+            req,
             interrupt_cb,
             driver_features,
+        }
+    }
+
+    fn complete_request(&self, status: u8) {
+        let mut req = Some(self.req.as_ref());
+        while let Some(req_raw) = req {
+            self.complete_one_request(req_raw, status);
+            req = req_raw.next.as_ref().as_ref();
+        }
+    }
+
+    fn complete_one_request(&self, req: &Request, status: u8) {
+        if let Err(ref e) = self.mem_space.write_object(&status, req.in_header) {
+            error!("Failed to write the status (aio completion) {:?}", e);
+            return;
+        }
+
+        let mut queue_lock = self.queue.lock().unwrap();
+        if let Err(ref e) = queue_lock
+            .vring
+            .add_used(&self.mem_space, req.desc_index, req.in_len)
+        {
+            error!(
+                "Failed to add used ring(aio completion), index {}, len {} {:?}",
+                req.desc_index, req.in_len, e,
+            );
+            return;
+        }
+
+        if queue_lock
+            .vring
+            .should_notify(&self.mem_space, self.driver_features)
+        {
+            if let Err(e) = (*self.interrupt_cb.as_ref().unwrap())(
+                &VirtioInterruptType::Vring,
+                Some(&queue_lock),
+            ) {
+                error!(
+                    "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
+                    e
+                );
+                return;
+            }
+            self.trace_send_interrupt("Block".to_string());
         }
     }
 }
@@ -143,7 +184,10 @@ struct Request {
     out_header: RequestOutHeader,
     iovec: Vec<Iovec>,
     data_len: u64,
+    in_len: u32,
     in_header: GuestAddress,
+    /// Point to the next merged Request.
+    next: Box<Option<Request>>,
 }
 
 impl Request {
@@ -174,10 +218,6 @@ impl Request {
                 ))
             })?;
 
-        if !out_header.is_valid() {
-            bail!("Unsupported block request type");
-        }
-
         let pos = elem.in_iovec.len() - 1;
         let in_iov_elem = elem.in_iovec.get(pos).unwrap();
         if in_iov_elem.len < 1 {
@@ -192,7 +232,9 @@ impl Request {
             out_header,
             iovec: Vec::with_capacity(elem.desc_num as usize),
             data_len: 0,
+            in_len: 0,
             in_header: in_iov_elem.addr,
+            next: Box::new(None),
         };
 
         match out_header.request_type {
@@ -229,6 +271,11 @@ impl Request {
             _ => (),
         }
 
+        // We always write the last status byte, so count all in_iovs.
+        for in_iov in elem.in_iovec.iter() {
+            request.in_len += in_iov.len;
+        }
+
         Ok(request)
     }
 
@@ -237,25 +284,11 @@ impl Request {
         &self,
         aio: &mut Box<Aio<AioCompleteCb>>,
         disk: &File,
-        disk_sectors: u64,
         serial_num: &Option<String>,
         direct: bool,
         last_aio: bool,
         iocompletecb: AioCompleteCb,
-    ) -> Result<u32> {
-        let mut top: u64 = self.data_len / SECTOR_SIZE;
-        if self.data_len % SECTOR_SIZE != 0 {
-            top += 1;
-        }
-        top.checked_add(self.out_header.sector)
-            .filter(|off| off <= &disk_sectors)
-            .with_context(|| {
-                format!(
-                    "offset {} invalid, disk sector {}",
-                    self.out_header.sector, disk_sectors
-                )
-            })?;
-
+    ) -> Result<()> {
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
@@ -267,19 +300,23 @@ impl Request {
             iocompletecb,
         };
 
-        for iov in self.iovec.iter() {
-            let iovec = Iovec {
-                iov_base: iov.iov_base,
-                iov_len: iov.iov_len,
-            };
-            aiocb.iovec.push(iovec);
+        let mut req = Some(self);
+        while let Some(req_raw) = req {
+            for iov in req_raw.iovec.iter() {
+                let iovec = Iovec {
+                    iov_base: iov.iov_base,
+                    iov_len: iov.iov_len,
+                };
+                aiocb.iovec.push(iovec);
+            }
+            req = req_raw.next.as_ref().as_ref();
         }
 
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
                 if direct {
-                    for iov in self.iovec.iter() {
+                    for iov in aiocb.iovec.iter() {
                         MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
                     }
                     (*aio)
@@ -317,30 +354,54 @@ impl Request {
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
-                if let Some(serial) = serial_num {
-                    let serial_vec = get_serial_num_config(serial);
+                let serial = serial_num.clone().unwrap_or_else(|| String::from(""));
+                let serial_vec = get_serial_num_config(&serial);
+                let mut start: usize = 0;
+                let mut end: usize;
 
-                    for iov in self.iovec.iter() {
-                        if (iov.iov_len as usize) < serial_vec.len() {
-                            bail!(
-                                "The buffer length {} is less than the length {} of serial num",
-                                iov.iov_len,
-                                serial_vec.len()
-                            );
-                        }
-                        write_buf_mem(&serial_vec, iov.iov_base)
-                            .with_context(|| "Failed to write buf for virtio block id")?;
+                for iov in self.iovec.iter() {
+                    end = cmp::min(start + iov.iov_len as usize, serial_vec.len());
+                    write_buf_mem(&serial_vec[start..end], iov.iov_base)
+                        .with_context(|| "Failed to write buf for virtio block id")?;
+
+                    if end >= serial_vec.len() {
+                        break;
                     }
+                    start = end;
                 }
-
-                return Ok(1);
+                aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_OK);
             }
             _ => bail!(
                 "The type {} of block request is not supported",
                 self.out_header.request_type
             ),
         };
-        Ok(0)
+        Ok(())
+    }
+
+    fn io_range_valid(&self, disk_sectors: u64) -> bool {
+        match self.out_header.request_type {
+            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
+                if self.data_len % SECTOR_SIZE != 0 {
+                    error!("Failed to process block request with size not aligned to 512B");
+                    return false;
+                }
+                if self
+                    .get_req_sector_num()
+                    .checked_add(self.out_header.sector)
+                    .filter(|&off| off <= disk_sectors)
+                    .is_none()
+                {
+                    error!(
+                        "offset {} invalid, disk sector {}",
+                        self.out_header.sector, disk_sectors
+                    );
+                    return false;
+                }
+                true
+            }
+            _ => true,
+        }
     }
 
     fn get_req_sector_num(&self) -> u64 {
@@ -383,36 +444,39 @@ struct BlockIoHandler {
 }
 
 impl BlockIoHandler {
-    fn merge_req_queue(&self, mut req_queue: Vec<Request>) -> Vec<Request> {
-        if req_queue.len() == 1 {
-            return req_queue;
-        }
-
+    fn merge_req_queue(
+        &self,
+        mut req_queue: Vec<Request>,
+        last_aio_index: &mut usize,
+    ) -> Vec<Request> {
         req_queue.sort_by(|a, b| a.out_header.sector.cmp(&b.out_header.sector));
-        let mut merge_req_queue = Vec::<Request>::new();
-        let mut continue_merge: bool = false;
 
-        for req in &req_queue {
-            if continue_merge {
-                if let Some(last_req) = merge_req_queue.last_mut() {
-                    if last_req.out_header.sector + last_req.get_req_sector_num()
-                        != req.out_header.sector
-                    {
-                        continue_merge = false;
-                        merge_req_queue.push(req.clone());
-                    } else {
-                        for iov in req.iovec.iter() {
-                            let iovec = Iovec {
-                                iov_base: iov.iov_base,
-                                iov_len: iov.iov_len,
-                            };
-                            last_req.data_len += iovec.iov_len;
-                            last_req.iovec.push(iovec);
-                        }
-                    }
+        let mut merge_req_queue = Vec::<Request>::new();
+        let mut last_req: Option<&mut Request> = None;
+
+        *last_aio_index = 0;
+        for req in req_queue {
+            let io = req.out_header.request_type == VIRTIO_BLK_T_IN
+                || req.out_header.request_type == VIRTIO_BLK_T_OUT;
+            let can_merge = match last_req {
+                Some(ref req_ref) => {
+                    io && req_ref.out_header.request_type == req.out_header.request_type
+                        && (req_ref.out_header.sector + req_ref.get_req_sector_num()
+                            == req.out_header.sector)
                 }
+                None => false,
+            };
+
+            if can_merge {
+                let last_req_raw = last_req.unwrap();
+                last_req_raw.next = Box::new(Some(req));
+                last_req = last_req_raw.next.as_mut().as_mut();
             } else {
-                merge_req_queue.push(req.clone());
+                if io {
+                    *last_aio_index = merge_req_queue.len();
+                }
+                merge_req_queue.push(req);
+                last_req = merge_req_queue.last_mut();
             }
         }
 
@@ -422,12 +486,14 @@ impl BlockIoHandler {
     fn process_queue(&mut self) -> Result<bool> {
         self.trace_request("Block".to_string(), "to IO".to_string());
         let mut req_queue = Vec::new();
-        let mut req_index = 0;
         let mut last_aio_req_index = 0;
-        let mut need_interrupt = false;
         let mut done = false;
 
         let mut queue = self.queue.lock().unwrap();
+        if !queue.is_enabled() {
+            done = true;
+            return Ok(done);
+        }
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             // limit io operations if iops is configured
@@ -447,14 +513,23 @@ impl BlockIoHandler {
 
             match Request::new(&self.mem_space, &elem) {
                 Ok(req) => {
-                    match req.out_header.request_type {
-                        VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
-                            last_aio_req_index = req_index;
-                        }
-                        _ => {}
+                    if !req.out_header.is_valid() || !req.io_range_valid(self.disk_sectors) {
+                        let status = if !req.out_header.is_valid() {
+                            VIRTIO_BLK_S_UNSUPP
+                        } else {
+                            VIRTIO_BLK_S_IOERR
+                        };
+                        let aiocompletecb = AioCompleteCb::new(
+                            self.queue.clone(),
+                            self.mem_space.clone(),
+                            Rc::new(req),
+                            Some(self.interrupt_cb.clone()),
+                            self.driver_features,
+                        );
+                        aiocompletecb.complete_request(status);
+                        continue;
                     }
                     req_queue.push(req);
-                    req_index += 1;
                     done = true;
                 }
                 Err(ref e) => {
@@ -463,8 +538,6 @@ impl BlockIoHandler {
                         .vring
                         .add_used(&self.mem_space, elem.index, 0)
                         .with_context(|| "Failed to add used ring")?;
-                    need_interrupt = true;
-
                     error!("failed to create block request, {:?}", e);
                 }
             };
@@ -473,93 +546,37 @@ impl BlockIoHandler {
         // unlock queue, because it will be hold below.
         drop(queue);
 
-        let merge_req_queue = self.merge_req_queue(req_queue);
-
-        if let Some(disk_img) = self.disk_image.as_mut() {
-            req_index = 0;
-            for req in merge_req_queue.iter() {
-                if let Some(ref mut aio) = self.aio {
-                    let rw_len = match req.out_header.request_type {
-                        VIRTIO_BLK_T_IN => u32::try_from(req.data_len)
-                            .with_context(|| "Convert block request len to u32 with overflow.")?,
-                        _ => 0u32,
-                    };
-
-                    let aiocompletecb = AioCompleteCb::new(
-                        self.queue.clone(),
-                        self.mem_space.clone(),
-                        req.desc_index,
-                        rw_len,
-                        req.in_header,
-                        Some(self.interrupt_cb.clone()),
-                        self.driver_features,
-                    );
-
-                    match req.execute(
-                        aio,
-                        disk_img,
-                        self.disk_sectors,
-                        &self.serial_num,
-                        self.direct,
-                        last_aio_req_index == req_index,
-                        aiocompletecb,
-                    ) {
-                        Ok(v) => {
-                            if v == 1 {
-                                // get device id
-                                self.mem_space
-                                    .write_object(&VIRTIO_BLK_S_OK, req.in_header)
-                                    .with_context(|| "Failed to write result for the request for block with device id")?;
-                                self.queue.lock().unwrap().vring.add_used(
-                                    &self.mem_space,
-                                    req.desc_index,
-                                    1,
-                                ).with_context(|| "Failed to add the request for block with device id to used ring")?;
-
-                                if self
-                                    .queue
-                                    .lock()
-                                    .unwrap()
-                                    .vring
-                                    .should_notify(&self.mem_space, self.driver_features)
-                                {
-                                    need_interrupt = true;
-                                }
-                            }
-                        }
-                        Err(ref e) => {
-                            error!("Failed to execute block request, {:?}", e);
-                        }
-                    }
-                    req_index += 1;
-                }
-            }
-        } else if !merge_req_queue.is_empty() {
-            for req in merge_req_queue.iter() {
-                self.queue
-                    .lock()
-                    .unwrap()
-                    .vring
-                    .add_used(&self.mem_space, req.desc_index, 1)
-                    .with_context(|| {
-                        "Failed to add used ring, when block request queue isn't empty"
-                    })?;
-            }
-            need_interrupt = true
+        if req_queue.is_empty() {
+            return Ok(done);
         }
 
-        if need_interrupt {
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.queue.lock().unwrap()),
-            )
-            .with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "block",
-                    VirtioInterruptType::Vring
-                ))
-            })?;
-            self.trace_send_interrupt("Block".to_string());
+        let merge_req_queue = self.merge_req_queue(req_queue, &mut last_aio_req_index);
+
+        for (req_index, req) in merge_req_queue.into_iter().enumerate() {
+            let req_rc = Rc::new(req);
+            let aiocompletecb = AioCompleteCb::new(
+                self.queue.clone(),
+                self.mem_space.clone(),
+                req_rc.clone(),
+                Some(self.interrupt_cb.clone()),
+                self.driver_features,
+            );
+            if let Some(disk_img) = self.disk_image.as_ref() {
+                if let Err(ref e) = req_rc.execute(
+                    self.aio.as_mut().unwrap(),
+                    disk_img,
+                    &self.serial_num,
+                    self.direct,
+                    req_index == last_aio_req_index,
+                    aiocompletecb.clone(),
+                ) {
+                    error!("Failed to execute block request, {:?}", e);
+                    aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
+                }
+            } else {
+                error!("Failed to execute block request, disk_img not specified");
+                aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
+            }
         }
 
         Ok(done)
@@ -567,48 +584,26 @@ impl BlockIoHandler {
 
     fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
         let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
-            let status = if ret < 0 {
-                ret
+            let mut status = if ret < 0 {
+                VIRTIO_BLK_S_IOERR
             } else {
-                i64::from(VIRTIO_BLK_S_OK)
+                VIRTIO_BLK_S_OK
             };
 
             let complete_cb = &aiocb.iocompletecb;
-            if let Err(ref e) = complete_cb
-                .mem_space
-                .write_object(&status, complete_cb.req_status_addr)
+            // When driver does not accept FLUSH feature, the device must be of
+            // writethrough cache type, so flush data before updating used ring.
+            if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
+                && aiocb.opcode == IoCmd::Pwritev
+                && ret >= 0
             {
-                error!("Failed to write the status (aio completion) {:?}", e);
-                return;
-            }
-
-            let mut queue_lock = complete_cb.queue.lock().unwrap();
-            if let Err(ref e) = queue_lock.vring.add_used(
-                &complete_cb.mem_space,
-                complete_cb.desc_index,
-                complete_cb.rw_len,
-            ) {
-                error!(
-                    "Failed to add used ring(aio completion), index {}, len {} {:?}",
-                    complete_cb.desc_index, complete_cb.rw_len, e,
-                );
-                return;
-            }
-
-            if queue_lock
-                .vring
-                .should_notify(&complete_cb.mem_space, complete_cb.driver_features)
-            {
-                if let Err(e) = (*complete_cb.interrupt_cb.as_ref().unwrap())(
-                    &VirtioInterruptType::Vring,
-                    Some(&queue_lock),
-                ) {
-                    error!(
-                        "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
-                        e
-                    );
+                if let Err(ref e) = raw_datasync(aiocb.file_fd) {
+                    error!("Failed to flush data before send response to guest {:?}", e);
+                    status = VIRTIO_BLK_S_IOERR;
                 }
             }
+
+            complete_cb.complete_request(status);
         }) as AioCompleteFunc<AioCompleteCb>);
 
         Ok(Box::new(Aio::new(complete_func, engine)?))
@@ -1057,31 +1052,36 @@ impl VirtioDevice for Block {
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
-        let config_len = config_slice.len() as u64;
-        if offset >= config_len {
+        // F_DISCARD is not supported for now, so related config does not exist.
+        let config_len = offset_of!(VirtioBlkConfig, max_discard_sectors) as u64;
+        let read_end = offset as usize + data.len();
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
-        }
+
+        let config_slice = self.state.config_space.as_bytes();
+        data.write_all(&config_slice[(offset as usize)..read_end])?;
 
         Ok(())
     }
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let data_len = data.len();
-        let config_slice = self.state.config_space.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset,
-                config_len as u64
-            )));
+        // F_DISCARD is not supported for now, so related config does not exist.
+        let config_len = offset_of!(VirtioBlkConfig, max_discard_sectors) as u64;
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        // The only writable field is "writeback", but it's not supported for now,
+        // so do nothing here.
 
         Ok(())
     }
@@ -1213,6 +1213,7 @@ impl StateTransfer for Block {
 impl MigrationHook for Block {}
 
 impl VirtioTrace for BlockIoHandler {}
+impl VirtioTrace for AioCompleteCb {}
 
 #[cfg(test)]
 mod tests {
@@ -1282,7 +1283,7 @@ mod tests {
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and
-    // read date are same; Input invalid offset or date length, it will failed.
+    // read data are not same; Input invalid offset or data length, it will failed.
     #[test]
     fn test_read_write_config() {
         let mut block = Block::default();
@@ -1292,7 +1293,7 @@ mod tests {
         let mut read_config_space = [0u8; 8];
         block.write_config(0, &expect_config_space).unwrap();
         block.read_config(0, &mut read_config_space).unwrap();
-        assert_eq!(read_config_space, expect_config_space);
+        assert_ne!(read_config_space, expect_config_space);
 
         // Invalid write
         assert!(block
