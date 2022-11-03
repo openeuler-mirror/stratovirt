@@ -643,6 +643,9 @@ pub fn display_cursor_define(
     cursor: &mut DisplayMouse,
     mask: &mut Vec<u8>,
 ) {
+    if cursor.data.len() != ((cursor.width * cursor.height) as usize) * bytes_per_pixel() {
+        return;
+    }
     let mut buf = Vec::new();
     if client.has_feature(VncFeatures::VncFeatureAlphaCursor) {
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
