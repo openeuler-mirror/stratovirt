@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressSpace, Region};
 use pci::config::{
     PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
-    PCIE_CONFIG_SPACE_SIZE, PCI_CLASS_SERIAL_USB, PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID,
-    ROM_ADDRESS, SUB_CLASS_CODE, VENDOR_ID,
+    PCIE_CONFIG_SPACE_SIZE, PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS,
+    SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
 
@@ -39,6 +39,7 @@ const PCI_INTERRUPT_PIN: u16 = 0x3d;
 const PCI_CACHE_LINE_SIZE: u16 = 0x0c;
 const PCI_SERIAL_BUS_RELEASE_NUMBER: u8 = 0x60;
 const PCI_SERIAL_BUS_RELEASE_VERSION_3_0: u8 = 0x30;
+const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
 /// PCI capability offset or size.
 const XHCI_PCI_CONFIG_LENGTH: u32 = 0x4000;
 const XHCI_PCI_CAP_OFFSET: u32 = 0x0;
@@ -53,6 +54,10 @@ const XHCI_PCI_PORT_OFFSET: u32 = XHCI_PCI_OPER_OFFSET + XHCI_PCI_OPER_LENGTH;
 const XHCI_PCI_PORT_LENGTH: u32 = 0x10;
 const XHCI_MSIX_TABLE_OFFSET: u32 = 0x3000;
 const XHCI_MSIX_PBA_OFFSET: u32 = 0x3800;
+
+/// Registers offset.
+/// 0x0    0x40    0x440    0x1000    0x2000      0x3000   0x4000
+/// | cap  | oper  | port   | runtime | doorbell  | MSIX   |      
 
 /// XHCI pci device which can be attached to PCI bus.
 pub struct XhciPciDevice {
@@ -104,6 +109,17 @@ impl XhciPciDevice {
             || "Failed to register oper region.",
         )?;
 
+        let port_num = self.xhci.lock().unwrap().port_num;
+        for i in 0..port_num {
+            let port = &self.xhci.lock().unwrap().ports[i as usize];
+            let port_region =
+                Region::init_io_region(XHCI_PCI_PORT_LENGTH as u64, build_port_ops(port));
+            let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i) as u64;
+            pci::Result::with_context(self.mem_region.add_subregion(port_region, offset), || {
+                "Failed to register port region."
+            })?;
+        }
+
         let mut runtime_region = Region::init_io_region(
             XHCI_PCI_RUNTIME_LENGTH as u64,
             build_runtime_ops(&self.xhci),
@@ -124,17 +140,6 @@ impl XhciPciDevice {
                 .add_subregion(doorbell_region, XHCI_PCI_DOORBELL_OFFSET as u64),
             || "Failed to register doorbell region.",
         )?;
-
-        let port_num = self.xhci.lock().unwrap().port_num;
-        for i in 0..port_num {
-            let port = &self.xhci.lock().unwrap().ports[i as usize];
-            let port_region =
-                Region::init_io_region(XHCI_PCI_PORT_LENGTH as u64, build_port_ops(port));
-            let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i) as u64;
-            pci::Result::with_context(self.mem_region.add_subregion(port_region, offset), || {
-                "Failed to register port region."
-            })?;
-        }
         Ok(())
     }
 }
