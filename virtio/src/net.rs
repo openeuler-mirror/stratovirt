@@ -26,8 +26,7 @@ use super::{
     VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
     VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
-use crate::virtio_has_feature;
-use crate::VirtioError;
+use crate::{report_virtio_error, virtio_has_feature, VirtioError};
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
@@ -113,11 +112,8 @@ impl ByteCode for CrtlHdr {}
 
 impl NetCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
-        let elem = self
-            .ctrl
-            .queue
-            .lock()
-            .unwrap()
+        let mut locked_queue = self.ctrl.queue.lock().unwrap();
+        let elem = locked_queue
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
             .with_context(|| "Failed to pop avail ring for net control queue")?;
@@ -167,25 +163,19 @@ impl NetCtrlHandler {
             self.mem_space.write_object::<u8>(&data, status.addr)?;
         }
 
-        self.ctrl
-            .queue
-            .lock()
-            .unwrap()
+        locked_queue
             .vring
             .add_used(&self.mem_space, elem.index, used_len)
             .with_context(|| format!("Failed to add used ring {}", elem.index))?;
 
-        (self.interrupt_cb)(
-            &VirtioInterruptType::Vring,
-            Some(&self.ctrl.queue.lock().unwrap()),
-            false,
-        )
-        .with_context(|| {
-            anyhow!(VirtioError::InterruptTrigger(
-                "ctrl",
-                VirtioInterruptType::Vring
-            ))
-        })?;
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
+            || {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "ctrl",
+                    VirtioInterruptType::Vring
+                ))
+            },
+        )?;
 
         Ok(())
     }
@@ -218,11 +208,15 @@ impl EventNotifierHelper for NetCtrlHandler {
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            cloned_net_io
-                .lock()
-                .unwrap()
-                .handle_ctrl()
-                .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
+            let mut locked_net_io = cloned_net_io.lock().unwrap();
+            locked_net_io.handle_ctrl().unwrap_or_else(|e| {
+                error!("Failed to handle ctrl queue, error is {}.", e);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    Some(&locked_net_io.deactivate_evt),
+                );
+            });
             None
         });
         let mut notifiers = Vec::new();
@@ -634,6 +628,11 @@ impl EventNotifierHelper for NetIoHandler {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
                 if let Err(ref e) = locked_net_io.handle_rx() {
                     error!("Failed to handle rx(tap event), {:?}", e);
+                    report_virtio_error(
+                        locked_net_io.interrupt_cb.clone(),
+                        locked_net_io.driver_features,
+                        Some(&locked_net_io.deactivate_evt),
+                    );
                 }
 
                 if let Some(tap) = locked_net_io.tap.as_ref() {
