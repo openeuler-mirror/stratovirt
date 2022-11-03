@@ -109,12 +109,12 @@ impl XhciPciDevice {
             || "Failed to register oper region.",
         )?;
 
-        let port_num = self.xhci.lock().unwrap().port_num;
+        let port_num = self.xhci.lock().unwrap().ports.len();
         for i in 0..port_num {
-            let port = &self.xhci.lock().unwrap().ports[i as usize];
+            let port = &self.xhci.lock().unwrap().ports[i];
             let port_region =
                 Region::init_io_region(XHCI_PCI_PORT_LENGTH as u64, build_port_ops(port));
-            let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i) as u64;
+            let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i as u32) as u64;
             pci::Result::with_context(self.mem_region.add_subregion(port_region, offset), || {
                 "Failed to register port region."
             })?;
