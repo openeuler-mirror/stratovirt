@@ -290,16 +290,18 @@ impl PciDevOps for XhciPciDevice {
 }
 
 impl XhciOps for XhciPciDevice {
-    fn trigger_intr(&mut self, n: u32, _level: bool) -> bool {
+    fn trigger_intr(&mut self, n: u32, trigger: bool) -> bool {
         if let Some(msix) = self.pci_config.msix.as_mut() {
-            msix.lock()
-                .unwrap()
-                .notify(n as u16, self.dev_id.load(Ordering::Acquire));
-            true
+            if trigger {
+                msix.lock()
+                    .unwrap()
+                    .notify(n as u16, self.dev_id.load(Ordering::Acquire));
+                return true;
+            }
         } else {
             error!("Failed to send interrupt: msix does not exist");
-            false
         }
+        false
     }
 
     fn update_intr(&mut self, _n: u32, _enable: bool) {}
