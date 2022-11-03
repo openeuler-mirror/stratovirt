@@ -91,6 +91,9 @@ impl RngHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let size =
                 get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
@@ -130,14 +133,13 @@ impl RngHandler {
         }
 
         if need_interrupt {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock)).with_context(
-                || {
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| {
                     anyhow!(VirtioError::InterruptTrigger(
                         "rng",
                         VirtioInterruptType::Vring
                     ))
-                },
-            )?;
+                })?;
             self.trace_send_interrupt("Rng".to_string());
         }
 
@@ -589,7 +591,7 @@ mod tests {
         let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
@@ -674,7 +676,7 @@ mod tests {
         let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,

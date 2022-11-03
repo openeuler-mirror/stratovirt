@@ -546,6 +546,9 @@ impl BalloonIoHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let req = Request::parse(&elem, OUT_IOVEC)
                 .with_context(|| "Fail to parse available descriptor chain")?;
             if !self.mem_info.lock().unwrap().has_huge_page() {
@@ -557,7 +560,7 @@ impl BalloonIoHandler {
                 .with_context(|| "Failed to add balloon response into used queue")?;
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue)).with_context(
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
             || {
                 anyhow!(VirtioError::InterruptTrigger(
                     "balloon",
@@ -579,6 +582,9 @@ impl BalloonIoHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let req = Request::parse(&elem, IN_IOVEC)
                 .with_context(|| "Fail to parse available descriptor chain")?;
             if !self.mem_info.lock().unwrap().has_huge_page() {
@@ -590,7 +596,7 @@ impl BalloonIoHandler {
                 .with_context(|| "Failed to add balloon response into used queue")?;
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue)).with_context(
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
             || {
                 anyhow!(VirtioError::InterruptTrigger(
                     "balloon",
@@ -822,7 +828,7 @@ impl Balloon {
     /// Notify configuration changes to VM.
     fn signal_config_change(&self) -> Result<()> {
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Config, None).with_context(|| {
+            interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
                 anyhow!(VirtioError::InterruptTrigger(
                     "balloon",
                     VirtioInterruptType::Vring
@@ -1257,7 +1263,7 @@ mod tests {
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
@@ -1395,7 +1401,7 @@ mod tests {
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,

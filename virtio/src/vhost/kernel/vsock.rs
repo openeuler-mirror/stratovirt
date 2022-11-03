@@ -127,6 +127,9 @@ impl Vsock {
                 .vring
                 .pop_avail(&self.mem_space, self.state.driver_features)
                 .with_context(|| "Failed to get avail ring element.")?;
+            if element.desc_num == 0 {
+                return Ok(());
+            }
 
             self.mem_space
                 .write_object(
@@ -144,8 +147,12 @@ impl Vsock {
                 .with_context(|| format!("Failed to add used ring {}", element.index))?;
 
             if let Some(interrupt_cb) = &self.interrupt_cb {
-                interrupt_cb(&VirtioInterruptType::Vring, Some(&*event_queue_locked))
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+                interrupt_cb(
+                    &VirtioInterruptType::Vring,
+                    Some(&*event_queue_locked),
+                    false,
+                )
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
             }
         }
 
