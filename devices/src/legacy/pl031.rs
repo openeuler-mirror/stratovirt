@@ -238,3 +238,43 @@ impl StateTransfer for PL031 {
 }
 
 impl MigrationHook for PL031 {}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use util::time::mktime64;
+
+    const WIGGLE: u32 = 2;
+
+    #[test]
+    fn test_set_year_20xx() {
+        let mut rtc = PL031::default();
+        // Set rtc time: 2013-11-13 02:04:56.
+        let wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
+        let mut data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
+        let rtick = LittleEndian::read_u32(&data);
+
+        let rtc_check = (rtick - wtick) <= WIGGLE;
+        assert_eq!(rtc_check, true);
+    }
+
+    #[test]
+    fn test_set_year_1970() {
+        let mut rtc = PL031::default();
+        // Set rtc time (min): 1970-01-01 00:00:00.
+        let wtick = mktime64(1970, 1, 1, 0, 0, 0) as u32;
+        let mut data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
+        let rtick = LittleEndian::read_u32(&data);
+
+        let rtc_check = (rtick - wtick) <= WIGGLE;
+        assert_eq!(rtc_check, true);
+    }
+}
