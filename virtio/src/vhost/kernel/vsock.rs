@@ -327,14 +327,7 @@ impl VirtioDevice for Vsock {
     }
 
     fn reset(&mut self) -> Result<()> {
-        // No need to close fd manually, because rust will
-        // automatically cleans up variables at the end of the lifecycle.
-        self.backend = None;
-        self.state = VsockState::default();
-        self.event_queue = None;
-        self.interrupt_cb = None;
-
-        self.realize()
+        self.backend.as_ref().unwrap().set_running(false)
     }
 }
 
