@@ -153,8 +153,12 @@ impl FileBackend {
 ///
 /// * `nr_vcpus` - Number of vcpus.
 fn max_nr_threads(nr_vcpus: u8) -> u8 {
-    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u8 };
-    min(min(nr_host_cpu, MAX_PREALLOC_THREAD), nr_vcpus)
+    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    if nr_host_cpu > 0 {
+        return min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus);
+    }
+    // If fails to call `sysconf` function, just use a single thread to touch pages.
+    1
 }
 
 /// Touch pages to pre-alloc memory for VM.
@@ -184,7 +188,7 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 ///
 /// # Arguments
 ///
-/// * `host_addr` - The start host address of memory of the virtual machine.
+/// * `host_addr` - The start host address to pre allocate.
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
 fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
@@ -580,5 +584,31 @@ mod test {
         let total_mmaps_size = host_mmaps.iter().fold(0_u64, |acc, x| acc + x.size());
         assert_eq!(total_mem_size, total_file_size);
         assert_eq!(total_mem_size, total_mmaps_size);
+    }
+
+    #[test]
+    fn test_memory_prealloc() {
+        // Mmap and prealloc with anonymous memory.
+        let host_addr = do_mmap(&None, 0x20_0000, 0, false, false, false).unwrap();
+        // Check the thread number equals to minimum value.
+        assert_eq!(max_nr_threads(1), 1);
+        // The max threads limit is 16, or the number of host CPUs, it will never be 20.
+        assert_ne!(max_nr_threads(20), 20);
+        mem_prealloc(host_addr, 0x20_0000, 20);
+
+        // Mmap and prealloc with file backend.
+        let file_path = String::from("back_mem_test");
+        let file_size = 0x10_0000;
+        let f_back = FileBackend::new_mem(&file_path, file_size).unwrap();
+        let host_addr = do_mmap(
+            &Some(f_back.file.as_ref()),
+            0x10_0000,
+            f_back.offset,
+            false,
+            true,
+            false,
+        )
+        .unwrap();
+        mem_prealloc(host_addr, 0x10_0000, 2);
     }
 }
