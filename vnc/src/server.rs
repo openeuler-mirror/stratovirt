@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
+    auth::SaslAuth,
     auth::{AuthState, SubAuthState},
     client::VncClient,
     data::keycode::KEYSYM2KEYCODE,
@@ -19,13 +20,15 @@ use crate::{
         get_image_width, unref_pixman_image,
     },
     round_up_div,
+    vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
     vnc::{
         update_client_surface, DisplayMouse, DIRTY_PIXELS_NUM, DISPLAY_UPDATE_INTERVAL_DEFAULT,
         DISPLAY_UPDATE_INTERVAL_INC, DISPLAY_UPDATE_INTERVAL_MAX, MAX_WINDOW_HEIGHT,
         MAX_WINDOW_WIDTH, REFRESH_EVT, VNC_BITMAP_WIDTH, VNC_SERVERS,
     },
+    VncError,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use machine_manager::{
     config::{ObjConfig, VncConfig},
     event_loop::EventLoop,
@@ -47,7 +50,6 @@ use util::{
     },
 };
 use vmm_sys_util::epoll::EventSet;
-
 /// Info of image.
 /// stride is not always equal to stride because of memory alignment.
 pub struct ImageInfo {
@@ -91,6 +93,12 @@ pub struct VncServer {
     listener: Arc<Mutex<TcpListener>>,
     /// Clients connected to vnc.
     pub clients: HashMap<String, Arc<Mutex<VncClient>>>,
+    /// Configuration for tls connection.
+    pub tlscreds: Option<TlsCreds>,
+    /// Configuration for sasl Authentication.
+    pub saslauth: Option<SaslAuth>,
+    /// Configuration to make tls channel.
+    pub tls_config: Option<Arc<rustls::ServerConfig>>,
     /// Auth type.
     pub auth: AuthState,
     /// Subauth type.
@@ -125,6 +133,9 @@ impl VncServer {
         VncServer {
             listener,
             clients: HashMap::new(),
+            tlscreds: None,
+            saslauth: None,
+            tls_config: None,
             auth: AuthState::No,
             subauth: SubAuthState::VncAuthVencryptPlain,
             keysym2keycode: HashMap::new(),
@@ -154,15 +165,73 @@ impl VncServer {
     /// * `object` - configure of sasl and tls.
     pub fn make_config(
         &mut self,
-        _vnc_cfg: &VncConfig,
-        _object: &HashMap<String, ObjConfig>,
+        vnc_cfg: &VncConfig,
+        object: &HashMap<String, ObjConfig>,
     ) -> Result<()> {
-        // tls configuration
+        // Tls configuration.
+        if let Some(ObjConfig::Tls(tls_cred)) = object.get(&vnc_cfg.tls_creds) {
+            let tlscred = TlsCreds {
+                cred_type: tls_cred.cred_type.clone(),
+                dir: tls_cred.dir.clone(),
+                endpoint: tls_cred.endpoint.clone(),
+                verifypeer: tls_cred.verifypeer,
+            };
+
+            match make_vencrypt_config(&tlscred) {
+                Ok(tls_config) => {
+                    self.tls_config = Some(tls_config);
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+            self.tlscreds = Some(tlscred);
+        }
+
+        // Sasl configuration.
+        if let Some(ObjConfig::Sasl(sasl_auth)) = object.get(&vnc_cfg.sasl_authz) {
+            let saslauth = SaslAuth {
+                identity: sasl_auth.identity.clone(),
+            };
+            self.saslauth = Some(saslauth);
+        }
+
+        // Server.auth.
+        if let Err(err) = self.setup_auth() {
+            return Err(err);
+        }
 
         // Mapping ASCII to keycode.
         for &(k, v) in KEYSYM2KEYCODE.iter() {
             self.keysym2keycode.insert(k, v);
         }
+        Ok(())
+    }
+
+    /// Encryption configuration.
+    pub fn setup_auth(&mut self) -> Result<()> {
+        if let Some(tlscred) = &self.tlscreds {
+            self.auth = AuthState::Vencrypt;
+            if tlscred.cred_type != *X509_CERT && tlscred.cred_type != *ANON_CERT {
+                error!("Unsupported tls cred type");
+                return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
+                    "Unsupported tls cred type",
+                ))));
+            }
+            if self.saslauth.is_some() {
+                if tlscred.cred_type == *"x509" {
+                    self.subauth = SubAuthState::VncAuthVencryptX509Sasl;
+                } else {
+                    self.subauth = SubAuthState::VncAuthVencryptTlssasl;
+                }
+            } else {
+                self.subauth = SubAuthState::VncAuthVencryptX509None;
+            }
+        } else {
+            self.auth = AuthState::No;
+            self.subauth = SubAuthState::VncAuthVencryptPlain;
+        }
+
         Ok(())
     }
 
@@ -375,6 +444,9 @@ impl VncServer {
                     server,
                     self.server_image,
                 );
+                if let Some(saslauth) = &self.saslauth {
+                    client.sasl.identity = saslauth.identity.clone();
+                }
                 client.write_msg("RFB 003.008\n".to_string().as_bytes());
                 info!("{:?}", client.stream);
 

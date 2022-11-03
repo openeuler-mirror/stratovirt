@@ -47,6 +47,7 @@ const F_DUPFD_CLOEXEC: u32 = F_LINUX_SPECIFIC_BASE + 6;
 const TCGETS: u32 = 0x5401;
 const TCSETS: u32 = 0x5402;
 const TIOCGWINSZ: u32 = 0x5413;
+const FIONREAD: u32 = 0x541B;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
@@ -55,8 +56,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * aarch64-unknown-gnu: 63 syscalls
-/// * aarch64-unknown-musl: 61 syscalls
+/// * aarch64-unknown-gnu: 77 syscalls
+/// * aarch64-unknown-musl: 75 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -75,9 +76,11 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_close),
         BpfRule::new(libc::SYS_eventfd2),
         BpfRule::new(libc::SYS_epoll_ctl),
+        BpfRule::new(libc::SYS_ppoll),
         BpfRule::new(libc::SYS_fdatasync),
         BpfRule::new(libc::SYS_recvmsg),
         BpfRule::new(libc::SYS_sendmsg),
+        BpfRule::new(libc::SYS_sendmmsg),
         BpfRule::new(libc::SYS_recvfrom),
         BpfRule::new(libc::SYS_mremap),
         BpfRule::new(libc::SYS_io_setup),
@@ -116,6 +119,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_msync),
         BpfRule::new(libc::SYS_readlinkat),
         BpfRule::new(libc::SYS_socket),
+        BpfRule::new(libc::SYS_bind),
         BpfRule::new(libc::SYS_connect),
         BpfRule::new(libc::SYS_getcwd),
         BpfRule::new(libc::SYS_clone),
@@ -124,6 +128,17 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_getsockname),
         BpfRule::new(libc::SYS_getpeername),
         BpfRule::new(libc::SYS_nanosleep),
+        BpfRule::new(libc::SYS_getuid),
+        BpfRule::new(libc::SYS_geteuid),
+        BpfRule::new(libc::SYS_getgid),
+        BpfRule::new(libc::SYS_getegid),
+        BpfRule::new(libc::SYS_gettid),
+        BpfRule::new(libc::SYS_getdents64),
+        BpfRule::new(libc::SYS_clock_gettime),
+        BpfRule::new(libc::SYS_getsockopt),
+        BpfRule::new(libc::SYS_uname),
+        BpfRule::new(libc::SYS_sysinfo),
+        BpfRule::new(libc::SYS_faccessat),
         BpfRule::new(libc::SYS_getrandom),
         BpfRule::new(libc::SYS_shutdown),
         BpfRule::new(libc::SYS_rt_sigaction),
@@ -148,6 +163,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_USER_MEMORY_REGION)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IOEVENTFD)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SIGNAL_MSI)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FIONREAD)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_GUEST_CID() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_RUNNING() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_VRING_CALL() as u32)
