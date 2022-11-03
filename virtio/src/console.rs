@@ -46,6 +46,8 @@ const BUFF_SIZE: usize = 4096;
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 struct VirtioConsoleConfig {
+    cols: u16,
+    rows: u16,
     max_nr_ports: u32,
     emerg_wr: u32,
 }
@@ -56,6 +58,8 @@ impl VirtioConsoleConfig {
     /// Create configuration of virtio-console devices.
     pub fn new() -> Self {
         VirtioConsoleConfig {
+            cols: 0_u16,
+            rows: 0_u16,
             max_nr_ports: 1_u32,
             emerg_wr: 0_u32,
         }
