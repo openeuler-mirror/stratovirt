@@ -38,13 +38,14 @@ use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    report_virtio_error, virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt,
+    VirtioInterruptType,
 };
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
-    CONFIG_STATUS_FEATURES_OK, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING,
-    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG, VIRTIO_TYPE_BLOCK,
-    VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
+    CONFIG_STATUS_FEATURES_OK, CONFIG_STATUS_NEEDS_RESET, QUEUE_TYPE_PACKED_VRING,
+    QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_MMIO_INT_CONFIG,
+    VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
 };
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
@@ -366,7 +367,7 @@ impl VirtioPciCommonConfig {
             COMMON_Q_ENABLE_REG => {
                 if value != 1 {
                     error!("Driver set illegal value for queue_enable {}", value);
-                    return Ok(());
+                    return Err(anyhow!(PciError::QueueEnable(value)));
                 }
                 self.get_mut_queue_config()
                     .map(|config| config.ready = true)?;
@@ -607,19 +608,24 @@ impl VirtioPciDevice {
         let cloned_msix = self.config.msix.clone();
         let dev_id = self.dev_id.clone();
         let cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, queue: Option<&Queue>, needs_reset: bool| {
+                let mut locked_common_cfg = cloned_common_cfg.lock().unwrap();
                 let vector = match int_type {
                     VirtioInterruptType::Config => {
-                        cloned_common_cfg
-                            .lock()
-                            .unwrap()
-                            .interrupt_status
-                            .fetch_or(VIRTIO_MMIO_INT_CONFIG, Ordering::SeqCst);
-                        cloned_common_cfg
-                            .lock()
-                            .unwrap()
-                            .msix_config
-                            .load(Ordering::SeqCst)
+                        if needs_reset {
+                            locked_common_cfg.device_status |= CONFIG_STATUS_NEEDS_RESET;
+                            if locked_common_cfg.device_status & CONFIG_STATUS_DRIVER_OK == 0 {
+                                return Ok(());
+                            }
+                        }
+                        // Use (CONFIG | VRING) instead of CONFIG, it can be used to solve the
+                        // IO stuck problem by change the device configure.
+                        locked_common_cfg.interrupt_status.fetch_or(
+                            VIRTIO_MMIO_INT_CONFIG | VIRTIO_MMIO_INT_VRING,
+                            Ordering::SeqCst,
+                        );
+                        locked_common_cfg.config_generation += 1;
+                        locked_common_cfg.msix_config.load(Ordering::SeqCst)
                     }
                     VirtioInterruptType::Vring => {
                         queue.map_or(0, |q| q.vring.get_queue_config().vector)
@@ -736,16 +742,34 @@ impl VirtioPciDevice {
                 .unwrap()
                 .device_status;
 
-            if let Err(e) = cloned_pci_device
+            // In report_virtio_error(), it will lock cloned_pci_device.common_config.
+            // So, avoid deadlock by getting the returned value firstly.
+            let err = cloned_pci_device
                 .common_config
                 .lock()
                 .unwrap()
-                .write_common_config(&cloned_pci_device.device.clone(), offset, value)
-            {
+                .write_common_config(&cloned_pci_device.device.clone(), offset, value);
+            if let Err(e) = err {
                 error!(
                     "Failed to write common config of virtio-pci device, error is {:?}",
                     e,
                 );
+                if let Some(cb) = cloned_pci_device.interrupt_cb.clone() {
+                    if let Some(PciError::QueueEnable(_)) = e.downcast_ref::<PciError>() {
+                        let features = (cloned_pci_device
+                            .device
+                            .lock()
+                            .unwrap()
+                            .get_driver_features(1) as u64)
+                            << 32;
+                        report_virtio_error(cb, features, None);
+                        if let Err(e) = cloned_pci_device.device.lock().unwrap().deactivate() {
+                            error!("Failed to deactivate virtio device, error is {:?}", e);
+                        }
+                    }
+                } else {
+                    error!("Failed to get interrupt callback");
+                }
                 return false;
             }
 

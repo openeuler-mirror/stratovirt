@@ -500,6 +500,7 @@ impl EventNotifierHelper for VhostIoHandler {
                     if let Err(e) = (locked_vhost_handler.interrupt_cb)(
                         &VirtioInterruptType::Vring,
                         Some(&host_notify.queue.lock().unwrap()),
+                        false,
                     ) {
                         error!(
                             "Failed to trigger interrupt for vhost device, error is {:?}",

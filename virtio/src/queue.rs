@@ -866,15 +866,14 @@ impl VringOps for SplitVring {
     }
 
     fn pop_avail(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element> {
-        let avail_len = self.avail_ring_len(sys_mem)?;
-        if avail_len == 0 {
-            bail!("failed to pop avail: empty!");
+        let mut element = Element::new(0);
+        if self.avail_ring_len(sys_mem)? == 0 {
+            return Ok(element);
         }
 
         // Make sure descriptor read does not bypass avail index read.
         fence(Ordering::Acquire);
 
-        let mut element = Element::new(0);
         self.get_vring_element(sys_mem, features, &mut element)
             .with_context(|| "Failed to get vring element")?;
 
@@ -1650,8 +1649,10 @@ mod tests {
         // set 0 to the idx of avail ring which is equal to next_avail
         vring.set_avail_ring_idx(&sys_space, 0).unwrap();
         let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
-        if let Ok(_) = vring.pop_avail(&sys_space, features) {
-            assert!(false);
+        if let Ok(elem) = vring.pop_avail(&sys_space, features) {
+            if elem.desc_num != 0 {
+                assert!(false);
+            }
         }
 
         // it is error when the indirect descriptor is written

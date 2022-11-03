@@ -79,6 +79,7 @@ impl EventNotifierHelper for VhostUserFsHandler {
                     if let Err(e) = (locked_vhost_user.interrup_cb)(
                         &VirtioInterruptType::Vring,
                         Some(&host_notify.queue.lock().unwrap()),
+                        false,
                     ) {
                         error!(
                             "Failed to trigger interrupt for vhost user device, error is {:?}",

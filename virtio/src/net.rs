@@ -121,6 +121,9 @@ impl NetCtrlHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
             .with_context(|| "Failed to pop avail ring for net control queue")?;
+        if elem.desc_num == 0 {
+            return Ok(());
+        }
 
         let mut used_len = 0;
         if let Some(ctrl_desc) = elem.out_iovec.get(0) {
@@ -175,6 +178,7 @@ impl NetCtrlHandler {
         (self.interrupt_cb)(
             &VirtioInterruptType::Vring,
             Some(&self.ctrl.queue.lock().unwrap()),
+            false,
         )
         .with_context(|| {
             anyhow!(VirtioError::InterruptTrigger(
@@ -303,6 +307,9 @@ impl NetIoHandler {
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net rx")?;
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut iovecs = Vec::new();
             for elem_iov in elem.in_iovec.iter() {
                 let host_addr = queue
@@ -360,12 +367,14 @@ impl NetIoHandler {
 
         if self.rx.need_irqs {
             self.rx.need_irqs = false;
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "net",
-                    VirtioInterruptType::Vring
-                ))
-            })?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
+                || {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "net",
+                        VirtioInterruptType::Vring
+                    ))
+                },
+            )?;
             self.trace_send_interrupt("Net".to_string());
         }
 
@@ -378,6 +387,9 @@ impl NetIoHandler {
         let mut need_irq = false;
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
                 let host_addr = queue
@@ -419,12 +431,14 @@ impl NetIoHandler {
         }
 
         if need_irq {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "net",
-                    VirtioInterruptType::Vring
-                ))
-            })?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
+                || {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "net",
+                        VirtioInterruptType::Vring
+                    ))
+                },
+            )?;
             self.trace_send_interrupt("Net".to_string());
         }
 

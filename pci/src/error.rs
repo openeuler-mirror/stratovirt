@@ -35,4 +35,6 @@ pub enum PciError {
     HotplugUnsupported(u8),
     #[error("Invalid PCI configuration, key:{0}, value:{1}")]
     InvalidConf(String, String),
+    #[error("Failed to enable queue, value is 0x{0:x}")]
+    QueueEnable(u32),
 }

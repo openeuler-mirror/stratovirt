@@ -1482,6 +1482,7 @@ impl GpuIoHandler {
                 (self.interrupt_cb)(
                     &VirtioInterruptType::Vring,
                     Some(&self.ctrl_queue.lock().unwrap()),
+                    false,
                 )
                 .with_context(|| {
                     anyhow!(VirtioError::InterruptTrigger(
@@ -1503,6 +1504,9 @@ impl GpuIoHandler {
 
         let mut req_queue = Vec::new();
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            if elem.desc_num == 0 {
+                break;
+            }
             match VirtioGpuRequest::new(&self.mem_space, &elem, VIRTIO_GPU_CMD_CTRL) {
                 Ok(req) => {
                     req_queue.push(req);
@@ -1528,6 +1532,9 @@ impl GpuIoHandler {
         }
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            if elem.desc_num == 0 {
+                break;
+            }
             match VirtioGpuRequest::new(&self.mem_space, &elem, VIRTIO_GPU_CMD_CURSOR) {
                 Ok(req) => {
                     self.gpu_update_cursor(&req)
@@ -1542,12 +1549,14 @@ impl GpuIoHandler {
                 .add_used(&self.mem_space, elem.index, 0)
                 .with_context(|| "Failed to add used ring")?;
 
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "gpu",
-                    VirtioInterruptType::Vring
-                ))
-            })?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
+                || {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "gpu",
+                        VirtioInterruptType::Vring
+                    ))
+                },
+            )?;
         }
 
         Ok(())
