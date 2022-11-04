@@ -83,6 +83,10 @@ impl RngHandler {
         let mut queue_lock = self.queue.lock().unwrap();
         let mut need_interrupt = false;
 
+        if !queue_lock.is_enabled() {
+            return Ok(());
+        }
+
         while let Ok(elem) = queue_lock
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
