@@ -122,6 +122,8 @@ pub const VIRTIO_NET_F_GUEST_ECN: u32 = 9;
 pub const VIRTIO_NET_F_GUEST_UFO: u32 = 10;
 /// Device can receive TSOv4.
 pub const VIRTIO_NET_F_HOST_TSO4: u32 = 11;
+/// Device can receive TSOv6.
+pub const VIRTIO_NET_F_HOST_TSO6: u32 = 12;
 /// Device can receive UFO.
 pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
 /// Device can merge receive buffers.
