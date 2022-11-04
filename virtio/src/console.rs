@@ -46,6 +46,8 @@ const BUFF_SIZE: usize = 4096;
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 struct VirtioConsoleConfig {
+    cols: u16,
+    rows: u16,
     max_nr_ports: u32,
     emerg_wr: u32,
 }
@@ -56,6 +58,8 @@ impl VirtioConsoleConfig {
     /// Create configuration of virtio-console devices.
     pub fn new() -> Self {
         VirtioConsoleConfig {
+            cols: 0_u16,
+            rows: 0_u16,
             max_nr_ports: 1_u32,
             emerg_wr: 0_u32,
         }
@@ -231,25 +235,27 @@ impl ConsoleHandler {
                     ));
                 }
             }
-            ChardevType::Socket { .. } => {
-                if let Some(stream_fd) = locked_chardev.stream_fd {
+            ChardevType::Socket { .. } => match locked_chardev.stream_fd {
+                Some(stream_fd) => {
                     notifiers.push(EventNotifier::new(
-                        NotifierOperation::Delete,
+                        NotifierOperation::Park,
                         stream_fd,
                         None,
                         EventSet::IN | EventSet::HANG_UP,
                         Vec::new(),
                     ));
                 }
-                let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
-                notifiers.push(EventNotifier::new(
-                    NotifierOperation::Delete,
-                    listener_fd,
-                    None,
-                    EventSet::IN,
-                    Vec::new(),
-                ));
-            }
+                None => {
+                    let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
+                    notifiers.push(EventNotifier::new(
+                        NotifierOperation::Delete,
+                        listener_fd,
+                        None,
+                        EventSet::IN,
+                        Vec::new(),
+                    ));
+                }
+            },
             _ => (),
         }
         notifiers
@@ -311,6 +317,8 @@ pub struct Console {
     deactivate_evt: EventFd,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
+    /// Connectability status between guest and console.
+    console_connected: bool,
 }
 
 impl Console {
@@ -328,6 +336,7 @@ impl Console {
             },
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             chardev: Arc::new(Mutex::new(Chardev::new(console_cfg.chardev))),
+            console_connected: false,
         }
     }
 }
@@ -424,13 +433,26 @@ impl VirtioDevice for Console {
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
         )?;
+        self.console_connected = true;
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        if self.console_connected {
+            self.deactivate_evt
+                .write(1)
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn reset(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+        self.console_connected = false;
+        Ok(())
     }
 }
 
@@ -561,12 +583,12 @@ mod tests {
 
         //Check the configuration that needs to be read
         let offset = 0_u64;
-        let mut read_data: Vec<u8> = vec![0; 8];
-        let expect_data: Vec<u8> = vec![1, 0, 0, 0, 0, 0, 0, 0];
+        let mut read_data: Vec<u8> = vec![0; 12];
+        let expect_data: Vec<u8> = vec![0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(console.read_config(offset, &mut read_data).is_ok(), true);
         assert_eq!(read_data, expect_data);
 
-        let offset = 0_u64;
+        let offset = 4_u64;
         let mut read_data: Vec<u8> = vec![0; 1];
         let expect_data: Vec<u8> = vec![1];
         assert_eq!(console.read_config(offset, &mut read_data).is_ok(), true);

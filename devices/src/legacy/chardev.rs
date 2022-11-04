@@ -284,7 +284,15 @@ impl EventNotifierHelper for Chardev {
                 }
             }
             ChardevType::Socket { .. } => {
-                if let Some(listener) = chardev.lock().unwrap().listener.as_ref() {
+                if chardev.lock().unwrap().stream_fd.is_some() {
+                    notifiers.push(EventNotifier::new(
+                        NotifierOperation::Resume,
+                        chardev.lock().unwrap().stream_fd.unwrap(),
+                        None,
+                        EventSet::IN | EventSet::HANG_UP,
+                        Vec::new(),
+                    ));
+                } else if let Some(listener) = chardev.lock().unwrap().listener.as_ref() {
                     notifiers.push(EventNotifier::new(
                         NotifierOperation::AddShared,
                         listener.as_raw_fd(),
