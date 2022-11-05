@@ -24,17 +24,18 @@ use log::{error, warn};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
-    RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
-    REG_SIZE, REVISION_ID, ROM_ADDRESS, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID,
-    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+    RegionType, BAR_0, BAR_SPACE_UNMAPPED, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
+    PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS, STATUS, STATUS_INTERRUPT,
+    SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::{update_dev_id, Message, MsixState, MsixUpdate};
 use pci::Result as PciResult;
 use pci::{
-    config::PciConfig, init_msix, init_multifunction, le_write_u16, ranges_overlap, PciBus,
-    PciDevOps, PciError,
+    config::PciConfig, init_msix, init_multifunction, le_write_u16, le_write_u32, ranges_overlap,
+    PciBus, PciDevOps, PciError,
 };
 use util::byte_code::ByteCode;
+use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
@@ -409,6 +410,7 @@ enum VirtioPciCapType {
     Notify = 2,
     ISR = 3,
     Device = 4,
+    CfgAccess = 5,
 }
 
 /// Virtio PCI Capability
@@ -440,6 +442,27 @@ impl VirtioPciCap {
             padding: [0u8; 3],
             offset,
             length,
+        }
+    }
+}
+
+/// The struct of virtio pci capability for accessing BAR regions.
+#[repr(C, packed)]
+#[derive(Debug, Copy, Clone, Default)]
+struct VirtioPciCfgAccessCap {
+    /// The struct of virtio pci capability.
+    cap: VirtioPciCap,
+    /// Data for BAR regions access.
+    pci_cfg_data: [u8; 4],
+}
+
+impl ByteCode for VirtioPciCfgAccessCap {}
+
+impl VirtioPciCfgAccessCap {
+    fn new(cap_len: u8, cfg_type: u8) -> Self {
+        VirtioPciCfgAccessCap {
+            cap: VirtioPciCap::new(cap_len, cfg_type, 0, 0, 0),
+            pci_cfg_data: [0; 4],
         }
     }
 }
@@ -548,6 +571,8 @@ pub struct VirtioPciDevice {
     sys_mem: Arc<AddressSpace>,
     /// Pci config space.
     config: PciConfig,
+    /// Offset of VirtioPciCfgAccessCap in Pci config space.
+    cfg_cap_offset: usize,
     /// Virtio common config refer to Virtio Spec.
     common_config: Arc<Mutex<VirtioPciCommonConfig>>,
     /// Primary Bus
@@ -586,6 +611,7 @@ impl VirtioPciDevice {
             device_activated: Arc::new(AtomicBool::new(false)),
             sys_mem,
             config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
+            cfg_cap_offset: 0,
             common_config: Arc::new(Mutex::new(VirtioPciCommonConfig::new(
                 queue_size, queue_num,
             ))),
@@ -668,7 +694,7 @@ impl VirtioPciDevice {
         ret
     }
 
-    fn modern_mem_region_map<T: ByteCode>(&mut self, data: T) -> PciResult<()> {
+    fn modern_mem_region_map<T: ByteCode>(&mut self, data: T) -> PciResult<usize> {
         let cap_offset = self.config.add_pci_cap(
             PCI_CAP_ID_VNDR,
             size_of::<T>() + PCI_CAP_VNDR_AND_NEXT_SIZE as usize,
@@ -678,7 +704,7 @@ impl VirtioPciDevice {
         self.config.config[write_start..(write_start + size_of::<T>())]
             .copy_from_slice(data.as_bytes());
 
-        Ok(())
+        Ok(write_start)
     }
 
     fn build_common_cfg_ops(&mut self) -> RegionOps {
@@ -987,6 +1013,62 @@ impl VirtioPciDevice {
 
         Ok(())
     }
+
+    // Access virtio configuration through VirtioPciCfgAccessCap.
+    fn do_cfg_access(&mut self, start: usize, end: usize, is_write: bool) {
+        let pci_cfg_data_offset =
+            self.cfg_cap_offset + offset_of!(VirtioPciCfgAccessCap, pci_cfg_data);
+        let pci_cfg_data_end = self.cfg_cap_offset + size_of::<VirtioPciCfgAccessCap>();
+        if !ranges_overlap(start, end, pci_cfg_data_offset, pci_cfg_data_end) {
+            return;
+        }
+
+        let config = &self.config.config[self.cfg_cap_offset..];
+        let bar = config[offset_of!(VirtioPciCap, bar_id)];
+        let off = LittleEndian::read_u32(&config[offset_of!(VirtioPciCap, offset)..]);
+        let len = LittleEndian::read_u32(&config[offset_of!(VirtioPciCap, length)..]);
+        if bar >= VIRTIO_PCI_BAR_MAX {
+            warn!("The bar_id {} of VirtioPciCfgAccessCap exceeds max", bar);
+            return;
+        }
+        let bar_base = self.config.get_bar_address(bar as usize);
+        if bar_base == BAR_SPACE_UNMAPPED {
+            warn!("The bar {} of VirtioPciCfgAccessCap is not mapped", bar);
+            return;
+        }
+        if ![1, 2, 4].contains(&len) {
+            warn!("The length {} of VirtioPciCfgAccessCap is illegal", len);
+            return;
+        }
+        if off & (len - 1) != 0 {
+            warn!("The offset {} of VirtioPciCfgAccessCap is not aligned", off);
+            return;
+        }
+        if (off as u64)
+            .checked_add(len as u64)
+            .filter(|&end| end <= self.config.bars[bar as usize].size)
+            .is_none()
+        {
+            warn!("The access range of VirtioPciCfgAccessCap exceeds bar size");
+            return;
+        }
+
+        let result = if is_write {
+            let mut data = self.config.config[pci_cfg_data_offset..].as_ref();
+            self.sys_mem
+                .write(&mut data, GuestAddress(bar_base + off as u64), len as u64)
+        } else {
+            let mut data = self.config.config[pci_cfg_data_offset..].as_mut();
+            self.sys_mem
+                .read(&mut data, GuestAddress(bar_base + off as u64), len as u64)
+        };
+        if let Err(e) = result {
+            error!(
+                "Failed to access virtio configuration through VirtioPciCfgAccessCap. {:?}",
+                e
+            );
+        }
+    }
 }
 
 impl PciDevOps for VirtioPciDevice {
@@ -1070,6 +1152,23 @@ impl PciDevOps for VirtioPciDevice {
         );
         self.modern_mem_region_map(notify_cap)?;
 
+        let cfg_cap = VirtioPciCfgAccessCap::new(
+            size_of::<VirtioPciCfgAccessCap>() as u8 + PCI_CAP_VNDR_AND_NEXT_SIZE,
+            VirtioPciCapType::CfgAccess as u8,
+        );
+        self.cfg_cap_offset = self.modern_mem_region_map(cfg_cap)?;
+
+        // Make related fields of PCI config writable for VirtioPciCfgAccessCap.
+        let write_mask = &mut self.config.write_mask[self.cfg_cap_offset..];
+        write_mask[offset_of!(VirtioPciCap, bar_id)] = !0;
+        le_write_u32(write_mask, offset_of!(VirtioPciCap, offset), !0)?;
+        le_write_u32(write_mask, offset_of!(VirtioPciCap, length), !0)?;
+        le_write_u32(
+            write_mask,
+            offset_of!(VirtioPciCfgAccessCap, pci_cfg_data),
+            !0,
+        )?;
+
         let nvectors = self.device.lock().unwrap().queue_num() + 1;
 
         init_msix(
@@ -1148,9 +1247,10 @@ impl PciDevOps for VirtioPciDevice {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         let data_size = data.len();
-        if offset + data_size > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
+        let end = offset + data_size;
+        if end > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
             error!(
                 "Failed to read pcie config space at offset 0x{:x} with data size {}",
                 offset, data_size
@@ -1158,6 +1258,7 @@ impl PciDevOps for VirtioPciDevice {
             return;
         }
 
+        self.do_cfg_access(offset, end, false);
         self.config.read(offset, data);
     }
 
@@ -1190,8 +1291,11 @@ impl PciDevOps for VirtioPciDevice {
                 &locked_parent_bus.mem_region,
             ) {
                 error!("Failed to update bar, error is {:?}", e);
+                return;
             }
         }
+
+        self.do_cfg_access(offset, end, true);
     }
 
     fn name(&self) -> String {

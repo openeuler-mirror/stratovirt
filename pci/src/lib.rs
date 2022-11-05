@@ -139,7 +139,7 @@ pub trait PciDevOps: Send {
     ///
     /// * `offset` - Offset in configuration space.
     /// * `data` - Data buffer for reading.
-    fn read_config(&self, offset: usize, data: &mut [u8]);
+    fn read_config(&mut self, offset: usize, data: &mut [u8]);
 
     /// Configuration space write.
     ///
@@ -376,7 +376,7 @@ mod tests {
                 Ok(())
             }
 
-            fn read_config(&self, _offset: usize, _data: &mut [u8]) {}
+            fn read_config(&mut self, _offset: usize, _data: &mut [u8]) {}
 
             fn write_config(&mut self, _offset: usize, _data: &[u8]) {}
 

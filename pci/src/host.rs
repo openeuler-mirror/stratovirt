@@ -510,7 +510,7 @@ pub mod tests {
             Ok(())
         }
 
-        fn read_config(&self, offset: usize, data: &mut [u8]) {
+        fn read_config(&mut self, offset: usize, data: &mut [u8]) {
             self.config.read(offset, data);
         }
 
