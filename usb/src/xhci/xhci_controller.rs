@@ -472,7 +472,7 @@ impl XhciDevice {
         Ok(())
     }
 
-    /// Update the xhci port status and then
+    /// Update the xhci port status and then notify the driver.
     pub fn port_update(&mut self, port: &Arc<Mutex<XhciPort>>) -> Result<()> {
         let mut locked_port = port.lock().unwrap();
         locked_port.portsc = PORTSC_PP;
@@ -499,6 +499,7 @@ impl XhciDevice {
             locked_port.portsc, pls
         );
         drop(locked_port);
+        self.oper.usb_status |= USB_STS_PCD;
         self.port_notify(port, PORTSC_CSC)?;
         Ok(())
     }
@@ -1442,8 +1443,6 @@ impl XhciDevice {
     pub fn get_mf_index(&self) -> u64 {
         0
     }
-
-    pub fn update_mf(&self) {}
 
     pub(crate) fn reset_event_ring(&mut self, idx: u32) -> Result<()> {
         let intr = &mut self.intrs[idx as usize];

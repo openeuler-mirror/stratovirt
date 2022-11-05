@@ -224,6 +224,10 @@ impl XhciRing {
         self.ccs = true;
     }
 
+    pub fn set_cycle_bit(&mut self, v: bool) {
+        self.ccs = v;
+    }
+
     /// Fetch TRB from the ring.
     pub fn fetch_trb(&mut self) -> Result<XhciTRB> {
         let mut link_cnt = 0;
