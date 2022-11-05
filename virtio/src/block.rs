@@ -21,11 +21,12 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use super::{
-    virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
-    VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
-    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
-    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    report_virtio_error, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
+    VirtioInterruptType, VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
+    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
+    VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
+    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
+    VIRTIO_TYPE_BLOCK,
 };
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
@@ -87,21 +88,6 @@ struct RequestOutHeader {
     request_type: u32,
     io_prio: u32,
     sector: u64,
-}
-
-impl RequestOutHeader {
-    fn is_valid(&self) -> bool {
-        match self.request_type {
-            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_FLUSH | VIRTIO_BLK_T_GET_ID => true,
-            _ => {
-                error!(
-                    "request type {} is not supported for block",
-                    self.request_type
-                );
-                false
-            }
-        }
-    }
 }
 
 impl ByteCode for RequestOutHeader {}
@@ -192,7 +178,7 @@ struct Request {
 }
 
 impl Request {
-    fn new(mem_space: &Arc<AddressSpace>, elem: &Element) -> Result<Self> {
+    fn new(handler: &BlockIoHandler, elem: &Element, status: &mut u8) -> Result<Self> {
         if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() || elem.desc_num < 2 {
             bail!(
                 "Missed header for block request: out {} in {} desc num {}",
@@ -210,7 +196,8 @@ impl Request {
             );
         }
 
-        let out_header = mem_space
+        let out_header = handler
+            .mem_space
             .read_object::<RequestOutHeader>(out_iov_elem.addr)
             .with_context(|| {
                 anyhow!(VirtioError::ReadObjectErr(
@@ -223,7 +210,7 @@ impl Request {
         let in_iov_elem = elem.in_iovec.get(pos).unwrap();
         if in_iov_elem.len < 1 {
             bail!(
-                "Invalid out header for block request: length {}",
+                "Invalid in header for block request: length {}",
                 in_iov_elem.len
             );
         }
@@ -244,13 +231,15 @@ impl Request {
                     if index == elem.in_iovec.len() - 1 {
                         break;
                     }
-                    if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
+                    if let Some(hva) = handler.mem_space.get_host_address(elem_iov.addr) {
                         let iov = Iovec {
                             iov_base: hva,
                             iov_len: u64::from(elem_iov.len),
                         };
                         request.iovec.push(iov);
                         request.data_len += u64::from(elem_iov.len);
+                    } else {
+                        bail!("Map desc base {:?} failed", elem_iov.addr);
                     }
                 }
             }
@@ -259,17 +248,27 @@ impl Request {
                     if index == 0 {
                         continue;
                     }
-                    if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
+                    if let Some(hva) = handler.mem_space.get_host_address(elem_iov.addr) {
                         let iov = Iovec {
                             iov_base: hva,
                             iov_len: u64::from(elem_iov.len),
                         };
                         request.iovec.push(iov);
                         request.data_len += u64::from(elem_iov.len);
+                    } else {
+                        bail!("Map desc base {:?} failed", elem_iov.addr);
                     }
                 }
             }
-            _ => (),
+            VIRTIO_BLK_T_FLUSH => (),
+            others => {
+                error!("Request type {} is not supported for block", others);
+                *status = VIRTIO_BLK_S_UNSUPP;
+            }
+        }
+
+        if !request.io_range_valid(handler.disk_sectors) {
+            *status = VIRTIO_BLK_S_IOERR;
         }
 
         // We always write the last status byte, so count all in_iovs.
@@ -484,8 +483,7 @@ impl BlockIoHandler {
         merge_req_queue
     }
 
-    fn process_queue(&mut self) -> Result<bool> {
-        self.trace_request("Block".to_string(), "to IO".to_string());
+    fn process_queue_internal(&mut self) -> Result<bool> {
         let mut req_queue = Vec::new();
         let mut last_aio_req_index = 0;
         let mut done = false;
@@ -496,10 +494,14 @@ impl BlockIoHandler {
             return Ok(done);
         }
 
-        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+        loop {
+            let elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)?;
             if elem.desc_num == 0 {
                 break;
             }
+
             // limit io operations if iops is configured
             if let Some(lb) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
@@ -515,47 +517,31 @@ impl BlockIoHandler {
                 };
             }
 
-            match Request::new(&self.mem_space, &elem) {
-                Ok(req) => {
-                    if !req.out_header.is_valid() || !req.io_range_valid(self.disk_sectors) {
-                        let status = if !req.out_header.is_valid() {
-                            VIRTIO_BLK_S_UNSUPP
-                        } else {
-                            VIRTIO_BLK_S_IOERR
-                        };
-                        let aiocompletecb = AioCompleteCb::new(
-                            self.queue.clone(),
-                            self.mem_space.clone(),
-                            Rc::new(req),
-                            Some(self.interrupt_cb.clone()),
-                            self.driver_features,
-                        );
-                        aiocompletecb.complete_request(status);
-                        continue;
-                    }
-                    req_queue.push(req);
-                    done = true;
-                }
-                Err(ref e) => {
-                    //  If it fails, also need to free descriptor table entry.
-                    queue
-                        .vring
-                        .add_used(&self.mem_space, elem.index, 0)
-                        .with_context(|| "Failed to add used ring")?;
-                    error!("failed to create block request, {:?}", e);
-                }
-            };
+            // Init and put valid request into request queue.
+            let mut status = VIRTIO_BLK_S_OK;
+            let req = Request::new(self, &elem, &mut status)?;
+            if status != VIRTIO_BLK_S_OK {
+                let aiocompletecb = AioCompleteCb::new(
+                    self.queue.clone(),
+                    self.mem_space.clone(),
+                    Rc::new(req),
+                    Some(self.interrupt_cb.clone()),
+                    self.driver_features,
+                );
+                aiocompletecb.complete_request(status);
+                continue;
+            }
+            req_queue.push(req);
+            done = true;
         }
 
         // unlock queue, because it will be hold below.
         drop(queue);
-
         if req_queue.is_empty() {
             return Ok(done);
         }
 
         let merge_req_queue = self.merge_req_queue(req_queue, &mut last_aio_req_index);
-
         for (req_index, req) in merge_req_queue.into_iter().enumerate() {
             let req_rc = Rc::new(req);
             let aiocompletecb = AioCompleteCb::new(
@@ -584,6 +570,19 @@ impl BlockIoHandler {
         }
 
         Ok(done)
+    }
+
+    fn process_queue(&mut self) -> Result<bool> {
+        self.trace_request("Block".to_string(), "to IO".to_string());
+        let result = self.process_queue_internal();
+        if result.is_err() {
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                Some(&self.deactivate_evt),
+            );
+        }
+        result
     }
 
     fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
