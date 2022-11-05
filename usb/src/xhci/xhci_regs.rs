@@ -649,7 +649,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
             XHCI_PORTHLPMC => 0,
             _ => {
                 error!("Faield to read port register: offset {:x}", offset);
-                0
+                return false;
             }
         };
         if let Err(e) = write_data(data, value) {
@@ -668,91 +668,21 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
                 return false;
             }
         };
-        let locked_port = port.lock().unwrap();
-        debug!(
-            "port write {} {:x} {:x} {:x}",
-            locked_port.name, addr.0, offset, value
-        );
-        let xhci = locked_port.xhci.upgrade().unwrap();
-        drop(locked_port);
-        // Lock controller first.
-        let mut locked_xhci = xhci.lock().unwrap();
-        #[allow(clippy::never_loop)]
-        loop {
-            match offset {
-                XHCI_PORTSC => {
-                    if value & PORTSC_WPR == PORTSC_WPR {
-                        if let Err(e) = locked_xhci.reset_port(&port, true) {
-                            error!("Failed to warn reset port {:?}", e);
-                        }
-                        break;
-                    }
-                    if value & PORTSC_PR == PORTSC_PR {
-                        if let Err(e) = locked_xhci.reset_port(&port, false) {
-                            error!("Failed to reset port {:?}", e);
-                        }
-                        break;
-                    }
-                    let mut locked_port = port.lock().unwrap();
-                    let mut portsc = locked_port.portsc;
-                    let mut notify = 0;
-                    portsc &= !(value
-                        & (PORTSC_CSC
-                            | PORTSC_PEC
-                            | PORTSC_WRC
-                            | PORTSC_OCC
-                            | PORTSC_PRC
-                            | PORTSC_PLC
-                            | PORTSC_CEC));
-                    if value & PORTSC_LWS == PORTSC_LWS {
-                        let old_pls = (locked_port.portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
-                        let new_pls = (value >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
-                        match new_pls {
-                            PLS_U0 => {
-                                if old_pls != PLS_U0 {
-                                    portsc = set_field(
-                                        portsc,
-                                        new_pls,
-                                        PORTSC_PLS_MASK,
-                                        PORTSC_PLS_SHIFT,
-                                    );
-                                    notify = PORTSC_PLC;
-                                }
-                            }
-                            PLS_U3 => {
-                                if old_pls < PLS_U3 {
-                                    portsc = set_field(
-                                        portsc,
-                                        new_pls,
-                                        PORTSC_PLS_MASK,
-                                        PORTSC_PLS_SHIFT,
-                                    );
-                                }
-                            }
-                            PLS_RESUME => {}
-                            _ => {
-                                error!("Invalid port link state, ignore the write.");
-                            }
-                        }
-                    }
-                    portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
-                    portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
-                    locked_port.portsc = portsc;
-                    drop(locked_port);
-                    if notify != 0 {
-                        if let Err(e) = locked_xhci.port_notify(&port, notify) {
-                            error!("Failed to notify: {:?}", e);
-                        }
-                    }
-                }
-                XHCI_PORTPMSC => (),
-                XHCI_PORTLI => (),
-                XHCI_PORTHLPMC => (),
-                _ => {
-                    error!("Invalid port link state offset {}", offset);
+        debug!("port write {:x} {:x} {:x}", addr.0, offset, value);
+        match offset {
+            XHCI_PORTSC => {
+                if let Err(e) = xhci_portsc_write(&port, value) {
+                    error!("Failed to write portsc register, {:?}", e);
+                    return false;
                 }
             }
-            break;
+            XHCI_PORTPMSC => (),
+            XHCI_PORTLI => (),
+            XHCI_PORTHLPMC => (),
+            _ => {
+                error!("Invalid port link state offset {}", offset);
+                return false;
+            }
         }
         true
     };
@@ -761,6 +691,69 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
         read: Arc::new(port_read),
         write: Arc::new(port_write),
     }
+}
+
+fn xhci_portsc_write(port: &Arc<Mutex<XhciPort>>, value: u32) -> Result<()> {
+    let locked_port = port.lock().unwrap();
+    let xhci = locked_port.xhci.upgrade().unwrap();
+    drop(locked_port);
+    // Lock controller first.
+    let mut locked_xhci = xhci.lock().unwrap();
+    if value & PORTSC_WPR == PORTSC_WPR {
+        return locked_xhci.reset_port(port, true);
+    }
+    if value & PORTSC_PR == PORTSC_PR {
+        return locked_xhci.reset_port(port, false);
+    }
+    let mut locked_port = port.lock().unwrap();
+    let mut portsc = locked_port.portsc;
+    let mut notify = 0;
+    // Write 1 to clear.
+    portsc &= !(value
+        & (PORTSC_CSC
+            | PORTSC_PEC
+            | PORTSC_WRC
+            | PORTSC_OCC
+            | PORTSC_PRC
+            | PORTSC_PLC
+            | PORTSC_CEC));
+    if value & PORTSC_LWS == PORTSC_LWS {
+        let old_pls = (locked_port.portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
+        let new_pls = (value >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
+        notify = xhci_portsc_ls_write(&mut portsc, old_pls, new_pls);
+    }
+    portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
+    portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
+    locked_port.portsc = portsc;
+    drop(locked_port);
+    if notify != 0 {
+        locked_xhci.port_notify(port, notify)?;
+    }
+    Ok(())
+}
+
+fn xhci_portsc_ls_write(portsc: &mut u32, old_pls: u32, new_pls: u32) -> u32 {
+    match new_pls {
+        PLS_U0 => {
+            if old_pls != PLS_U0 {
+                *portsc = set_field(*portsc, new_pls, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+                return PORTSC_PLC;
+            }
+        }
+        PLS_U3 => {
+            if old_pls < PLS_U3 {
+                *portsc = set_field(*portsc, new_pls, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+            }
+        }
+        PLS_RESUME => {}
+        _ => {
+            error!(
+                "Unhandled port link state, ignore the write. old {:x} new {:x}",
+                old_pls, new_pls
+            );
+        }
+    }
+    0
 }
 
 fn write_data(data: &mut [u8], value: u32) -> Result<()> {

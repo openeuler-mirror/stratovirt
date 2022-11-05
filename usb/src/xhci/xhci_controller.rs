@@ -436,7 +436,7 @@ impl XhciDevice {
                 locked_port.portsc |= PORTSC_WRC;
             }
             match speed {
-                USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH => {
+                USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
                     locked_port.portsc = set_field(
                         locked_port.portsc,
                         PLS_U0,
