@@ -487,12 +487,7 @@ impl BlockIoHandler {
         let mut req_queue = Vec::new();
         let mut last_aio_req_index = 0;
         let mut done = false;
-
         let mut queue = self.queue.lock().unwrap();
-        if !queue.is_enabled() {
-            done = true;
-            return Ok(done);
-        }
 
         loop {
             let elem = queue
@@ -572,9 +567,40 @@ impl BlockIoHandler {
         Ok(done)
     }
 
+    fn process_queue_suppress_notify(&mut self) -> Result<bool> {
+        let mut done = false;
+        if !self.queue.lock().unwrap().is_enabled() {
+            done = true;
+            return Ok(done);
+        }
+        while self
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .avail_ring_len(&self.mem_space)?
+            != 0
+        {
+            self.queue.lock().unwrap().vring.suppress_queue_notify(
+                &self.mem_space,
+                self.driver_features,
+                true,
+            )?;
+
+            done = self.process_queue_internal()?;
+
+            self.queue.lock().unwrap().vring.suppress_queue_notify(
+                &self.mem_space,
+                self.driver_features,
+                false,
+            )?;
+        }
+        Ok(done)
+    }
+
     fn process_queue(&mut self) -> Result<bool> {
         self.trace_request("Block".to_string(), "to IO".to_string());
-        let result = self.process_queue_internal();
+        let result = self.process_queue_suppress_notify();
         if result.is_err() {
             report_virtio_error(
                 self.interrupt_cb.clone(),
