@@ -348,7 +348,7 @@ impl PciDevOps for RootPort {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         let size = data.len();
         if offset + size > PCIE_CONFIG_SPACE_SIZE || size > 4 {
             error!(

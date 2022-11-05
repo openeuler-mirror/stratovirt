@@ -263,7 +263,7 @@ impl PciDevOps for LPCBridge {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         let size = data.len();
         if offset + size > PCI_CONFIG_SPACE_SIZE || size > 4 {
             debug!(

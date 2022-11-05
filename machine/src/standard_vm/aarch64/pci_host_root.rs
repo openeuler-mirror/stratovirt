@@ -79,7 +79,7 @@ impl PciDevOps for PciHostRoot {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         let size = data.len();
         if size > 4 {
             error!(
