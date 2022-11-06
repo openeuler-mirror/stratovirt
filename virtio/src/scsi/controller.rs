@@ -436,8 +436,8 @@ pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
     _cdb_size: u32,
     _sense_size: u32,
     mode: ScsiXferMode,
-    _interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    _driver_features: u64,
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    driver_features: u64,
     /// resp GPA.
     resp_addr: GuestAddress,
     pub req: T,
@@ -486,8 +486,8 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
             _cdb_size: VIRTIO_SCSI_CDB_DEFAULT_SIZE as u32,
             _sense_size: VIRTIO_SCSI_SENSE_DEFAULT_SIZE as u32,
             mode: ScsiXferMode::ScsiXferNone,
-            _interrupt_cb: interrupt_cb,
-            _driver_features: driver_features,
+            interrupt_cb,
+            driver_features,
             resp_addr: in_iov_elem.addr,
             req: scsi_req,
             resp: scsi_resp,
@@ -548,6 +548,7 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
             error!("Failed to write the scsi response {:?}", e);
             return false;
         }
+
         let mut queue_lock = self.queue.lock().unwrap();
         if let Err(ref e) = queue_lock.vring.add_used(
             mem_space,
@@ -560,6 +561,24 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
             );
             return false;
         }
+
+        if queue_lock
+            .vring
+            .should_notify(mem_space, self.driver_features)
+        {
+            if let Err(e) = (*self.interrupt_cb.as_ref().unwrap())(
+                &VirtioInterruptType::Vring,
+                Some(&queue_lock),
+                false,
+            ) {
+                error!(
+                    "Failed to trigger interrupt(aio completion) for scsi controller, error is {:?}",
+                    e
+                );
+                return false;
+            }
+        }
+
         true
     }
 }
@@ -654,9 +673,6 @@ impl ScsiCtrlHandler {
             queue = self.queue.lock().unwrap();
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-            || VirtioError::InterruptTrigger("scsi ctrl", VirtioInterruptType::Vring),
-        )?;
         Ok(())
     }
 
@@ -943,15 +959,6 @@ impl ScsiCmdHandler {
 
             queue = self.queue.lock().unwrap();
         }
-
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-            || {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "scsi cmd",
-                    VirtioInterruptType::Vring
-                ))
-            },
-        )?;
 
         Ok(())
     }
