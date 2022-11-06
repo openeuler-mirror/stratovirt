@@ -1248,13 +1248,18 @@ fn scsi_command_emulate_report_luns(
     let dev_lock = dev.lock().unwrap();
     // Byte 0-3: Lun List Length. Byte 4-7: Reserved.
     let mut outbuf: Vec<u8> = vec![0; 8];
+    let target = dev_lock.config.target;
 
     if cmd.xfer < 16 {
         bail!("scsi REPORT LUNS xfer {} too short!", cmd.xfer);
     }
 
+    //Byte2: SELECT REPORT:00h/01h/02h. 03h to FFh is reserved.
     if cmd.buf[2] > 2 {
-        bail!("Invalid REPORT LUNS cmd, buf[2] is {}", cmd.buf[2]);
+        bail!(
+            "Invalid REPORT LUNS cmd, SELECT REPORT Byte is {}",
+            cmd.buf[2]
+        );
     }
 
     let scsi_bus = dev_lock.parent_bus.upgrade().unwrap();
@@ -1264,6 +1269,10 @@ fn scsi_command_emulate_report_luns(
 
     for (_pos, device) in scsi_bus_clone.devices.iter() {
         let device_lock = device.lock().unwrap();
+        if device_lock.config.target != target {
+            drop(device_lock);
+            continue;
+        }
         let len = outbuf.len();
         if device_lock.config.lun < 256 {
             outbuf.push(0);
