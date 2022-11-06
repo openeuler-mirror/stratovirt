@@ -12,16 +12,15 @@
 
 use crate::VncError;
 use crate::{
-    auth::Sasl,
+    auth::SaslAuth,
     auth::{AuthState, SubAuthState},
     pixman::{get_image_height, get_image_width, PixelFormat},
     round_up_div,
     server::VncServer,
     utils::BuffPool,
     vnc::{
-        display_cursor_define, framebuffer_upadate, set_area_dirty, update_client_surface,
-        DisplayMouse, BIT_PER_BYTE, DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT,
-        MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
+        display_cursor_define, framebuffer_upadate, set_area_dirty, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
+        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
     },
 };
 use anyhow::{anyhow, Result};
@@ -253,11 +252,11 @@ pub struct VncClient {
     /// The function handling the connection.
     pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
     /// Pointer to VncServer.
-    pub server: Arc<Mutex<VncServer>>,
+    pub server: Arc<VncServer>,
     /// Tls server connection.
     pub tls_conn: Option<rustls::ServerConnection>,
     /// Configuration for sasl authentication.
-    pub sasl: Sasl,
+    pub sasl: SaslAuth,
     /// State flags whether the image needs to be updated for the client.
     state: UpdateState,
     /// Identify the image update area.
@@ -284,7 +283,7 @@ impl VncClient {
         addr: String,
         auth: AuthState,
         subauth: SubAuthState,
-        server: Arc<Mutex<VncServer>>,
+        server: Arc<VncServer>,
         image: *mut pixman_image_t,
     ) -> Self {
         VncClient {
@@ -299,7 +298,7 @@ impl VncClient {
             handlers: Vec::new(),
             server,
             tls_conn: None,
-            sasl: Sasl::default(),
+            sasl: SaslAuth::default(),
             state: UpdateState::No,
             dirty_bitmap: Bitmap::<u64>::new(
                 MAX_WINDOW_HEIGHT as usize
@@ -954,21 +953,8 @@ impl VncClient {
 
         self.desktop_resize();
         // VNC display cursor define.
-        let mut cursor: DisplayMouse = DisplayMouse::default();
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
-        let locked_server = server.lock().unwrap();
-        let mut mask: Vec<u8> = Vec::new();
-        if let Some(c) = &locked_server.cursor {
-            cursor = c.clone();
-        }
-        if let Some(m) = &locked_server.mask {
-            mask = m.clone();
-        }
-        drop(locked_server);
-        if !cursor.data.is_empty() {
-            display_cursor_define(self, &mut cursor, &mut mask);
-        }
-
+        display_cursor_define(self, &server);
         self.update_event_handler(1, VncClient::handle_protocol_msg);
         Ok(())
     }
@@ -1162,9 +1148,6 @@ fn connection_cleanup(client: Arc<Mutex<VncClient>>) {
     info!("Client disconnect : {:?}", addr);
     client.lock().unwrap().disconnect();
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    let mut locked_server = server.lock().unwrap();
-    locked_server.clients.remove(&addr);
-    if locked_server.clients.is_empty() {
-        update_client_surface(&mut locked_server);
-    }
+    let mut locked_clients = server.clients.lock().unwrap();
+    locked_clients.remove(&addr);
 }

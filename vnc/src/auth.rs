@@ -60,7 +60,7 @@ pub enum SubAuthState {
 
 /// Struct of sasl authentiation.
 #[derive(Debug, Clone)]
-pub struct Sasl {
+pub struct SaslAuth {
     /// State of sasl connection .
     pub sasl_conn: *mut sasl_conn_t,
     /// Identity user.
@@ -77,9 +77,9 @@ pub struct Sasl {
     pub run_ssf: u32,
 }
 
-impl Sasl {
+impl SaslAuth {
     pub fn default() -> Self {
-        Sasl {
+        SaslAuth {
             sasl_conn: ptr::null_mut() as *mut sasl_conn_t,
             identity: String::new(),
             mech_list: String::new(),
@@ -89,13 +89,6 @@ impl Sasl {
             run_ssf: 0,
         }
     }
-}
-
-/// Configuration for authentication.
-/// Identity: authentication user.
-#[derive(Debug, Clone, Default)]
-pub struct SaslAuth {
-    pub identity: String,
 }
 
 /// Authentication stage.

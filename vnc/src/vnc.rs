@@ -22,7 +22,7 @@ use crate::{
         unref_pixman_image,
     },
     round_up, round_up_div,
-    server::VncServer,
+    server::{make_server_config, vnc_refresh_notify, VncConnHandler, VncServer, VncSurface},
 };
 use anyhow::{anyhow, Result};
 use core::time;
@@ -119,25 +119,23 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         .set_nonblocking(true)
         .expect("Set noblocking for vnc socket failed");
 
-    let mut server = VncServer::new(Arc::new(Mutex::new(listener)), get_client_image());
-
+    let refresh_fd = Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
+    let server = Arc::new(VncServer::new(refresh_fd, get_client_image()));
     // Parameter configuation for VncServeer.
-    if let Err(err) = server.make_config(vnc_cfg, object) {
+    if let Err(err) = make_server_config(&server, vnc_cfg, object) {
         return Err(err);
     }
 
     // Add an VncServer.
-    add_vnc_server(server);
-
+    add_vnc_server(server.clone());
+    // Register the event to listen for client's connection.
+    let vnc_io = Arc::new(Mutex::new(VncConnHandler::new(listener, server)));
     // Vnc_thread: a thread to send the framebuffer
     if let Err(err) = start_vnc_thread() {
         return Err(err);
     }
 
-    EventLoop::update_event(
-        EventNotifierHelper::internal_notifiers(VNC_SERVERS.lock().unwrap()[0].clone()),
-        None,
-    )?;
+    EventLoop::update_event(EventNotifierHelper::internal_notifiers(vnc_io), None)?;
     Ok(())
 }
 
@@ -170,7 +168,7 @@ fn start_vnc_thread() -> Result<()> {
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
             buf.append(&mut [0_u8; 2].to_vec());
 
-            let locked_server = server.lock().unwrap();
+            let locked_surface = server.vnc_surface.lock().unwrap();
             for rect in rect_info.rects.iter_mut() {
                 if check_rect(rect, rect_info.width, rect_info.height) {
                     let n =
@@ -182,25 +180,21 @@ fn start_vnc_thread() -> Result<()> {
             }
             buf[2] = (num_rects >> 8) as u8;
             buf[3] = num_rects as u8;
+            drop(locked_surface);
 
-            let client = if let Some(client) = locked_server.clients.get(&rect_info.addr) {
-                client.clone()
-            } else {
-                continue;
-            };
-            drop(locked_server);
-            client.lock().unwrap().write_msg(&buf);
+            let locked_clients = server.clients.lock().unwrap();
+            if let Some(client) = locked_clients.get(&rect_info.addr) {
+                client.lock().unwrap().write_msg(&buf);
+            }
+            drop(locked_clients);
         })
         .unwrap();
     Ok(())
 }
 
 /// Add a vnc server during initialization.
-fn add_vnc_server(server: VncServer) {
-    VNC_SERVERS
-        .lock()
-        .unwrap()
-        .push(Arc::new(Mutex::new(server)));
+fn add_vnc_server(server: Arc<VncServer>) {
+    VNC_SERVERS.lock().unwrap().push(server);
 }
 
 /// Set dirty in bitmap.
@@ -230,7 +224,6 @@ pub fn set_area_dirty(
         }
         y += 1;
     }
-    REFRESH_EVT.lock().unwrap().write(1).unwrap();
 }
 
 pub fn vnc_display_update(x: i32, y: i32, w: i32, h: i32) {
@@ -238,10 +231,20 @@ pub fn vnc_display_update(x: i32, y: i32, w: i32, h: i32) {
         return;
     }
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    let mut locked_server = server.lock().unwrap();
-    let g_w = get_image_width(locked_server.guest_image);
-    let g_h = get_image_height(locked_server.guest_image);
-    set_area_dirty(&mut locked_server.guest_dirty_bitmap, x, y, w, h, g_w, g_h);
+    let mut locked_vnc_surface = server.vnc_surface.lock().unwrap();
+    let g_w = get_image_width(locked_vnc_surface.guest_image);
+    let g_h = get_image_height(locked_vnc_surface.guest_image);
+    set_area_dirty(
+        &mut locked_vnc_surface.guest_dirty_bitmap,
+        x,
+        y,
+        w,
+        h,
+        g_w,
+        g_h,
+    );
+    drop(locked_vnc_surface);
+    vnc_refresh_notify(&server);
 }
 
 fn vnc_get_display_update_interval() -> u32 {
@@ -249,9 +252,9 @@ fn vnc_get_display_update_interval() -> u32 {
         return DISPLAY_UPDATE_INTERVAL_DEFAULT;
     }
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    let locked_server = server.lock().unwrap();
+    let update_interval = *server.update_interval.lock().unwrap();
 
-    locked_server.update_interval
+    update_interval
 }
 
 pub fn vnc_loop_update_display(x: i32, y: i32, width: i32, height: i32) {
@@ -281,26 +284,22 @@ fn vnc_height(height: i32) -> i32 {
     cmp::min(MAX_WINDOW_HEIGHT as i32, height)
 }
 
-/// Update Client image
-pub fn update_client_surface(server: &mut VncServer) {
-    unref_pixman_image(server.server_image);
-    server.server_image = ptr::null_mut();
+/// Update server image
+pub fn update_server_surface(server: &Arc<VncServer>) {
+    let mut locked_vnc_surface = server.vnc_surface.lock().unwrap();
+    unref_pixman_image(locked_vnc_surface.server_image);
+    locked_vnc_surface.server_image = ptr::null_mut();
     // Server image changes, clear the task queue.
     VNC_RECT_INFO.lock().unwrap().clear();
-    if server.clients.is_empty() {
+    if server.clients.lock().unwrap().is_empty() {
         return;
     }
 
-    for client in server.clients.values_mut() {
-        client.lock().unwrap().server_image = ptr::null_mut();
-    }
-
-    let g_width = get_image_width(server.guest_image);
-    let g_height = get_image_height(server.guest_image);
+    let g_width = get_image_width(locked_vnc_surface.guest_image);
+    let g_height = get_image_height(locked_vnc_surface.guest_image);
     let width = vnc_width(g_width);
     let height = vnc_height(g_height);
-    server.true_width = cmp::min(MAX_WINDOW_WIDTH as i32, g_width);
-    server.server_image = unsafe {
+    locked_vnc_surface.server_image = unsafe {
         pixman_image_create_bits(
             pixman_format_code_t::PIXMAN_x8r8g8b8,
             width,
@@ -309,14 +308,10 @@ pub fn update_client_surface(server: &mut VncServer) {
             0,
         )
     };
-    for client in server.clients.values_mut() {
-        client.lock().unwrap().server_image = server.server_image;
-        client.lock().unwrap().width = width;
-        client.lock().unwrap().height = height;
-    }
-    server.guest_dirty_bitmap.clear_all();
+
+    locked_vnc_surface.guest_dirty_bitmap.clear_all();
     set_area_dirty(
-        &mut server.guest_dirty_bitmap,
+        &mut locked_vnc_surface.guest_dirty_bitmap,
         0,
         0,
         width,
@@ -327,14 +322,12 @@ pub fn update_client_surface(server: &mut VncServer) {
 }
 
 /// Check if the suface for VncClient is need update
-fn check_surface(surface: &DisplaySurface) -> bool {
-    let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    let locked_server = server.lock().unwrap();
+fn check_surface(locked_vnc_surface: &mut VncSurface, surface: &DisplaySurface) -> bool {
     if surface.image.is_null()
-        || locked_server.server_image.is_null()
-        || locked_server.guest_format != surface.format
-        || get_image_width(locked_server.server_image) != get_image_width(surface.image)
-        || get_image_height(locked_server.server_image) != get_image_height(surface.image)
+        || locked_vnc_surface.server_image.is_null()
+        || locked_vnc_surface.guest_format != surface.format
+        || get_image_width(locked_vnc_surface.server_image) != get_image_width(surface.image)
+        || get_image_height(locked_vnc_surface.server_image) != get_image_height(surface.image)
     {
         return true;
     }
@@ -532,20 +525,20 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
     if VNC_SERVERS.lock().unwrap().is_empty() {
         return;
     }
-    let need_resize = check_surface(surface);
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    let mut locked_server = server.lock().unwrap();
-    unref_pixman_image(locked_server.guest_image);
+    let mut locked_vnc_surface = server.vnc_surface.lock().unwrap();
+    let need_resize = check_surface(&mut locked_vnc_surface, surface);
+    unref_pixman_image(locked_vnc_surface.guest_image);
 
     // Vnc_pixman_image_ref
-    locked_server.guest_image = unsafe { pixman_image_ref(surface.image) };
-    locked_server.guest_format = surface.format;
+    locked_vnc_surface.guest_image = unsafe { pixman_image_ref(surface.image) };
+    locked_vnc_surface.guest_format = surface.format;
 
-    let guest_width: i32 = get_image_width(locked_server.guest_image);
-    let guest_height: i32 = get_image_height(locked_server.guest_image);
+    let guest_width: i32 = get_image_width(locked_vnc_surface.guest_image);
+    let guest_height: i32 = get_image_height(locked_vnc_surface.guest_image);
     if !need_resize {
         set_area_dirty(
-            &mut locked_server.guest_dirty_bitmap,
+            &mut locked_vnc_surface.guest_dirty_bitmap,
             0,
             0,
             guest_width,
@@ -553,20 +546,14 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
             guest_width,
             guest_height,
         );
+        vnc_refresh_notify(&server);
         return;
     }
-    update_client_surface(&mut locked_server);
-    // Cursor.
-    let mut cursor: DisplayMouse = DisplayMouse::default();
-    let mut mask: Vec<u8> = Vec::new();
-    if let Some(c) = &locked_server.cursor {
-        cursor = c.clone();
-    }
-    if let Some(m) = &locked_server.mask {
-        mask = m.clone();
-    }
+    drop(locked_vnc_surface);
+    update_server_surface(&server);
 
-    for client in locked_server.clients.values_mut() {
+    let mut locked_clients = server.clients.lock().unwrap();
+    for client in locked_clients.values_mut() {
         let width = vnc_width(guest_width);
         let height = vnc_height(guest_height);
         let mut locked_client = client.lock().unwrap();
@@ -575,9 +562,7 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
         // Desktop_resize.
         locked_client.desktop_resize();
         // Cursor define.
-        if !cursor.data.is_empty() {
-            display_cursor_define(&mut locked_client, &mut cursor, &mut mask);
-        }
+        display_cursor_define(&mut locked_client, &server);
         locked_client.dirty_bitmap.clear_all();
         set_area_dirty(
             &mut locked_client.dirty_bitmap,
@@ -589,6 +574,7 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
             guest_height,
         );
     }
+    vnc_refresh_notify(&server);
 }
 
 pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
@@ -625,22 +611,42 @@ pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
         }
     }
 
-    server.lock().unwrap().cursor = Some(cursor.clone());
-    server.lock().unwrap().mask = Some(mask.clone());
+    server.vnc_cursor.lock().unwrap().cursor = Some(cursor.clone());
+    server.vnc_cursor.lock().unwrap().mask = Some(mask.clone());
 
+    let mut locked_clients = server.clients.lock().unwrap();
     // Send the framebuff for each client.
-    for client in server.lock().unwrap().clients.values_mut() {
-        display_cursor_define(&mut client.lock().unwrap(), cursor, &mut mask);
+    for client in locked_clients.values_mut() {
+        let mut locked_client = client.lock().unwrap();
+        display_cursor_define(&mut locked_client, &server);
     }
 }
 
 /// Send framebuf of mouse to the client.
-pub fn display_cursor_define(
-    client: &mut VncClient,
-    cursor: &mut DisplayMouse,
-    mask: &mut Vec<u8>,
-) {
-    if cursor.data.len() != ((cursor.width * cursor.height) as usize) * bytes_per_pixel() {
+pub fn display_cursor_define(client: &mut VncClient, server: &Arc<VncServer>) {
+    let mut cursor: DisplayMouse;
+    let mut mask: Vec<u8>;
+    let locked_cursor = server.vnc_cursor.lock().unwrap();
+    match &locked_cursor.cursor {
+        Some(c) => {
+            cursor = c.clone();
+        }
+        None => {
+            return;
+        }
+    }
+    match &locked_cursor.mask {
+        Some(m) => {
+            mask = m.clone();
+        }
+        None => {
+            return;
+        }
+    }
+    drop(locked_cursor);
+    if cursor.data.is_empty()
+        || cursor.data.len() != ((cursor.width * cursor.height) as usize) * bytes_per_pixel()
+    {
         return;
     }
     let mut buf = Vec::new();
@@ -679,14 +685,11 @@ pub fn display_cursor_define(
         let data_size = cursor.width * cursor.height * client.client_dpm.pf.pixel_bytes as u32;
         let data_ptr = cursor.data.as_ptr() as *mut u8;
         write_pixel(data_ptr, data_size as usize, &client.client_dpm, &mut buf);
-        buf.append(mask);
+        buf.append(&mut mask);
         client.write_msg(&buf);
     }
 }
 
-pub static VNC_SERVERS: Lazy<Mutex<Vec<Arc<Mutex<VncServer>>>>> =
-    Lazy::new(|| Mutex::new(Vec::new()));
+pub static VNC_SERVERS: Lazy<Mutex<Vec<Arc<VncServer>>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static VNC_RECT_INFO: Lazy<Arc<Mutex<Vec<RectInfo>>>> =
     Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
-pub static REFRESH_EVT: Lazy<Arc<Mutex<EventFd>>> =
-    Lazy::new(|| Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())));
