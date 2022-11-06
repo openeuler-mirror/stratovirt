@@ -53,9 +53,9 @@ impl VncClient {
         let keycode: u16;
         match self
             .server
+            .keysym2keycode
             .lock()
             .unwrap()
-            .keysym2keycode
             .get(&(keysym as u16))
         {
             Some(k) => keycode = *k,

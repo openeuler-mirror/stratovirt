@@ -113,8 +113,8 @@ impl VncClient {
         buf.append(&mut (1_u8).to_be_bytes().to_vec());
         self.write_msg(&buf);
 
-        if let Some(tls_config) = &self.server.lock().unwrap().tls_config {
-            match rustls::ServerConnection::new(Arc::clone(tls_config)) {
+        if let Some(tls_config) = self.server.security_type.lock().unwrap().tls_config.clone() {
+            match rustls::ServerConnection::new(tls_config) {
                 Ok(tls_conn) => {
                     self.tls_conn = Some(tls_conn);
                 }

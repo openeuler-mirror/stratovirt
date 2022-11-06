@@ -25,6 +25,8 @@ pub enum VncError {
     InvalidImageSize,
     #[error("Tcp bind failed: {0}")]
     TcpBindFailed(String),
+    #[error("Make connection failed: {0}")]
+    MakeConnectionFailed(String),
     #[error("Make tls connection failed: {0}")]
     MakeTlsConnectionFailed(String),
     #[error("ProtocolMessage failed: {0}")]
