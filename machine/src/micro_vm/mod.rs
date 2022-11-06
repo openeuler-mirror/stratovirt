@@ -698,7 +698,7 @@ impl MachineOps for LightMachine {
         vm_config: &mut VmConfig,
         cfg_args: &str,
     ) -> MachineResult<()> {
-        let device_cfg = parse_blk(vm_config, cfg_args)?;
+        let device_cfg = parse_blk(vm_config, cfg_args, None)?;
         if self.replaceable_info.block_count >= MMIO_REPLACEABLE_BLK_NR {
             bail!(
                 "A maximum of {} block replaceable devices are supported.",
