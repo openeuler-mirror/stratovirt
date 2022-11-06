@@ -54,6 +54,7 @@ use machine_manager::config::{
     parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci,
     BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
     NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    MAX_VIRTIO_QUEUE,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -602,7 +603,12 @@ pub trait MachineOps {
     fn add_virtio_pci_blk(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
-        let device_cfg = parse_blk(vm_config, cfg_args)?;
+        let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
+            0,
+            vm_config.machine_config.nr_cpus,
+            MAX_VIRTIO_QUEUE,
+        ));
+        let device_cfg = parse_blk(vm_config, cfg_args, queues_auto)?;
         if let Some(bootindex) = device_cfg.boot_index {
             self.check_bootindex(bootindex)
                 .with_context(|| "Fail to add virtio pci blk device for invalid bootindex")?;
@@ -727,7 +733,12 @@ pub trait MachineOps {
     fn add_vhost_user_blk_pci(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
-        let device_cfg = parse_vhost_user_blk_pci(vm_config, cfg_args)?;
+        let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
+            0,
+            vm_config.machine_config.nr_cpus,
+            MAX_VIRTIO_QUEUE,
+        ));
+        let device_cfg = parse_vhost_user_blk_pci(vm_config, cfg_args, queues_auto)?;
         let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(VhostUser::Block::new(
             &device_cfg,
             self.get_sys_mem(),

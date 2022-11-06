@@ -256,7 +256,11 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     Ok(drive)
 }
 
-pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevConfig> {
+pub fn parse_blk(
+    vm_config: &mut VmConfig,
+    drive_config: &str,
+    queues_auto: Option<u16>,
+) -> Result<BlkDevConfig> {
     let mut cmd_parser = CmdParser::new("virtio-blk");
     cmd_parser
         .push("")
@@ -301,6 +305,8 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
 
     if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
         blkdevcfg.queues = queues;
+    } else if let Some(queues) = queues_auto {
+        blkdevcfg.queues = queues;
     }
 
     if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
@@ -319,6 +325,7 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
 pub fn parse_vhost_user_blk_pci(
     vm_config: &mut VmConfig,
     drive_config: &str,
+    queues_auto: Option<u16>,
 ) -> Result<BlkDevConfig> {
     let mut cmd_parser = CmdParser::new("vhost-user-blk-pci");
     cmd_parser
@@ -351,6 +358,8 @@ pub fn parse_vhost_user_blk_pci(
     }
 
     if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
+        blkdevcfg.queues = queues;
+    } else if let Some(queues) = queues_auto {
         blkdevcfg.queues = queues;
     }
 
@@ -536,6 +545,7 @@ mod tests {
         let blk_cfg_res = parse_blk(
             &mut vm_config,
             "virtio-blk-device,drive=rootfs,id=rootfs,iothread=iothread1,serial=111111,num-queues=4",
+            None,
         );
         assert!(blk_cfg_res.is_ok());
         let blk_device_config = blk_cfg_res.unwrap();
@@ -553,6 +563,7 @@ mod tests {
         let blk_cfg_res = parse_blk(
             &mut vm_config,
             "virtio-blk-device,drive=rootfs1,id=rootfs1,iothread=iothread1,iops=200,serial=111111",
+            None,
         );
         assert!(blk_cfg_res.is_err()); // Can not find drive named "rootfs1".
     }
@@ -564,7 +575,7 @@ mod tests {
             .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
         let blk_cfg = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111,num-queues=4";
-        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
+        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg, None);
         assert!(blk_cfg_res.is_ok());
         let drive_configs = blk_cfg_res.unwrap();
         assert_eq!(drive_configs.id, "rootfs");
@@ -581,7 +592,7 @@ mod tests {
         assert_eq!(pci.addr, (1, 2));
 
         //  drive "rootfs" has been removed.
-        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
+        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg, None);
         assert!(blk_cfg_res.is_err());
 
         let mut vm_config = VmConfig::default();
@@ -590,7 +601,7 @@ mod tests {
             .is_ok());
         let blk_cfg =
             "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,multifunction=on";
-        assert!(parse_blk(&mut vm_config, blk_cfg).is_ok());
+        assert!(parse_blk(&mut vm_config, blk_cfg, None).is_ok());
     }
 
     #[test]

@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
@@ -1068,6 +1068,14 @@ impl VirtioPciDevice {
                 e
             );
         }
+    }
+
+    pub fn virtio_pci_auto_queues_num(queues_fixed: u16, nr_cpus: u8, queues_max: usize) -> u16 {
+        // Give each vcpu a vq, allow the vCPU that submit request can handle
+        // its own request completion. i.e, If the vq is not enough, vcpu A will
+        // receive completion of request that submitted by vcpu B, then A needs
+        // to IPI B.
+        min(queues_max as u16 - queues_fixed, nr_cpus as u16)
     }
 }
 

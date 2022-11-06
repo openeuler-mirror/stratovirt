@@ -49,7 +49,7 @@ use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
-    DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, VmConfig,
+    DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, VmConfig, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -59,7 +59,7 @@ use pci::PciBus;
 use util::byte_code::ByteCode;
 use virtio::{
     qmp_balloon, qmp_query_balloon, Block, BlockState, VhostKern, VhostUser, VirtioDevice,
-    VirtioNetState,
+    VirtioNetState, VirtioPciDevice,
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -748,6 +748,7 @@ impl StdMachine {
             bail!("Drive not set");
         };
 
+        let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
         let blk = if let Some(conf) = self.get_vm_config().lock().unwrap().drives.get(drive) {
             let dev = BlkDevConfig {
                 id: args.id.clone(),
@@ -757,7 +758,9 @@ impl StdMachine {
                 serial_num: args.serial_num.clone(),
                 iothread: args.iothread.clone(),
                 iops: conf.iops,
-                queues: args.queues.unwrap_or(1),
+                queues: args.queues.unwrap_or_else(|| {
+                    VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
+                }),
                 boot_index: args.boot_index,
                 chardev: None,
                 socket_path: None,
