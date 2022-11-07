@@ -446,8 +446,11 @@ pub fn init_msix(
     parent_region: Option<&Region>,
     offset_opt: Option<(u32, u32)>,
 ) -> Result<()> {
-    if vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
-        bail!("Too many msix vectors.");
+    if vector_nr == 0 || vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
+        bail!(
+            "invalid msix vectors, which should be in [1, {}]",
+            MSIX_TABLE_SIZE_MAX + 1
+        );
     }
 
     let msix_cap_offset: usize = config.add_pci_cap(CapId::Msix as u8, MSIX_CAP_SIZE as usize)?;
@@ -538,6 +541,18 @@ mod tests {
         assert!(init_msix(
             0,
             MSIX_TABLE_SIZE_MAX as u32 + 2,
+            &mut pci_config,
+            Arc::new(AtomicU16::new(0)),
+            "msix",
+            None,
+            None,
+        )
+        .is_err());
+
+        // No vector.
+        assert!(init_msix(
+            0,
+            0,
             &mut pci_config,
             Arc::new(AtomicU16::new(0)),
             "msix",
