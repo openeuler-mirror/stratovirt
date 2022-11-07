@@ -240,9 +240,16 @@ impl RTC {
 
         match self.cur_index {
             RTC_SECONDS | RTC_MINUTES | RTC_HOURS | RTC_DAY_OF_WEEK | RTC_DAY_OF_MONTH
-            | RTC_MONTH | RTC_YEAR => {
-                self.cmos_data[self.cur_index as usize] = data[0];
-                self.update_rtc_time();
+            | RTC_MONTH | RTC_YEAR | RTC_CENTURY_BCD => {
+                if self.rtc_valid_check(data[0]) {
+                    self.cmos_data[self.cur_index as usize] = data[0];
+                    self.update_rtc_time();
+                } else {
+                    warn!(
+                        "Set invalid RTC time, index {}, data {}",
+                        self.cur_index, data[0]
+                    );
+                }
             }
             RTC_REG_C | RTC_REG_D => {
                 warn!(
@@ -292,6 +299,36 @@ impl RTC {
         self.cmos_data[RTC_MONTH as usize] = bin_to_bcd((tm.tm_mon + 1) as u8);
         self.cmos_data[RTC_YEAR as usize] = bin_to_bcd(((tm.tm_year + 1900) % 100) as u8);
         self.cmos_data[RTC_CENTURY_BCD as usize] = bin_to_bcd(((tm.tm_year + 1900) / 100) as u8);
+    }
+
+    fn rtc_valid_check(&self, val: u8) -> bool {
+        let range = [
+            [0, 59], // Seconds
+            [0, 59], // Seconds Alarm
+            [0, 59], // Minutes
+            [0, 59], // Minutes Alarm
+            [0, 23], // Hours
+            [0, 23], // Hours Alarm
+            [1, 7],  // Day of the Week
+            [1, 31], // Day of the Month
+            [1, 12], // Month
+            [0, 99], // Year
+        ];
+
+        if (val >> 4) > 9 || (val & 0x0f) > 9 {
+            return false;
+        }
+
+        let value = bcd_to_bin(val);
+
+        if self.cur_index <= 9
+            && (value < range[self.cur_index as usize][0]
+                || value > range[self.cur_index as usize][1])
+        {
+            return false;
+        }
+
+        true
     }
 
     fn update_rtc_time(&mut self) {
