@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::config::{
-    ConfigError, ObjConfig, {CmdParser, VmConfig},
+    ConfigError, {CmdParser, VmConfig},
 };
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -42,9 +42,8 @@ impl VmConfig {
         }
 
         let id = saslauth.id.clone();
-        if self.object.get(&id).is_none() {
-            let saslauth_config = ObjConfig::Sasl(saslauth);
-            self.object.insert(id, saslauth_config);
+        if self.object.sasl_object.get(&id).is_none() {
+            self.object.sasl_object.insert(id, saslauth);
         } else {
             return Err(anyhow!(ConfigError::IdRepeat("saslauth".to_string(), id)));
         }
@@ -64,20 +63,16 @@ mod tests {
         assert!(vm_config
             .add_object("authz-simple,id=authz0,identity=test")
             .is_ok());
-        assert!(vm_config.object.get(&id).is_some());
-        if let Some(obj_cfg) = vm_config.object.get(&id) {
-            if let ObjConfig::Sasl(saslauth) = obj_cfg {
-                assert_eq!(saslauth.identity, "test".to_string());
-            }
+        assert!(vm_config.object.sasl_object.get(&id).is_some());
+        if let Some(obj_cfg) = vm_config.object.sasl_object.get(&id) {
+            assert_eq!(obj_cfg.identity, "test".to_string());
         }
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_object("authz-simple,id=authz0").is_ok());
-        assert!(vm_config.object.get(&id).is_some());
-        if let Some(obj_cfg) = vm_config.object.get(&id) {
-            if let ObjConfig::Sasl(saslauth) = obj_cfg {
-                assert!(saslauth.identity == "".to_string());
-            }
+        assert!(vm_config.object.sasl_object.get(&id).is_some());
+        if let Some(obj_cfg) = vm_config.object.sasl_object.get(&id) {
+            assert!(obj_cfg.identity == "".to_string());
         }
     }
 }

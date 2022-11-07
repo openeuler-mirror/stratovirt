@@ -75,35 +75,12 @@ pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_TAG_LENGTH: usize = 36;
 pub const MAX_NODES: u32 = 128;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ObjConfig {
-    Rng(RngObjConfig),
-    Zone(MemZoneConfig),
-    Tls(TlsCredObjConfig),
-    Sasl(SaslAuthObjConfig),
-}
-
-fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
-    let mut cmd_params = CmdParser::new("rng-object");
-    cmd_params.push("").push("id").push("filename");
-
-    cmd_params.parse(object_args)?;
-    let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
-        obj_id
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rng-object")));
-    };
-    let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
-        name
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "filename",
-            "rng-object"
-        )));
-    };
-    let rng_obj_cfg = RngObjConfig { id, filename };
-
-    Ok(rng_obj_cfg)
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct ObjectConfig {
+    pub rng_object: HashMap<String, RngObjConfig>,
+    pub mem_object: HashMap<String, MemZoneConfig>,
+    pub tls_object: HashMap<String, TlsCredObjConfig>,
+    pub sasl_object: HashMap<String, SaslAuthObjConfig>,
 }
 
 /// This main config structure for Vm, contains Vm's basic configuration and devices.
@@ -119,7 +96,7 @@ pub struct VmConfig {
     pub devices: Vec<(String, String)>,
     pub serial: Option<SerialConfig>,
     pub iothreads: Option<Vec<IothreadConfig>>,
-    pub object: HashMap<String, ObjConfig>,
+    pub object: ObjectConfig,
     pub pflashs: Option<Vec<PFlashConfig>>,
     pub dev_name: HashMap<String, u8>,
     pub global_config: HashMap<String, String>,
@@ -204,9 +181,8 @@ impl VmConfig {
             "rng-random" => {
                 let rng_cfg = parse_rng_obj(object_args)?;
                 let id = rng_cfg.id.clone();
-                let object_config = ObjConfig::Rng(rng_cfg);
-                if self.object.get(&id).is_none() {
-                    self.object.insert(id, object_config);
+                if self.object.rng_object.get(&id).is_none() {
+                    self.object.rng_object.insert(id, rng_cfg);
                 } else {
                     bail!("Object: {} has been added", id);
                 }
@@ -214,9 +190,8 @@ impl VmConfig {
             "memory-backend-ram" => {
                 let zone_config = self.add_mem_zone(object_args)?;
                 let id = zone_config.id.clone();
-                let object_config = ObjConfig::Zone(zone_config);
-                if self.object.get(&id).is_none() {
-                    self.object.insert(id, object_config);
+                if self.object.mem_object.get(&id).is_none() {
+                    self.object.mem_object.insert(id, zone_config);
                 } else {
                     bail!("Object: {} has been added", id);
                 }

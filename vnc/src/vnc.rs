@@ -26,13 +26,12 @@ use crate::{
 use anyhow::{anyhow, Result};
 use core::time;
 use machine_manager::{
-    config::{ObjConfig, VncConfig},
+    config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,
 };
 use once_cell::sync::Lazy;
 use std::{
     cmp,
-    collections::HashMap,
     net::TcpListener,
     ptr,
     sync::{Arc, Mutex},
@@ -95,7 +94,7 @@ pub struct DisplayMouse {
 /// # Arguments
 ///
 /// * `VncConfig` `object`- vnc related parameters
-pub fn vnc_init(vnc: &Option<VncConfig>, object: &HashMap<String, ObjConfig>) -> Result<()> {
+pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
     let vnc_cfg;
     if let Some(v) = vnc {
         vnc_cfg = v;
