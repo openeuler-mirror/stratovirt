@@ -1298,6 +1298,17 @@ impl CompileFDTHelper for StdMachine {
                 fdt.set_property_string("enable-method", "psci")?;
             }
             fdt.set_property_u64("reg", mpidr & 0x007F_FFFF)?;
+            fdt.set_property_u32("phandle", device_tree::FIRST_VCPU_PHANDLE)?;
+
+            if let Some(numa_nodes) = &self.numa_nodes {
+                for numa_index in 0..numa_nodes.len() {
+                    let numa_node = numa_nodes.get(&(numa_index as u32));
+                    if numa_node.unwrap().cpus.contains(&(cpu_index as u8)) {
+                        fdt.set_property_u32("numa-node-id", numa_index as u32)?;
+                    }
+                }
+            }
+
             fdt.end_node(mpidr_node_dep)?;
         }
 
