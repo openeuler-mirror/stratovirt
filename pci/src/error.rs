@@ -34,5 +34,5 @@ pub enum PciError {
     #[error("HotPlug is not supported for device with devfn {0}")]
     HotplugUnsupported(u8),
     #[error("Invalid PCI configuration, key:{0}, value:{1}")]
-    InvalidConf(String, u32),
+    InvalidConf(String, String),
 }

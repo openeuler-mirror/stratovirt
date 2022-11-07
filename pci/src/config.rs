@@ -553,6 +553,7 @@ impl PciConfig {
         size: u64,
     ) -> Result<()> {
         self.validate_bar_id(id)?;
+        self.validate_bar_size(region_type, size)?;
         let offset: usize = BAR_0 as usize + id * REG_SIZE;
         match region_type {
             RegionType::Io => {
@@ -885,7 +886,21 @@ impl PciConfig {
         {
             return Err(anyhow!(PciError::InvalidConf(
                 "Bar id".to_string(),
-                id as u32
+                id.to_string(),
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_bar_size(&self, bar_type: RegionType, size: u64) -> Result<()> {
+        if !size.is_power_of_two()
+            || ((bar_type == RegionType::Mem32Bit || bar_type == RegionType::Mem64Bit)
+                && size < MINMUM_BAR_SIZE_FOR_MMIO.try_into().unwrap())
+            || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO.try_into().unwrap())
+        {
+            return Err(anyhow!(PciError::InvalidConf(
+                "Bar size".to_string(),
+                size.to_string(),
             )));
         }
         Ok(())
@@ -932,40 +947,31 @@ mod tests {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let region = Region::init_io_region(2048, region_ops);
+        let region = Region::init_io_region(8192, region_ops.clone());
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
 
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
-            .register_bar(
-                0,
-                region.clone(),
-                RegionType::Io,
-                false,
-                IO_BASE_ADDR_MASK as u64,
-            )
+            .register_bar(0, region.clone(), RegionType::Io, false, 8192)
             .is_ok());
         assert!(pci_config
-            .register_bar(
-                1,
-                region.clone(),
-                RegionType::Mem32Bit,
-                false,
-                (MEM_BASE_ADDR_MASK as u32) as u64,
-            )
+            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 8192)
             .is_ok());
         assert!(pci_config
-            .register_bar(
-                2,
-                region.clone(),
-                RegionType::Mem64Bit,
-                true,
-                MEM_BASE_ADDR_MASK
-            )
+            .register_bar(2, region.clone(), RegionType::Mem64Bit, true, 8192)
             .is_ok());
         // test when bar id is not valid
         assert!(pci_config
-            .register_bar(7, region, RegionType::Mem64Bit, true, MEM_BASE_ADDR_MASK)
+            .register_bar(7, region, RegionType::Mem64Bit, true, 8192)
+            .is_err());
+        // test when bar size is incorrect(below 4KB, or not power of 2)
+        let region_size_too_small = Region::init_io_region(2048, region_ops.clone());
+        assert!(pci_config
+            .register_bar(3, region_size_too_small, RegionType::Mem64Bit, true, 2048)
+            .is_err());
+        let region_size_not_pow_2 = Region::init_io_region(4238, region_ops);
+        assert!(pci_config
+            .register_bar(4, region_size_not_pow_2, RegionType::Mem64Bit, true, 4238)
             .is_err());
 
         #[cfg(target_arch = "x86_64")]
@@ -1022,18 +1028,18 @@ mod tests {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let region = Region::init_io_region(2048, region_ops);
+        let region = Region::init_io_region(8192, region_ops);
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 6);
 
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
-            .register_bar(0, region.clone(), RegionType::Io, false, 2048)
+            .register_bar(0, region.clone(), RegionType::Io, false, 8192)
             .is_ok());
         assert!(pci_config
-            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048)
+            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 8192)
             .is_ok());
         assert!(pci_config
-            .register_bar(2, region, RegionType::Mem64Bit, true, 2048)
+            .register_bar(2, region, RegionType::Mem64Bit, true, 8192)
             .is_ok());
 
         #[cfg(target_arch = "x86_64")]
@@ -1167,19 +1173,19 @@ mod tests {
             read: Arc::new(read_ops),
             write: Arc::new(write_ops),
         };
-        let region = Region::init_io_region(2048, region_ops);
+        let region = Region::init_io_region(4096, region_ops);
         let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
 
         // bar is unmapped
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
-            .register_bar(0, region.clone(), RegionType::Io, false, 2048)
+            .register_bar(0, region.clone(), RegionType::Io, false, 4096)
             .is_ok());
         assert!(pci_config
-            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048)
+            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 4096)
             .is_ok());
         assert!(pci_config
-            .register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048)
+            .register_bar(2, region.clone(), RegionType::Mem64Bit, true, 4096)
             .is_ok());
 
         #[cfg(target_arch = "x86_64")]
@@ -1197,13 +1203,13 @@ mod tests {
         // bar is mapped
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
-            .register_bar(0, region.clone(), RegionType::Io, false, 2048)
+            .register_bar(0, region.clone(), RegionType::Io, false, 4096)
             .is_ok());
         assert!(pci_config
-            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 2048)
+            .register_bar(1, region.clone(), RegionType::Mem32Bit, false, 4096)
             .is_ok());
         assert!(pci_config
-            .register_bar(2, region.clone(), RegionType::Mem64Bit, true, 2048)
+            .register_bar(2, region.clone(), RegionType::Mem64Bit, true, 4096)
             .is_ok());
 
         #[cfg(target_arch = "x86_64")]
