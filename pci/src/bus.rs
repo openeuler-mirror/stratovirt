@@ -302,6 +302,8 @@ mod tests {
             (0xC000_0000, 0x3000_0000),
             #[cfg(target_arch = "aarch64")]
             (0xF000_0000, 0x1000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (512 << 30, 512 << 30),
         )))
     }
 
