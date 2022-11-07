@@ -30,7 +30,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use machine_manager::{
-    config::{ObjConfig, VncConfig},
+    config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,
 };
 use std::{
@@ -163,13 +163,9 @@ impl VncServer {
     ///
     /// * `vnc_cfg` - configure of vnc.
     /// * `object` - configure of sasl and tls.
-    pub fn make_config(
-        &mut self,
-        vnc_cfg: &VncConfig,
-        object: &HashMap<String, ObjConfig>,
-    ) -> Result<()> {
+    pub fn make_config(&mut self, vnc_cfg: &VncConfig, object: &ObjectConfig) -> Result<()> {
         // Tls configuration.
-        if let Some(ObjConfig::Tls(tls_cred)) = object.get(&vnc_cfg.tls_creds) {
+        if let Some(tls_cred) = object.tls_object.get(&vnc_cfg.tls_creds) {
             let tlscred = TlsCreds {
                 cred_type: tls_cred.cred_type.clone(),
                 dir: tls_cred.dir.clone(),
@@ -189,7 +185,7 @@ impl VncServer {
         }
 
         // Sasl configuration.
-        if let Some(ObjConfig::Sasl(sasl_auth)) = object.get(&vnc_cfg.sasl_authz) {
+        if let Some(sasl_auth) = object.sasl_object.get(&vnc_cfg.sasl_authz) {
             let saslauth = SaslAuth {
                 identity: sasl_auth.identity.clone(),
             };

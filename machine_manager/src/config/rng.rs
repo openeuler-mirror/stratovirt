@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
-use super::{pci_args_check, ObjConfig};
+use super::pci_args_check;
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 
 const MIN_BYTES_PER_SEC: u64 = 64;
@@ -113,16 +113,37 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
         bail!("Argument 'max-bytes' is missing");
     }
 
-    if let Some(object_cfg) = vm_config.object.remove(&rng) {
-        if let ObjConfig::Rng(obj_cfg) = object_cfg {
-            rng_cfg.random_file = obj_cfg.filename;
-        }
+    if let Some(rng_object) = vm_config.object.rng_object.remove(&rng) {
+        rng_cfg.random_file = rng_object.filename;
     } else {
         bail!("Object for rng-random device not found");
     }
 
     rng_cfg.check()?;
     Ok(rng_cfg)
+}
+
+pub fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
+    let mut cmd_params = CmdParser::new("rng-object");
+    cmd_params.push("").push("id").push("filename");
+
+    cmd_params.parse(object_args)?;
+    let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
+        obj_id
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rng-object")));
+    };
+    let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
+        name
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "filename",
+            "rng-object"
+        )));
+    };
+    let rng_obj_cfg = RngObjConfig { id, filename };
+
+    Ok(rng_obj_cfg)
 }
 
 #[cfg(test)]

@@ -53,7 +53,7 @@ use machine_manager::config::{
     parse_scsi_controller, parse_scsi_device, parse_usb_keyboard, parse_usb_tablet, parse_vfio,
     parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci,
     BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
-    NumaNodes, ObjConfig, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
 };
 use machine_manager::{
     event_loop::EventLoop,
@@ -948,10 +948,9 @@ pub trait MachineOps {
                         ..Default::default()
                     };
 
-                    if let Some(object_cfg) = vm_config.object.remove(&numa_config.mem_dev) {
-                        if let ObjConfig::Zone(zone_config) = object_cfg {
-                            numa_node.size = zone_config.size;
-                        }
+                    if let Some(mem_cfg) = vm_config.object.mem_object.remove(&numa_config.mem_dev)
+                    {
+                        numa_node.size = mem_cfg.size;
                     } else {
                         bail!(
                             "Object for memory-backend-ram {} config not found",
