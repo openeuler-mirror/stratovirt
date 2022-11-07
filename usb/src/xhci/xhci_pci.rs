@@ -38,8 +38,10 @@ const PCI_CLASS_PI: u16 = 0x09;
 const PCI_INTERRUPT_PIN: u16 = 0x3d;
 const PCI_CACHE_LINE_SIZE: u16 = 0x0c;
 const PCI_SERIAL_BUS_RELEASE_NUMBER: u8 = 0x60;
+const PCI_FRAME_LENGTH_ADJUSTMENT: u8 = 0x61;
 const PCI_SERIAL_BUS_RELEASE_VERSION_3_0: u8 = 0x30;
 const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
+const PCI_NO_FRAME_LENGTH_TIMING_CAP: u8 = 0x40;
 /// PCI capability offset or size.
 const XHCI_PCI_CONFIG_LENGTH: u32 = 0x4000;
 const XHCI_PCI_CAP_OFFSET: u32 = 0x0;
@@ -177,6 +179,8 @@ impl PciDevOps for XhciPciDevice {
         self.pci_config.config[PCI_CACHE_LINE_SIZE as usize] = 0x10;
         self.pci_config.config[PCI_SERIAL_BUS_RELEASE_NUMBER as usize] =
             PCI_SERIAL_BUS_RELEASE_VERSION_3_0;
+        self.pci_config.config[PCI_FRAME_LENGTH_ADJUSTMENT as usize] =
+            PCI_NO_FRAME_LENGTH_TIMING_CAP;
         self.dev_id.store(self.devfn as u16, Ordering::SeqCst);
         self.mem_region_init()?;
 
