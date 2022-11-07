@@ -37,8 +37,8 @@ use super::config::{
 };
 use crate::bus::PciBus;
 use crate::hotplug::HotplugOps;
-use crate::init_multifunction;
 use crate::msix::init_msix;
+use crate::{init_multifunction, PciError};
 use crate::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
     PciDevOps,
@@ -450,20 +450,23 @@ impl HotplugOps for RootPort {
             .devfn()
             .with_context(|| "Failed to get devfn")?;
         // Only if devfn is equal to 0, hot plugging is supported.
-        if devfn == 0 {
-            let offset = self.config.ext_cap_offset;
-            le_write_set_value_u16(
-                &mut self.config.config,
-                (offset + PCI_EXP_SLTSTA) as usize,
-                PCI_EXP_SLTSTA_PDS | PCI_EXP_HP_EV_PDC | PCI_EXP_HP_EV_ABP,
-            )?;
-            le_write_set_value_u16(
-                &mut self.config.config,
-                (offset + PCI_EXP_LNKSTA) as usize,
-                PCIE_CAP_CLS_2_5G | PCIE_CAP_NLW_X1 | PCI_EXP_LNKSTA_DLLLA,
-            )?;
-            self.hotplug_event_notify();
+        if devfn != 0 {
+            return Err(anyhow!(PciError::HotplugUnsupported(devfn)));
         }
+
+        let offset = self.config.ext_cap_offset;
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_SLTSTA) as usize,
+            PCI_EXP_SLTSTA_PDS | PCI_EXP_HP_EV_PDC | PCI_EXP_HP_EV_ABP,
+        )?;
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_LNKSTA) as usize,
+            PCIE_CAP_CLS_2_5G | PCIE_CAP_NLW_X1 | PCI_EXP_LNKSTA_DLLLA,
+        )?;
+        self.hotplug_event_notify();
+
         Ok(())
     }
 
