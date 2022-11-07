@@ -110,9 +110,9 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x3EFF_0000, 0x0001_0000),    // PciePio
     (0x3F00_0000, 0x0100_0000),    // PcieEcam
     (0x4000_0000, 0x80_0000_0000), // Mem
-    (256 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
-    (257 << 30, 0x1000_0000),      // HighPcieEcam
-    (258 << 30, 512 << 30),        // HighPcieMmio
+    (512 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
+    (513 << 30, 0x1000_0000),      // HighPcieEcam
+    (514 << 30, 512 << 30),        // HighPcieMmio
 ];
 
 /// Standard machine structure.
@@ -188,6 +188,7 @@ impl StdMachine {
                 MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize],
                 MEM_LAYOUT[LayoutEntryType::PcieMmio as usize],
                 MEM_LAYOUT[LayoutEntryType::PciePio as usize],
+                MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize],
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
