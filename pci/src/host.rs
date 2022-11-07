@@ -12,8 +12,6 @@
 
 use std::sync::{Arc, Mutex};
 
-#[cfg(target_arch = "aarch64")]
-use acpi::AmlOne;
 use acpi::{
     AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlByte, AmlCacheable, AmlCreateDWordField,
     AmlDWord, AmlDWordDesc, AmlDevice, AmlEisaId, AmlElse, AmlEqual, AmlISARanges, AmlIf,
@@ -23,6 +21,8 @@ use acpi::{
 };
 #[cfg(target_arch = "x86_64")]
 use acpi::{AmlIoDecode, AmlIoResource};
+#[cfg(target_arch = "aarch64")]
+use acpi::{AmlOne, AmlQWordDesc};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use anyhow::Context;
 use sysbus::SysBusDevOps;
@@ -60,6 +60,8 @@ pub struct PciHost {
     pcie_mmio_range: (u64, u64),
     #[cfg(target_arch = "aarch64")]
     pcie_pio_range: (u64, u64),
+    #[cfg(target_arch = "aarch64")]
+    high_pcie_mmio_range: (u64, u64),
 }
 
 impl PciHost {
@@ -69,12 +71,17 @@ impl PciHost {
     ///
     /// * `sys_io` - IO space which the host bridge maps (only on x86_64).
     /// * `sys_mem`- Memory space which the host bridge maps.
+    /// * `pcie_ecam_range` - PCIe ECAM base address and length.
+    /// * `pcie_mmio_range` - PCIe MMIO base address and length.
+    /// * `pcie_pio_range` - PCIe PIO base addreass and length (only on aarch64).
+    /// * `high_pcie_mmio_range` - PCIe high MMIO base address and length (only on aarch64).
     pub fn new(
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
         pcie_ecam_range: (u64, u64),
         pcie_mmio_range: (u64, u64),
         #[cfg(target_arch = "aarch64")] pcie_pio_range: (u64, u64),
+        #[cfg(target_arch = "aarch64")] high_pcie_mmio_range: (u64, u64),
     ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = sys_io.root().clone();
@@ -94,6 +101,8 @@ impl PciHost {
             pcie_mmio_range,
             #[cfg(target_arch = "aarch64")]
             pcie_pio_range,
+            #[cfg(target_arch = "aarch64")]
+            high_pcie_mmio_range,
         }
     }
 
@@ -423,6 +432,17 @@ impl AmlBuilder for PciHost {
                 0,
                 pcie_pio.1 as u32,
             ));
+            let high_pcie_mmio = self.high_pcie_mmio_range;
+            crs.append_child(AmlQWordDesc::new_memory(
+                AmlAddressSpaceDecode::Positive,
+                AmlCacheable::NonCacheable,
+                AmlReadAndWrite::ReadWrite,
+                0,
+                high_pcie_mmio.0 as u64,
+                (high_pcie_mmio.0 + high_pcie_mmio.1) as u64 - 1,
+                0,
+                high_pcie_mmio.1 as u64,
+            ));
         }
         crs.append_child(AmlDWordDesc::new_memory(
             AmlAddressSpaceDecode::Positive,
@@ -533,6 +553,8 @@ pub mod tests {
             (0xC000_0000, 0x3000_0000),
             #[cfg(target_arch = "aarch64")]
             (0xF000_0000, 0x1000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (512 << 30, 512 << 30),
         )))
     }
 
