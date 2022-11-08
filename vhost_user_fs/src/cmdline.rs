@@ -16,7 +16,7 @@ const MAX_STRING_LENGTH: usize = 255;
 const MAX_SOCK_PATH_LENGTH: usize = 108;
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
 /// This function is to define all command line arguments.
@@ -85,10 +85,13 @@ impl FsConfig {
             );
         }
 
+        if fs::metadata(&self.source_dir).is_err() {
+            bail!("Failed to stat source directory {}", self.source_dir);
+        }
         let source_dir = PathBuf::from(&self.source_dir);
         if !source_dir.is_dir() {
             bail!(
-                "The source directory is not a directory {}",
+                "The source directory {} is not a directory",
                 self.source_dir
             );
         }
