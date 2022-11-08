@@ -13,6 +13,7 @@
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 const MAX_STRING_LENGTH: usize = 255;
+const MAX_SOCK_PATH_LENGTH: usize = 108;
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
@@ -77,7 +78,7 @@ impl FsConfig {
             );
         }
 
-        if self.sock_path.len() > MAX_STRING_LENGTH {
+        if self.sock_path.len() > MAX_SOCK_PATH_LENGTH {
             bail!(
                 "The length of socket file path is too long {}",
                 self.sock_path.len()
