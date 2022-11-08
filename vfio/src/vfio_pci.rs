@@ -419,8 +419,13 @@ impl VfioPciDevice {
                 region
             };
 
-            self.pci_config
-                .register_bar(i as usize, bar_region, vfio_bar.region_type, false, size);
+            self.pci_config.register_bar(
+                i as usize,
+                bar_region,
+                vfio_bar.region_type,
+                false,
+                size,
+            )?;
         }
 
         Ok(())
