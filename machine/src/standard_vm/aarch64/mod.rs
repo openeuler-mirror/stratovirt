@@ -1053,9 +1053,17 @@ fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::Result<()> {
     fdt.set_property_u32("#address-cells", 3)?;
     fdt.set_property_u32("#size-cells", 2)?;
 
+    let high_pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].0;
+    let high_pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].1;
+    let fdt_pci_mmio_type_64bit: u32 = device_tree::FDT_PCI_RANGE_MMIO_64BIT;
+    let high_mmio_base_hi: u32 = (high_pcie_mmio_base >> 32) as u32;
+    let high_mmio_base_lo: u32 = (high_pcie_mmio_base & 0xffff_ffff) as u32;
+    let high_mmio_size_hi: u32 = (high_pcie_mmio_size >> 32) as u32;
+    let high_mmio_size_lo: u32 = (high_pcie_mmio_size & 0xffff_ffff) as u32;
+
     let pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].0;
     let pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::PcieMmio as usize].1;
-    let fdt_pci_mmio_type: u32 = 0x0200_0000;
+    let fdt_pci_mmio_type: u32 = device_tree::FDT_PCI_RANGE_MMIO;
     let mmio_base_hi: u32 = (pcie_mmio_base >> 32) as u32;
     let mmio_base_lo: u32 = (pcie_mmio_base & 0xffff_ffff) as u32;
     let mmio_size_hi: u32 = (pcie_mmio_size >> 32) as u32;
@@ -1063,7 +1071,7 @@ fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::Result<()> {
 
     let pcie_pio_base = MEM_LAYOUT[LayoutEntryType::PciePio as usize].0;
     let pcie_pio_size = MEM_LAYOUT[LayoutEntryType::PciePio as usize].1;
-    let fdt_pci_pio_type: u32 = 0x0100_0000;
+    let fdt_pci_pio_type: u32 = device_tree::FDT_PCI_RANGE_IOPORT;
     let pio_base_hi: u32 = (pcie_pio_base >> 32) as u32;
     let pio_base_lo: u32 = (pcie_pio_base & 0xffff_ffff) as u32;
     let pio_size_hi: u32 = (pcie_pio_size >> 32) as u32;
@@ -1086,6 +1094,13 @@ fn generate_pci_host_node(fdt: &mut FdtBuilder) -> util::Result<()> {
             mmio_base_lo,
             mmio_size_hi,
             mmio_size_lo,
+            fdt_pci_mmio_type_64bit,
+            high_mmio_base_hi,
+            high_mmio_base_lo,
+            high_mmio_base_hi,
+            high_mmio_base_lo,
+            high_mmio_size_hi,
+            high_mmio_size_lo,
         ],
     )?;
 

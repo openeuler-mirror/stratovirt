@@ -45,6 +45,10 @@ const MEM_RESERVE_ALIGNMENT: usize = 8;
 // Structure block alignment.
 const STRUCTURE_BLOCK_ALIGNMENT: usize = 4;
 
+pub const FDT_PCI_RANGE_IOPORT: u32 = 0x0100_0000;
+pub const FDT_PCI_RANGE_MMIO: u32 = 0x0200_0000;
+pub const FDT_PCI_RANGE_MMIO_64BIT: u32 = 0x0300_0000;
+
 /// FdtBuilder structure.
 pub struct FdtBuilder {
     /// The header of flattened device tree.
