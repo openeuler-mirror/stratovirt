@@ -345,7 +345,8 @@ impl NetIoHandler {
                         error!("Failed to read tap: {}", e);
                     }
                 }
-                bail!("Failed to call readv for net handle_rx: {}", e);
+                error!("Failed to call readv for net handle_rx: {}", e);
+                break;
             }
 
             queue
