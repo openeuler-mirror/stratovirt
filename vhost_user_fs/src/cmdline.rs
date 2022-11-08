@@ -12,7 +12,7 @@
 
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
-const MAX_STRING_LENGTH: usize = 255;
+const MAX_PATH_LENGTH: usize = 4096;
 // Maximum length of the socket path is restricted by linux.
 const MAX_SOCK_PATH_LENGTH: usize = 108;
 
@@ -72,7 +72,7 @@ pub struct FsConfig {
 
 impl FsConfig {
     fn check_config(&self) -> Result<()> {
-        if self.source_dir.len() > MAX_STRING_LENGTH {
+        if self.source_dir.len() > MAX_PATH_LENGTH {
             bail!(
                 "The length of source directory is too long {}",
                 self.source_dir.len()
