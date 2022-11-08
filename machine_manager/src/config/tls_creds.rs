@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::config::{
-    ConfigError, ObjConfig, {CmdParser, VmConfig},
+    ConfigError, {CmdParser, VmConfig},
 };
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -63,9 +63,8 @@ impl VmConfig {
         tlscred.cred_type = "x509".to_string();
 
         let id = tlscred.id.clone();
-        if self.object.get(&id).is_none() {
-            let tlscred_config = ObjConfig::Tls(tlscred);
-            self.object.insert(id, tlscred_config);
+        if self.object.tls_object.get(&id).is_none() {
+            self.object.tls_object.insert(id, tlscred);
         } else {
             return Err(anyhow!(ConfigError::IdRepeat("tlscred".to_string(), id)));
         }
@@ -97,13 +96,11 @@ mod tests {
         let id = String::from("vnc-tls-creds0");
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_object(tls_config.as_str()).is_ok());
-        assert!(vm_config.object.get(&id).is_some());
-        if let Some(obj_cfg) = vm_config.object.get(&id) {
-            if let ObjConfig::Tls(tls_cred) = obj_cfg {
-                assert_eq!(tls_cred.dir, dir.to_str().unwrap());
-                assert_eq!(tls_cred.endpoint, Some("server".to_string()));
-                assert_eq!(tls_cred.verifypeer, false);
-            }
+        assert!(vm_config.object.tls_object.get(&id).is_some());
+        if let Some(tls_cred_cfg) = vm_config.object.tls_object.get(&id) {
+            assert_eq!(tls_cred_cfg.dir, dir.to_str().unwrap());
+            assert_eq!(tls_cred_cfg.endpoint, Some("server".to_string()));
+            assert_eq!(tls_cred_cfg.verifypeer, false);
         }
 
         // Delete file.
