@@ -143,7 +143,7 @@ struct VirtioPciCommonConfig {
     /// Device status.
     device_status: u32,
     /// Configuration atomicity value.
-    config_generation: u32,
+    config_generation: u8,
     /// Queue selector.
     queue_select: u16,
     /// The configuration vector for MSI-X.
@@ -247,7 +247,7 @@ impl VirtioPciCommonConfig {
             COMMON_MSIX_REG => self.msix_config.load(Ordering::SeqCst) as u32,
             COMMON_NUMQ_REG => self.queues_config.len() as u32,
             COMMON_STATUS_REG => self.device_status,
-            COMMON_CFGGENERATION_REG => self.config_generation,
+            COMMON_CFGGENERATION_REG => self.config_generation as u32,
             COMMON_Q_SELECT_REG => self.queue_select as u32,
             COMMON_Q_SIZE_REG => self
                 .get_queue_config()
@@ -515,7 +515,7 @@ pub struct VirtioPciState {
     acked_features_select: u32,
     interrupt_status: u32,
     device_status: u32,
-    config_generation: u32,
+    config_generation: u8,
     queue_select: u16,
     msix_config: u16,
     /// The configuration of queues. Max number of queues is 32(equals to MAX_VIRTIO_QUEUE).
