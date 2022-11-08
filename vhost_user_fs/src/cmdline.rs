@@ -13,6 +13,7 @@
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 const MAX_STRING_LENGTH: usize = 255;
+// Maximum length of the socket path is restricted by linux.
 const MAX_SOCK_PATH_LENGTH: usize = 108;
 
 use anyhow::{bail, Context, Result};
@@ -94,6 +95,11 @@ impl FsConfig {
                 "The source directory {} is not a directory",
                 self.source_dir
             );
+        }
+
+        let sock_path = PathBuf::from(&self.sock_path);
+        if !sock_path.is_file() {
+            bail!("The socket path {} is not a file", self.sock_path);
         }
 
         Ok(())
