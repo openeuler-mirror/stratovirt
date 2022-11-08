@@ -24,7 +24,7 @@ use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
 
-use util::time::NANOSECONDS_PER_SECOND;
+use util::time::{mktime64, NANOSECONDS_PER_SECOND};
 
 /// IO port of RTC device to select Register to read/write.
 pub const RTC_PORT_INDEX: u64 = 0x70;
@@ -240,9 +240,16 @@ impl RTC {
 
         match self.cur_index {
             RTC_SECONDS | RTC_MINUTES | RTC_HOURS | RTC_DAY_OF_WEEK | RTC_DAY_OF_MONTH
-            | RTC_MONTH | RTC_YEAR => {
-                self.cmos_data[self.cur_index as usize] = data[0];
-                self.update_rtc_time();
+            | RTC_MONTH | RTC_YEAR | RTC_CENTURY_BCD => {
+                if self.rtc_valid_check(data[0]) {
+                    self.cmos_data[self.cur_index as usize] = data[0];
+                    self.update_rtc_time();
+                } else {
+                    warn!(
+                        "Set invalid RTC time, index {}, data {}",
+                        self.cur_index, data[0]
+                    );
+                }
             }
             RTC_REG_C | RTC_REG_D => {
                 warn!(
@@ -294,13 +301,43 @@ impl RTC {
         self.cmos_data[RTC_CENTURY_BCD as usize] = bin_to_bcd(((tm.tm_year + 1900) / 100) as u8);
     }
 
+    fn rtc_valid_check(&self, val: u8) -> bool {
+        let range = [
+            [0, 59], // Seconds
+            [0, 59], // Seconds Alarm
+            [0, 59], // Minutes
+            [0, 59], // Minutes Alarm
+            [0, 23], // Hours
+            [0, 23], // Hours Alarm
+            [1, 7],  // Day of the Week
+            [1, 31], // Day of the Month
+            [1, 12], // Month
+            [0, 99], // Year
+        ];
+
+        if (val >> 4) > 9 || (val & 0x0f) > 9 {
+            return false;
+        }
+
+        let value = bcd_to_bin(val);
+
+        if self.cur_index <= 9
+            && (value < range[self.cur_index as usize][0]
+                || value > range[self.cur_index as usize][1])
+        {
+            return false;
+        }
+
+        true
+    }
+
     fn update_rtc_time(&mut self) {
         let sec = bcd_to_bin(self.cmos_data[RTC_SECONDS as usize]);
         let min = bcd_to_bin(self.cmos_data[RTC_MINUTES as usize]);
         let hour = bcd_to_bin(self.cmos_data[RTC_HOURS as usize]);
         let day = bcd_to_bin(self.cmos_data[RTC_DAY_OF_MONTH as usize]);
-        let mut mon = bcd_to_bin(self.cmos_data[RTC_MONTH as usize]);
-        let mut year = bcd_to_bin(self.cmos_data[RTC_YEAR as usize])
+        let mon = bcd_to_bin(self.cmos_data[RTC_MONTH as usize]);
+        let year = bcd_to_bin(self.cmos_data[RTC_YEAR as usize])
             + bcd_to_bin(self.cmos_data[RTC_CENTURY_BCD as usize]) * 100;
 
         // Check rtc time is valid to prevent tick_offset overflow.
@@ -312,22 +349,7 @@ impl RTC {
             return;
         }
 
-        // Converts date to seconds since 1970-01-01 00:00:00.
-        if mon <= 2 {
-            mon += 10;
-            year -= 1;
-        } else {
-            mon -= 2;
-        }
-
-        self.tick_offset =
-            ((((year / 4 - year / 100 + year / 400 + 367 * mon / 12 + day) + year * 365 - 719499)
-                * 24
-                + hour)
-                * 60
-                + min)
-                * 60
-                + sec;
+        self.tick_offset = mktime64(year, mon, day, hour, min, sec);
 
         self.base_time = Instant::now();
     }
@@ -406,5 +428,107 @@ impl AmlBuilder for RTC {
         acpi_dev.append_child(AmlNameDecl::new("_CRS", res));
 
         acpi_dev.aml_bytes()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use address_space::GuestAddress;
+    use anyhow::Context;
+
+    const WIGGLE: u8 = 2;
+
+    fn cmos_read(rtc: &mut RTC, index: u8) -> u8 {
+        let mut data: [u8; 1] = [index; 1];
+        RTC::write(rtc, &mut data, GuestAddress(0), 0);
+        RTC::read(rtc, &mut data, GuestAddress(0), 1);
+        data[0]
+    }
+
+    fn cmos_write(rtc: &mut RTC, index: u8, val: u8) {
+        let mut data: [u8; 1] = [index; 1];
+        RTC::write(rtc, &mut data, GuestAddress(0), 0);
+        data[0] = val;
+        RTC::write(rtc, &mut data, GuestAddress(0), 1);
+    }
+
+    #[test]
+    fn test_set_year_20xx() -> Result<()> {
+        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
+        // Set rtc time: 2013-11-13 02:04:56
+        cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x20);
+        cmos_write(&mut rtc, RTC_YEAR, 0x13);
+        cmos_write(&mut rtc, RTC_MONTH, 0x11);
+        cmos_write(&mut rtc, RTC_DAY_OF_MONTH, 0x13);
+        cmos_write(&mut rtc, RTC_HOURS, 0x02);
+        cmos_write(&mut rtc, RTC_MINUTES, 0x04);
+        cmos_write(&mut rtc, RTC_SECONDS, 0x56);
+
+        let seconds_check = (cmos_read(&mut rtc, RTC_SECONDS) - 0x56) <= WIGGLE;
+        assert_eq!(seconds_check, true);
+        assert_eq!(cmos_read(&mut rtc, RTC_MINUTES), 0x04);
+        assert_eq!(cmos_read(&mut rtc, RTC_HOURS), 0x02);
+        assert_eq!(cmos_read(&mut rtc, RTC_DAY_OF_MONTH), 0x13);
+        assert_eq!(cmos_read(&mut rtc, RTC_MONTH), 0x11);
+        assert_eq!(cmos_read(&mut rtc, RTC_YEAR), 0x13);
+        assert_eq!(cmos_read(&mut rtc, RTC_CENTURY_BCD), 0x20);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_year_1970() -> Result<()> {
+        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
+        // Set rtc time (min): 1970-01-01 00:00:00
+        cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x19);
+        cmos_write(&mut rtc, RTC_YEAR, 0x70);
+        cmos_write(&mut rtc, RTC_MONTH, 0x01);
+        cmos_write(&mut rtc, RTC_DAY_OF_MONTH, 0x01);
+        cmos_write(&mut rtc, RTC_HOURS, 0x00);
+        cmos_write(&mut rtc, RTC_MINUTES, 0x00);
+        cmos_write(&mut rtc, RTC_SECONDS, 0x00);
+
+        let seconds_check = (cmos_read(&mut rtc, RTC_SECONDS) - 0x00) <= WIGGLE;
+        assert_eq!(seconds_check, true);
+        assert_eq!(cmos_read(&mut rtc, RTC_MINUTES), 0x00);
+        assert_eq!(cmos_read(&mut rtc, RTC_HOURS), 0x00);
+        assert_eq!(cmos_read(&mut rtc, RTC_DAY_OF_MONTH), 0x01);
+        assert_eq!(cmos_read(&mut rtc, RTC_MONTH), 0x01);
+        assert_eq!(cmos_read(&mut rtc, RTC_YEAR), 0x70);
+        assert_eq!(cmos_read(&mut rtc, RTC_CENTURY_BCD), 0x19);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_rtc_time() -> Result<()> {
+        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
+        // Set rtc year: 1969
+        cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x19);
+        cmos_write(&mut rtc, RTC_YEAR, 0x69);
+        assert_ne!(cmos_read(&mut rtc, RTC_YEAR), 0x69);
+
+        // Set rtc month: 13
+        cmos_write(&mut rtc, RTC_MONTH, 0x13);
+        assert_ne!(cmos_read(&mut rtc, RTC_HOURS), 0x13);
+
+        // Set rtc day: 32
+        cmos_write(&mut rtc, RTC_DAY_OF_MONTH, 0x32);
+        assert_ne!(cmos_read(&mut rtc, RTC_DAY_OF_MONTH), 0x32);
+
+        // Set rtc hour: 25
+        cmos_write(&mut rtc, RTC_HOURS, 0x25);
+        assert_ne!(cmos_read(&mut rtc, RTC_HOURS), 0x25);
+
+        // Set rtc minute: 60
+        cmos_write(&mut rtc, RTC_MINUTES, 0x60);
+        assert_ne!(cmos_read(&mut rtc, RTC_MINUTES), 0x60);
+
+        // Set rtc second: 60
+        cmos_write(&mut rtc, RTC_SECONDS, 0x60);
+        assert_ne!(cmos_read(&mut rtc, RTC_SECONDS), 0x60);
+
+        Ok(())
     }
 }
