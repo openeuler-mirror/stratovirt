@@ -258,8 +258,7 @@ mod test {
         PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
         let rtick = LittleEndian::read_u32(&data);
 
-        let rtc_check = (rtick - wtick) <= WIGGLE;
-        assert_eq!(rtc_check, true);
+        assert!((rtick - wtick) <= WIGGLE);
     }
 
     #[test]
@@ -274,7 +273,6 @@ mod test {
         PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
         let rtick = LittleEndian::read_u32(&data);
 
-        let rtc_check = (rtick - wtick) <= WIGGLE;
-        assert_eq!(rtc_check, true);
+        assert!((rtick - wtick) <= WIGGLE);
     }
 }
