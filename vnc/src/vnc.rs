@@ -10,11 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::VncError;
 use crate::{
     client::{
-        DisplayMode, RectInfo, Rectangle, ServerMsg, VncClient, VncFeatures, ENCODING_ALPHA_CURSOR,
-        ENCODING_HEXTILE, ENCODING_RAW, ENCODING_RICH_CURSOR,
+        desktop_resize, display_cursor_define, set_color_depth, vnc_flush_notify, DisplayMode,
+        RectInfo, Rectangle, ServerMsg, ENCODING_HEXTILE, ENCODING_RAW,
     },
     encoding::enc_hextile::hextile_send_framebuffer_update,
     pixman::{
@@ -23,6 +22,7 @@ use crate::{
     },
     round_up, round_up_div,
     server::{make_server_config, vnc_refresh_notify, VncConnHandler, VncServer, VncSurface},
+    VncError,
 };
 use anyhow::{anyhow, Result};
 use core::time;
@@ -169,10 +169,13 @@ fn start_vnc_thread() -> Result<()> {
             buf.append(&mut [0_u8; 2].to_vec());
 
             let locked_surface = server.vnc_surface.lock().unwrap();
+            let width = get_image_width(locked_surface.server_image);
+            let height = get_image_height(locked_surface.server_image);
             for rect in rect_info.rects.iter_mut() {
-                if check_rect(rect, rect_info.width, rect_info.height) {
+                let dpm = rect_info.client.client_dpm.lock().unwrap().clone();
+                if check_rect(rect, width, height) {
                     let n =
-                        send_framebuffer_update(rect_info.image, rect, &rect_info.dpm, &mut buf);
+                        send_framebuffer_update(locked_surface.server_image, rect, &dpm, &mut buf);
                     if n >= 0 {
                         num_rects += n;
                     }
@@ -182,11 +185,9 @@ fn start_vnc_thread() -> Result<()> {
             buf[3] = num_rects as u8;
             drop(locked_surface);
 
-            let locked_clients = server.clients.lock().unwrap();
-            if let Some(client) = locked_clients.get(&rect_info.addr) {
-                client.lock().unwrap().write_msg(&buf);
-            }
-            drop(locked_clients);
+            let client = rect_info.client;
+            client.out_buffer.lock().unwrap().read(&mut buf);
+            vnc_flush_notify(&client);
         })
         .unwrap();
     Ok(())
@@ -291,7 +292,7 @@ pub fn update_server_surface(server: &Arc<VncServer>) {
     locked_vnc_surface.server_image = ptr::null_mut();
     // Server image changes, clear the task queue.
     VNC_RECT_INFO.lock().unwrap().clear();
-    if server.clients.lock().unwrap().is_empty() {
+    if server.client_handlers.lock().unwrap().is_empty() {
         return;
     }
 
@@ -319,6 +320,7 @@ pub fn update_server_surface(server: &Arc<VncServer>) {
         g_width,
         g_height,
     );
+    vnc_refresh_notify(server);
 }
 
 /// Check if the suface for VncClient is need update
@@ -552,20 +554,23 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
     drop(locked_vnc_surface);
     update_server_surface(&server);
 
-    let mut locked_clients = server.clients.lock().unwrap();
-    for client in locked_clients.values_mut() {
+    let mut locked_handlers = server.client_handlers.lock().unwrap();
+    for client_io in locked_handlers.values_mut() {
+        let client = client_io.lock().unwrap().client.clone();
         let width = vnc_width(guest_width);
         let height = vnc_height(guest_height);
-        let mut locked_client = client.lock().unwrap();
+        let mut buf: Vec<u8> = Vec::new();
         // Set Color depth.
-        locked_client.set_color_depth();
+        set_color_depth(&client, &server, &mut buf);
         // Desktop_resize.
-        locked_client.desktop_resize();
+        desktop_resize(&client, &server, &mut buf);
         // Cursor define.
-        display_cursor_define(&mut locked_client, &server);
-        locked_client.dirty_bitmap.clear_all();
+        display_cursor_define(&client, &server, &mut buf);
+        client.out_buffer.lock().unwrap().read(&mut buf);
+        vnc_flush_notify(&client);
+        client.dirty_bitmap.lock().unwrap().clear_all();
         set_area_dirty(
-            &mut locked_client.dirty_bitmap,
+            &mut client.dirty_bitmap.lock().unwrap(),
             0,
             0,
             width,
@@ -614,79 +619,14 @@ pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
     server.vnc_cursor.lock().unwrap().cursor = Some(cursor.clone());
     server.vnc_cursor.lock().unwrap().mask = Some(mask.clone());
 
-    let mut locked_clients = server.clients.lock().unwrap();
+    let mut locked_handler = server.client_handlers.lock().unwrap();
     // Send the framebuff for each client.
-    for client in locked_clients.values_mut() {
-        let mut locked_client = client.lock().unwrap();
-        display_cursor_define(&mut locked_client, &server);
-    }
-}
-
-/// Send framebuf of mouse to the client.
-pub fn display_cursor_define(client: &mut VncClient, server: &Arc<VncServer>) {
-    let mut cursor: DisplayMouse;
-    let mut mask: Vec<u8>;
-    let locked_cursor = server.vnc_cursor.lock().unwrap();
-    match &locked_cursor.cursor {
-        Some(c) => {
-            cursor = c.clone();
-        }
-        None => {
-            return;
-        }
-    }
-    match &locked_cursor.mask {
-        Some(m) => {
-            mask = m.clone();
-        }
-        None => {
-            return;
-        }
-    }
-    drop(locked_cursor);
-    if cursor.data.is_empty()
-        || cursor.data.len() != ((cursor.width * cursor.height) as usize) * bytes_per_pixel()
-    {
-        return;
-    }
-    let mut buf = Vec::new();
-    if client.has_feature(VncFeatures::VncFeatureAlphaCursor) {
-        buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
-        buf.append(&mut (0_u8).to_be_bytes().to_vec()); // padding
-        buf.append(&mut (1_u16).to_be_bytes().to_vec()); // number of rects
-
-        framebuffer_upadate(
-            cursor.hot_x as i32,
-            cursor.hot_y as i32,
-            cursor.width as i32,
-            cursor.height as i32,
-            ENCODING_ALPHA_CURSOR as i32,
-            &mut buf,
-        );
-        buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
-        buf.append(&mut cursor.data);
-        client.write_msg(&buf);
-        return;
-    }
-
-    if client.has_feature(VncFeatures::VncFeatureRichCursor) {
-        buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
-        buf.append(&mut (0_u8).to_be_bytes().to_vec()); // padding
-        buf.append(&mut (1_u16).to_be_bytes().to_vec()); // number of rects
-
-        framebuffer_upadate(
-            cursor.hot_x as i32,
-            cursor.hot_y as i32,
-            cursor.width as i32,
-            cursor.height as i32,
-            ENCODING_RICH_CURSOR as i32,
-            &mut buf,
-        );
-        let data_size = cursor.width * cursor.height * client.client_dpm.pf.pixel_bytes as u32;
-        let data_ptr = cursor.data.as_ptr() as *mut u8;
-        write_pixel(data_ptr, data_size as usize, &client.client_dpm, &mut buf);
-        buf.append(&mut mask);
-        client.write_msg(&buf);
+    for client_io in locked_handler.values_mut() {
+        let client = client_io.lock().unwrap().client.clone();
+        let mut buf: Vec<u8> = Vec::new();
+        display_cursor_define(&client, &server, &mut buf);
+        client.out_buffer.lock().unwrap().read(&mut buf);
+        vnc_flush_notify(&client);
     }
 }
 
