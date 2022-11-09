@@ -271,6 +271,20 @@ pub enum RegionType {
     Mem64Bit,
 }
 
+impl std::fmt::Display for RegionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                RegionType::Io => "PIO",
+                RegionType::Mem32Bit => "32 bits MMIO",
+                RegionType::Mem64Bit => "64 bits MMIO",
+            }
+        )
+    }
+}
+
 /// Registered bar.
 #[derive(Clone)]
 pub struct Bar {
@@ -894,9 +908,11 @@ impl PciConfig {
             || ((bar_type == RegionType::Mem32Bit || bar_type == RegionType::Mem64Bit)
                 && size < MINMUM_BAR_SIZE_FOR_MMIO.try_into().unwrap())
             || (bar_type == RegionType::Io && size < MINMUM_BAR_SIZE_FOR_PIO.try_into().unwrap())
+            || (bar_type == RegionType::Mem32Bit && size > u32::MAX as u64)
+            || (bar_type == RegionType::Io && size > u16::MAX as u64)
         {
             return Err(anyhow!(PciError::InvalidConf(
-                "Bar size".to_string(),
+                "Bar size of type ".to_string() + &bar_type.to_string(),
                 size.to_string(),
             )));
         }
