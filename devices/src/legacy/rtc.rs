@@ -511,7 +511,7 @@ mod test {
 
         // Set rtc month: 13
         cmos_write(&mut rtc, RTC_MONTH, 0x13);
-        assert_ne!(cmos_read(&mut rtc, RTC_HOURS), 0x13);
+        assert_ne!(cmos_read(&mut rtc, RTC_MONTH), 0x13);
 
         // Set rtc day: 32
         cmos_write(&mut rtc, RTC_DAY_OF_MONTH, 0x32);
