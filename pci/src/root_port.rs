@@ -121,7 +121,7 @@ impl RootPort {
     fn hotplug_command_completed(&mut self) {
         if let Err(e) = le_write_set_value_u16(
             &mut self.config.config,
-            (self.config.ext_cap_offset + PCI_EXP_SLTSTA) as usize,
+            (self.config.pci_express_cap_offset + PCI_EXP_SLTSTA) as usize,
             PCI_EXP_HP_EV_CCI,
         ) {
             error!("{}", format!("{:?}", e));
@@ -141,7 +141,7 @@ impl RootPort {
 
     /// Update register when the guest OS trigger the removal of the device.
     fn update_register_status(&mut self) -> Result<()> {
-        let cap_offset = self.config.ext_cap_offset;
+        let cap_offset = self.config.pci_express_cap_offset;
         le_write_clear_value_u16(
             &mut self.config.config,
             (cap_offset + PCI_EXP_SLTSTA) as usize,
@@ -220,7 +220,7 @@ impl RootPort {
     }
 
     fn do_unplug(&mut self, offset: usize, end: usize, old_ctl: u16) {
-        let cap_offset = self.config.ext_cap_offset;
+        let cap_offset = self.config.pci_express_cap_offset;
         // Only care the write config about slot control
         if !ranges_overlap(
             offset,
@@ -372,7 +372,7 @@ impl PciDevOps for RootPort {
             return;
         }
 
-        let cap_offset = self.config.ext_cap_offset;
+        let cap_offset = self.config.pci_express_cap_offset;
         let old_ctl =
             le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
 
@@ -417,7 +417,7 @@ impl PciDevOps for RootPort {
                 .reset()
                 .with_context(|| "Fail to reset sec_bus in root port")
         } else {
-            let cap_offset = self.config.ext_cap_offset;
+            let cap_offset = self.config.pci_express_cap_offset;
             le_write_u16(
                 &mut self.config.config,
                 (cap_offset + PCI_EXP_SLTSTA) as usize,
@@ -457,7 +457,7 @@ impl HotplugOps for RootPort {
             return Err(anyhow!(PciError::HotplugUnsupported(devfn)));
         }
 
-        let offset = self.config.ext_cap_offset;
+        let offset = self.config.pci_express_cap_offset;
         le_write_set_value_u16(
             &mut self.config.config,
             (offset + PCI_EXP_SLTSTA) as usize,
@@ -474,7 +474,7 @@ impl HotplugOps for RootPort {
     }
 
     fn unplug_request(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
-        let pcie_cap_offset = self.config.ext_cap_offset;
+        let pcie_cap_offset = self.config.pci_express_cap_offset;
         let sltctl = le_read_u16(
             &self.config.config,
             (pcie_cap_offset + PCI_EXP_SLTCTL) as usize,
@@ -494,7 +494,7 @@ impl HotplugOps for RootPort {
             return self.unplug(dev);
         }
 
-        let offset = self.config.ext_cap_offset;
+        let offset = self.config.pci_express_cap_offset;
         le_write_clear_value_u16(
             &mut self.config.config,
             (offset + PCI_EXP_LNKSTA) as usize,
