@@ -845,7 +845,7 @@ impl PciConfig {
 
         offset = cap_offset + PcieCap::LinkCap2 as usize;
         le_write_u32(
-            &mut self.write_mask,
+            &mut self.config,
             offset,
             PCIE_CAP_LINK_SLSV_2_5GT
                 | PCIE_CAP_LINK_SLSV_5GT
@@ -853,7 +853,7 @@ impl PciConfig {
                 | PCIE_CAP_LINK_SLSV_16GT,
         )?;
         offset = cap_offset + PcieCap::LinkCtl2 as usize;
-        le_write_u16(&mut self.write_mask, offset, PCIE_CAP_LINK_TLS_16GT)?;
+        le_write_u16(&mut self.config, offset, PCIE_CAP_LINK_TLS_16GT)?;
 
         Ok(cap_offset)
     }
