@@ -465,8 +465,7 @@ mod test {
         cmos_write(&mut rtc, RTC_MINUTES, 0x04);
         cmos_write(&mut rtc, RTC_SECONDS, 0x56);
 
-        let seconds_check = (cmos_read(&mut rtc, RTC_SECONDS) - 0x56) <= WIGGLE;
-        assert_eq!(seconds_check, true);
+        assert!((cmos_read(&mut rtc, RTC_SECONDS) - 0x56) <= WIGGLE);
         assert_eq!(cmos_read(&mut rtc, RTC_MINUTES), 0x04);
         assert_eq!(cmos_read(&mut rtc, RTC_HOURS), 0x02);
         assert_eq!(cmos_read(&mut rtc, RTC_DAY_OF_MONTH), 0x13);
@@ -489,8 +488,7 @@ mod test {
         cmos_write(&mut rtc, RTC_MINUTES, 0x00);
         cmos_write(&mut rtc, RTC_SECONDS, 0x00);
 
-        let seconds_check = (cmos_read(&mut rtc, RTC_SECONDS) - 0x00) <= WIGGLE;
-        assert_eq!(seconds_check, true);
+        assert!((cmos_read(&mut rtc, RTC_SECONDS) - 0x00) <= WIGGLE);
         assert_eq!(cmos_read(&mut rtc, RTC_MINUTES), 0x00);
         assert_eq!(cmos_read(&mut rtc, RTC_HOURS), 0x00);
         assert_eq!(cmos_read(&mut rtc, RTC_DAY_OF_MONTH), 0x01);
