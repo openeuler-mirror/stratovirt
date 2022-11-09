@@ -568,6 +568,9 @@ impl ScsiCtrlHandler {
         let mut queue = self.queue.lock().unwrap();
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            if elem.desc_num == 0 {
+                break;
+            }
             drop(queue);
             let ctrl_desc = elem.out_iovec.get(0).unwrap();
             let ctrl_type = self
@@ -635,9 +638,9 @@ impl ScsiCtrlHandler {
             queue = self.queue.lock().unwrap();
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
-            VirtioError::InterruptTrigger("scsi ctrl", VirtioInterruptType::Vring)
-        })?;
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
+            || VirtioError::InterruptTrigger("scsi ctrl", VirtioInterruptType::Vring),
+        )?;
         Ok(())
     }
 }
@@ -750,6 +753,9 @@ impl ScsiCmdHandler {
         let mut queue = self.queue.lock().unwrap();
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            if elem.desc_num == 0 {
+                break;
+            }
             match VirtioScsiRequest::<VirtioScsiCmdReq, VirtioScsiCmdResp>::new(
                 &self.mem_space,
                 self.queue.clone(),
@@ -826,12 +832,14 @@ impl ScsiCmdHandler {
             queue = self.queue.lock().unwrap();
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
-            anyhow!(VirtioError::InterruptTrigger(
-                "scsi cmd",
-                VirtioInterruptType::Vring
-            ))
-        })?;
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
+            || {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "scsi cmd",
+                    VirtioInterruptType::Vring
+                ))
+            },
+        )?;
 
         Ok(())
     }

@@ -91,6 +91,9 @@ impl InputReceiver for ConsoleHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut write_count = 0_usize;
             for elem_iov in elem.in_iovec.iter() {
                 let allow_write_count = cmp::min(write_count + elem_iov.len as usize, count);
@@ -134,7 +137,9 @@ impl InputReceiver for ConsoleHandler {
             }
         }
 
-        if let Err(ref e) = (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock)) {
+        if let Err(ref e) =
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+        {
             error!(
                 "Failed to trigger interrupt for console, int-type {:?} {:?} ",
                 VirtioInterruptType::Vring,
@@ -158,6 +163,9 @@ impl ConsoleHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut read_count = 0_usize;
             for elem_iov in elem.out_iovec.iter() {
                 let allow_read_count = cmp::min(read_count + elem_iov.len as usize, buffer.len());

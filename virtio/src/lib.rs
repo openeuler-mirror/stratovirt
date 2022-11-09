@@ -89,6 +89,7 @@ const CONFIG_STATUS_ACKNOWLEDGE: u32 = 0x01;
 const CONFIG_STATUS_DRIVER: u32 = 0x02;
 const CONFIG_STATUS_DRIVER_OK: u32 = 0x04;
 const CONFIG_STATUS_FEATURES_OK: u32 = 0x08;
+const CONFIG_STATUS_NEEDS_RESET: u32 = 0x40;
 const CONFIG_STATUS_FAILED: u32 = 0x80;
 
 /// Feature Bits, refer to Virtio Spec.
@@ -121,6 +122,8 @@ pub const VIRTIO_NET_F_GUEST_ECN: u32 = 9;
 pub const VIRTIO_NET_F_GUEST_UFO: u32 = 10;
 /// Device can receive TSOv4.
 pub const VIRTIO_NET_F_HOST_TSO4: u32 = 11;
+/// Device can receive TSOv6.
+pub const VIRTIO_NET_F_HOST_TSO6: u32 = 12;
 /// Device can receive UFO.
 pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
 /// Device can merge receive buffers.
@@ -223,7 +226,7 @@ pub enum VirtioInterruptType {
 }
 
 pub type VirtioInterrupt =
-    Box<dyn Fn(&VirtioInterruptType, Option<&Queue>) -> Result<()> + Send + Sync>;
+    Box<dyn Fn(&VirtioInterruptType, Option<&Queue>, bool) -> Result<()> + Send + Sync>;
 
 /// The trait for virtio device operations.
 pub trait VirtioDevice: Send {
@@ -352,5 +355,27 @@ pub trait VirtioTrace {
             "{} : stratovirt processing complete, ready to send interrupt to guest.",
             device
         );
+    }
+}
+
+/// The function used to inject interrupt to guest when encounter an virtio error.
+pub fn report_virtio_error(
+    interrupt_cb: Arc<VirtioInterrupt>,
+    features: u64,
+    deactivate_evt: Option<&EventFd>,
+) {
+    if virtio_has_feature(features, VIRTIO_F_VERSION_1) {
+        interrupt_cb(&VirtioInterruptType::Config, None, true).unwrap_or_else(|e| {
+            error!(
+                "Failed to trigger interrupt for virtio error, error is {}",
+                e
+            )
+        });
+    }
+    // The queue should not work when meeting virtio error.
+    // So, using deactivate evt to disable the queue.
+    if let Some(evt) = deactivate_evt {
+        evt.write(1)
+            .unwrap_or_else(|e| error!("Failed to deactivate event, error is {}", e));
     }
 }

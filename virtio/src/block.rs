@@ -166,6 +166,7 @@ impl AioCompleteCb {
             if let Err(e) = (*self.interrupt_cb.as_ref().unwrap())(
                 &VirtioInterruptType::Vring,
                 Some(&queue_lock),
+                false,
             ) {
                 error!(
                     "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
@@ -496,6 +497,9 @@ impl BlockIoHandler {
         }
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            if elem.desc_num == 0 {
+                break;
+            }
             // limit io operations if iops is configured
             if let Some(lb) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
@@ -1172,7 +1176,7 @@ impl VirtioDevice for Block {
         }
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Config, None).with_context(|| {
+            interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
                 anyhow!(VirtioError::InterruptTrigger(
                     "block",
                     VirtioInterruptType::Config
@@ -1409,7 +1413,7 @@ mod tests {
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,

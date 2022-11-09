@@ -23,11 +23,11 @@ use super::{
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
     VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
-    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
+    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
-use crate::virtio_has_feature;
-use crate::VirtioError;
+use crate::{report_virtio_error, virtio_has_feature, VirtioError};
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
@@ -113,14 +113,14 @@ impl ByteCode for CrtlHdr {}
 
 impl NetCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
-        let elem = self
-            .ctrl
-            .queue
-            .lock()
-            .unwrap()
+        let mut locked_queue = self.ctrl.queue.lock().unwrap();
+        let elem = locked_queue
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
             .with_context(|| "Failed to pop avail ring for net control queue")?;
+        if elem.desc_num == 0 {
+            return Ok(());
+        }
 
         let mut used_len = 0;
         if let Some(ctrl_desc) = elem.out_iovec.get(0) {
@@ -164,24 +164,19 @@ impl NetCtrlHandler {
             self.mem_space.write_object::<u8>(&data, status.addr)?;
         }
 
-        self.ctrl
-            .queue
-            .lock()
-            .unwrap()
+        locked_queue
             .vring
             .add_used(&self.mem_space, elem.index, used_len)
             .with_context(|| format!("Failed to add used ring {}", elem.index))?;
 
-        (self.interrupt_cb)(
-            &VirtioInterruptType::Vring,
-            Some(&self.ctrl.queue.lock().unwrap()),
-        )
-        .with_context(|| {
-            anyhow!(VirtioError::InterruptTrigger(
-                "ctrl",
-                VirtioInterruptType::Vring
-            ))
-        })?;
+        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
+            || {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "ctrl",
+                    VirtioInterruptType::Vring
+                ))
+            },
+        )?;
 
         Ok(())
     }
@@ -214,11 +209,15 @@ impl EventNotifierHelper for NetCtrlHandler {
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            cloned_net_io
-                .lock()
-                .unwrap()
-                .handle_ctrl()
-                .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
+            let mut locked_net_io = cloned_net_io.lock().unwrap();
+            locked_net_io.handle_ctrl().unwrap_or_else(|e| {
+                error!("Failed to handle ctrl queue, error is {}.", e);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    Some(&locked_net_io.deactivate_evt),
+                );
+            });
             None
         });
         let mut notifiers = Vec::new();
@@ -303,6 +302,9 @@ impl NetIoHandler {
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net rx")?;
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut iovecs = Vec::new();
             for elem_iov in elem.in_iovec.iter() {
                 let host_addr = queue
@@ -343,7 +345,8 @@ impl NetIoHandler {
                         error!("Failed to read tap: {}", e);
                     }
                 }
-                bail!("Failed to call readv for net handle_rx: {}", e);
+                error!("Failed to call readv for net handle_rx: {}", e);
+                break;
             }
 
             queue
@@ -360,12 +363,14 @@ impl NetIoHandler {
 
         if self.rx.need_irqs {
             self.rx.need_irqs = false;
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "net",
-                    VirtioInterruptType::Vring
-                ))
-            })?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
+                || {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "net",
+                        VirtioInterruptType::Vring
+                    ))
+                },
+            )?;
             self.trace_send_interrupt("Net".to_string());
         }
 
@@ -378,6 +383,9 @@ impl NetIoHandler {
         let mut need_irq = false;
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
                 let host_addr = queue
@@ -419,12 +427,14 @@ impl NetIoHandler {
         }
 
         if need_irq {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue)).with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "net",
-                    VirtioInterruptType::Vring
-                ))
-            })?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
+                || {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "net",
+                        VirtioInterruptType::Vring
+                    ))
+                },
+            )?;
             self.trace_send_interrupt("Net".to_string());
         }
 
@@ -620,6 +630,11 @@ impl EventNotifierHelper for NetIoHandler {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
                 if let Err(ref e) = locked_net_io.handle_rx() {
                     error!("Failed to handle rx(tap event), {:?}", e);
+                    report_virtio_error(
+                        locked_net_io.interrupt_cb.clone(),
+                        locked_net_io.driver_features,
+                        Some(&locked_net_io.deactivate_evt),
+                    );
                 }
 
                 if let Some(tap) = locked_net_io.tap.as_ref() {
@@ -853,8 +868,10 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_CSUM
             | 1 << VIRTIO_NET_F_GUEST_CSUM
             | 1 << VIRTIO_NET_F_GUEST_TSO4
+            | 1 << VIRTIO_NET_F_GUEST_TSO6
             | 1 << VIRTIO_NET_F_GUEST_UFO
             | 1 << VIRTIO_NET_F_HOST_TSO4
+            | 1 << VIRTIO_NET_F_HOST_TSO6
             | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_F_RING_EVENT_IDX;
 
