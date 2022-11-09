@@ -339,8 +339,8 @@ pub struct PciConfig {
     pub last_ext_cap_end: u16,
     /// MSI-X information.
     pub msix: Option<Arc<Mutex<Msix>>>,
-    /// Offset of the PCIe extended capability.
-    pub ext_cap_offset: u16,
+    /// Offset of the PCI express capability.
+    pub pci_express_cap_offset: u16,
 }
 
 impl PciConfig {
@@ -370,7 +370,7 @@ impl PciConfig {
             last_ext_cap_offset: 0,
             last_ext_cap_end: PCI_CONFIG_SPACE_SIZE as u16,
             msix: None,
-            ext_cap_offset: PCI_CONFIG_HEAD_END as u16,
+            pci_express_cap_offset: PCI_CONFIG_HEAD_END as u16,
         }
     }
 
@@ -750,7 +750,7 @@ impl PciConfig {
     /// * `dev_type` - Device type.
     pub fn add_pcie_cap(&mut self, devfn: u8, port_num: u8, dev_type: u8) -> Result<usize> {
         let cap_offset: usize = self.add_pci_cap(CapId::Pcie as u8, PCIE_CAP_SIZE as usize)?;
-        self.ext_cap_offset = cap_offset as u16;
+        self.pci_express_cap_offset = cap_offset as u16;
         let mut offset: usize = cap_offset + PcieCap::CapReg as usize;
         let pci_type = (dev_type << PCI_EXP_FLAGS_TYPE_SHIFT) as u16 & PCI_EXP_FLAGS_TYPE;
         le_write_u16(
