@@ -294,7 +294,19 @@ impl Msix {
         send_msix(self.get_message(vector), dev_id);
     }
 
-    pub fn write_config(&mut self, config: &[u8], dev_id: u16) {
+    pub fn write_config(&mut self, config: &[u8], dev_id: u16, offset: usize, data: &[u8]) {
+        let len = data.len();
+        let msix_cap_control_off: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
+        // Only care about the bits Masked(14) & Enabled(15) in msix control register.
+        if !ranges_overlap(
+            offset,
+            offset + len,
+            msix_cap_control_off + 1,
+            msix_cap_control_off + 2,
+        ) {
+            return;
+        }
+
         let func_masked: bool = is_msix_func_masked(self.msix_cap_offset as usize, config);
         let enabled: bool = is_msix_enabled(self.msix_cap_offset as usize, config);
 
@@ -648,7 +660,12 @@ mod tests {
         let val = le_read_u16(&pci_config.config, offset).unwrap();
         le_write_u16(&mut pci_config.config, offset, val | MSIX_CAP_ENABLE).unwrap();
         locked_msix.set_pending_vector(0);
-        locked_msix.write_config(&pci_config.config, 0);
+        locked_msix.write_config(
+            &pci_config.config,
+            0,
+            offset,
+            &[0, val as u8 | MSIX_CAP_ENABLE as u8],
+        );
 
         assert!(!locked_msix.func_masked);
         assert!(locked_msix.enabled);
