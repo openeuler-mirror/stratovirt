@@ -61,7 +61,7 @@ static mut BALLOON_DEV: Option<Arc<Mutex<Balloon>>> = None;
 
 /// IO vector, used to find memory segments.
 #[derive(Clone, Copy, Default)]
-struct Iovec {
+struct GuestIovec {
     /// Base address of memory.
     iov_base: GuestAddress,
     /// Length of memory segments.
@@ -79,7 +79,7 @@ struct VirtioBalloonConfig {
     pub actual: u32,
 }
 
-impl ByteCode for Iovec {}
+impl ByteCode for GuestIovec {}
 impl ByteCode for VirtioBalloonConfig {}
 
 /// Bitmap for balloon. It is used if the host page size is bigger than 4k.
@@ -124,7 +124,7 @@ impl BalloonedPageBitmap {
 /// * `offset` - Offset.
 fn iov_to_buf<T: ByteCode>(
     address_space: &Arc<AddressSpace>,
-    &iov: &Iovec,
+    &iov: &GuestIovec,
     offset: u64,
 ) -> Option<T> {
     let obj_len = std::mem::size_of::<T>() as u64;
@@ -162,7 +162,7 @@ struct Request {
     /// Count of elements.
     elem_cnt: u32,
     /// The data which is both readable and writable.
-    iovec: Vec<Iovec>,
+    iovec: Vec<GuestIovec>,
 }
 
 impl Request {
@@ -188,7 +188,7 @@ impl Request {
             return Err(anyhow!(VirtioError::ElementEmpty));
         }
         for elem_iov in iovec {
-            request.iovec.push(Iovec {
+            request.iovec.push(GuestIovec {
                 iov_base: elem_iov.addr,
                 iov_len: elem_iov.len as u64,
             });
@@ -1352,12 +1352,12 @@ mod tests {
             .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_inf.desc_table.0))
             .unwrap();
 
-        let ele = Iovec {
+        let ele = GuestIovec {
             iov_base: GuestAddress(0xff),
-            iov_len: std::mem::size_of::<Iovec>() as u64,
+            iov_len: std::mem::size_of::<GuestIovec>() as u64,
         };
         mem_space
-            .write_object::<Iovec>(&ele, GuestAddress(0x2000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000))
             .unwrap();
         mem_space
             .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4 as u64))
@@ -1383,7 +1383,7 @@ mod tests {
             .unwrap();
 
         mem_space
-            .write_object::<Iovec>(&ele, GuestAddress(0x3000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000))
             .unwrap();
         mem_space
             .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4 as u64))
