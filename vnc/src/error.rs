@@ -37,4 +37,6 @@ pub enum VncError {
     AuthFailed(String),
     #[error("ParseKeyBoardFailed: {0}")]
     ParseKeyBoardFailed(String),
+    #[error("Disconnection")]
+    Disconnection,
 }

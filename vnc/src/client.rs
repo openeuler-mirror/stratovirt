@@ -10,22 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::VncError;
 use crate::{
-    auth::SaslAuth,
-    auth::{AuthState, SubAuthState},
-    pixman::{get_image_height, get_image_width, PixelFormat},
+    auth::AuthState,
+    pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     round_up_div,
-    server::VncServer,
+    server::{vnc_refresh_notify, VncServer},
     utils::BuffPool,
     vnc::{
-        display_cursor_define, framebuffer_upadate, set_area_dirty, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
-        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO, VNC_SERVERS,
+        framebuffer_upadate, set_area_dirty, write_pixel, DisplayMouse, BIT_PER_BYTE,
+        DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO,
     },
+    VncError,
 };
 use anyhow::{anyhow, Result};
-use log::{error, info};
-use machine_manager::event_loop::EventLoop;
+use log::error;
 use rustls::ServerConnection;
 use sscanf::scanf;
 use std::{
@@ -37,11 +35,12 @@ use std::{
 };
 use util::{
     bitmap::Bitmap,
-    loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation},
-    pixman::pixman_image_t,
+    loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation},
 };
 use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
+pub const APP_NAME: &str = "stratovirt";
 const MAX_RECVBUF_LEN: usize = 1024;
 const MAX_SEND_LEN: usize = 64 * 1024;
 const NUM_OF_COLORMAP: u16 = 256;
@@ -112,6 +111,7 @@ impl From<u8> for ClientMsg {
 }
 
 /// RFB protocol version.
+#[derive(Clone)]
 pub struct VncVersion {
     pub major: u16,
     pub minor: u16,
@@ -183,29 +183,17 @@ impl Default for DisplayMode {
 
 unsafe impl Send for RectInfo {}
 pub struct RectInfo {
-    /// TcpStream address.
-    pub addr: String,
+    /// Vnc client state.
+    pub client: Arc<ClientState>,
     /// Dirty area of image.
     pub rects: Vec<Rectangle>,
-    /// Width of Client image.
-    pub width: i32,
-    /// Height of Client image.
-    pub height: i32,
-    /// Output mod information of client display.
-    pub dpm: DisplayMode,
-    /// Image
-    pub image: *mut pixman_image_t,
 }
 
 impl RectInfo {
-    pub fn new(client: &VncClient, rects: Vec<Rectangle>) -> Self {
+    pub fn new(client: &Arc<ClientState>, rects: Vec<Rectangle>) -> Self {
         RectInfo {
-            addr: client.addr.clone(),
+            client: client.clone(),
             rects,
-            width: client.width,
-            height: client.height,
-            dpm: client.client_dpm.clone(),
-            image: client.server_image,
         }
     }
 }
@@ -217,12 +205,8 @@ impl Clone for RectInfo {
             rects.push(rect.clone());
         }
         Self {
-            addr: self.addr.clone(),
+            client: self.client.clone(),
             rects,
-            width: self.width,
-            height: self.height,
-            dpm: self.dpm.clone(),
-            image: self.image,
         }
     }
 
@@ -231,213 +215,178 @@ impl Clone for RectInfo {
     }
 }
 
-/// VncClient struct to record the information of connnection.
-pub struct VncClient {
-    /// TcpStream connected with client.
-    pub stream: TcpStream,
-    /// TcpStream receive buffer.
-    pub buffpool: BuffPool,
-    /// Size of buff in next handle.
-    pub expect: usize,
+/// The connection state of vnc client.
+pub struct ConnState {
     /// Connection status.
     pub dis_conn: bool,
+    /// State flags whether the image needs to be updated for the client.
+    update_state: UpdateState,
     /// RFB protocol version.
     pub version: VncVersion,
-    /// Auth type.
-    auth: AuthState,
-    /// SubAuth type.
-    pub subauth: SubAuthState,
-    /// Message handler.
-    pub handle_msg: fn(&mut VncClient) -> Result<()>,
-    /// The function handling the connection.
-    pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
-    /// Pointer to VncServer.
-    pub server: Arc<VncServer>,
-    /// Tls server connection.
-    pub tls_conn: Option<rustls::ServerConnection>,
-    /// Configuration for sasl authentication.
-    pub sasl: SaslAuth,
-    /// State flags whether the image needs to be updated for the client.
-    state: UpdateState,
-    /// Identify the image update area.
-    pub dirty_bitmap: Bitmap<u64>,
-    /// Number of dirty data.
-    dirty_num: i32,
-    /// Image pointer.
-    pub server_image: *mut pixman_image_t,
-    /// Tcp listening address.
-    pub addr: String,
-    /// Image width.
-    pub width: i32,
-    /// Image height.
-    pub height: i32,
-    /// Display output mod information of client.
-    pub client_dpm: DisplayMode,
-    /// Image display feature.
+    /// Vnc display feature.
     feature: i32,
 }
 
-impl VncClient {
-    pub fn new(
-        stream: TcpStream,
-        addr: String,
-        auth: AuthState,
-        subauth: SubAuthState,
-        server: Arc<VncServer>,
-        image: *mut pixman_image_t,
-    ) -> Self {
-        VncClient {
-            stream,
-            buffpool: BuffPool::new(),
-            expect: 12,
+impl Default for ConnState {
+    fn default() -> Self {
+        ConnState {
             dis_conn: false,
+            update_state: UpdateState::No,
             version: VncVersion::default(),
-            auth,
-            subauth,
-            handle_msg: VncClient::handle_version,
-            handlers: Vec::new(),
-            server,
-            tls_conn: None,
-            sasl: SaslAuth::default(),
-            state: UpdateState::No,
-            dirty_bitmap: Bitmap::<u64>::new(
-                MAX_WINDOW_HEIGHT as usize
-                    * round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) as usize,
-            ),
-            dirty_num: 0,
-            server_image: image,
-            addr,
-            width: 0,
-            height: 0,
-            client_dpm: DisplayMode::default(),
             feature: 0,
         }
     }
+}
 
-    /// Whether the client's image data needs to be updated.
-    pub fn is_need_update(&self) -> bool {
-        match self.state {
-            UpdateState::No => false,
-            UpdateState::Incremental => {
-                // throttle_output_offset
-                true
-            }
-            UpdateState::Force => {
-                // force_update_offset
-                true
-            }
-        }
+impl ConnState {
+    pub fn is_disconnect(&mut self) -> bool {
+        self.dis_conn
     }
 
-    /// Generate the data that needs to be sent.
-    /// Add to send queue
-    pub fn get_rects(&mut self, dirty_num: i32) -> i32 {
-        self.dirty_num += dirty_num;
-        if !self.is_need_update() || (self.dirty_num == 0 && self.state != UpdateState::Force) {
-            return 0;
+    pub fn has_feature(&self, feature: VncFeatures) -> bool {
+        self.feature & (1 << feature as usize) != 0
+    }
+}
+
+/// Struct to record the state with the vnc client.
+pub struct ClientState {
+    /// Write event fd.
+    write_fd: Arc<Mutex<EventFd>>,
+    /// TcpStream receive buffer.
+    pub in_buffer: Arc<Mutex<BuffPool>>,
+    /// TcpStream write buffer.
+    pub out_buffer: Arc<Mutex<BuffPool>>,
+    /// Output mode information of client display.
+    pub client_dpm: Arc<Mutex<DisplayMode>>,
+    /// The connection state of vnc client.
+    pub conn_state: Arc<Mutex<ConnState>>,
+    /// Identify the image update area.
+    pub dirty_bitmap: Arc<Mutex<Bitmap<u64>>>,
+}
+
+impl Default for ClientState {
+    fn default() -> Self {
+        ClientState {
+            write_fd: Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
+            in_buffer: Arc::new(Mutex::new(BuffPool::new())),
+            out_buffer: Arc::new(Mutex::new(BuffPool::new())),
+            client_dpm: Arc::new(Mutex::new(DisplayMode::default())),
+            conn_state: Arc::new(Mutex::new(ConnState::default())),
+            dirty_bitmap: Arc::new(Mutex::new(Bitmap::<u64>::new(
+                MAX_WINDOW_HEIGHT as usize
+                    * round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) as usize,
+            ))),
+        }
+    }
+}
+
+/// Handle the message with vnc client.
+pub struct ClientIoHandler {
+    /// TcpStream connected with client.
+    pub stream: TcpStream,
+    /// Tls server connection.
+    pub tls_conn: Option<rustls::ServerConnection>,
+    /// Message handler.
+    pub msg_handler: fn(&mut ClientIoHandler) -> Result<()>,
+    /// Size of buff in next handle.
+    pub expect: usize,
+    /// State with vnc client.
+    pub client: Arc<ClientState>,
+    /// Configure for vnc server.
+    pub server: Arc<VncServer>,
+    /// Disconnect event fd.
+    pub disconn_evt: EventFd,
+    /// Tcp listening address.
+    pub addr: String,
+}
+
+impl ClientIoHandler {
+    pub fn new(
+        stream: TcpStream,
+        client: Arc<ClientState>,
+        server: Arc<VncServer>,
+        addr: String,
+    ) -> Self {
+        ClientIoHandler {
+            stream,
+            tls_conn: None,
+            msg_handler: ClientIoHandler::handle_version,
+            expect: 12,
+            client,
+            server,
+            disconn_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            addr,
+        }
+    }
+}
+
+impl ClientIoHandler {
+    fn client_handle_read(&mut self) -> Result<(), anyhow::Error> {
+        // Read message from tcpstream.
+        if let Err(e) = self.read_msg() {
+            return Err(e);
         }
 
-        let mut num_rects = 0;
-        let mut x: u64;
-        let mut y: u64 = 0;
-        let mut h: u64;
-        let mut x2: u64;
-        let mut rects = Vec::new();
-        let bpl = self.dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
+        let client = self.client.clone();
+        while client.in_buffer.lock().unwrap().len() >= self.expect {
+            if let Err(e) = (self.msg_handler)(self) {
+                return Err(e);
+            }
 
-        let height = get_image_height(self.server_image) as u64;
-        let width = get_image_width(self.server_image) as u64;
-        loop {
-            // Find the first non-zero bit in dirty bitmap.
-            let offset = self.dirty_bitmap.find_next_bit(y as usize * bpl).unwrap() as u64;
-            if offset >= height as u64 * bpl as u64 {
+            if self.client.conn_state.lock().unwrap().dis_conn {
+                return Err(anyhow!(VncError::Disconnection));
+            }
+
+            if self.expect == 0 {
                 break;
             }
-
-            x = offset % bpl as u64;
-            y = offset / bpl as u64;
-            // Find value in one line to the end.
-            x2 = self.dirty_bitmap.find_next_zero(offset as usize).unwrap() as u64 % bpl as u64;
-            let mut i = y;
-            while i < height {
-                if !self
-                    .dirty_bitmap
-                    .contain((i * bpl as u64 + x) as usize)
-                    .unwrap()
-                {
-                    break;
-                }
-                for j in x..x2 {
-                    self.dirty_bitmap
-                        .clear((i * bpl as u64 + j) as usize)
-                        .unwrap();
-                }
-                i += 1;
-            }
-
-            h = i - y;
-            x2 = cmp::min(x2, width / DIRTY_PIXELS_NUM as u64);
-            if x2 > x as u64 {
-                rects.push(Rectangle::new(
-                    (x * DIRTY_PIXELS_NUM as u64) as i32,
-                    y as i32,
-                    ((x2 - x) * DIRTY_PIXELS_NUM as u64) as i32,
-                    h as i32,
-                ));
-                num_rects += 1;
-            }
-
-            if x == 0 && x2 == width / DIRTY_PIXELS_NUM as u64 {
-                y += h;
-                if y == height {
-                    break;
-                }
-            }
         }
-
-        VNC_RECT_INFO
-            .lock()
-            .unwrap()
-            .push(RectInfo::new(self, rects));
-
-        self.state = UpdateState::No;
-        self.dirty_num = 0;
-
-        num_rects
-    }
-
-    /// Modify event notifiers to  event loop
-    ///
-    /// # Arguments
-    ///
-    /// * `op` - Notifier operation.
-    /// * `idx` - Idx of event in server.handlers
-    pub fn modify_event(&mut self, op: NotifierOperation, idx: usize) -> Result<()> {
-        let mut handlers = Vec::new();
-
-        if let NotifierOperation::Modify = op {
-            if self.handlers.len() <= idx {
-                return Ok(());
-            }
-            handlers.push(self.handlers[idx].clone());
-        }
-
-        EventLoop::update_event(
-            vec![EventNotifier::new(
-                op,
-                self.stream.as_raw_fd(),
-                None,
-                EventSet::IN | EventSet::READ_HANG_UP,
-                handlers,
-            )],
-            None,
-        )?;
 
         Ok(())
     }
 
+    fn client_handle_write(&mut self) {
+        let client = self.client.clone();
+        let mut locked_buffer = client.out_buffer.lock().unwrap();
+        let len = locked_buffer.len();
+        let buf = locked_buffer.read_front(len);
+        self.write_msg(buf);
+        locked_buffer.remov_front(len);
+        drop(locked_buffer);
+    }
+
+    /// Read buf from stream, return the size.
+    fn read_msg(&mut self) -> Result<usize> {
+        let mut buf = Vec::new();
+        let mut len: usize = 0;
+        if self.tls_conn.is_none() {
+            match self.read_plain_msg(&mut buf) {
+                Ok(n) => len = n,
+                Err(e) => return Err(e),
+            }
+        }
+        if let Some(tc) = &self.tls_conn {
+            if tc.is_handshaking() {
+                return Ok(0_usize);
+            }
+        }
+        if self.tls_conn.is_some() {
+            match self.read_tls_msg(&mut buf) {
+                Ok(n) => len = n,
+                Err(e) => return Err(e),
+            }
+        }
+        self.client
+            .in_buffer
+            .lock()
+            .unwrap()
+            .read(&mut buf[..len].to_vec());
+
+        Ok(len)
+    }
+
     // Read from vencrypt channel.
-    pub fn read_tls_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+    fn read_tls_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
         let mut len = 0_usize;
         if self.tls_conn.is_none() {
             return Ok(0_usize);
@@ -474,19 +423,25 @@ impl VncClient {
     }
 
     /// Read plain txt.
-    pub fn read_plain_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+    fn read_plain_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
         let mut len = 0_usize;
         buf.resize(MAX_RECVBUF_LEN, 0u8);
         match self.stream.read(buf) {
-            Ok(ret) => {
-                len = ret;
-            }
-            Err(e) => {
-                error!("read msg error: {:?}", e);
-            }
+            Ok(ret) => len = ret,
+            Err(e) => error!("read msg error: {:?}", e),
         }
 
         Ok(len)
+    }
+
+    /// Write buf to stream
+    /// Choose different channel according to whether or not to encrypt
+    pub fn write_msg(&mut self, buf: &[u8]) {
+        if self.tls_conn.is_none() {
+            self.write_plain_msg(buf)
+        } else {
+            self.write_tls_msg(buf)
+        }
     }
 
     // Send vencrypt message.
@@ -509,7 +464,10 @@ impl VncClient {
                 error!("write msg error: {:?}", e);
                 return;
             }
-            vnc_write_tls_message(tc, &mut self.stream);
+            if let Err(_e) = vnc_write_tls_message(tc, &mut self.stream) {
+                self.client.conn_state.lock().unwrap().dis_conn = true;
+                return;
+            }
             offset = next;
         }
     }
@@ -530,6 +488,7 @@ impl VncClient {
                         continue;
                     } else {
                         error!("write msg error: {:?}", e);
+                        self.client.conn_state.lock().unwrap().dis_conn = true;
                         return;
                     }
                 }
@@ -541,47 +500,10 @@ impl VncClient {
         }
     }
 
-    /// Write buf to stream
-    /// Choose different channel according to whether or not to encrypt
-    ///
-    /// # Arguments
-    /// * `buf` - Data to be send.
-    pub fn write_msg(&mut self, buf: &[u8]) {
-        if self.tls_conn.is_none() {
-            self.write_plain_msg(buf)
-        } else {
-            self.write_tls_msg(buf)
-        }
-    }
-
-    /// Read buf from stream, return the size.
-    pub fn read_msg(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
-        if self.tls_conn.is_none() {
-            self.read_plain_msg(buf)
-        } else {
-            self.read_tls_msg(buf)
-        }
-    }
-
-    /// Read buf from tcpstream.
-    pub fn from_tcpstream_to_buff(&mut self) -> Result<()> {
-        let mut buf = Vec::new();
-        match self.read_msg(&mut buf) {
-            Ok(len) => {
-                self.buffpool.read(&mut buf[0..len].to_vec());
-            }
-            Err(e) => {
-                return Err(e);
-            }
-        }
-
-        Ok(())
-    }
-
     /// Exchange RFB protocol version with client.
     fn handle_version(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
-        let res = String::from_utf8_lossy(buf);
+        let buf = self.read_incoming_msg();
+        let res = String::from_utf8_lossy(&buf);
         let ver_str = &res[0..12].to_string();
         let ver;
         match scanf!(ver_str, "RFB {usize:/\\d\\{3\\}/}.{usize:/\\d\\{3\\}/}\n") {
@@ -594,27 +516,29 @@ impl VncClient {
                 return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
             }
         }
-        self.version.major = ver.0 as u16;
-        self.version.minor = ver.1 as u16;
-        if self.version.major != 3 || ![3, 4, 5, 7, 8].contains(&self.version.minor) {
+
+        let mut version = VncVersion::new(ver.0 as u16, ver.1 as u16);
+        if version.major != 3 || ![3, 4, 5, 7, 8].contains(&version.minor) {
             let mut buf = Vec::new();
             buf.append(&mut (AuthState::Invalid as u32).to_be_bytes().to_vec());
             self.write_msg(&buf);
             return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         }
 
-        if [4, 5].contains(&self.version.minor) {
-            self.version.minor = 3;
+        if [4, 5].contains(&version.minor) {
+            version.minor = 3;
         }
+        self.client.conn_state.lock().unwrap().version = version;
+        let auth = self.server.security_type.lock().unwrap().auth;
 
-        if self.version.minor == 3 {
+        if self.client.conn_state.lock().unwrap().version.minor == 3 {
             error!("Waiting for handle minor=3 ...");
-            match self.auth {
+            match auth {
                 AuthState::No => {
                     let mut buf = Vec::new();
                     buf.append(&mut (AuthState::No as u32).to_be_bytes().to_vec());
                     self.write_msg(&buf);
-                    self.update_event_handler(1, VncClient::handle_client_init);
+                    self.update_event_handler(1, ClientIoHandler::handle_client_init);
                 }
                 _ => {
                     self.auth_failed("Unsupported auth method");
@@ -626,43 +550,58 @@ impl VncClient {
         } else {
             let mut buf = [0u8; 2];
             buf[0] = 1; // Number of security types.
-            buf[1] = self.auth as u8;
+            buf[1] = auth as u8;
             self.write_msg(&buf);
-            self.update_event_handler(1, VncClient::handle_auth);
+            self.update_event_handler(1, ClientIoHandler::handle_auth);
         }
         Ok(())
     }
 
-    /// Invalid authentication, send 1 to reject.
-    fn auth_failed(&mut self, msg: &str) {
-        let auth_rej: u8 = 1;
-        let mut buf: Vec<u8> = vec![1u8];
-        buf.append(&mut (auth_rej as u32).to_be_bytes().to_vec());
-        if self.version.minor >= 8 {
-            let err_msg = msg;
-            buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
-            buf.append(&mut err_msg.as_bytes().to_vec());
+    /// Initialize the connection of vnc client.
+    pub fn handle_client_init(&mut self) -> Result<()> {
+        let mut buf = Vec::new();
+        // Send server framebuffer info.
+        let locked_surface = self.server.vnc_surface.lock().unwrap();
+        let width = get_image_width(locked_surface.server_image);
+        let height = get_image_height(locked_surface.server_image);
+        drop(locked_surface);
+        if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
+            || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
+        {
+            error!("Invalid Image Size!");
+            return Err(anyhow!(VncError::InvalidImageSize));
         }
+        buf.append(&mut (width as u16).to_be_bytes().to_vec());
+        buf.append(&mut (height as u16).to_be_bytes().to_vec());
+        let client = self.client.clone();
+        pixel_format_message(&client, &mut buf);
+
+        buf.append(&mut (APP_NAME.to_string().len() as u32).to_be_bytes().to_vec());
+        buf.append(&mut APP_NAME.to_string().as_bytes().to_vec());
         self.write_msg(&buf);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+        Ok(())
     }
 
     /// Authentication
     fn handle_auth(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
+        let auth = self.server.security_type.lock().unwrap().auth;
+        let version = self.client.conn_state.lock().unwrap().version.clone();
 
-        if buf[0] != self.auth as u8 {
+        if buf[0] != auth as u8 {
             self.auth_failed("Authentication failed");
             error!("handle_auth");
             return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
         }
 
-        match self.auth {
+        match auth {
             AuthState::No => {
-                if self.version.minor >= 8 {
+                if version.minor >= 8 {
                     let buf = [0u8; 4];
                     self.write_msg(&buf);
                 }
-                self.update_event_handler(1, VncClient::handle_client_init);
+                self.update_event_handler(1, ClientIoHandler::handle_client_init);
             }
             AuthState::Vencrypt => {
                 // Send VeNCrypt version 0.2.
@@ -671,7 +610,7 @@ impl VncClient {
                 buf[1] = 2_u8;
 
                 self.write_msg(&buf);
-                self.update_event_handler(2, VncClient::client_vencrypt_init);
+                self.update_event_handler(2, ClientIoHandler::client_vencrypt_init);
             }
             _ => {
                 self.auth_failed("Unhandled auth method");
@@ -682,68 +621,33 @@ impl VncClient {
         Ok(())
     }
 
-    /// Set color depth for client.
-    pub fn set_color_depth(&mut self) {
-        if self.has_feature(VncFeatures::VncFeatureWmvi) {
-            let mut buf = Vec::new();
-            buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
-            buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Padding.
-            buf.append(&mut (1_u16).to_be_bytes().to_vec()); // Number of pixel block.
-            framebuffer_upadate(0, 0, self.width, self.height, ENCODING_WMVI, &mut buf);
-            buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
-            self.pixel_format_message(&mut buf);
-            self.write_msg(&buf);
-        } else if !self.client_dpm.pf.is_default_pixel_format() {
-            self.client_dpm.convert = true;
+    /// Process the data sent by the client
+    pub fn handle_protocol_msg(&mut self) -> Result<()> {
+        // According to RFB protocol, first byte identifies the event type.
+        let buf = self.read_incoming_msg();
+        match ClientMsg::from(buf[0]) {
+            ClientMsg::SetPixelFormat => {
+                return self.set_pixel_format();
+            }
+            ClientMsg::SetEncodings => {
+                return self.set_encodings();
+            }
+            ClientMsg::FramebufferUpdateRequest => {
+                self.update_frame_buff();
+            }
+            ClientMsg::KeyEvent => {
+                self.key_envent();
+            }
+            ClientMsg::PointerEvent => {
+                self.point_event();
+            }
+            ClientMsg::ClientCutText => {
+                self.client_cut_event();
+            }
+            _ => {
+                self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+            }
         }
-    }
-
-    /// Set pixformat for client.
-    pub fn pixel_format_message(&mut self, buf: &mut Vec<u8>) {
-        self.client_dpm.pf.init_pixelformat();
-        buf.append(&mut (self.client_dpm.pf.pixel_bits as u8).to_be_bytes().to_vec()); // Bit per pixel.
-        buf.append(&mut (self.client_dpm.pf.depth as u8).to_be_bytes().to_vec()); // Depth.
-        buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Big-endian flag.
-        buf.append(&mut (1_u8).to_be_bytes().to_vec()); // True-color flag.
-        buf.append(&mut (self.client_dpm.pf.red.max as u16).to_be_bytes().to_vec()); // Red max.
-        buf.append(&mut (self.client_dpm.pf.green.max as u16).to_be_bytes().to_vec()); // Green max.
-        buf.append(&mut (self.client_dpm.pf.blue.max as u16).to_be_bytes().to_vec()); // Blue max.
-        buf.append(&mut (self.client_dpm.pf.red.shift as u8).to_be_bytes().to_vec()); // Red shift.
-        buf.append(
-            &mut (self.client_dpm.pf.green.shift as u8)
-                .to_be_bytes()
-                .to_vec(),
-        ); // Green shift.
-        buf.append(&mut (self.client_dpm.pf.blue.shift as u8).to_be_bytes().to_vec()); // Blue shift.
-        buf.append(&mut [0; 3].to_vec()); // Padding.
-    }
-
-    /// Initialize the connection of vnc client.
-    pub fn handle_client_init(&mut self) -> Result<()> {
-        let mut buf = Vec::new();
-        // Send server framebuffer info.
-        self.width = get_image_width(self.server_image);
-        if self.width < 0 || self.width > MAX_WINDOW_WIDTH as i32 {
-            error!("Invalid Image Size!");
-            return Err(anyhow!(VncError::InvalidImageSize));
-        }
-        buf.append(&mut (self.width as u16).to_be_bytes().to_vec());
-        self.height = get_image_height(self.server_image);
-        if self.height < 0 || self.height > MAX_WINDOW_HEIGHT as i32 {
-            error!("Invalid Image Size!");
-            return Err(anyhow!(VncError::InvalidImageSize));
-        }
-        buf.append(&mut (self.height as u16).to_be_bytes().to_vec());
-        self.pixel_format_message(&mut buf);
-
-        buf.append(
-            &mut ("StratoVirt".to_string().len() as u32)
-                .to_be_bytes()
-                .to_vec(),
-        );
-        buf.append(&mut "StratoVirt".to_string().as_bytes().to_vec());
-        self.write_msg(&buf);
-        self.update_event_handler(1, VncClient::handle_protocol_msg);
         Ok(())
     }
 
@@ -762,7 +666,7 @@ impl VncClient {
         // Number of colors.
         buf.append(&mut (NUM_OF_COLORMAP as u16).to_be_bytes().to_vec());
 
-        let pf = self.client_dpm.pf.clone();
+        let pf = self.client.client_dpm.lock().unwrap().pf.clone();
         for i in 0..NUM_OF_COLORMAP as u16 {
             let r = ((i >> pf.red.shift) & pf.red.max as u16) << (16 - pf.red.bits);
             let g = ((i >> pf.green.shift) & pf.green.max as u16) << (16 - pf.green.bits);
@@ -782,7 +686,7 @@ impl VncClient {
             return Ok(());
         }
 
-        let buf = self.buffpool.read_front(self.expect).to_vec();
+        let buf = self.read_incoming_msg();
         let mut bit_per_pixel: u8 = buf[4];
         let big_endian_flag = buf[6];
         let true_color_flag: u8 = buf[7];
@@ -805,73 +709,45 @@ impl VncClient {
         // Verify the validity of pixel format.
         // bit_per_pixel: Bits occupied by each pixel.
         if ![8, 16, 32].contains(&bit_per_pixel) {
-            self.dis_conn = true;
+            self.client.conn_state.lock().unwrap().dis_conn = true;
             error!("Worng format of bits_per_pixel");
             return Err(anyhow!(VncError::ProtocolMessageFailed(String::from(
                 "set pixel format"
             ))));
         }
 
-        self.client_dpm.pf.red.set_color_info(red_shift, red_max);
-        self.client_dpm
-            .pf
-            .green
-            .set_color_info(green_shift, green_max);
-        self.client_dpm.pf.blue.set_color_info(blue_shift, blue_max);
-        self.client_dpm.pf.pixel_bits = bit_per_pixel;
-        self.client_dpm.pf.pixel_bytes = bit_per_pixel / BIT_PER_BYTE as u8;
+        let mut locked_dpm = self.client.client_dpm.lock().unwrap();
+        locked_dpm.pf.red.set_color_info(red_shift, red_max);
+        locked_dpm.pf.green.set_color_info(green_shift, green_max);
+        locked_dpm.pf.blue.set_color_info(blue_shift, blue_max);
+        locked_dpm.pf.pixel_bits = bit_per_pixel;
+        locked_dpm.pf.pixel_bytes = bit_per_pixel / BIT_PER_BYTE as u8;
         // Standard pixel format, depth is equal to 24.
-        self.client_dpm.pf.depth = if bit_per_pixel == 32 {
+        locked_dpm.pf.depth = if bit_per_pixel == 32 {
             24
         } else {
             bit_per_pixel
         };
-        self.client_dpm.client_be = big_endian_flag != 0;
+        locked_dpm.client_be = big_endian_flag != 0;
+
+        if !locked_dpm.pf.is_default_pixel_format() {
+            locked_dpm.convert = true;
+        }
+        drop(locked_dpm);
         if true_color_flag == 0 {
             self.send_color_map();
         }
-        if !self.client_dpm.pf.is_default_pixel_format() {
-            self.client_dpm.convert = true;
-        }
 
         VNC_RECT_INFO.lock().unwrap().clear();
-        self.update_event_handler(1, VncClient::handle_protocol_msg);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
-    }
-
-    /// Update image for client.
-    fn update_frame_buff(&mut self) {
-        if self.expect == 1 {
-            self.expect = 10;
-            return;
-        }
-        let buf = self.buffpool.read_front(self.expect);
-        if buf[1] != 0 {
-            if self.state != UpdateState::Force {
-                self.state = UpdateState::Incremental;
-            }
-        } else {
-            self.state = UpdateState::Force;
-            let x = u16::from_be_bytes([buf[2], buf[3]]) as i32;
-            let y = u16::from_be_bytes([buf[4], buf[5]]) as i32;
-            let w = u16::from_be_bytes([buf[6], buf[7]]) as i32;
-            let h = u16::from_be_bytes([buf[8], buf[9]]) as i32;
-            set_area_dirty(
-                &mut self.dirty_bitmap,
-                x,
-                y,
-                w,
-                h,
-                get_image_width(self.server_image),
-                get_image_height(self.server_image),
-            );
-        }
-        self.update_event_handler(1, VncClient::handle_protocol_msg);
     }
 
     /// Set encoding.
     fn set_encodings(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
+        let client = self.client.clone();
+        let server = self.server.clone();
+        let buf = self.read_incoming_msg();
         if self.expect == 1 {
             self.expect = 4;
             return Ok(());
@@ -888,7 +764,8 @@ impl VncClient {
             num_encoding = u16::from_be_bytes([buf[2], buf[3]]);
         }
 
-        info!("Set encoding");
+        let mut locked_dpm = self.client.client_dpm.lock().unwrap();
+        let mut locked_state = self.client.conn_state.lock().unwrap();
         while num_encoding > 0 {
             let offset = (4 * num_encoding) as usize;
             let enc = i32::from_be_bytes([
@@ -899,51 +776,51 @@ impl VncClient {
             ]);
             match enc {
                 ENCODING_RAW => {
-                    self.client_dpm.enc = enc;
+                    locked_dpm.enc = enc;
                 }
                 ENCODING_HEXTILE => {
-                    self.feature |= 1 << VncFeatures::VncFeatureHextile as usize;
-                    self.client_dpm.enc = enc;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureHextile as usize;
+                    locked_dpm.enc = enc;
                 }
                 ENCODING_TIGHT => {
-                    self.feature |= 1 << VncFeatures::VncFeatureTight as usize;
-                    self.client_dpm.enc = enc;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureTight as usize;
+                    locked_dpm.enc = enc;
                 }
                 ENCODING_ZLIB => {
                     // ZRLE compress better than ZLIB, so prioritize ZRLE.
-                    if self.feature & (1 << VncFeatures::VncFeatureZrle as usize) == 0 {
-                        self.feature |= 1 << VncFeatures::VncFeatureZlib as usize;
-                        self.client_dpm.enc = enc;
+                    if locked_state.feature & (1 << VncFeatures::VncFeatureZrle as usize) == 0 {
+                        locked_state.feature |= 1 << VncFeatures::VncFeatureZlib as usize;
+                        locked_dpm.enc = enc;
                     }
                 }
                 ENCODING_ZRLE => {
-                    self.feature |= 1 << VncFeatures::VncFeatureZrle as usize;
-                    self.client_dpm.enc = enc;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureZrle as usize;
+                    locked_dpm.enc = enc;
                 }
                 ENCODING_ZYWRLE => {
-                    self.feature |= 1 << VncFeatures::VncFeatureZywrle as usize;
-                    self.client_dpm.enc = enc;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureZywrle as usize;
+                    locked_dpm.enc = enc;
                 }
                 ENCODING_DESKTOPRESIZE => {
-                    self.feature |= 1 << VncFeatures::VncFeatureResize as usize;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureResize as usize;
                 }
                 ENCODING_DESKTOP_RESIZE_EXT => {
-                    self.feature |= 1 << VncFeatures::VncFeatureResizeExt as usize;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureResizeExt as usize;
                 }
                 ENCODING_POINTER_TYPE_CHANGE => {
-                    self.feature |= 1 << VncFeatures::VncFeaturePointerTypeChange as usize;
+                    locked_state.feature |= 1 << VncFeatures::VncFeaturePointerTypeChange as usize;
                 }
                 ENCODING_RICH_CURSOR => {
-                    self.feature |= 1 << VncFeatures::VncFeatureRichCursor as usize;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureRichCursor as usize;
                 }
                 ENCODING_ALPHA_CURSOR => {
-                    self.feature |= 1 << VncFeatures::VncFeatureAlphaCursor as usize;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureAlphaCursor as usize;
                 }
                 ENCODING_WMVI => {
-                    self.feature |= 1 << VncFeatures::VncFeatureWmvi as usize;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureWmvi as usize;
                 }
                 ENCODING_LED_STATE => {
-                    self.feature |= 1 << VncFeatures::VncFeatureLedState as usize;
+                    locked_state.feature |= 1 << VncFeatures::VncFeatureLedState as usize;
                 }
                 _ => {}
             }
@@ -951,80 +828,77 @@ impl VncClient {
             num_encoding -= 1;
         }
 
-        self.desktop_resize();
+        drop(locked_dpm);
+        drop(locked_state);
+        let mut buf: Vec<u8> = Vec::new();
+        // VNC desktop resize.
+        desktop_resize(&client, &server, &mut buf);
         // VNC display cursor define.
-        let server = VNC_SERVERS.lock().unwrap()[0].clone();
-        display_cursor_define(self, &server);
-        self.update_event_handler(1, VncClient::handle_protocol_msg);
+        display_cursor_define(&client, &server, &mut buf);
+        client.out_buffer.lock().unwrap().read(&mut buf);
+        vnc_flush_notify(&client);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
     }
 
-    pub fn has_feature(&mut self, feature: VncFeatures) -> bool {
-        self.feature & (1 << feature as usize) != 0
+    /// Update image for client.
+    fn update_frame_buff(&mut self) {
+        if self.expect == 1 {
+            self.expect = 10;
+            return;
+        }
+        let buf = self.read_incoming_msg();
+        let locked_surface = self.server.vnc_surface.lock().unwrap();
+        let width = get_image_width(locked_surface.server_image);
+        let height = get_image_height(locked_surface.server_image);
+        drop(locked_surface);
+        let client = self.client.clone();
+        let mut locked_state = client.conn_state.lock().unwrap();
+        if buf[1] != 0 {
+            if locked_state.update_state != UpdateState::Force {
+                locked_state.update_state = UpdateState::Incremental;
+            }
+        } else {
+            locked_state.update_state = UpdateState::Force;
+            let x = u16::from_be_bytes([buf[2], buf[3]]) as i32;
+            let y = u16::from_be_bytes([buf[4], buf[5]]) as i32;
+            let w = u16::from_be_bytes([buf[6], buf[7]]) as i32;
+            let h = u16::from_be_bytes([buf[8], buf[9]]) as i32;
+            set_area_dirty(
+                &mut client.dirty_bitmap.lock().unwrap(),
+                x,
+                y,
+                w,
+                h,
+                width,
+                height,
+            );
+        }
+        drop(locked_state);
+        let server = self.server.clone();
+        vnc_refresh_notify(&server);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
-    /// Set Desktop Size.
-    pub fn desktop_resize(&mut self) {
-        if !self.has_feature(VncFeatures::VncFeatureResizeExt)
-            && !self.has_feature(VncFeatures::VncFeatureResize)
-        {
-            return;
+    /// Invalid authentication, send 1 to reject.
+    fn auth_failed(&mut self, msg: &str) {
+        let auth_rej: u8 = 1;
+        let mut buf: Vec<u8> = vec![1u8];
+        buf.append(&mut (auth_rej as u32).to_be_bytes().to_vec());
+        // If the RFB protocol version is above 3.8, an error reason will be returned.
+        if self.client.conn_state.lock().unwrap().version.minor >= 8 {
+            let err_msg = msg;
+            buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
+            buf.append(&mut err_msg.as_bytes().to_vec());
         }
-        self.width = get_image_width(self.server_image);
-        self.height = get_image_height(self.server_image);
-        if self.width < 0
-            || self.width > MAX_WINDOW_WIDTH as i32
-            || self.height < 0
-            || self.height > MAX_WINDOW_HEIGHT as i32
-        {
-            error!("Invalid Image Size!");
-            return;
-        }
-
-        let mut buf: Vec<u8> = Vec::new();
-        buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
-        buf.append(&mut (0_u8).to_be_bytes().to_vec());
-        buf.append(&mut (1_u16).to_be_bytes().to_vec());
-        framebuffer_upadate(
-            0,
-            0,
-            self.width,
-            self.height,
-            ENCODING_DESKTOPRESIZE,
-            &mut buf,
-        );
-
         self.write_msg(&buf);
     }
 
-    /// Process the data sent by the client
-    pub fn handle_protocol_msg(&mut self) -> Result<()> {
-        // According to RFB protocol, first byte identifies the event type.
-        let buf = self.buffpool.read_front(self.expect);
-        match ClientMsg::from(buf[0]) {
-            ClientMsg::SetPixelFormat => {
-                return self.set_pixel_format();
-            }
-            ClientMsg::SetEncodings => {
-                return self.set_encodings();
-            }
-            ClientMsg::FramebufferUpdateRequest => {
-                self.update_frame_buff();
-            }
-            ClientMsg::KeyEvent => {
-                self.key_envent();
-            }
-            ClientMsg::PointerEvent => {
-                self.point_event();
-            }
-            ClientMsg::ClientCutText => {
-                self.client_cut_event();
-            }
-            _ => {
-                self.update_event_handler(1, VncClient::handle_protocol_msg);
-            }
-        }
-        Ok(())
+    /// Read the data from the receiver buffer.
+    pub fn read_incoming_msg(&mut self) -> Vec<u8> {
+        let mut locked_in_buffer = self.client.in_buffer.lock().unwrap();
+        let buf = locked_in_buffer.read_front(self.expect).to_vec();
+        buf
     }
 
     /// Action token after the event.
@@ -1032,101 +906,228 @@ impl VncClient {
     /// # Arguments
     ///
     /// * `expect` - the size of bytes of next callback function.
-    /// * `handle_msg` - callback function of the next event.
+    /// * `msg_handler` - callback function of the next event.
     pub fn update_event_handler(
         &mut self,
         expect: usize,
-        handle_msg: fn(&mut VncClient) -> Result<()>,
+        msg_handler: fn(&mut ClientIoHandler) -> Result<()>,
     ) {
-        self.buffpool.remov_front(self.expect);
+        self.client
+            .in_buffer
+            .lock()
+            .unwrap()
+            .remov_front(self.expect);
         self.expect = expect;
-        self.handle_msg = handle_msg;
+        self.msg_handler = msg_handler;
     }
 
-    /// Clear the data when disconnected from client.
-    pub fn disconnect(&mut self) {
-        if let Err(e) = self.modify_event(NotifierOperation::Delete, 0) {
-            error!("Failed to delete event, error is {}", format!("{:?}", e));
-        }
+    fn disconn_evt_handler(&mut self) -> Vec<EventNotifier> {
+        let notifiers = vec![
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.stream.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.client.write_fd.lock().unwrap().as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+            EventNotifier::new(
+                NotifierOperation::Delete,
+                self.disconn_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                Vec::new(),
+            ),
+        ];
 
-        if let Err(e) = self.stream.shutdown(Shutdown::Both) {
-            info!("Shutdown stream failed: {}", e);
-        }
-        self.handlers.clear();
+        notifiers
     }
 }
 
-/// Internal_notifiers for VncClient.
-impl EventNotifierHelper for VncClient {
-    fn internal_notifiers(client_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
-        let client = client_handler.clone();
+/// Internal notifiers for Client message.
+impl EventNotifierHelper for ClientIoHandler {
+    fn internal_notifiers(client_io_handler: Arc<Mutex<ClientIoHandler>>) -> Vec<EventNotifier> {
+        let mut notifiers: Vec<EventNotifier> = Vec::new();
+
+        // Register event notifier for read.
+        let client_io = client_io_handler.clone();
         let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _| {
-                let mut dis_conn = false;
-                if event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP {
-                    dis_conn = true;
-                } else if event == EventSet::IN {
-                    let mut locked_client = client.lock().unwrap();
-                    if let Err(e) = locked_client.from_tcpstream_to_buff() {
-                        error!("Failed to read_msg, error is {}", format!("{:?}", e));
-                        dis_conn = true;
+            Box::new(move |event, _fd: RawFd| {
+                let mut locked_client_io = client_io.lock().unwrap();
+                if event & EventSet::ERROR == EventSet::ERROR
+                    || event & EventSet::HANG_UP == EventSet::HANG_UP
+                    || event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP
+                {
+                    locked_client_io.client.conn_state.lock().unwrap().dis_conn = true;
+                } else if event & EventSet::IN == EventSet::IN {
+                    if let Err(_e) = locked_client_io.client_handle_read() {
+                        locked_client_io.client.conn_state.lock().unwrap().dis_conn = true;
                     }
                 }
 
-                if !dis_conn {
-                    let mut locked_client = client.lock().unwrap();
-                    while locked_client.buffpool.len() >= locked_client.expect {
-                        if let Err(e) = (locked_client.handle_msg)(&mut locked_client) {
-                            error!("Failed to read_msg, error is {}", format!("{:?}", e));
-                            dis_conn = true;
-                            break;
-                        }
-                    }
+                // Do disconnection event.
+                if locked_client_io
+                    .client
+                    .conn_state
+                    .lock()
+                    .unwrap()
+                    .is_disconnect()
+                {
+                    locked_client_io.disconn_evt.write(1).unwrap();
                 }
+                drop(locked_client_io);
 
-                if dis_conn {
-                    connection_cleanup(client.clone());
-                }
-
-                None as Option<Vec<EventNotifier>>
+                None
             });
-
-        let mut locked_client = client_handler.lock().unwrap();
-        locked_client.handlers.push(Arc::new(Mutex::new(handler)));
-
-        let client = client_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _| {
-                let mut dis_conn = false;
-                if event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP {
-                    dis_conn = true;
-                } else if event == EventSet::IN {
-                    let mut locked_client = client.lock().unwrap();
-                    if locked_client.tls_handshake().is_err() {
-                        dis_conn = true;
-                    }
-                }
-
-                if dis_conn {
-                    connection_cleanup(client.clone());
-                }
-
-                None as Option<Vec<EventNotifier>>
-            });
-
-        locked_client.handlers.push(Arc::new(Mutex::new(handler)));
-
-        vec![EventNotifier::new(
+        let client_io = client_io_handler.clone();
+        notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            locked_client.stream.as_raw_fd(),
+            client_io.lock().unwrap().stream.as_raw_fd(),
             None,
             EventSet::IN | EventSet::READ_HANG_UP,
-            vec![locked_client.handlers[0].clone()],
-        )]
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        // Register event notifier for write.
+        let client_io = client_io_handler.clone();
+        let client = client_io.lock().unwrap().client.clone();
+        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Box::new(move |_event, fd| {
+                read_fd(fd);
+                let mut locked_client_io = client_io.lock().unwrap();
+                locked_client_io.client_handle_write();
+
+                // do disconnection event.
+                if locked_client_io.client.conn_state.lock().unwrap().dis_conn {
+                    locked_client_io.disconn_evt.write(1).unwrap();
+                }
+                drop(locked_client_io);
+
+                None
+            });
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            client.write_fd.lock().unwrap().as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        // Register event for disconnect.
+        let client_io = client_io_handler.clone();
+        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Box::new(move |_event, fd| {
+                read_fd(fd);
+                // Drop client info from vnc server.
+                let mut locked_client_io = client_io.lock().unwrap();
+                let addr = locked_client_io.addr.clone();
+                let server = locked_client_io.server.clone();
+                let notifiers = locked_client_io.disconn_evt_handler();
+                // Shutdown stream.
+                if let Err(e) = locked_client_io.stream.shutdown(Shutdown::Both) {
+                    error!("Shutdown stream failed: {}", e);
+                }
+                drop(locked_client_io);
+                server.client_handlers.lock().unwrap().remove(&addr);
+
+                Some(notifiers)
+            });
+
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            client_io_handler.lock().unwrap().disconn_evt.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![Arc::new(Mutex::new(handler))],
+        ));
+
+        notifiers
     }
 }
 
-fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) {
+/// Generate the data that needs to be sent.
+/// Add to send queue
+pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: i32) -> i32 {
+    if !is_need_update(client) || dirty_num == 0 {
+        return 0;
+    }
+
+    let mut num_rects = 0;
+    let mut x: u64;
+    let mut y: u64 = 0;
+    let mut h: u64;
+    let mut x2: u64;
+    let mut rects = Vec::new();
+    let bpl = client.dirty_bitmap.lock().unwrap().vol() / MAX_WINDOW_HEIGHT as usize;
+    let locked_surface = server.vnc_surface.lock().unwrap();
+    let mut locked_dirty = client.dirty_bitmap.lock().unwrap();
+
+    let height = get_image_height(locked_surface.server_image) as u64;
+    let width = get_image_width(locked_surface.server_image) as u64;
+    loop {
+        // Find the first non-zero bit in dirty bitmap.
+        let offset = locked_dirty.find_next_bit(y as usize * bpl).unwrap() as u64;
+        if offset >= height as u64 * bpl as u64 {
+            break;
+        }
+
+        x = offset % bpl as u64;
+        y = offset / bpl as u64;
+        // Find value in one line to the end.
+        x2 = locked_dirty.find_next_zero(offset as usize).unwrap() as u64 % bpl as u64;
+        let mut i = y;
+        while i < height {
+            if !locked_dirty.contain((i * bpl as u64 + x) as usize).unwrap() {
+                break;
+            }
+            for j in x..x2 {
+                locked_dirty.clear((i * bpl as u64 + j) as usize).unwrap();
+            }
+            i += 1;
+        }
+
+        h = i - y;
+        x2 = cmp::min(x2, width / DIRTY_PIXELS_NUM as u64);
+        if x2 > x as u64 {
+            rects.push(Rectangle::new(
+                (x * DIRTY_PIXELS_NUM as u64) as i32,
+                y as i32,
+                ((x2 - x) * DIRTY_PIXELS_NUM as u64) as i32,
+                h as i32,
+            ));
+            num_rects += 1;
+        }
+
+        if x == 0 && x2 == width / DIRTY_PIXELS_NUM as u64 {
+            y += h;
+            if y == height {
+                break;
+            }
+        }
+    }
+
+    VNC_RECT_INFO
+        .lock()
+        .unwrap()
+        .push(RectInfo::new(client, rects));
+
+    drop(locked_dirty);
+    drop(locked_surface);
+
+    let mut locked_state = client.conn_state.lock().unwrap();
+    locked_state.update_state = UpdateState::No;
+    drop(locked_state);
+
+    num_rects
+}
+
+fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) -> Result<()> {
     while tc.wants_write() {
         match tc.write_tls(stream) {
             Ok(_) => {}
@@ -1136,18 +1137,193 @@ fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) {
                     continue;
                 } else {
                     error!("write msg error: {:?}", e);
-                    return;
+                    return Err(anyhow!(VncError::Disconnection));
                 }
             }
         }
     }
+
+    Ok(())
 }
 
-fn connection_cleanup(client: Arc<Mutex<VncClient>>) {
-    let addr = client.lock().unwrap().addr.clone();
-    info!("Client disconnect : {:?}", addr);
-    client.lock().unwrap().disconnect();
-    let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    let mut locked_clients = server.clients.lock().unwrap();
-    locked_clients.remove(&addr);
+/// Whether the client's image data needs to be updated.
+pub fn is_need_update(client: &Arc<ClientState>) -> bool {
+    match client.conn_state.lock().unwrap().update_state {
+        UpdateState::No => false,
+        UpdateState::Incremental => {
+            // throttle_output_offset
+            true
+        }
+        UpdateState::Force => {
+            // force_update_offset
+            true
+        }
+    }
+}
+
+/// Set pixformat for client.
+pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
+    let mut locked_dpm = client.client_dpm.lock().unwrap();
+    locked_dpm.pf.init_pixelformat();
+    let big_endian: u8 = if cfg!(target_endian = "big") {
+        1_u8
+    } else {
+        0_u8
+    };
+    buf.append(&mut (locked_dpm.pf.pixel_bits as u8).to_be_bytes().to_vec()); // Bit per pixel.
+    buf.append(&mut (locked_dpm.pf.depth as u8).to_be_bytes().to_vec()); // Depth.
+    buf.append(&mut (big_endian as u8).to_be_bytes().to_vec()); // Big-endian flag.
+    buf.append(&mut (1_u8).to_be_bytes().to_vec()); // True-color flag.
+    buf.append(&mut (locked_dpm.pf.red.max as u16).to_be_bytes().to_vec()); // Red max.
+    buf.append(&mut (locked_dpm.pf.green.max as u16).to_be_bytes().to_vec()); // Green max.
+    buf.append(&mut (locked_dpm.pf.blue.max as u16).to_be_bytes().to_vec()); // Blue max.
+    buf.append(&mut (locked_dpm.pf.red.shift as u8).to_be_bytes().to_vec()); // Red shift.
+    buf.append(&mut (locked_dpm.pf.green.shift as u8).to_be_bytes().to_vec()); // Green shift.
+    buf.append(&mut (locked_dpm.pf.blue.shift as u8).to_be_bytes().to_vec()); // Blue shift.
+    buf.append(&mut [0; 3].to_vec()); // Padding.
+    drop(locked_dpm);
+}
+
+/// Set Desktop Size.
+pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
+    let locked_state = client.conn_state.lock().unwrap();
+    let locked_surface = server.vnc_surface.lock().unwrap();
+    if !locked_state.has_feature(VncFeatures::VncFeatureResizeExt)
+        && !locked_state.has_feature(VncFeatures::VncFeatureResize)
+    {
+        return;
+    }
+    let width = get_image_width(locked_surface.server_image);
+    let height = get_image_height(locked_surface.server_image);
+    drop(locked_state);
+    drop(locked_surface);
+
+    if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
+        || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
+    {
+        error!("Invalid Image Size!");
+        return;
+    }
+
+    buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
+    buf.append(&mut (0_u8).to_be_bytes().to_vec());
+    buf.append(&mut (1_u16).to_be_bytes().to_vec());
+    framebuffer_upadate(0, 0, width, height, ENCODING_DESKTOPRESIZE, buf);
+}
+
+/// Set color depth for client.
+pub fn set_color_depth(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
+    let locked_state = client.conn_state.lock().unwrap();
+    if locked_state.has_feature(VncFeatures::VncFeatureWmvi) {
+        let locked_surface = server.vnc_surface.lock().unwrap();
+        let width = get_image_width(locked_surface.server_image);
+        let height = get_image_height(locked_surface.server_image);
+        drop(locked_surface);
+
+        if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
+            || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
+        {
+            error!("Invalid Image Size!");
+            return;
+        }
+        buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
+        buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Padding.
+        buf.append(&mut (1_u16).to_be_bytes().to_vec()); // Number of pixel block.
+        framebuffer_upadate(0, 0, width, height, ENCODING_WMVI, buf);
+        buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
+        pixel_format_message(client, buf);
+    } else if !client
+        .client_dpm
+        .lock()
+        .unwrap()
+        .pf
+        .is_default_pixel_format()
+    {
+        client.client_dpm.lock().unwrap().convert = true;
+    }
+}
+
+/// Send framebuf of mouse to the client.
+pub fn display_cursor_define(
+    client: &Arc<ClientState>,
+    server: &Arc<VncServer>,
+    buf: &mut Vec<u8>,
+) {
+    let mut cursor: DisplayMouse;
+    let mut mask: Vec<u8>;
+    let locked_cursor = server.vnc_cursor.lock().unwrap();
+    match &locked_cursor.cursor {
+        Some(c) => {
+            cursor = c.clone();
+        }
+        None => {
+            return;
+        }
+    }
+    match &locked_cursor.mask {
+        Some(m) => {
+            mask = m.clone();
+        }
+        None => {
+            return;
+        }
+    }
+    drop(locked_cursor);
+    if cursor.data.is_empty()
+        || cursor.data.len() != ((cursor.width * cursor.height) as usize) * bytes_per_pixel()
+    {
+        return;
+    }
+    if client
+        .conn_state
+        .lock()
+        .unwrap()
+        .has_feature(VncFeatures::VncFeatureAlphaCursor)
+    {
+        buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
+        buf.append(&mut (0_u8).to_be_bytes().to_vec()); // padding
+        buf.append(&mut (1_u16).to_be_bytes().to_vec()); // number of rects
+
+        framebuffer_upadate(
+            cursor.hot_x as i32,
+            cursor.hot_y as i32,
+            cursor.width as i32,
+            cursor.height as i32,
+            ENCODING_ALPHA_CURSOR as i32,
+            buf,
+        );
+        buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
+        buf.append(&mut cursor.data);
+        return;
+    }
+
+    if client
+        .conn_state
+        .lock()
+        .unwrap()
+        .has_feature(VncFeatures::VncFeatureRichCursor)
+    {
+        buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
+        buf.append(&mut (0_u8).to_be_bytes().to_vec()); // padding
+        buf.append(&mut (1_u16).to_be_bytes().to_vec()); // number of rects
+
+        framebuffer_upadate(
+            cursor.hot_x as i32,
+            cursor.hot_y as i32,
+            cursor.width as i32,
+            cursor.height as i32,
+            ENCODING_RICH_CURSOR as i32,
+            buf,
+        );
+        let dpm = client.client_dpm.lock().unwrap().clone();
+        let data_size = cursor.width * cursor.height * dpm.pf.pixel_bytes as u32;
+        let data_ptr = cursor.data.as_ptr() as *mut u8;
+        write_pixel(data_ptr, data_size as usize, &dpm, buf);
+        buf.append(&mut mask);
+    }
+}
+
+/// Consume the output buffer.
+pub fn vnc_flush_notify(client: &Arc<ClientState>) {
+    client.write_fd.lock().unwrap().write(1).unwrap();
 }

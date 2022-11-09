@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{auth::SubAuthState, client::VncClient, VncError};
+use crate::{auth::SubAuthState, client::ClientIoHandler, VncError};
 use anyhow::{anyhow, Result};
 use log::{error, info};
 use rustls::{
@@ -26,7 +26,6 @@ use rustls::{
     RootCertStore, SupportedCipherSuite, SupportedKxGroup, SupportedProtocolVersion,
 };
 use std::{fs::File, io::BufReader, sync::Arc};
-use util::loop_context::NotifierOperation;
 
 const TLS_CREDS_SERVER_CACERT: &str = "cacert.pem";
 const TLS_CREDS_SERVERCERT: &str = "servercert.pem";
@@ -64,11 +63,11 @@ pub struct TlsCreds {
     pub verifypeer: bool,
 }
 
-impl VncClient {
+impl ClientIoHandler {
     /// Exchange auth version with client
     pub fn client_vencrypt_init(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
-
+        let buf = self.read_incoming_msg();
+        let subauth = self.server.security_type.lock().unwrap().subauth;
         // VeNCrypt version 0.2.
         if buf[0] != 0 || buf[1] != 2 {
             let mut buf = Vec::new();
@@ -83,21 +82,22 @@ impl VncClient {
             // Number of sub-auths.
             buf.append(&mut (1_u8).to_be_bytes().to_vec());
             // The supported auth.
-            buf.append(&mut (self.subauth as u32).to_be_bytes().to_vec());
+            buf.append(&mut (subauth as u32).to_be_bytes().to_vec());
             self.write_msg(&buf);
         }
 
-        self.update_event_handler(4, VncClient::client_vencrypt_auth);
+        self.update_event_handler(4, ClientIoHandler::client_vencrypt_auth);
         Ok(())
     }
 
     /// Encrypted Channel Initialize.
     pub fn client_vencrypt_auth(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let auth = u32::from_be_bytes(buf);
+        let subauth = self.server.security_type.lock().unwrap().subauth;
 
-        if auth != self.subauth as u32 {
+        if auth != subauth as u32 {
             let mut buf = Vec::new();
             // Reject auth.
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
@@ -132,8 +132,13 @@ impl VncClient {
             ))));
         }
 
-        self.update_event_handler(1, VncClient::tls_handshake);
-        self.modify_event(NotifierOperation::Modify, 1)?;
+        self.client
+            .in_buffer
+            .lock()
+            .unwrap()
+            .remov_front(self.expect);
+        self.expect = 0;
+        self.msg_handler = ClientIoHandler::tls_handshake;
         Ok(())
     }
 
@@ -170,11 +175,10 @@ impl VncClient {
 
             if tc.is_handshaking() {
                 // Tls handshake continue.
-                self.handle_msg = VncClient::tls_handshake;
+                self.msg_handler = ClientIoHandler::tls_handshake;
             } else {
                 info!("Finished tls handshaking");
                 // Tls handshake finished.
-                self.modify_event(NotifierOperation::Modify, 0)?;
                 if let Err(e) = self.handle_vencrypt_subauth() {
                     return Err(e);
                 }
@@ -188,10 +192,11 @@ impl VncClient {
     }
 
     fn handle_vencrypt_subauth(&mut self) -> Result<()> {
-        match self.subauth {
+        let subauth = self.server.security_type.lock().unwrap().subauth;
+        match subauth {
             SubAuthState::VncAuthVencryptX509Sasl => {
                 self.expect = 4;
-                self.handle_msg = VncClient::get_mechname_length;
+                self.msg_handler = ClientIoHandler::get_mechname_length;
                 if let Err(e) = self.start_sasl_auth() {
                     return Err(e);
                 }
@@ -200,12 +205,13 @@ impl VncClient {
                 let buf = [0u8; 4];
                 self.write_msg(&buf);
                 self.expect = 1;
-                self.handle_msg = VncClient::handle_client_init;
+                self.msg_handler = ClientIoHandler::handle_client_init;
             }
             _ => {
                 let mut buf: Vec<u8> = Vec::new();
                 buf.append(&mut (0_u8).to_be_bytes().to_vec());
-                if self.version.minor >= 8 {
+                let version = self.client.conn_state.lock().unwrap().version.clone();
+                if version.minor >= 8 {
                     let err_msg: String = "Unsupported subauth type".to_string();
                     buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
                     buf.append(&mut err_msg.as_bytes().to_vec());

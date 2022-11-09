@@ -12,8 +12,8 @@
 
 use crate::{
     auth::SaslAuth,
-    auth::{AuthState, SubAuthState},
-    client::VncClient,
+    auth::{AuthState, SaslConfig, SubAuthState},
+    client::{get_rects, ClientIoHandler, ClientState},
     data::keycode::KEYSYM2KEYCODE,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
@@ -58,8 +58,8 @@ const CONNECTION_LIMIT: usize = 1;
 pub struct VncServer {
     /// Event fd for vnc refresh.
     pub refresh_fd: Arc<Mutex<EventFd>>,
-    /// Clients connected to vnc.
-    pub clients: Arc<Mutex<HashMap<String, Arc<Mutex<VncClient>>>>>,
+    /// Client io handler.
+    pub client_handlers: Arc<Mutex<HashMap<String, Arc<Mutex<ClientIoHandler>>>>>,
     /// Security Type for connection.
     pub security_type: Arc<Mutex<SecurityType>>,
     /// Mapping ASCII to keycode.
@@ -82,7 +82,7 @@ impl VncServer {
     pub fn new(refresh_fd: Arc<Mutex<EventFd>>, guest_image: *mut pixman_image_t) -> Self {
         VncServer {
             refresh_fd,
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            client_handlers: Arc::new(Mutex::new(HashMap::new())),
             security_type: Arc::new(Mutex::new(SecurityType::default())),
             keysym2keycode: Arc::new(Mutex::new(HashMap::new())),
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
@@ -199,8 +199,10 @@ impl ImageInfo {
 pub struct SecurityType {
     /// Configuration for tls connection.
     pub tlscreds: Option<TlsCreds>,
-    /// Configuration for sasl Authentication.
+    /// Authentication for connection
     pub saslauth: Option<SaslAuth>,
+    /// Configuration for sasl Authentication.
+    pub saslconfig: SaslConfig,
     /// Configuration to make tls channel.
     pub tls_config: Option<Arc<rustls::ServerConfig>>,
     /// Auth type.
@@ -214,6 +216,7 @@ impl Default for SecurityType {
         SecurityType {
             tlscreds: None,
             saslauth: None,
+            saslconfig: SaslConfig::default(),
             tls_config: None,
             auth: AuthState::No,
             subauth: SubAuthState::VncAuthVencryptPlain,
@@ -245,8 +248,8 @@ impl SecurityType {
         }
 
         // Sasl configuration.
-        if let Some(_sasl_auth) = object.sasl_object.get(&vnc_cfg.sasl_authz) {
-            self.saslauth = Some(SaslAuth::default());
+        if let Some(sasl_auth) = object.sasl_object.get(&vnc_cfg.sasl_authz) {
+            self.saslauth = Some(SaslAuth::new(sasl_auth.identity.clone()));
         }
 
         Ok(())
@@ -497,12 +500,13 @@ impl VncSurface {
 /// * `x` `y`- coordinates of dirty area.
 fn set_dirty_for_each_clients(x: usize, y: usize) {
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    let mut locked_clients = server.clients.lock().unwrap();
-    for client in locked_clients.values_mut() {
+    let mut locked_handlers = server.client_handlers.lock().unwrap();
+    for client_io in locked_handlers.values_mut() {
+        let client = client_io.lock().unwrap().client.clone();
         client
+            .dirty_bitmap
             .lock()
             .unwrap()
-            .dirty_bitmap
             .set(x + y * VNC_BITMAP_WIDTH as usize)
             .unwrap();
     }
@@ -519,42 +523,37 @@ pub fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<()> {
-    if server.clients.lock().unwrap().len() >= server.conn_limits {
+    if server.client_handlers.lock().unwrap().len() >= server.conn_limits {
         stream.shutdown(Shutdown::Both).unwrap();
         return Err(anyhow!(VncError::MakeConnectionFailed(String::from(
             "Total connection is exceeding to limit."
         ))));
     }
-    info!("New Client: {:?}", addr);
     stream
         .set_nonblocking(true)
         .expect("set nonblocking failed");
+    info!("New Connection: {:?}", stream);
 
-    let locked_security_type = server.security_type.lock().unwrap();
-    let mut client = VncClient::new(
+    // Register event notifier for vnc client.
+    let client = Arc::new(ClientState::default());
+    let client_io = Arc::new(Mutex::new(ClientIoHandler::new(
         stream,
-        addr.to_string(),
-        locked_security_type.auth,
-        locked_security_type.subauth,
+        client,
         server.clone(),
-        server.vnc_surface.lock().unwrap().server_image,
-    );
-
-    if let Some(saslauth) = &locked_security_type.saslauth {
-        client.sasl.identity = saslauth.identity.clone();
-    }
-    drop(locked_security_type);
-    client.write_msg("RFB 003.008\n".to_string().as_bytes());
-    info!("{:?}", client.stream);
-
-    let tmp_client = Arc::new(Mutex::new(client));
-    server
-        .clients
+        addr.to_string(),
+    )));
+    client_io
         .lock()
         .unwrap()
-        .insert(addr.to_string(), tmp_client.clone());
+        .write_msg("RFB 003.008\n".to_string().as_bytes());
 
-    EventLoop::update_event(EventNotifierHelper::internal_notifiers(tmp_client), None)?;
+    server
+        .client_handlers
+        .lock()
+        .unwrap()
+        .insert(addr.to_string(), client_io.clone());
+
+    EventLoop::update_event(EventNotifierHelper::internal_notifiers(client_io), None)?;
 
     update_server_surface(server);
     vnc_refresh_notify(server);
@@ -567,7 +566,7 @@ fn vnc_refresh() {
         return;
     }
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
-    if server.clients.lock().unwrap().is_empty() {
+    if server.client_handlers.lock().unwrap().is_empty() {
         return;
     }
 
@@ -586,9 +585,10 @@ fn vnc_refresh() {
     }
 
     let mut _rects: i32 = 0;
-    let mut clients = server.clients.lock().unwrap();
-    for client in clients.values_mut() {
-        _rects += client.lock().unwrap().get_rects(dirty_num);
+    let mut locked_handlers = server.client_handlers.lock().unwrap();
+    for client_io in locked_handlers.values_mut() {
+        let client = client_io.lock().unwrap().client.clone();
+        _rects += get_rects(&client, &server, dirty_num);
     }
 }
 
