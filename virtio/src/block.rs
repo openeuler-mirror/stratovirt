@@ -21,16 +21,17 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use super::{
-    report_virtio_error, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
-    VirtioInterruptType, VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
-    VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_BLOCK,
+    iov_discard_back, iov_discard_front, iov_from_buf_direct, iov_to_buf, report_virtio_error,
+    virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
+    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
+use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 use machine_manager::{
     config::{BlkDevConfig, ConfigCheck},
@@ -71,15 +72,6 @@ fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let serial_bytes = serial_num.as_bytes();
     id_bytes[..bytes_to_copy].clone_from_slice(&serial_bytes[..bytes_to_copy]);
     id_bytes
-}
-
-fn write_buf_mem(buf: &[u8], hva: u64) -> Result<()> {
-    let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
-    (&mut slice)
-        .write(buf)
-        .with_context(|| format!("Failed to write buf(hva:{})", hva))?;
-
-    Ok(())
 }
 
 #[repr(C)]
@@ -178,8 +170,8 @@ struct Request {
 }
 
 impl Request {
-    fn new(handler: &BlockIoHandler, elem: &Element, status: &mut u8) -> Result<Self> {
-        if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() || elem.desc_num < 2 {
+    fn new(handler: &BlockIoHandler, elem: &mut Element, status: &mut u8) -> Result<Self> {
+        if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() {
             bail!(
                 "Missed header for block request: out {} in {} desc num {}",
                 elem.out_iovec.len(),
@@ -188,32 +180,29 @@ impl Request {
             );
         }
 
-        let out_iov_elem = elem.out_iovec.get(0).unwrap();
-        if out_iov_elem.len < size_of::<RequestOutHeader>() as u32 {
-            bail!(
-                "Invalid out header for block request: length {}",
-                out_iov_elem.len
-            );
-        }
+        let mut out_header = RequestOutHeader::default();
+        iov_to_buf(
+            &handler.mem_space,
+            &elem.out_iovec,
+            out_header.as_mut_bytes(),
+        )
+        .and_then(|size| {
+            if size < size_of::<RequestOutHeader>() {
+                bail!("Invalid out header for block request: length {}", size);
+            }
+            Ok(())
+        })?;
+        out_header.request_type = LittleEndian::read_u32(out_header.request_type.as_bytes());
+        out_header.sector = LittleEndian::read_u64(out_header.sector.as_bytes());
 
-        let out_header = handler
-            .mem_space
-            .read_object::<RequestOutHeader>(out_iov_elem.addr)
-            .with_context(|| {
-                anyhow!(VirtioError::ReadObjectErr(
-                    "the block's request header",
-                    out_iov_elem.addr.0
-                ))
-            })?;
-
-        let pos = elem.in_iovec.len() - 1;
-        let in_iov_elem = elem.in_iovec.get(pos).unwrap();
+        let in_iov_elem = elem.in_iovec.last().unwrap();
         if in_iov_elem.len < 1 {
             bail!(
                 "Invalid in header for block request: length {}",
                 in_iov_elem.len
             );
         }
+        let in_header = GuestAddress(in_iov_elem.addr.0 + in_iov_elem.len as u64 - 1);
 
         let mut request = Request {
             desc_index: elem.index,
@@ -221,33 +210,29 @@ impl Request {
             iovec: Vec::with_capacity(elem.desc_num as usize),
             data_len: 0,
             in_len: 0,
-            in_header: in_iov_elem.addr,
+            in_header,
             next: Box::new(None),
         };
 
+        // Count in_len before discard iovec.
+        // We always write the last status byte, so count all in_iovs.
+        for in_iov in elem.in_iovec.iter() {
+            request.in_len += in_iov.len;
+        }
+
         match out_header.request_type {
-            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_GET_ID => {
-                for (index, elem_iov) in elem.in_iovec.iter().enumerate() {
-                    if index == elem.in_iovec.len() - 1 {
-                        break;
+            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_GET_ID | VIRTIO_BLK_T_OUT => {
+                let data_iovec = match out_header.request_type {
+                    VIRTIO_BLK_T_OUT => {
+                        iov_discard_front(&mut elem.out_iovec, size_of::<RequestOutHeader>() as u64)
                     }
-                    if let Some(hva) = handler.mem_space.get_host_address(elem_iov.addr) {
-                        let iov = Iovec {
-                            iov_base: hva,
-                            iov_len: u64::from(elem_iov.len),
-                        };
-                        request.iovec.push(iov);
-                        request.data_len += u64::from(elem_iov.len);
-                    } else {
-                        bail!("Map desc base {:?} failed", elem_iov.addr);
-                    }
+                    // Otherwise discard the last "status" byte.
+                    _ => iov_discard_back(&mut elem.in_iovec, 1),
+                };
+                if data_iovec.is_none() {
+                    bail!("Empty data for block request");
                 }
-            }
-            VIRTIO_BLK_T_OUT => {
-                for (index, elem_iov) in elem.out_iovec.iter().enumerate() {
-                    if index == 0 {
-                        continue;
-                    }
+                for elem_iov in data_iovec.unwrap() {
                     if let Some(hva) = handler.mem_space.get_host_address(elem_iov.addr) {
                         let iov = Iovec {
                             iov_base: hva,
@@ -269,11 +254,6 @@ impl Request {
 
         if !request.io_range_valid(handler.disk_sectors) {
             *status = VIRTIO_BLK_S_IOERR;
-        }
-
-        // We always write the last status byte, so count all in_iovs.
-        for in_iov in elem.in_iovec.iter() {
-            request.in_len += in_iov.len;
         }
 
         Ok(request)
@@ -356,19 +336,7 @@ impl Request {
             VIRTIO_BLK_T_GET_ID => {
                 let serial = serial_num.clone().unwrap_or_else(|| String::from(""));
                 let serial_vec = get_serial_num_config(&serial);
-                let mut start: usize = 0;
-                let mut end: usize;
-
-                for iov in self.iovec.iter() {
-                    end = cmp::min(start + iov.iov_len as usize, serial_vec.len());
-                    write_buf_mem(&serial_vec[start..end], iov.iov_base)
-                        .with_context(|| "Failed to write buf for virtio block id")?;
-
-                    if end >= serial_vec.len() {
-                        break;
-                    }
-                    start = end;
-                }
+                iov_from_buf_direct(&self.iovec, &serial_vec)?;
                 aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_OK);
             }
             _ => bail!(
@@ -490,7 +458,7 @@ impl BlockIoHandler {
 
         loop {
             let mut queue = self.queue.lock().unwrap();
-            let elem = queue
+            let mut elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
             if elem.desc_num == 0 {
@@ -514,7 +482,7 @@ impl BlockIoHandler {
 
             // Init and put valid request into request queue.
             let mut status = VIRTIO_BLK_S_OK;
-            let req = Request::new(self, &elem, &mut status)?;
+            let req = Request::new(self, &mut elem, &mut status)?;
             if status != VIRTIO_BLK_S_OK {
                 let aiocompletecb = AioCompleteCb::new(
                     self.queue.clone(),
