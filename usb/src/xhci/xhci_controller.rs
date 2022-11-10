@@ -75,6 +75,9 @@ const PORT_EVENT_ID_SHIFT: u32 = 24;
 const SLOT_CTX_PORT_NUMBER_SHIFT: u32 = 16;
 const ENDPOINT_ID_START: u32 = 1;
 const MAX_ENDPOINTS: u32 = 31;
+/// XHCI config
+const XHCI_PORT2_NUM: u32 = 2;
+const XHCI_PORT3_NUM: u32 = 2;
 
 type DmaAddr = u64;
 
@@ -319,7 +322,6 @@ pub struct XhciDevice {
     pub oper: XchiOperReg,
     pub usb_ports: Vec<Arc<Mutex<UsbPort>>>,
     pub ports: Vec<Arc<Mutex<XhciPort>>>,
-    pub port_num: u32,
     pub slots: Vec<XhciSlot>,
     pub intrs: Vec<XhciInterrupter>,
     pub cmd_ring: XhciRing,
@@ -334,9 +336,8 @@ impl XhciDevice {
             oper: XchiOperReg::new(),
             ctrl_ops: None,
             usb_ports: Vec::new(),
-            numports_2: 2,
-            numports_3: 2,
-            port_num: 4,
+            numports_2: XHCI_PORT2_NUM,
+            numports_3: XHCI_PORT3_NUM,
             ports: Vec::new(),
             slots: vec![XhciSlot::new(mem_space); MAX_SLOTS as usize],
             intrs: vec![XhciInterrupter::new(mem_space); 1],
@@ -348,7 +349,7 @@ impl XhciDevice {
         let clone_xhci = xhci.clone();
         let mut locked_xhci = clone_xhci.lock().unwrap();
         locked_xhci.oper.usb_status = USB_STS_HCH;
-        for i in 0..locked_xhci.port_num {
+        for i in 0..(XHCI_PORT2_NUM + XHCI_PORT3_NUM) {
             locked_xhci.ports.push(Arc::new(Mutex::new(XhciPort::new(
                 &Arc::downgrade(&clone_xhci),
                 format!("xhci-port-{}", i),
@@ -435,7 +436,7 @@ impl XhciDevice {
                 locked_port.portsc |= PORTSC_WRC;
             }
             match speed {
-                USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH => {
+                USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
                     locked_port.portsc = set_field(
                         locked_port.portsc,
                         PLS_U0,
@@ -471,7 +472,7 @@ impl XhciDevice {
         Ok(())
     }
 
-    /// Update the xhci port status and then
+    /// Update the xhci port status and then notify the driver.
     pub fn port_update(&mut self, port: &Arc<Mutex<XhciPort>>) -> Result<()> {
         let mut locked_port = port.lock().unwrap();
         locked_port.portsc = PORTSC_PP;
@@ -498,6 +499,7 @@ impl XhciDevice {
             locked_port.portsc, pls
         );
         drop(locked_port);
+        self.oper.usb_status |= USB_STS_PCD;
         self.port_notify(port, PORTSC_CSC)?;
         Ok(())
     }
@@ -519,7 +521,7 @@ impl XhciDevice {
     fn lookup_usb_port(&mut self, slot_ctx: &XhciSlotCtx) -> Option<Arc<Mutex<UsbPort>>> {
         let mut path = String::new();
         let mut port = slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff;
-        if port < 1 || port > self.port_num {
+        if port < 1 || port > self.ports.len() as u32 {
             error!("Invalid port: {}", port);
             return None;
         }
@@ -1441,8 +1443,6 @@ impl XhciDevice {
     pub fn get_mf_index(&self) -> u64 {
         0
     }
-
-    pub fn update_mf(&self) {}
 
     pub(crate) fn reset_event_ring(&mut self, idx: u32) -> Result<()> {
         let intr = &mut self.intrs[idx as usize];

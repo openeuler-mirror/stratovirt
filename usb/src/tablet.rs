@@ -239,12 +239,15 @@ impl UsbDeviceOps for UsbTablet {
         debug!("handle_control request {:?}", device_req);
         let mut locked_dev = self.device.lock().unwrap();
         match locked_dev.handle_control_for_descriptor(packet, device_req, data) {
-            Ok(_) => {
-                debug!("Tablet Device control handled by descriptor, return directly.");
-                return;
+            Ok(handled) => {
+                if handled {
+                    debug!("Tablet control handled by descriptor, return directly.");
+                    return;
+                }
             }
             Err(e) => {
-                debug!("Tablet not handled by descriptor, fallthrough {}", e);
+                error!("Tablet descriptor error {}", e);
+                return;
             }
         }
         let mut locked_hid = self.hid.lock().unwrap();
