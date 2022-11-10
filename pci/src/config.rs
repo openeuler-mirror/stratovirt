@@ -87,56 +87,9 @@ pub const HEADER_TYPE_MULTIFUNC: u8 = 0x80;
 /// The vendor ID for PCI devices other than virtio.
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
-/// PCI Express capability registers, same as kernel defines
-/// Link Training
-pub const PCI_EXP_LNKSTA: u16 = 18;
-/// Data Link Layer Link Active
-pub const PCI_EXP_LNKSTA_DLLLA: u16 = 0x2000;
-/// Negotiated Link Width
-pub const PCI_EXP_LNKSTA_NLW: u16 = 0x03f0;
-/// Slot Control
-pub const PCI_EXP_SLTCTL: u16 = 24;
-/// Power Controller Control
-pub const PCI_EXP_SLTCTL_PCC: u16 = 0x0400;
-/// Attention Button Pressed Enable
-pub const PCI_EXP_SLTCTL_ABPE: u16 = 0x0001;
-/// Presence Detect Changed Enable
-pub const PCI_EXP_SLTCTL_PDCE: u16 = 0x0008;
-/// Command Completed Interrupt Enable
-pub const PCI_EXP_SLTCTL_CCIE: u16 = 0x0010;
-/// Hot-Plug Interrupt Enable
-pub const PCI_EXP_SLTCTL_HPIE: u16 = 0x0020;
-/// Power Indicator off
-pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
-/// Power Indicator on
-pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
-/// Slot Status
-pub const PCI_EXP_SLTSTA: u16 = 26;
-/// Attention Button Pressed
-pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
-/// Presence Detect Changed
-pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
-/// Command Completed
-pub const PCI_EXP_SLTSTA_CC: u16 = 0x0010;
-/// Presence Detect State
-pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
-
-/// Hot plug event
-/// Presence detect changed
-pub const PCI_EXP_HP_EV_PDC: u16 = PCI_EXP_SLTCTL_PDCE;
-/// Attention button pressed
-pub const PCI_EXP_HP_EV_ABP: u16 = PCI_EXP_SLTCTL_ABPE;
-/// Command completed
-pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
-
 const PCI_CONFIG_HEAD_END: u8 = 64;
 const NEXT_CAP_OFFSET: u8 = 0x01;
 const STATUS_CAP_LIST: u16 = 0x0010;
-const PCIE_CAP_VERSION_SHIFT: u8 = 16;
-const PCIE_CAP_NEXT_OFFSET_SHIFT: u8 = 20;
-const PCIE_CAP_SIZE: u8 = 0x3c;
-const PCIE_CAP_VERSION_2: u16 = 0x0002;
-const PCIE_CAP_SLOT_IMPLEMENTED: u16 = 0x0100;
 
 /// 16 bits PCI Status.
 pub const STATUS: u8 = 0x06;
@@ -188,80 +141,144 @@ pub const MINMUM_BAR_SIZE_FOR_MMIO: usize = 0x1000;
 /// pio bar's minimum size shall be 4B
 pub const MINMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
 
-// Role-Based error reporting.
-const PCIE_CAP_RBER: u32 = 0x8000;
-// Correctable error reporting.
-const PCIE_CAP_DEV_CER: u16 = 0x01;
-// Non-Fatal error reporting.
-const PCIE_CAP_DEV_NFER: u16 = 0x02;
-// Fatal error reporting.
-const PCIE_CAP_DEV_FER: u16 = 0x04;
-// Unsupported request reporting.
-const PCIE_CAP_DEV_URR: u16 = 0x08;
-// Max link speed.
-const PCIE_CAP_MLS_16GT: u32 = 0x0000_0004;
-// Maximum link width.
-const PCIE_CAP_MLW_X32: u32 = 0x0000_0200;
-// Active state power management support.
-const PCIE_CAP_ASPM_L0S: u32 = 0x0000_0400;
-// Link bandwidth notification capability
-const PCIE_CAP_LINK_LBNC: u32 = 0x0020_0000;
-// Data link layer link active reporting capable
-const PCIE_CAP_LINK_DLLLARC: u32 = 0x0010_0000;
-const PCIE_CAP_PORT_NUM_SHIFT: u8 = 24;
-// Current link speed.
-pub const PCIE_CAP_CLS_2_5G: u16 = 0x0001;
-// Negotiated link width.
-pub const PCIE_CAP_NLW_X1: u16 = 0x0010;
-// Attention button present.
-const PCIE_CAP_SLOTCAP_ABP: u32 = 0x0000_0001;
-// Power controller present.
-const PCIE_CAP_SLOTCAP_PCP: u32 = 0x0000_0002;
-// Attention indicator present.
-const PCIE_CAP_SLOTCAP_AIP: u32 = 0x0000_0008;
-// Power indicator present.
-const PCIE_CAP_SLOTCAP_PIP: u32 = 0x0000_0010;
-// Hot-Plug surprise.
-const PCIE_CAP_SLOTCAP_HPS: u32 = 0x0000_0020;
-// Hot-Plug capable.
-const PCIE_CAP_SLOTCAP_HPC: u32 = 0x0000_0040;
-const PCIE_CAP_SLOT_NUM_SHIFT: u32 = 19;
-// Attention Indicator Control.
-const PCIE_CAP_SLOT_AIC_MASK: u16 = 0x00c0;
-const PCIE_CAP_SLOT_AIC_OFF: u16 = 0x00c0;
-// Power Indicator Control.
-pub(crate) const PCIE_CAP_SLOT_PIC_MASK: u16 = 0x0300;
-pub(crate) const PCIE_CAP_SLOT_PIC_BLINK: u16 = 0x200;
-const PCIE_CAP_SLOT_PIC_OFF: u16 = 0x0300;
+/// PCI Express capability registers, same as kernel defines
 
-// Power controller control.
-const PCIE_CAP_SLOT_PCC: u16 = 0x0400;
-// Electromechanical interlock control.
-const PCIE_CAP_SLOT_EIC: u16 = 0x0800;
-// System error on correctable error enable.
-const PCIE_CAP_ROOT_SECEE: u16 = 0x01;
-// System error on non-fatal error enable.
-const PCIE_CAP_ROOT_SENFEE: u16 = 0x02;
-// System error on fatal error enable.
-const PCIE_CAP_ROOT_SEFEE: u16 = 0x04;
-const PCIE_CAP_ARI: u32 = 0x0000_0020;
-// Extended Fmt Field Supported.
-const PCIE_CAP_DEV_EFFS: u32 = 0x0010_0000;
-// End-End TLP Prefix Supported.
-const PCIE_CAP_DEV_EETPS: u32 = 0x0020_0000;
-const PCIE_CAP_ARI_ENABLE: u16 = 0x0020;
-// End-End TLP Prefix Blocking
-const PCIE_CAP_DEV_EETPB: u16 = 0x8000;
-// Supported Link Speeds Vector.
-const PCIE_CAP_LINK_SLSV_2_5GT: u32 = 0x02;
-const PCIE_CAP_LINK_SLSV_5GT: u32 = 0x04;
-const PCIE_CAP_LINK_SLSV_8GT: u32 = 0x08;
-const PCIE_CAP_LINK_SLSV_16GT: u32 = 0x10;
-// Target Link Speed.
-const PCIE_CAP_LINK_TLS_16GT: u16 = 0x0004;
+const PCI_EXT_CAP_VER_SHIFT: u8 = 16;
+const PCI_EXT_CAP_NEXT_SHIFT: u8 = 20;
+const PCI_EXP_VER2_SIZEOF: u8 = 0x3c;
+const PCI_EXP_FLAGS_VER2: u16 = 0x0002;
+const PCI_EXP_FLAGS_SLOT: u16 = 0x0100;
 // PCIe type flag
 const PCI_EXP_FLAGS_TYPE_SHIFT: u16 = 4;
 const PCI_EXP_FLAGS_TYPE: u16 = 0x00f0;
+
+// Role-Based error reporting.
+const PCI_EXP_DEVCAP_RBER: u32 = 0x8000;
+
+// Correctable error reporting enable.
+const PCI_EXP_DEVCTL_CERE: u16 = 0x01;
+// Non-Fatal error reporting enable.
+const PCI_EXP_DEVCTL_NFERE: u16 = 0x02;
+// Fatal error reporting enable.
+const PCI_EXP_DEVCTL_FERE: u16 = 0x04;
+// Unsupported request reporting enable.
+const PCI_EXP_DEVCTL_URRE: u16 = 0x08;
+
+// Supported max link speed, 16GT for default.
+const PCI_EXP_LNKCAP_MLS_16GT: u32 = 0x0000_0004;
+// Supported maximum link width, X32 for default.
+const PCI_EXP_LNKCAP_MLW_X32: u32 = 0x0000_0200;
+// Active state power management support.
+const PCI_EXP_LNKCAP_ASPMS_0S: u32 = 0x0000_0400;
+// Link bandwidth notification capability.
+const PCI_EXP_LNKCAP_LBNC: u32 = 0x0020_0000;
+// Data link layer link active reporting capable.
+const PCI_EXP_LNKCAP_DLLLARC: u32 = 0x0010_0000;
+// Port number reg's shift.
+const PCI_EXP_LNKCAP_PN_SHIFT: u8 = 24;
+
+/// Link Training
+pub const PCI_EXP_LNKSTA: u16 = 18;
+// Current link speed, 2.5GB for default.
+pub const PCI_EXP_LNKSTA_CLS_2_5GB: u16 = 0x0001;
+// Negotiated link width, X1 for default.
+pub const PCI_EXP_LNKSTA_NLW_X1: u16 = 0x0010;
+/// Data Link Layer Link Active
+pub const PCI_EXP_LNKSTA_DLLLA: u16 = 0x2000;
+/// Negotiated Link Width
+pub const PCI_EXP_LNKSTA_NLW: u16 = 0x03f0;
+
+// Attention button present.
+const PCI_EXP_SLTCAP_ABP: u32 = 0x0000_0001;
+// Power controller present.
+const PCI_EXP_SLTCAP_PCP: u32 = 0x0000_0002;
+// Attention indicator present.
+const PCI_EXP_SLTCAP_AIP: u32 = 0x0000_0008;
+// Power indicator present.
+const PCI_EXP_SLTCAP_PIP: u32 = 0x0000_0010;
+// Hot-Plug surprise.
+const PCI_EXP_SLTCAP_HPS: u32 = 0x0000_0020;
+// Hot-Plug capable.
+const PCI_EXP_SLTCAP_HPC: u32 = 0x0000_0040;
+// Physical slot number reg's shift.
+const PCI_EXP_SLTCAP_PSN_SHIFT: u32 = 19;
+
+/// Slot Control
+pub const PCI_EXP_SLTCTL: u16 = 24;
+/// Attention Button Pressed Enable
+pub const PCI_EXP_SLTCTL_ABPE: u16 = 0x0001;
+/// Presence Detect Changed Enable
+pub const PCI_EXP_SLTCTL_PDCE: u16 = 0x0008;
+/// Command Completed Interrupt Enable
+pub const PCI_EXP_SLTCTL_CCIE: u16 = 0x0010;
+/// Hot-Plug Interrupt Enable
+pub const PCI_EXP_SLTCTL_HPIE: u16 = 0x0020;
+// Attention Indicator Control.
+const PCI_EXP_SLTCTL_AIC: u16 = 0x00c0;
+// Attention Indicator off.
+const PCI_EXP_SLTCTL_ATTN_IND_OFF: u16 = 0x00c0;
+// Power Indicator Control.
+pub(crate) const PCI_EXP_SLTCTL_PIC: u16 = 0x0300;
+// Power Indicator blinking.
+pub(crate) const PCI_EXP_SLTCTL_PWR_IND_BLINK: u16 = 0x200;
+/// Power Indicator on
+pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
+// Power Indicator off.
+pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
+/// Power Controller Control
+pub const PCI_EXP_SLTCTL_PCC: u16 = 0x0400;
+// Electromechanical interlock control.
+const PCI_EXP_SLTCTL_EIC: u16 = 0x0800;
+
+/// Slot Status
+pub const PCI_EXP_SLTSTA: u16 = 26;
+/// Attention Button Pressed
+pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
+/// Presence Detect Changed
+pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
+/// Command Completed
+pub const PCI_EXP_SLTSTA_CC: u16 = 0x0010;
+/// Presence Detect State
+pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
+
+// System error on correctable error enable.
+const PCI_EXP_RTCTL_SECEE: u16 = 0x01;
+// System error on non-fatal error enable.
+const PCI_EXP_RTCTL_SENFEE: u16 = 0x02;
+// System error on fatal error enable.
+const PCI_EXP_RTCTL_SEFEE: u16 = 0x04;
+
+// Alternative Routing-ID.
+const PCI_EXP_DEVCAP2_ARI: u32 = 0x0000_0020;
+// Extended Fmt Field Supported.
+const PCI_EXP_DEVCAP2_EFF: u32 = 0x0010_0000;
+// End-End TLP Prefix Supported.
+const PCI_EXP_DEVCAP2_EETLPP: u32 = 0x0020_0000;
+// Alternative Routing-ID.
+const PCI_EXP_DEVCTL2_ARI: u16 = 0x0020;
+// End-End TLP Prefix Blocking
+const PCI_EXP_DEVCTL2_EETLPPB: u16 = 0x8000;
+
+// Supported Link Speeds Vector.
+const PCI_EXP_LNKCAP2_SLS_2_5GB: u32 = 0x02;
+const PCI_EXP_LNKCAP2_SLS_5_0GB: u32 = 0x04;
+const PCI_EXP_LNKCAP2_SLS_8_0GB: u32 = 0x08;
+const PCI_EXP_LNKCAP2_SLS_16_0GB: u32 = 0x10;
+
+// Target Link Speed, 16GT for default.
+const PCI_EXP_LNKCTL2_TLS_16_0GT: u16 = 0x0004;
+
+/// Hot plug event
+/// Presence detect changed
+pub const PCI_EXP_HP_EV_PDC: u16 = PCI_EXP_SLTCTL_PDCE;
+/// Attention button pressed
+pub const PCI_EXP_HP_EV_ABP: u16 = PCI_EXP_SLTCTL_ABPE;
+/// Command completed
+pub const PCI_EXP_HP_EV_CCI: u16 = PCI_EXP_SLTCTL_CCIE;
+
+// XHCI device id
+pub const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
+pub const PCI_CLASS_SERIAL_USB: u16 = 0x0c03;
 
 /// Type of bar region.
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -740,14 +757,14 @@ impl PciConfig {
         le_write_u32(
             &mut self.config,
             offset,
-            id as u32 | (version << PCIE_CAP_VERSION_SHIFT),
+            id as u32 | (version << PCI_EXT_CAP_VER_SHIFT),
         )?;
         if self.last_ext_cap_offset != 0 {
             let old_value = le_read_u32(&self.config, self.last_ext_cap_offset as usize)?;
             le_write_u32(
                 &mut self.config,
                 self.last_ext_cap_offset as usize,
-                old_value | ((offset as u32) << PCIE_CAP_NEXT_OFFSET_SHIFT),
+                old_value | ((offset as u32) << PCI_EXT_CAP_NEXT_SHIFT),
             )?;
         }
         self.last_ext_cap_offset = offset as u16;
@@ -763,20 +780,22 @@ impl PciConfig {
     /// * `port_num` - Port number.
     /// * `dev_type` - Device type.
     pub fn add_pcie_cap(&mut self, devfn: u8, port_num: u8, dev_type: u8) -> Result<usize> {
-        let cap_offset: usize = self.add_pci_cap(CapId::Pcie as u8, PCIE_CAP_SIZE as usize)?;
+        let cap_offset: usize =
+            self.add_pci_cap(CapId::Pcie as u8, PCI_EXP_VER2_SIZEOF as usize)?;
         self.pci_express_cap_offset = cap_offset as u16;
         let mut offset: usize = cap_offset + PcieCap::CapReg as usize;
         let pci_type = (dev_type << PCI_EXP_FLAGS_TYPE_SHIFT) as u16 & PCI_EXP_FLAGS_TYPE;
         le_write_u16(
             &mut self.config,
             offset,
-            pci_type | PCIE_CAP_VERSION_2 | PCIE_CAP_SLOT_IMPLEMENTED,
+            pci_type | PCI_EXP_FLAGS_VER2 | PCI_EXP_FLAGS_SLOT,
         )?;
 
         offset = cap_offset + PcieCap::DevCap as usize;
-        le_write_u32(&mut self.config, offset, PCIE_CAP_RBER)?;
+        le_write_u32(&mut self.config, offset, PCI_EXP_DEVCAP_RBER)?;
         offset = cap_offset + PcieCap::DevCtl as usize;
-        let mask = PCIE_CAP_DEV_CER | PCIE_CAP_DEV_NFER | PCIE_CAP_DEV_FER | PCIE_CAP_DEV_URR;
+        let mask =
+            PCI_EXP_DEVCTL_CERE | PCI_EXP_DEVCTL_NFERE | PCI_EXP_DEVCTL_FERE | PCI_EXP_DEVCTL_URRE;
         le_write_u16(&mut self.write_mask, offset, mask)?;
         offset = cap_offset + PcieCap::DevStat as usize;
         le_write_u16(&mut self.write_clear_mask, offset, mask)?;
@@ -785,18 +804,18 @@ impl PciConfig {
         le_write_u32(
             &mut self.config,
             offset,
-            PCIE_CAP_MLS_16GT
-                | PCIE_CAP_MLW_X32
-                | PCIE_CAP_ASPM_L0S
-                | PCIE_CAP_LINK_LBNC
-                | PCIE_CAP_LINK_DLLLARC
-                | ((port_num as u32) << PCIE_CAP_PORT_NUM_SHIFT),
+            PCI_EXP_LNKCAP_MLS_16GT
+                | PCI_EXP_LNKCAP_MLW_X32
+                | PCI_EXP_LNKCAP_ASPMS_0S
+                | PCI_EXP_LNKCAP_LBNC
+                | PCI_EXP_LNKCAP_DLLLARC
+                | ((port_num as u32) << PCI_EXP_LNKCAP_PN_SHIFT),
         )?;
         offset = cap_offset + PcieCap::LinkStat as usize;
         le_write_u16(
             &mut self.config,
             offset,
-            PCIE_CAP_CLS_2_5G | PCIE_CAP_NLW_X1,
+            PCI_EXP_LNKSTA_CLS_2_5GB | PCI_EXP_LNKSTA_NLW_X1,
         )?;
 
         let slot: u8 = devfn >> BDF_FUNC_SHIFT;
@@ -804,19 +823,19 @@ impl PciConfig {
         le_write_u32(
             &mut self.config,
             offset,
-            PCIE_CAP_SLOTCAP_ABP
-                | PCIE_CAP_SLOTCAP_PCP
-                | PCIE_CAP_SLOTCAP_AIP
-                | PCIE_CAP_SLOTCAP_PIP
-                | PCIE_CAP_SLOTCAP_HPS
-                | PCIE_CAP_SLOTCAP_HPC
-                | ((slot as u32) << PCIE_CAP_SLOT_NUM_SHIFT),
+            PCI_EXP_SLTCAP_ABP
+                | PCI_EXP_SLTCAP_PCP
+                | PCI_EXP_SLTCAP_AIP
+                | PCI_EXP_SLTCAP_PIP
+                | PCI_EXP_SLTCAP_HPS
+                | PCI_EXP_SLTCAP_HPC
+                | ((slot as u32) << PCI_EXP_SLTCAP_PSN_SHIFT),
         )?;
         offset = cap_offset + PcieCap::SlotCtl as usize;
         le_write_u16(
             &mut self.config,
             offset,
-            PCIE_CAP_SLOT_AIC_OFF | PCIE_CAP_SLOT_PIC_OFF | PCIE_CAP_SLOT_PCC,
+            PCI_EXP_SLTCTL_ATTN_IND_OFF | PCI_EXP_SLTCTL_PWR_IND_OFF | PCI_EXP_SLTCTL_PCC,
         )?;
         le_write_u16(
             &mut self.write_mask,
@@ -825,10 +844,10 @@ impl PciConfig {
                 | PCI_EXP_SLTCTL_PDCE
                 | PCI_EXP_SLTCTL_CCIE
                 | PCI_EXP_SLTCTL_HPIE
-                | PCIE_CAP_SLOT_AIC_MASK
-                | PCIE_CAP_SLOT_PIC_MASK
-                | PCIE_CAP_SLOT_PCC
-                | PCIE_CAP_SLOT_EIC,
+                | PCI_EXP_SLTCTL_AIC
+                | PCI_EXP_SLTCTL_PIC
+                | PCI_EXP_SLTCTL_PCC
+                | PCI_EXP_SLTCTL_EIC,
         )?;
         offset = cap_offset + PcieCap::SlotStat as usize;
         le_write_u16(
@@ -841,33 +860,33 @@ impl PciConfig {
         le_write_u16(
             &mut self.write_mask,
             offset,
-            PCIE_CAP_ROOT_SECEE | PCIE_CAP_ROOT_SENFEE | PCIE_CAP_ROOT_SEFEE,
+            PCI_EXP_RTCTL_SECEE | PCI_EXP_RTCTL_SENFEE | PCI_EXP_RTCTL_SEFEE,
         )?;
 
         offset = cap_offset + PcieCap::DevCap2 as usize;
         le_write_u32(
             &mut self.config,
             offset,
-            PCIE_CAP_ARI | PCIE_CAP_DEV_EFFS | PCIE_CAP_DEV_EETPS,
+            PCI_EXP_DEVCAP2_ARI | PCI_EXP_DEVCAP2_EFF | PCI_EXP_DEVCAP2_EETLPP,
         )?;
         offset = cap_offset + PcieCap::DevCtl2 as usize;
         le_write_u16(
             &mut self.write_mask,
             offset,
-            PCIE_CAP_ARI_ENABLE | PCIE_CAP_DEV_EETPB,
+            PCI_EXP_DEVCTL2_ARI | PCI_EXP_DEVCTL2_EETLPPB,
         )?;
 
         offset = cap_offset + PcieCap::LinkCap2 as usize;
         le_write_u32(
             &mut self.config,
             offset,
-            PCIE_CAP_LINK_SLSV_2_5GT
-                | PCIE_CAP_LINK_SLSV_5GT
-                | PCIE_CAP_LINK_SLSV_8GT
-                | PCIE_CAP_LINK_SLSV_16GT,
+            PCI_EXP_LNKCAP2_SLS_2_5GB
+                | PCI_EXP_LNKCAP2_SLS_5_0GB
+                | PCI_EXP_LNKCAP2_SLS_8_0GB
+                | PCI_EXP_LNKCAP2_SLS_16_0GB,
         )?;
         offset = cap_offset + PcieCap::LinkCtl2 as usize;
-        le_write_u16(&mut self.config, offset, PCIE_CAP_LINK_TLS_16GT)?;
+        le_write_u16(&mut self.config, offset, PCI_EXP_LNKCTL2_TLS_16_0GT)?;
 
         Ok(cap_offset)
     }
