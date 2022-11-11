@@ -12,10 +12,12 @@
 
 // Read the programe version in `Cargo.toml`.
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
-const MAX_STRING_LENGTH: usize = 255;
+const MAX_PATH_LENGTH: usize = 4096;
+// Maximum length of the socket path is restricted by linux.
+const MAX_SOCK_PATH_LENGTH: usize = 108;
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
 /// This function is to define all command line arguments.
@@ -70,26 +72,34 @@ pub struct FsConfig {
 
 impl FsConfig {
     fn check_config(&self) -> Result<()> {
-        if self.source_dir.len() > MAX_STRING_LENGTH {
+        if self.source_dir.len() > MAX_PATH_LENGTH {
             bail!(
                 "The length of source directory is too long {}",
                 self.source_dir.len()
             );
         }
 
-        if self.sock_path.len() > MAX_STRING_LENGTH {
+        if self.sock_path.len() > MAX_SOCK_PATH_LENGTH {
             bail!(
                 "The length of socket file path is too long {}",
                 self.sock_path.len()
             );
         }
 
+        if fs::metadata(&self.source_dir).is_err() {
+            bail!("Failed to stat source directory {}", self.source_dir);
+        }
         let source_dir = PathBuf::from(&self.source_dir);
         if !source_dir.is_dir() {
             bail!(
-                "The source directory is not a directory {}",
+                "The source directory {} is not a directory",
                 self.source_dir
             );
+        }
+
+        let sock_path = PathBuf::from(&self.sock_path);
+        if !sock_path.is_file() {
+            bail!("The socket path {} is not a file", self.sock_path);
         }
 
         Ok(())
