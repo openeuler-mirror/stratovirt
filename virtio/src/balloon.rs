@@ -558,16 +558,15 @@ impl BalloonIoHandler {
                 .vring
                 .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
                 .with_context(|| "Failed to add balloon response into used queue")?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
+                .with_context(|| {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "balloon",
+                        VirtioInterruptType::Vring
+                    ))
+                })?;
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
-            || {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "balloon",
-                    VirtioInterruptType::Vring
-                ))
-            },
-        )?;
         Ok(())
     }
 
@@ -594,16 +593,15 @@ impl BalloonIoHandler {
                 .vring
                 .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
                 .with_context(|| "Failed to add balloon response into used queue")?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
+                .with_context(|| {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "balloon",
+                        VirtioInterruptType::Vring
+                    ))
+                })?;
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
-            || {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "balloon",
-                    VirtioInterruptType::Vring
-                ))
-            },
-        )?;
         Ok(())
     }
 
