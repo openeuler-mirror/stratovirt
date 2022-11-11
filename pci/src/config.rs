@@ -17,11 +17,11 @@ use address_space::Region;
 use log::error;
 
 use crate::msix::Msix;
-use crate::PciError;
 use crate::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, BDF_FUNC_SHIFT,
 };
+use crate::{ranges_overlap, PciError};
 use anyhow::{anyhow, Context, Result};
 
 /// Size in bytes of the configuration space of legacy PCI device.
@@ -523,7 +523,14 @@ impl PciConfig {
     /// * `offset` - Offset in the configuration space from which to write.
     /// * `data` - Data to write.
     /// * `dev_id` - Device id to send MSI/MSI-X.
-    pub fn write(&mut self, mut offset: usize, data: &[u8], dev_id: u16) {
+    pub fn write(
+        &mut self,
+        mut offset: usize,
+        data: &[u8],
+        dev_id: u16,
+        #[cfg(target_arch = "x86_64")] io_region: Option<&Region>,
+        mem_region: Option<&Region>,
+    ) {
         if let Err(err) = self.validate_config_boundary(offset, data) {
             error!("invalid write: {:?}", err);
             return;
@@ -531,11 +538,34 @@ impl PciConfig {
 
         let cloned_data = data.to_vec();
         let old_offset = offset;
+        let end = offset + data.len();
         for data in &cloned_data {
             self.config[offset] = (self.config[offset] & (!self.write_mask[offset]))
                 | (data & self.write_mask[offset]);
             self.config[offset] &= !(data & self.write_clear_mask[offset]);
             offset += 1;
+        }
+
+        let mut bar_num = BAR_NUM_MAX_FOR_ENDPOINT;
+        if self.config[HEADER_TYPE as usize] == HEADER_TYPE_BRIDGE {
+            bar_num = BAR_NUM_MAX_FOR_ENDPOINT;
+        }
+        if ranges_overlap(old_offset, end, COMMAND as usize, (COMMAND + 1) as usize)
+            || ranges_overlap(
+                old_offset,
+                end,
+                BAR_0 as usize,
+                BAR_0 as usize + REG_SIZE * bar_num as usize,
+            )
+            || ranges_overlap(old_offset, end, ROM_ADDRESS, ROM_ADDRESS + 4)
+        {
+            if let Err(e) = self.update_bar_mapping(
+                #[cfg(target_arch = "x86_64")]
+                io_region,
+                mem_region,
+            ) {
+                error!("{:?}", e);
+            }
         }
 
         if let Some(msix) = &mut self.msix {
@@ -714,6 +744,23 @@ impl PciConfig {
         Ok(())
     }
 
+    fn is_bar_region_empty(
+        &mut self,
+        id: usize,
+        #[cfg(target_arch = "x86_64")] io_region: Option<&Region>,
+        mem_region: Option<&Region>,
+    ) -> bool {
+        if self.bars[id].region_type == RegionType::Io {
+            #[cfg(target_arch = "x86_64")]
+            if io_region.is_none() {
+                return true;
+            }
+        } else if mem_region.is_none() {
+            return true;
+        }
+        false
+    }
+
     /// Update bar space mapping once the base address is updated by the guest.
     ///
     /// # Arguments
@@ -722,8 +769,8 @@ impl PciConfig {
     /// * `mem_region`: Memory space region which the parent bridge manages.
     pub fn update_bar_mapping(
         &mut self,
-        #[cfg(target_arch = "x86_64")] io_region: &Region,
-        mem_region: &Region,
+        #[cfg(target_arch = "x86_64")] io_region: Option<&Region>,
+        mem_region: Option<&Region>,
     ) -> Result<()> {
         for id in 0..self.bars.len() {
             if self.bars[id].size == 0 {
@@ -734,15 +781,27 @@ impl PciConfig {
             if self.bars[id].address == new_addr {
                 continue;
             }
+
+            if self.is_bar_region_empty(
+                id,
+                #[cfg(target_arch = "x86_64")]
+                io_region,
+                mem_region,
+            ) {
+                return Ok(());
+            }
+
             if self.bars[id].address != BAR_SPACE_UNMAPPED {
                 match self.bars[id].region_type {
                     RegionType::Io => {
                         #[cfg(target_arch = "x86_64")]
                         io_region
+                            .unwrap()
                             .delete_subregion(self.bars[id].region.as_ref().unwrap())
                             .with_context(|| format!("Failed to unmap BAR{} in I/O space.", id))?;
                     }
                     _ => mem_region
+                        .unwrap()
                         .delete_subregion(self.bars[id].region.as_ref().unwrap())
                         .with_context(|| anyhow!(PciError::UnregMemBar(id)))?,
                 }
@@ -753,10 +812,12 @@ impl PciConfig {
                     RegionType::Io => {
                         #[cfg(target_arch = "x86_64")]
                         io_region
+                            .unwrap()
                             .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
                             .with_context(|| format!("Failed to map BAR{} in I/O space.", id))?;
                     }
                     _ => mem_region
+                        .unwrap()
                         .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
                         .with_context(|| anyhow!(PciError::UnregMemBar(id)))?,
                 }
@@ -1171,8 +1232,8 @@ mod tests {
         pci_config
             .update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
-                sys_io.root(),
-                sys_mem.root(),
+                Some(sys_io.root()),
+                Some(sys_mem.root()),
             )
             .unwrap();
         assert_eq!(pci_config.bars[1].address, 2048);
@@ -1182,8 +1243,8 @@ mod tests {
         pci_config
             .update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
-                sys_io.root(),
-                sys_mem.root(),
+                Some(sys_io.root()),
+                Some(sys_mem.root()),
             )
             .unwrap();
         assert_eq!(pci_config.bars[1].address, 2048);
@@ -1206,8 +1267,8 @@ mod tests {
         pci_config
             .update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
-                sys_io.root(),
-                sys_mem.root(),
+                Some(sys_io.root()),
+                Some(sys_mem.root()),
             )
             .unwrap();
         assert_eq!(pci_config.bars[1].address, pci_config.get_bar_address(1));
@@ -1353,8 +1414,8 @@ mod tests {
         pci_config
             .update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
-                &io_region,
-                &mem_region,
+                Some(&io_region),
+                Some(&mem_region),
             )
             .unwrap();
 

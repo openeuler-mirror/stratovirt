@@ -17,10 +17,10 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressSpace, Region};
 use machine_manager::config::XhciConfig;
 use pci::config::{
-    PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
-    PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS, SUB_CLASS_CODE, VENDOR_ID,
+    PciConfig, RegionType, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE, REVISION_ID,
+    SUB_CLASS_CODE, VENDOR_ID,
 };
-use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
+use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
 
 use crate::bus::{BusDeviceMap, BusDeviceOps};
 use crate::usb::UsbDeviceOps;
@@ -244,27 +244,17 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let end = offset + data.len();
-        self.pci_config
-            .write(offset, data, self.dev_id.clone().load(Ordering::Acquire));
-        if ranges_overlap(
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let locked_parent_bus = parent_bus.lock().unwrap();
+
+        self.pci_config.write(
             offset,
-            end,
-            BAR_0 as usize,
-            BAR_0 as usize + REG_SIZE as usize,
-        ) || ranges_overlap(offset, end, ROM_ADDRESS, ROM_ADDRESS + 4)
-            || ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + 1)
-        {
-            let parent_bus = self.parent_bus.upgrade().unwrap();
-            let locked_parent_bus = parent_bus.lock().unwrap();
-            if let Err(e) = self.pci_config.update_bar_mapping(
-                #[cfg(target_arch = "x86_64")]
-                &locked_parent_bus.io_region,
-                &locked_parent_bus.mem_region,
-            ) {
-                error!("Failed to update bar, error is {:?}", e);
-            }
-        }
+            data,
+            self.dev_id.clone().load(Ordering::Acquire),
+            #[cfg(target_arch = "x86_64")]
+            Some(&locked_parent_bus.io_region),
+            Some(&locked_parent_bus.mem_region),
+        );
     }
 
     fn name(&self) -> String {

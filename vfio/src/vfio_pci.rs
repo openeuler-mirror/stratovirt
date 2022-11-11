@@ -956,48 +956,27 @@ impl PciDevOps for VfioPciDevice {
             .msix
             .as_ref()
             .map_or(0, |m| m.lock().unwrap().msix_cap_offset as usize);
-        if ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + REG_SIZE) {
-            self.pci_config
-                .write(offset, data, self.dev_id.load(Ordering::Acquire));
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let locked_parent_bus = parent_bus.lock().unwrap();
+        self.pci_config.write(
+            offset,
+            data,
+            self.dev_id.load(Ordering::Acquire),
+            #[cfg(target_arch = "x86_64")]
+            Some(&locked_parent_bus.io_region),
+            Some(&locked_parent_bus.mem_region),
+        );
 
+        if ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + REG_SIZE) {
             if le_read_u32(&self.pci_config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
                 != 0
             {
-                let parent_bus = self.parent_bus.upgrade().unwrap();
-                let locked_parent_bus = parent_bus.lock().unwrap();
-                if let Err(e) = self.pci_config.update_bar_mapping(
-                    #[cfg(target_arch = "x86_64")]
-                    &locked_parent_bus.io_region,
-                    &locked_parent_bus.mem_region,
-                ) {
-                    error!("Failed to update bar, error is {}", format!("{:?}", e));
-                    return;
-                }
-                drop(locked_parent_bus);
-
                 if let Err(e) = self.setup_bars_mmap() {
                     error!("Failed to map bar regions, error is {}", format!("{:?}", e));
                 }
             }
-        } else if ranges_overlap(offset, end, BAR_0 as usize, (BAR_5 as usize) + REG_SIZE) {
-            self.pci_config
-                .write(offset, data, self.dev_id.load(Ordering::Acquire));
-
-            if size == 4 && LittleEndian::read_u32(data) != 0xffff_ffff {
-                let parent_bus = self.parent_bus.upgrade().unwrap();
-                let locked_parent_bus = parent_bus.lock().unwrap();
-                if let Err(e) = self.pci_config.update_bar_mapping(
-                    #[cfg(target_arch = "x86_64")]
-                    &locked_parent_bus.io_region,
-                    &locked_parent_bus.mem_region,
-                ) {
-                    error!("Failed to update bar, error is {}", format!("{:?}", e));
-                }
-            }
         } else if ranges_overlap(offset, end, cap_offset, cap_offset + MSIX_CAP_SIZE as usize) {
             let was_enable = is_msix_enabled(cap_offset, &self.pci_config.config);
-            self.pci_config
-                .write(offset, data, self.dev_id.load(Ordering::Acquire));
             let is_enable = is_msix_enabled(cap_offset, &self.pci_config.config);
 
             if !was_enable && is_enable {
@@ -1009,9 +988,6 @@ impl PciDevOps for VfioPciDevice {
                     error!("{}\nFailed to disable MSI-X.", format!("{:?}", e));
                 }
             }
-        } else {
-            self.pci_config
-                .write(offset, data, self.dev_id.load(Ordering::Acquire));
         }
     }
 

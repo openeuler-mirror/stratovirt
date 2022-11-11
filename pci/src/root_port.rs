@@ -26,14 +26,14 @@ use once_cell::sync::OnceCell;
 use util::byte_code::ByteCode;
 
 use super::config::{
-    PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
-    COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE,
-    PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC,
-    PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_CLS_2_5GB, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW_X1,
-    PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC, PCI_EXP_SLTCTL_PWR_IND_BLINK,
+    PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
+    DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE,
+    PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC, PCI_EXP_LNKSTA,
+    PCI_EXP_LNKSTA_CLS_2_5GB, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW_X1, PCI_EXP_SLTCTL,
+    PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC, PCI_EXP_SLTCTL_PWR_IND_BLINK,
     PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTCTL_PWR_OFF, PCI_EXP_SLTSTA,
     PCI_EXP_SLTSTA_PDC, PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
-    PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::hotplug::HotplugOps;
@@ -367,19 +367,14 @@ impl PciDevOps for RootPort {
         let old_ctl =
             le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
 
-        self.config
-            .write(offset, data, self.dev_id.load(Ordering::Acquire));
-        if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
-            || ranges_overlap(offset, end, BAR_0 as usize, BAR_0 as usize + REG_SIZE * 2)
-        {
-            if let Err(e) = self.config.update_bar_mapping(
-                #[cfg(target_arch = "x86_64")]
-                &self.io_region,
-                &self.mem_region,
-            ) {
-                error!("{}", format!("{:?}", e));
-            }
-        }
+        self.config.write(
+            offset,
+            data,
+            self.dev_id.load(Ordering::Acquire),
+            #[cfg(target_arch = "x86_64")]
+            Some(&self.io_region),
+            Some(&self.mem_region),
+        );
         if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
             || ranges_overlap(offset, end, IO_BASE as usize, (IO_BASE + 2) as usize)
             || ranges_overlap(

@@ -24,9 +24,9 @@ use log::{error, warn};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use pci::config::{
-    RegionType, BAR_0, BAR_SPACE_UNMAPPED, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
-    PCIE_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS, STATUS, STATUS_INTERRUPT,
-    SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+    RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
+    REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID,
+    SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::msix::{update_dev_id, Message, MsixState, MsixUpdate};
 use pci::Result as PciResult;
@@ -1265,28 +1265,16 @@ impl PciDevOps for VirtioPciDevice {
             return;
         }
 
-        self.config
-            .write(offset, data, self.dev_id.clone().load(Ordering::Acquire));
-        if ranges_overlap(
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let locked_parent_bus = parent_bus.lock().unwrap();
+        self.config.write(
             offset,
-            end,
-            BAR_0 as usize,
-            BAR_0 as usize + REG_SIZE as usize * VIRTIO_PCI_BAR_MAX as usize,
-        ) || ranges_overlap(offset, end, ROM_ADDRESS, ROM_ADDRESS + 4)
-            || ranges_overlap(offset, end, COMMAND as usize, COMMAND as usize + 1)
-        {
-            let parent_bus = self.parent_bus.upgrade().unwrap();
-            let locked_parent_bus = parent_bus.lock().unwrap();
-            if let Err(e) = self.config.update_bar_mapping(
-                #[cfg(target_arch = "x86_64")]
-                &locked_parent_bus.io_region,
-                &locked_parent_bus.mem_region,
-            ) {
-                error!("Failed to update bar, error is {:?}", e);
-                return;
-            }
-        }
-
+            data,
+            self.dev_id.clone().load(Ordering::Acquire),
+            #[cfg(target_arch = "x86_64")]
+            Some(&locked_parent_bus.io_region),
+            Some(&locked_parent_bus.mem_region),
+        );
         self.do_cfg_access(offset, end, true);
     }
 
@@ -1443,8 +1431,8 @@ impl MigrationHook for VirtioPciDevice {
             let locked_parent_bus = parent_bus.lock().unwrap();
             if let Err(e) = self.config.update_bar_mapping(
                 #[cfg(target_arch = "x86_64")]
-                &locked_parent_bus.io_region,
-                &locked_parent_bus.mem_region,
+                Some(&locked_parent_bus.io_region),
+                Some(&locked_parent_bus.mem_region),
             ) {
                 bail!("Failed to update bar, error is {:?}", e);
             }
