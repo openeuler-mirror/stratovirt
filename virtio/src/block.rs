@@ -487,9 +487,9 @@ impl BlockIoHandler {
         let mut req_queue = Vec::new();
         let mut last_aio_req_index = 0;
         let mut done = false;
-        let mut queue = self.queue.lock().unwrap();
 
         loop {
+            let mut queue = self.queue.lock().unwrap();
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -523,6 +523,8 @@ impl BlockIoHandler {
                     Some(self.interrupt_cb.clone()),
                     self.driver_features,
                 );
+                // unlock queue, because it will be hold below.
+                drop(queue);
                 aiocompletecb.complete_request(status);
                 continue;
             }
@@ -530,8 +532,6 @@ impl BlockIoHandler {
             done = true;
         }
 
-        // unlock queue, because it will be hold below.
-        drop(queue);
         if req_queue.is_empty() {
             return Ok(done);
         }
