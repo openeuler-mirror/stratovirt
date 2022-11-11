@@ -523,7 +523,15 @@ pub mod tests {
         }
 
         fn write_config(&mut self, offset: usize, data: &[u8]) {
-            self.config.write(offset, data, 0);
+            #[allow(unused_variables)]
+            self.config.write(
+                offset,
+                data,
+                0,
+                #[cfg(target_arch = "x86_64")]
+                None,
+                None,
+            );
         }
 
         fn name(&self) -> String {

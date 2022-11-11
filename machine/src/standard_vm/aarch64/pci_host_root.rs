@@ -83,7 +83,7 @@ impl PciDevOps for PciHostRoot {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        self.config.write(offset, data, 0);
+        self.config.write(offset, data, 0, None);
     }
 
     fn name(&self) -> String {
