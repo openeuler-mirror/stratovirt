@@ -19,6 +19,7 @@ use std::{
     time::Duration,
 };
 
+use crate::report_virtio_error;
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
@@ -514,7 +515,7 @@ struct BalloonIoHandler {
     /// Reporting EventFd.
     report_evt: Option<EventFd>,
     /// EventFd for device deactivate
-    deactivate_evt: RawFd,
+    deactivate_evt: EventFd,
     /// The interrupt call back function.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Balloon Memory information.
@@ -624,7 +625,7 @@ impl BalloonIoHandler {
         let notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.deactivate_evt,
+                self.deactivate_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -682,12 +683,14 @@ impl EventNotifierHelper for BalloonIoHandler {
         let cloned_balloon_io = balloon_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(e) = cloned_balloon_io
-                .lock()
-                .unwrap()
-                .process_balloon_queue(BALLOON_INFLATE_EVENT)
-            {
+            let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+            if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_INFLATE_EVENT) {
                 error!("Failed to inflate balloon: {:?}", e);
+                report_virtio_error(
+                    locked_balloon_io.interrupt_cb.clone(),
+                    locked_balloon_io.driver_features,
+                    Some(&locked_balloon_io.deactivate_evt),
+                );
             };
             None
         });
@@ -700,12 +703,14 @@ impl EventNotifierHelper for BalloonIoHandler {
         let cloned_balloon_io = balloon_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(e) = cloned_balloon_io
-                .lock()
-                .unwrap()
-                .process_balloon_queue(BALLOON_DEFLATE_EVENT)
-            {
+            let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+            if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_DEFLATE_EVENT) {
                 error!("Failed to deflate balloon: {:?}", e);
+                report_virtio_error(
+                    locked_balloon_io.interrupt_cb.clone(),
+                    locked_balloon_io.driver_features,
+                    Some(&locked_balloon_io.deactivate_evt),
+                );
             };
             None
         });
@@ -719,8 +724,14 @@ impl EventNotifierHelper for BalloonIoHandler {
             let cloned_balloon_io = balloon_io.clone();
             let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
-                if let Err(e) = cloned_balloon_io.lock().unwrap().reporting_evt_handler() {
+                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+                if let Err(e) = locked_balloon_io.reporting_evt_handler() {
                     error!("Failed to report free pages: {:?}", e);
+                    report_virtio_error(
+                        locked_balloon_io.interrupt_cb.clone(),
+                        locked_balloon_io.driver_features,
+                        Some(&locked_balloon_io.deactivate_evt),
+                    );
                 }
                 None
             });
@@ -734,7 +745,7 @@ impl EventNotifierHelper for BalloonIoHandler {
             Some(cloned_balloon_io.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(build_event_notifier(
-            locked_balloon_io.deactivate_evt,
+            locked_balloon_io.deactivate_evt.as_raw_fd(),
             handler,
         ));
 
@@ -1039,7 +1050,7 @@ impl VirtioDevice for Balloon {
             def_evt,
             report_queue,
             report_evt,
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
@@ -1324,7 +1335,7 @@ mod tests {
             def_evt: event_def,
             report_queue: None,
             report_evt: None,
-            deactivate_evt: event_deactivate.as_raw_fd(),
+            deactivate_evt: event_deactivate.try_clone().unwrap(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),
