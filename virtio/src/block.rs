@@ -534,7 +534,7 @@ impl BlockIoHandler {
                     aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
                 }
             } else {
-                error!("Failed to execute block request, disk_img not specified");
+                warn!("Failed to execute block request, disk_img not specified");
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
             }
         }
