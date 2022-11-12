@@ -86,7 +86,7 @@ type DmaAddr = u64;
 pub struct XhciTransfer {
     packet: UsbPacket,
     status: TRBCCode,
-    trbs: Vec<XhciTRB>,
+    td: Vec<XhciTRB>,
     complete: bool,
     slotid: u32,
     epid: u32,
@@ -96,11 +96,11 @@ pub struct XhciTransfer {
 }
 
 impl XhciTransfer {
-    fn new(len: usize) -> Self {
+    fn new() -> Self {
         XhciTransfer {
             packet: UsbPacket::default(),
             status: TRBCCode::Invalid,
-            trbs: vec![XhciTRB::new(); len],
+            td: Vec::new(),
             complete: false,
             slotid: 0,
             epid: 0,
@@ -393,6 +393,11 @@ impl XhciDevice {
         self.oper.usb_status & USB_STS_HCH != USB_STS_HCH
     }
 
+    fn internal_error(&mut self) {
+        error!("Xhci host controller error!");
+        self.oper.usb_status |= USB_STS_HCE;
+    }
+
     pub fn reset(&mut self) {
         info!("xhci reset");
         self.oper.reset();
@@ -551,7 +556,7 @@ impl XhciDevice {
         let mut event = XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::Success);
         for _ in 0..COMMAND_LIMIT {
             match self.cmd_ring.fetch_trb() {
-                Ok(trb) => {
+                Ok(Some(trb)) => {
                     let trb_type = trb.get_type();
                     event.ptr = trb.addr;
                     slot_id = self.get_slot_id(&mut event, &trb);
@@ -614,6 +619,10 @@ impl XhciDevice {
                     }
                     event.slot_id = slot_id as u8;
                     self.send_event(&event, 0)?;
+                }
+                Ok(None) => {
+                    debug!("No TRB in the cmd ring.");
+                    break;
                 }
                 Err(e) => {
                     error!("Failed to fetch ring: {:?}", e);
@@ -1009,34 +1018,26 @@ impl XhciDevice {
         const KICK_LIMIT: u32 = 32;
         let mut count = 0;
         loop {
-            let len = match epctx.ring.get_transfer_len() {
-                Ok(len) => len,
-                Err(e) => {
-                    error!("Failed to get transfer len: {:?}", e);
-                    break;
-                }
-            };
-            if len == 0 {
-                break;
-            }
-            let mut xfer: XhciTransfer = XhciTransfer::new(len);
+            let mut xfer: XhciTransfer = XhciTransfer::new();
             xfer.slotid = slot_id;
             xfer.epid = ep_id;
-            for i in 0..len {
-                match epctx.ring.fetch_trb() {
-                    Ok(trb) => {
-                        debug!(
-                            "fetch transfer trb {:?} ring dequeue {:x}",
-                            trb, epctx.ring.dequeue,
-                        );
-                        xfer.trbs[i] = trb;
-                    }
-                    Err(e) => {
-                        self.oper.usb_status |= USB_STS_HCE;
-                        // update the endpoint in slot
-                        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize] = epctx;
-                        bail!("fetch ring failed {}", e);
-                    }
+            match epctx.ring.fetch_td() {
+                Ok(Some(td)) => {
+                    debug!(
+                        "fetch transfer trb {:?} ring dequeue {:?}",
+                        td, epctx.ring.dequeue,
+                    );
+                    xfer.td = td;
+                }
+                Ok(None) => {
+                    debug!("No TD in the transfer ring.");
+                    break;
+                }
+                Err(e) => {
+                    self.internal_error();
+                    // update the endpoint in slot
+                    self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize] = epctx;
+                    bail!("fetch ring failed {}", e);
                 }
             }
             if let Err(e) = self.endpoint_do_transfer(&mut xfer, &mut epctx) {
@@ -1141,12 +1142,12 @@ impl XhciDevice {
         xfer: &mut XhciTransfer,
         epctx: &mut XhciEpContext,
     ) -> Result<()> {
-        let trb_setup = xfer.trbs[0];
-        let mut trb_status = xfer.trbs[xfer.trbs.len() - 1];
+        let trb_setup = xfer.td[0];
+        let mut trb_status = xfer.td[xfer.td.len() - 1];
         let setup_type = trb_setup.get_type();
         let status_type = trb_status.get_type();
-        if status_type == TRBType::TrEvdata && xfer.trbs.len() > 2 {
-            trb_status = xfer.trbs[xfer.trbs.len() - 2];
+        if status_type == TRBType::TrEvdata && xfer.td.len() > 2 {
+            trb_status = xfer.td[xfer.td.len() - 2];
         }
         if setup_type != TRBType::TrSetup {
             bail!("The first TRB is not Setup");
@@ -1204,7 +1205,7 @@ impl XhciDevice {
         };
         // Map dma address to iovec.
         let mut vec = Vec::new();
-        for trb in &xfer.trbs {
+        for trb in &xfer.td {
             let trb_type = trb.get_type();
             if trb.control & TRB_TR_IOC == TRB_TR_IOC {
                 xfer.int_req = true;
@@ -1300,8 +1301,8 @@ impl XhciDevice {
         let mut left = xfer.packet.actual_length;
         let mut reported = false;
         let mut short_pkt = false;
-        for i in 0..xfer.trbs.len() {
-            let trb = &xfer.trbs[i];
+        for i in 0..xfer.td.len() {
+            let trb = &xfer.td[i];
             let trb_type = trb.get_type();
             let mut chunk = trb.status & 0x1ffff;
             match trb_type {
@@ -1425,7 +1426,7 @@ impl XhciDevice {
             xfer.running_retry = false;
             killed = 1;
         }
-        xfer.trbs.clear();
+        xfer.td.clear();
         Ok(killed)
     }
 
