@@ -575,6 +575,15 @@ impl BlockIoHandler {
                 self.driver_features,
                 false,
             )?;
+
+            // See whether we have been throttled.
+            if let Some(lb) = self.leak_bucket.as_mut() {
+                if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
+                    if lb.throttled(ctx, 0) {
+                        break;
+                    }
+                }
+            }
         }
         Ok(done)
     }
