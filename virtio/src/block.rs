@@ -11,10 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -46,6 +45,7 @@ use util::aio::{
     iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
 };
 use util::byte_code::ByteCode;
+use util::file::open_disk_file;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -976,45 +976,20 @@ impl VirtioDevice for Block {
             self.state.config_space.num_queues = self.blk_cfg.queues;
         }
 
+        let mut disk_image = None;
         let mut disk_size = DUMMY_IMG_SIZE;
-
         if !self.blk_cfg.path_on_host.is_empty() {
-            self.disk_image = None;
-
-            let mut file = if self.blk_cfg.direct {
-                OpenOptions::new()
-                    .read(true)
-                    .write(!self.blk_cfg.read_only)
-                    .custom_flags(libc::O_DIRECT)
-                    .open(&self.blk_cfg.path_on_host)
-                    .with_context(|| {
-                        format!(
-                            "failed to open the file by O_DIRECT for block {}",
-                            self.blk_cfg.path_on_host
-                        )
-                    })?
-            } else {
-                OpenOptions::new()
-                    .read(true)
-                    .write(!self.blk_cfg.read_only)
-                    .open(&self.blk_cfg.path_on_host)
-                    .with_context(|| {
-                        format!(
-                            "failed to open the file for block {}",
-                            self.blk_cfg.path_on_host
-                        )
-                    })?
-            };
-
+            let mut file = open_disk_file(
+                &self.blk_cfg.path_on_host,
+                self.blk_cfg.read_only,
+                self.blk_cfg.direct,
+            )?;
             disk_size =
                 file.seek(SeekFrom::End(0))
                     .with_context(|| "Failed to seek the end for block")? as u64;
-
-            self.disk_image = Some(Arc::new(file));
-        } else {
-            self.disk_image = None;
+            disk_image = Some(Arc::new(file));
         }
-
+        self.disk_image = disk_image;
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
         self.state.config_space.capacity = self.disk_sectors;
 
