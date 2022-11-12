@@ -263,29 +263,28 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-Ten properties are supported for virtio block device.
+10 properties are supported for virtio block device.
 
-* drive_id: unique device-id in StratoVirt.
-* path_on_host: the path of block device in host.
-* serial_num: serial number of virtio block. (optional)
-* read_only: whether virtio block device is read-only. If not set, default is false.
-* direct: open block device with `O_DIRECT` mode. If not set, default is true.
-* iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
+* id: unique device-id in StratoVirt.
+* file: the path of backend file on host.
+* serial: serial number of virtio block. (optional)
+* readonly: whether virtio block device is read-only. (optional) If not set, default is false.
+* direct: open block device with `O_DIRECT` mode. (optional) If not set, default is true.
+* iothread: indicate which iothread will be used. (optional) if not set, the main thread will be used.
 * throttling.iops-total: used to limit IO operations for block device. (optional)
-* if: drive type, for block drive, it should be `none`. If not set, default is `none` (optional)
-* format: the format of block image, default value `raw`. NB: currently only `raw` is supported. (optional)
-If not set, default is raw.
-* num-queues: the optional num-queues attribute controls the number of queues to be used for block device. If not set,
-the default block queue number is 1. The max queues number supported is no more than 32.
+* if: drive type, for block drive, it should be `none`. (optional) If not set, default is `none`.
+* format: the format of block image. (optional) If not set, default is `raw`. NB: currently only `raw` is supported.
+* num-queues: the optional num-queues attribute controls the number of queues to be used for block device. (optional) The max queues number supported is 32. If not set, the default block queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)).
 * bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
 The number ranges from 0 to 255, the smaller the number, the higher the priority.
 It determines the order of bootable devices which firmware will use for booting the guest OS.
 * aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
 
-For virtio-blk-pci, two more properties are required.
+For virtio-blk-pci, three more properties are required.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
+* multifunction: whether to open multi-function for device. (optional) If not set, default is false.
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
