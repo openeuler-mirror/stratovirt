@@ -323,8 +323,12 @@ fn build_osc_for_aml(pci_host_bridge: &mut AmlDevice) {
         AmlName("CDW3".to_string()),
         AmlName("CTRL".to_string()),
     ));
+    /*
+     * Hotplug: We now support PCIe native hotplug(bit 0) with PCI Express Capability Structure(bit 4)
+     * other bits: bit1: SHPC; bit2: PME; bit3: AER;
+     */
     if_obj_0.append_child(AmlStore::new(
-        AmlAnd::new(AmlName("CTRL".to_string()), AmlInteger(0x1d), AmlLocal(0)),
+        AmlAnd::new(AmlName("CTRL".to_string()), AmlInteger(0x11), AmlLocal(0)),
         AmlName("CTRL".to_string()),
     ));
     let mut if_obj_1 = AmlIf::new(AmlLNot::new(AmlEqual::new(AmlArg(1), AmlInteger(1))));
