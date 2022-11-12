@@ -138,7 +138,6 @@ impl UsbTablet {
     pub fn realize(self) -> Result<Arc<Mutex<Self>>> {
         let mut locked_usb = self.device.lock().unwrap();
         locked_usb.product_desc = String::from("StratoVirt USB Tablet");
-        locked_usb.auto_attach = true;
         locked_usb.strings = Vec::new();
         drop(locked_usb);
         let tablet = Arc::new(Mutex::new(self));

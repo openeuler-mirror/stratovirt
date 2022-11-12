@@ -678,12 +678,13 @@ impl XhciDevice {
         )?;
         if let Some(usb_port) = self.lookup_usb_port(&slot_ctx) {
             let lock_port = usb_port.lock().unwrap();
-            let dev = lock_port.dev.as_ref().unwrap();
-            let mut locked_dev = dev.lock().unwrap();
-            if !locked_dev.attached() {
-                error!("Failed to connect device");
+            let dev = if let Some(dev) = lock_port.dev.as_ref() {
+                dev
+            } else {
+                error!("No device found in usb port.");
                 return Ok(TRBCCode::UsbTransactionError);
-            }
+            };
+            let mut locked_dev = dev.lock().unwrap();
             self.slots[(slot_id - 1) as usize].usb_port = Some(Arc::downgrade(&usb_port));
             self.slots[(slot_id - 1) as usize].ctx = octx;
             self.slots[(slot_id - 1) as usize].intr =
