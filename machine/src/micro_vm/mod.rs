@@ -30,6 +30,7 @@
 
 pub mod error;
 pub use error::MicroVmError;
+use util::aio::AIO_NATIVE;
 
 mod mem_layout;
 mod syscall;
@@ -1101,8 +1102,12 @@ impl DeviceInterface for LightMachine {
             boot_index: None,
             chardev: None,
             socket_path: None,
-            // TODO Add aio option by qmp.
-            aio: None,
+            // TODO Add aio option by qmp, now we set it based on "direct".
+            aio: if direct {
+                Some(String::from(AIO_NATIVE))
+            } else {
+                None
+            },
         };
         if let Err(e) = config.check() {
             error!("{:?}", e);

@@ -263,7 +263,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-Nine properties are supported for virtio block device.
+Ten properties are supported for virtio block device.
 
 * drive_id: unique device-id in StratoVirt.
 * path_on_host: the path of block device in host.
@@ -280,6 +280,7 @@ the default block queue number is 1. The max queues number supported is no more 
 * bootindex: the boot order of block device. (optional) If not set, the priority is lowest.
 The number ranges from 0 to 255, the smaller the number, the higher the priority.
 It determines the order of bootable devices which firmware will use for booting the guest OS.
+* aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
 
 For virtio-blk-pci, two more properties are required.
 * bus: name of bus which to attach.

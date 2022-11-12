@@ -23,6 +23,7 @@ pub use error::StandardVmError;
 pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
+use util::aio::AIO_NATIVE;
 use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -764,8 +765,7 @@ impl StdMachine {
                 boot_index: args.boot_index,
                 chardev: None,
                 socket_path: None,
-                // TODO Add aio option by qmp.
-                aio: None,
+                aio: conf.aio.clone(),
             };
             dev.check()?;
             dev
@@ -1145,7 +1145,12 @@ impl DeviceInterface for StdMachine {
             read_only,
             direct,
             iops: args.iops,
-            aio: None,
+            // TODO Add aio option by qmp, now we set it based on "direct".
+            aio: if direct {
+                Some(String::from(AIO_NATIVE))
+            } else {
+                None
+            },
         };
 
         if let Err(e) = config.check() {

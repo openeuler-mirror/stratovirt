@@ -93,7 +93,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             iops: None,
-            aio: None,
+            aio: Some(String::from(AIO_NATIVE)),
         }
     }
 }
@@ -161,6 +161,18 @@ impl ConfigCheck for DriveConfig {
                 true,
             )));
         }
+        if self.aio == Some(String::from(AIO_NATIVE)) && !self.direct {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "aio".to_string(),
+                "native aio type should be used with \"direct\" on".to_string(),
+            )));
+        }
+        if self.aio.is_none() && self.direct {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "aio".to_string(),
+                "low performance expected when use sync io with \"direct\" on".to_string(),
+            )));
+        }
         Ok(())
     }
 }
@@ -200,7 +212,9 @@ impl ConfigCheck for BlkDevConfig {
 
         let fake_drive = DriveConfig {
             path_on_host: self.path_on_host.clone(),
+            direct: self.direct,
             iops: self.iops,
+            aio: self.aio.clone(),
             ..Default::default()
         };
         fake_drive.check()?;
@@ -240,12 +254,24 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
     drive.aio = if let Some(aio) = cmd_parser.get_value::<String>("aio")? {
-        if aio != AIO_NATIVE && aio != AIO_IOURING {
-            bail!("Invalid aio configure")
+        let aio_off = "off";
+        if aio != AIO_NATIVE && aio != AIO_IOURING && aio != aio_off {
+            bail!(
+                "Invalid aio configure, should be one of {}|{}|{}",
+                AIO_NATIVE,
+                AIO_IOURING,
+                aio_off
+            );
         }
-        Some(aio)
-    } else {
+        if aio != aio_off {
+            Some(aio)
+        } else {
+            None
+        }
+    } else if drive.direct {
         Some(AIO_NATIVE.to_string())
+    } else {
+        None
     };
     drive.check()?;
     #[cfg(not(test))]
