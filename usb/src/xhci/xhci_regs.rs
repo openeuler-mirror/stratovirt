@@ -612,19 +612,18 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         if slot_id == 0 {
             if value == 0 {
                 if let Err(e) = xhci.handle_command() {
-                    error!("Failed to process commands: {:?}", e);
+                    error!("Failed to handle command: {:?}", e);
+                    return false;
                 }
             } else {
-                error!("Invalid doorbell write: value {:x}", value)
+                error!("Invalid doorbell write: value {:x}", value);
+                return false;
             }
         } else {
             let ep_id = value & DB_TARGET_MASK;
-            if slot_id > xhci.slots.len() as u32 {
-                error!("Invalid slot_id {}", slot_id);
-            } else if ep_id == 0 || ep_id > 31 {
-                error!("Invalid epid {}", ep_id,);
-            } else if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
+            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
                 error!("Failed to kick endpoint: {:?}", e);
+                return false;
             }
         }
         true
