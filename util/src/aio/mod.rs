@@ -174,15 +174,17 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64) -> Result<()> {
+    pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64, direct: bool) -> Result<()> {
         let mut misaligned = false;
-        for iov in cb.iovec.iter() {
-            if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
-                misaligned = true;
-                break;
+        if direct {
+            for iov in cb.iovec.iter() {
+                if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
+                    misaligned = true;
+                    break;
+                }
             }
         }
-        if misaligned {
+        if direct && misaligned {
             return self.handle_misaligned_aio(cb);
         }
 

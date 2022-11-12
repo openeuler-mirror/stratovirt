@@ -42,8 +42,7 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::raw_datasync;
-use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
+use util::aio::{raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
@@ -63,7 +62,7 @@ const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
 
-type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool);
+type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, Option<String>);
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -266,6 +265,7 @@ impl Request {
         disk: &File,
         serial_num: &Option<String>,
         direct: bool,
+        aio_type: &Option<String>,
         last_aio: bool,
         iocompletecb: AioCompleteCb,
     ) -> Result<()> {
@@ -295,13 +295,13 @@ impl Request {
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
-                if direct {
+                if aio_type.is_some() {
                     for iov in aiocb.iovec.iter() {
                         MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
                     }
                     (*aio)
                         .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
                         .with_context(|| {
                             "Failed to process block request for reading asynchronously"
                         })?;
@@ -313,10 +313,10 @@ impl Request {
             }
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::Pwritev;
-                if direct {
+                if aio_type.is_some() {
                     (*aio)
                         .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
                         .with_context(|| {
                             "Failed to process block request for writing asynchronously"
                         })?;
@@ -391,8 +391,10 @@ struct BlockIoHandler {
     disk_sectors: u64,
     /// Serial number of the block device.
     serial_num: Option<String>,
-    /// if use direct access io.
+    /// If use direct access io.
     direct: bool,
+    /// Async IO type.
+    aio_type: Option<String>,
     /// Aio context.
     aio: Option<Box<Aio<AioCompleteCb>>>,
     /// Bit mask of features negotiated by the backend and the frontend.
@@ -520,6 +522,7 @@ impl BlockIoHandler {
                     disk_img,
                     &self.serial_num,
                     self.direct,
+                    &self.aio_type,
                     req_index == last_aio_req_index,
                     aiocompletecb.clone(),
                 ) {
@@ -608,17 +611,19 @@ impl BlockIoHandler {
 
     fn update_evt_handler(&mut self) {
         match self.receiver.recv() {
-            Ok((image, disk_sectors, serial_num, direct)) => {
+            Ok((image, disk_sectors, serial_num, direct, aio_type)) => {
                 self.disk_sectors = disk_sectors;
                 self.disk_image = image;
                 self.serial_num = serial_num;
                 self.direct = direct;
+                self.aio_type = aio_type;
             }
             Err(_) => {
                 self.disk_sectors = 0;
                 self.disk_image = None;
                 self.serial_num = None;
                 self.direct = true;
+                self.aio_type = Some(String::from(AIO_NATIVE));
             }
         };
 
@@ -1106,6 +1111,7 @@ impl VirtioDevice for Block {
                 disk_image: self.disk_image.clone(),
                 disk_sectors: self.disk_sectors,
                 direct: self.blk_cfg.direct,
+                aio_type: self.blk_cfg.aio.clone(),
                 serial_num: self.blk_cfg.serial_num.clone(),
                 aio: None,
                 driver_features: self.state.driver_features,
@@ -1159,6 +1165,7 @@ impl VirtioDevice for Block {
                         self.disk_sectors,
                         self.blk_cfg.serial_num.clone(),
                         self.blk_cfg.direct,
+                        self.blk_cfg.aio.clone(),
                     ))
                     .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
             }
