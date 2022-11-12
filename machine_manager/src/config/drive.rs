@@ -430,7 +430,6 @@ impl VmConfig {
             .push("format")
             .push("if")
             .push("throttling.iops-total")
-            .push("serial")
             .push("aio");
 
         cmd_parser.parse(block_config)?;
@@ -594,7 +593,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
         let blk_cfg =
             "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,multifunction=on";
