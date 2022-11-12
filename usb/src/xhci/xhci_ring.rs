@@ -229,14 +229,15 @@ impl XhciRing {
     }
 
     /// Fetch TRB from the ring.
-    pub fn fetch_trb(&mut self) -> Result<XhciTRB> {
+    pub fn fetch_trb(&mut self) -> Result<Option<XhciTRB>> {
         let mut link_cnt = 0;
         loop {
             let mut trb = self.read_trb(self.dequeue)?;
             trb.addr = self.dequeue;
             trb.ccs = self.ccs;
             if trb.get_cycle_bit() != self.ccs {
-                bail!("TRB cycle bit not matched");
+                debug!("TRB cycle bit not matched");
+                return Ok(None);
             }
             let trb_type = trb.get_type();
             debug!("Fetch TRB: type {:?} trb {:?}", trb_type, trb);
@@ -251,7 +252,7 @@ impl XhciRing {
                 }
             } else {
                 self.dequeue += TRB_SIZE as u64;
-                return Ok(trb);
+                return Ok(Some(trb));
             }
         }
     }
@@ -269,19 +270,24 @@ impl XhciRing {
         Ok(trb)
     }
 
-    /// Get the number of TRBs in the TD if success.
-    pub fn get_transfer_len(&self) -> Result<usize> {
-        let mut len = 0;
+    /// Get the transfer descriptor which includes one or more TRBs.
+    /// Return None if the td is not ready.
+    /// Return Vec if the td is ok.
+    /// Return Error if read trb failed.
+    pub fn fetch_td(&mut self) -> Result<Option<Vec<XhciTRB>>> {
         let mut dequeue = self.dequeue;
         let mut ccs = self.ccs;
         let mut ctrl_td = false;
         let mut link_cnt = 0;
+        let mut td = Vec::new();
         for _ in 0..RING_LEN_LIMIT {
-            let trb = self.read_trb(dequeue)?;
+            let mut trb = self.read_trb(dequeue)?;
+            trb.addr = dequeue;
+            trb.ccs = ccs;
             if trb.get_cycle_bit() != ccs {
-                // TRB is not ready
+                // TRB is not ready.
                 debug!("TRB cycle bit not matched");
-                return Ok(0);
+                return Ok(None);
             }
             let trb_type = trb.get_type();
             if trb_type == TRBType::TrLink {
@@ -294,7 +300,7 @@ impl XhciRing {
                     ccs = !ccs;
                 }
             } else {
-                len += 1;
+                td.push(trb);
                 dequeue += TRB_SIZE as u64;
                 if trb_type == TRBType::TrSetup {
                     ctrl_td = true;
@@ -302,7 +308,10 @@ impl XhciRing {
                     ctrl_td = false;
                 }
                 if !ctrl_td && (trb.control & TRB_TR_CH != TRB_TR_CH) {
-                    return Ok(len);
+                    // Update the dequeue pointer and ccs flag.
+                    self.dequeue = dequeue;
+                    self.ccs = ccs;
+                    return Ok(Some(td));
                 }
             }
         }
