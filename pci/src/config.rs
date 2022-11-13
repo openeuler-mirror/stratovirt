@@ -143,9 +143,9 @@ pub const STATUS: u8 = 0x06;
 /// PCI Interrupt Status.
 pub const STATUS_INTERRUPT: u8 = 0x08;
 const CACHE_LINE_SIZE: u8 = 0x0c;
-const PRIMARY_BUS_NUM: u8 = 0x18;
-const IO_LIMIT: u8 = 0x1d;
-const PREF_MEM_BASE_UPPER: u8 = 0x28;
+pub const PRIMARY_BUS_NUM: u8 = 0x18;
+pub const IO_LIMIT: u8 = 0x1d;
+pub const PREF_MEM_BASE_UPPER: u8 = 0x28;
 const CAP_LIST: u8 = 0x34;
 const INTERRUPT_LINE: u8 = 0x3c;
 const BRIDGE_CONTROL: u8 = 0x3e;
