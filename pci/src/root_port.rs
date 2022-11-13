@@ -27,18 +27,19 @@ use util::byte_code::ByteCode;
 
 use super::config::{
     PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
-    COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE,
-    PCIE_CAP_CLS_2_5G, PCIE_CAP_NLW_X1, PCIE_CAP_SLOT_PIC_BLINK, PCIE_CAP_SLOT_PIC_MASK,
-    PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC,
-    PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC,
+    COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, IO_LIMIT,
+    MEMORY_BASE, PCIE_CAP_CLS_2_5G, PCIE_CAP_NLW_X1, PCIE_CAP_SLOT_PIC_BLINK,
+    PCIE_CAP_SLOT_PIC_MASK, PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI,
+    PCI_EXP_HP_EV_PDC, PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC,
     PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTSTA, PCI_EXP_SLTSTA_PDC,
     PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
-    PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    PREF_MEM_BASE_UPPER, PREF_MEM_RANGE_64BIT, PRIMARY_BUS_NUM, REG_SIZE, SUB_CLASS_CODE,
+    VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::hotplug::HotplugOps;
 use crate::msix::init_msix;
-use crate::{init_multifunction, PciError};
+use crate::{init_multifunction, le_write_u32, le_write_u64, PciError};
 use crate::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
     PciDevOps,
@@ -262,6 +263,18 @@ impl RootPort {
             error!("Failed to set fast unplug feature: {}", v);
         }
     }
+
+    fn reset_bridge_regs(&mut self) -> Result<()> {
+        le_write_u32(&mut self.config.config, PRIMARY_BUS_NUM as usize, 0)?;
+
+        self.config.config[IO_BASE as usize] = 0xff;
+        self.config.config[IO_LIMIT as usize] = 0;
+        // set memory/pref memory's base to 0xFFFF and limit to 0.
+        le_write_u32(&mut self.config.config, MEMORY_BASE as usize, 0xffff)?;
+        le_write_u32(&mut self.config.config, PREF_MEMORY_BASE as usize, 0xffff)?;
+        le_write_u64(&mut self.config.config, PREF_MEM_BASE_UPPER as usize, 0)?;
+        Ok(())
+    }
 }
 
 impl PciDevOps for RootPort {
@@ -415,7 +428,7 @@ impl PciDevOps for RootPort {
                 .lock()
                 .unwrap()
                 .reset()
-                .with_context(|| "Fail to reset sec_bus in root port")
+                .with_context(|| "Fail to reset sec_bus in root port")?;
         } else {
             let cap_offset = self.config.ext_cap_offset;
             le_write_u16(
@@ -433,8 +446,8 @@ impl PciDevOps for RootPort {
                 (cap_offset + PCI_EXP_LNKSTA) as usize,
                 PCI_EXP_LNKSTA_DLLLA,
             )?;
-            Ok(())
         }
+        self.reset_bridge_regs()
     }
 
     fn get_dev_path(&self) -> Option<String> {
