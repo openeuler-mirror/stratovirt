@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::Region;
 use log::debug;
 
-use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
+use super::config::{
+    BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET, SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM,
+};
 use super::hotplug::HotplugOps;
 use super::PciDevOps;
 use anyhow::{bail, Context, Result};
@@ -74,19 +76,9 @@ impl PciBus {
     ///
     /// * `offset` - Offset of bus number register.
     pub fn number(&self, offset: usize) -> u8 {
-        if self.parent_bridge.is_none() {
-            return 0;
-        }
-
         let mut data = vec![0_u8; 1];
-        self.parent_bridge
-            .as_ref()
-            .unwrap()
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .read_config(offset, &mut data);
+        self.get_bridge_control_reg(offset, &mut data);
+
         data[0]
     }
 
@@ -105,6 +97,10 @@ impl PciBus {
     }
 
     fn in_range(&self, bus_num: u8) -> bool {
+        if self.is_during_reset() {
+            return false;
+        }
+
         let secondary_bus_num: u8 = self.number(SECONDARY_BUS_NUM as usize);
         let subordinate_bus_num: u8 = self.number(SUBORDINATE_BUS_NUM as usize);
         if bus_num > secondary_bus_num && bus_num <= subordinate_bus_num {
@@ -220,6 +216,30 @@ impl PciBus {
         }
 
         Ok(())
+    }
+
+    fn is_during_reset(&self) -> bool {
+        let mut data = vec![0_u8; 2];
+        self.get_bridge_control_reg(BRIDGE_CONTROL as usize + 1, &mut data);
+        if data[1] & ((BRIDGE_CTL_SEC_BUS_RESET >> 8) as u8) != 0 {
+            return true;
+        }
+        false
+    }
+
+    fn get_bridge_control_reg(&self, offset: usize, data: &mut [u8]) {
+        if self.parent_bridge.is_none() {
+            return;
+        }
+
+        self.parent_bridge
+            .as_ref()
+            .unwrap()
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .read_config(offset, data);
     }
 }
 
