@@ -62,7 +62,7 @@ pub struct AioCb<T: Clone> {
     pub iovec: Vec<Iovec>,
     pub offset: usize,
     pub process: bool,
-    pub iocb: Option<std::ptr::NonNull<IoCb>>,
+    pub iocb: Option<Box<IoCb>>,
     pub iocompletecb: T,
 }
 
@@ -133,13 +133,8 @@ impl<T: Clone + 'static> Aio<T> {
 
                     (self.complete_func)(&(*node).value, evts[e as usize].res);
                     self.aio_in_flight.unlink(&(*node));
-
-                    // free mem
-                    if let Some(i) = (*node).value.iocb {
-                        libc::free((*node).value.iovec.as_ptr() as *mut libc::c_void);
-                        libc::free(i.as_ptr() as *mut libc::c_void);
-                    };
-                    libc::free(node as *mut libc::c_void);
+                    // Construct Box to free mem automatically.
+                    Box::from_raw(node);
                 }
             }
         }
@@ -154,8 +149,9 @@ impl<T: Clone + 'static> Aio<T> {
 
             for _ in self.aio_in_flight.len..self.max_events {
                 match self.aio_in_queue.pop_tail() {
-                    Some(node) => {
-                        iocbs.push(node.value.iocb.unwrap().as_ptr());
+                    Some(mut node) => {
+                        let iocb = node.value.iocb.as_mut().unwrap();
+                        iocbs.push(&mut **iocb as *mut IoCb);
                         self.aio_in_flight.add_head(node);
                     }
                     None => break,
@@ -207,7 +203,7 @@ impl<T: Clone + 'static> Aio<T> {
             data: (&mut (*node) as *mut CbNode<T>) as u64,
             ..Default::default()
         };
-        node.value.iocb = std::ptr::NonNull::new(Box::into_raw(Box::new(iocb)));
+        node.value.iocb = Some(Box::new(iocb));
 
         self.aio_in_queue.add_head(node);
         if last_aio || self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {

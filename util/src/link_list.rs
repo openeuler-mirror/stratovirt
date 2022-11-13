@@ -27,6 +27,12 @@ pub struct List<T> {
     marker: PhantomData<Box<Node<T>>>,
 }
 
+impl<T> Drop for List<T> {
+    fn drop(&mut self) {
+        while self.pop_head().is_some() {}
+    }
+}
+
 impl<T> Node<T> {
     pub fn new(value: T) -> Self {
         Node {
