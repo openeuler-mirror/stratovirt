@@ -779,7 +779,7 @@ Six properties can be set for virtio-scsi hd.
 * file: the path of backend image file.
 * id: unique device id.
 * bus: scsi bus name, only support $scsi_controller_name + ".0"
-* scsi-id: id number (target) of scsi four level hierarchical address (host, channel, target, lun). Only support 0 now.
+* scsi-id: id number (target) of scsi four level hierarchical address (host, channel, target, lun). Configuration range is [0, 255]. Boot scsi disk configuration range is [0, 31].
 * lun: lun number (lun) of scsi four level hierarchical address (host, channel, target, lun). Only support starting from 0 now.
 * serial: serial number of virtio scsi device.(optional)
 

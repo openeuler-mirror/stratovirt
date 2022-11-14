@@ -15,6 +15,10 @@ use anyhow::{anyhow, Result};
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE};
 
+/// According to Virtio Spec.
+/// Max_target should be less than or equal to 255.
+pub const VIRTIO_SCSI_MAX_TARGET: u16 = 255;
+
 #[derive(Debug, Clone)]
 pub struct ScsiCntlrConfig {
     /// Virtio-scsi-pci device id.
@@ -153,12 +157,12 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     }
 
     if let Some(target) = cmd_parser.get_value::<u8>("scsi-id")? {
-        if target != 0 {
+        if target > VIRTIO_SCSI_MAX_TARGET as u8 {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "scsi-id of scsi device".to_string(),
                 0,
                 true,
-                0,
+                VIRTIO_SCSI_MAX_TARGET as u64,
                 true,
             )));
         }
