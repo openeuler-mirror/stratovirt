@@ -115,6 +115,7 @@ impl NetCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
         let mut locked_queue = self.ctrl.queue.lock().unwrap();
         loop {
+            let ack = VIRTIO_NET_OK;
             let elem = locked_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -123,9 +124,7 @@ impl NetCtrlHandler {
                 break;
             }
 
-            let mut used_len = 0;
             if let Some(ctrl_desc) = elem.out_iovec.get(0) {
-                used_len += ctrl_desc.len;
                 let ctrl_hdr = self
                     .mem_space
                     .read_object::<CrtlHdr>(ctrl_desc.addr)
@@ -139,7 +138,6 @@ impl NetCtrlHandler {
                             );
                         }
                         if let Some(mq_desc) = elem.out_iovec.get(1) {
-                            used_len += mq_desc.len;
                             let queue_pairs = self
                                 .mem_space
                                 .read_object::<u16>(mq_desc.addr)
@@ -160,14 +158,12 @@ impl NetCtrlHandler {
                 }
             }
             if let Some(status) = elem.in_iovec.get(0) {
-                used_len += status.len;
-                let data = VIRTIO_NET_OK;
-                self.mem_space.write_object::<u8>(&data, status.addr)?;
+                self.mem_space.write_object::<u8>(&ack, status.addr)?;
             }
 
             locked_queue
                 .vring
-                .add_used(&self.mem_space, elem.index, used_len)
+                .add_used(&self.mem_space, elem.index, mem::size_of_val(&ack) as u32)
                 .with_context(|| format!("Failed to add used ring {}", elem.index))?;
 
             if locked_queue
