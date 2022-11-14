@@ -137,7 +137,7 @@ impl NetCtrlHandler {
                             VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
                         );
                     }
-                    if let Some(mq_desc) = elem.out_iovec.get(0) {
+                    if let Some(mq_desc) = elem.out_iovec.get(1) {
                         used_len += mq_desc.len;
                         let queue_pairs = self
                             .mem_space
