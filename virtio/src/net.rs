@@ -317,7 +317,7 @@ impl NetIoHandler {
                     };
                     iovecs.push(iovec);
                 } else {
-                    error!("Failed to get host address for {}", elem_iov.addr.0);
+                    bail!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
             let write_count = unsafe {
