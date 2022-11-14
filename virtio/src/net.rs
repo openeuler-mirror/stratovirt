@@ -383,7 +383,11 @@ impl NetIoHandler {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
 
-        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+        loop {
+            let elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for net tx")?;
             if elem.desc_num == 0 {
                 break;
             }
