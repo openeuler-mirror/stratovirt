@@ -78,6 +78,8 @@ const MAX_ENDPOINTS: u32 = 31;
 /// XHCI config
 const XHCI_PORT2_NUM: u32 = 2;
 const XHCI_PORT3_NUM: u32 = 2;
+/// Slot Context.
+const SLOT_INPUT_CTX_OFFSET: u64 = 0x20;
 /// Endpoint Context.
 const EP_INPUT_CTX_ENTRY_SIZE: u64 = 0x20;
 const EP_INPUT_CTX_OFFSET: u64 = 0x40;
@@ -210,7 +212,7 @@ impl From<u32> for EpType {
 pub struct XhciSlot {
     pub enabled: bool,
     pub addressed: bool,
-    pub intr: u16,
+    pub intr_target: u16,
     pub ctx: u64,
     pub usb_port: Option<Weak<Mutex<UsbPort>>>,
     pub endpoints: Vec<XhciEpContext>,
@@ -221,7 +223,7 @@ impl XhciSlot {
         XhciSlot {
             enabled: false,
             addressed: false,
-            intr: 0,
+            intr_target: 0,
             ctx: 0,
             usb_port: None,
             endpoints: vec![XhciEpContext::new(mem); MAX_ENDPOINTS as usize],
@@ -590,7 +592,7 @@ impl XhciDevice {
                         }
                         TRBType::CrAddressDevice => {
                             if slot_id != 0 {
-                                event.ccode = self.address_slot(slot_id, &trb)?;
+                                event.ccode = self.address_device(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrConfigureEndpoint => {
@@ -652,69 +654,88 @@ impl XhciDevice {
         self.slots[(slot_id - 1) as usize].enabled = false;
         self.slots[(slot_id - 1) as usize].addressed = false;
         self.slots[(slot_id - 1) as usize].usb_port = None;
-        self.slots[(slot_id - 1) as usize].intr = 0;
+        self.slots[(slot_id - 1) as usize].intr_target = 0;
         Ok(TRBCCode::Success)
     }
 
-    fn address_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
-        let bsr = trb.control & TRB_CR_BSR == TRB_CR_BSR;
-        let dcbaap = self.oper.dcbaap;
+    fn address_device(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
         let ictx = trb.parameter;
-        let mut octx = 0;
-        dma_read_u64(
+        let ccode = self.check_input_ctx(ictx)?;
+        if ccode != TRBCCode::Success {
+            return Ok(ccode);
+        }
+        let mut slot_ctx = XhciSlotCtx::default();
+        dma_read_u32(
             &self.mem_space,
-            GuestAddress(dcbaap + (8 * slot_id) as u64),
-            &mut octx,
+            GuestAddress(ictx + SLOT_INPUT_CTX_OFFSET),
+            slot_ctx.as_mut_dwords(),
         )?;
+        let bsr = trb.control & TRB_CR_BSR == TRB_CR_BSR;
+        let ccode = self.check_slot_state(&slot_ctx, bsr)?;
+        if ccode != TRBCCode::Success {
+            return Ok(ccode);
+        }
+        let usb_port = if let Some(usb_port) = self.lookup_usb_port(&slot_ctx) {
+            usb_port
+        } else {
+            error!("Failed to found usb port");
+            return Ok(TRBCCode::TrbError);
+        };
+        let lock_port = usb_port.lock().unwrap();
+        let dev = if let Some(dev) = lock_port.dev.as_ref() {
+            dev
+        } else {
+            error!("No device found in usb port.");
+            return Ok(TRBCCode::UsbTransactionError);
+        };
+        let ctx_addr = self.get_device_context_addr(slot_id);
+        let mut octx = 0;
+        dma_read_u64(&self.mem_space, GuestAddress(ctx_addr), &mut octx)?;
+        self.slots[(slot_id - 1) as usize].usb_port = Some(Arc::downgrade(&usb_port));
+        self.slots[(slot_id - 1) as usize].ctx = octx;
+        self.slots[(slot_id - 1) as usize].intr_target =
+            ((slot_ctx.tt_info >> TRB_INTR_SHIFT) & TRB_INTR_MASK) as u16;
+        dev.lock().unwrap().reset();
+        if bsr {
+            slot_ctx.dev_state = SLOT_DEFAULT << SLOT_STATE_SHIFT;
+        } else {
+            slot_ctx.dev_state = (SLOT_ADDRESSED << SLOT_STATE_SHIFT) | slot_id;
+            self.set_device_address(dev, slot_id);
+        }
+        // Enable control endpoint.
+        self.enable_endpoint(slot_id, 1, ictx, octx)?;
+        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        self.slots[(slot_id - 1) as usize].addressed = true;
+        Ok(TRBCCode::Success)
+    }
+
+    fn check_input_ctx(&self, ictx: u64) -> Result<TRBCCode> {
         let mut ictl_ctx = XhciInputCtrlCtx::default();
         dma_read_u32(
             &self.mem_space,
             GuestAddress(ictx),
             ictl_ctx.as_mut_dwords(),
         )?;
-        if ictl_ctx.drop_flags != 0x0 || ictl_ctx.add_flags != 0x3 {
-            error!("Invalid input: {:?}", ictl_ctx);
-            return Ok(TRBCCode::TrbError);
-        }
-        let mut slot_ctx = XhciSlotCtx::default();
-        dma_read_u32(
-            &self.mem_space,
-            GuestAddress(ictx + 32),
-            slot_ctx.as_mut_dwords(),
-        )?;
-        if let Some(usb_port) = self.lookup_usb_port(&slot_ctx) {
-            let lock_port = usb_port.lock().unwrap();
-            let dev = if let Some(dev) = lock_port.dev.as_ref() {
-                dev
-            } else {
-                error!("No device found in usb port.");
-                return Ok(TRBCCode::UsbTransactionError);
-            };
-            let mut locked_dev = dev.lock().unwrap();
-            self.slots[(slot_id - 1) as usize].usb_port = Some(Arc::downgrade(&usb_port));
-            self.slots[(slot_id - 1) as usize].ctx = octx;
-            self.slots[(slot_id - 1) as usize].intr =
-                ((slot_ctx.tt_info >> TRB_INTR_SHIFT) & TRB_INTR_MASK) as u16;
-            locked_dev.reset();
-            drop(locked_dev);
-            if bsr {
-                slot_ctx.dev_state = SLOT_DEFAULT << SLOT_STATE_SHIFT;
-            } else {
-                slot_ctx.dev_state = (SLOT_ADDRESSED << SLOT_STATE_SHIFT) | slot_id;
-                self.address_device(dev, slot_id);
-            }
-            // Enable control endpoint.
-            self.enable_endpoint(slot_id, 1, ictx, octx)?;
-            dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
-            self.slots[(slot_id - 1) as usize].addressed = true;
-        } else {
-            error!("Failed to found usb port");
-            return Ok(TRBCCode::TrbError);
+        if ictl_ctx.add_flags & 0x3 != 0x3 {
+            // The Slot Context(Add Context flag0 (A0)) and Default Endpoint Control
+            // (Add Context flag1 (A1)) shall be valid. Others shall be ignored.
+            error!("Invalid input context: {:?}", ictl_ctx);
+            return Ok(TRBCCode::ParameterError);
         }
         Ok(TRBCCode::Success)
     }
 
-    fn address_device(&mut self, dev: &Arc<Mutex<dyn UsbDeviceOps>>, slot_id: u32) {
+    fn check_slot_state(&self, slot_ctx: &XhciSlotCtx, bsr: bool) -> Result<TRBCCode> {
+        let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
+        if !(slot_state == SLOT_ENABLED || !bsr && slot_state == SLOT_DEFAULT) {
+            error!("Invalid slot state: {:?}", slot_ctx);
+            return Ok(TRBCCode::ContextStateError);
+        }
+        Ok(TRBCCode::Success)
+    }
+
+    /// Send SET_ADDRESS request to usb device.
+    fn set_device_address(&mut self, dev: &Arc<Mutex<dyn UsbDeviceOps>>, addr: u32) {
         let mut p = UsbPacket::default();
         let mut locked_dev = dev.lock().unwrap();
         let usb_dev = locked_dev.get_mut_usb_device();
@@ -725,11 +746,15 @@ impl XhciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_OUT_REQUEST,
             request: USB_REQUEST_SET_ADDRESS,
-            value: slot_id as u16,
+            value: addr as u16,
             index: 0,
             length: 0,
         };
         locked_dev.handle_control(&mut p, &device_req, &mut []);
+    }
+
+    fn get_device_context_addr(&self, slot_id: u32) -> u64 {
+        self.oper.dcbaap + (8 * slot_id) as u64
     }
 
     fn config_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
