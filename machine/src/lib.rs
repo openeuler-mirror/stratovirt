@@ -26,6 +26,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier, Mutex, Weak};
 
 use kvm_ioctls::VcpuFd;
+use log::warn;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub use micro_vm::LightMachine;
@@ -484,8 +485,8 @@ pub trait MachineOps {
 
     fn get_sys_bus(&mut self) -> &SysBus;
 
-    fn get_fwcfg_dev(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
-        bail!("No FwCfg deivce found");
+    fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
+        None
     }
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
@@ -541,8 +542,13 @@ pub trait MachineOps {
         }
         fwcfg_boot_order_string.push('\0');
 
-        let fwcfg = self.get_fwcfg_dev()?;
+        let fwcfg = self.get_fwcfg_dev();
+        if fwcfg.is_none() {
+            warn!("Direct kernel boot mode don't support set boot order");
+            return Ok(());
+        }
         fwcfg
+            .unwrap()
             .lock()
             .unwrap()
             .modify_file_entry("bootorder", fwcfg_boot_order_string.as_bytes().to_vec())
