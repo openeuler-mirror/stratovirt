@@ -69,6 +69,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_epoll_pwait),
         BpfRule::new(libc::SYS_io_getevents),
         BpfRule::new(libc::SYS_io_submit),
+        BpfRule::new(libc::SYS_io_destroy),
         BpfRule::new(libc::SYS_io_uring_setup),
         BpfRule::new(libc::SYS_io_uring_register),
         BpfRule::new(libc::SYS_io_uring_enter),
