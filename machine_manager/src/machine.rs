@@ -293,6 +293,9 @@ pub trait DeviceInterface {
             ("iothread", "object"),
             #[cfg(target_arch = "aarch64")]
             ("gpex-pcihost", "pcie-host-bridge"),
+            ("nec-usb-xhci", "base-xhci"),
+            ("usb-tablet", "usb-hid"),
+            ("usb-kbd", "usb-hid"),
         ];
 
         for list in list_types {
