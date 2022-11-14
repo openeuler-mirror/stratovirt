@@ -8,7 +8,7 @@ description = "Provide virtio fs for VM"
 
 [dependencies]
 capng = "0.2.2"
-errno = "0.2.7"
+errno = "0.2.8"
 log = "0.4.8"
 libc = ">=0.2.71"
 thiserror = "1.0"
