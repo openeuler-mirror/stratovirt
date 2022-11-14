@@ -197,7 +197,29 @@ $ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-
 
 至此就获得了可以使用的 raw 格式镜像。
 
-### 4. 启动命令行样例
+### 4. 以 direct kernel boot 方式启动标准虚拟机
+
+为virt虚机主板提供直接从kernel启动的模式。在该模式下，不需要UEFI和APCI表，
+虚拟机将跳过UEFI启动阶段，直接从kernel启动，从而加快启动速度。
+
+启动命令行如下：
+
+```shell
+/usr/bin/stratovirt \
+    -machine virt \
+    -kernel /path/to/kernel \
+    -smp 1 \
+    -m 2G \
+    -append "console=${con} reboot=k panic=1 root=/dev/vda rw" \
+    -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
+    -device virtio-blk-pci,drive=rootfs,id=blk1,bus=pcie.0,addr=0x2 \
+    -qmp unix:/path/to/socket,server,nowait \
+    -serial stdio
+```
+
+说明：当前只支持ARM架构下virt虚机主板快速启动标准虚拟机。
+
+### 5. 启动命令行样例
 
 请注意，标准虚拟机需要两个PFlash设备，它们将使用来自与EDK2二进制的两个固件文件。
 如果你不需要保持启动信息，单元序列为1的数据存储文件可以被省略。但是单元序号为0的
