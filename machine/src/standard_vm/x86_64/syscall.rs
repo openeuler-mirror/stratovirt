@@ -93,6 +93,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
             .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFD)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_GETFD)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFL),
+        BpfRule::new(libc::SYS_flock),
         BpfRule::new(libc::SYS_rt_sigprocmask),
         BpfRule::new(libc::SYS_open),
         BpfRule::new(libc::SYS_openat),
