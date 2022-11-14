@@ -169,14 +169,18 @@ impl NetCtrlHandler {
             .add_used(&self.mem_space, elem.index, used_len)
             .with_context(|| format!("Failed to add used ring {}", elem.index))?;
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
-            || {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "ctrl",
-                    VirtioInterruptType::Vring
-                ))
-            },
-        )?;
+        if locked_queue
+            .vring
+            .should_notify(&self.mem_space, self.driver_features)
+        {
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
+                .with_context(|| {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "ctrl",
+                        VirtioInterruptType::Vring
+                    ))
+                })?;
+        }
 
         Ok(())
     }
@@ -259,7 +263,6 @@ impl TxVirtio {
 
 struct RxVirtio {
     queue_full: bool,
-    need_irqs: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
 }
@@ -268,7 +271,6 @@ impl RxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
         RxVirtio {
             queue_full: false,
-            need_irqs: false,
             queue,
             queue_evt,
         }
@@ -358,20 +360,20 @@ impl NetIoHandler {
                         elem.index, write_count
                     )
                 })?;
-            self.rx.need_irqs = true;
-        }
 
-        if self.rx.need_irqs {
-            self.rx.need_irqs = false;
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-                || {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "net",
-                        VirtioInterruptType::Vring
-                    ))
-                },
-            )?;
-            self.trace_send_interrupt("Net".to_string());
+            if queue
+                .vring
+                .should_notify(&self.mem_space, self.driver_features)
+            {
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
+                    .with_context(|| {
+                        anyhow!(VirtioError::InterruptTrigger(
+                            "net",
+                            VirtioInterruptType::Vring
+                        ))
+                    })?;
+                self.trace_send_interrupt("Net".to_string());
+            }
         }
 
         Ok(())
@@ -380,7 +382,6 @@ impl NetIoHandler {
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
-        let mut need_irq = false;
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             if elem.desc_num == 0 {
@@ -423,19 +424,19 @@ impl NetIoHandler {
                 .add_used(&self.mem_space, elem.index, 0)
                 .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
 
-            need_irq = true;
-        }
-
-        if need_irq {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-                || {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "net",
-                        VirtioInterruptType::Vring
-                    ))
-                },
-            )?;
-            self.trace_send_interrupt("Net".to_string());
+            if queue
+                .vring
+                .should_notify(&self.mem_space, self.driver_features)
+            {
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
+                    .with_context(|| {
+                        anyhow!(VirtioError::InterruptTrigger(
+                            "net",
+                            VirtioInterruptType::Vring
+                        ))
+                    })?;
+                self.trace_send_interrupt("Net".to_string());
+            }
         }
 
         Ok(())
