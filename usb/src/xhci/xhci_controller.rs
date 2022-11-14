@@ -78,6 +78,10 @@ const MAX_ENDPOINTS: u32 = 31;
 /// XHCI config
 const XHCI_PORT2_NUM: u32 = 2;
 const XHCI_PORT3_NUM: u32 = 2;
+/// Endpoint Context.
+const EP_INPUT_CTX_ENTRY_SIZE: u64 = 0x20;
+const EP_INPUT_CTX_OFFSET: u64 = 0x40;
+const EP_CTX_OFFSET: u64 = 0x20;
 
 type DmaAddr = u64;
 
@@ -118,7 +122,7 @@ pub struct XhciEpContext {
     enabled: bool,
     ring: XhciRing,
     ep_type: EpType,
-    pctx: DmaAddr,
+    output_ctx: DmaAddr,
     max_psize: u32,
     state: u32,
     /// Line Stream Array
@@ -129,13 +133,13 @@ pub struct XhciEpContext {
 }
 
 impl XhciEpContext {
-    pub fn new(mem: &Arc<AddressSpace>, epid: u32) -> Self {
+    pub fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
-            epid,
+            epid: 0,
             enabled: false,
             ring: XhciRing::new(mem),
             ep_type: EpType::Invalid,
-            pctx: 0,
+            output_ctx: 0,
             max_psize: 0,
             state: 0,
             lsa: false,
@@ -145,10 +149,11 @@ impl XhciEpContext {
         }
     }
 
-    pub fn init(&mut self, pctx: DmaAddr, ctx: &XhciEpCtx) {
+    /// Init the endpoint context used the context read from memory.
+    fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) {
         let dequeue: DmaAddr = addr64_from_u32(ctx.deq_lo & !0xf, ctx.deq_hi);
         self.ep_type = ((ctx.ep_info2 >> EP_TYPE_SHIFT) & EP_TYPE_MASK).into();
-        self.pctx = pctx;
+        self.output_ctx = output_ctx;
         self.max_psize = ctx.ep_info2 >> EP_CTX_MAX_PACKET_SIZE_SHIFT;
         self.max_psize *= 1 + ((ctx.ep_info2 >> 8) & 0xff);
         self.lsa = (ctx.ep_info >> EP_CTX_LSA_SHIFT) & 1 == 1;
@@ -157,14 +162,15 @@ impl XhciEpContext {
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
     }
 
-    pub fn set_state(&mut self, mem: &Arc<AddressSpace>, state: u32) -> Result<()> {
+    /// Update the endpoint state and write the state to memory.
+    fn set_state(&mut self, mem: &Arc<AddressSpace>, state: u32) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        dma_read_u32(mem, GuestAddress(self.pctx), ep_ctx.as_mut_dwords())?;
+        dma_read_u32(mem, GuestAddress(self.output_ctx), ep_ctx.as_mut_dwords())?;
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= state;
         ep_ctx.deq_lo = self.ring.dequeue as u32 | self.ring.ccs as u32;
         ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
-        dma_write_u32(mem, GuestAddress(self.pctx), ep_ctx.as_dwords())?;
+        dma_write_u32(mem, GuestAddress(self.output_ctx), ep_ctx.as_dwords())?;
         self.state = state;
         Ok(())
     }
@@ -218,7 +224,7 @@ impl XhciSlot {
             intr: 0,
             ctx: 0,
             usb_port: None,
-            endpoints: vec![XhciEpContext::new(mem, 0); MAX_ENDPOINTS as usize],
+            endpoints: vec![XhciEpContext::new(mem); MAX_ENDPOINTS as usize],
         }
     }
 }
@@ -697,19 +703,9 @@ impl XhciDevice {
                 slot_ctx.dev_state = (SLOT_ADDRESSED << SLOT_STATE_SHIFT) | slot_id;
                 self.address_device(dev, slot_id);
             }
-            let mut ep0_ctx = XhciEpCtx::default();
-            dma_read_u32(
-                &self.mem_space,
-                GuestAddress(ictx + 64),
-                ep0_ctx.as_mut_dwords(),
-            )?;
-            self.enable_endpoint(slot_id, 1, octx + 32, &mut ep0_ctx)?;
+            // Enable control endpoint.
+            self.enable_endpoint(slot_id, 1, ictx, octx)?;
             dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
-            dma_write_u32(
-                &self.mem_space,
-                GuestAddress(octx + 32),
-                ep0_ctx.as_dwords(),
-            )?;
             self.slots[(slot_id - 1) as usize].addressed = true;
         } else {
             error!("Failed to found usb port");
@@ -801,24 +797,11 @@ impl XhciDevice {
                 self.disable_endpoint(slot_id, i)?;
             }
             if ictl_ctx.add_flags & (1 << i) == 1 << i {
-                let offset = 32 + 32 * i as u64;
-                let mut ep_ctx = XhciEpCtx::default();
-                dma_read_u32(
-                    &self.mem_space,
-                    GuestAddress(ictx + offset),
-                    ep_ctx.as_mut_dwords(),
-                )?;
                 self.disable_endpoint(slot_id, i)?;
-                let offset = 32 * i as u64;
-                let ret = self.enable_endpoint(slot_id, i, octx + offset, &mut ep_ctx)?;
+                let ret = self.enable_endpoint(slot_id, i, ictx, octx)?;
                 if ret != TRBCCode::Success {
                     return Ok(ret);
                 }
-                dma_write_u32(
-                    &self.mem_space,
-                    GuestAddress(octx + offset),
-                    ep_ctx.as_dwords(),
-                )?;
             }
         }
         Ok(TRBCCode::Success)
@@ -901,17 +884,29 @@ impl XhciDevice {
         &mut self,
         slot_id: u32,
         ep_id: u32,
-        pctx: DmaAddr,
-        ctx: &mut XhciEpCtx,
+        input_ctx: DmaAddr,
+        output_ctx: DmaAddr,
     ) -> Result<TRBCCode> {
+        let entry_offset = (ep_id - 1) as u64 * EP_INPUT_CTX_ENTRY_SIZE;
+        let mut ep_ctx = XhciEpCtx::default();
+        dma_read_u32(
+            &self.mem_space,
+            GuestAddress(input_ctx + EP_INPUT_CTX_OFFSET + entry_offset),
+            ep_ctx.as_mut_dwords(),
+        )?;
         self.disable_endpoint(slot_id, ep_id)?;
-        let mut epctx = XhciEpContext::new(&self.mem_space, ep_id);
+        let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
+        epctx.epid = ep_id;
         epctx.enabled = true;
-        epctx.init(pctx, ctx);
+        epctx.init_ctx(output_ctx + EP_CTX_OFFSET + entry_offset, &ep_ctx);
         epctx.state = EP_RUNNING;
-        ctx.ep_info &= !EP_STATE_MASK;
-        ctx.ep_info |= EP_RUNNING;
-        self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize] = epctx;
+        ep_ctx.ep_info &= !EP_STATE_MASK;
+        ep_ctx.ep_info |= EP_RUNNING;
+        dma_write_u32(
+            &self.mem_space,
+            GuestAddress(output_ctx + EP_CTX_OFFSET + entry_offset),
+            ep_ctx.as_dwords(),
+        )?;
         Ok(TRBCCode::Success)
     }
 
