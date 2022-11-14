@@ -108,8 +108,8 @@ struct VirtioScsiConfig {
     event_info_size: u32,
     sense_size: u32,
     cdb_size: u32,
-    max_channel: u32,
-    max_target: u32,
+    max_channel: u16,
+    max_target: u16,
     max_lun: u32,
 }
 
