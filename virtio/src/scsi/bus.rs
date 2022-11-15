@@ -851,7 +851,7 @@ fn scsi_cdb_xfer_mode(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> ScsiXferMode 
     }
 }
 
-/// VPD: Virtual Product Data.
+/// VPD: Vital Product Data.
 fn scsi_command_emulate_vpd_page(
     cmd: &ScsiCommand,
     dev: &Arc<Mutex<ScsiDevice>>,
@@ -906,7 +906,7 @@ fn scsi_command_emulate_vpd_page(
             }
 
             if len > 0 {
-                // 0x2: Code Set: ASCII, Protocol Identifier: FCP-4.
+                // 0x2: Code Set: ASCII, Protocol Identifier: reserved.
                 // 0: Identifier Type, Association, Reserved, Piv.
                 // 0: Reserved.
                 // len: identifier length.
@@ -956,7 +956,6 @@ fn scsi_command_emulate_vpd_page(
         0xb1 => {
             // Block Device Characteristics.
             // 0: Medium Rotation Rate: 2Bytes.
-            // 0: Medium Rotation Rate: 2Bytes.
             // 0: Product Type.
             // 0: Nominal Form Factor, Wacereq, Wabereq.
             // 0: Vbuls, Fuab, Bocs, Reserved, Zoned, Reserved.
@@ -977,7 +976,7 @@ fn scsi_command_emulate_vpd_page(
         }
     }
 
-    // It's OK for just using outbuf bit 3, because all page_code's buflen in stratovirt is less than 255 now.
+    // It's OK for just using outbuf byte 3, because all page_code's buflen in stratovirt is less than 255 now.
     outbuf[3] = buflen as u8 - 4;
     Ok(outbuf)
 }
@@ -1044,7 +1043,7 @@ fn scsi_command_emulate_inquiry(
     cmd: &ScsiCommand,
     dev: &Arc<Mutex<ScsiDevice>>,
 ) -> Result<Vec<u8>> {
-    // Vital product data.
+    // Byte1 bit0: EVPD(enable vital product data).
     if cmd.buf[1] == 0x1 {
         return scsi_command_emulate_vpd_page(cmd, dev);
     }
@@ -1077,7 +1076,11 @@ fn scsi_command_emulate_inquiry(
 
     drop(dev_lock);
 
-    // scsi version: 5.
+    // outbuf:
+    // Byte2: Version.
+    // Byte3: bits[0-3]: Response Data Format; bit 4:Hisup.
+    // Byte4: Additional Length(outbuf.len()-5).
+    // Byte7: bit2: Cmdque; bit4: SYNC.
     outbuf[2] = 5;
     outbuf[3] = (2 | 0x10) as u8;
 
@@ -1087,7 +1090,6 @@ fn scsi_command_emulate_inquiry(
         outbuf[4] = 36 - 5;
     }
 
-    // TCQ.
     outbuf[7] = 0x12;
 
     Ok(outbuf)
