@@ -910,6 +910,14 @@ impl VirtioDevice for Net {
             self.taps = None;
         }
 
+        // Using the first tap to test if all the taps have ufo.
+        if let Some(tap) = self.taps.as_ref().map(|t| &t[0]) {
+            if !tap.has_ufo() {
+                self.state.device_features &=
+                    !(1 << VIRTIO_NET_F_GUEST_UFO | 1 << VIRTIO_NET_F_HOST_UFO);
+            }
+        }
+
         if let Some(mac) = &self.net_cfg.mac {
             self.state.device_features |=
                 build_device_config_space(&mut self.state.config_space, mac);
