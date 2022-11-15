@@ -53,6 +53,7 @@ const SLOT_ADDRESSED: u32 = 2;
 const SLOT_CONFIGURED: u32 = 3;
 const SLOT_CONTEXT_ENTRIES_MASK: u32 = 0x1f;
 const SLOT_CONTEXT_ENTRIES_SHIFT: u32 = 27;
+const SLOT_CONTEXT_DEVICE_ADDRESS_MASK: u32 = 0xff;
 /// TRB flags
 const TRB_CR_BSR: u32 = 1 << 9;
 const TRB_CR_EPID_SHIFT: u32 = 16;
@@ -651,7 +652,9 @@ impl XhciDevice {
                             }
                         }
                         TRBType::CrResetDevice => {
-                            event.ccode = self.reset_slot(slot_id)?;
+                            if slot_id != 0 {
+                                event.ccode = self.reset_device(slot_id)?;
+                            }
                         }
                         _ => {
                             error!("Invalid Command: type {:?}", trb_type);
@@ -921,19 +924,27 @@ impl XhciDevice {
         Ok(TRBCCode::Success)
     }
 
-    fn reset_slot(&mut self, slot_id: u32) -> Result<TRBCCode> {
+    fn reset_device(&mut self, slot_id: u32) -> Result<TRBCCode> {
         let mut slot_ctx = XhciSlotCtx::default();
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
-        for i in 2..32 {
-            self.disable_endpoint(slot_id, i)?;
-        }
         dma_read_u32(
             &self.mem_space,
             GuestAddress(octx),
             slot_ctx.as_mut_dwords(),
         )?;
+        let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
+        if slot_state != SLOT_ADDRESSED && slot_state != SLOT_CONFIGURED {
+            error!("Invalid slot state: {:?}", slot_state);
+            return Ok(TRBCCode::ContextStateError);
+        }
+        for i in 2..32 {
+            self.disable_endpoint(slot_id, i)?;
+        }
         slot_ctx.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
         slot_ctx.dev_state |= SLOT_DEFAULT << SLOT_STATE_SHIFT;
+        slot_ctx.dev_info &= !(SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
+        slot_ctx.dev_info |= 1 << SLOT_CONTEXT_ENTRIES_SHIFT;
+        slot_ctx.dev_state &= !SLOT_CONTEXT_DEVICE_ADDRESS_MASK;
         dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
     }
