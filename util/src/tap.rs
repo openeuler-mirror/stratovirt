@@ -135,6 +135,11 @@ impl Tap {
         Ok(())
     }
 
+    pub fn has_ufo(&self) -> bool {
+        let flags = TUN_F_CSUM | TUN_F_UFO;
+        (unsafe { ioctl_with_val(&self.file, TUNSETOFFLOAD(), flags as libc::c_ulong) }) >= 0
+    }
+
     pub fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         self.file.read(buf)
     }
