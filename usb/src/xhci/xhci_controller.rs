@@ -676,6 +676,9 @@ impl XhciDevice {
                                 event.ccode = self.reset_device(slot_id)?;
                             }
                         }
+                        TRBType::CrNoop => {
+                            event.ccode = TRBCCode::Success;
+                        }
                         _ => {
                             error!("Invalid Command: type {:?}", trb_type);
                             event.ccode = TRBCCode::TrbError;
