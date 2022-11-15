@@ -39,11 +39,10 @@ const EP_DISABLED: u32 = 0;
 const EP_RUNNING: u32 = 1;
 const EP_HALTED: u32 = 2;
 const EP_STOPPED: u32 = 3;
+const EP_ERROR: u32 = 4;
 /// Endpoint type
 const EP_TYPE_SHIFT: u32 = 3;
 const EP_TYPE_MASK: u32 = 0x7;
-#[allow(unused)]
-const EP_ERROR: u32 = 4;
 /// Slot state
 const SLOT_STATE_MASK: u32 = 0x1f;
 const SLOT_STATE_SHIFT: u32 = 27;
@@ -64,8 +63,6 @@ const TRB_CR_DC: u32 = 1 << 9;
 const TRB_CR_SLOTID_SHIFT: u32 = 24;
 const TRB_CR_SLOTID_MASK: u32 = 0xff;
 const COMMAND_LIMIT: u32 = 256;
-const EP_CTX_MAX_PACKET_SIZE_SHIFT: u32 = 16;
-const EP_CTX_LSA_SHIFT: u32 = 15;
 const EP_CTX_INTERVAL_SHIFT: u32 = 16;
 const EP_CTX_INTERVAL_MASK: u32 = 0xff;
 const EVENT_TRB_CCODE_SHIFT: u32 = 24;
@@ -84,6 +81,8 @@ const SLOT_INPUT_CTX_OFFSET: u64 = 0x20;
 const EP_INPUT_CTX_ENTRY_SIZE: u64 = 0x20;
 const EP_INPUT_CTX_OFFSET: u64 = 0x40;
 const EP_CTX_OFFSET: u64 = 0x20;
+const EP_CTX_TR_DEQUEUE_POINTER_MASK: u64 = !0xf;
+const EP_CTX_DCS: u64 = 1;
 
 type DmaAddr = u64;
 
@@ -124,11 +123,8 @@ pub struct XhciEpContext {
     enabled: bool,
     ring: XhciRing,
     ep_type: EpType,
-    output_ctx: DmaAddr,
-    max_psize: u32,
+    output_ctx_addr: DmaAddr,
     state: u32,
-    /// Line Stream Array
-    lsa: bool,
     interval: u32,
     transfers: Vec<XhciTransfer>,
     retry: Option<XhciTransfer>,
@@ -141,10 +137,8 @@ impl XhciEpContext {
             enabled: false,
             ring: XhciRing::new(mem),
             ep_type: EpType::Invalid,
-            output_ctx: 0,
-            max_psize: 0,
+            output_ctx_addr: 0,
             state: 0,
-            lsa: false,
             interval: 0,
             transfers: Vec::new(),
             retry: None,
@@ -155,10 +149,7 @@ impl XhciEpContext {
     fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) {
         let dequeue: DmaAddr = addr64_from_u32(ctx.deq_lo & !0xf, ctx.deq_hi);
         self.ep_type = ((ctx.ep_info2 >> EP_TYPE_SHIFT) & EP_TYPE_MASK).into();
-        self.output_ctx = output_ctx;
-        self.max_psize = ctx.ep_info2 >> EP_CTX_MAX_PACKET_SIZE_SHIFT;
-        self.max_psize *= 1 + ((ctx.ep_info2 >> 8) & 0xff);
-        self.lsa = (ctx.ep_info >> EP_CTX_LSA_SHIFT) & 1 == 1;
+        self.output_ctx_addr = output_ctx;
         self.ring.init(dequeue);
         self.ring.ccs = (ctx.deq_lo & 1) == 1;
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
@@ -167,13 +158,33 @@ impl XhciEpContext {
     /// Update the endpoint state and write the state to memory.
     fn set_state(&mut self, mem: &Arc<AddressSpace>, state: u32) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        dma_read_u32(mem, GuestAddress(self.output_ctx), ep_ctx.as_mut_dwords())?;
+        dma_read_u32(
+            mem,
+            GuestAddress(self.output_ctx_addr),
+            ep_ctx.as_mut_dwords(),
+        )?;
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= state;
         ep_ctx.deq_lo = self.ring.dequeue as u32 | self.ring.ccs as u32;
         ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
-        dma_write_u32(mem, GuestAddress(self.output_ctx), ep_ctx.as_dwords())?;
+        dma_write_u32(mem, GuestAddress(self.output_ctx_addr), ep_ctx.as_dwords())?;
         self.state = state;
+        Ok(())
+    }
+
+    /// Update the dequeue pointer in memory.
+    fn update_dequeue(&mut self, mem: &Arc<AddressSpace>, dequeue: u64) -> Result<()> {
+        let mut ep_ctx = XhciEpCtx::default();
+        dma_read_u32(
+            mem,
+            GuestAddress(self.output_ctx_addr),
+            ep_ctx.as_mut_dwords(),
+        )?;
+        self.ring.init(dequeue & EP_CTX_TR_DEQUEUE_POINTER_MASK);
+        self.ring.ccs = (dequeue & EP_CTX_DCS) == EP_CTX_DCS;
+        ep_ctx.deq_lo = self.ring.dequeue as u32 | self.ring.ccs as u32;
+        ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
+        dma_write_u32(mem, GuestAddress(self.output_ctx_addr), ep_ctx.as_dwords())?;
         Ok(())
     }
 }
@@ -213,21 +224,41 @@ pub struct XhciSlot {
     pub enabled: bool,
     pub addressed: bool,
     pub intr_target: u16,
-    pub ctx: u64,
+    pub slot_ctx_addr: u64,
     pub usb_port: Option<Weak<Mutex<UsbPort>>>,
     pub endpoints: Vec<XhciEpContext>,
 }
 
 impl XhciSlot {
-    pub fn new(mem: &Arc<AddressSpace>) -> Self {
+    fn new(mem: &Arc<AddressSpace>) -> Self {
         XhciSlot {
             enabled: false,
             addressed: false,
             intr_target: 0,
-            ctx: 0,
+            slot_ctx_addr: 0,
             usb_port: None,
             endpoints: vec![XhciEpContext::new(mem); MAX_ENDPOINTS as usize],
         }
+    }
+
+    /// Get the slot state from the memory.
+    fn get_slot_state(&self, mem: &Arc<AddressSpace>) -> Result<u32> {
+        let mut slot_ctx = XhciSlotCtx::default();
+        dma_read_u32(
+            mem,
+            GuestAddress(self.slot_ctx_addr),
+            slot_ctx.as_mut_dwords(),
+        )?;
+        let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
+        Ok(slot_state)
+    }
+
+    fn slot_state_is_valid(&self, mem: &Arc<AddressSpace>) -> Result<bool> {
+        let slot_state = self.get_slot_state(mem)?;
+        let valid = slot_state == SLOT_DEFAULT
+            || slot_state == SLOT_ADDRESSED
+            || slot_state == SLOT_CONFIGURED;
+        Ok(valid)
     }
 }
 
@@ -614,8 +645,10 @@ impl XhciDevice {
                             event.ccode = self.reset_endpoint(slot_id, ep_id)?;
                         }
                         TRBType::CrSetTrDequeue => {
-                            let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
-                            event.ccode = self.set_endpoint_dequeue(slot_id, ep_id, &trb)?;
+                            if slot_id != 0 {
+                                let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                                event.ccode = self.set_tr_dequeue_pointer(slot_id, ep_id, &trb)?;
+                            }
                         }
                         TRBType::CrResetDevice => {
                             event.ccode = self.reset_slot(slot_id)?;
@@ -692,7 +725,7 @@ impl XhciDevice {
         let mut octx = 0;
         dma_read_u64(&self.mem_space, GuestAddress(ctx_addr), &mut octx)?;
         self.slots[(slot_id - 1) as usize].usb_port = Some(Arc::downgrade(&usb_port));
-        self.slots[(slot_id - 1) as usize].ctx = octx;
+        self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
         self.slots[(slot_id - 1) as usize].intr_target =
             ((slot_ctx.tt_info >> TRB_INTR_SHIFT) & TRB_INTR_MASK) as u16;
         dev.lock().unwrap().reset();
@@ -759,7 +792,7 @@ impl XhciDevice {
 
     fn config_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
         let ictx = trb.parameter;
-        let octx = self.slots[(slot_id - 1) as usize].ctx;
+        let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         let mut slot_ctx = XhciSlotCtx::default();
         if trb.control & TRB_CR_DC == TRB_CR_DC {
             for i in 2..32 {
@@ -834,7 +867,7 @@ impl XhciDevice {
 
     fn evaluate_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
         let ictx = trb.parameter;
-        let octx = self.slots[(slot_id - 1) as usize].ctx;
+        let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         let mut ictl_ctx = XhciInputCtrlCtx::default();
         dma_read_u32(
             &self.mem_space,
@@ -890,7 +923,7 @@ impl XhciDevice {
 
     fn reset_slot(&mut self, slot_id: u32) -> Result<TRBCCode> {
         let mut slot_ctx = XhciSlotCtx::default();
-        let octx = self.slots[(slot_id - 1) as usize].ctx;
+        let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         for i in 2..32 {
             self.disable_endpoint(slot_id, i)?;
         }
@@ -997,24 +1030,33 @@ impl XhciDevice {
         Ok(TRBCCode::Success)
     }
 
-    fn set_endpoint_dequeue(&mut self, slotid: u32, epid: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+    fn set_tr_dequeue_pointer(
+        &mut self,
+        slotid: u32,
+        epid: u32,
+        trb: &XhciTRB,
+    ) -> Result<TRBCCode> {
         if !(ENDPOINT_ID_START..=MAX_ENDPOINTS).contains(&epid) {
             error!("Invalid endpoint id {}", epid);
             return Ok(TRBCCode::TrbError);
         }
-        let dequeue = trb.parameter;
-        let mut epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize];
-        if !epctx.enabled {
-            error!(" Endpoint is disabled slotid {} epid {}", slotid, epid);
-            return Ok(TRBCCode::EpNotEnabledError);
-        }
-        if epctx.state != EP_STOPPED {
-            error!("Endpoint is not stopped slotid {} epid {}", slotid, epid);
+        if !self.slots[(slotid - 1) as usize].slot_state_is_valid(&self.mem_space)? {
+            error!("Invalid slot state, slotid {}", slotid);
             return Ok(TRBCCode::ContextStateError);
         }
-        epctx.ring.init(dequeue & !0xf);
-        epctx.ring.ccs = (dequeue & 1) == 1;
-        epctx.set_state(&self.mem_space, EP_STOPPED)?;
+        let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize];
+        if !epctx.enabled {
+            error!("Endpoint is disabled, slotid {} epid {}", slotid, epid);
+            return Ok(TRBCCode::EpNotEnabledError);
+        }
+        if epctx.state != EP_STOPPED && epctx.state != EP_ERROR {
+            error!(
+                "Endpoint invalid state, slotid {} epid {} state {}",
+                slotid, epid, epctx.state
+            );
+            return Ok(TRBCCode::ContextStateError);
+        }
+        epctx.update_dequeue(&self.mem_space, trb.parameter)?;
         Ok(TRBCCode::Success)
     }
 
