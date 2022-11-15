@@ -28,7 +28,7 @@ use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use log::{error, info};
 use machine_manager::{
-    config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_TARGET},
+    config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
 };
 use util::aio::{Aio, AioCb, AioCompleteFunc, Iovec};
@@ -168,6 +168,7 @@ impl VirtioDevice for ScsiCntlr {
         // seg_max: queue size - 2, 32 bit.
         self.state.config_space.seg_max = self.queue_size() as u32 - 2;
         self.state.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
+        self.state.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
 
         self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_SCSI_F_HOTPLUG)
