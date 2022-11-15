@@ -768,8 +768,9 @@ impl ScsiCmdHandler {
                     drop(queue);
                     let lun: [u8; 8] = cmd.req.lun;
                     let scsibus = self.scsibus.lock().unwrap();
+                    let req_lun_id = virtio_scsi_get_lun(lun);
 
-                    if let Some(scsidevice) = scsibus.get_device(lun[1], virtio_scsi_get_lun(lun)) {
+                    if let Some(scsidevice) = scsibus.get_device(lun[1], req_lun_id) {
                         drop(scsibus);
                         let cmd_req = Arc::new(Mutex::new(cmd));
                         let req = if let Ok(scsireq) =
@@ -788,13 +789,21 @@ impl ScsiCmdHandler {
                             None
                         };
 
+                        let scsi_dev_lock = scsidevice.lock().unwrap();
+                        let found_lun_id = scsi_dev_lock.config.lun;
+                        drop(scsi_dev_lock);
+
                         if let Some(scsireq) = req {
                             if scsireq.opstype == EMULATE_SCSI_OPS {
                                 let scsicompletecb = ScsiCompleteCb::new(
                                     self.mem_space.clone(),
                                     Arc::new(Mutex::new(scsireq.clone())),
                                 );
-                                scsireq.emulate_execute(scsicompletecb)?;
+                                scsireq.emulate_execute(
+                                    scsicompletecb,
+                                    req_lun_id,
+                                    found_lun_id,
+                                )?;
                             } else if let Some(disk_img) =
                                 scsidevice.lock().unwrap().disk_image.as_mut()
                             {
