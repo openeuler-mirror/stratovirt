@@ -454,7 +454,7 @@ impl XhciDevice {
         self.oper.usb_status & USB_STS_HCH != USB_STS_HCH
     }
 
-    fn internal_error(&mut self) {
+    pub fn host_controller_error(&mut self) {
         error!("Xhci host controller error!");
         self.oper.usb_status |= USB_STS_HCE;
     }
@@ -607,12 +607,7 @@ impl XhciDevice {
 
     /// Control plane
     pub fn handle_command(&mut self) -> Result<()> {
-        if !self.running() {
-            bail!("Failed to process command: xhci is not running");
-        }
-        let mut lo = read_u32(self.oper.cmd_ring_ctrl, 0);
-        lo |= CMD_RING_CTRL_CRR;
-        self.oper.cmd_ring_ctrl = write_u64_low(self.oper.cmd_ring_ctrl, lo);
+        self.oper.start_cmd_ring();
         let mut slot_id: u32;
         let mut event = XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::Success);
         for _ in 0..COMMAND_LIMIT {
@@ -1153,7 +1148,6 @@ impl XhciDevice {
                     break;
                 }
                 Err(e) => {
-                    self.internal_error();
                     // update the endpoint in slot
                     self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize] = epctx;
                     bail!("fetch ring failed {}", e);
