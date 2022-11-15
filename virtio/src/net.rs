@@ -114,69 +114,71 @@ impl ByteCode for CrtlHdr {}
 impl NetCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
         let mut locked_queue = self.ctrl.queue.lock().unwrap();
-        let elem = locked_queue
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-            .with_context(|| "Failed to pop avail ring for net control queue")?;
-        if elem.desc_num == 0 {
-            return Ok(());
-        }
+        loop {
+            let ack = VIRTIO_NET_OK;
+            let elem = locked_queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for net control queue")?;
+            if elem.desc_num == 0 {
+                break;
+            }
 
-        let mut used_len = 0;
-        if let Some(ctrl_desc) = elem.out_iovec.get(0) {
-            used_len += ctrl_desc.len;
-            let ctrl_hdr = self
-                .mem_space
-                .read_object::<CrtlHdr>(ctrl_desc.addr)
-                .with_context(|| "Failed to get control queue descriptor")?;
-            match ctrl_hdr.class as u16 {
-                VIRTIO_NET_CTRL_MQ => {
-                    if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
-                        bail!(
-                            "Control queue header command can't match {}",
-                            VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
-                        );
-                    }
-                    if let Some(mq_desc) = elem.out_iovec.get(0) {
-                        used_len += mq_desc.len;
-                        let queue_pairs = self
-                            .mem_space
-                            .read_object::<u16>(mq_desc.addr)
-                            .with_context(|| "Failed to read multi queue descriptor")?;
-                        if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
-                            .contains(&queue_pairs)
-                        {
-                            bail!("Invalid queue pairs {}", queue_pairs);
+            if let Some(ctrl_desc) = elem.out_iovec.get(0) {
+                let ctrl_hdr = self
+                    .mem_space
+                    .read_object::<CrtlHdr>(ctrl_desc.addr)
+                    .with_context(|| "Failed to get control queue descriptor")?;
+                match ctrl_hdr.class as u16 {
+                    VIRTIO_NET_CTRL_MQ => {
+                        if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
+                            bail!(
+                                "Control queue header command can't match {}",
+                                VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
+                            );
+                        }
+                        if let Some(mq_desc) = elem.out_iovec.get(1) {
+                            let queue_pairs = self
+                                .mem_space
+                                .read_object::<u16>(mq_desc.addr)
+                                .with_context(|| "Failed to read multi queue descriptor")?;
+                            if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                                .contains(&queue_pairs)
+                            {
+                                bail!("Invalid queue pairs {}", queue_pairs);
+                            }
                         }
                     }
-                }
-                _ => {
-                    bail!(
-                        "Control queue header class can't match {}",
-                        VIRTIO_NET_CTRL_MQ
-                    );
+                    _ => {
+                        bail!(
+                            "Control queue header class can't match {}",
+                            VIRTIO_NET_CTRL_MQ
+                        );
+                    }
                 }
             }
-        }
-        if let Some(status) = elem.in_iovec.get(0) {
-            used_len += status.len;
-            let data = VIRTIO_NET_OK;
-            self.mem_space.write_object::<u8>(&data, status.addr)?;
-        }
+            if let Some(status) = elem.in_iovec.get(0) {
+                self.mem_space.write_object::<u8>(&ack, status.addr)?;
+            }
 
-        locked_queue
-            .vring
-            .add_used(&self.mem_space, elem.index, used_len)
-            .with_context(|| format!("Failed to add used ring {}", elem.index))?;
+            locked_queue
+                .vring
+                .add_used(&self.mem_space, elem.index, mem::size_of_val(&ack) as u32)
+                .with_context(|| format!("Failed to add used ring {}", elem.index))?;
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false).with_context(
-            || {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "ctrl",
-                    VirtioInterruptType::Vring
-                ))
-            },
-        )?;
+            if locked_queue
+                .vring
+                .should_notify(&self.mem_space, self.driver_features)
+            {
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
+                    .with_context(|| {
+                        anyhow!(VirtioError::InterruptTrigger(
+                            "ctrl",
+                            VirtioInterruptType::Vring
+                        ))
+                    })?;
+            }
+        }
 
         Ok(())
     }
@@ -259,7 +261,6 @@ impl TxVirtio {
 
 struct RxVirtio {
     queue_full: bool,
-    need_irqs: bool,
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
 }
@@ -268,7 +269,6 @@ impl RxVirtio {
     fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
         RxVirtio {
             queue_full: false,
-            need_irqs: false,
             queue,
             queue_evt,
         }
@@ -317,7 +317,7 @@ impl NetIoHandler {
                     };
                     iovecs.push(iovec);
                 } else {
-                    error!("Failed to get host address for {}", elem_iov.addr.0);
+                    bail!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
             let write_count = unsafe {
@@ -358,20 +358,20 @@ impl NetIoHandler {
                         elem.index, write_count
                     )
                 })?;
-            self.rx.need_irqs = true;
-        }
 
-        if self.rx.need_irqs {
-            self.rx.need_irqs = false;
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-                || {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "net",
-                        VirtioInterruptType::Vring
-                    ))
-                },
-            )?;
-            self.trace_send_interrupt("Net".to_string());
+            if queue
+                .vring
+                .should_notify(&self.mem_space, self.driver_features)
+            {
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
+                    .with_context(|| {
+                        anyhow!(VirtioError::InterruptTrigger(
+                            "net",
+                            VirtioInterruptType::Vring
+                        ))
+                    })?;
+                self.trace_send_interrupt("Net".to_string());
+            }
         }
 
         Ok(())
@@ -380,9 +380,12 @@ impl NetIoHandler {
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
-        let mut need_irq = false;
 
-        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+        loop {
+            let elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for net tx")?;
             if elem.desc_num == 0 {
                 break;
             }
@@ -423,19 +426,19 @@ impl NetIoHandler {
                 .add_used(&self.mem_space, elem.index, 0)
                 .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
 
-            need_irq = true;
-        }
-
-        if need_irq {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-                || {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "net",
-                        VirtioInterruptType::Vring
-                    ))
-                },
-            )?;
-            self.trace_send_interrupt("Net".to_string());
+            if queue
+                .vring
+                .should_notify(&self.mem_space, self.driver_features)
+            {
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
+                    .with_context(|| {
+                        anyhow!(VirtioError::InterruptTrigger(
+                            "net",
+                            VirtioInterruptType::Vring
+                        ))
+                    })?;
+                self.trace_send_interrupt("Net".to_string());
+            }
         }
 
         Ok(())
@@ -589,7 +592,7 @@ impl EventNotifierHelper for NetIoHandler {
                         NotifierOperation::Resume,
                         tap.as_raw_fd(),
                         None,
-                        EventSet::IN,
+                        EventSet::IN | EventSet::EDGE_TRIGGERED,
                         Vec::new(),
                     )];
                     locked_net_io.is_listening = true;
