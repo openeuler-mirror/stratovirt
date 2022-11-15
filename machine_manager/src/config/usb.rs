@@ -67,7 +67,7 @@ impl ConfigCheck for UsbKeyboardConfig {
 
 pub fn parse_usb_keyboard(conf: &str) -> Result<UsbKeyboardConfig> {
     let mut cmd_parser = CmdParser::new("usb-kbd");
-    cmd_parser.push("").push("id");
+    cmd_parser.push("").push("id").push("bus").push("port");
     cmd_parser.parse(conf)?;
     let mut dev = UsbKeyboardConfig::new();
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
@@ -98,7 +98,7 @@ impl ConfigCheck for UsbTabletConfig {
 
 pub fn parse_usb_tablet(conf: &str) -> Result<UsbTabletConfig> {
     let mut cmd_parser = CmdParser::new("usb-tablet");
-    cmd_parser.push("").push("id");
+    cmd_parser.push("").push("id").push("bus").push("port");
     cmd_parser.parse(conf)?;
     let mut dev = UsbTabletConfig::new();
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
