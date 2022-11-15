@@ -78,12 +78,15 @@ const XHCI_PORT2_NUM: u32 = 2;
 const XHCI_PORT3_NUM: u32 = 2;
 /// Slot Context.
 const SLOT_INPUT_CTX_OFFSET: u64 = 0x20;
+const SLOT_CTX_MAX_EXIT_LATENCY_MASK: u32 = 0xffff;
+const SLOT_CTX_INTERRUPTER_TARGET_MASK: u32 = 0xffc00000;
 /// Endpoint Context.
 const EP_INPUT_CTX_ENTRY_SIZE: u64 = 0x20;
 const EP_INPUT_CTX_OFFSET: u64 = 0x40;
 const EP_CTX_OFFSET: u64 = 0x20;
 const EP_CTX_TR_DEQUEUE_POINTER_MASK: u64 = !0xf;
 const EP_CTX_DCS: u64 = 1;
+const EP_CTX_MAX_PACKET_SIZE_MASK: u32 = 0xffff0000;
 
 type DmaAddr = u64;
 
@@ -242,14 +245,20 @@ impl XhciSlot {
         }
     }
 
-    /// Get the slot state from the memory.
-    fn get_slot_state(&self, mem: &Arc<AddressSpace>) -> Result<u32> {
+    /// Get the slot context from the memory.
+    fn get_slot_ctx(&self, mem: &Arc<AddressSpace>) -> Result<XhciSlotCtx> {
         let mut slot_ctx = XhciSlotCtx::default();
         dma_read_u32(
             mem,
             GuestAddress(self.slot_ctx_addr),
             slot_ctx.as_mut_dwords(),
         )?;
+        Ok(slot_ctx)
+    }
+
+    /// Get the slot state from the memory.
+    fn get_slot_state(&self, mem: &Arc<AddressSpace>) -> Result<u32> {
+        let slot_ctx = self.get_slot_ctx(mem)?;
         let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
         Ok(slot_state)
     }
@@ -328,6 +337,18 @@ pub struct XhciSlotCtx {
     pub dev_info2: u32,
     pub tt_info: u32,
     pub dev_state: u32,
+}
+
+impl XhciSlotCtx {
+    fn set_slot_state(&mut self, state: u32) {
+        self.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
+        self.dev_state |= (state & SLOT_STATE_MASK) << SLOT_STATE_SHIFT;
+    }
+
+    fn set_context_entry(&mut self, num: u32) {
+        self.dev_info &= !(SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
+        self.dev_info |= (num & SLOT_CONTEXT_ENTRIES_MASK) << SLOT_CONTEXT_ENTRIES_SHIFT;
+    }
 }
 
 impl DwordOrder for XhciSlotCtx {}
@@ -629,12 +650,12 @@ impl XhciDevice {
                         }
                         TRBType::CrConfigureEndpoint => {
                             if slot_id != 0 {
-                                event.ccode = self.config_slot(slot_id, &trb)?;
+                                event.ccode = self.configure_endpoint(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrEvaluateContext => {
                             if slot_id != 0 {
-                                event.ccode = self.evaluate_slot(slot_id, &trb)?;
+                                event.ccode = self.evaluate_context(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrStopEndpoint => {
@@ -797,24 +818,38 @@ impl XhciDevice {
         self.oper.dcbaap + (8 * slot_id) as u64
     }
 
-    fn config_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
-        let ictx = trb.parameter;
-        let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
-        let mut slot_ctx = XhciSlotCtx::default();
+    fn configure_endpoint(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        let slot_state = self.slots[(slot_id - 1) as usize].get_slot_state(&self.mem_space)?;
         if trb.control & TRB_CR_DC == TRB_CR_DC {
-            for i in 2..32 {
-                self.disable_endpoint(slot_id, i)?;
+            if slot_state != SLOT_CONFIGURED {
+                error!("Invalid slot state: {:?}", slot_state);
+                return Ok(TRBCCode::ContextStateError);
             }
-            dma_read_u32(
-                &self.mem_space,
-                GuestAddress(octx),
-                slot_ctx.as_mut_dwords(),
-            )?;
-            slot_ctx.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
-            slot_ctx.dev_state |= SLOT_ADDRESSED << SLOT_STATE_SHIFT;
-            dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
-            return Ok(TRBCCode::Success);
+            return self.deconfigure_endpoint(slot_id);
         }
+        if slot_state != SLOT_CONFIGURED && slot_state != SLOT_ADDRESSED {
+            error!("Invalid slot state: {:?}", slot_state);
+            return Ok(TRBCCode::ContextStateError);
+        }
+        self.config_slot_ep(slot_id, trb.parameter)?;
+        Ok(TRBCCode::Success)
+    }
+
+    fn deconfigure_endpoint(&mut self, slot_id: u32) -> Result<TRBCCode> {
+        for i in 2..32 {
+            self.disable_endpoint(slot_id, i)?;
+        }
+        let mut slot_ctx = self.slots[(slot_id - 1) as usize].get_slot_ctx(&self.mem_space)?;
+        slot_ctx.set_slot_state(SLOT_ADDRESSED);
+        dma_write_u32(
+            &self.mem_space,
+            GuestAddress(self.slots[(slot_id - 1) as usize].slot_ctx_addr),
+            slot_ctx.as_dwords(),
+        )?;
+        Ok(TRBCCode::Success)
+    }
+
+    fn config_slot_ep(&mut self, slot_id: u32, ictx: u64) -> Result<TRBCCode> {
         let mut ictl_ctx = XhciInputCtrlCtx::default();
         dma_read_u32(
             &self.mem_space,
@@ -825,54 +860,47 @@ impl XhciDevice {
             error!("Invalid control context {:?}", ictl_ctx);
             return Ok(TRBCCode::TrbError);
         }
-        let mut islot_ctx = XhciSlotCtx::default();
-        dma_read_u32(
-            &self.mem_space,
-            GuestAddress(ictx + 32),
-            islot_ctx.as_mut_dwords(),
-        )?;
-        dma_read_u32(
-            &self.mem_space,
-            GuestAddress(octx),
-            slot_ctx.as_mut_dwords(),
-        )?;
-        if (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK < SLOT_ADDRESSED {
-            error!("Invalid slot state");
-            return Ok(TRBCCode::TrbError);
-        }
-        self.config_slot_ep(slot_id, ictx, octx, ictl_ctx)?;
-        slot_ctx.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
-        slot_ctx.dev_state |= SLOT_CONFIGURED << SLOT_STATE_SHIFT;
-        slot_ctx.dev_info &= !(SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
-        slot_ctx.dev_info |=
-            islot_ctx.dev_info & (SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
-        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
-        Ok(TRBCCode::Success)
-    }
-
-    fn config_slot_ep(
-        &mut self,
-        slot_id: u32,
-        ictx: u64,
-        octx: u64,
-        ictl_ctx: XhciInputCtrlCtx,
-    ) -> Result<TRBCCode> {
+        let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         for i in 2..32 {
             if ictl_ctx.drop_flags & (1 << i) == 1 << i {
                 self.disable_endpoint(slot_id, i)?;
             }
             if ictl_ctx.add_flags & (1 << i) == 1 << i {
                 self.disable_endpoint(slot_id, i)?;
-                let ret = self.enable_endpoint(slot_id, i, ictx, octx)?;
-                if ret != TRBCCode::Success {
-                    return Ok(ret);
-                }
+                self.enable_endpoint(slot_id, i, ictx, octx)?;
             }
         }
+        // From section 4.6.6 Configure Endpoint of the spec:
+        // If all Endpoints are Disabled:
+        // Set the Slot State in the Output Slot Context to Addresed.
+        // else (An Endpoint is Enabled):
+        // Set the Slot State in the Output Slot Context to Configured.
+        // Set the Context Entries field in the Output Slot Context to the index of
+        // the last valid Endpoint Context in its Output Device Context structure.
+        let mut enabled_ep_idx = 0;
+        for i in (2..32).rev() {
+            if self.slots[(slot_id - 1) as usize].endpoints[(i - 1) as usize].enabled {
+                enabled_ep_idx = i;
+                break;
+            }
+        }
+        let mut slot_ctx = self.slots[(slot_id - 1) as usize].get_slot_ctx(&self.mem_space)?;
+        if enabled_ep_idx == 0 {
+            slot_ctx.set_slot_state(SLOT_ADDRESSED);
+            slot_ctx.set_context_entry(1);
+        } else {
+            slot_ctx.set_slot_state(SLOT_CONFIGURED);
+            slot_ctx.set_context_entry(enabled_ep_idx);
+        }
+        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
     }
 
-    fn evaluate_slot(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+    fn evaluate_context(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
+        if !self.slots[(slot_id - 1) as usize].slot_state_is_valid(&self.mem_space)? {
+            error!("Invalid slot state, slot id {}", slot_id);
+            return Ok(TRBCCode::ContextStateError);
+        }
         let ictx = trb.parameter;
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         let mut ictl_ctx = XhciInputCtrlCtx::default();
@@ -889,7 +917,7 @@ impl XhciDevice {
             let mut islot_ctx = XhciSlotCtx::default();
             dma_read_u32(
                 &self.mem_space,
-                GuestAddress(ictx + 0x20),
+                GuestAddress(ictx + SLOT_INPUT_CTX_OFFSET),
                 islot_ctx.as_mut_dwords(),
             )?;
             let mut slot_ctx = XhciSlotCtx::default();
@@ -898,30 +926,31 @@ impl XhciDevice {
                 GuestAddress(octx),
                 slot_ctx.as_mut_dwords(),
             )?;
-            slot_ctx.dev_info2 &= !0xffff;
-            slot_ctx.dev_info2 |= islot_ctx.dev_info2 & 0xffff;
-            slot_ctx.tt_info &= !0xff00000;
-            slot_ctx.tt_info |= islot_ctx.tt_info & 0xff000000;
+            slot_ctx.dev_info2 &= !SLOT_CTX_MAX_EXIT_LATENCY_MASK;
+            slot_ctx.dev_info2 |= islot_ctx.dev_info2 & SLOT_CTX_MAX_EXIT_LATENCY_MASK;
+            slot_ctx.tt_info &= !SLOT_CTX_INTERRUPTER_TARGET_MASK;
+            slot_ctx.tt_info |= islot_ctx.tt_info & SLOT_CTX_INTERRUPTER_TARGET_MASK;
             dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
         }
         if ictl_ctx.add_flags & 0x2 == 0x2 {
+            // Default control endpoint context.
             let mut iep_ctx = XhciEpCtx::default();
             dma_read_u32(
                 &self.mem_space,
-                GuestAddress(ictx + 0x40),
+                GuestAddress(ictx + EP_INPUT_CTX_OFFSET),
                 iep_ctx.as_mut_dwords(),
             )?;
             let mut ep_ctx = XhciEpCtx::default();
             dma_read_u32(
                 &self.mem_space,
-                GuestAddress(octx + 0x20),
+                GuestAddress(octx + EP_CTX_OFFSET),
                 ep_ctx.as_mut_dwords(),
             )?;
-            ep_ctx.ep_info2 &= !0xffff0000;
-            ep_ctx.ep_info2 |= iep_ctx.ep_info2 & 0xffff0000;
+            ep_ctx.ep_info2 &= !EP_CTX_MAX_PACKET_SIZE_MASK;
+            ep_ctx.ep_info2 |= iep_ctx.ep_info2 & EP_CTX_MAX_PACKET_SIZE_MASK;
             dma_write_u32(
                 &self.mem_space,
-                GuestAddress(octx + 0x20),
+                GuestAddress(octx + EP_CTX_OFFSET),
                 ep_ctx.as_dwords(),
             )?;
         }
@@ -944,10 +973,8 @@ impl XhciDevice {
         for i in 2..32 {
             self.disable_endpoint(slot_id, i)?;
         }
-        slot_ctx.dev_state &= !(SLOT_STATE_MASK << SLOT_STATE_SHIFT);
-        slot_ctx.dev_state |= SLOT_DEFAULT << SLOT_STATE_SHIFT;
-        slot_ctx.dev_info &= !(SLOT_CONTEXT_ENTRIES_MASK << SLOT_CONTEXT_ENTRIES_SHIFT);
-        slot_ctx.dev_info |= 1 << SLOT_CONTEXT_ENTRIES_SHIFT;
+        slot_ctx.set_slot_state(SLOT_DEFAULT);
+        slot_ctx.set_context_entry(1);
         slot_ctx.dev_state &= !SLOT_CONTEXT_DEVICE_ADDRESS_MASK;
         dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
