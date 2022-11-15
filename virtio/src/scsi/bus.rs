@@ -17,7 +17,7 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::ScsiCntlr::{
     ScsiCntlr, ScsiCompleteCb, ScsiXferMode, VirtioScsiCmdReq, VirtioScsiCmdResp,
@@ -466,166 +466,69 @@ impl ScsiRequest {
 
     pub fn emulate_execute(&self, iocompletecb: ScsiCompleteCb) -> Result<()> {
         debug!("scsi command is {:#x}", self.cmd.command);
-        match self.cmd.command {
+        let mut not_supported_flag = false;
+        let mut sense = None;
+        let result = match self.cmd.command {
             REQUEST_SENSE => {
-                self.cmd_complete(
-                    &iocompletecb.mem_space,
-                    VIRTIO_SCSI_S_OK,
-                    GOOD,
-                    Some(SCSI_SENSE_NO_SENSE),
-                    &Vec::new(),
-                )?;
+                sense = Some(SCSI_SENSE_NO_SENSE);
+                Ok(Vec::new())
             }
+            WRITE_SAME_10 | WRITE_SAME_16 | SYNCHRONIZE_CACHE => Ok(Vec::new()),
             TEST_UNIT_READY => {
                 let dev_lock = self.dev.lock().unwrap();
                 if dev_lock.disk_image.is_none() {
-                    error!("error in processing scsi command TEST_UNIT_READY, no scsi backend");
-                }
-                self.cmd_complete(
-                    &iocompletecb.mem_space,
-                    VIRTIO_SCSI_S_OK,
-                    GOOD,
-                    None,
-                    &Vec::new(),
-                )?;
-            }
-            INQUIRY => match scsi_command_emulate_inquiry(&self.cmd, &self.dev) {
-                Ok(outbuf) => {
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        GOOD,
-                        None,
-                        &outbuf,
-                    )?;
-                }
-                Err(ref e) => {
-                    error!("error in Processing scsi command INQUIRY: {:?}", e);
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_FIELD),
-                        &Vec::new(),
-                    )?;
-                }
-            },
-            READ_CAPACITY_10 => match scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev) {
-                Ok(outbuf) => {
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        GOOD,
-                        None,
-                        &outbuf,
-                    )?;
-                }
-                Err(ref e) => {
-                    error!("error in Processing scsi command READ_CAPACITY_10: {:?}", e);
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_FIELD),
-                        &Vec::new(),
-                    )?;
-                }
-            },
-            MODE_SENSE | MODE_SENSE_10 => {
-                match scsi_command_emulate_mode_sense(&self.cmd, &self.dev) {
-                    Ok(outbuf) => {
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            GOOD,
-                            None,
-                            &outbuf,
-                        )?;
-                    }
-                    Err(ref e) => {
-                        error!(
-                            "error in processing scsi command MODE_SENSE / MODE_SENSE_10: {:?}",
-                            e
-                        );
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            CHECK_CONDITION,
-                            Some(SCSI_SENSE_INVALID_FIELD),
-                            &Vec::new(),
-                        )?;
-                    }
+                    Err(anyhow!("No scsi backend!"))
+                } else {
+                    Ok(Vec::new())
                 }
             }
-            REPORT_LUNS => match scsi_command_emulate_report_luns(&self.cmd, &self.dev) {
-                Ok(outbuf) => {
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        GOOD,
-                        None,
-                        &outbuf,
-                    )?;
-                }
-                Err(ref e) => {
-                    error!("error in processing scsi command REPORT_LUNS: {:?}", e);
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_FIELD),
-                        &Vec::new(),
-                    )?;
-                }
-            },
-            SERVICE_ACTION_IN_16 => {
-                match scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev) {
-                    Ok(outbuf) => {
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            GOOD,
-                            None,
-                            &outbuf,
-                        )?;
-                    }
-                    Err(ref e) => {
-                        error!(
-                            "error in processing scsi command SERVICE_ACTION_IN(16): {:?}",
-                            e
-                        );
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            CHECK_CONDITION,
-                            Some(SCSI_SENSE_INVALID_FIELD),
-                            &Vec::new(),
-                        )?;
-                    }
-                }
-            }
-            WRITE_SAME_10 | WRITE_SAME_16 | SYNCHRONIZE_CACHE => {
-                self.cmd_complete(
-                    &iocompletecb.mem_space,
-                    VIRTIO_SCSI_S_OK,
-                    GOOD,
-                    None,
-                    &Vec::new(),
-                )?;
-            }
+            INQUIRY => scsi_command_emulate_inquiry(&self.cmd, &self.dev),
+            READ_CAPACITY_10 => scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev),
+            MODE_SENSE | MODE_SENSE_10 => scsi_command_emulate_mode_sense(&self.cmd, &self.dev),
+            REPORT_LUNS => scsi_command_emulate_report_luns(&self.cmd, &self.dev),
+            SERVICE_ACTION_IN_16 => scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev),
             _ => {
-                info!(
-                    "emulation scsi command {:#x} is not supported",
-                    self.cmd.command
-                );
-                self.set_scsi_sense(SCSI_SENSE_INVALID_OPCODE);
+                not_supported_flag = true;
+                Err(anyhow!("Emulation scsi command is not supported now!"))
+            }
+        };
 
-                let mut req = self.virtioscsireq.lock().unwrap();
-                req.resp.response = VIRTIO_SCSI_S_OK;
-                req.resp.status = CHECK_CONDITION;
-                req.resp.resid = 0;
-
-                req.complete(&iocompletecb.mem_space);
+        match result {
+            Ok(outbuf) => {
+                self.cmd_complete(
+                    &iocompletecb.mem_space,
+                    VIRTIO_SCSI_S_OK,
+                    GOOD,
+                    sense,
+                    &outbuf,
+                )?;
+            }
+            Err(ref e) => {
+                if not_supported_flag {
+                    info!(
+                        "emulation scsi command {:#x} is no supported",
+                        self.cmd.command
+                    );
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        CHECK_CONDITION,
+                        Some(SCSI_SENSE_INVALID_OPCODE),
+                        &Vec::new(),
+                    )?;
+                } else {
+                    error!(
+                        "Error in processing scsi command 0x{:#x}, err is {:?}",
+                        self.cmd.command, e
+                    );
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        CHECK_CONDITION,
+                        Some(SCSI_SENSE_INVALID_FIELD),
+                        &Vec::new(),
+                    )?;
+                }
             }
         }
 
