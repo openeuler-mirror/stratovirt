@@ -61,7 +61,7 @@ def test_standvm_balloon(standvm):
     steps:
     1) launch standvm with argument: "-balloon deflate-on-oom=true".
     2) query memory size, and save.
-    3) set memory size through balloon device to 814748368.
+    3) set memory size through balloon device to 814743552.
     4) wait 5 seconds for ballooning.
     5) check if the memory size is less than 2524971008.
     6) set memory size through balloon device to 2524971008, and wait.
@@ -76,7 +76,7 @@ def test_standvm_balloon(standvm):
     resp = test_vm.query_balloon()
     ori = int(resp["return"]["actual"])
 
-    resp = test_vm.balloon_set(value=814748368)
+    resp = test_vm.balloon_set(value=814743552)
     time.sleep(5)
     test_vm.event_wait(name='BALLOON_CHANGED', timeout=2.0)
     resp = test_vm.query_balloon()
