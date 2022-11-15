@@ -638,12 +638,16 @@ impl XhciDevice {
                             }
                         }
                         TRBType::CrStopEndpoint => {
-                            let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
-                            event.ccode = self.stop_endpoint(slot_id, ep_id)?;
+                            if slot_id != 0 {
+                                let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                                event.ccode = self.stop_endpoint(slot_id, ep_id)?;
+                            }
                         }
                         TRBType::CrResetEndpoint => {
-                            let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
-                            event.ccode = self.reset_endpoint(slot_id, ep_id)?;
+                            if slot_id != 0 {
+                                let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                                event.ccode = self.reset_endpoint(slot_id, ep_id)?;
+                            }
                         }
                         TRBType::CrSetTrDequeue => {
                             if slot_id != 0 {
@@ -998,14 +1002,24 @@ impl XhciDevice {
             error!("Invalid endpoint id");
             return Ok(TRBCCode::TrbError);
         }
-        if !self.slots[(slot_id - 1) as usize].enabled {
+        if !self.slots[(slot_id - 1) as usize].slot_state_is_valid(&self.mem_space)? {
+            error!("Invalid slot state, slotid {}", slot_id);
+            return Ok(TRBCCode::ContextStateError);
+        }
+        let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
+        if !epctx.enabled {
+            error!(" Endpoint is disabled, slotid {} epid {}", slot_id, ep_id);
             return Ok(TRBCCode::EpNotEnabledError);
+        }
+        if epctx.state != EP_RUNNING {
+            error!(
+                "Endpoint invalid state, slotid {} epid {} state {}",
+                slot_id, ep_id, epctx.state
+            );
+            return Ok(TRBCCode::ContextStateError);
         }
         if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Stopped)? > 0 {
             warn!("endpoint stop when xfers running!");
-        }
-        if !self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize].enabled {
-            error!("stop_endpoint ep is disabled");
         }
         self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
             .set_state(&self.mem_space, EP_STOPPED)?;
@@ -1016,6 +1030,10 @@ impl XhciDevice {
         if !(ENDPOINT_ID_START..=MAX_ENDPOINTS).contains(&ep_id) {
             error!("Invalid endpoint id {}", ep_id);
             return Ok(TRBCCode::TrbError);
+        }
+        if !self.slots[(slot_id - 1) as usize].slot_state_is_valid(&self.mem_space)? {
+            error!("Invalid slot state, slotid {}", slot_id);
+            return Ok(TRBCCode::ContextStateError);
         }
         let slot = &mut self.slots[(slot_id - 1) as usize];
         let epctx = &mut slot.endpoints[(ep_id - 1) as usize];
