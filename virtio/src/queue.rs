@@ -26,6 +26,8 @@ use anyhow::{anyhow, bail, Context, Result};
 
 /// When host consumes a buffer, don't interrupt the guest.
 const VRING_AVAIL_F_NO_INTERRUPT: u16 = 1;
+/// When guest produces a buffer, don't notify the host.
+const VRING_USED_F_NO_NOTIFY: u16 = 1;
 /// Split Virtqueue.
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
 /// Packed Virtqueue.
@@ -194,7 +196,21 @@ pub trait VringOps {
     ///
     /// * `sys_mem` - Address space to which the vring belongs.
     /// * `features` - Bit mask of features negotiated by the backend and the frontend.
-    fn should_notify(&mut self, system_space: &Arc<AddressSpace>, features: u64) -> bool;
+    fn should_notify(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> bool;
+
+    /// Give guest a hint to suppress virtqueue notification.
+    ///
+    /// # Arguments
+    ///
+    /// * `sys_mem` - Address space to which the vring belongs.
+    /// * `features` - Bit mask of features negotiated by the backend and the frontend.
+    /// * `suppress` - Suppress virtqueue notification or not.
+    fn suppress_queue_notify(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        features: u64,
+        suppress: bool,
+    ) -> Result<()>;
 
     /// Get the actual size of the vring.
     fn actual_size(&self) -> u16;
@@ -554,52 +570,76 @@ impl SplitVring {
         min(self.size, self.max_size)
     }
 
-    /// Get the index of the available ring from guest memory.
-    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let avail_flags_idx = sys_mem
+    /// Get the flags and idx of the available ring from guest memory.
+    fn get_avail_flags_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<SplitVringFlagsIdx> {
+        sys_mem
             .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
             .with_context(|| {
                 anyhow!(VirtioError::ReadObjectErr(
-                    "avail id",
+                    "avail flags idx",
                     self.avail_ring.raw_value()
                 ))
-            })?;
-        Ok(avail_flags_idx.idx)
+            })
+    }
+
+    /// Get the idx of the available ring from guest memory.
+    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
+        let flags_idx = self.get_avail_flags_idx(sys_mem)?;
+        Ok(flags_idx.idx)
     }
 
     /// Get the flags of the available ring from guest memory.
     fn get_avail_flags(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let avail_flags_idx: SplitVringFlagsIdx = sys_mem
-            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
+        let flags_idx = self.get_avail_flags_idx(sys_mem)?;
+        Ok(flags_idx.flags)
+    }
+
+    /// Get the flags and idx of the used ring from guest memory.
+    fn get_used_flags_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<SplitVringFlagsIdx> {
+        // Make sure the idx read from sys_mem is new.
+        fence(Ordering::SeqCst);
+        sys_mem
+            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host)
             .with_context(|| {
                 anyhow!(VirtioError::ReadObjectErr(
-                    "avail flags",
-                    self.avail_ring.raw_value()
+                    "used flags idx",
+                    self.used_ring.raw_value()
                 ))
-            })?;
-        Ok(avail_flags_idx.flags)
+            })
     }
 
     /// Get the index of the used ring from guest memory.
     fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        // Make sure the idx read from sys_mem is new.
-        fence(Ordering::SeqCst);
-        let used_flag_idx: SplitVringFlagsIdx = sys_mem
-            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host)
+        let flag_idx = self.get_used_flags_idx(sys_mem)?;
+        Ok(flag_idx.idx)
+    }
+
+    /// Set the used flags to suppress virtqueue notification or not
+    fn set_used_flags(&self, sys_mem: &Arc<AddressSpace>, suppress: bool) -> Result<()> {
+        let mut flags_idx = self.get_used_flags_idx(sys_mem)?;
+
+        if suppress {
+            flags_idx.flags |= VRING_USED_F_NO_NOTIFY;
+        } else {
+            flags_idx.flags &= !VRING_USED_F_NO_NOTIFY;
+        }
+        sys_mem
+            .write_object_direct::<SplitVringFlagsIdx>(&flags_idx, self.addr_cache.used_ring_host)
             .with_context(|| {
-                anyhow!(VirtioError::ReadObjectErr(
-                    "used id",
+                format!(
+                    "Failed to set used flags, used_ring: 0x{:X}",
                     self.used_ring.raw_value()
-                ))
+                )
             })?;
-        Ok(used_flag_idx.idx)
+        // Make sure the data has been set.
+        fence(Ordering::SeqCst);
+        Ok(())
     }
 
     /// Set the avail idx to the field of the event index for the available ring.
-    fn set_avail_event(&self, sys_mem: &Arc<AddressSpace>) -> Result<()> {
+    fn set_avail_event(&self, sys_mem: &Arc<AddressSpace>, event_idx: u16) -> Result<()> {
         let avail_event_offset =
             VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
-        let event_idx = self.next_avail.0;
 
         sys_mem
             .write_object_direct(
@@ -818,6 +858,13 @@ impl SplitVring {
             desc_index,
             &mut self.cache,
         )?;
+
+        // Suppress queue notification related to current processing desc chain.
+        if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
+            self.set_avail_event(sys_mem, (self.next_avail + Wrapping(1)).0)
+                .with_context(|| "Failed to set avail event for popping avail ring")?;
+        }
+
         let desc_info = DescInfo {
             table_host: self.addr_cache.desc_table_host,
             size: self.actual_size(),
@@ -833,11 +880,6 @@ impl SplitVring {
             },
         )?;
         self.next_avail += Wrapping(1);
-
-        if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.set_avail_event(sys_mem)
-                .with_context(|| "Failed to set avail event for popping avail ring")?;
-        }
 
         Ok(())
     }
@@ -923,6 +965,20 @@ impl VringOps for SplitVring {
         } else {
             !self.is_avail_ring_no_interrupt(sys_mem)
         }
+    }
+
+    fn suppress_queue_notify(
+        &mut self,
+        sys_mem: &Arc<AddressSpace>,
+        features: u64,
+        suppress: bool,
+    ) -> Result<()> {
+        if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
+            self.set_avail_event(sys_mem, self.get_avail_idx(sys_mem)?)?;
+        } else {
+            self.set_used_flags(sys_mem, suppress)?;
+        }
+        Ok(())
     }
 
     fn actual_size(&self) -> u16 {

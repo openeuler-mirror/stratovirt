@@ -886,7 +886,7 @@ impl PciDevOps for VfioPciDevice {
     }
 
     /// Read pci data from pci config if it emulate, otherwise read from vfio device.
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         let size = data.len();
         let end = offset + size;
         if end > (self.config_size as usize) || size > 4 {

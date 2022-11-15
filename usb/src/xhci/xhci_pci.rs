@@ -239,7 +239,7 @@ impl PciDevOps for XhciPciDevice {
         Some(self.devfn)
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         let data_size = data.len();
         if offset + data_size > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
             error!(
