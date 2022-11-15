@@ -61,7 +61,7 @@ def test_microvm_balloon(microvm):
     steps:
     1) launch microvm with argument: "-balloon deflate-on-oom=true".
     2) query memory size, and save.
-    3) set memory size through balloon device to 814748368.
+    3) set memory size through balloon device to 814743552.
     4) wait 5 seconds for ballooning.
     5) check if the memory size is less than 2524971008.
     6) set memory size through balloon device to 2524971008, and wait.
