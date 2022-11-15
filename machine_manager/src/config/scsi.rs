@@ -16,8 +16,15 @@ use super::{error::ConfigError, pci_args_check};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE};
 
 /// According to Virtio Spec.
+/// Max_channel should be 0.
 /// Max_target should be less than or equal to 255.
 pub const VIRTIO_SCSI_MAX_TARGET: u16 = 255;
+/// Max_lun should be less than or equal to 16383 (2^14 - 1).
+pub const VIRTIO_SCSI_MAX_LUN: u16 = 16383;
+
+/// Only support peripheral device addressing format(8 bits for lun) in stratovirt now.
+/// So, max lun id supported is 255 (2^8 - 1).
+const SUPPORT_SCSI_MAX_LUN: u16 = 255;
 
 #[derive(Debug, Clone)]
 pub struct ScsiCntlrConfig {
@@ -170,12 +177,15 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     }
 
     if let Some(lun) = cmd_parser.get_value::<u16>("lun")? {
-        if lun > 255 {
+        // Do not support Flat space addressing format(14 bits for lun) in stratovirt now.
+        // We now support peripheral device addressing format(8 bits for lun).
+        // So, MAX_LUN should be less than 255(2^8 - 1) temporarily.
+        if lun > SUPPORT_SCSI_MAX_LUN {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "lun of scsi device".to_string(),
                 0,
                 true,
-                255,
+                SUPPORT_SCSI_MAX_LUN as u64,
                 true,
             )));
         }
