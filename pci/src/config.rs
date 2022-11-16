@@ -480,6 +480,7 @@ impl PciConfig {
     /// * `dev_id` - Device id to send MSI/MSI-X.
     pub fn write(&mut self, mut offset: usize, data: &[u8], dev_id: u16) {
         let cloned_data = data.to_vec();
+        let old_offset = offset;
         for data in &cloned_data {
             self.config[offset] = (self.config[offset] & (!self.write_mask[offset]))
                 | (data & self.write_mask[offset]);
@@ -487,7 +488,9 @@ impl PciConfig {
             offset += 1;
         }
         if let Some(msix) = &mut self.msix {
-            msix.lock().unwrap().write_config(&self.config, dev_id);
+            msix.lock()
+                .unwrap()
+                .write_config(&self.config, dev_id, old_offset, data);
         }
     }
 
