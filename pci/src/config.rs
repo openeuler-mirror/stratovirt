@@ -117,6 +117,8 @@ const BRIDGE_CTL_DISCARD_TIMER_SERR_E: u16 = 0x0800;
 
 pub const COMMAND_BUS_MASTER: u16 = 0x0004;
 const COMMAND_SERR_ENABLE: u16 = 0x0100;
+#[cfg(test)]
+const COMMAND_FAST_BACK: u16 = 0x0200;
 pub const COMMAND_INTERRUPT_DISABLE: u16 = 0x0400;
 
 const STATUS_PARITY_ERROR: u16 = 0x0100;
@@ -511,6 +513,37 @@ impl PciConfig {
                 .unwrap()
                 .write_config(&self.config, dev_id, old_offset, data);
         }
+    }
+
+    /// Reset type1 specific configuration space.
+    pub fn reset_bridge_regs(&mut self) -> Result<()> {
+        le_write_u32(&mut self.config, PRIMARY_BUS_NUM as usize, 0)?;
+
+        self.config[IO_BASE as usize] = 0xff;
+        self.config[IO_LIMIT as usize] = 0;
+        // set memory/pref memory's base to 0xFFFF and limit to 0.
+        le_write_u32(&mut self.config, MEMORY_BASE as usize, 0xffff)?;
+        le_write_u32(&mut self.config, PREF_MEMORY_BASE as usize, 0xffff)?;
+        le_write_u64(&mut self.config, PREF_MEM_BASE_UPPER as usize, 0)?;
+        Ok(())
+    }
+
+    fn reset_single_writable_reg(&mut self, offset: usize) -> Result<()> {
+        let writable_command = le_read_u16(&self.write_mask, offset).unwrap()
+            | le_read_u16(&self.write_clear_mask, offset).unwrap();
+        let old_command = le_read_u16(&self.config, offset).unwrap();
+
+        le_write_u16(&mut self.config, offset, old_command & !writable_command)
+    }
+
+    /// Reset bits that's writable in the common configuration fields for both type0 and type1 devices.
+    pub fn reset_common_regs(&mut self) -> Result<()> {
+        self.reset_single_writable_reg(COMMAND as usize)?;
+        self.reset_single_writable_reg(STATUS as usize)?;
+        self.reset_single_writable_reg(INTERRUPT_LINE as usize)?;
+        self.config[CACHE_LINE_SIZE as usize] = 0;
+
+        Ok(())
     }
 
     /// Get base offset of the capability in PCIe/PCI configuration space.
@@ -1200,6 +1233,24 @@ mod tests {
         let size2 = pcie_config.get_ext_cap_size(offset2);
         assert_eq!(size1, 0x10);
         assert_eq!(size2, 0x40);
+    }
+
+    #[test]
+    fn test_reset_common_regs() {
+        let mut pcie_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 3);
+        pcie_config.init_common_write_mask().unwrap();
+        pcie_config.init_common_write_clear_mask().unwrap();
+
+        le_write_u16(
+            &mut pcie_config.config,
+            COMMAND as usize,
+            COMMAND_MEMORY_SPACE | COMMAND_FAST_BACK,
+        )
+        .unwrap();
+        assert!(pcie_config.reset_common_regs().is_ok());
+
+        let res = le_read_u16(&mut pcie_config.config, COMMAND as usize).unwrap();
+        assert_eq!(res, COMMAND_FAST_BACK);
     }
 
     #[test]
