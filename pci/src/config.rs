@@ -143,19 +143,19 @@ pub const STATUS: u8 = 0x06;
 /// PCI Interrupt Status.
 pub const STATUS_INTERRUPT: u8 = 0x08;
 const CACHE_LINE_SIZE: u8 = 0x0c;
-const PRIMARY_BUS_NUM: u8 = 0x18;
-const IO_LIMIT: u8 = 0x1d;
-const PREF_MEM_BASE_UPPER: u8 = 0x28;
+pub const PRIMARY_BUS_NUM: u8 = 0x18;
+pub const IO_LIMIT: u8 = 0x1d;
+pub const PREF_MEM_BASE_UPPER: u8 = 0x28;
 const CAP_LIST: u8 = 0x34;
 const INTERRUPT_LINE: u8 = 0x3c;
-const BRIDGE_CONTROL: u8 = 0x3e;
+pub const BRIDGE_CONTROL: u8 = 0x3e;
 
 const BRIDGE_CTL_PARITY_ENABLE: u16 = 0x0001;
 const BRIDGE_CTL_SERR_ENABLE: u16 = 0x0002;
 const BRIDGE_CTL_ISA_ENABLE: u16 = 0x0004;
 const BRIDGE_CTL_VGA_ENABLE: u16 = 0x0008;
 const BRIDGE_CTL_VGA_16BIT_DEC: u16 = 0x0010;
-const BRIDGE_CTL_SEC_BUS_RESET: u16 = 0x0040;
+pub const BRIDGE_CTL_SEC_BUS_RESET: u16 = 0x0040;
 const BRIDGE_CTL_FAST_BACK: u16 = 0x0080;
 const BRIDGE_CTL_DISCARD_TIMER: u16 = 0x0100;
 const BRIDGE_CTL_SEC_DISCARD_TIMER: u16 = 0x0200;
