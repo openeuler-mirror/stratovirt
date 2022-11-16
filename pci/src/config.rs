@@ -227,6 +227,8 @@ pub const PCI_EXP_SLTCTL_PWR_IND_ON: u16 = 0x0100;
 pub const PCI_EXP_SLTCTL_PWR_IND_OFF: u16 = 0x0300;
 /// Power Controller Control
 pub const PCI_EXP_SLTCTL_PCC: u16 = 0x0400;
+/// Power Off
+pub const PCI_EXP_SLTCTL_PWR_OFF: u16 = 0x0400;
 // Electromechanical interlock control.
 const PCI_EXP_SLTCTL_EIC: u16 = 0x0800;
 
