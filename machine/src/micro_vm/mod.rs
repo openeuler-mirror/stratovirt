@@ -61,7 +61,7 @@ use devices::legacy::PL031;
 use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
-use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController};
+use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
@@ -510,7 +510,7 @@ impl MachineOps for LightMachine {
         let intc_conf = ICGICConfig {
             version: None,
             vcpu_count,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v3: Some(v3),
             v2: Some(v2),
         };

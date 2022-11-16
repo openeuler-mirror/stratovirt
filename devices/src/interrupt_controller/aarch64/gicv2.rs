@@ -302,6 +302,8 @@ mod tests {
     use super::super::GICv2Config;
     use super::*;
 
+    use crate::GIC_IRQ_MAX;
+
     #[test]
     #[serial]
     fn test_create_gicv2() {
@@ -314,7 +316,7 @@ mod tests {
         let gic_conf = GICConfig {
             version: Some(GICVersion::GICv2),
             vcpu_count: 4,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v2: Some(GICv2Config {
                 dist_range: (0x0800_0000, 0x0001_0000),
                 cpu_range: (0x080A_0000, 0x00F6_0000),
