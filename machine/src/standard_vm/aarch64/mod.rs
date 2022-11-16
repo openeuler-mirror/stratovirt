@@ -59,7 +59,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use pci_host_root::PciHostRoot;
-use sysbus::{SysBus, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevType, SysRes, IRQ_BASE, IRQ_MAX};
 use syscall::syscall_whitelist;
 use usb::bus::BusDeviceMap;
 use util::byte_code::ByteCode;
@@ -169,7 +169,7 @@ impl StdMachine {
             .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
         let sysbus = SysBus::new(
             &sys_mem,
-            (32, 192),
+            (IRQ_BASE, IRQ_MAX),
             (
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,

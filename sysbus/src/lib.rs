@@ -21,6 +21,19 @@ pub use anyhow::{bail, Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
 
+// Now that the serial device use a hardcoded IRQ number (4), and the starting
+// free IRQ number can be 5.
+#[cfg(target_arch = "x86_64")]
+pub const IRQ_BASE: i32 = 5;
+#[cfg(target_arch = "x86_64")]
+pub const IRQ_MAX: i32 = 15;
+
+// 0-31 is private to each CPU (SGIs and PPIs).
+#[cfg(target_arch = "aarch64")]
+pub const IRQ_BASE: i32 = 32;
+#[cfg(target_arch = "aarch64")]
+pub const IRQ_MAX: i32 = 191;
+
 pub struct SysBus {
     #[cfg(target_arch = "x86_64")]
     pub sys_io: Arc<AddressSpace>,

@@ -51,7 +51,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::SysBus;
+use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 use syscall::syscall_whitelist;
 use usb::bus::BusDeviceMap;
 use util::{
@@ -148,7 +148,7 @@ impl StdMachine {
         let sysbus = SysBus::new(
             &sys_io,
             &sys_mem,
-            (5, 15),
+            (IRQ_BASE, IRQ_MAX),
             (
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,

@@ -79,7 +79,7 @@ use machine_manager::{
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
-use sysbus::SysBus;
+use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 #[cfg(target_arch = "aarch64")]
 use sysbus::{SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
@@ -197,10 +197,7 @@ impl LightMachine {
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
             .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
-        #[cfg(target_arch = "x86_64")]
-        let free_irqs: (i32, i32) = (5, 15);
-        #[cfg(target_arch = "aarch64")]
-        let free_irqs: (i32, i32) = (32, 191);
+        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (
             MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
             MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
