@@ -1300,15 +1300,13 @@ impl AmlBuilder for FwCfgIO {
 mod test {
     use super::*;
     use address_space::{AddressSpace, HostMemMapping, Region};
+    use sysbus::{IRQ_BASE, IRQ_MAX};
 
     fn sysbus_init() -> SysBus {
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value())).unwrap();
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16)).unwrap();
-        #[cfg(target_arch = "x86_64")]
-        let free_irqs: (i32, i32) = (5, 15);
-        #[cfg(target_arch = "aarch64")]
-        let free_irqs: (i32, i32) = (32, 191);
+        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
         SysBus::new(
             #[cfg(target_arch = "x86_64")]
