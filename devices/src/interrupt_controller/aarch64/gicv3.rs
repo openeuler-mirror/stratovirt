@@ -557,6 +557,8 @@ mod tests {
     use super::super::GICv3Config;
     use super::*;
 
+    use crate::GIC_IRQ_MAX;
+
     #[test]
     #[serial]
     fn test_create_gicv3() {
@@ -569,7 +571,7 @@ mod tests {
         let gic_conf = GICConfig {
             version: Some(GICVersion::GICv3),
             vcpu_count: 4,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v2: None,
             v3: Some(GICv3Config {
                 msi: false,
@@ -593,7 +595,7 @@ mod tests {
         let gic_config = GICConfig {
             version: Some(GICVersion::GICv3),
             vcpu_count: 4_u64,
-            max_irq: 192_u32,
+            max_irq: GIC_IRQ_MAX,
             v2: None,
             v3: Some(GICv3Config {
                 msi: false,
@@ -619,7 +621,7 @@ mod tests {
         let gic_config = GICConfig {
             version: Some(GICVersion::GICv3),
             vcpu_count: 210_u64,
-            max_irq: 192_u32,
+            max_irq: GIC_IRQ_MAX,
             v3: Some(GICv3Config {
                 msi: true,
                 dist_range: (0x0800_0000, 0x0001_0000),

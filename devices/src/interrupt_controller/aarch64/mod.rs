@@ -32,6 +32,8 @@ use util::{
 
 // First 32 are private to each CPU (SGIs and PPIs).
 pub(crate) const GIC_IRQ_INTERNAL: u32 = 32;
+// Last usable IRQ on aarch64.
+pub const GIC_IRQ_MAX: u32 = 192;
 
 /// GIC version type.
 pub enum GICVersion {
@@ -195,7 +197,7 @@ mod tests {
         let mut gic_conf = GICConfig {
             version: Some(GICVersion::GICv3),
             vcpu_count: 4,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v2: None,
             v3: None,
         };

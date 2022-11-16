@@ -44,7 +44,7 @@ use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 
-use devices::{ICGICConfig, ICGICv3Config, InterruptController};
+use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, Incoming, MigrateMode, NumaNode, NumaNodes,
@@ -391,7 +391,7 @@ impl MachineOps for StdMachine {
         let intc_conf = ICGICConfig {
             version: None,
             vcpu_count,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v2: None,
             v3: Some(v3),
         };
