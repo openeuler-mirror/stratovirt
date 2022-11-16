@@ -29,8 +29,8 @@ use super::config::{
     PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
     DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE,
     PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC, PCI_EXP_LNKSTA,
-    PCI_EXP_LNKSTA_CLS_2_5GB, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW_X1, PCI_EXP_SLTCTL,
-    PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC, PCI_EXP_SLTCTL_PWR_IND_BLINK,
+    PCI_EXP_LNKSTA_CLS_2_5GB, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW_X1, PCI_EXP_SLOTSTA_EVENTS,
+    PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC, PCI_EXP_SLTCTL_PWR_IND_BLINK,
     PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTCTL_PWR_OFF, PCI_EXP_SLTSTA,
     PCI_EXP_SLTSTA_PDC, PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
     PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, SUB_CLASS_CODE, VENDOR_ID,
@@ -219,7 +219,37 @@ impl RootPort {
         }
     }
 
-    fn do_unplug(&mut self, offset: usize, end: usize, old_ctl: u16) {
+    fn correct_race_unplug(&mut self, offset: usize, data: &[u8], old_status: u16) {
+        let end = offset + data.len();
+        let cap_offset = self.config.pci_express_cap_offset;
+        if !ranges_overlap(
+            offset,
+            end,
+            (cap_offset + PCI_EXP_SLTSTA) as usize,
+            (cap_offset + PCI_EXP_SLTSTA + 2) as usize,
+        ) {
+            return;
+        }
+
+        let status =
+            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
+        let val: u16 = data[0] as u16 + ((data[1] as u16) << 8);
+        if (val & !old_status & PCI_EXP_SLOTSTA_EVENTS) != 0 {
+            let tmpstat =
+                (status & !PCI_EXP_SLOTSTA_EVENTS) | (old_status & PCI_EXP_SLOTSTA_EVENTS);
+            le_write_u16(
+                &mut self.config.config,
+                (cap_offset + PCI_EXP_SLTSTA) as usize,
+                tmpstat,
+            )
+            .unwrap();
+        }
+    }
+
+    fn do_unplug(&mut self, offset: usize, data: &[u8], old_ctl: u16, old_status: u16) {
+        self.correct_race_unplug(offset, data, old_status);
+
+        let end = offset + data.len();
         let cap_offset = self.config.pci_express_cap_offset;
         // Only care the write config about slot control
         if !ranges_overlap(
@@ -366,6 +396,8 @@ impl PciDevOps for RootPort {
         let cap_offset = self.config.pci_express_cap_offset;
         let old_ctl =
             le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
+        let old_status =
+            le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
 
         self.config.write(
             offset,
@@ -387,7 +419,7 @@ impl PciDevOps for RootPort {
             self.register_region();
         }
 
-        self.do_unplug(offset, end, old_ctl);
+        self.do_unplug(offset, data, old_ctl, old_status);
     }
 
     fn name(&self) -> String {
