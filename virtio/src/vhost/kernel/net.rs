@@ -11,9 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::fs::File;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
 use crate::error::VirtioError;
@@ -55,15 +54,15 @@ trait VhostNetBackend {
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
     /// * `fd` - EventFd that will be signaled from guest.
-    fn set_backend(&self, queue_index: usize, tap_file: &File) -> Result<()>;
+    fn set_backend(&self, queue_index: usize, fd: RawFd) -> Result<()>;
 }
 
 impl VhostNetBackend for VhostBackend {
     /// Attach virtio net ring to a raw socket, or tap device.
-    fn set_backend(&self, queue_index: usize, tap_file: &File) -> Result<()> {
+    fn set_backend(&self, queue_index: usize, fd: RawFd) -> Result<()> {
         let vring_file = VhostVringFile {
             index: queue_index as u32,
-            fd: tap_file.as_raw_fd(),
+            fd,
         };
 
         let ret = unsafe { ioctl_with_ref(self, VHOST_NET_SET_BACKEND(), &vring_file) };
@@ -349,7 +348,7 @@ impl VirtioDevice for Net {
                     Some(taps) => taps[index].clone(),
                 };
                 backend
-                    .set_backend(queue_index, &tap.file)
+                    .set_backend(queue_index, tap.file.as_raw_fd())
                     .with_context(|| {
                         format!(
                             "Failed to set tap device for vhost net, index: {}",
@@ -381,16 +380,22 @@ impl VirtioDevice for Net {
     }
 
     fn reset(&mut self) -> Result<()> {
-        // No need to close fd manually, because rust will
-        // automatically cleans up variables at the end of the lifecycle.
-        self.backends = None;
-        self.taps = None;
-        self.device_features = 0_u64;
-        self.driver_features = 0_u64;
-        self.vhost_features = 0_u64;
-        self.device_config = VirtioNetConfig::default();
+        let queue_pairs = self.net_cfg.queues / 2;
+        for index in 0..queue_pairs as usize {
+            let backend = match &self.backends {
+                None => return Err(anyhow!("Failed to get backend for vhost net")),
+                Some(backends) => backends
+                    .get(index)
+                    .with_context(|| format!("Failed to get index {} vhost backend", index))?,
+            };
 
-        self.realize()
+            // 2 queues: rx and tx.
+            for queue_index in 0..2 {
+                backend.set_backend(queue_index, -1)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
