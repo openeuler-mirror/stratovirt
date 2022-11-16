@@ -59,6 +59,9 @@ const UART_MSR_CTS: u8 = 0x10;
 const UART_MSR_DSR: u8 = 0x20;
 const UART_MSR_DCD: u8 = 0x80;
 
+/// IRQ number of serial device.
+const UART_IRQ: i32 = 4;
+
 const RECEIVER_BUFF_SIZE: usize = 1024;
 
 /// Contain register status of serial device.
@@ -380,7 +383,7 @@ impl SysBusDevOps for Serial {
     fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
         let mut irq: i32 = -1;
         if let Some(e) = self.interrupt_evt() {
-            irq = 4;
+            irq = UART_IRQ;
             KVM_FDS.load().register_irqfd(e, irq as u32)?;
         }
         Ok(irq)
