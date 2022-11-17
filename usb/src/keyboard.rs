@@ -124,7 +124,7 @@ impl UsbKeyboard {
         Self {
             id,
             device: Arc::new(Mutex::new(UsbDevice::new())),
-            hid: Arc::new(Mutex::new(Hid::new())),
+            hid: Arc::new(Mutex::new(Hid::new(HidType::Keyboard))),
             ctrl: None,
             endpoint: None,
         }
@@ -147,9 +147,6 @@ impl UsbKeyboard {
     fn init_hid(&mut self) -> Result<()> {
         let mut locked_usb = self.device.lock().unwrap();
         locked_usb.usb_desc = Some(DESC_KEYBOARD.clone());
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.kind = HidType::Keyboard;
-        drop(locked_hid);
         let ep = locked_usb.get_endpoint(USB_TOKEN_IN as u32, 1);
         self.endpoint = Some(Arc::downgrade(&ep));
         locked_usb.init_descriptor()?;
