@@ -635,9 +635,9 @@ impl VirtioPciDevice {
         let dev_id = self.dev_id.clone();
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, queue: Option<&Queue>, needs_reset: bool| {
-                let mut locked_common_cfg = cloned_common_cfg.lock().unwrap();
                 let vector = match int_type {
                     VirtioInterruptType::Config => {
+                        let mut locked_common_cfg = cloned_common_cfg.lock().unwrap();
                         if needs_reset {
                             locked_common_cfg.device_status |= CONFIG_STATUS_NEEDS_RESET;
                             if locked_common_cfg.device_status & CONFIG_STATUS_DRIVER_OK == 0 {
