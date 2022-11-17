@@ -19,7 +19,6 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use anyhow::Result;
-use hypervisor::kvm::KVM_FDS;
 use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use vmm_sys_util::eventfd::EventFd;
@@ -30,8 +29,6 @@ use util::time::{mktime64, NANOSECONDS_PER_SECOND};
 pub const RTC_PORT_INDEX: u64 = 0x70;
 /// IO port of RTC device to read/write data from selected register.
 pub const RTC_PORT_DATA: u64 = 0x71;
-/// IRQ number of RTC device.
-pub const RTC_IRQ: u32 = 8;
 
 /// Index of register of time in RTC static RAM.
 const RTC_SECONDS: u8 = 0x00;
@@ -135,7 +132,7 @@ impl RTC {
             res: SysRes {
                 region_base: RTC_PORT_INDEX,
                 region_size: 8,
-                irq: RTC_IRQ as i32,
+                irq: -1,
             },
             mem_size: 0,
             gap_start: 0,
@@ -384,15 +381,6 @@ impl SysBusDevOps for RTC {
 
     fn interrupt_evt(&self) -> Option<&EventFd> {
         self.interrupt_evt.as_ref()
-    }
-
-    fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
-        let mut irq: i32 = -1;
-        if let Some(e) = self.interrupt_evt() {
-            irq = RTC_IRQ as i32;
-            KVM_FDS.load().register_irqfd(e, irq as u32)?;
-        }
-        Ok(irq)
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {

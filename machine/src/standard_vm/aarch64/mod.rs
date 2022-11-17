@@ -44,7 +44,7 @@ use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
 
-use devices::{ICGICConfig, ICGICv3Config, InterruptController};
+use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
     parse_incoming_uri, BootIndexInfo, BootSource, Incoming, MigrateMode, NumaNode, NumaNodes,
@@ -59,7 +59,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
 use pci_host_root::PciHostRoot;
-use sysbus::{SysBus, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevType, SysRes, IRQ_BASE, IRQ_MAX};
 use syscall::syscall_whitelist;
 use usb::bus::BusDeviceMap;
 use util::byte_code::ByteCode;
@@ -169,7 +169,7 @@ impl StdMachine {
             .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
         let sysbus = SysBus::new(
             &sys_mem,
-            (32, 192),
+            (IRQ_BASE, IRQ_MAX),
             (
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
@@ -391,7 +391,7 @@ impl MachineOps for StdMachine {
         let intc_conf = ICGICConfig {
             version: None,
             vcpu_count,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v2: None,
             v3: Some(v3),
         };

@@ -61,7 +61,7 @@ use devices::legacy::PL031;
 use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
-use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController};
+use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
@@ -79,7 +79,7 @@ use machine_manager::{
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
 use migration::{MigrationManager, MigrationStatus};
-use sysbus::SysBus;
+use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 #[cfg(target_arch = "aarch64")]
 use sysbus::{SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
@@ -197,10 +197,7 @@ impl LightMachine {
         #[cfg(target_arch = "x86_64")]
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
             .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
-        #[cfg(target_arch = "x86_64")]
-        let free_irqs: (i32, i32) = (5, 15);
-        #[cfg(target_arch = "aarch64")]
-        let free_irqs: (i32, i32) = (32, 191);
+        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
         let mmio_region: (u64, u64) = (
             MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
             MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
@@ -513,7 +510,7 @@ impl MachineOps for LightMachine {
         let intc_conf = ICGICConfig {
             version: None,
             vcpu_count,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v3: Some(v3),
             v2: Some(v2),
         };
