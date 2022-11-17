@@ -290,6 +290,38 @@ struct NetIoHandler {
 }
 
 impl NetIoHandler {
+    fn read_from_tap(queue: &mut Queue, iovecs: &[libc::iovec], tap: &mut Tap) -> i32 {
+        let size = unsafe {
+            libc::readv(
+                tap.as_raw_fd() as libc::c_int,
+                iovecs.as_ptr() as *const libc::iovec,
+                iovecs.len() as libc::c_int,
+            )
+        } as i32;
+        if size < 0 {
+            let e = std::io::Error::last_os_error();
+            queue.vring.push_back();
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                return size;
+            }
+
+            // If the backend tap device is removed, readv returns less than 0.
+            // At this time, the content in the tap needs to be cleaned up.
+            // Here, read is called to process, otherwise handle_rx may be triggered all the time.
+            let mut buf = [0; 1024];
+            match tap.read(&mut buf) {
+                Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
+                Err(e) => {
+                    // When the backend tap device is abnormally removed, read return EBADFD.
+                    error!("Failed to read tap: {}", e);
+                }
+            }
+            error!("Failed to call readv for net handle_rx: {}", e);
+        }
+
+        size
+    }
+
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
@@ -320,42 +352,20 @@ impl NetIoHandler {
                     bail!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
-            let write_count = unsafe {
-                libc::readv(
-                    tap.as_raw_fd() as libc::c_int,
-                    iovecs.as_ptr() as *const libc::iovec,
-                    iovecs.len() as libc::c_int,
-                )
-            };
-            if write_count < 0 {
-                let e = std::io::Error::last_os_error();
-                queue.vring.push_back();
-                if e.kind() == std::io::ErrorKind::WouldBlock {
-                    break;
-                }
 
-                // If the backend tap device is removed, readv returns less than 0.
-                // At this time, the content in the tap needs to be cleaned up.
-                // Here, read is called to process, otherwise handle_rx may be triggered all the time.
-                let mut buf = [0; 1024];
-                match tap.read(&mut buf) {
-                    Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
-                    Err(e) => {
-                        // When the backend tap device is abnormally removed, read return EBADFD.
-                        error!("Failed to read tap: {}", e);
-                    }
-                }
-                error!("Failed to call readv for net handle_rx: {}", e);
+            // Read the data from the tap device.
+            let size = NetIoHandler::read_from_tap(&mut queue, &iovecs, tap);
+            if size < 0 {
                 break;
             }
 
             queue
                 .vring
-                .add_used(&self.mem_space, elem.index, write_count as u32)
+                .add_used(&self.mem_space, elem.index, size as u32)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring for net rx, index: {}, len: {}",
-                        elem.index, write_count
+                        elem.index, size
                     )
                 })?;
 
