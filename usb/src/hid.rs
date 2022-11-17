@@ -198,6 +198,13 @@ impl HidKeyboard {
             key_num: 0,
         }
     }
+
+    fn reset(&mut self) {
+        self.keycodes.iter_mut().for_each(|x| *x = 0);
+        self.modifiers = 0;
+        self.key_buf.iter_mut().for_each(|x| *x = 0);
+        self.key_num = 0;
+    }
 }
 
 /// HID pointer event including position and button state.
@@ -223,6 +230,12 @@ impl HidPointer {
             queue: [HidPointerEvent::default(); QUEUE_LENGTH as usize],
         }
     }
+
+    fn reset(&mut self) {
+        self.queue
+            .iter_mut()
+            .for_each(|x| *x = HidPointerEvent::default());
+    }
 }
 
 /// Human Interface Device.
@@ -237,11 +250,11 @@ pub struct Hid {
 }
 
 impl Hid {
-    pub fn new() -> Self {
+    pub fn new(kind: HidType) -> Self {
         Hid {
             head: 0,
             num: 0,
-            kind: HidType::UnKnown,
+            kind,
             protocol: 0,
             idle: 0,
             keyboard: HidKeyboard::new(),
@@ -254,6 +267,8 @@ impl Hid {
         self.num = 0;
         self.protocol = HID_PROTOCOL_REPORT;
         self.idle = 0;
+        self.keyboard.reset();
+        self.pointer.reset();
     }
 
     fn convert_to_hid_code(&mut self) {
@@ -261,7 +276,7 @@ impl Hid {
             return;
         }
         let slot = self.head & QUEUE_MASK;
-        increase_queue(&mut self.head);
+        self.increase_head();
         self.num -= 1;
         let keycode = self.keyboard.keycodes[slot as usize];
         let key = keycode & 0x7f;
@@ -343,13 +358,13 @@ impl Hid {
         } else {
             self.head - 1
         };
+        if self.num != 0 {
+            self.increase_head();
+            self.num -= 1;
+        }
         let evt = &mut self.pointer.queue[(index & QUEUE_MASK) as usize];
         let z = evt.pos_z;
         evt.pos_z = 0;
-        if self.num != 0 {
-            increase_queue(&mut self.head);
-            self.num -= 1;
-        }
         vec![
             evt.button_state as u8,
             evt.pos_x as u8,
@@ -358,6 +373,14 @@ impl Hid {
             (evt.pos_y >> 8) as u8,
             z as u8,
         ]
+    }
+
+    fn increase_head(&mut self) {
+        if self.head + 1 >= QUEUE_LENGTH {
+            self.head = 0;
+        } else {
+            self.head += 1;
+        }
     }
 
     /// USB HID device handle control packet.
@@ -527,12 +550,6 @@ impl Hid {
     }
 }
 
-impl Default for Hid {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Display for Hid {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         write!(
@@ -541,10 +558,4 @@ impl Display for Hid {
             self.head, self.num, self.kind, self.protocol, self.idle
         )
     }
-}
-
-fn increase_queue(head: &mut u32) {
-    let mut i = *head + 1;
-    i &= QUEUE_MASK;
-    *head = i;
 }
