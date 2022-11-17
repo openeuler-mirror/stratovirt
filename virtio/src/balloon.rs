@@ -543,10 +543,12 @@ impl BalloonIoHandler {
             &self.def_queue
         };
         let mut locked_queue = queue.lock().unwrap();
-        while let Ok(elem) = locked_queue
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-        {
+        loop {
+            let elem = locked_queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for process baloon queue")?;
+
             if elem.desc_num == 0 {
                 break;
             }
@@ -565,7 +567,7 @@ impl BalloonIoHandler {
                         "balloon",
                         VirtioInterruptType::Vring
                     ))
-                })?;
+                })?
         }
 
         Ok(())
@@ -578,10 +580,12 @@ impl BalloonIoHandler {
         }
         let unwraped_queue = queue.as_ref().unwrap();
         let mut locked_queue = unwraped_queue.lock().unwrap();
-        while let Ok(elem) = locked_queue
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-        {
+        loop {
+            let elem = locked_queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for reporting free pages")?;
+
             if elem.desc_num == 0 {
                 break;
             }
