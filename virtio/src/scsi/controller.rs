@@ -28,7 +28,7 @@ use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use log::{error, info};
 use machine_manager::{
-    config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_TARGET},
+    config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
 };
 use util::aio::{Aio, AioCb, AioCompleteFunc, Iovec};
@@ -168,6 +168,7 @@ impl VirtioDevice for ScsiCntlr {
         // seg_max: queue size - 2, 32 bit.
         self.state.config_space.seg_max = self.queue_size() as u32 - 2;
         self.state.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
+        self.state.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
 
         self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_SCSI_F_HOTPLUG)
@@ -768,8 +769,9 @@ impl ScsiCmdHandler {
                     drop(queue);
                     let lun: [u8; 8] = cmd.req.lun;
                     let scsibus = self.scsibus.lock().unwrap();
+                    let req_lun_id = virtio_scsi_get_lun(lun);
 
-                    if let Some(scsidevice) = scsibus.get_device(lun[1], virtio_scsi_get_lun(lun)) {
+                    if let Some(scsidevice) = scsibus.get_device(lun[1], req_lun_id) {
                         drop(scsibus);
                         let cmd_req = Arc::new(Mutex::new(cmd));
                         let req = if let Ok(scsireq) =
@@ -788,13 +790,21 @@ impl ScsiCmdHandler {
                             None
                         };
 
+                        let scsi_dev_lock = scsidevice.lock().unwrap();
+                        let found_lun_id = scsi_dev_lock.config.lun;
+                        drop(scsi_dev_lock);
+
                         if let Some(scsireq) = req {
                             if scsireq.opstype == EMULATE_SCSI_OPS {
                                 let scsicompletecb = ScsiCompleteCb::new(
                                     self.mem_space.clone(),
                                     Arc::new(Mutex::new(scsireq.clone())),
                                 );
-                                scsireq.emulate_execute(scsicompletecb)?;
+                                scsireq.emulate_execute(
+                                    scsicompletecb,
+                                    req_lun_id,
+                                    found_lun_id,
+                                )?;
                             } else if let Some(disk_img) =
                                 scsidevice.lock().unwrap().disk_image.as_mut()
                             {

@@ -17,7 +17,7 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::ScsiCntlr::{
     ScsiCntlr, ScsiCompleteCb, ScsiXferMode, VirtioScsiCmdReq, VirtioScsiCmdResp,
@@ -275,6 +275,17 @@ pub const SCSI_INQUIRY_VENDOR_MAX_LEN: usize = 8;
 pub const SCSI_INQUIRY_VERSION_MAX_LEN: usize = 4;
 pub const SCSI_INQUIRY_VPD_SERIAL_NUMBER_MAX_LEN: usize = 32;
 
+const SCSI_TARGET_INQUIRY_LEN: u32 = 36;
+
+/// |     bit7 - bit 5     |     bit 4 - bit 0      |
+/// | Peripheral Qualifier | Peripheral Device Type |
+/// Unknown or no device type.
+const TYPE_UNKNOWN: u8 = 0x1f;
+/// A peripheral device having the specified peripheral device type is not connected to this logical unit.
+const TYPE_INACTIVE: u8 = 0x20;
+/// Scsi target device is not capable of supporting a peripheral device connected to this logical unit.
+const TYPE_NO_LUN: u8 = 0x7f;
+
 pub struct ScsiBus {
     /// Bus name.
     pub name: String,
@@ -294,10 +305,33 @@ impl ScsiBus {
     }
 
     /// Get device by the target number and the lun number.
+    /// If the device requested by the target number and the lun number is non-existen,
+    /// return the first device in ScsiBus's devices list. It's OK because we will not
+    /// use this "random" device, we will just use it to prove that the target is existen.
     pub fn get_device(&self, target: u8, lun: u16) -> Option<Arc<Mutex<ScsiDevice>>> {
         if let Some(dev) = self.devices.get(&(target, lun)) {
             return Some((*dev).clone());
         }
+
+        // If lun device requested in CDB's LUNS bytes is not found, it may be a target request.
+        // Target request means if there is any lun in this scsi target, it will response some
+        // scsi commands. And, if there is no lun found in this scsi target, it means such target
+        // is non-existent. So, we should find if there exists a lun which has the same id with
+        // target id in CBD's LUNS bytes. And, if there exist two or more luns which have the same
+        // target id, just return the first one is OK enough.
+        for (id, device) in self.devices.iter() {
+            let (target_id, lun_id) = id;
+            if *target_id == target {
+                debug!(
+                    "Target request, target {}, requested lun {}, found lun {}",
+                    target_id, lun, lun_id
+                );
+                return Some((*device).clone());
+            }
+        }
+
+        // No lun found in requested target. It seems there is no such target requested in
+        // CDB's LUNS bytes.
         debug!("Can't find scsi device target {} lun {}", target, lun);
         None
     }
@@ -464,168 +498,102 @@ impl ScsiRequest {
         Ok(0)
     }
 
-    pub fn emulate_execute(&self, iocompletecb: ScsiCompleteCb) -> Result<()> {
+    pub fn emulate_execute(
+        &self,
+        iocompletecb: ScsiCompleteCb,
+        req_lun_id: u16,
+        found_lun_id: u16,
+    ) -> Result<()> {
         debug!("scsi command is {:#x}", self.cmd.command);
-        match self.cmd.command {
-            REQUEST_SENSE => {
-                self.cmd_complete(
-                    &iocompletecb.mem_space,
-                    VIRTIO_SCSI_S_OK,
-                    GOOD,
-                    Some(SCSI_SENSE_NO_SENSE),
-                    &Vec::new(),
-                )?;
-            }
-            TEST_UNIT_READY => {
-                let dev_lock = self.dev.lock().unwrap();
-                if dev_lock.disk_image.is_none() {
-                    error!("error in processing scsi command TEST_UNIT_READY, no scsi backend");
-                }
-                self.cmd_complete(
-                    &iocompletecb.mem_space,
-                    VIRTIO_SCSI_S_OK,
-                    GOOD,
-                    None,
-                    &Vec::new(),
-                )?;
-            }
-            INQUIRY => match scsi_command_emulate_inquiry(&self.cmd, &self.dev) {
-                Ok(outbuf) => {
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        GOOD,
-                        None,
-                        &outbuf,
-                    )?;
-                }
-                Err(ref e) => {
-                    error!("error in Processing scsi command INQUIRY: {:?}", e);
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_FIELD),
-                        &Vec::new(),
-                    )?;
-                }
-            },
-            READ_CAPACITY_10 => match scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev) {
-                Ok(outbuf) => {
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        GOOD,
-                        None,
-                        &outbuf,
-                    )?;
-                }
-                Err(ref e) => {
-                    error!("error in Processing scsi command READ_CAPACITY_10: {:?}", e);
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_FIELD),
-                        &Vec::new(),
-                    )?;
-                }
-            },
-            MODE_SENSE | MODE_SENSE_10 => {
-                match scsi_command_emulate_mode_sense(&self.cmd, &self.dev) {
-                    Ok(outbuf) => {
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            GOOD,
-                            None,
-                            &outbuf,
-                        )?;
-                    }
-                    Err(ref e) => {
-                        error!(
-                            "error in processing scsi command MODE_SENSE / MODE_SENSE_10: {:?}",
-                            e
-                        );
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            CHECK_CONDITION,
-                            Some(SCSI_SENSE_INVALID_FIELD),
-                            &Vec::new(),
-                        )?;
-                    }
-                }
-            }
-            REPORT_LUNS => match scsi_command_emulate_report_luns(&self.cmd, &self.dev) {
-                Ok(outbuf) => {
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        GOOD,
-                        None,
-                        &outbuf,
-                    )?;
-                }
-                Err(ref e) => {
-                    error!("error in processing scsi command REPORT_LUNS: {:?}", e);
-                    self.cmd_complete(
-                        &iocompletecb.mem_space,
-                        VIRTIO_SCSI_S_OK,
-                        CHECK_CONDITION,
-                        Some(SCSI_SENSE_INVALID_FIELD),
-                        &Vec::new(),
-                    )?;
-                }
-            },
-            SERVICE_ACTION_IN_16 => {
-                match scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev) {
-                    Ok(outbuf) => {
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            GOOD,
-                            None,
-                            &outbuf,
-                        )?;
-                    }
-                    Err(ref e) => {
-                        error!(
-                            "error in processing scsi command SERVICE_ACTION_IN(16): {:?}",
-                            e
-                        );
-                        self.cmd_complete(
-                            &iocompletecb.mem_space,
-                            VIRTIO_SCSI_S_OK,
-                            CHECK_CONDITION,
-                            Some(SCSI_SENSE_INVALID_FIELD),
-                            &Vec::new(),
-                        )?;
-                    }
-                }
-            }
-            WRITE_SAME_10 | WRITE_SAME_16 | SYNCHRONIZE_CACHE => {
-                self.cmd_complete(
-                    &iocompletecb.mem_space,
-                    VIRTIO_SCSI_S_OK,
-                    GOOD,
-                    None,
-                    &Vec::new(),
-                )?;
-            }
-            _ => {
-                info!(
-                    "emulation scsi command {:#x} is not supported",
-                    self.cmd.command
-                );
-                self.set_scsi_sense(SCSI_SENSE_INVALID_OPCODE);
+        let mut not_supported_flag = false;
+        let mut sense = None;
+        let result;
 
-                let mut req = self.virtioscsireq.lock().unwrap();
-                req.resp.response = VIRTIO_SCSI_S_OK;
-                req.resp.status = CHECK_CONDITION;
-                req.resp.resid = 0;
+        // Requested lun id is not equal to found device id means it may be a target request.
+        // REPORT LUNS is also a target request command.
+        if req_lun_id != found_lun_id || self.cmd.command == REPORT_LUNS {
+            result = match self.cmd.command {
+                REPORT_LUNS => scsi_command_emulate_report_luns(&self.cmd, &self.dev),
+                INQUIRY => scsi_command_emulate_target_inquiry(req_lun_id, &self.cmd),
+                REQUEST_SENSE => {
+                    if req_lun_id != 0 {
+                        sense = Some(SCSI_SENSE_LUN_NOT_SUPPORTED);
+                    }
+                    // Scsi Device does not realize sense buffer now, so just return.
+                    Ok(Vec::new())
+                }
+                TEST_UNIT_READY => Ok(Vec::new()),
+                _ => {
+                    not_supported_flag = true;
+                    sense = Some(SCSI_SENSE_INVALID_OPCODE);
+                    Err(anyhow!("Invalid emulation target scsi command"))
+                }
+            };
+        } else {
+            // It's not a target request.
+            result = match self.cmd.command {
+                REQUEST_SENSE => {
+                    sense = Some(SCSI_SENSE_NO_SENSE);
+                    Ok(Vec::new())
+                }
+                WRITE_SAME_10 | WRITE_SAME_16 | SYNCHRONIZE_CACHE => Ok(Vec::new()),
+                TEST_UNIT_READY => {
+                    let dev_lock = self.dev.lock().unwrap();
+                    if dev_lock.disk_image.is_none() {
+                        Err(anyhow!("No scsi backend!"))
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+                INQUIRY => scsi_command_emulate_inquiry(&self.cmd, &self.dev),
+                READ_CAPACITY_10 => scsi_command_emulate_read_capacity_10(&self.cmd, &self.dev),
+                MODE_SENSE | MODE_SENSE_10 => scsi_command_emulate_mode_sense(&self.cmd, &self.dev),
+                SERVICE_ACTION_IN_16 => {
+                    scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev)
+                }
+                _ => {
+                    not_supported_flag = true;
+                    Err(anyhow!("Emulation scsi command is not supported now!"))
+                }
+            };
+        }
 
-                req.complete(&iocompletecb.mem_space);
+        match result {
+            Ok(outbuf) => {
+                self.cmd_complete(
+                    &iocompletecb.mem_space,
+                    VIRTIO_SCSI_S_OK,
+                    GOOD,
+                    sense,
+                    &outbuf,
+                )?;
+            }
+            Err(ref e) => {
+                if not_supported_flag {
+                    info!(
+                        "emulation scsi command {:#x} is no supported",
+                        self.cmd.command
+                    );
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        CHECK_CONDITION,
+                        Some(SCSI_SENSE_INVALID_OPCODE),
+                        &Vec::new(),
+                    )?;
+                } else {
+                    error!(
+                        "Error in processing scsi command 0x{:#x}, err is {:?}",
+                        self.cmd.command, e
+                    );
+                    self.cmd_complete(
+                        &iocompletecb.mem_space,
+                        VIRTIO_SCSI_S_OK,
+                        CHECK_CONDITION,
+                        Some(SCSI_SENSE_INVALID_FIELD),
+                        &Vec::new(),
+                    )?;
+                }
             }
         }
 
@@ -1014,10 +982,69 @@ fn scsi_command_emulate_vpd_page(
     Ok(outbuf)
 }
 
+fn scsi_command_emulate_target_inquiry(lun: u16, cmd: &ScsiCommand) -> Result<Vec<u8>> {
+    let mut outbuf: Vec<u8> = vec![0; 4];
+
+    // Byte1: bit0: EVPD (Enable Vital product bit).
+    if cmd.buf[1] == 0x1 {
+        // Vital Product Data.
+        // Byte2: Page Code.
+        let page_code = cmd.buf[2];
+        outbuf[1] = page_code;
+        match page_code {
+            0x00 => {
+                // Supported page codes.
+                // Page Length: outbuf.len() - 4. Supported VPD page list only has 0x00 item.
+                outbuf[3] = 0x1;
+                // Supported VPD page list. Only support this page.
+                outbuf.push(0x00);
+            }
+            _ => {
+                bail!("Emulate target inquiry invalid page code {:x}", page_code);
+            }
+        }
+        return Ok(outbuf);
+    }
+
+    // EVPD = 0 means it's a Standard INQUIRY command.
+    // Byte2: page code.
+    if cmd.buf[2] != 0 {
+        bail!("Invalid standatd inquiry command!");
+    }
+
+    outbuf.resize(SCSI_TARGET_INQUIRY_LEN as usize, 0);
+    let len = cmp::min(cmd.xfer, SCSI_TARGET_INQUIRY_LEN);
+
+    // outbuf.
+    // Byte0: Peripheral Qualifier | peripheral device type.
+    // Byte1：RMB.
+    // Byte2: VERSION.
+    // Byte3: NORMACA | HISUP | Response Data Format.
+    // Byte4: Additional length(outbuf.len() - 5).
+    // Byte5: SCCS | ACC | TPGS | 3PC | RESERVED | PROTECT.
+    // Byte6: ENCSERV | VS | MULTIP | ADDR16.
+    // Byte7: WBUS16 | SYNC | CMDQUE | VS.
+    if lun != 0 {
+        outbuf[0] = TYPE_NO_LUN;
+    } else {
+        outbuf[0] = TYPE_UNKNOWN | TYPE_INACTIVE;
+        // scsi version.
+        outbuf[2] = 5;
+        // HISUP(hierarchical support). Response Data Format(must be 2).
+        outbuf[3] = 0x12;
+        outbuf[4] = len as u8 - 5;
+        // SYNC, CMDQUE(the logical unit supports the task management model).
+        outbuf[7] = 0x12;
+    }
+
+    Ok(outbuf)
+}
+
 fn scsi_command_emulate_inquiry(
     cmd: &ScsiCommand,
     dev: &Arc<Mutex<ScsiDevice>>,
 ) -> Result<Vec<u8>> {
+    // Vital product data.
     if cmd.buf[1] == 0x1 {
         return scsi_command_emulate_vpd_page(cmd, dev);
     }
