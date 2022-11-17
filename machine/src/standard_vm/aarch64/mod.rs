@@ -313,7 +313,11 @@ impl StdMachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> StdResult<Arc<Mutex<dyn FwCfgOps>>> {
+    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> StdResult<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+        if self.vm_config.lock().unwrap().pflashs.is_none() {
+            return Ok(None);
+        }
+
         let mut fwcfg = FwCfgMem::new(self.sys_mem.clone());
         fwcfg
             .add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())
@@ -349,7 +353,7 @@ impl StdMachineOps for StdMachine {
         .with_context(|| "Failed to realize fwcfg device")?;
         self.fwcfg_dev = Some(fwcfg_dev.clone());
 
-        Ok(fwcfg_dev)
+        Ok(Some(fwcfg_dev))
     }
 
     fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
@@ -505,7 +509,7 @@ impl MachineOps for StdMachine {
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(Some(&fwcfg))?)
+            Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
         } else {
             None
         };
@@ -547,9 +551,10 @@ impl MachineOps for StdMachine {
                 })?;
         }
 
-        if migrate.0 == MigrateMode::Unknown {
+        // If it is direct kernel boot mode, the ACPI can not be enabled.
+        if migrate.0 == MigrateMode::Unknown && fwcfg.is_some() {
             locked_vm
-                .build_acpi_tables(&fwcfg)
+                .build_acpi_tables(&fwcfg.unwrap())
                 .with_context(|| "Failed to create ACPI tables")?;
         }
 
@@ -596,10 +601,14 @@ impl MachineOps for StdMachine {
 
     #[cfg(not(target_env = "musl"))]
     fn add_ramfb(&mut self) -> Result<()> {
+        let fwcfg_dev = self.get_fwcfg_dev();
+        if fwcfg_dev.is_none() {
+            bail!("Ramfb device must be used UEFI to boot, please add pflash devices");
+        }
+
         let sys_mem = self.get_sys_mem();
         let mut ramfb = Ramfb::new(sys_mem.clone());
-        let locked_fwcfg = self.get_fwcfg_dev()?;
-        ramfb.ramfb_state.setup(&locked_fwcfg)?;
+        ramfb.ramfb_state.setup(&fwcfg_dev.unwrap())?;
         ramfb.realize(&mut self.sysbus)?;
         Ok(())
     }
@@ -632,9 +641,11 @@ impl MachineOps for StdMachine {
         &self.sysbus
     }
 
-    fn get_fwcfg_dev(&mut self) -> Result<Arc<Mutex<dyn FwCfgOps>>> {
-        // Unwrap is safe. Because after standard machine realize, this will not be None.F
-        Ok(self.fwcfg_dev.clone().unwrap())
+    fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
+        if let Some(fwcfg_dev) = &self.fwcfg_dev {
+            return Some(fwcfg_dev.clone());
+        }
+        None
     }
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
