@@ -501,17 +501,17 @@ impl XhciDevice {
     /// Reset xhci port.
     pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<XhciPort>>, warm_reset: bool) -> Result<()> {
         let mut locked_port = xhci_port.lock().unwrap();
-        if let Some(usb_port) = locked_port.usb_port.clone() {
-            let locked_usb_port = usb_port.upgrade().unwrap();
-            let speed = locked_usb_port
-                .lock()
-                .unwrap()
-                .dev
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .speed();
+        if let Some(usb_port) = locked_port.usb_port.as_ref() {
+            let upg_usb_port = usb_port.upgrade().unwrap();
+            let locked_usb_port = upg_usb_port.lock().unwrap();
+            let usb_dev = if let Some(dev) = locked_usb_port.dev.as_ref() {
+                dev
+            } else {
+                // No device, no need to reset.
+                return Ok(());
+            };
+            usb_dev.lock().unwrap().reset();
+            let speed = usb_dev.lock().unwrap().speed();
             if speed == USB_SPEED_SUPER && warm_reset {
                 locked_port.portsc |= PORTSC_WRC;
             }
