@@ -15,15 +15,12 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
+use crate::config::*;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
     UsbInterfaceDescriptor,
 };
 use crate::xhci::xhci_controller::XhciDevice;
-use crate::{
-    config::*,
-    xhci::xhci_controller::{get_field, set_field},
-};
 use anyhow::{bail, Result};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
@@ -659,14 +656,9 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     };
     if wakeup {
         let mut locked_port = xhci_port.lock().unwrap();
-        let port_status = get_field(locked_port.portsc, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+        let port_status = locked_port.get_port_link_state();
         if port_status == PLS_U3 {
-            locked_port.portsc = set_field(
-                locked_port.portsc,
-                PLS_RESUME,
-                PORTSC_PLS_MASK,
-                PORTSC_PLS_SHIFT,
-            );
+            locked_port.set_port_link_state(PLS_RESUME);
             debug!(
                 "Update portsc when notify controller, port {} status {}",
                 locked_port.portsc, port_status
