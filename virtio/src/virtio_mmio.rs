@@ -457,9 +457,9 @@ impl VirtioMmioDevice {
         let cloned_state = self.state.clone();
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, needs_reset: bool| {
-                let mut locked_state = cloned_state.lock().unwrap();
                 let status = match int_type {
                     VirtioInterruptType::Config => {
+                        let mut locked_state = cloned_state.lock().unwrap();
                         if needs_reset {
                             locked_state.config_space.device_status |= CONFIG_STATUS_NEEDS_RESET;
                             if locked_state.config_space.device_status & CONFIG_STATUS_DRIVER_OK
@@ -672,15 +672,13 @@ impl StateTransfer for VirtioMmioDevice {
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        self.state = Arc::new(Mutex::new(*VirtioMmioState::from_bytes(state).ok_or_else(
-            || {
-                anyhow!(migration::error::MigrationError::FromBytesError(
-                    "MMIO_DEVICE"
-                ))
-            },
-        )?));
+        let s_len = std::mem::size_of::<VirtioMmioState>();
+        if state.len() != s_len {
+            bail!("Invalid state length {}, expected {}", state.len(), s_len);
+        }
+        let mut locked_state = self.state.lock().unwrap();
+        locked_state.as_mut_bytes().copy_from_slice(state);
         let cloned_mem_space = self.mem_space.clone();
-        let locked_state = self.state.lock().unwrap();
         let mut queue_states = locked_state.config_space.queues_config
             [0..locked_state.config_space.queue_num]
             .to_vec();
@@ -701,8 +699,8 @@ impl StateTransfer for VirtioMmioDevice {
                 ))
             })
             .collect();
-        self.interrupt_status =
-            Arc::new(AtomicU32::new(locked_state.config_space.interrupt_status));
+        self.interrupt_status
+            .store(locked_state.config_space.interrupt_status, Ordering::SeqCst);
 
         Ok(())
     }
