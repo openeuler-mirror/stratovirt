@@ -517,12 +517,7 @@ impl XhciDevice {
             }
             match speed {
                 USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
-                    locked_port.portsc = set_field(
-                        locked_port.portsc,
-                        PLS_U0,
-                        PORTSC_PLS_MASK,
-                        PORTSC_PLS_SHIFT,
-                    );
+                    locked_port.set_port_link_state(PLS_U0);
                     locked_port.portsc |= PORTSC_PED;
                 }
                 _ => {
@@ -573,7 +568,7 @@ impl XhciDevice {
                 }
             }
         }
-        locked_port.portsc = set_field(locked_port.portsc, pls, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+        locked_port.set_port_link_state(pls);
         debug!(
             "xhci port update portsc {:x} pls {:x}",
             locked_port.portsc, pls
@@ -1752,15 +1747,4 @@ fn dma_write_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &[u32]
 
 fn addr64_from_u32(low: u32, high: u32) -> u64 {
     (((high << 16) as u64) << 16) | low as u64
-}
-
-pub fn get_field(val: u32, mask: u32, shift: u32) -> u32 {
-    val >> shift & mask
-}
-
-pub fn set_field(val: u32, new_val: u32, mask: u32, shift: u32) -> u32 {
-    let mut tmp = val;
-    tmp &= !(mask << shift);
-    tmp |= (new_val & mask) << shift;
-    tmp
 }
