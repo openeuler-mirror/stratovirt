@@ -457,9 +457,9 @@ impl VirtioMmioDevice {
         let cloned_state = self.state.clone();
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, needs_reset: bool| {
-                let mut locked_state = cloned_state.lock().unwrap();
                 let status = match int_type {
                     VirtioInterruptType::Config => {
+                        let mut locked_state = cloned_state.lock().unwrap();
                         if needs_reset {
                             locked_state.config_space.device_status |= CONFIG_STATUS_NEEDS_RESET;
                             if locked_state.config_space.device_status & CONFIG_STATUS_DRIVER_OK
