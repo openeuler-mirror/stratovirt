@@ -401,7 +401,7 @@ impl XhciDevice {
             numports_3: XHCI_PORT3_NUM,
             ports: Vec::new(),
             slots: vec![XhciSlot::new(mem_space); MAX_SLOTS as usize],
-            intrs: vec![XhciInterrupter::new(mem_space); 1],
+            intrs: vec![XhciInterrupter::new(mem_space); MAX_INTRS as usize],
             cmd_ring: XhciRing::new(mem_space),
             mem_space: mem_space.clone(),
             bus: Arc::new(Mutex::new(UsbBus::new())),
@@ -1496,7 +1496,8 @@ impl XhciDevice {
             evt.length = *edtla & 0xffffff;
             *edtla = 0;
         }
-        self.send_event(&evt, 0)?;
+        let idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
+        self.send_event(&evt, idx)?;
         Ok(())
     }
 
