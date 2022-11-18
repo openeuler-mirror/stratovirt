@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, Region};
+use machine_manager::config::XhciConfig;
 use pci::config::{
     PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
     PCIE_CONFIG_SPACE_SIZE, PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS,
@@ -75,7 +76,7 @@ pub struct XhciPciDevice {
 
 impl XhciPciDevice {
     pub fn new(
-        name: &str,
+        config: &XhciConfig,
         devfn: u8,
         parent_bus: Weak<Mutex<PciBus>>,
         mem_space: &Arc<AddressSpace>,
@@ -84,9 +85,9 @@ impl XhciPciDevice {
         Self {
             pci_config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
             devfn,
-            xhci: XhciDevice::new(mem_space),
+            xhci: XhciDevice::new(mem_space, config),
             dev_id: Arc::new(AtomicU16::new(0)),
-            name: name.to_string(),
+            name: config.id.to_string(),
             parent_bus,
             mem_region: Region::init_container_region(XHCI_PCI_CONFIG_LENGTH as u64),
             bus_device,
