@@ -12,7 +12,7 @@
 
 use super::error::ConfigError;
 use crate::config::{
-    pci_args_check, ChardevType, CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH,
+    pci_args_check, ChardevType, CmdParser, ConfigCheck, VmConfig, MAX_SOCK_PATH_LENGTH,
     MAX_STRING_LENGTH, MAX_TAG_LENGTH,
 };
 use anyhow::{anyhow, bail, Result};
@@ -55,10 +55,10 @@ impl ConfigCheck for FsConfig {
             )));
         }
 
-        if self.sock.len() > MAX_PATH_LENGTH {
+        if self.sock.len() > MAX_SOCK_PATH_LENGTH {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "fs sock path".to_string(),
-                MAX_PATH_LENGTH,
+                MAX_SOCK_PATH_LENGTH,
             )));
         }
 

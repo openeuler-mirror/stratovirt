@@ -15,7 +15,7 @@ const VIRIOT_FS_HIGH_PRIO_QUEUE_NUM: u64 = 1;
 /// The num of request queue.
 const VIRTIO_FS_REQ_QUEUES_NUM: u64 = 1;
 /// The next queue size.
-const VIRTIO_FS_MAX_QUEUE_SIZE: u16 = 1024;
+const VIRTIO_FS_MAX_QUEUE_SIZE: u16 = 128;
 
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
