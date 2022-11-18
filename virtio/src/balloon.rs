@@ -1356,7 +1356,7 @@ mod tests {
         let desc = SplitVringDesc {
             addr: GuestAddress(0x2000),
             len: 4,
-            flags: 1,
+            flags: 0,
             next: 1,
         };
 
@@ -1387,7 +1387,7 @@ mod tests {
         let desc = SplitVringDesc {
             addr: GuestAddress(0x2000),
             len: 4,
-            flags: 1,
+            flags: 0,
             next: 1,
         };
 
