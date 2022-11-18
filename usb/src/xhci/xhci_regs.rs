@@ -233,14 +233,14 @@ pub struct XhciPort {
     /// Port Status and Control
     pub portsc: u32,
     /// Port ID
-    pub port_idx: u32,
+    pub port_idx: u8,
     pub usb_port: Option<Weak<Mutex<UsbPort>>>,
     pub speed_mask: u32,
     pub name: String,
 }
 
 impl XhciPort {
-    pub fn new(xhci: &Weak<Mutex<XhciDevice>>, name: String, i: u32) -> Self {
+    pub fn new(xhci: &Weak<Mutex<XhciDevice>>, name: String, i: u8) -> Self {
         Self {
             xhci: xhci.clone(),
             portsc: 0,
@@ -266,7 +266,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 XHCI_VERSION << hci_version_offset | XHCI_CAP_LENGTH
             }
             XHCI_CAP_REG_HCSPARAMS1 => {
-                max_ports << CAP_HCSP_NP_SHIFT
+                (max_ports as u32) << CAP_HCSP_NP_SHIFT
                     | max_intrs << CAP_HCSP_NI_SHIFT
                     | (locked_dev.slots.len() as u32) << CAP_HCSP_NDS_SHIFT
             }
@@ -288,7 +288,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
             }
             0x24 => CAP_EXT_USB_NAME_STRING,
-            0x28 => (locked_dev.numports_2 << 8) | 1,
+            0x28 => ((locked_dev.numports_2 as u32) << 8) | 1,
             0x2c => 0x0,
             // Extended capabilities (USB 3.0)
             0x30 => {
@@ -296,7 +296,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
             }
             0x34 => CAP_EXT_USB_NAME_STRING,
-            0x38 => (locked_dev.numports_3 << 8) | (locked_dev.numports_2 + 1),
+            0x38 => ((locked_dev.numports_3 as u32) << 8) | (locked_dev.numports_2 + 1) as u32,
             0x3c => 0x0,
             _ => {
                 error!("Failed to read xhci cap: not implemented");

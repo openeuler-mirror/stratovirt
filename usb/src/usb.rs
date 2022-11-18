@@ -141,11 +141,11 @@ pub struct UsbPort {
     pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
     pub speed_mask: u32,
     pub path: String,
-    pub index: u32,
+    pub index: u8,
 }
 
 impl UsbPort {
-    pub fn new(index: u32) -> Self {
+    pub fn new(index: u8) -> Self {
         Self {
             dev: None,
             speed_mask: 0,
