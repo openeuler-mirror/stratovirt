@@ -34,6 +34,8 @@ pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
 pub const QUEUE_TYPE_PACKED_VRING: u16 = 2;
 /// Max total len of a descriptor chain.
 const DESC_CHAIN_MAX_TOTAL_LEN: u64 = 1u64 << 32;
+/// Invalid queue vector num
+pub const INVALID_VECTOR_NUM: u16 = 0xFFFF;
 
 fn checked_offset_mem(
     mmio_space: &Arc<AddressSpace>,
@@ -109,7 +111,7 @@ impl QueueConfig {
             max_size,
             size: max_size,
             ready: false,
-            vector: 0,
+            vector: INVALID_VECTOR_NUM,
             next_avail: 0,
             next_used: 0,
             last_signal_used: 0,
