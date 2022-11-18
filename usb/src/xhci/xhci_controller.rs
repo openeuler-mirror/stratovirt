@@ -445,9 +445,7 @@ impl XhciDevice {
 
     pub fn stop(&mut self) {
         self.oper.usb_status |= USB_STS_HCH;
-        let mut lo = read_u32(self.oper.cmd_ring_ctrl, 0);
-        lo &= !CMD_RING_CTRL_CRR;
-        write_u64_low(self.oper.cmd_ring_ctrl, lo);
+        self.oper.cmd_ring_ctrl &= !(CMD_RING_CTRL_CRR as u64);
     }
 
     pub fn running(&self) -> bool {
