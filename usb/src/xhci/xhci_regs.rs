@@ -144,6 +144,11 @@ impl XchiOperReg {
         self.dcbaap = 0;
         self.config = 0;
     }
+
+    /// Run the command ring.
+    pub fn start_cmd_ring(&mut self) {
+        self.cmd_ring_ctrl |= CMD_RING_CTRL_CRR as u64;
+    }
 }
 
 /// XHCI Interrupter
@@ -605,26 +610,27 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         debug!("doorbell write {:x} {:x}", addr.0, offset);
         if !xhci.lock().unwrap().running() {
             error!("Failed to write doorbell, XHCI is not running");
-            return true;
+            return false;
         }
         let mut xhci = xhci.lock().unwrap();
         let slot_id = (offset >> 2) as u32;
         if slot_id == 0 {
             if value == 0 {
                 if let Err(e) = xhci.handle_command() {
-                    error!("Failed to process commands: {:?}", e);
+                    error!("Failed to handle command: {:?}", e);
+                    xhci.host_controller_error();
+                    return false;
                 }
             } else {
-                error!("Invalid doorbell write: value {:x}", value)
+                error!("Invalid doorbell write: value {:x}", value);
+                return false;
             }
         } else {
             let ep_id = value & DB_TARGET_MASK;
-            if slot_id > xhci.slots.len() as u32 {
-                error!("Invalid slot_id {}", slot_id);
-            } else if ep_id == 0 || ep_id > 31 {
-                error!("Invalid epid {}", ep_id,);
-            } else if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
+            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
                 error!("Failed to kick endpoint: {:?}", e);
+                xhci.host_controller_error();
+                return false;
             }
         }
         true

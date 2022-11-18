@@ -153,16 +153,6 @@ impl UsbPort {
             index,
         }
     }
-
-    /// If the USB port attached USB device.
-    pub fn is_attached(&self) -> bool {
-        if let Some(dev) = &self.dev {
-            let locked_dev = dev.lock().unwrap();
-            locked_dev.attached()
-        } else {
-            false
-        }
-    }
 }
 
 /// USB descriptor strings.
@@ -242,8 +232,6 @@ pub struct UsbDevice {
     pub speed_mask: u32,
     pub addr: u8,
     pub product_desc: String,
-    pub auto_attach: bool,
-    pub attached: bool,
     pub state: UsbDeviceState,
     pub setup_buf: Vec<u8>,
     pub data_buf: Vec<u8>,
@@ -269,7 +257,6 @@ impl UsbDevice {
     pub fn new() -> Self {
         let mut dev = UsbDevice {
             port: None,
-            attached: false,
             speed: 0,
             speed_mask: 0,
             addr: 0,
@@ -283,7 +270,6 @@ impl UsbDevice {
             ep_in: Vec::new(),
             ep_out: Vec::new(),
             product_desc: String::new(),
-            auto_attach: false,
             strings: Vec::new(),
             usb_desc: None,
             device_desc: None,
@@ -494,7 +480,6 @@ pub trait UsbDeviceOps: Send + Sync {
     fn handle_attach(&mut self) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
         let mut locked_dev = usb_dev.lock().unwrap();
-        locked_dev.attached = true;
         locked_dev.state = UsbDeviceState::Attached;
         drop(locked_dev);
         let usb_dev = self.get_mut_usb_device();
@@ -562,13 +547,6 @@ pub trait UsbDeviceOps: Send + Sync {
         let usb_dev = self.get_usb_device();
         let locked_dev = usb_dev.lock().unwrap();
         locked_dev.speed
-    }
-
-    /// If USB device is attached.
-    fn attached(&self) -> bool {
-        let usb_dev = self.get_usb_device();
-        let locked_dev = usb_dev.lock().unwrap();
-        locked_dev.attached
     }
 
     fn process_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
