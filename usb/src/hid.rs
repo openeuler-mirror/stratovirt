@@ -355,8 +355,10 @@ impl Hid {
     fn pointer_poll(&mut self) -> Vec<u8> {
         let index = if self.num > 0 {
             self.head
-        } else {
+        } else if self.head > 0 {
             self.head - 1
+        } else {
+            QUEUE_LENGTH - 1
         };
         if self.num != 0 {
             self.increase_head();

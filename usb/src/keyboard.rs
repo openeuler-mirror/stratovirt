@@ -160,6 +160,7 @@ pub fn keyboard_event(kbd: &Arc<Mutex<UsbKeyboard>>, scan_codes: &[u32]) -> Resu
     let mut locked_hid = locked_kbd.hid.lock().unwrap();
     if scan_codes.len() as u32 + locked_hid.num > QUEUE_LENGTH {
         debug!("Keyboard queue is full!");
+        // Return ok to ignore the request.
         return Ok(());
     }
     for code in scan_codes {
