@@ -18,6 +18,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::{
     iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error, virtio_has_feature,
@@ -65,6 +66,8 @@ const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 const DUMMY_IMG_SIZE: u64 = 0;
 /// Number of max merged requests.
 const MAX_NUM_MERGE_REQS: u16 = 32;
+/// Max time for every round of process queue.
+const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
 
 type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, Option<String>);
 
@@ -508,6 +511,10 @@ impl BlockIoHandler {
                 aiocompletecb.complete_request(status);
                 continue;
             }
+            // Avoid bogus guest stuck IO thread.
+            if req_queue.len() >= queue.vring.actual_size() as usize {
+                bail!("The front driver may be damaged, avail requests more than queue size");
+            }
             req_queue.push(req);
             done = true;
         }
@@ -550,6 +557,8 @@ impl BlockIoHandler {
 
     fn process_queue_suppress_notify(&mut self) -> Result<bool> {
         let mut done = false;
+        let start_time = Instant::now();
+
         if !self.queue.lock().unwrap().is_enabled() {
             done = true;
             return Ok(done);
@@ -562,6 +571,14 @@ impl BlockIoHandler {
             .avail_ring_len(&self.mem_space)?
             != 0
         {
+            // Do not stuck IO thread.
+            let now = Instant::now();
+            if (now - start_time).as_millis() > MAX_MILLIS_TIME_PROCESS_QUEUE as u128 {
+                // Make sure we can come back.
+                self.queue_evt.try_clone()?.write(1)?;
+                break;
+            }
+
             self.queue.lock().unwrap().vring.suppress_queue_notify(
                 &self.mem_space,
                 self.driver_features,
