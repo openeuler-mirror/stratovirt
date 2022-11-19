@@ -109,7 +109,7 @@ impl AioContext for LibaioContext {
     }
 
     /// Get the IO events.
-    fn get_events(&mut self) -> (&[IoEvent], u32, u32) {
+    fn get_events(&mut self) -> (&[IoEvent], usize, usize) {
         let ring = self.ctx as *mut AioRing;
         let head = unsafe { (*ring).head };
         let tail = unsafe { (*ring).tail };
@@ -123,6 +123,6 @@ impl AioContext for LibaioContext {
 
         let io_events: &[IoEvent] = unsafe { (*ring).io_events.as_slice(ring_nr as usize) };
 
-        (io_events, head, head + nr)
+        (io_events, head as usize, (head + nr) as usize)
     }
 }

@@ -448,6 +448,7 @@ impl ScsiRequest {
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: (self.cmd.lba << 9) as usize,
+            nbytes: 0,
             process: true,
             iocb: None,
             iocompletecb,
@@ -459,6 +460,7 @@ impl ScsiRequest {
                 iov_len: iov.iov_len,
             };
             aiocb.iovec.push(iovec);
+            aiocb.nbytes += iov.iov_len;
         }
 
         if self.cmd.command == SYNCHRONIZE_CACHE {
