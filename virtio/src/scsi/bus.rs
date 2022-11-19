@@ -460,6 +460,15 @@ impl ScsiRequest {
             aiocb.iovec.push(iovec);
         }
 
+        if self.cmd.command == SYNCHRONIZE_CACHE {
+            aiocb.opcode = IoCmd::Fdsync;
+            (*aio)
+                .as_mut()
+                .rw_sync(aiocb)
+                .with_context(|| "Failed to process scsi request for flushing")?;
+            return Ok(0);
+        }
+
         match self.cmd.mode {
             ScsiXferMode::ScsiXferFromDev => {
                 aiocb.opcode = IoCmd::Preadv;
@@ -536,7 +545,7 @@ impl ScsiRequest {
                     sense = Some(SCSI_SENSE_NO_SENSE);
                     Ok(Vec::new())
                 }
-                WRITE_SAME_10 | WRITE_SAME_16 | SYNCHRONIZE_CACHE => Ok(Vec::new()),
+                WRITE_SAME_10 | WRITE_SAME_16 => Ok(Vec::new()),
                 TEST_UNIT_READY => {
                     let dev_lock = self.dev.lock().unwrap();
                     if dev_lock.disk_image.is_none() {
@@ -662,13 +671,17 @@ fn write_buf_mem(buf: &[u8], max: u64, hva: u64) -> Result<()> {
     Ok(())
 }
 
+// Scsi Commands which are emulated in stratovirt and do noting to the backend.
 pub const EMULATE_SCSI_OPS: u32 = 0;
-pub const DMA_SCSI_OPS: u32 = 1;
+// Scsi Commands which will do something(eg: read and write) to the backend.
+pub const NON_EMULATE_SCSI_OPS: u32 = 1;
 
 fn scsi_operation_type(op: u8) -> u32 {
     match op {
         READ_6 | READ_10 | READ_12 | READ_16 | WRITE_6 | WRITE_10 | WRITE_12 | WRITE_16
-        | WRITE_VERIFY_10 | WRITE_VERIFY_12 | WRITE_VERIFY_16 => DMA_SCSI_OPS,
+        | WRITE_VERIFY_10 | WRITE_VERIFY_12 | WRITE_VERIFY_16 | SYNCHRONIZE_CACHE => {
+            NON_EMULATE_SCSI_OPS
+        }
         _ => EMULATE_SCSI_OPS,
     }
 }
@@ -1256,7 +1269,7 @@ fn scsi_command_emulate_report_luns(
         bail!("scsi REPORT LUNS xfer {} too short!", cmd.xfer);
     }
 
-    //Byte2: SELECT REPORT:00h/01h/02h. 03h to FFh is reserved.
+    // Byte2: SELECT REPORT:00h/01h/02h. 03h to FFh is reserved.
     if cmd.buf[2] > 2 {
         bail!(
             "Invalid REPORT LUNS cmd, SELECT REPORT Byte is {}",
