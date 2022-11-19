@@ -172,6 +172,8 @@ impl VirtioDevice for ScsiCntlr {
         self.state.config_space.seg_max = self.queue_size() as u32 - 2;
         self.state.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
         self.state.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
+        // num_queues: request queues number.
+        self.state.config_space.num_queues = self.config.queues;
 
         self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_SCSI_F_HOTPLUG)
