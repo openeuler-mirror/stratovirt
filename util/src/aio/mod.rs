@@ -205,38 +205,27 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64, direct: bool) -> Result<()> {
-        let mut misaligned = false;
         if direct {
             for iov in cb.iovec.iter() {
                 if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
-                    misaligned = true;
-                    break;
+                    return self.handle_misaligned_rw(cb);
                 }
             }
         }
-        if direct && misaligned {
-            return self.handle_misaligned_aio(cb);
-        }
 
-        let last_aio = cb.last_aio;
-        let opcode = cb.opcode;
-        let file_fd = cb.file_fd;
-        let iovec = (&*cb.iovec).as_ptr() as u64;
-        let sg_size = cb.iovec.len();
-        let offset = cb.offset;
-
-        let mut node = Box::new(Node::new(cb));
-        let iocb = IoCb {
-            aio_lio_opcode: opcode as u16,
-            aio_fildes: file_fd as u32,
-            aio_buf: iovec,
-            aio_nbytes: sg_size as u64,
-            aio_offset: offset as u64,
+        let mut iocb = IoCb {
+            aio_lio_opcode: cb.opcode as u16,
+            aio_fildes: cb.file_fd as u32,
+            aio_buf: (&*cb.iovec).as_ptr() as u64,
+            aio_nbytes: cb.iovec.len() as u64,
+            aio_offset: cb.offset as u64,
             aio_flags: IOCB_FLAG_RESFD,
             aio_resfd: self.fd.as_raw_fd() as u32,
-            data: (&mut (*node) as *mut CbNode<T>) as u64,
             ..Default::default()
         };
+        let last_aio = cb.last_aio;
+        let mut node = Box::new(Node::new(cb));
+        iocb.data = (&mut (*node) as *mut CbNode<T>) as u64;
         node.value.iocb = Some(Box::new(iocb));
 
         self.aio_in_queue.add_head(node);
@@ -267,7 +256,6 @@ impl<T: Clone + 'static> Aio<T> {
                 }
                 r
             }
-            IoCmd::Fdsync => raw_datasync(cb.file_fd)?,
             _ => -1,
         };
         (self.complete_func)(&cb, ret);
@@ -275,10 +263,10 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    fn handle_misaligned_aio(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn handle_misaligned_rw(&mut self, cb: AioCb<T>) -> Result<()> {
         // Safe because we only get the host page size.
         let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-        let mut ret = 0_i64;
+        let mut ret = -1;
 
         match cb.opcode {
             IoCmd::Preadv => {
@@ -344,11 +332,16 @@ impl<T: Clone + 'static> Aio<T> {
                 })?;
                 unsafe { libc::free(aligned_buffer) };
             }
-            IoCmd::Fdsync => ret = raw_datasync(cb.file_fd)?,
             _ => {}
         };
         (self.complete_func)(&cb, ret);
 
+        Ok(())
+    }
+
+    pub fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+        let ret = raw_datasync(cb.file_fd)?;
+        (self.complete_func)(&cb, ret);
         Ok(())
     }
 }
