@@ -558,12 +558,18 @@ impl XhciDevice {
             if let Some(dev) = &locked_usb_port.dev {
                 let speed = dev.lock().unwrap().speed();
                 locked_port.portsc |= PORTSC_CCS;
-                if speed == PORTSC_SPEED_SUPER {
+                if speed == USB_SPEED_SUPER {
                     locked_port.portsc |= PORTSC_SPEED_SUPER;
                     locked_port.portsc |= PORTSC_PED;
                     pls = PLS_U0;
-                } else {
-                    locked_port.portsc |= speed;
+                } else if speed == USB_SPEED_FULL {
+                    locked_port.portsc |= PORTSC_SPEED_FULL;
+                    pls = PLS_POLLING;
+                } else if speed == USB_SPEED_HIGH {
+                    locked_port.portsc |= PORTSC_SPEED_HIGH;
+                    pls = PLS_POLLING;
+                } else if speed == USB_SPEED_LOW {
+                    locked_port.portsc |= PORTSC_SPEED_LOW;
                     pls = PLS_POLLING;
                 }
             }
