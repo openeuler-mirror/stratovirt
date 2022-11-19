@@ -139,7 +139,7 @@ impl ScsiDevice {
 
             let mut file = OpenOptions::new()
                 .read(true)
-                .write(true)
+                .write(!self.config.read_only)
                 .custom_flags(libc::O_DIRECT)
                 .open(&self.config.path_on_host)
                 .with_context(|| {
