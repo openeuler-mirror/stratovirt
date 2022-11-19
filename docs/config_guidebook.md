@@ -774,18 +774,19 @@ Virtio Scsi HardDisk is a virtual block device, which process read and write req
 
 Note: Only support using raw image file as backend now.
 
-Six properties can be set for virtio-scsi hd.
+Seven properties can be set for virtio-scsi hd.
 
 * file: the path of backend image file.
 * id: unique device id.
 * bus: scsi bus name, only support $scsi_controller_name + ".0"
 * scsi-id: id number (target) of scsi four level hierarchical address (host, channel, target, lun). Configuration range is [0, 255]. Boot scsi disk configuration range is [0, 31].
 * lun: lun number (lun) of scsi four level hierarchical address (host, channel, target, lun). Configuration rage is [0, 255]. Boot scsi disk configuration range is [0, 7].
-* serial: serial number of virtio scsi device.(optional)
+* serial: serial number of virtio scsi device. (optional)
+* readonly: whether scsi device is read-only or not. Default option is false. (optional)
 
 ```shell
--device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1]
--drive file=path_on_host,id=drive-scsi0-0-0-0
+-device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1,num-queues=4]
+-drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true]
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0
 ```
 Note: Only support scsi-id=0 and lun number should start from 0 Now.

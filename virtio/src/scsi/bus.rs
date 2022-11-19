@@ -1154,9 +1154,15 @@ fn scsi_command_emulate_mode_sense(
         cmd.buf[4]
     );
 
+    // Device specific paramteter field for direct access block devices:
+    // Bit 7: WP(Write Protect); bit 4: DPOFUA;
     if dev_lock.scsi_type == SCSI_TYPE_DISK {
         if dev_lock.state.features & (1 << SCSI_DISK_F_DPOFUA) != 0 {
             dev_specific_parameter = 0x10;
+        }
+        if dev_lock.config.read_only {
+            // Readonly.
+            dev_specific_parameter |= 0x80;
         }
     } else {
         dbd = true;
