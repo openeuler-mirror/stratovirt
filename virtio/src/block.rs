@@ -334,7 +334,7 @@ impl Request {
                 aiocb.opcode = IoCmd::Fdsync;
                 (*aio)
                     .as_mut()
-                    .rw_sync(aiocb)
+                    .flush_sync(aiocb)
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
