@@ -50,7 +50,7 @@ trait AioContext {
     /// Submit IO requests to the OS.
     fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()>;
     /// Get the IO events of the requests sumbitted earlier.
-    fn get_events(&mut self) -> (&[IoEvent], u32, u32);
+    fn get_events(&mut self) -> (&[IoEvent], usize, usize);
 }
 
 pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) + Sync + Send>;
@@ -61,6 +61,7 @@ pub struct AioCb<T: Clone> {
     pub opcode: IoCmd,
     pub iovec: Vec<Iovec>,
     pub offset: usize,
+    pub nbytes: u64,
     pub process: bool,
     pub iocb: Option<Box<IoCb>>,
     pub iocompletecb: T,
@@ -74,6 +75,7 @@ impl<T: Clone> AioCb<T> {
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: 0,
+            nbytes: 0,
             process: false,
             iocb: None,
             iocompletecb: cb,
@@ -125,17 +127,24 @@ impl<T: Clone + 'static> Aio<T> {
         let mut ctx = self.ctx.lock().unwrap();
         let (evts, start, end) = ctx.get_events();
 
-        for e in start..end {
-            if evts[e as usize].res2 == 0 {
-                done = true;
-                unsafe {
-                    let node = evts[e as usize].data as *mut CbNode<T>;
+        for index in start..end {
+            unsafe {
+                let node = evts[index].data as *mut CbNode<T>;
 
-                    (self.complete_func)(&(*node).value, evts[e as usize].res);
-                    self.aio_in_flight.unlink(&(*node));
-                    // Construct Box to free mem automatically.
-                    Box::from_raw(node);
-                }
+                let res = if evts[index].res2 == 0
+                    && evts[index].res > 0
+                    && evts[index].res as u64 == (*node).value.nbytes
+                {
+                    done = true;
+                    evts[index].res
+                } else {
+                    -1
+                };
+
+                (self.complete_func)(&(*node).value, res);
+                self.aio_in_flight.unlink(&(*node));
+                // Construct Box to free mem automatically.
+                Box::from_raw(node);
             }
         }
         // Drop reference of 'ctx', so below 'process_list' can work.

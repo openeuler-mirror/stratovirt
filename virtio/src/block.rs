@@ -275,6 +275,7 @@ impl Request {
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: (self.out_header.sector << SECTOR_SHIFT) as usize,
+            nbytes: 0,
             process: true,
             iocb: None,
             iocompletecb,
@@ -288,6 +289,7 @@ impl Request {
                     iov_len: iov.iov_len,
                 };
                 aiocb.iovec.push(iovec);
+                aiocb.nbytes += iov.iov_len;
             }
             req = req_raw.next.as_ref().as_ref();
         }
