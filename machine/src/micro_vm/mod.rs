@@ -63,7 +63,7 @@ use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, DriveConfig, Incoming, MigrateMode,
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, Incoming, MigrateMode,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -1089,18 +1089,6 @@ impl DeviceInterface for LightMachine {
             true
         };
 
-        let fake_drive = DriveConfig {
-            path_on_host: args.file.filename.clone(),
-            ..Default::default()
-        };
-        if let Err(e) = fake_drive.check_path() {
-            error!("{:?}", e);
-            return Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                None,
-            );
-        }
-
         let config = BlkDevConfig {
             id: args.node_name.clone(),
             path_on_host: args.file.filename,
@@ -1116,6 +1104,13 @@ impl DeviceInterface for LightMachine {
             // TODO Add aio option by qmp.
             aio: None,
         };
+        if let Err(e) = config.check() {
+            error!("{:?}", e);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
