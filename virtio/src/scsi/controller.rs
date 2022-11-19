@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
-    VIRTIO_SCSI_F_CHANGE, VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_VERSION_1, VIRTIO_SCSI_F_CHANGE, VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
 };
 use crate::ScsiBus::{virtio_scsi_get_lun, ScsiBus, ScsiRequest, EMULATE_SCSI_OPS, GOOD};
 use crate::VirtioError;
@@ -174,7 +174,9 @@ impl VirtioDevice for ScsiCntlr {
 
         self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_SCSI_F_HOTPLUG)
-            | (1_u64 << VIRTIO_SCSI_F_CHANGE);
+            | (1_u64 << VIRTIO_SCSI_F_CHANGE)
+            | (1_u64 << VIRTIO_F_RING_EVENT_IDX);
+
         Ok(())
     }
 
