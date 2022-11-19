@@ -63,6 +63,8 @@ const SECTOR_SHIFT: u8 = 9;
 const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
+/// Number of max merged requests.
+const MAX_NUM_MERGE_REQS: u16 = 32;
 
 type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, Option<String>);
 
@@ -427,6 +429,7 @@ impl BlockIoHandler {
 
         let mut merge_req_queue = Vec::<Request>::new();
         let mut last_req: Option<&mut Request> = None;
+        let mut merged_reqs = 1;
 
         *last_aio_index = 0;
         for req in req_queue {
@@ -434,7 +437,8 @@ impl BlockIoHandler {
                 || req.out_header.request_type == VIRTIO_BLK_T_OUT;
             let can_merge = match last_req {
                 Some(ref req_ref) => {
-                    io && req_ref.out_header.request_type == req.out_header.request_type
+                    io && merged_reqs < MAX_NUM_MERGE_REQS
+                        && req_ref.out_header.request_type == req.out_header.request_type
                         && (req_ref.out_header.sector + req_ref.get_req_sector_num()
                             == req.out_header.sector)
                 }
@@ -445,12 +449,14 @@ impl BlockIoHandler {
                 let last_req_raw = last_req.unwrap();
                 last_req_raw.next = Box::new(Some(req));
                 last_req = last_req_raw.next.as_mut().as_mut();
+                merged_reqs += 1;
             } else {
                 if io {
                     *last_aio_index = merge_req_queue.len();
                 }
                 merge_req_queue.push(req);
                 last_req = merge_req_queue.last_mut();
+                merged_reqs = 1;
             }
         }
 
