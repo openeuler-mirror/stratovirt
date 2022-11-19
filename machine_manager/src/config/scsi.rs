@@ -77,7 +77,10 @@ impl ConfigCheck for ScsiCntlrConfig {
     }
 }
 
-pub fn parse_scsi_controller(drive_config: &str) -> Result<ScsiCntlrConfig> {
+pub fn parse_scsi_controller(
+    drive_config: &str,
+    queues_auto: Option<u16>,
+) -> Result<ScsiCntlrConfig> {
     let mut cmd_parser = CmdParser::new("virtio-scsi-pci");
     cmd_parser
         .push("")
@@ -85,7 +88,8 @@ pub fn parse_scsi_controller(drive_config: &str) -> Result<ScsiCntlrConfig> {
         .push("bus")
         .push("addr")
         .push("multifunction")
-        .push("iothread");
+        .push("iothread")
+        .push("num-queues");
 
     cmd_parser.parse(drive_config)?;
 
@@ -104,6 +108,12 @@ pub fn parse_scsi_controller(drive_config: &str) -> Result<ScsiCntlrConfig> {
             "id",
             "virtio scsi pci"
         )));
+    }
+
+    if let Some(queues) = cmd_parser.get_value::<u32>("num-queues")? {
+        cntlr_cfg.queues = queues;
+    } else if let Some(queues) = queues_auto {
+        cntlr_cfg.queues = queues as u32;
     }
 
     cntlr_cfg.check()?;
