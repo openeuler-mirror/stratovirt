@@ -204,6 +204,8 @@ impl ConfigCheck for BlkDevConfig {
             ..Default::default()
         };
         fake_drive.check()?;
+        #[cfg(not(test))]
+        fake_drive.check_path()?;
 
         Ok(())
     }
@@ -245,6 +247,9 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     } else {
         Some(AIO_NATIVE.to_string())
     };
+    drive.check()?;
+    #[cfg(not(test))]
+    drive.check_path()?;
     Ok(drive)
 }
 
