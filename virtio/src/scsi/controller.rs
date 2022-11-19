@@ -917,7 +917,7 @@ impl ScsiCmdHandler {
                     } else {
                         cmd.resp.response = VIRTIO_SCSI_S_BAD_TARGET;
                         cmd.complete(&self.mem_space);
-                        error!(
+                        debug!(
                             "no such scsi device target {}, lun {}",
                             lun[1],
                             virtio_scsi_get_lun(lun)
