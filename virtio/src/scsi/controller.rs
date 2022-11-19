@@ -238,8 +238,9 @@ impl VirtioDevice for ScsiCntlr {
             )));
         }
 
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
-
+        // Guest can only set sense_size and cdb_size, which are fixed default values
+        // (VIRTIO_SCSI_CDB_DEFAULT_SIZE; VIRTIO_SCSI_SENSE_DEFAULT_SIZE) and cannot be
+        // changed in stratovirt now. So, do nothing when guest writes config.
         Ok(())
     }
 
