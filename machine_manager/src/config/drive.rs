@@ -107,15 +107,16 @@ impl DriveConfig {
                 if ((meta.st_mode() & libc::S_IFREG) != libc::S_IFREG)
                     && ((meta.st_mode() & libc::S_IFBLK) != libc::S_IFBLK)
                 {
-                    return Err(anyhow!(ConfigError::UnRegularFile(
-                        "Drive File".to_string()
+                    return Err(anyhow!(ConfigError::UnRegularFileOrBlk(
+                        self.path_on_host.clone()
                     )));
                 }
             }
             Err(e) => {
                 error!("Failed to check the drive metadata: {:?}", e);
-                return Err(anyhow!(ConfigError::UnRegularFile(
-                    "Drive File".to_string()
+                return Err(anyhow!(ConfigError::NoMetadata(
+                    self.path_on_host.clone(),
+                    e.to_string(),
                 )));
             }
         }
@@ -128,8 +129,9 @@ impl DriveConfig {
             }
         } else {
             error!("Failed to check the drive file name");
-            return Err(anyhow!(ConfigError::UnRegularFile(
-                "Drive File".to_string()
+            return Err(anyhow!(ConfigError::InvalidParam(
+                self.path_on_host.clone(),
+                "file".to_string(),
             )));
         }
         Ok(())
@@ -172,13 +174,6 @@ impl ConfigCheck for BlkDevConfig {
             )));
         }
 
-        if self.path_on_host.len() > MAX_PATH_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "drive device path".to_string(),
-                MAX_PATH_LENGTH,
-            )));
-        }
-
         if self.serial_num.is_some() && self.serial_num.as_ref().unwrap().len() > MAX_SERIAL_NUM {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "drive serial number".to_string(),
@@ -193,16 +188,6 @@ impl ConfigCheck for BlkDevConfig {
             )));
         }
 
-        if self.iops.is_some() && self.iops.unwrap() > MAX_IOPS {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "iops of block device".to_string(),
-                0,
-                true,
-                MAX_IOPS,
-                true,
-            )));
-        }
-
         if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "number queues of block device".to_string(),
@@ -212,6 +197,13 @@ impl ConfigCheck for BlkDevConfig {
                 true,
             )));
         }
+
+        let fake_drive = DriveConfig {
+            path_on_host: self.path_on_host.clone(),
+            iops: self.iops,
+            ..Default::default()
+        };
+        fake_drive.check()?;
 
         Ok(())
     }
