@@ -15,6 +15,8 @@ mod raw;
 mod uring;
 
 use std::clone::Clone;
+use std::cmp;
+use std::io::Write;
 use std::marker::{Send, Sync};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
@@ -23,7 +25,7 @@ use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 pub use libaio::*;
 pub use raw::*;
 use uring::IoUringContext;
@@ -280,52 +282,67 @@ impl<T: Clone + 'static> Aio<T> {
 
         match cb.opcode {
             IoCmd::Preadv => {
-                let mut off = cb.offset;
-                for iov in cb.iovec.iter() {
-                    // Safe because we allocate aligned memory and free it later.
-                    // Alignment is set to host page size to decrease the count of allocated pages.
-                    let aligned_buffer =
-                        unsafe { libc::memalign(host_page_size as usize, iov.iov_len as usize) };
-                    ret = raw_read(cb.file_fd, aligned_buffer as u64, iov.iov_len as usize, off)?;
-                    off += iov.iov_len as usize;
-
-                    let dst = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            iov.iov_base as *mut u8,
-                            iov.iov_len as usize,
-                        )
-                    };
-                    let src = unsafe {
-                        std::slice::from_raw_parts(
-                            aligned_buffer as *const u8,
-                            iov.iov_len as usize,
-                        )
-                    };
-                    dst.copy_from_slice(src);
+                // Safe because we allocate aligned memory and free it later.
+                // Alignment is set to host page size to decrease the count of allocated pages.
+                let aligned_buffer =
+                    unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
+                if aligned_buffer.is_null() {
+                    bail!("Failed to alloc memory for misaligned read");
+                }
+                ret = raw_read(
+                    cb.file_fd,
+                    aligned_buffer as u64,
+                    cb.nbytes as usize,
+                    cb.offset,
+                )
+                .map_err(|e| {
                     // Safe because the memory is allocated by us and will not be used anymore.
                     unsafe { libc::free(aligned_buffer) };
-                }
+                    e
+                })?;
+
+                let src = unsafe {
+                    std::slice::from_raw_parts(aligned_buffer as *const u8, cb.nbytes as usize)
+                };
+                iov_from_buf_direct(&cb.iovec, src).and_then(|v| {
+                    if v == cb.nbytes as usize {
+                        Ok(())
+                    } else {
+                        unsafe { libc::free(aligned_buffer) };
+                        bail!("Failed to copy buff to iovs")
+                    }
+                })?;
+                unsafe { libc::free(aligned_buffer) };
             }
             IoCmd::Pwritev => {
-                let mut off = cb.offset;
-                for iov in cb.iovec.iter() {
-                    let aligned_buffer =
-                        unsafe { libc::memalign(host_page_size as usize, iov.iov_len as usize) };
-                    let dst = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            aligned_buffer as *mut u8,
-                            iov.iov_len as usize,
-                        )
-                    };
-                    let src = unsafe {
-                        std::slice::from_raw_parts(iov.iov_base as *const u8, iov.iov_len as usize)
-                    };
-                    dst.copy_from_slice(src);
-
-                    ret = raw_write(cb.file_fd, aligned_buffer as u64, iov.iov_len as usize, off)?;
-                    off += iov.iov_len as usize;
-                    unsafe { libc::free(aligned_buffer) };
+                let aligned_buffer =
+                    unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
+                if aligned_buffer.is_null() {
+                    bail!("Failed to alloc memory for misaligned write");
                 }
+                let dst = unsafe {
+                    std::slice::from_raw_parts_mut(aligned_buffer as *mut u8, cb.nbytes as usize)
+                };
+                iov_to_buf_direct(&cb.iovec, dst).and_then(|v| {
+                    if v == cb.nbytes as usize {
+                        Ok(())
+                    } else {
+                        unsafe { libc::free(aligned_buffer) };
+                        bail!("Failed to copy iovs to buff")
+                    }
+                })?;
+
+                ret = raw_write(
+                    cb.file_fd,
+                    aligned_buffer as u64,
+                    cb.nbytes as usize,
+                    cb.offset,
+                )
+                .map_err(|e| {
+                    unsafe { libc::free(aligned_buffer) };
+                    e
+                })?;
+                unsafe { libc::free(aligned_buffer) };
             }
             IoCmd::Fdsync => ret = raw_datasync(cb.file_fd)?,
             _ => {}
@@ -334,4 +351,51 @@ impl<T: Clone + 'static> Aio<T> {
 
         Ok(())
     }
+}
+
+fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
+    let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
+    (&mut slice)
+        .write(buf)
+        .with_context(|| format!("Failed to write buf to hva:{})", hva))?;
+    Ok(())
+}
+
+/// Write buf to iovec and return the writed number of bytes.
+pub fn iov_from_buf_direct(iovec: &[Iovec], buf: &[u8]) -> Result<usize> {
+    let mut start: usize = 0;
+    let mut end: usize = 0;
+
+    for iov in iovec.iter() {
+        end = cmp::min(start + iov.iov_len as usize, buf.len());
+        mem_from_buf(&buf[start..end], iov.iov_base)?;
+        if end >= buf.len() {
+            break;
+        }
+        start = end;
+    }
+    Ok(end)
+}
+
+pub fn mem_to_buf(mut buf: &mut [u8], hva: u64) -> Result<()> {
+    let slice = unsafe { std::slice::from_raw_parts(hva as *const u8, buf.len()) };
+    buf.write(slice)
+        .with_context(|| format!("Failed to read buf from hva:{})", hva))?;
+    Ok(())
+}
+
+/// Read iovec to buf and return the readed number of bytes.
+pub fn iov_to_buf_direct(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
+    let mut start: usize = 0;
+    let mut end: usize = 0;
+
+    for iov in iovec {
+        end = cmp::min(start + iov.iov_len as usize, buf.len());
+        mem_to_buf(&mut buf[start..end], iov.iov_base)?;
+        if end >= buf.len() {
+            break;
+        }
+        start = end;
+    }
+    Ok(end)
 }
