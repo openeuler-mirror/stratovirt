@@ -95,7 +95,7 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
     }
 
     /// Get the events.
-    fn get_events(&mut self) -> (&[IoEvent], usize, usize) {
+    fn get_events(&mut self) -> &[IoEvent] {
         let mut queue = self.ring.completion();
         self.events.clear();
         let l = queue.len();
@@ -113,6 +113,6 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
                 }
             }
         }
-        (&self.events, 0, self.events.len())
+        &self.events
     }
 }

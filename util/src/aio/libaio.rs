@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::atomic::{fence, Ordering};
+
 use super::{AioContext, IoEvent, Result};
 use anyhow::bail;
 use kvm_bindings::__IncompleteArrayField;
@@ -64,6 +66,7 @@ pub struct EventResult {
 
 pub struct LibaioContext {
     pub ctx: *mut IoContext,
+    pub events: Vec<IoEvent>,
     pub max_size: i32,
 }
 
@@ -100,7 +103,11 @@ impl LibaioContext {
             bail!("Failed to setup aio context, return {}.", ret);
         }
 
-        Ok(LibaioContext { ctx, max_size })
+        Ok(LibaioContext {
+            ctx,
+            events: Vec::with_capacity(max_size as usize),
+            max_size,
+        })
     }
 }
 
@@ -119,20 +126,30 @@ impl AioContext for LibaioContext {
     }
 
     /// Get the IO events.
-    fn get_events(&mut self) -> (&[IoEvent], usize, usize) {
+    fn get_events(&mut self) -> &[IoEvent] {
         let ring = self.ctx as *mut AioRing;
         let head = unsafe { (*ring).head };
         let tail = unsafe { (*ring).tail };
         let ring_nr = unsafe { (*ring).nr };
+        let io_events: &[IoEvent] = unsafe { (*ring).io_events.as_slice(ring_nr as usize) };
+
         let nr = if tail >= head {
             tail - head
         } else {
-            ring_nr - head
+            ring_nr - head + tail
         };
-        unsafe { (*ring).head = (head + nr) % ring_nr };
 
-        let io_events: &[IoEvent] = unsafe { (*ring).io_events.as_slice(ring_nr as usize) };
+        // Avoid speculatively loading ring.io_events before observing tail.
+        fence(Ordering::Acquire);
+        self.events.clear();
+        for i in head..(head + nr) {
+            self.events.push(io_events[(i % ring_nr) as usize].clone());
+        }
 
-        (io_events, head as usize, (head + nr) as usize)
+        // Avoid head is updated before we consume all io_events.
+        fence(Ordering::Release);
+        unsafe { (*ring).head = tail };
+
+        &self.events
     }
 }
