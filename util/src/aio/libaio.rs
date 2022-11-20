@@ -107,13 +107,15 @@ impl LibaioContext {
 /// Implements the AioContext for libaio.
 impl AioContext for LibaioContext {
     /// Submit requests.
-    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()> {
+    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize> {
         let ret = unsafe { libc::syscall(libc::SYS_io_submit, self.ctx, nr, iocbp.as_ptr()) };
-        if ret < 0 {
+        if ret >= 0 {
+            return Ok(ret as usize);
+        }
+        if errno::errno().0 != libc::EAGAIN {
             bail!("Failed to submit aio, return {}.", ret);
         }
-
-        Ok(())
+        Ok(0)
     }
 
     /// Get the IO events.
