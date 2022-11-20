@@ -960,12 +960,6 @@ fn scsi_command_emulate_vpd_page(
             outbuf[4] = 1;
             let max_xfer_length: u32 = u32::MAX / 512;
             BigEndian::write_u32(&mut outbuf[8..12], max_xfer_length);
-            let max_unmap_sectors: u32 = (1_u32 << 30) / 512;
-            BigEndian::write_u32(&mut outbuf[20..24], max_unmap_sectors);
-            let max_unmap_block_desc: u32 = 255;
-            BigEndian::write_u32(&mut outbuf[24..28], max_unmap_block_desc);
-            let opt_unmap_granulatity: u32 = (1_u32 << 12) / 512;
-            BigEndian::write_u32(&mut outbuf[28..32], opt_unmap_granulatity);
             BigEndian::write_u64(&mut outbuf[36..44], max_xfer_length as u64);
             buflen = outbuf.len();
         }
@@ -981,10 +975,10 @@ fn scsi_command_emulate_vpd_page(
         0xb2 => {
             // Logical Block Provisioning.
             // 0: Threshold exponent.
-            // 0xe0: LBPU | LBPWS | LBPWS10 | LBPRZ | ANC_SUP | DP.
+            // 0xe0: LBPU(bit 7) | LBPWS | LBPWS10 | LBPRZ | ANC_SUP | DP.
             // 0: Threshold percentage | Provisioning Type.
             // 0: Threshold percentage.
-            outbuf.append(&mut [0_u8, 0xe0_u8, 1_u8, 0_u8].to_vec());
+            outbuf.append(&mut [0_u8, 0x60_u8, 1_u8, 0_u8].to_vec());
             buflen = 8;
         }
         _ => {
