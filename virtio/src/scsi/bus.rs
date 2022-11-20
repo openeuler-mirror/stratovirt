@@ -1106,9 +1106,10 @@ fn scsi_command_emulate_read_capacity_10(
 
     let dev_lock = dev.lock().unwrap();
     let mut outbuf: Vec<u8> = vec![0; 8];
-    let nb_sectors = cmp::min(dev_lock.disk_sectors as u32, u32::MAX);
+    let mut nb_sectors = cmp::min(dev_lock.disk_sectors as u32, u32::MAX);
+    nb_sectors -= 1;
 
-    // Bytes[0-3]: Returned Logical Block Address.
+    // Bytes[0-3]: Returned Logical Block Address(the logical block address of the last logical block).
     // Bytes[4-7]: Logical Block Length In Bytes.
     BigEndian::write_u32(&mut outbuf[0..4], nb_sectors);
     BigEndian::write_u32(&mut outbuf[4..8], DEFAULT_SECTOR_SIZE);
@@ -1308,11 +1309,12 @@ fn scsi_command_emulate_service_action_in_16(
     if cmd.buf[1] & 0x1f == SUBCODE_READ_CAPACITY_16 {
         let dev_lock = dev.lock().unwrap();
         let mut outbuf: Vec<u8> = vec![0; 32];
-        let nb_sectors = dev_lock.disk_sectors;
+        let mut nb_sectors = dev_lock.disk_sectors;
+        nb_sectors -= 1;
 
         drop(dev_lock);
 
-        // Byte[0-7]: Returned Logical BLock Address.
+        // Byte[0-7]: Returned Logical BLock Address(the logical block address of the last logical block).
         // Byte[8-11]: Logical Block Length in Bytes.
         BigEndian::write_u64(&mut outbuf[0..8], nb_sectors);
         BigEndian::write_u32(&mut outbuf[8..12], DEFAULT_SECTOR_SIZE);
