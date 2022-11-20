@@ -19,6 +19,7 @@ use std::marker::{Send, Sync};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
+use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
@@ -47,8 +48,8 @@ pub const AIO_NATIVE: &str = "native";
 
 /// The trait for Asynchronous IO operation.
 trait AioContext {
-    /// Submit IO requests to the OS.
-    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()>;
+    /// Submit IO requests to the OS, the nr submitted is returned.
+    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize>;
     /// Get the IO events of the requests sumbitted earlier.
     fn get_events(&mut self) -> (&[IoEvent], usize, usize);
 }
@@ -149,11 +150,12 @@ impl<T: Clone + 'static> Aio<T> {
         }
         // Drop reference of 'ctx', so below 'process_list' can work.
         drop(ctx);
-        self.process_list().map(|_v| Ok(done))?
+        self.process_list();
+        Ok(done)
     }
 
-    fn process_list(&mut self) -> Result<()> {
-        if self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
+    fn process_list(&mut self) {
+        while self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
             let mut iocbs = Vec::new();
 
             for _ in self.aio_in_flight.len..self.max_events {
@@ -167,16 +169,41 @@ impl<T: Clone + 'static> Aio<T> {
                 }
             }
 
-            if !iocbs.is_empty() {
-                return self
-                    .ctx
-                    .lock()
-                    .unwrap()
-                    .submit(iocbs.len() as i64, &mut iocbs);
+            // The iocbs must not be empty.
+            let (nr, is_err) = match self
+                .ctx
+                .lock()
+                .unwrap()
+                .submit(iocbs.len() as i64, &mut iocbs)
+                .map_err(|e| {
+                    error!("{}", e);
+                    e
+                }) {
+                Ok(nr) => (nr, false),
+                Err(_) => (0, true),
+            };
+
+            // Push back unsubmitted requests. This should rarely happen, so the
+            // trade off is acceptable.
+            let mut index = nr;
+            while index < iocbs.len() {
+                if let Some(node) = self.aio_in_flight.pop_head() {
+                    self.aio_in_queue.add_tail(node);
+                }
+                index += 1;
+            }
+
+            if is_err {
+                // Fail one request, retry the rest.
+                if let Some(node) = self.aio_in_queue.pop_tail() {
+                    (self.complete_func)(&(*node).value, -1);
+                }
+            } else if nr == 0 {
+                // If can't submit any request, break the loop
+                // and the method handle() will try again.
+                break;
             }
         }
-
-        Ok(())
     }
 
     pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64, direct: bool) -> Result<()> {
@@ -216,7 +243,7 @@ impl<T: Clone + 'static> Aio<T> {
 
         self.aio_in_queue.add_head(node);
         if last_aio || self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
-            return self.process_list();
+            self.process_list();
         }
 
         Ok(())

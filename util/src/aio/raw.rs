@@ -24,7 +24,7 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64> 
         }
     }
     if ret < 0 || ret as usize != size {
-        bail!("Failed to pread for {}, return {}.", fd, ret);
+        bail!("Failed to pread for {}, size {} return {}.", fd, size, ret);
     }
 
     Ok(ret)
@@ -39,7 +39,7 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64>
         }
     }
     if ret < 0 || ret as usize != size {
-        bail!("Failed to pwrite for {}, return {}.", fd, ret);
+        bail!("Failed to pwrite for {}, size {} return {}.", fd, size, ret);
     }
 
     Ok(ret)
