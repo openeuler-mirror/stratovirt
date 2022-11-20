@@ -136,7 +136,7 @@ pub struct ScsiCntlrState {
 /// Virtio Scsi Controller device structure.
 pub struct ScsiCntlr {
     /// Configuration of the virtio scsi controller.
-    config: ScsiCntlrConfig,
+    pub config: ScsiCntlrConfig,
     /// Status of virtio scsi controller.
     state: ScsiCntlrState,
     /// Scsi bus.
