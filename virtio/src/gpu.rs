@@ -43,6 +43,10 @@ use util::pixman::{
 };
 use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
+use vnc::pixman::{
+    pixman_glyph_from_vgafont, pixman_glyph_render, unref_pixman_image, QemuColorNames,
+    COLOR_TABLE_RGB,
+};
 use vnc::vnc::{
     vnc_display_cursor, vnc_display_switch, vnc_display_update, DisplayMouse, DisplaySurface,
 };
@@ -517,10 +521,20 @@ fn display_define_mouse(mouse: &mut Option<DisplayMouse>) {
 }
 
 fn display_replace_surface(surface: Option<DisplaySurface>) {
-    if let Some(mut surface) = surface {
-        vnc_display_switch(&mut surface);
-    } else {
-        println!("Surface is None, waiting complete the code!");
+    match surface {
+        Some(surface) => {
+            vnc_display_switch(&surface);
+        }
+        None => unsafe {
+            match MSG_SURFACE {
+                Some(surface) => {
+                    vnc_display_switch(&surface);
+                }
+                None => {
+                    error!("Default msg surface is none, check is needed")
+                }
+            }
+        },
     }
 }
 
@@ -562,6 +576,51 @@ fn create_surface(
     };
     surface
 }
+
+const FONT_HEIGHT: i32 = 16;
+const FONT_WIDTH: i32 = 8;
+const MSG_SURFACE_HEIGHT: i32 = 480;
+const MSG_SURFACE_WIDTH: i32 = 640;
+
+fn create_msg_surface() -> Option<DisplaySurface> {
+    let mut surface = DisplaySurface::default();
+    unsafe {
+        surface.format = pixman_format_code_t::PIXMAN_x8r8g8b8;
+        surface.image = pixman_image_create_bits(
+            surface.format,
+            MSG_SURFACE_WIDTH,
+            MSG_SURFACE_HEIGHT,
+            ptr::null_mut(),
+            MSG_SURFACE_WIDTH * 4,
+        );
+        if surface.image.is_null() {
+            error!("create default surface failed!");
+            return None;
+        }
+    }
+    let msg = String::from("Display is not active now");
+    let fg = COLOR_TABLE_RGB[0][QemuColorNames::QemuColorWhite as usize];
+    let bg = COLOR_TABLE_RGB[0][QemuColorNames::QemuColorBlack as usize];
+    let x = (MSG_SURFACE_WIDTH / FONT_WIDTH - msg.len() as i32) / 2;
+    let y = (MSG_SURFACE_HEIGHT / FONT_HEIGHT - 1) / 2;
+
+    for (index, ch) in msg.chars().enumerate() {
+        let glyph = pixman_glyph_from_vgafont(FONT_HEIGHT, ch as u32);
+        pixman_glyph_render(
+            glyph,
+            surface.image,
+            &fg,
+            &bg,
+            (x + index as i32, y),
+            FONT_WIDTH,
+            FONT_HEIGHT,
+        );
+        unref_pixman_image(glyph);
+    }
+    Some(surface)
+}
+
+static mut MSG_SURFACE: Option<DisplaySurface> = None;
 
 impl GpuIoHandler {
     fn gpu_get_pixman_format(&mut self, format: u32) -> Result<pixman_format_code_t> {
@@ -1799,6 +1858,10 @@ impl VirtioDevice for Gpu {
                 QUEUE_NUM_GPU,
                 queues.len()
             )));
+        }
+
+        unsafe {
+            MSG_SURFACE = create_msg_surface();
         }
 
         self.interrupt_cb = Some(interrupt_cb.clone());
