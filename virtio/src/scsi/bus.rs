@@ -250,12 +250,13 @@ pub const SCSI_SENSE_SPACE_ALLOC_FAILED: ScsiSense = scsisense!(DATA_PROTECT, 0x
 
 #[derive(Default)]
 pub struct ScsiSense {
-    key: u8,
-    asc: u8,
-    ascq: u8,
+    /// Sense key.
+    pub key: u8,
+    /// Additional sense code.
+    pub asc: u8,
+    /// Additional sense code qualifier.
+    pub ascq: u8,
 }
-
-pub const SCSI_SENSE_LEN: u32 = 18;
 
 /// Mode page codes for mode sense/set.
 pub const MODE_PAGE_R_W_ERROR: u8 = 0x01;
@@ -467,7 +468,7 @@ impl ScsiRequest {
             aiocb.opcode = IoCmd::Fdsync;
             (*aio)
                 .as_mut()
-                .rw_sync(aiocb)
+                .flush_sync(aiocb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
             return Ok(0);
         }
@@ -595,7 +596,7 @@ impl ScsiRequest {
                     )?;
                 } else {
                     error!(
-                        "Error in processing scsi command 0x{:#x}, err is {:?}",
+                        "Error in processing scsi command {:#x}, err is {:?}",
                         self.cmd.command, e
                     );
                     self.cmd_complete(
@@ -612,18 +613,6 @@ impl ScsiRequest {
         Ok(())
     }
 
-    fn set_scsi_sense(&self, sense: ScsiSense) {
-        let mut req = self.virtioscsireq.lock().unwrap();
-        // Response code: current errors(0x70).
-        req.resp.sense[0] = 0x70;
-        req.resp.sense[2] = sense.key;
-        // Additional sense length: sense len - 8.
-        req.resp.sense[7] = SCSI_SENSE_LEN as u8 - 8;
-        req.resp.sense[12] = sense.asc;
-        req.resp.sense[13] = sense.ascq;
-        req.resp.sense_len = SCSI_SENSE_LEN;
-    }
-
     fn cmd_complete(
         &self,
         mem_space: &Arc<AddressSpace>,
@@ -632,10 +621,11 @@ impl ScsiRequest {
         scsisense: Option<ScsiSense>,
         outbuf: &[u8],
     ) -> Result<()> {
-        if let Some(sense) = scsisense {
-            self.set_scsi_sense(sense);
-        }
         let mut req = self.virtioscsireq.lock().unwrap();
+
+        if let Some(sense) = scsisense {
+            req.resp.set_scsi_sense(sense);
+        }
         req.resp.response = response;
         req.resp.status = status;
         req.resp.resid = 0;
@@ -658,7 +648,7 @@ impl ScsiRequest {
             }
         }
 
-        req.complete(mem_space);
+        req.complete(mem_space)?;
         Ok(())
     }
 }
