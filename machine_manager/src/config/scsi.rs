@@ -34,6 +34,8 @@ pub struct ScsiCntlrConfig {
     pub iothread: Option<String>,
     /// Number of scsi cmd queues.
     pub queues: u32,
+    /// Boot path of this scsi controller. It's prefix of scsi device's boot path.
+    pub boot_prefix: Option<String>,
 }
 
 impl Default for ScsiCntlrConfig {
@@ -43,6 +45,7 @@ impl Default for ScsiCntlrConfig {
             iothread: None,
             //At least 1 cmd queue.
             queues: 1,
+            boot_prefix: None,
         }
     }
 }
@@ -136,6 +139,8 @@ pub struct ScsiDevConfig {
     pub direct: bool,
     /// Async IO type.
     pub aio_type: Option<String>,
+    /// Boot order.
+    pub boot_index: Option<u8>,
     /// Scsi four level hierarchical address(host, channel, target, lun).
     pub channel: u8,
     pub target: u8,
@@ -151,6 +156,7 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         .push("scsi-id")
         .push("lun")
         .push("serial")
+        .push("bootindex")
         .push("drive");
 
     cmd_parser.parse(drive_config)?;
@@ -162,6 +168,10 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     } else {
         return Err(anyhow!(ConfigError::FieldIsMissing("drive", "scsi device")));
     };
+
+    if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
+        scsi_dev_cfg.boot_index = Some(boot_index);
+    }
 
     if let Some(serial) = cmd_parser.get_value::<String>("serial")? {
         scsi_dev_cfg.serial = Some(serial);

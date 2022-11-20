@@ -1305,6 +1305,15 @@ impl PciDevOps for VirtioPciDevice {
                 dev_path.push_str("/disk@0,0");
                 Some(dev_path)
             }
+            VIRTIO_TYPE_SCSI => {
+                // The virtio scsi controller can not set boot order, which is set for scsi device.
+                // All the scsi devices in the same scsi controller have the same boot path prefix
+                // (eg: /pci@XXXXX/scsi@$slot_id[,function_id]). And every scsi device has it's
+                // own boot path("/channel@0/disk@$target_id,$lun_id");
+                let parent_dev_path = self.get_parent_dev_path(parent_bus);
+                let dev_path = self.populate_dev_path(parent_dev_path, self.devfn, "/scsi@");
+                Some(dev_path)
+            }
             _ => None,
         }
     }

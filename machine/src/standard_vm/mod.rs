@@ -808,6 +808,7 @@ impl StdMachine {
             queues: args.queues.unwrap_or_else(|| {
                 VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
             }) as u32,
+            boot_prefix: None,
         };
         dev_cfg.check()?;
 
@@ -822,15 +823,20 @@ impl StdMachine {
             bail!("No scsi controller list found");
         }
 
-        let result = self.add_virtio_pci_device(&args.id, pci_bdf, device, multifunction, false);
-        if let Err(ref e) = result {
+        let result =
+            self.add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false);
+        let pci_dev = if let Err(ref e) = result {
             self.get_scsi_cntlr_list()
                 .unwrap()
                 .lock()
                 .unwrap()
                 .remove(&bus_name);
             bail!("Failed to add virtio scsi controller, error is {:?}", e);
-        }
+        } else {
+            result.unwrap()
+        };
+
+        device.lock().unwrap().config.boot_prefix = pci_dev.lock().unwrap().get_dev_path();
 
         Ok(())
     }
