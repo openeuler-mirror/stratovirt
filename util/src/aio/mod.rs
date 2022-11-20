@@ -33,7 +33,7 @@ type CbNode<T> = Node<AioCb<T>>;
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct IoEvent {
     pub data: u64,
     pub obj: u64,
@@ -51,7 +51,7 @@ trait AioContext {
     /// Submit IO requests to the OS, the nr submitted is returned.
     fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize>;
     /// Get the IO events of the requests sumbitted earlier.
-    fn get_events(&mut self) -> (&[IoEvent], usize, usize);
+    fn get_events(&mut self) -> &[IoEvent];
 }
 
 pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) + Sync + Send>;
@@ -126,19 +126,15 @@ impl<T: Clone + 'static> Aio<T> {
     pub fn handle(&mut self) -> Result<bool> {
         let mut done = false;
         let mut ctx = self.ctx.lock().unwrap();
-        let (evts, start, end) = ctx.get_events();
 
-        for index in start..end {
+        for evt in ctx.get_events() {
             unsafe {
-                let node = evts[index].data as *mut CbNode<T>;
-
-                let res = if evts[index].res2 == 0
-                    && evts[index].res > 0
-                    && evts[index].res as u64 == (*node).value.nbytes
-                {
+                let node = evt.data as *mut CbNode<T>;
+                let res = if (evt.res2 == 0) && (evt.res == (*node).value.nbytes as i64) {
                     done = true;
-                    evts[index].res
+                    evt.res
                 } else {
+                    error!("Async IO request failed, res2 {} res {}", evt.res2, evt.res);
                     -1
                 };
 
