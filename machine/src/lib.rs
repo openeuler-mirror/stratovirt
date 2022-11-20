@@ -628,6 +628,13 @@ pub trait MachineOps {
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .with_context(|| "Failed to add virtio pci device")?;
         if let Some(bootindex) = device_cfg.boot_index {
+            // Eg: OpenFirmware device path(virtio-blk disk):
+            // /pci@i0cf8/scsi@6[,3]/disk@0,0
+            //   |             |  |       | |
+            //   |             |  |       | |
+            //   |             |  |     fixed 0.
+            //   |         PCI slot,[function] holding disk.
+            //  PCI root as system bus port.
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
                 self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
             }
