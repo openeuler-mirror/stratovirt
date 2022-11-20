@@ -955,25 +955,29 @@ impl ScsiCmdHandler {
                 continue;
             };
 
-            // If found lun id is not equal to request lun id, this request is a target request.
-            let scsi_dev_lock = scsidevice.lock().unwrap();
-            let found_lun_id = scsi_dev_lock.config.lun;
-            drop(scsi_dev_lock);
-
+            let scsi_device_lock = scsidevice.lock().unwrap();
             if scsi_req.opstype == EMULATE_SCSI_OPS {
+                let lun = scsi_device_lock.config.lun;
+                drop(scsi_device_lock);
                 let scsicompletecb = ScsiCompleteCb::new(
                     self.mem_space.clone(),
                     Arc::new(Mutex::new(scsi_req.clone())),
                 );
-                scsi_req.emulate_execute(scsicompletecb, req_lun_id, found_lun_id)?;
-            } else if let Some(disk_img) = scsidevice.lock().unwrap().disk_image.as_mut() {
+                // If found device's lun id is not equal to request lun id, this request is a target request.
+                scsi_req.emulate_execute(scsicompletecb, req_lun_id, lun)?;
+            } else {
+                let aio_type = scsi_device_lock.config.aio_type.clone();
+                let direct = scsi_device_lock.config.direct;
+                let disk_img = scsi_device_lock.disk_image.as_ref().unwrap().clone();
+                drop(scsi_device_lock);
+
                 let scsicompletecb = ScsiCompleteCb::new(
                     self.mem_space.clone(),
                     Arc::new(Mutex::new(scsi_req.clone())),
                 );
                 if let Some(ref mut aio) = self.aio {
                     if let Err(ref e) =
-                        scsi_req.execute(aio, disk_img, false, None, true, scsicompletecb)
+                        scsi_req.execute(aio, &disk_img, direct, aio_type, true, scsicompletecb)
                     {
                         // If read/write operation by rw_sync or flush operation fails, this request will not
                         // call complete_func(). So we should process this error here. Otherwise, stratovirt

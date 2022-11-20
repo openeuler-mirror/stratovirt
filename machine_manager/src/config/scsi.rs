@@ -132,6 +132,10 @@ pub struct ScsiDevConfig {
     pub bus: String,
     /// Scsi device can not do write operation.
     pub read_only: bool,
+    /// If true, use direct access io.
+    pub direct: bool,
+    /// Async IO type.
+    pub aio_type: Option<String>,
     /// Scsi four level hierarchical address(host, channel, target, lun).
     pub channel: u8,
     pub target: u8,
@@ -207,6 +211,8 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
     if let Some(drive_arg) = &vm_config.drives.remove(&scsi_drive) {
         scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
         scsi_dev_cfg.read_only = drive_arg.read_only;
+        scsi_dev_cfg.direct = drive_arg.direct;
+        scsi_dev_cfg.aio_type = drive_arg.aio.clone();
     }
 
     Ok(scsi_dev_cfg)
