@@ -21,9 +21,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use super::{
-    iov_discard_back, iov_discard_front, iov_from_buf_direct, iov_to_buf, report_virtio_error,
-    virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
-    VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error, virtio_has_feature,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
     VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
     VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
@@ -42,7 +42,9 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::{raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE};
+use util::aio::{
+    iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
+};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
