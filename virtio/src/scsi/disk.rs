@@ -10,15 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom};
-use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
 
 use crate::ScsiBus::ScsiBus;
 use machine_manager::config::ScsiDevConfig;
+use util::file::open_disk_file;
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -137,17 +137,11 @@ impl ScsiDevice {
         if !self.config.path_on_host.is_empty() {
             self.disk_image = None;
 
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(!self.config.read_only)
-                .custom_flags(libc::O_DIRECT)
-                .open(&self.config.path_on_host)
-                .with_context(|| {
-                    format!(
-                        "Failed to open the file {} for scsi device",
-                        self.config.path_on_host
-                    )
-                })?;
+            let mut file = open_disk_file(
+                &self.config.path_on_host,
+                self.config.read_only,
+                self.config.direct,
+            )?;
 
             disk_size = file
                 .seek(SeekFrom::End(0))

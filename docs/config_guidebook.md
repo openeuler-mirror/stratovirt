@@ -783,10 +783,12 @@ Seven properties can be set for virtio-scsi hd.
 * lun: lun number (lun) of scsi four level hierarchical address (host, channel, target, lun). Configuration rage is [0, 255]. Boot scsi disk configuration range is [0, 7].
 * serial: serial number of virtio scsi device. (optional)
 * readonly: whether scsi device is read-only or not. Default option is false. (optional)
+* direct: open block device with `O_DIRECT` mode. (optional) If not set, default is true.
+* aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
 
 ```shell
 -device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1,num-queues=4]
--drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true]
+-drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0
 ```
 Note: Only support scsi-id=0 and lun number should start from 0 Now.
