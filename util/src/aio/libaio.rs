@@ -67,6 +67,14 @@ pub struct LibaioContext {
     pub max_size: i32,
 }
 
+impl Drop for LibaioContext {
+    fn drop(&mut self) {
+        if !self.ctx.is_null() {
+            unsafe { libc::syscall(libc::SYS_io_destroy, self.ctx) };
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Default)]
 pub struct AioRing {
