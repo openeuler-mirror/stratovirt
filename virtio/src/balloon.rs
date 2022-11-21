@@ -950,17 +950,19 @@ impl VirtioDevice for Balloon {
             num_pages: self.num_pages,
             actual: self.actual.load(Ordering::Acquire),
         };
-        if offset != 0 {
-            return Err(anyhow!(VirtioError::IncorrectOffset(0, offset)));
+
+        let config_len = size_of::<VirtioBalloonConfig>() as u64;
+        let data_len = data.len() as u64;
+        if offset + data_len > config_len {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-        data.write_all(
-            &new_config.as_bytes()[offset as usize
-                ..cmp::min(
-                    offset as usize + data.len(),
-                    size_of::<VirtioBalloonConfig>(),
-                )],
-        )
-        .with_context(|| "Failed to write data to 'data' while reading balloon config")?;
+
+        if let Some(end) = offset.checked_add(data_len) {
+            data.write_all(
+                &new_config.as_bytes()[offset as usize..cmp::min(end, config_len) as usize],
+            )?;
+        }
+
         Ok(())
     }
 
