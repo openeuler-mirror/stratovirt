@@ -492,6 +492,25 @@ impl PciConfig {
         buf[..].copy_from_slice(&self.config[offset..(offset + size)]);
     }
 
+    fn validate_config_boundary(&mut self, offset: usize, data: &[u8]) -> Result<()> {
+        if offset + data.len() > self.config.len() {
+            return Err(anyhow!(PciError::InvalidConf(
+                "config size".to_string(),
+                format!("offset {} with len {}", offset, data.len())
+            )));
+        }
+
+        // According to pcie specification 7.2.2.2 PCI Express Device Requirements:
+        if data.len() > 4 {
+            return Err(anyhow!(PciError::InvalidConf(
+                "data size".to_string(),
+                format!("{}", data.len())
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Common writing to configuration space.
     ///
     /// # Arguments
@@ -500,6 +519,10 @@ impl PciConfig {
     /// * `data` - Data to write.
     /// * `dev_id` - Device id to send MSI/MSI-X.
     pub fn write(&mut self, mut offset: usize, data: &[u8], dev_id: u16) {
+        if self.validate_config_boundary(offset, data).is_err() {
+            return;
+        }
+
         let cloned_data = data.to_vec();
         let old_offset = offset;
         for data in &cloned_data {
@@ -508,6 +531,7 @@ impl PciConfig {
             self.config[offset] &= !(data & self.write_clear_mask[offset]);
             offset += 1;
         }
+
         if let Some(msix) = &mut self.msix {
             msix.lock()
                 .unwrap()
