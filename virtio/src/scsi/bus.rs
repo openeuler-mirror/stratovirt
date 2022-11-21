@@ -460,6 +460,15 @@ impl ScsiRequest {
             aiocb.iovec.push(iovec);
         }
 
+        if self.cmd.command == SYNCHRONIZE_CACHE {
+            aiocb.opcode = IoCmd::Fdsync;
+            (*aio)
+                .as_mut()
+                .rw_sync(aiocb)
+                .with_context(|| "Failed to process scsi request for flushing")?;
+            return Ok(0);
+        }
+
         match self.cmd.mode {
             ScsiXferMode::ScsiXferFromDev => {
                 aiocb.opcode = IoCmd::Preadv;
@@ -536,7 +545,7 @@ impl ScsiRequest {
                     sense = Some(SCSI_SENSE_NO_SENSE);
                     Ok(Vec::new())
                 }
-                WRITE_SAME_10 | WRITE_SAME_16 | SYNCHRONIZE_CACHE => Ok(Vec::new()),
+                WRITE_SAME_10 | WRITE_SAME_16 => Ok(Vec::new()),
                 TEST_UNIT_READY => {
                     let dev_lock = self.dev.lock().unwrap();
                     if dev_lock.disk_image.is_none() {
@@ -662,13 +671,17 @@ fn write_buf_mem(buf: &[u8], max: u64, hva: u64) -> Result<()> {
     Ok(())
 }
 
+// Scsi Commands which are emulated in stratovirt and do noting to the backend.
 pub const EMULATE_SCSI_OPS: u32 = 0;
-pub const DMA_SCSI_OPS: u32 = 1;
+// Scsi Commands which will do something(eg: read and write) to the backend.
+pub const NON_EMULATE_SCSI_OPS: u32 = 1;
 
 fn scsi_operation_type(op: u8) -> u32 {
     match op {
         READ_6 | READ_10 | READ_12 | READ_16 | WRITE_6 | WRITE_10 | WRITE_12 | WRITE_16
-        | WRITE_VERIFY_10 | WRITE_VERIFY_12 | WRITE_VERIFY_16 => DMA_SCSI_OPS,
+        | WRITE_VERIFY_10 | WRITE_VERIFY_12 | WRITE_VERIFY_16 | SYNCHRONIZE_CACHE => {
+            NON_EMULATE_SCSI_OPS
+        }
         _ => EMULATE_SCSI_OPS,
     }
 }
@@ -851,7 +864,7 @@ fn scsi_cdb_xfer_mode(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> ScsiXferMode 
     }
 }
 
-/// VPD: Virtual Product Data.
+/// VPD: Vital Product Data.
 fn scsi_command_emulate_vpd_page(
     cmd: &ScsiCommand,
     dev: &Arc<Mutex<ScsiDevice>>,
@@ -906,7 +919,7 @@ fn scsi_command_emulate_vpd_page(
             }
 
             if len > 0 {
-                // 0x2: Code Set: ASCII, Protocol Identifier: FCP-4.
+                // 0x2: Code Set: ASCII, Protocol Identifier: reserved.
                 // 0: Identifier Type, Association, Reserved, Piv.
                 // 0: Reserved.
                 // len: identifier length.
@@ -956,7 +969,6 @@ fn scsi_command_emulate_vpd_page(
         0xb1 => {
             // Block Device Characteristics.
             // 0: Medium Rotation Rate: 2Bytes.
-            // 0: Medium Rotation Rate: 2Bytes.
             // 0: Product Type.
             // 0: Nominal Form Factor, Wacereq, Wabereq.
             // 0: Vbuls, Fuab, Bocs, Reserved, Zoned, Reserved.
@@ -977,7 +989,7 @@ fn scsi_command_emulate_vpd_page(
         }
     }
 
-    // It's OK for just using outbuf bit 3, because all page_code's buflen in stratovirt is less than 255 now.
+    // It's OK for just using outbuf byte 3, because all page_code's buflen in stratovirt is less than 255 now.
     outbuf[3] = buflen as u8 - 4;
     Ok(outbuf)
 }
@@ -1044,7 +1056,7 @@ fn scsi_command_emulate_inquiry(
     cmd: &ScsiCommand,
     dev: &Arc<Mutex<ScsiDevice>>,
 ) -> Result<Vec<u8>> {
-    // Vital product data.
+    // Byte1 bit0: EVPD(enable vital product data).
     if cmd.buf[1] == 0x1 {
         return scsi_command_emulate_vpd_page(cmd, dev);
     }
@@ -1077,7 +1089,11 @@ fn scsi_command_emulate_inquiry(
 
     drop(dev_lock);
 
-    // scsi version: 5.
+    // outbuf:
+    // Byte2: Version.
+    // Byte3: bits[0-3]: Response Data Format; bit 4:Hisup.
+    // Byte4: Additional Length(outbuf.len()-5).
+    // Byte7: bit2: Cmdque; bit4: SYNC.
     outbuf[2] = 5;
     outbuf[3] = (2 | 0x10) as u8;
 
@@ -1087,7 +1103,6 @@ fn scsi_command_emulate_inquiry(
         outbuf[4] = 36 - 5;
     }
 
-    // TCQ.
     outbuf[7] = 0x12;
 
     Ok(outbuf)
@@ -1248,13 +1263,18 @@ fn scsi_command_emulate_report_luns(
     let dev_lock = dev.lock().unwrap();
     // Byte 0-3: Lun List Length. Byte 4-7: Reserved.
     let mut outbuf: Vec<u8> = vec![0; 8];
+    let target = dev_lock.config.target;
 
     if cmd.xfer < 16 {
         bail!("scsi REPORT LUNS xfer {} too short!", cmd.xfer);
     }
 
+    // Byte2: SELECT REPORT:00h/01h/02h. 03h to FFh is reserved.
     if cmd.buf[2] > 2 {
-        bail!("Invalid REPORT LUNS cmd, buf[2] is {}", cmd.buf[2]);
+        bail!(
+            "Invalid REPORT LUNS cmd, SELECT REPORT Byte is {}",
+            cmd.buf[2]
+        );
     }
 
     let scsi_bus = dev_lock.parent_bus.upgrade().unwrap();
@@ -1264,6 +1284,10 @@ fn scsi_command_emulate_report_luns(
 
     for (_pos, device) in scsi_bus_clone.devices.iter() {
         let device_lock = device.lock().unwrap();
+        if device_lock.config.target != target {
+            drop(device_lock);
+            continue;
+        }
         let len = outbuf.len();
         if device_lock.config.lun < 256 {
             outbuf.push(0);
