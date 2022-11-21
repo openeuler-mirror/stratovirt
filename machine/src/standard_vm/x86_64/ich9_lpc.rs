@@ -276,15 +276,7 @@ impl PciDevOps for LPCBridge {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let size = data.len();
-        let end = offset + size;
-        if end > PCI_CONFIG_SPACE_SIZE || size > 4 {
-            debug!(
-                "Failed to write LPC bridge's pci config space: offset {}, data size {}",
-                offset, size
-            );
-            return;
-        }
+        let end = offset + data.len();
 
         self.config.write(offset, data, 0);
         if ranges_overlap(

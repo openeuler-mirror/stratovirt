@@ -252,16 +252,7 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let data_size = data.len();
-        let end = offset + data_size;
-        if end > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
-            error!(
-                "Failed to write pci config space at offset 0x{:x} with data size {}",
-                offset, data_size
-            );
-            return;
-        }
-
+        let end = offset + data.len();
         self.pci_config
             .write(offset, data, self.dev_id.clone().load(Ordering::Acquire));
         if ranges_overlap(
