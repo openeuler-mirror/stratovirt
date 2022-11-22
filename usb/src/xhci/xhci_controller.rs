@@ -32,6 +32,9 @@ use crate::xhci::xhci_ring::{
 };
 use anyhow::{bail, Context, Result};
 
+use super::xhci_ring::SETUP_TRB_TR_LEN;
+use super::xhci_ring::TRB_TR_LEN_MASK;
+
 pub const MAX_INTRS: u16 = 16;
 pub const MAX_SLOTS: u32 = 64;
 /// Endpoint state
@@ -623,14 +626,13 @@ impl XhciDevice {
     /// Control plane
     pub fn handle_command(&mut self) -> Result<()> {
         self.oper.start_cmd_ring();
-        let mut slot_id: u32;
+        let mut slot_id: u32 = 0;
         let mut event = XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::Success);
         for _ in 0..COMMAND_LIMIT {
             match self.cmd_ring.fetch_trb() {
                 Ok(Some(trb)) => {
                     let trb_type = trb.get_type();
                     event.ptr = trb.addr;
-                    slot_id = self.get_slot_id(&mut event, &trb);
                     info!("handle_command {:?} {:?}", trb_type, trb);
                     match trb_type {
                         TRBType::CrEnableSlot => {
@@ -649,44 +651,52 @@ impl XhciDevice {
                             }
                         }
                         TRBType::CrDisableSlot => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.disable_slot(slot_id)?;
                             }
                         }
                         TRBType::CrAddressDevice => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.address_device(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrConfigureEndpoint => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.configure_endpoint(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrEvaluateContext => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.evaluate_context(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrStopEndpoint => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
                                 event.ccode = self.stop_endpoint(slot_id, ep_id)?;
                             }
                         }
                         TRBType::CrResetEndpoint => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
                                 event.ccode = self.reset_endpoint(slot_id, ep_id)?;
                             }
                         }
                         TRBType::CrSetTrDequeue => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
                                 event.ccode = self.set_tr_dequeue_pointer(slot_id, ep_id, &trb)?;
                             }
                         }
                         TRBType::CrResetDevice => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.reset_device(slot_id)?;
                             }
@@ -1289,8 +1299,11 @@ impl XhciDevice {
         if trb_setup.control & TRB_TR_IDT != TRB_TR_IDT {
             bail!("no IDT bit");
         }
-        if trb_setup.status & 0x1ffff != 8 {
-            bail!("Bad Setup TRB length {}", trb_setup.status & 0x1ffff);
+        if trb_setup.status & TRB_TR_LEN_MASK != SETUP_TRB_TR_LEN {
+            bail!(
+                "Bad Setup TRB length {}",
+                trb_setup.status & TRB_TR_LEN_MASK
+            );
         }
 
         let bm_request_type = trb_setup.parameter as u8;
@@ -1345,7 +1358,7 @@ impl XhciDevice {
                 || trb_type == TRBType::TrNormal
                 || trb_type == TRBType::TrIsoch
             {
-                let chunk = trb.status & 0x1ffff;
+                let chunk = trb.status & TRB_TR_LEN_MASK;
                 let dma_addr = if trb.control & TRB_TR_IDT == TRB_TR_IDT {
                     trb.addr
                 } else {
@@ -1359,9 +1372,7 @@ impl XhciDevice {
             }
         }
         xfer.packet.init(dir as u32, ep, 0, false, xfer.int_req);
-        for v in vec {
-            xfer.packet.iovecs.push(v);
-        }
+        xfer.packet.iovecs = vec;
         Ok(())
     }
 
@@ -1435,7 +1446,7 @@ impl XhciDevice {
         for i in 0..xfer.td.len() {
             let trb = &xfer.td[i];
             let trb_type = trb.get_type();
-            let mut chunk = trb.status & 0x1ffff;
+            let mut chunk = trb.status & TRB_TR_LEN_MASK;
             match trb_type {
                 TRBType::TrSetup => {
                     if chunk > 8 {
@@ -1493,7 +1504,7 @@ impl XhciDevice {
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
         evt.slot_id = xfer.slotid as u8;
         evt.ep_id = xfer.epid as u8;
-        evt.length = (trb.status & 0x1ffff) - chunk;
+        evt.length = (trb.status & TRB_TR_LEN_MASK) - chunk;
         evt.flags = 0;
         evt.ptr = trb.addr;
         evt.ccode = if xfer.status == TRBCCode::Success {

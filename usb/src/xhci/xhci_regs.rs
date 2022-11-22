@@ -98,6 +98,7 @@ const XHCI_INTR_REG_ERSTBA_HI: u64 = 0x14;
 const XHCI_INTR_REG_ERDP_LO: u64 = 0x18;
 const XHCI_INTR_REG_ERDP_HI: u64 = 0x1c;
 const XHCI_INTR_REG_SIZE: u64 = 0x20;
+const XHCI_INTR_REG_SHIFT: u64 = 5;
 /// Doorbell Register Bit Field.
 /// DB Target.
 const DB_TARGET_MASK: u32 = 0xff;
@@ -396,10 +397,11 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 {
                     locked_xhci.stop();
                 }
-                // Not support Save/Restore, report the Save/Restore Error.
                 if value & USB_CMD_CSS == USB_CMD_CSS {
                     locked_xhci.oper.usb_status &= !USB_STS_SRE;
                 }
+                // When the restore command is issued, an error is reported and then
+                // guest OS performs a complete initialization.
                 if value & USB_CMD_CRS == USB_CMD_CRS {
                     locked_xhci.oper.usb_status |= USB_STS_SRE;
                 }
@@ -489,7 +491,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 error!("Failed to read runtime registers, offset is {:x}", offset);
             }
         } else {
-            let idx = ((offset - XHCI_INTR_REG_SIZE) / XHCI_INTR_REG_SIZE) as usize;
+            let idx = ((offset - XHCI_INTR_REG_SIZE) >> XHCI_INTR_REG_SHIFT) as usize;
             let mut xhci = xhci.lock().unwrap();
             if idx >= xhci.intrs.len() {
                 error!("Invalid interrupter index: {} idx {}", offset, idx);
@@ -535,7 +537,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             return false;
         }
         let mut xhci = xhci.lock().unwrap();
-        let idx = ((offset - XHCI_INTR_REG_SIZE) / XHCI_INTR_REG_SIZE) as u32;
+        let idx = ((offset - XHCI_INTR_REG_SIZE) >> XHCI_INTR_REG_SHIFT) as u32;
         if idx >= xhci.intrs.len() as u32 {
             error!("Invalid interrupter index: {} idx {}", offset, idx);
             return false;
