@@ -20,7 +20,7 @@ use util::num_ops::{read_u32, write_u64_high, write_u64_low};
 
 use crate::config::*;
 use crate::usb::UsbPort;
-use crate::xhci::xhci_controller::{set_field, XhciDevice, XhciEvent};
+use crate::xhci::xhci_controller::{XhciDevice, XhciEvent};
 use crate::xhci::xhci_ring::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
 use anyhow::{bail, Result};
 
@@ -249,6 +249,17 @@ impl XhciPort {
             usb_port: None,
             name,
         }
+    }
+
+    /// Get port link state from port status and control register.
+    pub fn get_port_link_state(&self) -> u32 {
+        self.portsc >> PORTSC_PLS_SHIFT & PORTSC_PLS_MASK
+    }
+
+    /// Set port link state in port status and control register.
+    pub fn set_port_link_state(&mut self, pls: u32) {
+        self.portsc &= !(PORTSC_PLS_MASK << PORTSC_PLS_SHIFT);
+        self.portsc |= (pls & PORTSC_PLS_MASK) << PORTSC_PLS_SHIFT;
     }
 }
 
@@ -726,7 +737,7 @@ fn xhci_portsc_write(port: &Arc<Mutex<XhciPort>>, value: u32) -> Result<()> {
     if value & PORTSC_LWS == PORTSC_LWS {
         let old_pls = (locked_port.portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
         let new_pls = (value >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
-        notify = xhci_portsc_ls_write(&mut portsc, old_pls, new_pls);
+        notify = xhci_portsc_ls_write(&mut locked_port, old_pls, new_pls);
     }
     portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
     portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
@@ -738,17 +749,17 @@ fn xhci_portsc_write(port: &Arc<Mutex<XhciPort>>, value: u32) -> Result<()> {
     Ok(())
 }
 
-fn xhci_portsc_ls_write(portsc: &mut u32, old_pls: u32, new_pls: u32) -> u32 {
+fn xhci_portsc_ls_write(port: &mut XhciPort, old_pls: u32, new_pls: u32) -> u32 {
     match new_pls {
         PLS_U0 => {
             if old_pls != PLS_U0 {
-                *portsc = set_field(*portsc, new_pls, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+                port.set_port_link_state(new_pls);
                 return PORTSC_PLC;
             }
         }
         PLS_U3 => {
             if old_pls < PLS_U3 {
-                *portsc = set_field(*portsc, new_pls, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+                port.set_port_link_state(new_pls);
             }
         }
         PLS_RESUME => {}

@@ -20,7 +20,7 @@ use crate::descriptor::{
     UsbInterfaceDescriptor,
 };
 use crate::hid::{
-    Hid, HidType, DESC_STRINGS, QUEUE_MASK, STR_CONFIG_KEYBOARD, STR_MANUFACTURER,
+    Hid, HidType, DESC_STRINGS, QUEUE_LENGTH, QUEUE_MASK, STR_CONFIG_KEYBOARD, STR_MANUFACTURER,
     STR_PRODUCT_KEYBOARD, STR_SERIAL_KEYBOARD,
 };
 use crate::usb::{
@@ -124,7 +124,7 @@ impl UsbKeyboard {
         Self {
             id,
             device: Arc::new(Mutex::new(UsbDevice::new())),
-            hid: Arc::new(Mutex::new(Hid::new())),
+            hid: Arc::new(Mutex::new(Hid::new(HidType::Keyboard))),
             ctrl: None,
             endpoint: None,
         }
@@ -147,9 +147,6 @@ impl UsbKeyboard {
     fn init_hid(&mut self) -> Result<()> {
         let mut locked_usb = self.device.lock().unwrap();
         locked_usb.usb_desc = Some(DESC_KEYBOARD.clone());
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.kind = HidType::Keyboard;
-        drop(locked_hid);
         let ep = locked_usb.get_endpoint(USB_TOKEN_IN as u32, 1);
         self.endpoint = Some(Arc::downgrade(&ep));
         locked_usb.init_descriptor()?;
@@ -161,6 +158,11 @@ impl UsbKeyboard {
 pub fn keyboard_event(kbd: &Arc<Mutex<UsbKeyboard>>, scan_codes: &[u32]) -> Result<()> {
     let locked_kbd = kbd.lock().unwrap();
     let mut locked_hid = locked_kbd.hid.lock().unwrap();
+    if scan_codes.len() as u32 + locked_hid.num > QUEUE_LENGTH {
+        debug!("Keyboard queue is full!");
+        // Return ok to ignore the request.
+        return Ok(());
+    }
     for code in scan_codes {
         let index = ((locked_hid.head + locked_hid.num) & QUEUE_MASK) as usize;
         locked_hid.num += 1;

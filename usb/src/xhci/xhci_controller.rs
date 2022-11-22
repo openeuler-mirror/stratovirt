@@ -501,28 +501,23 @@ impl XhciDevice {
     /// Reset xhci port.
     pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<XhciPort>>, warm_reset: bool) -> Result<()> {
         let mut locked_port = xhci_port.lock().unwrap();
-        if let Some(usb_port) = locked_port.usb_port.clone() {
-            let locked_usb_port = usb_port.upgrade().unwrap();
-            let speed = locked_usb_port
-                .lock()
-                .unwrap()
-                .dev
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .speed();
+        if let Some(usb_port) = locked_port.usb_port.as_ref() {
+            let upg_usb_port = usb_port.upgrade().unwrap();
+            let locked_usb_port = upg_usb_port.lock().unwrap();
+            let usb_dev = if let Some(dev) = locked_usb_port.dev.as_ref() {
+                dev
+            } else {
+                // No device, no need to reset.
+                return Ok(());
+            };
+            usb_dev.lock().unwrap().reset();
+            let speed = usb_dev.lock().unwrap().speed();
             if speed == USB_SPEED_SUPER && warm_reset {
                 locked_port.portsc |= PORTSC_WRC;
             }
             match speed {
                 USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
-                    locked_port.portsc = set_field(
-                        locked_port.portsc,
-                        PLS_U0,
-                        PORTSC_PLS_MASK,
-                        PORTSC_PLS_SHIFT,
-                    );
+                    locked_port.set_port_link_state(PLS_U0);
                     locked_port.portsc |= PORTSC_PED;
                 }
                 _ => {
@@ -563,17 +558,23 @@ impl XhciDevice {
             if let Some(dev) = &locked_usb_port.dev {
                 let speed = dev.lock().unwrap().speed();
                 locked_port.portsc |= PORTSC_CCS;
-                if speed == PORTSC_SPEED_SUPER {
+                if speed == USB_SPEED_SUPER {
                     locked_port.portsc |= PORTSC_SPEED_SUPER;
                     locked_port.portsc |= PORTSC_PED;
                     pls = PLS_U0;
-                } else {
-                    locked_port.portsc |= speed;
+                } else if speed == USB_SPEED_FULL {
+                    locked_port.portsc |= PORTSC_SPEED_FULL;
+                    pls = PLS_POLLING;
+                } else if speed == USB_SPEED_HIGH {
+                    locked_port.portsc |= PORTSC_SPEED_HIGH;
+                    pls = PLS_POLLING;
+                } else if speed == USB_SPEED_LOW {
+                    locked_port.portsc |= PORTSC_SPEED_LOW;
                     pls = PLS_POLLING;
                 }
             }
         }
-        locked_port.portsc = set_field(locked_port.portsc, pls, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+        locked_port.set_port_link_state(pls);
         debug!(
             "xhci port update portsc {:x} pls {:x}",
             locked_port.portsc, pls
@@ -1752,15 +1753,4 @@ fn dma_write_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &[u32]
 
 fn addr64_from_u32(low: u32, high: u32) -> u64 {
     (((high << 16) as u64) << 16) | low as u64
-}
-
-pub fn get_field(val: u32, mask: u32, shift: u32) -> u32 {
-    val >> shift & mask
-}
-
-pub fn set_field(val: u32, new_val: u32, mask: u32, shift: u32) -> u32 {
-    let mut tmp = val;
-    tmp &= !(mask << shift);
-    tmp |= (new_val & mask) << shift;
-    tmp
 }
