@@ -1136,7 +1136,14 @@ impl XhciDevice {
 
     /// Data plane
     pub(crate) fn kick_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<()> {
-        let epctx = self.get_endpoint(slot_id, ep_id)?;
+        let epctx = match self.get_endpoint_ctx(slot_id, ep_id) {
+            Ok(epctx) => epctx,
+            Err(e) => {
+                error!("Kick endpoint error: {}", e);
+                // No need to return the error, just ignore it.
+                return Ok(());
+            }
+        };
         debug!(
             "kick_endpoint slotid {} epid {} dequeue {:x}",
             slot_id, ep_id, epctx.ring.dequeue
@@ -1210,7 +1217,7 @@ impl XhciDevice {
         Ok(())
     }
 
-    fn get_endpoint(&self, slot_id: u32, ep_id: u32) -> Result<&XhciEpContext> {
+    fn get_endpoint_ctx(&self, slot_id: u32, ep_id: u32) -> Result<&XhciEpContext> {
         self.check_slot_enabled(slot_id)?;
         if !(ENDPOINT_ID_START..=MAX_ENDPOINTS).contains(&ep_id) {
             bail!("Invalid endpoint id {}", ep_id);
