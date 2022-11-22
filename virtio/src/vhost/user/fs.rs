@@ -15,7 +15,7 @@ const VIRIOT_FS_HIGH_PRIO_QUEUE_NUM: usize = 1;
 // The num of request queue
 const VIRTIO_FS_REQ_QUEUES_NUM: usize = 1;
 // The size of queue for virtio fs
-const VIRTIO_FS_QUEUE_SIZE: u16 = 1024;
+const VIRTIO_FS_QUEUE_SIZE: u16 = 128;
 
 use crate::VirtioError;
 use std::cmp;
