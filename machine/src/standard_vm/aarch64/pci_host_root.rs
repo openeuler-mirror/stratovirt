@@ -12,7 +12,6 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use log::{debug, error};
 use pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
@@ -80,21 +79,6 @@ impl PciDevOps for PciHostRoot {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if size > 4 {
-            error!(
-                "Failed to read PciHostRoot config space: Invalid data size {}",
-                size
-            );
-            return;
-        }
-        if offset + size > PCI_CONFIG_SPACE_SIZE {
-            debug!(
-                "Failed to read PciHostRoot config space: offset {}, size {}, config space size {}",
-                offset, size, PCI_CONFIG_SPACE_SIZE
-            );
-            return;
-        }
         self.config.read(offset, data);
     }
 

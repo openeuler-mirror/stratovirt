@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use address_space::Region;
+use log::error;
 
 use crate::msix::Msix;
 use crate::PciError;
@@ -488,11 +489,15 @@ impl PciConfig {
     /// * `offset` - Offset in the configuration space from which to read.
     /// * `data` - Buffer to put read data.
     pub fn read(&self, offset: usize, buf: &mut [u8]) {
+        if let Err(err) = self.validate_config_boundary(offset, buf) {
+            error!("invalid read: {:?}", err);
+            return;
+        }
         let size = buf.len();
         buf[..].copy_from_slice(&self.config[offset..(offset + size)]);
     }
 
-    fn validate_config_boundary(&mut self, offset: usize, data: &[u8]) -> Result<()> {
+    fn validate_config_boundary(&self, offset: usize, data: &[u8]) -> Result<()> {
         if offset + data.len() > self.config.len() {
             return Err(anyhow!(PciError::InvalidConf(
                 "config size".to_string(),
@@ -519,7 +524,8 @@ impl PciConfig {
     /// * `data` - Data to write.
     /// * `dev_id` - Device id to send MSI/MSI-X.
     pub fn write(&mut self, mut offset: usize, data: &[u8], dev_id: u16) {
-        if self.validate_config_boundary(offset, data).is_err() {
+        if let Err(err) = self.validate_config_boundary(offset, data) {
+            error!("invalid write: {:?}", err);
             return;
         }
 
