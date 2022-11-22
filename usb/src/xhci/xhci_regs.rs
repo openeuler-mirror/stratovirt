@@ -385,10 +385,11 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 {
                     locked_xhci.stop();
                 }
-                // Not support Save/Restore, report the Save/Restore Error.
                 if value & USB_CMD_CSS == USB_CMD_CSS {
                     locked_xhci.oper.usb_status &= !USB_STS_SRE;
                 }
+                // When the restore command is issued, an error is reported and then
+                // guest OS performs a complete initialization.
                 if value & USB_CMD_CRS == USB_CMD_CRS {
                     locked_xhci.oper.usb_status |= USB_STS_SRE;
                 }
