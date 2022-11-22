@@ -32,6 +32,9 @@ use crate::xhci::xhci_ring::{
 };
 use anyhow::{bail, Context, Result};
 
+use super::xhci_ring::SETUP_TRB_TR_LEN;
+use super::xhci_ring::TRB_TR_LEN_MASK;
+
 pub const MAX_INTRS: u16 = 16;
 pub const MAX_SLOTS: u32 = 64;
 /// Endpoint state
@@ -1296,8 +1299,11 @@ impl XhciDevice {
         if trb_setup.control & TRB_TR_IDT != TRB_TR_IDT {
             bail!("no IDT bit");
         }
-        if trb_setup.status & 0x1ffff != 8 {
-            bail!("Bad Setup TRB length {}", trb_setup.status & 0x1ffff);
+        if trb_setup.status & TRB_TR_LEN_MASK != SETUP_TRB_TR_LEN {
+            bail!(
+                "Bad Setup TRB length {}",
+                trb_setup.status & TRB_TR_LEN_MASK
+            );
         }
 
         let bm_request_type = trb_setup.parameter as u8;
@@ -1352,7 +1358,7 @@ impl XhciDevice {
                 || trb_type == TRBType::TrNormal
                 || trb_type == TRBType::TrIsoch
             {
-                let chunk = trb.status & 0x1ffff;
+                let chunk = trb.status & TRB_TR_LEN_MASK;
                 let dma_addr = if trb.control & TRB_TR_IDT == TRB_TR_IDT {
                     trb.addr
                 } else {
@@ -1442,7 +1448,7 @@ impl XhciDevice {
         for i in 0..xfer.td.len() {
             let trb = &xfer.td[i];
             let trb_type = trb.get_type();
-            let mut chunk = trb.status & 0x1ffff;
+            let mut chunk = trb.status & TRB_TR_LEN_MASK;
             match trb_type {
                 TRBType::TrSetup => {
                     if chunk > 8 {
@@ -1500,7 +1506,7 @@ impl XhciDevice {
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
         evt.slot_id = xfer.slotid as u8;
         evt.ep_id = xfer.epid as u8;
-        evt.length = (trb.status & 0x1ffff) - chunk;
+        evt.length = (trb.status & TRB_TR_LEN_MASK) - chunk;
         evt.flags = 0;
         evt.ptr = trb.addr;
         evt.ccode = if xfer.status == TRBCCode::Success {
