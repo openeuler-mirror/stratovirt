@@ -37,6 +37,10 @@ pub const TRB_TR_CH: u32 = 1 << 4;
 pub const TRB_TR_IOC: u32 = 1 << 5;
 /// Immediate Data.
 pub const TRB_TR_IDT: u32 = 1 << 6;
+/// TRB Transfer Length Mask
+pub const TRB_TR_LEN_MASK: u32 = 0x1ffff;
+/// Setup Stage TRB Length always 8
+pub const SETUP_TRB_TR_LEN: u32 = 8;
 
 const TRB_LINK_LIMIT: u32 = 32;
 /// The max size of a ring segment in bytes is 64k.
