@@ -826,6 +826,7 @@ dependencies = [
  "byteorder",
  "libc",
  "log",
+ "machine_manager",
  "once_cell",
  "pci",
  "thiserror",

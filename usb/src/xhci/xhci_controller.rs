@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
+use machine_manager::config::XhciConfig;
 use util::num_ops::{read_u32, write_u64_low};
 
 use crate::bus::UsbBus;
@@ -74,8 +75,9 @@ const SLOT_CTX_PORT_NUMBER_SHIFT: u32 = 16;
 const ENDPOINT_ID_START: u32 = 1;
 const MAX_ENDPOINTS: u32 = 31;
 /// XHCI config
-const XHCI_PORT2_NUM: u32 = 2;
-const XHCI_PORT3_NUM: u32 = 2;
+const XHCI_MAX_PORT2: u8 = 15;
+const XHCI_MAX_PORT3: u8 = 15;
+const XHCI_DEFAULT_PORT: u8 = 4;
 /// Slot Context.
 const SLOT_INPUT_CTX_OFFSET: u64 = 0x20;
 const SLOT_CTX_MAX_EXIT_LATENCY_MASK: u32 = 0xffff;
@@ -378,8 +380,8 @@ trait DwordOrder: Default + Copy + Send + Sync {
 
 /// Xhci controller device.
 pub struct XhciDevice {
-    pub numports_2: u32,
-    pub numports_3: u32,
+    pub numports_2: u8,
+    pub numports_3: u8,
     pub oper: XchiOperReg,
     pub usb_ports: Vec<Arc<Mutex<UsbPort>>>,
     pub ports: Vec<Arc<Mutex<XhciPort>>>,
@@ -392,16 +394,30 @@ pub struct XhciDevice {
 }
 
 impl XhciDevice {
-    pub fn new(mem_space: &Arc<AddressSpace>) -> Arc<Mutex<Self>> {
+    pub fn new(mem_space: &Arc<AddressSpace>, config: &XhciConfig) -> Arc<Mutex<Self>> {
+        let mut p2 = XHCI_DEFAULT_PORT;
+        let mut p3 = XHCI_DEFAULT_PORT;
+        if config.p2.is_some() {
+            p2 = config.p2.unwrap();
+            if p2 > XHCI_MAX_PORT2 {
+                p2 = XHCI_MAX_PORT2
+            }
+        }
+        if config.p3.is_some() {
+            p3 = config.p3.unwrap();
+            if p3 > XHCI_MAX_PORT3 {
+                p3 = XHCI_MAX_PORT3;
+            }
+        }
         let xhci = XhciDevice {
             oper: XchiOperReg::new(),
             ctrl_ops: None,
             usb_ports: Vec::new(),
-            numports_2: XHCI_PORT2_NUM,
-            numports_3: XHCI_PORT3_NUM,
+            numports_3: p3,
+            numports_2: p2,
             ports: Vec::new(),
             slots: vec![XhciSlot::new(mem_space); MAX_SLOTS as usize],
-            intrs: vec![XhciInterrupter::new(mem_space); 1],
+            intrs: vec![XhciInterrupter::new(mem_space); MAX_INTRS as usize],
             cmd_ring: XhciRing::new(mem_space),
             mem_space: mem_space.clone(),
             bus: Arc::new(Mutex::new(UsbBus::new())),
@@ -410,7 +426,7 @@ impl XhciDevice {
         let clone_xhci = xhci.clone();
         let mut locked_xhci = clone_xhci.lock().unwrap();
         locked_xhci.oper.usb_status = USB_STS_HCH;
-        for i in 0..(XHCI_PORT2_NUM + XHCI_PORT3_NUM) {
+        for i in 0..(p2 + p3) {
             locked_xhci.ports.push(Arc::new(Mutex::new(XhciPort::new(
                 &Arc::downgrade(&clone_xhci),
                 format!("xhci-port-{}", i),
@@ -445,9 +461,7 @@ impl XhciDevice {
 
     pub fn stop(&mut self) {
         self.oper.usb_status |= USB_STS_HCH;
-        let mut lo = read_u32(self.oper.cmd_ring_ctrl, 0);
-        lo &= !CMD_RING_CTRL_CRR;
-        write_u64_low(self.oper.cmd_ring_ctrl, lo);
+        self.oper.cmd_ring_ctrl &= !(CMD_RING_CTRL_CRR as u64);
     }
 
     pub fn running(&self) -> bool {
@@ -533,7 +547,7 @@ impl XhciDevice {
             return Ok(());
         }
         let mut evt = XhciEvent::new(TRBType::ErPortStatusChange, TRBCCode::Success);
-        evt.ptr = (locked_port.port_idx << PORT_EVENT_ID_SHIFT) as u64;
+        evt.ptr = ((locked_port.port_idx as u32) << PORT_EVENT_ID_SHIFT) as u64;
         self.send_event(&evt, 0)?;
         Ok(())
     }
@@ -586,8 +600,8 @@ impl XhciDevice {
 
     fn lookup_usb_port(&mut self, slot_ctx: &XhciSlotCtx) -> Option<Arc<Mutex<UsbPort>>> {
         let mut path = String::new();
-        let mut port = slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff;
-        if port < 1 || port > self.ports.len() as u32 {
+        let mut port = (slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff) as u8;
+        if port < 1 || port > self.ports.len() as u8 {
             error!("Invalid port: {}", port);
             return None;
         }
@@ -595,7 +609,7 @@ impl XhciDevice {
         port = usb_port.lock().unwrap().index + 1;
         path += &format!("{}", port);
         for i in 0..5 {
-            port = (slot_ctx.dev_info >> (4 * i)) & 0x0f;
+            port = ((slot_ctx.dev_info >> (4 * i)) & 0x0f) as u8;
             if port == 0 {
                 break;
             }
@@ -1496,7 +1510,8 @@ impl XhciDevice {
             evt.length = *edtla & 0xffffff;
             *edtla = 0;
         }
-        self.send_event(&evt, 0)?;
+        let idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
+        self.send_event(&evt, idx)?;
         Ok(())
     }
 

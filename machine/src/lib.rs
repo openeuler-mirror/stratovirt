@@ -1028,7 +1028,7 @@ pub trait MachineOps {
         };
 
         let pcidev = XhciPciDevice::new(
-            &device_cfg.id,
+            &device_cfg,
             devfn,
             parent_bus,
             self.get_sys_mem(),
