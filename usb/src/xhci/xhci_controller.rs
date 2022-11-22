@@ -1141,8 +1141,9 @@ impl XhciDevice {
             "kick_endpoint slotid {} epid {} dequeue {:x}",
             slot_id, ep_id, epctx.ring.dequeue
         );
-        if let Err(e) = self.endpoint_retry_transfer(slot_id, ep_id) {
-            bail!("Failed to retry transfer {}", e);
+        if !self.endpoint_retry_transfer(slot_id, ep_id)? {
+            // Return directly to retry again at the next kick.
+            return Ok(());
         }
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if epctx.state == EP_HALTED {
@@ -1221,18 +1222,23 @@ impl XhciDevice {
         Ok(ep_ctx)
     }
 
-    fn endpoint_retry_transfer(&mut self, slot_id: u32, ep_id: u32) -> Result<()> {
+    /// Return true if retry is done.
+    /// Return false if packet is need to retry again.
+    /// Return error if retry failed.
+    fn endpoint_retry_transfer(&mut self, slot_id: u32, ep_id: u32) -> Result<bool> {
         let slot = &mut self.slots[(slot_id - 1) as usize];
         let mut xfer = if let Some(xfer) = &mut slot.endpoints[(ep_id - 1) as usize].retry {
             xfer.clone()
         } else {
             // No need to retry.
-            return Ok(());
+            return Ok(true);
         };
         self.setup_usb_packet(&mut xfer)?;
         self.device_handle_packet(&mut xfer.packet)?;
         if xfer.packet.status == UsbPacketStatus::Nak {
-            bail!("USB packet status is NAK");
+            debug!("USB packet status is NAK");
+            // NAK need to retry again.
+            return Ok(false);
         }
         self.complete_packet(&mut xfer)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
@@ -1240,7 +1246,7 @@ impl XhciDevice {
             epctx.set_state(&self.mem_space, epctx.state)?;
         }
         epctx.retry = None;
-        Ok(())
+        Ok(true)
     }
 
     fn device_handle_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
