@@ -31,10 +31,10 @@ use super::config::{
     MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC,
     PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_CLS_2_5GB, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW_X1,
     PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC, PCI_EXP_SLTCTL_PWR_IND_BLINK,
-    PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTSTA, PCI_EXP_SLTSTA_PDC,
-    PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
-    PREF_MEM_BASE_UPPER, PREF_MEM_RANGE_64BIT, PRIMARY_BUS_NUM, REG_SIZE, SUB_CLASS_CODE,
-    VENDOR_ID,
+    PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTCTL_PWR_OFF, PCI_EXP_SLTSTA,
+    PCI_EXP_SLTSTA_PDC, PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
+    PREF_MEMORY_LIMIT, PREF_MEM_BASE_UPPER, PREF_MEM_RANGE_64BIT, PRIMARY_BUS_NUM, REG_SIZE,
+    SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
 use crate::hotplug::HotplugOps;
@@ -514,7 +514,7 @@ impl HotplugOps for RootPort {
             PCI_EXP_LNKSTA_DLLLA,
         )?;
 
-        let mut slot_status = PCI_EXP_HP_EV_ABP;
+        let mut slot_status = 0;
         if let Some(&true) = FAST_UNPLUG_FEATURE.get() {
             slot_status |= PCI_EXP_HP_EV_PDC;
         }
@@ -522,6 +522,19 @@ impl HotplugOps for RootPort {
             &mut self.config.config,
             (offset + PCI_EXP_SLTSTA) as usize,
             slot_status,
+        )?;
+
+        if ((sltctl & PCI_EXP_SLTCTL_PIC) == PCI_EXP_SLTCTL_PWR_IND_OFF)
+            && ((sltctl & PCI_EXP_SLTCTL_PCC) == PCI_EXP_SLTCTL_PWR_OFF)
+        {
+            // if the slot has already been unpluged, skip notifing the guest.
+            return Ok(());
+        }
+
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_SLTSTA) as usize,
+            slot_status | PCI_EXP_HP_EV_ABP,
         )?;
         self.hotplug_event_notify();
         Ok(())
