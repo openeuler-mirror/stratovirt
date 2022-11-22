@@ -629,8 +629,8 @@ impl XhciDevice {
         let mut slot_id: u32 = 0;
         let mut event = XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::Success);
         for _ in 0..COMMAND_LIMIT {
-            match self.cmd_ring.fetch_trb() {
-                Ok(Some(trb)) => {
+            match self.cmd_ring.fetch_trb()? {
+                Some(trb) => {
                     let trb_type = trb.get_type();
                     event.ptr = trb.addr;
                     info!("handle_command {:?} {:?}", trb_type, trb);
@@ -712,13 +712,8 @@ impl XhciDevice {
                     event.slot_id = slot_id as u8;
                     self.send_event(&event, 0)?;
                 }
-                Ok(None) => {
+                None => {
                     debug!("No TRB in the cmd ring.");
-                    break;
-                }
-                Err(e) => {
-                    error!("Failed to fetch ring: {:?}", e);
-                    event.ccode = TRBCCode::TrbError;
                     break;
                 }
             }
