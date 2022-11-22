@@ -1371,9 +1371,7 @@ impl XhciDevice {
             }
         }
         xfer.packet.init(dir as u32, ep, 0, false, xfer.int_req);
-        for v in vec {
-            xfer.packet.iovecs.push(v);
-        }
+        xfer.packet.iovecs = vec;
         Ok(())
     }
 
