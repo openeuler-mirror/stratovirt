@@ -14,8 +14,8 @@
 const VIRIOT_FS_HIGH_PRIO_QUEUE_NUM: u64 = 1;
 /// The num of request queue.
 const VIRTIO_FS_REQ_QUEUES_NUM: u64 = 1;
-/// The next queue size.
-const VIRTIO_FS_MAX_QUEUE_SIZE: u16 = 128;
+/// The max queue size.
+const VIRTIO_FS_MAX_QUEUE_SIZE: u16 = 1024;
 
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -73,24 +73,30 @@ impl FsIoHandler {
     }
 
     fn process_queue(&mut self) -> Result<()> {
-        while let Ok(elem) = self
-            .queue
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-        {
+        loop {
+            let elem = self
+                .queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for process virtiofs queue")?;
+
+            if elem.desc_num == 0 {
+                break;
+            }
+
             let mut req = FuseReq::new(&elem);
             let (index, len) = req.execute(&self.mem_space, self.fs.clone());
             self.queue.vring.add_used(&self.mem_space, index, len)?;
-        }
 
-        if self
-            .queue
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
-            self.call_evt
-                .write(1)
-                .with_context(|| "Failed to write call fd")?;
+            if self
+                .queue
+                .vring
+                .should_notify(&self.mem_space, self.driver_features)
+            {
+                self.call_evt
+                    .write(1)
+                    .with_context(|| "Failed to write call fd")?;
+            }
         }
 
         Ok(())
