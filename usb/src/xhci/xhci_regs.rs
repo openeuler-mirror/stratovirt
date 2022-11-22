@@ -83,7 +83,7 @@ const XHCI_OPER_REG_DCBAAP_LO: u64 = 0x30;
 const XHCI_OPER_REG_DCBAAP_HI: u64 = 0x34;
 const XHCI_OPER_REG_CONFIG: u64 = 0x38;
 const XHCI_OPER_PAGESIZE: u32 = 1;
-/// Command Ring Control Register RCS/CS/CA/CRR mask.
+/// Command Ring Control Register RCS/CS/CA mask.
 const XHCI_CRCR_CTRL_LO_MASK: u32 = 0xffffffc7;
 /// Command Ring Pointer Mask.
 const XHCI_CRCR_CRP_MASK: u64 = !0x3f;
@@ -408,40 +408,29 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
             XHCI_OPER_REG_DNCTRL => locked_xhci.oper.dev_notify_ctrl = value & XHCI_OPER_NE_MASK,
             XHCI_OPER_REG_CMD_RING_CTRL_LO => {
-                let mut crc_lo = value;
-                if crc_lo & CMD_RING_CTRL_CRR != CMD_RING_CTRL_CRR {
-                    locked_xhci
-                        .cmd_ring
-                        .set_cycle_bit(crc_lo & CMD_RING_CTRL_RCS == CMD_RING_CTRL_RCS);
-                }
-                if crc_lo & (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS)
-                    == (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS)
-                    && (value & CMD_RING_CTRL_CRR) == CMD_RING_CTRL_CRR
+                let mut crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0);
+                crc_lo = (value & XHCI_CRCR_CTRL_LO_MASK) | (crc_lo & CMD_RING_CTRL_CRR);
+                locked_xhci.oper.cmd_ring_ctrl =
+                    write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
+            }
+            XHCI_OPER_REG_CMD_RING_CTRL_HI => {
+                let crc_hi = (value as u64) << 32;
+                let mut crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0);
+                if crc_lo & (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS) != 0
+                    && (crc_lo & CMD_RING_CTRL_CRR) == CMD_RING_CTRL_CRR
                 {
                     let event =
                         XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::CommandRingStopped);
                     crc_lo &= !CMD_RING_CTRL_CRR;
-                    locked_xhci.oper.cmd_ring_ctrl =
-                        write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
                     if let Err(e) = locked_xhci.send_event(&event, 0) {
                         error!("Failed to send event: {:?}", e);
                     }
-                }
-                crc_lo &= !(CMD_RING_CTRL_CA | CMD_RING_CTRL_CS);
-                locked_xhci.oper.cmd_ring_ctrl = write_u64_low(
-                    locked_xhci.oper.cmd_ring_ctrl,
-                    crc_lo & XHCI_CRCR_CTRL_LO_MASK,
-                );
-            }
-            XHCI_OPER_REG_CMD_RING_CTRL_HI => {
-                let crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0);
-                if (crc_lo & CMD_RING_CTRL_CRR) != CMD_RING_CTRL_CRR {
-                    let crc_hi = (value as u64) << 32;
+                } else {
                     let addr = (crc_hi | crc_lo as u64) & XHCI_CRCR_CRP_MASK;
                     locked_xhci.cmd_ring.init(addr);
-                    locked_xhci.oper.cmd_ring_ctrl =
-                        write_u64_high(locked_xhci.oper.cmd_ring_ctrl, value);
                 }
+                crc_lo &= !(CMD_RING_CTRL_CA | CMD_RING_CTRL_CS);
+                locked_xhci.oper.cmd_ring_ctrl = write_u64_low(crc_hi, crc_lo);
             }
             XHCI_OPER_REG_DCBAAP_LO => {
                 locked_xhci.oper.dcbaap = write_u64_low(locked_xhci.oper.dcbaap, value & 0xffffffc0)
