@@ -622,14 +622,13 @@ impl XhciDevice {
     /// Control plane
     pub fn handle_command(&mut self) -> Result<()> {
         self.oper.start_cmd_ring();
-        let mut slot_id: u32;
+        let mut slot_id: u32 = 0;
         let mut event = XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::Success);
         for _ in 0..COMMAND_LIMIT {
             match self.cmd_ring.fetch_trb() {
                 Ok(Some(trb)) => {
                     let trb_type = trb.get_type();
                     event.ptr = trb.addr;
-                    slot_id = self.get_slot_id(&mut event, &trb);
                     info!("handle_command {:?} {:?}", trb_type, trb);
                     match trb_type {
                         TRBType::CrEnableSlot => {
@@ -648,44 +647,52 @@ impl XhciDevice {
                             }
                         }
                         TRBType::CrDisableSlot => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.disable_slot(slot_id)?;
                             }
                         }
                         TRBType::CrAddressDevice => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.address_device(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrConfigureEndpoint => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.configure_endpoint(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrEvaluateContext => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.evaluate_context(slot_id, &trb)?;
                             }
                         }
                         TRBType::CrStopEndpoint => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
                                 event.ccode = self.stop_endpoint(slot_id, ep_id)?;
                             }
                         }
                         TRBType::CrResetEndpoint => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
                                 event.ccode = self.reset_endpoint(slot_id, ep_id)?;
                             }
                         }
                         TRBType::CrSetTrDequeue => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
                                 event.ccode = self.set_tr_dequeue_pointer(slot_id, ep_id, &trb)?;
                             }
                         }
                         TRBType::CrResetDevice => {
+                            slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
                                 event.ccode = self.reset_device(slot_id)?;
                             }
