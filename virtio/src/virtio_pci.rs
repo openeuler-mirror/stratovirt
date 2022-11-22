@@ -1274,17 +1274,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        let data_size = data.len();
-        let end = offset + data_size;
-        if end > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
-            error!(
-                "Failed to read pcie config space at offset 0x{:x} with data size {}",
-                offset, data_size
-            );
-            return;
-        }
-
-        self.do_cfg_access(offset, end, false);
+        self.do_cfg_access(offset, offset + data.len(), false);
         self.config.read(offset, data);
     }
 

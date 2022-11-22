@@ -17,8 +17,7 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressSpace, Region};
 use pci::config::{
     PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
-    PCIE_CONFIG_SPACE_SIZE, PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS,
-    SUB_CLASS_CODE, VENDOR_ID,
+    PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
 
@@ -240,14 +239,6 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        let data_size = data.len();
-        if offset + data_size > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
-            error!(
-                "Failed to read pci config space at offset 0x{:x} with data size {}",
-                offset, data_size
-            );
-            return;
-        }
         self.pci_config.read(offset, data);
     }
 
