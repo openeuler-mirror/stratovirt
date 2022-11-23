@@ -35,6 +35,7 @@ use pci::{
     PciBus, PciDevOps, PciError,
 };
 use util::byte_code::ByteCode;
+use util::num_ops::{read_data_u32, write_data_u32};
 use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -744,42 +745,17 @@ impl VirtioPciDevice {
                 }
             };
 
-            match data.len() {
-                1 => data[0] = value as u8,
-                2 => {
-                    LittleEndian::write_u16(data, value as u16);
-                }
-                4 => {
-                    LittleEndian::write_u32(data, value);
-                }
-                _ => {
-                    error!(
-                        "invalid data length for reading pci common config: offset 0x{:x}, data len {}",
-                        offset, data.len()
-                    );
-                    return false;
-                }
-            };
-
-            true
+            write_data_u32(data, value)
         };
 
         let cloned_pci_device = self.clone();
         let cloned_mem_space = self.sys_mem.clone();
         let cloned_gsi_routes = self.gsi_msi_routes.clone();
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
-            let value = match data.len() {
-                1 => data[0] as u32,
-                2 => LittleEndian::read_u16(data) as u32,
-                4 => LittleEndian::read_u32(data),
-                _ => {
-                    error!(
-                        "Invalid data length for writing pci common config: offset 0x{:x}, data len {}",
-                        offset, data.len()
-                    );
-                    return false;
-                }
-            };
+            let mut value = 0;
+            if !read_data_u32(data, &mut value) {
+                return false;
+            }
             let old_dev_status = cloned_pci_device
                 .common_config
                 .lock()
