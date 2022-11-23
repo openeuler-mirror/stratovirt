@@ -229,12 +229,13 @@ impl VhostUserServerHandler {
         buf: &'a [u8],
         len: usize,
     ) -> Result<&'a D> {
-        if size_of::<D>() != len {
+        if !self.is_valid_request(hdr, len, size_of::<D>()) {
             bail!(
-                "Failed to get msg body for request {}, len {}, payload size {}",
+                "Failed to get msg body for request {}, len {}, payload size {}, hdr.size {}",
                 hdr.request,
                 len,
-                size_of::<D>()
+                size_of::<D>(),
+                hdr.size
             );
         }
 
@@ -311,6 +312,10 @@ impl VhostUserServerHandler {
         Ok(())
     }
 
+    fn is_valid_request(&self, hdr: &VhostUserMsgHdr, size: usize, expected: usize) -> bool {
+        (hdr.size as usize == expected) && (size == expected) && !hdr.is_reply()
+    }
+
     fn process_request(
         &mut self,
         hdr: &VhostUserMsgHdr,
@@ -320,8 +325,8 @@ impl VhostUserServerHandler {
     ) -> Result<()> {
         match VhostUserMsgReq::from(hdr.request) {
             VhostUserMsgReq::GetFeatures => {
-                if len != 0 {
-                    bail!("The length {} of getting features is invalid", len);
+                if !self.is_valid_request(hdr, len, 0) {
+                    bail!("Invalid request size of GetFeatures");
                 }
 
                 let features = self.backend.lock().unwrap().get_features()?;
@@ -337,9 +342,10 @@ impl VhostUserServerHandler {
                 self.backend.lock().unwrap().set_features(*features)?;
             }
             VhostUserMsgReq::SetOwner => {
-                if len != 0 {
-                    bail!("The length {} of setting owner is invalid", len);
+                if !self.is_valid_request(hdr, len, 0) {
+                    bail!("Invalid request size of SetOwner");
                 }
+
                 self.backend.lock().unwrap().set_owner()?;
             }
             VhostUserMsgReq::SetMemTable => {
