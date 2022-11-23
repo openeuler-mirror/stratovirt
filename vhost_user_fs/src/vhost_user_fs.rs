@@ -135,15 +135,13 @@ impl VhostUserFs {
                 .with_context(|| format!("Failed to set rlimit nofile {}", limit))?;
         }
 
+        let sock_path = fs_config.sock_path.clone();
         let virtio_fs = Arc::new(Mutex::new(
-            VirtioFs::new(&fs_config.source_dir)
-                .with_context(|| format!("Failed to create virtio fs {}", fs_config.source_dir))?,
+            VirtioFs::new(fs_config).with_context(|| "Failed to create virtio fs")?,
         ));
 
-        let server_handler = VhostUserServerHandler::new(&fs_config.sock_path, virtio_fs)
-            .with_context(|| {
-                format!("Failed to create vhost user server {}", fs_config.sock_path)
-            })?;
+        let server_handler = VhostUserServerHandler::new(sock_path.as_str(), virtio_fs)
+            .with_context(|| "Failed to create vhost user server")?;
         Ok(VhostUserFs { server_handler })
     }
 

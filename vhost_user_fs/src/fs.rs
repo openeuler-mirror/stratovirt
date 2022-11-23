@@ -21,6 +21,7 @@ const ROOT_INODE: usize = 1;
 
 use super::fs_ops::*;
 use super::fuse_msg::*;
+use crate::cmdline::FsConfig;
 use anyhow::{bail, Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CString;
@@ -315,10 +316,11 @@ impl FileSystem {
     /// # Arguments
     ///
     /// * `source_dir` - The path of the host directory which needs to be shared.
-    pub fn new(source_dir: &str) -> Result<Self> {
-        let (root_file_opt, ret) = open(CString::new(source_dir).unwrap(), libc::O_PATH);
+    pub fn new(fs_config: FsConfig) -> Result<Self> {
+        let root_dir = fs_config.root_dir.clone();
+        let (root_file_opt, ret) = open(CString::new(root_dir).unwrap(), libc::O_PATH);
         if ret != FUSE_OK {
-            bail!("Failed to open root file {}", source_dir);
+            bail!("Failed to open root file {}", fs_config.root_dir);
         }
         let root_file = root_file_opt.unwrap();
         let (stat, ret) = fstat_at(
@@ -327,7 +329,7 @@ impl FileSystem {
             libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
         );
         if ret != FUSE_OK {
-            bail!("Failed to get stat of root file {}", source_dir);
+            bail!("Failed to get stat of root file {}", fs_config.root_dir);
         }
         let key = StatKey {
             ino: stat.st_ino,
@@ -339,16 +341,12 @@ impl FileSystem {
         let root_inode = Inode::new(root_file, 2, root_id, libc::S_IFDIR, key);
         let mut inodes = BTreeMap::new();
         inodes.insert(key, root_inode.clone());
-        let (proc_dir_opt, ret) = open(CString::new("/proc/self/fd").unwrap(), libc::O_PATH);
-        if ret != FUSE_OK {
-            bail!("Failed to open proc dir");
-        }
         Ok(FileSystem {
             root_inode,
             inodes,
             inode_key_map,
             file_map: Map::new(),
-            proc_dir: proc_dir_opt.unwrap(),
+            proc_dir: fs_config.proc_dir_opt.unwrap(),
         })
     }
 

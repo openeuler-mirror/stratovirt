@@ -16,7 +16,11 @@ const MAX_PATH_LENGTH: usize = 4096;
 // Maximum length of the socket path is restricted by linux.
 const MAX_SOCK_PATH_LENGTH: usize = 108;
 
+use crate::fs_ops::open;
+use crate::fuse_msg::FUSE_OK;
 use anyhow::{bail, Context, Result};
+use std::ffi::CString;
+use std::fs::File;
 use std::{fs, path::PathBuf};
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 
@@ -57,10 +61,33 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                 .takes_value(true)
                 .can_no_value(true),
         )
+        .arg(
+            Arg::with_name("seccomp")
+                .long("seccomp")
+                .value_name("limit syscall(allow, kill, log, trap)")
+                .help("-seccomp kill")
+                .takes_value(true)
+                .possible_values(vec!["allow", "kill", "log", "trap"]),
+        )
+        .arg(
+            Arg::with_name("sandbox")
+                .long("sandbox")
+                .value_name("isolate the daemon process(chroot, namespace)")
+                .help("-sandbox namespace")
+                .takes_value(true)
+                .possible_values(vec!["namespace", "chroot"]),
+        )
+        .arg(
+            Arg::with_name("modcaps")
+                .opt_long("modcaps")
+                .value_name("add or delete modcaps")
+                .help("--modcaps=-LEASE,+KILL")
+                .takes_value(true),
+        )
 }
 
 /// Filesystem configuration parsed from command line for the process.
-#[derive(Clone, Default, Debug)]
+#[derive(Debug)]
 pub struct FsConfig {
     /// Source directory in host which can be accessed by guest.
     pub source_dir: String,
@@ -68,6 +95,22 @@ pub struct FsConfig {
     pub sock_path: String,
     /// The limit of file resources which can be opened for the process.
     pub rlimit_nofile: Option<u64>,
+    /// The path of root directory.
+    pub root_dir: String,
+    /// File object for /proc/self/fd.
+    pub proc_dir_opt: Option<File>,
+}
+
+impl Default for FsConfig {
+    fn default() -> Self {
+        FsConfig {
+            source_dir: String::from(""),
+            sock_path: String::from(""),
+            rlimit_nofile: None,
+            root_dir: String::from(""),
+            proc_dir_opt: None,
+        }
+    }
 }
 
 impl FsConfig {
@@ -126,6 +169,17 @@ pub fn create_fs_config(args: &ArgMatches) -> Result<FsConfig> {
             .parse::<u64>()
             .with_context(|| "Failed to parse rlimit nofile")?;
         fs_config.rlimit_nofile = Some(limit);
+    }
+
+    let (proc_dir_opt, ret) = open(CString::new("/proc/self/fd").unwrap(), libc::O_PATH);
+    if ret != FUSE_OK {
+        bail!("Failed to open proc dir");
+    }
+    fs_config.proc_dir_opt = proc_dir_opt;
+
+    fs_config.root_dir = fs_config.source_dir.clone();
+    if args.value_of("sandbox").is_some() {
+        fs_config.root_dir = "/".to_string();
     }
 
     fs_config

@@ -838,6 +838,59 @@ Sample Configuration：
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
+### 2.18 Virtio-fs
+Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.
+
+### 2.18.1 virtio fs device
+Three properties can be set for virtio fs device.
+* chardevid: id for char device
+* device_id: the unique id for device
+* mount_tag: the mount tag of the shared directory which can be mounted in the guest
+
+```shell
+-chardev socket,id=chardevid,path=socket_path
+-device vhost-user-fs-pci,id=device_id,chardev=chardevid,tag=mount_tag
+```
+
+### 2.18.2 vhost_user_fs
+The vhost-user filesystem device contains virtio fs device and the vhost-user server which can be connected with the vhost-user client in StratoVirt through socket.
+
+Seven properties are supported for vhost_user_fs.
+* source: Shared directory path.
+* socket-path: vhost user socket path.
+* rlimit-nofile: Set maxinum number of file descriptors, The limit of file resources which can be opened for the process.
+* D: log file path.
+* seccomp: Action to take when seccomp finds a not allowed syscall (allow, kill, log, trap).
+  - **allow**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule.
+  - **kill**: The process will be killed by the kernel when it calls a syscall that matches the filter rule.
+  - **log**: The seccomp filter will have no effect on the thread calling the syscall if it matches the filter rule but the syscall will be logged.
+  - **trap**: The thread will throw a SIGSYS signal when it calls a syscall that matches the filter rule.
+* sandbox: Sandbox mechanism to isolate the daemon process (chroot, namespace).
+  - **chroot**: The program invokes `chroot(2)` to make the shared directory tree its root when it does not have permission to create namespaces itself.
+  - **namespace**: The program invodes `pivot_root(2)` to make the shared directory tree its root.
+* modcaps: Add/delete capabilities, For example, `--modcaps=-LEASE,+KILL` stands for delete CAP_LEASE, add CAP_KILL. Capabilityes list do not need prefix `CAP_`.
+  
+*How to start vhost_user_fs process?*
+
+```shell
+host# ./path/to/vhost_user_fs -source /tmp/shared -socket-path /tmp/shared/virtio_fs.sock -D
+
+host# stratovirt \
+        -machine type=q35,dump-guest-core=off,mem-share=on \
+        -smp 1 \
+        -m 1024 \
+        -kernel <your image> \
+        -append root=/dev/vda console=ttyS0 reboot=k panic=1 random.trust_cpu=on rw \
+        -drive file=<your file path>,if=pflash,unit=0 \
+        -qmp unix:/tmp/qmp2.socket,server,nowait \
+        -drive id=drive_id,file=<your image>,direct=on \
+        -device virtio-blk-pci,drive=drive_id,bug=pcie.0,addr=1,id=blk -serial stdio -disable-seccomp \
+        -chardev socket,id=virtio_fs,path=/tmp/shared/virtio_fs.sock,server,nowait \
+        -device vhost-user-fs-pci,id=device_id,chardev=virtio_fs,tag=myfs,bus=pcie.0,addr=0x7
+        
+guest# mount -t virtiofs myfs /mnt
+```
+
 ## 3. Trace
 
 Users can specify the configuration file which lists events to trace.
