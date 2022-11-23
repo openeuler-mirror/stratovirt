@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
-use util::num_ops::{read_u32, write_u64_high, write_u64_low};
+use util::num_ops::{read_u32, write_data_u32, write_u64_high, write_u64_low};
 
 use crate::config::*;
 use crate::usb::UsbPort;
@@ -315,11 +315,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 0
             }
         };
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read oper registers: {:?}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let cap_write = move |_data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
@@ -368,11 +364,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 0
             }
         };
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read oper registers: {:?}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let xhci = xhci_dev.clone();
@@ -515,11 +507,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 }
             };
         }
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read runtime registers: {:?}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let xhci = xhci_dev.clone();
@@ -605,11 +593,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
 pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let doorbell_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
         debug!("doorbell read addr {:x} offset {:x}", addr.0, offset);
-        if let Err(e) = write_data(data, 0) {
-            error!("Failed to write data: {:?}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, 0)
     };
     let xhci = xhci_dev.clone();
     let doorbell_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
@@ -671,11 +655,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
                 return false;
             }
         };
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data: {:?}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let port = xhci_port.clone();
@@ -773,26 +753,6 @@ fn xhci_portsc_ls_write(port: &mut XhciPort, old_pls: u32, new_pls: u32) -> u32 
         }
     }
     0
-}
-
-fn write_data(data: &mut [u8], value: u32) -> Result<()> {
-    match data.len() {
-        1 => data[0] = value as u8,
-        2 => {
-            LittleEndian::write_u16(data, value as u16);
-        }
-        4 => {
-            LittleEndian::write_u32(data, value);
-        }
-        _ => {
-            bail!(
-                "Invalid data length: value {}, data len {}",
-                value,
-                data.len()
-            );
-        }
-    };
-    Ok(())
 }
 
 fn read_data(data: &[u8]) -> Result<u32> {

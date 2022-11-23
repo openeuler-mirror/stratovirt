@@ -16,7 +16,7 @@ use address_space::GuestAddress;
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 
-use util::time::NANOSECONDS_PER_SECOND;
+use util::{num_ops::write_data_u16, time::NANOSECONDS_PER_SECOND};
 
 // Frequency of PM Timer in HZ.
 const PM_TIMER_FREQUENCY: u128 = 3_579_545;
@@ -75,34 +75,13 @@ impl AcpiPmEvent {
 
     pub fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
-            0 => match data.len() {
-                1 => data[0] = self.status as u8,
-                2 => LittleEndian::write_u16(data, self.status),
-                n => {
-                    error!(
-                        "Invalid data length {} for reading PM status register, offset is {}",
-                        n, offset
-                    );
-                    return false;
-                }
-            },
-            2 => match data.len() {
-                1 => data[0] = self.enable as u8,
-                2 => LittleEndian::write_u16(data, self.enable),
-                n => {
-                    error!(
-                        "Invalid data length {} for reading PM enable register, offset is {}",
-                        n, offset
-                    );
-                    return false;
-                }
-            },
+            0 => write_data_u16(data, self.status),
+            2 => write_data_u16(data, self.enable),
             _ => {
                 error!("Invalid offset");
-                return false;
+                false
             }
         }
-        true
     }
 
     pub fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
@@ -155,15 +134,7 @@ impl AcpiPmCtrl {
     }
 
     pub fn read(&mut self, data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
-        match data.len() {
-            1 => data[0] = self.control as u8,
-            2 => LittleEndian::write_u16(data, self.control),
-            n => {
-                error!("Invalid data length {} for reading PM control register", n);
-                return false;
-            }
-        }
-        true
+        write_data_u16(data, self.control)
     }
 
     // Return true when guest want poweroff.

@@ -26,6 +26,7 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::num_ops::write_data_u32;
 use vmm_sys_util::eventfd::EventFd;
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
@@ -139,13 +140,7 @@ impl SysBusDevOps for PL031 {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if (0xFE0..0x1000).contains(&offset) {
             let value = u32::from(RTC_PERIPHERAL_ID[((offset - 0xFE0) >> 2) as usize]);
-            match data.len() {
-                1 => data[0] = value as u8,
-                2 => LittleEndian::write_u16(data, value as u16),
-                4 => LittleEndian::write_u32(data, value as u32),
-                _ => {}
-            }
-            return true;
+            return write_data_u32(data, value);
         }
 
         let mut value: u32 = 0;
@@ -160,14 +155,7 @@ impl SysBusDevOps for PL031 {
             _ => {}
         }
 
-        match data.len() {
-            1 => data[0] = value as u8,
-            2 => LittleEndian::write_u16(data, value as u16),
-            4 => LittleEndian::write_u32(data, value as u32),
-            _ => {}
-        }
-
-        true
+        write_data_u32(data, value)
     }
 
     /// Write data to registers by guest.
