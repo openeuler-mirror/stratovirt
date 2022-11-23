@@ -83,9 +83,6 @@ pub enum TRBType {
     ErHostController,
     ErDeviceNotification,
     ErMfindexWrap,
-    /* vendor specific bits */
-    CrVendorNecFirmwareRevision = 49,
-    CrVendorNecChallengeResponse = 50,
     Unknown,
 }
 
@@ -124,8 +121,6 @@ impl From<u32> for TRBType {
             37 => TRBType::ErHostController,
             38 => TRBType::ErDeviceNotification,
             39 => TRBType::ErMfindexWrap,
-            49 => TRBType::CrVendorNecFirmwareRevision,
-            50 => TRBType::CrVendorNecChallengeResponse,
             _ => TRBType::Unknown,
         }
     }
