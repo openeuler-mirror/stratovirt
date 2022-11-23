@@ -321,6 +321,65 @@ pub fn write_data_u32(data: &mut [u8], value: u32) -> bool {
     true
 }
 
+///  Read the given array to an u32, returns the bool.
+///
+/// # Arguments
+///
+/// * `data` - The array of u8.
+/// * `value` - The u32 value
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::read_data_u32;
+///
+/// let mut value = 0;
+/// let ret = read_data_u32(&[0x11, 0x22, 0x33, 0x44], &mut value);
+/// assert!(ret && value == 0x44332211);
+/// ```
+pub fn read_data_u32(data: &[u8], value: &mut u32) -> bool {
+    *value = match data.len() {
+        1 => data[0] as u32,
+        2 => LittleEndian::read_u16(data) as u32,
+        4 => LittleEndian::read_u32(data),
+        _ => {
+            error!("Invalid data length: data len {}", data.len());
+            return false;
+        }
+    };
+    true
+}
+
+///  Read the given array to an u16, returns the bool.
+///
+/// # Arguments
+///
+/// * `data` - The array of u8.
+/// * `value` - The u16 value
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::read_data_u16;
+///
+/// let mut value = 0;
+/// let ret = read_data_u16(&[0x11, 0x22], &mut value);
+/// assert!(ret && value == 0x2211);
+/// ```
+pub fn read_data_u16(data: &[u8], value: &mut u16) -> bool {
+    *value = match data.len() {
+        1 => data[0] as u16,
+        2 => LittleEndian::read_u16(data),
+        _ => {
+            error!("Invalid data length: data len {}", data.len());
+            return false;
+        }
+    };
+    true
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -448,5 +507,29 @@ mod test {
         let mut data: [u8; 4] = [0; 4];
         let ret = write_data_u32(&mut data, 0x11223344);
         assert!(ret && data[0] == 0x44 && data[1] == 0x33 && data[2] == 0x22 && data[3] == 0x11);
+    }
+
+    #[test]
+    fn test_read_data_u16() {
+        let mut value = 0;
+        let ret = read_data_u16(&[0x11], &mut value);
+        assert!(ret && value == 0x11);
+        let ret = read_data_u16(&[0x11, 0x22], &mut value);
+        assert!(ret && value == 0x2211);
+        let ret = read_data_u16(&[0x11, 0x22, 0x33], &mut value);
+        assert!(!ret);
+    }
+
+    #[test]
+    fn test_read_data_u32() {
+        let mut value = 0;
+        let ret = read_data_u32(&[0x11], &mut value);
+        assert!(ret && value == 0x11);
+        let ret = read_data_u32(&[0x11, 0x22], &mut value);
+        assert!(ret && value == 0x2211);
+        let ret = read_data_u32(&[0x11, 0x22, 0x33], &mut value);
+        assert!(!ret);
+        let ret = read_data_u32(&[0x11, 0x22, 0x33, 0x44], &mut value);
+        assert!(ret && value == 0x44332211);
     }
 }

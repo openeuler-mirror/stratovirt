@@ -16,13 +16,13 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
-use util::num_ops::{read_u32, write_data_u32, write_u64_high, write_u64_low};
+use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
 use crate::config::*;
 use crate::usb::UsbPort;
 use crate::xhci::xhci_controller::{XhciDevice, XhciEvent};
 use crate::xhci::xhci_ring::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 /// Capability offset or size.
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;
@@ -370,13 +370,10 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let xhci = xhci_dev.clone();
     let oper_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
         debug!("oper write {:x} {:x}", addr.0, offset);
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         let mut locked_xhci = xhci.lock().unwrap();
         match offset {
             XHCI_OPER_REG_USBCMD => {
@@ -512,13 +509,10 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
 
     let xhci = xhci_dev.clone();
     let runtime_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         debug!("runtime write {:x} {:x} {:x}", addr.0, offset, value);
         if offset < 0x20 {
             error!("Runtime write not implemented: offset {}", offset);
@@ -597,13 +591,10 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     };
     let xhci = xhci_dev.clone();
     let doorbell_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         debug!("doorbell write {:x} {:x}", addr.0, offset);
         if !xhci.lock().unwrap().running() {
             error!("Failed to write doorbell, XHCI is not running");
@@ -660,13 +651,10 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
 
     let port = xhci_port.clone();
     let port_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {:?}", offset, e);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         debug!("port write {:x} {:x} {:x}", addr.0, offset, value);
         match offset {
             XHCI_PORTSC => {
@@ -753,16 +741,4 @@ fn xhci_portsc_ls_write(port: &mut XhciPort, old_pls: u32, new_pls: u32) -> u32 
         }
     }
     0
-}
-
-fn read_data(data: &[u8]) -> Result<u32> {
-    let value = match data.len() {
-        1 => data[0] as u32,
-        2 => LittleEndian::read_u16(data) as u32,
-        4 => LittleEndian::read_u32(data),
-        _ => {
-            bail!("Invalid data length: data len {}", data.len());
-        }
-    };
-    Ok(value)
 }
