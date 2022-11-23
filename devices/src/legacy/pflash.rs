@@ -21,7 +21,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
-use util::num_ops::{deposit_u32, extract_u32};
+use util::num_ops::{deposit_u32, extract_u32, write_data_u32};
 pub struct PFlash {
     /// Has backend file or not.
     has_backend: bool,
@@ -815,17 +815,7 @@ impl SysBusDevOps for PFlash {
             }
         }
 
-        match data.len() {
-            1 => data[0] = ret as u8,
-            2 => LittleEndian::write_u16(data, ret as u16),
-            4 => LittleEndian::write_u32(data, ret),
-            n => {
-                error!("Invalid data length {}", n);
-                return false;
-            }
-        }
-
-        true
+        write_data_u32(data, ret)
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {

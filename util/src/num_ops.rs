@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 // This module implements some operations of Rust primitive types.
 
@@ -251,6 +252,75 @@ pub fn deposit_u32(value: u32, start: u32, length: u32, fieldval: u32) -> Option
     Some((value & !mask) | ((fieldval << start) & mask))
 }
 
+///  Write the given u16 to an array, returns the bool.
+///
+/// # Arguments
+///
+/// * `data` - The array of u8.
+/// * `value` - The u16 value
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::write_data_u16;
+///
+/// let mut data: [u8; 2] = [0; 2];
+/// let ret = write_data_u16(&mut data, 0x1234);
+/// assert!(ret && data[0] == 0x34 && data[1] == 0x12);
+/// ```
+pub fn write_data_u16(data: &mut [u8], value: u16) -> bool {
+    match data.len() {
+        1 => data[0] = value as u8,
+        2 => {
+            LittleEndian::write_u16(data, value as u16);
+        }
+        n => {
+            error!("Invalid data length {} for reading value {}", n, value);
+            return false;
+        }
+    };
+    true
+}
+
+///  Write the given u32 to an array, returns the bool.
+///
+/// # Arguments
+///
+/// * `data` - The array of u8.
+/// * `value` - The u32 value
+///
+/// # Examples
+///
+/// ```rust
+/// extern crate util;
+/// use util::num_ops::write_data_u32;
+///
+/// let mut data: [u8; 4] = [0; 4];
+/// let ret = write_data_u32(&mut data, 0x12345678);
+/// assert!(ret && data[0] == 0x78 && data[1] == 0x56 && data[2] == 0x34 && data[3] == 0x12);
+/// ```
+pub fn write_data_u32(data: &mut [u8], value: u32) -> bool {
+    match data.len() {
+        1 => data[0] = value as u8,
+        2 => {
+            LittleEndian::write_u16(data, value as u16);
+        }
+        4 => {
+            LittleEndian::write_u32(data, value);
+        }
+        _ => {
+            error!(
+                "Invalid data length: value {}, data len {}",
+                value,
+                data.len()
+            );
+            return false;
+        }
+    };
+    true
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -349,5 +419,34 @@ mod test {
         assert_eq!(deposit_u32(0xfdfcfbfa, 8, 16, 0xbdbcbbba), Some(0xfdbbbafa));
         assert_eq!(deposit_u32(0xfdfcfbfa, 8, 24, 0xbdbcbbba), Some(0xbcbbbafa));
         assert_eq!(deposit_u32(0xfdfcfbfa, 0, 32, 0xbdbcbbba), Some(0xbdbcbbba));
+    }
+
+    #[test]
+    fn test_write_data_u16() {
+        let mut data: [u8; 1] = [0; 1];
+        let ret = write_data_u16(&mut data, 0x11);
+        assert!(ret && data[0] == 0x11);
+        let mut data: [u8; 2] = [0; 2];
+        let ret = write_data_u16(&mut data, 0x1122);
+        assert!(ret && data[0] == 0x22 && data[1] == 0x11);
+        let mut data: [u8; 3] = [0; 3];
+        let ret = write_data_u16(&mut data, 0x1122);
+        assert!(!ret);
+    }
+
+    #[test]
+    fn test_write_data_u32() {
+        let mut data: [u8; 1] = [0; 1];
+        let ret = write_data_u32(&mut data, 0x11);
+        assert!(ret && data[0] == 0x11);
+        let mut data: [u8; 2] = [0; 2];
+        let ret = write_data_u32(&mut data, 0x1122);
+        assert!(ret && data[0] == 0x22 && data[1] == 0x11);
+        let mut data: [u8; 3] = [0; 3];
+        let ret = write_data_u32(&mut data, 0x112233);
+        assert!(!ret);
+        let mut data: [u8; 4] = [0; 4];
+        let ret = write_data_u32(&mut data, 0x11223344);
+        assert!(ret && data[0] == 0x44 && data[1] == 0x33 && data[2] == 0x22 && data[3] == 0x11);
     }
 }
