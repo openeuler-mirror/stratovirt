@@ -344,28 +344,44 @@ impl VhostUserReqHandler for VirtioFs {
         let used_addr = self.get_guest_address(used_ring)?;
         let avail_addr = self.get_guest_address(avail_ring)?;
 
-        self.config
-            .get_mut_queue_config(queue_index as usize)
-            .map(|queue_info| {
-                queue_info.config.desc_table = GuestAddress(desc_addr);
-                queue_info.config.addr_cache.desc_table_host = cloned_mem_space
-                    .get_host_address(GuestAddress(desc_addr))
-                    .unwrap_or(0);
+        if let Err(_ret) =
+            self.config
+                .get_mut_queue_config(queue_index as usize)
+                .map(|queue_info| {
+                    queue_info.config.desc_table = GuestAddress(desc_addr);
+                    queue_info.config.addr_cache.desc_table_host = cloned_mem_space
+                        .get_host_address(GuestAddress(desc_addr))
+                        .unwrap_or(0);
 
-                queue_info.config.avail_ring = GuestAddress(avail_addr);
-                queue_info.config.addr_cache.avail_ring_host = cloned_mem_space
-                    .get_host_address(GuestAddress(avail_addr))
-                    .unwrap_or(0);
+                    queue_info.config.avail_ring = GuestAddress(avail_addr);
+                    queue_info.config.addr_cache.avail_ring_host = cloned_mem_space
+                        .get_host_address(GuestAddress(avail_addr))
+                        .unwrap_or(0);
 
-                queue_info.config.used_ring = GuestAddress(used_addr);
-                queue_info.config.addr_cache.used_ring_host = cloned_mem_space
-                    .get_host_address(GuestAddress(used_addr))
-                    .unwrap_or(0);
-            }).with_context(||
-            format!("Failed to set vring addr, index: {}, desc: 0x{:X}, avail: 0x{:X}, used: 0x{:X}",
-                    queue_index, desc_addr, avail_addr, used_addr,
-            )
-        )?;
+                    queue_info.config.used_ring = GuestAddress(used_addr);
+                    queue_info.config.addr_cache.used_ring_host = cloned_mem_space
+                        .get_host_address(GuestAddress(used_addr))
+                        .unwrap_or(0);
+
+                    if queue_info.config.addr_cache.desc_table_host == 0
+                        || queue_info.config.addr_cache.avail_ring_host == 0
+                        || queue_info.config.addr_cache.used_ring_host == 0
+                    {
+                        return Err(());
+                    }
+
+                    Ok(())
+                })
+        {
+            bail!(
+                "Failed to set vring addr, got host address failed. Index: {}, desc: 0x{:X}, avail: 0x{:X}, used: 0x{:X}",
+                queue_index,
+                desc_addr,
+                avail_addr,
+                used_addr
+            );
+        }
+
         Ok(())
     }
 
