@@ -1029,12 +1029,13 @@ impl XhciDevice {
     }
 
     fn disable_endpoint(&mut self, slot_id: u32, ep_id: u32) -> Result<TRBCCode> {
-        let slot = &mut self.slots[(slot_id - 1) as usize];
-        let epctx = &mut slot.endpoints[(ep_id - 1) as usize];
+        let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if !epctx.enabled {
             debug!("Endpoint already disabled");
             return Ok(TRBCCode::Success);
         }
+        self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Invalid)?;
+        let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if self.oper.dcbaap != 0 {
             epctx.set_state(&self.mem_space, EP_DISABLED)?;
         }
@@ -1528,7 +1529,7 @@ impl XhciDevice {
 
     /// Flush transfer in endpoint in some case such as stop endpoint.
     fn flush_ep_transfer(&mut self, slotid: u32, epid: u32, report: TRBCCode) -> Result<u32> {
-        info!("flush_ep_transfer slotid {} epid {}", slotid, epid);
+        debug!("flush_ep_transfer slotid {} epid {}", slotid, epid);
         let mut cnt = 0;
         let mut report = report;
         let xfers = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
