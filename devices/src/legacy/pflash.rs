@@ -18,10 +18,9 @@ use super::error::LegacyError;
 use acpi::AmlBuilder;
 use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
 use anyhow::{anyhow, bail, Context, Result};
-use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, warn};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
-use util::num_ops::{deposit_u32, extract_u32, write_data_u32};
+use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
 pub struct PFlash {
     /// Has backend file or not.
     has_backend: bool,
@@ -819,15 +818,10 @@ impl SysBusDevOps for PFlash {
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        let value: u32 = match data.len() {
-            1 => data[0] as u32,
-            2 => LittleEndian::read_u16(data).into(),
-            4 => LittleEndian::read_u32(data),
-            n => {
-                error!("Invalid data length {}", n);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         let cmd: u8 = data[0];
         let data_len: u8 = data.len() as u8;
 

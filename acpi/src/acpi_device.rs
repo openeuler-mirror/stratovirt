@@ -13,10 +13,12 @@
 use std::time::Instant;
 
 use address_space::GuestAddress;
-use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 
-use util::{num_ops::write_data_u16, time::NANOSECONDS_PER_SECOND};
+use util::{
+    num_ops::{read_data_u16, write_data_u16},
+    time::NANOSECONDS_PER_SECOND,
+};
 
 // Frequency of PM Timer in HZ.
 const PM_TIMER_FREQUENCY: u128 = 3_579_545;
@@ -87,31 +89,17 @@ impl AcpiPmEvent {
     pub fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
         match offset {
             0 => {
-                let value: u16 = match data.len() {
-                    1 => data[0] as u16,
-                    2 => LittleEndian::read_u16(data),
-                    n => {
-                        error!(
-                            "Invalid data length {} for writing PM status register, offset is {}",
-                            n, offset
-                        );
-                        return false;
-                    }
-                };
+                let mut value = 0;
+                if !read_data_u16(data, &mut value) {
+                    return false;
+                }
                 self.status &= !value;
             }
             2 => {
-                let value: u16 = match data.len() {
-                    1 => data[0] as u16,
-                    2 => LittleEndian::read_u16(data),
-                    n => {
-                        error!(
-                            "Invalid data length {} for writing PM enable register, offset is {}",
-                            n, offset
-                        );
-                        return false;
-                    }
-                };
+                let mut value = 0;
+                if !read_data_u16(data, &mut value) {
+                    return false;
+                }
                 self.enable = value;
             }
             _ => {
@@ -139,14 +127,10 @@ impl AcpiPmCtrl {
 
     // Return true when guest want poweroff.
     pub fn write(&mut self, data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
-        let value: u16 = match data.len() {
-            1 => data[0] as u16,
-            2 => LittleEndian::read_u16(data),
-            n => {
-                error!("Invalid data length {} for writing PM control register", n);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u16(data, &mut value) {
+            return false;
+        }
         self.control = value & !ACPI_BITMASK_SLEEP_ENABLE;
         value & ACPI_BITMASK_SLEEP_ENABLE != 0
     }

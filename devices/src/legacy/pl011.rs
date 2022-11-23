@@ -21,7 +21,6 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use anyhow::{anyhow, Context, Result};
-use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
 use machine_manager::{
     config::{BootSource, Param, SerialConfig},
@@ -35,6 +34,7 @@ use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
+use util::num_ops::read_data_u32;
 use vmm_sys_util::eventfd::EventFd;
 const PL011_FLAG_TXFE: u8 = 0x80;
 const PL011_FLAG_RXFF: u8 = 0x40;
@@ -305,12 +305,10 @@ impl SysBusDevOps for PL011 {
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        let value = match data.len() {
-            1 => data[0] as u32,
-            2 => LittleEndian::read_u16(data) as u32,
-            4 => LittleEndian::read_u32(data) as u32,
-            _ => return false,
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
 
         match offset >> 2 {
             0 => {

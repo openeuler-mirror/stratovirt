@@ -35,7 +35,7 @@ use pci::{
     PciBus, PciDevOps, PciError,
 };
 use util::byte_code::ByteCode;
-use util::num_ops::write_data_u32;
+use util::num_ops::{read_data_u32, write_data_u32};
 use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -752,18 +752,10 @@ impl VirtioPciDevice {
         let cloned_mem_space = self.sys_mem.clone();
         let cloned_gsi_routes = self.gsi_msi_routes.clone();
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
-            let value = match data.len() {
-                1 => data[0] as u32,
-                2 => LittleEndian::read_u16(data) as u32,
-                4 => LittleEndian::read_u32(data),
-                _ => {
-                    error!(
-                        "Invalid data length for writing pci common config: offset 0x{:x}, data len {}",
-                        offset, data.len()
-                    );
-                    return false;
-                }
-            };
+            let mut value = 0;
+            if !read_data_u32(data, &mut value) {
+                return false;
+            }
             let old_dev_status = cloned_pci_device
                 .common_config
                 .lock()
