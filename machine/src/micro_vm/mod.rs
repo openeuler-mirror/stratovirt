@@ -930,7 +930,7 @@ impl DeviceInterface for LightMachine {
             },
             KvmVmState::Paused => qmp_schema::StatusInfo {
                 singlestep: false,
-                running: true,
+                running: false,
                 status: qmp_schema::RunState::paused,
             },
             _ => Default::default(),
