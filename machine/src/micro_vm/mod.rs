@@ -30,6 +30,7 @@
 
 pub mod error;
 pub use error::MicroVmError;
+use util::aio::AIO_NATIVE;
 
 mod mem_layout;
 mod syscall;
@@ -39,11 +40,8 @@ use super::Result as MachineResult;
 use log::error;
 use std::fmt;
 use std::fmt::Debug;
-use std::fs::metadata;
 use std::ops::Deref;
-use std::os::linux::fs::MetadataExt;
 use std::os::unix::io::RawFd;
-use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::vec::Vec;
 use vmm_sys_util::eventfd::EventFd;
@@ -1082,9 +1080,7 @@ impl DeviceInterface for LightMachine {
     }
 
     fn blockdev_add(&self, args: Box<qmp_schema::BlockDevAddArgument>) -> Response {
-        const MAX_STRING_LENGTH: usize = 255;
         let read_only = args.read_only.unwrap_or(false);
-
         let direct = if let Some(cache) = args.cache {
             match cache.direct {
                 Some(direct) => direct,
@@ -1093,46 +1089,6 @@ impl DeviceInterface for LightMachine {
         } else {
             true
         };
-
-        let blk = Path::new(&args.file.filename);
-        match metadata(blk) {
-            Ok(meta) => {
-                if (meta.st_mode() & libc::S_IFREG != libc::S_IFREG)
-                    && (meta.st_mode() & libc::S_IFBLK != libc::S_IFBLK)
-                {
-                    error!("File {:?} is not a regular file or block device", blk);
-                    return Response::create_error_response(
-                        qmp_schema::QmpErrorClass::GenericError(
-                            "File is not a regular file or block device".to_string(),
-                        ),
-                        None,
-                    );
-                }
-            }
-            Err(ref e) => {
-                error!("Blockdev_add failed: {}", e);
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                    None,
-                );
-            }
-        }
-
-        if let Some(file_name) = blk.file_name() {
-            if file_name.len() > MAX_STRING_LENGTH {
-                error!("File name {:?} is illegal", file_name);
-                return Response::create_error_response(
-                    qmp_schema::QmpErrorClass::GenericError("Illegal block name".to_string()),
-                    None,
-                );
-            }
-        } else {
-            error!("Path: {:?} is not valid", blk);
-            return Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError("Invalid block path".to_string()),
-                None,
-            );
-        }
 
         let config = BlkDevConfig {
             id: args.node_name.clone(),
@@ -1146,9 +1102,20 @@ impl DeviceInterface for LightMachine {
             boot_index: None,
             chardev: None,
             socket_path: None,
-            // TODO Add aio option by qmp.
-            aio: None,
+            // TODO Add aio option by qmp, now we set it based on "direct".
+            aio: if direct {
+                Some(String::from(AIO_NATIVE))
+            } else {
+                None
+            },
         };
+        if let Err(e) = config.check() {
+            error!("{:?}", e);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {

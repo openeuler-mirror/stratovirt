@@ -61,15 +61,13 @@ pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use virtio_pci::VirtioPciDevice;
 
 use std::cmp;
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use anyhow::anyhow;
 use anyhow::bail;
-use anyhow::Context;
 use machine_manager::config::ConfigCheck;
-use util::aio::Iovec;
+use util::aio::mem_to_buf;
 use util::num_ops::write_u32;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -383,37 +381,6 @@ pub fn report_virtio_error(
         evt.write(1)
             .unwrap_or_else(|e| error!("Failed to deactivate event, error is {}", e));
     }
-}
-
-fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
-    let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
-    (&mut slice)
-        .write(buf)
-        .with_context(|| format!("Failed to write buf to hva:{})", hva))?;
-    Ok(())
-}
-
-/// Write buf to iovec and return the writed number of bytes.
-pub fn iov_from_buf_direct(iovec: &[Iovec], buf: &[u8]) -> Result<usize> {
-    let mut start: usize = 0;
-    let mut end: usize = 0;
-
-    for iov in iovec.iter() {
-        end = cmp::min(start + iov.iov_len as usize, buf.len());
-        mem_from_buf(&buf[start..end], iov.iov_base)?;
-        if end >= buf.len() {
-            break;
-        }
-        start = end;
-    }
-    Ok(end)
-}
-
-fn mem_to_buf(mut buf: &mut [u8], hva: u64) -> Result<()> {
-    let slice = unsafe { std::slice::from_raw_parts(hva as *const u8, buf.len()) };
-    buf.write(slice)
-        .with_context(|| format!("Failed to read buf from hva:{})", hva))?;
-    Ok(())
 }
 
 /// Read iovec to buf and return the readed number of bytes.

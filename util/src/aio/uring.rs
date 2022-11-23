@@ -52,7 +52,7 @@ impl<T: Clone + 'static> IoUringContext<T> {
 impl<T: Clone + 'static> AioContext for IoUringContext<T> {
     #[allow(clippy::zero_ptr)]
     /// Submit requests to OS.
-    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()> {
+    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize> {
         for iocb in iocbp.iter() {
             let offset = unsafe { (*(*iocb)).aio_offset as libc::off_t };
             let node = unsafe { (*(*iocb)).data as *mut CbNode<T> };
@@ -91,12 +91,11 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
         }
         self.ring
             .submit_and_wait(nr as usize)
-            .with_context(|| "Failed to submit sqe")?;
-        Ok(())
+            .with_context(|| "Failed to submit sqe")
     }
 
     /// Get the events.
-    fn get_events(&mut self) -> (&[IoEvent], u32, u32) {
+    fn get_events(&mut self) -> &[IoEvent] {
         let mut queue = self.ring.completion();
         self.events.clear();
         let l = queue.len();
@@ -114,6 +113,6 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
                 }
             }
         }
-        (&self.events, 0, self.events.len() as u32)
+        &self.events
     }
 }

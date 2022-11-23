@@ -858,6 +858,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "byteorder",
+ "errno",
  "io-uring",
  "kvm-bindings",
  "kvm-ioctls",

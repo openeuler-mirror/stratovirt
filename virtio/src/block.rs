@@ -11,19 +11,19 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::{
-    iov_discard_back, iov_discard_front, iov_from_buf_direct, iov_to_buf, report_virtio_error,
-    virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
-    VirtioTrace, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error, virtio_has_feature,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
     VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
     VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
@@ -42,9 +42,11 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::raw_datasync;
-use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
+use util::aio::{
+    iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
+};
 use util::byte_code::ByteCode;
+use util::file::open_disk_file;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -62,8 +64,12 @@ const SECTOR_SHIFT: u8 = 9;
 const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
+/// Number of max merged requests.
+const MAX_NUM_MERGE_REQS: u16 = 32;
+/// Max time for every round of process queue.
+const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
 
-type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool);
+type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, Option<String>);
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -266,6 +272,7 @@ impl Request {
         disk: &File,
         serial_num: &Option<String>,
         direct: bool,
+        aio_type: &Option<String>,
         last_aio: bool,
         iocompletecb: AioCompleteCb,
     ) -> Result<()> {
@@ -275,6 +282,7 @@ impl Request {
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: (self.out_header.sector << SECTOR_SHIFT) as usize,
+            nbytes: 0,
             process: true,
             iocb: None,
             iocompletecb,
@@ -288,6 +296,7 @@ impl Request {
                     iov_len: iov.iov_len,
                 };
                 aiocb.iovec.push(iovec);
+                aiocb.nbytes += iov.iov_len;
             }
             req = req_raw.next.as_ref().as_ref();
         }
@@ -295,13 +304,13 @@ impl Request {
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
-                if direct {
+                if aio_type.is_some() {
                     for iov in aiocb.iovec.iter() {
                         MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
                     }
                     (*aio)
                         .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
                         .with_context(|| {
                             "Failed to process block request for reading asynchronously"
                         })?;
@@ -313,10 +322,10 @@ impl Request {
             }
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::Pwritev;
-                if direct {
+                if aio_type.is_some() {
                     (*aio)
                         .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
                         .with_context(|| {
                             "Failed to process block request for writing asynchronously"
                         })?;
@@ -330,7 +339,7 @@ impl Request {
                 aiocb.opcode = IoCmd::Fdsync;
                 (*aio)
                     .as_mut()
-                    .rw_sync(aiocb)
+                    .flush_sync(aiocb)
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
@@ -391,8 +400,10 @@ struct BlockIoHandler {
     disk_sectors: u64,
     /// Serial number of the block device.
     serial_num: Option<String>,
-    /// if use direct access io.
+    /// If use direct access io.
     direct: bool,
+    /// Async IO type.
+    aio_type: Option<String>,
     /// Aio context.
     aio: Option<Box<Aio<AioCompleteCb>>>,
     /// Bit mask of features negotiated by the backend and the frontend.
@@ -421,6 +432,7 @@ impl BlockIoHandler {
 
         let mut merge_req_queue = Vec::<Request>::new();
         let mut last_req: Option<&mut Request> = None;
+        let mut merged_reqs = 1;
 
         *last_aio_index = 0;
         for req in req_queue {
@@ -428,7 +440,8 @@ impl BlockIoHandler {
                 || req.out_header.request_type == VIRTIO_BLK_T_OUT;
             let can_merge = match last_req {
                 Some(ref req_ref) => {
-                    io && req_ref.out_header.request_type == req.out_header.request_type
+                    io && merged_reqs < MAX_NUM_MERGE_REQS
+                        && req_ref.out_header.request_type == req.out_header.request_type
                         && (req_ref.out_header.sector + req_ref.get_req_sector_num()
                             == req.out_header.sector)
                 }
@@ -439,12 +452,14 @@ impl BlockIoHandler {
                 let last_req_raw = last_req.unwrap();
                 last_req_raw.next = Box::new(Some(req));
                 last_req = last_req_raw.next.as_mut().as_mut();
+                merged_reqs += 1;
             } else {
                 if io {
                     *last_aio_index = merge_req_queue.len();
                 }
                 merge_req_queue.push(req);
                 last_req = merge_req_queue.last_mut();
+                merged_reqs = 1;
             }
         }
 
@@ -496,6 +511,10 @@ impl BlockIoHandler {
                 aiocompletecb.complete_request(status);
                 continue;
             }
+            // Avoid bogus guest stuck IO thread.
+            if req_queue.len() >= queue.vring.actual_size() as usize {
+                bail!("The front driver may be damaged, avail requests more than queue size");
+            }
             req_queue.push(req);
             done = true;
         }
@@ -520,6 +539,7 @@ impl BlockIoHandler {
                     disk_img,
                     &self.serial_num,
                     self.direct,
+                    &self.aio_type,
                     req_index == last_aio_req_index,
                     aiocompletecb.clone(),
                 ) {
@@ -527,7 +547,7 @@ impl BlockIoHandler {
                     aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
                 }
             } else {
-                error!("Failed to execute block request, disk_img not specified");
+                warn!("Failed to execute block request, disk_img not specified");
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
             }
         }
@@ -537,6 +557,8 @@ impl BlockIoHandler {
 
     fn process_queue_suppress_notify(&mut self) -> Result<bool> {
         let mut done = false;
+        let start_time = Instant::now();
+
         if !self.queue.lock().unwrap().is_enabled() {
             done = true;
             return Ok(done);
@@ -549,6 +571,14 @@ impl BlockIoHandler {
             .avail_ring_len(&self.mem_space)?
             != 0
         {
+            // Do not stuck IO thread.
+            let now = Instant::now();
+            if (now - start_time).as_millis() > MAX_MILLIS_TIME_PROCESS_QUEUE as u128 {
+                // Make sure we can come back.
+                self.queue_evt.try_clone()?.write(1)?;
+                break;
+            }
+
             self.queue.lock().unwrap().vring.suppress_queue_notify(
                 &self.mem_space,
                 self.driver_features,
@@ -562,6 +592,15 @@ impl BlockIoHandler {
                 self.driver_features,
                 false,
             )?;
+
+            // See whether we have been throttled.
+            if let Some(lb) = self.leak_bucket.as_mut() {
+                if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
+                    if lb.throttled(ctx, 0) {
+                        break;
+                    }
+                }
+            }
         }
         Ok(done)
     }
@@ -608,17 +647,19 @@ impl BlockIoHandler {
 
     fn update_evt_handler(&mut self) {
         match self.receiver.recv() {
-            Ok((image, disk_sectors, serial_num, direct)) => {
+            Ok((image, disk_sectors, serial_num, direct, aio_type)) => {
                 self.disk_sectors = disk_sectors;
                 self.disk_image = image;
                 self.serial_num = serial_num;
                 self.direct = direct;
+                self.aio_type = aio_type;
             }
             Err(_) => {
                 self.disk_sectors = 0;
                 self.disk_image = None;
                 self.serial_num = None;
                 self.direct = true;
+                self.aio_type = Some(String::from(AIO_NATIVE));
             }
         };
 
@@ -967,45 +1008,20 @@ impl VirtioDevice for Block {
             self.state.config_space.num_queues = self.blk_cfg.queues;
         }
 
+        let mut disk_image = None;
         let mut disk_size = DUMMY_IMG_SIZE;
-
         if !self.blk_cfg.path_on_host.is_empty() {
-            self.disk_image = None;
-
-            let mut file = if self.blk_cfg.direct {
-                OpenOptions::new()
-                    .read(true)
-                    .write(!self.blk_cfg.read_only)
-                    .custom_flags(libc::O_DIRECT)
-                    .open(&self.blk_cfg.path_on_host)
-                    .with_context(|| {
-                        format!(
-                            "failed to open the file by O_DIRECT for block {}",
-                            self.blk_cfg.path_on_host
-                        )
-                    })?
-            } else {
-                OpenOptions::new()
-                    .read(true)
-                    .write(!self.blk_cfg.read_only)
-                    .open(&self.blk_cfg.path_on_host)
-                    .with_context(|| {
-                        format!(
-                            "failed to open the file for block {}",
-                            self.blk_cfg.path_on_host
-                        )
-                    })?
-            };
-
+            let mut file = open_disk_file(
+                &self.blk_cfg.path_on_host,
+                self.blk_cfg.read_only,
+                self.blk_cfg.direct,
+            )?;
             disk_size =
                 file.seek(SeekFrom::End(0))
                     .with_context(|| "Failed to seek the end for block")? as u64;
-
-            self.disk_image = Some(Arc::new(file));
-        } else {
-            self.disk_image = None;
+            disk_image = Some(Arc::new(file));
         }
-
+        self.disk_image = disk_image;
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
         self.state.config_space.capacity = self.disk_sectors;
 
@@ -1106,6 +1122,7 @@ impl VirtioDevice for Block {
                 disk_image: self.disk_image.clone(),
                 disk_sectors: self.disk_sectors,
                 direct: self.blk_cfg.direct,
+                aio_type: self.blk_cfg.aio.clone(),
                 serial_num: self.blk_cfg.serial_num.clone(),
                 aio: None,
                 driver_features: self.state.driver_features,
@@ -1159,6 +1176,7 @@ impl VirtioDevice for Block {
                         self.disk_sectors,
                         self.blk_cfg.serial_num.clone(),
                         self.blk_cfg.direct,
+                        self.blk_cfg.aio.clone(),
                     ))
                     .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
             }

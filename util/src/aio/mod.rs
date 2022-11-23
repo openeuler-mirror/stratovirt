@@ -15,14 +15,17 @@ mod raw;
 mod uring;
 
 use std::clone::Clone;
+use std::cmp;
+use std::io::Write;
 use std::marker::{Send, Sync};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
+use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 pub use libaio::*;
 pub use raw::*;
 use uring::IoUringContext;
@@ -32,7 +35,7 @@ type CbNode<T> = Node<AioCb<T>>;
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct IoEvent {
     pub data: u64,
     pub obj: u64,
@@ -47,10 +50,10 @@ pub const AIO_NATIVE: &str = "native";
 
 /// The trait for Asynchronous IO operation.
 trait AioContext {
-    /// Submit IO requests to the OS.
-    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()>;
+    /// Submit IO requests to the OS, the nr submitted is returned.
+    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize>;
     /// Get the IO events of the requests sumbitted earlier.
-    fn get_events(&mut self) -> (&[IoEvent], u32, u32);
+    fn get_events(&mut self) -> &[IoEvent];
 }
 
 pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) + Sync + Send>;
@@ -61,8 +64,9 @@ pub struct AioCb<T: Clone> {
     pub opcode: IoCmd,
     pub iovec: Vec<Iovec>,
     pub offset: usize,
+    pub nbytes: u64,
     pub process: bool,
-    pub iocb: Option<std::ptr::NonNull<IoCb>>,
+    pub iocb: Option<Box<IoCb>>,
     pub iocompletecb: T,
 }
 
@@ -74,6 +78,7 @@ impl<T: Clone> AioCb<T> {
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: 0,
+            nbytes: 0,
             process: false,
             iocb: None,
             iocompletecb: cb,
@@ -123,93 +128,109 @@ impl<T: Clone + 'static> Aio<T> {
     pub fn handle(&mut self) -> Result<bool> {
         let mut done = false;
         let mut ctx = self.ctx.lock().unwrap();
-        let (evts, start, end) = ctx.get_events();
 
-        for e in start..end {
-            if evts[e as usize].res2 == 0 {
-                done = true;
-                unsafe {
-                    let node = evts[e as usize].data as *mut CbNode<T>;
+        for evt in ctx.get_events() {
+            unsafe {
+                let node = evt.data as *mut CbNode<T>;
+                let res = if (evt.res2 == 0) && (evt.res == (*node).value.nbytes as i64) {
+                    done = true;
+                    evt.res
+                } else {
+                    error!("Async IO request failed, res2 {} res {}", evt.res2, evt.res);
+                    -1
+                };
 
-                    (self.complete_func)(&(*node).value, evts[e as usize].res);
-                    self.aio_in_flight.unlink(&(*node));
-
-                    // free mem
-                    if let Some(i) = (*node).value.iocb {
-                        libc::free((*node).value.iovec.as_ptr() as *mut libc::c_void);
-                        libc::free(i.as_ptr() as *mut libc::c_void);
-                    };
-                    libc::free(node as *mut libc::c_void);
-                }
+                (self.complete_func)(&(*node).value, res);
+                self.aio_in_flight.unlink(&(*node));
+                // Construct Box to free mem automatically.
+                Box::from_raw(node);
             }
         }
         // Drop reference of 'ctx', so below 'process_list' can work.
         drop(ctx);
-        self.process_list().map(|_v| Ok(done))?
+        self.process_list();
+        Ok(done)
     }
 
-    fn process_list(&mut self) -> Result<()> {
-        if self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
+    fn process_list(&mut self) {
+        while self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
             let mut iocbs = Vec::new();
 
             for _ in self.aio_in_flight.len..self.max_events {
                 match self.aio_in_queue.pop_tail() {
-                    Some(node) => {
-                        iocbs.push(node.value.iocb.unwrap().as_ptr());
+                    Some(mut node) => {
+                        let iocb = node.value.iocb.as_mut().unwrap();
+                        iocbs.push(&mut **iocb as *mut IoCb);
                         self.aio_in_flight.add_head(node);
                     }
                     None => break,
                 }
             }
 
-            if !iocbs.is_empty() {
-                return self
-                    .ctx
-                    .lock()
-                    .unwrap()
-                    .submit(iocbs.len() as i64, &mut iocbs);
+            // The iocbs must not be empty.
+            let (nr, is_err) = match self
+                .ctx
+                .lock()
+                .unwrap()
+                .submit(iocbs.len() as i64, &mut iocbs)
+                .map_err(|e| {
+                    error!("{}", e);
+                    e
+                }) {
+                Ok(nr) => (nr, false),
+                Err(_) => (0, true),
+            };
+
+            // Push back unsubmitted requests. This should rarely happen, so the
+            // trade off is acceptable.
+            let mut index = nr;
+            while index < iocbs.len() {
+                if let Some(node) = self.aio_in_flight.pop_head() {
+                    self.aio_in_queue.add_tail(node);
+                }
+                index += 1;
             }
-        }
 
-        Ok(())
-    }
-
-    pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64) -> Result<()> {
-        let mut misaligned = false;
-        for iov in cb.iovec.iter() {
-            if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
-                misaligned = true;
+            if is_err {
+                // Fail one request, retry the rest.
+                if let Some(node) = self.aio_in_queue.pop_tail() {
+                    (self.complete_func)(&(*node).value, -1);
+                }
+            } else if nr == 0 {
+                // If can't submit any request, break the loop
+                // and the method handle() will try again.
                 break;
             }
         }
-        if misaligned {
-            return self.handle_misaligned_aio(cb);
+    }
+
+    pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64, direct: bool) -> Result<()> {
+        if direct {
+            for iov in cb.iovec.iter() {
+                if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
+                    return self.handle_misaligned_rw(cb);
+                }
+            }
         }
 
-        let last_aio = cb.last_aio;
-        let opcode = cb.opcode;
-        let file_fd = cb.file_fd;
-        let iovec = (&*cb.iovec).as_ptr() as u64;
-        let sg_size = cb.iovec.len();
-        let offset = cb.offset;
-
-        let mut node = Box::new(Node::new(cb));
-        let iocb = IoCb {
-            aio_lio_opcode: opcode as u16,
-            aio_fildes: file_fd as u32,
-            aio_buf: iovec,
-            aio_nbytes: sg_size as u64,
-            aio_offset: offset as u64,
+        let mut iocb = IoCb {
+            aio_lio_opcode: cb.opcode as u16,
+            aio_fildes: cb.file_fd as u32,
+            aio_buf: (&*cb.iovec).as_ptr() as u64,
+            aio_nbytes: cb.iovec.len() as u64,
+            aio_offset: cb.offset as u64,
             aio_flags: IOCB_FLAG_RESFD,
             aio_resfd: self.fd.as_raw_fd() as u32,
-            data: (&mut (*node) as *mut CbNode<T>) as u64,
             ..Default::default()
         };
-        node.value.iocb = std::ptr::NonNull::new(Box::into_raw(Box::new(iocb)));
+        let last_aio = cb.last_aio;
+        let mut node = Box::new(Node::new(cb));
+        iocb.data = (&mut (*node) as *mut CbNode<T>) as u64;
+        node.value.iocb = Some(Box::new(iocb));
 
         self.aio_in_queue.add_head(node);
         if last_aio || self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
-            return self.process_list();
+            self.process_list();
         }
 
         Ok(())
@@ -235,7 +256,6 @@ impl<T: Clone + 'static> Aio<T> {
                 }
                 r
             }
-            IoCmd::Fdsync => raw_datasync(cb.file_fd)?,
             _ => -1,
         };
         (self.complete_func)(&cb, ret);
@@ -243,65 +263,132 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    fn handle_misaligned_aio(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn handle_misaligned_rw(&mut self, cb: AioCb<T>) -> Result<()> {
         // Safe because we only get the host page size.
         let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-        let mut ret = 0_i64;
+        let mut ret = -1;
 
         match cb.opcode {
             IoCmd::Preadv => {
-                let mut off = cb.offset;
-                for iov in cb.iovec.iter() {
-                    // Safe because we allocate aligned memory and free it later.
-                    // Alignment is set to host page size to decrease the count of allocated pages.
-                    let aligned_buffer =
-                        unsafe { libc::memalign(host_page_size as usize, iov.iov_len as usize) };
-                    ret = raw_read(cb.file_fd, aligned_buffer as u64, iov.iov_len as usize, off)?;
-                    off += iov.iov_len as usize;
-
-                    let dst = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            iov.iov_base as *mut u8,
-                            iov.iov_len as usize,
-                        )
-                    };
-                    let src = unsafe {
-                        std::slice::from_raw_parts(
-                            aligned_buffer as *const u8,
-                            iov.iov_len as usize,
-                        )
-                    };
-                    dst.copy_from_slice(src);
+                // Safe because we allocate aligned memory and free it later.
+                // Alignment is set to host page size to decrease the count of allocated pages.
+                let aligned_buffer =
+                    unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
+                if aligned_buffer.is_null() {
+                    bail!("Failed to alloc memory for misaligned read");
+                }
+                ret = raw_read(
+                    cb.file_fd,
+                    aligned_buffer as u64,
+                    cb.nbytes as usize,
+                    cb.offset,
+                )
+                .map_err(|e| {
                     // Safe because the memory is allocated by us and will not be used anymore.
                     unsafe { libc::free(aligned_buffer) };
-                }
+                    e
+                })?;
+
+                let src = unsafe {
+                    std::slice::from_raw_parts(aligned_buffer as *const u8, cb.nbytes as usize)
+                };
+                iov_from_buf_direct(&cb.iovec, src).and_then(|v| {
+                    if v == cb.nbytes as usize {
+                        Ok(())
+                    } else {
+                        unsafe { libc::free(aligned_buffer) };
+                        bail!("Failed to copy buff to iovs")
+                    }
+                })?;
+                unsafe { libc::free(aligned_buffer) };
             }
             IoCmd::Pwritev => {
-                let mut off = cb.offset;
-                for iov in cb.iovec.iter() {
-                    let aligned_buffer =
-                        unsafe { libc::memalign(host_page_size as usize, iov.iov_len as usize) };
-                    let dst = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            aligned_buffer as *mut u8,
-                            iov.iov_len as usize,
-                        )
-                    };
-                    let src = unsafe {
-                        std::slice::from_raw_parts(iov.iov_base as *const u8, iov.iov_len as usize)
-                    };
-                    dst.copy_from_slice(src);
-
-                    ret = raw_write(cb.file_fd, aligned_buffer as u64, iov.iov_len as usize, off)?;
-                    off += iov.iov_len as usize;
-                    unsafe { libc::free(aligned_buffer) };
+                let aligned_buffer =
+                    unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
+                if aligned_buffer.is_null() {
+                    bail!("Failed to alloc memory for misaligned write");
                 }
+                let dst = unsafe {
+                    std::slice::from_raw_parts_mut(aligned_buffer as *mut u8, cb.nbytes as usize)
+                };
+                iov_to_buf_direct(&cb.iovec, dst).and_then(|v| {
+                    if v == cb.nbytes as usize {
+                        Ok(())
+                    } else {
+                        unsafe { libc::free(aligned_buffer) };
+                        bail!("Failed to copy iovs to buff")
+                    }
+                })?;
+
+                ret = raw_write(
+                    cb.file_fd,
+                    aligned_buffer as u64,
+                    cb.nbytes as usize,
+                    cb.offset,
+                )
+                .map_err(|e| {
+                    unsafe { libc::free(aligned_buffer) };
+                    e
+                })?;
+                unsafe { libc::free(aligned_buffer) };
             }
-            IoCmd::Fdsync => ret = raw_datasync(cb.file_fd)?,
             _ => {}
         };
         (self.complete_func)(&cb, ret);
 
         Ok(())
     }
+
+    pub fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+        let ret = raw_datasync(cb.file_fd)?;
+        (self.complete_func)(&cb, ret);
+        Ok(())
+    }
+}
+
+fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
+    let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
+    (&mut slice)
+        .write(buf)
+        .with_context(|| format!("Failed to write buf to hva:{})", hva))?;
+    Ok(())
+}
+
+/// Write buf to iovec and return the writed number of bytes.
+pub fn iov_from_buf_direct(iovec: &[Iovec], buf: &[u8]) -> Result<usize> {
+    let mut start: usize = 0;
+    let mut end: usize = 0;
+
+    for iov in iovec.iter() {
+        end = cmp::min(start + iov.iov_len as usize, buf.len());
+        mem_from_buf(&buf[start..end], iov.iov_base)?;
+        if end >= buf.len() {
+            break;
+        }
+        start = end;
+    }
+    Ok(end)
+}
+
+pub fn mem_to_buf(mut buf: &mut [u8], hva: u64) -> Result<()> {
+    let slice = unsafe { std::slice::from_raw_parts(hva as *const u8, buf.len()) };
+    buf.write(slice)
+        .with_context(|| format!("Failed to read buf from hva:{})", hva))?;
+    Ok(())
+}
+
+/// Read iovec to buf and return the readed number of bytes.
+pub fn iov_to_buf_direct(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
+    let mut start: usize = 0;
+    let mut end: usize = 0;
+
+    for iov in iovec {
+        end = cmp::min(start + iov.iov_len as usize, buf.len());
+        mem_to_buf(&mut buf[start..end], iov.iov_base)?;
+        if end >= buf.len() {
+            break;
+        }
+        start = end;
+    }
+    Ok(end)
 }

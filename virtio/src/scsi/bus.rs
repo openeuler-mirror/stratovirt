@@ -438,6 +438,7 @@ impl ScsiRequest {
         aio: &mut Box<Aio<ScsiCompleteCb>>,
         disk: &File,
         direct: bool,
+        aio_type: Option<String>,
         last_aio: bool,
         iocompletecb: ScsiCompleteCb,
     ) -> Result<u32> {
@@ -447,6 +448,7 @@ impl ScsiRequest {
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: (self.cmd.lba << 9) as usize,
+            nbytes: 0,
             process: true,
             iocb: None,
             iocompletecb,
@@ -458,6 +460,7 @@ impl ScsiRequest {
                 iov_len: iov.iov_len,
             };
             aiocb.iovec.push(iovec);
+            aiocb.nbytes += iov.iov_len;
         }
 
         if self.cmd.command == SYNCHRONIZE_CACHE {
@@ -472,10 +475,10 @@ impl ScsiRequest {
         match self.cmd.mode {
             ScsiXferMode::ScsiXferFromDev => {
                 aiocb.opcode = IoCmd::Preadv;
-                if direct {
+                if aio_type.is_some() {
                     (*aio)
                         .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
                         .with_context(|| {
                             "Failed to process scsi request for reading asynchronously"
                         })?;
@@ -487,10 +490,10 @@ impl ScsiRequest {
             }
             ScsiXferMode::ScsiXferToDev => {
                 aiocb.opcode = IoCmd::Pwritev;
-                if direct {
+                if aio_type.is_some() {
                     (*aio)
                         .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE)
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
                         .with_context(|| {
                             "Failed to process block request for writing asynchronously"
                         })?;

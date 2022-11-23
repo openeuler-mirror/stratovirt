@@ -903,7 +903,14 @@ impl ScsiCmdHandler {
                                     Arc::new(Mutex::new(scsireq.clone())),
                                 );
                                 if let Some(ref mut aio) = self.aio {
-                                    scsireq.execute(aio, disk_img, false, true, scsicompletecb)?;
+                                    scsireq.execute(
+                                        aio,
+                                        disk_img,
+                                        false,
+                                        None,
+                                        true,
+                                        scsicompletecb,
+                                    )?;
                                 }
                             }
                         }

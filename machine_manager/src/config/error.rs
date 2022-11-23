@@ -50,6 +50,10 @@ pub enum ConfigError {
     UnknownVhostType,
     #[error("{0} is not a regular File.")]
     UnRegularFile(String),
+    #[error("{0} is not a regular file or block device.")]
+    UnRegularFileOrBlk(String),
+    #[error("Failed to get metadata of file {0}: {1}.")]
+    NoMetadata(String, String),
     #[error("Input value {0} is unaligned with {1} for {2}.")]
     Unaligned(String, u64, u64),
     #[error("PFlash unit id given {0} should not be more than {1}")]

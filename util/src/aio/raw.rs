@@ -16,18 +16,30 @@ use libc::{c_void, fdatasync, pread, pwrite};
 use std::os::unix::io::RawFd;
 
 pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64> {
-    let ret = unsafe { pread(fd, buf as *mut c_void, size, offset as i64) as i64 };
-    if ret < 0 {
-        bail!("Failed to pread for {}, return {}.", fd, ret);
+    let mut ret;
+    loop {
+        ret = unsafe { pread(fd, buf as *mut c_void, size, offset as i64) as i64 };
+        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+            break;
+        }
+    }
+    if ret < 0 || ret as usize != size {
+        bail!("Failed to pread for {}, size {} return {}.", fd, size, ret);
     }
 
     Ok(ret)
 }
 
 pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64> {
-    let ret = unsafe { pwrite(fd, buf as *mut c_void, size, offset as i64) as i64 };
-    if ret < 0 {
-        bail!("Failed to pwrite for {}, return {}.", fd, ret);
+    let mut ret;
+    loop {
+        ret = unsafe { pwrite(fd, buf as *mut c_void, size, offset as i64) as i64 };
+        if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
+            break;
+        }
+    }
+    if ret < 0 || ret as usize != size {
+        bail!("Failed to pwrite for {}, size {} return {}.", fd, size, ret);
     }
 
     Ok(ret)

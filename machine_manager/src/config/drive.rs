@@ -93,7 +93,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             iops: None,
-            aio: None,
+            aio: Some(String::from(AIO_NATIVE)),
         }
     }
 }
@@ -107,15 +107,16 @@ impl DriveConfig {
                 if ((meta.st_mode() & libc::S_IFREG) != libc::S_IFREG)
                     && ((meta.st_mode() & libc::S_IFBLK) != libc::S_IFBLK)
                 {
-                    return Err(anyhow!(ConfigError::UnRegularFile(
-                        "Drive File".to_string()
+                    return Err(anyhow!(ConfigError::UnRegularFileOrBlk(
+                        self.path_on_host.clone()
                     )));
                 }
             }
             Err(e) => {
                 error!("Failed to check the drive metadata: {:?}", e);
-                return Err(anyhow!(ConfigError::UnRegularFile(
-                    "Drive File".to_string()
+                return Err(anyhow!(ConfigError::NoMetadata(
+                    self.path_on_host.clone(),
+                    e.to_string(),
                 )));
             }
         }
@@ -128,8 +129,9 @@ impl DriveConfig {
             }
         } else {
             error!("Failed to check the drive file name");
-            return Err(anyhow!(ConfigError::UnRegularFile(
-                "Drive File".to_string()
+            return Err(anyhow!(ConfigError::InvalidParam(
+                self.path_on_host.clone(),
+                "file".to_string(),
             )));
         }
         Ok(())
@@ -159,6 +161,18 @@ impl ConfigCheck for DriveConfig {
                 true,
             )));
         }
+        if self.aio == Some(String::from(AIO_NATIVE)) && !self.direct {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "aio".to_string(),
+                "native aio type should be used with \"direct\" on".to_string(),
+            )));
+        }
+        if self.aio.is_none() && self.direct {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "aio".to_string(),
+                "low performance expected when use sync io with \"direct\" on".to_string(),
+            )));
+        }
         Ok(())
     }
 }
@@ -169,13 +183,6 @@ impl ConfigCheck for BlkDevConfig {
             return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "drive device id".to_string(),
                 MAX_STRING_LENGTH,
-            )));
-        }
-
-        if self.path_on_host.len() > MAX_PATH_LENGTH {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "drive device path".to_string(),
-                MAX_PATH_LENGTH,
             )));
         }
 
@@ -193,16 +200,6 @@ impl ConfigCheck for BlkDevConfig {
             )));
         }
 
-        if self.iops.is_some() && self.iops.unwrap() > MAX_IOPS {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "iops of block device".to_string(),
-                0,
-                true,
-                MAX_IOPS,
-                true,
-            )));
-        }
-
         if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "number queues of block device".to_string(),
@@ -212,6 +209,17 @@ impl ConfigCheck for BlkDevConfig {
                 true,
             )));
         }
+
+        let fake_drive = DriveConfig {
+            path_on_host: self.path_on_host.clone(),
+            direct: self.direct,
+            iops: self.iops,
+            aio: self.aio.clone(),
+            ..Default::default()
+        };
+        fake_drive.check()?;
+        #[cfg(not(test))]
+        fake_drive.check_path()?;
 
         Ok(())
     }
@@ -246,13 +254,28 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
     drive.aio = if let Some(aio) = cmd_parser.get_value::<String>("aio")? {
-        if aio != AIO_NATIVE && aio != AIO_IOURING {
-            bail!("Invalid aio configure")
+        let aio_off = "off";
+        if aio != AIO_NATIVE && aio != AIO_IOURING && aio != aio_off {
+            bail!(
+                "Invalid aio configure, should be one of {}|{}|{}",
+                AIO_NATIVE,
+                AIO_IOURING,
+                aio_off
+            );
         }
-        Some(aio)
-    } else {
+        if aio != aio_off {
+            Some(aio)
+        } else {
+            None
+        }
+    } else if drive.direct {
         Some(AIO_NATIVE.to_string())
+    } else {
+        None
     };
+    drive.check()?;
+    #[cfg(not(test))]
+    drive.check_path()?;
     Ok(drive)
 }
 
@@ -433,7 +456,6 @@ impl VmConfig {
             .push("format")
             .push("if")
             .push("throttling.iops-total")
-            .push("serial")
             .push("aio");
 
         cmd_parser.parse(block_config)?;
@@ -597,7 +619,7 @@ mod tests {
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
         let blk_cfg =
             "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,multifunction=on";
