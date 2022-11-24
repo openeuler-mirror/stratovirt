@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{Region, RegionOps};
 use anyhow::{bail, Result};
-use log::{debug, error};
+use log::error;
 use pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
@@ -139,42 +139,11 @@ impl PciDevOps for Mch {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if size > 4 {
-            error!(
-                "Failed to read MCH config space: Invalid data size {}",
-                size
-            );
-            return;
-        }
-        if offset + size > PCI_CONFIG_SPACE_SIZE {
-            debug!(
-                "Failed to read MCH config space: offset {}, size {}, config space size {}",
-                offset, size, PCI_CONFIG_SPACE_SIZE
-            );
-            return;
-        }
         self.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let size = data.len();
-        let end = offset + size;
-        if size > 4 {
-            error!(
-                "Failed to write MCH config space: Invalid data size {}",
-                size
-            );
-            return;
-        }
-        if offset + size > PCI_CONFIG_SPACE_SIZE {
-            debug!(
-                "Failed to write MCH config space: offset {}, size {}, config space size {}",
-                offset, size, PCI_CONFIG_SPACE_SIZE
-            );
-            return;
-        }
-
+        let end = offset + data.len();
         self.config.write(offset, data, 0);
         if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8) {
             if let Err(e) = self.update_pciexbar_mapping() {

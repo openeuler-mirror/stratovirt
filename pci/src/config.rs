@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use address_space::Region;
+use log::error;
 
 use crate::msix::Msix;
 use crate::PciError;
@@ -488,8 +489,31 @@ impl PciConfig {
     /// * `offset` - Offset in the configuration space from which to read.
     /// * `data` - Buffer to put read data.
     pub fn read(&self, offset: usize, buf: &mut [u8]) {
+        if let Err(err) = self.validate_config_boundary(offset, buf) {
+            error!("invalid read: {:?}", err);
+            return;
+        }
         let size = buf.len();
         buf[..].copy_from_slice(&self.config[offset..(offset + size)]);
+    }
+
+    fn validate_config_boundary(&self, offset: usize, data: &[u8]) -> Result<()> {
+        if offset + data.len() > self.config.len() {
+            return Err(anyhow!(PciError::InvalidConf(
+                "config size".to_string(),
+                format!("offset {} with len {}", offset, data.len())
+            )));
+        }
+
+        // According to pcie specification 7.2.2.2 PCI Express Device Requirements:
+        if data.len() > 4 {
+            return Err(anyhow!(PciError::InvalidConf(
+                "data size".to_string(),
+                format!("{}", data.len())
+            )));
+        }
+
+        Ok(())
     }
 
     /// Common writing to configuration space.
@@ -500,6 +524,11 @@ impl PciConfig {
     /// * `data` - Data to write.
     /// * `dev_id` - Device id to send MSI/MSI-X.
     pub fn write(&mut self, mut offset: usize, data: &[u8], dev_id: u16) {
+        if let Err(err) = self.validate_config_boundary(offset, data) {
+            error!("invalid write: {:?}", err);
+            return;
+        }
+
         let cloned_data = data.to_vec();
         let old_offset = offset;
         for data in &cloned_data {
@@ -508,6 +537,7 @@ impl PciConfig {
             self.config[offset] &= !(data & self.write_clear_mask[offset]);
             offset += 1;
         }
+
         if let Some(msix) = &mut self.msix {
             msix.lock()
                 .unwrap()

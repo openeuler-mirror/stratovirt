@@ -20,7 +20,7 @@ use crate::standard_vm::Result;
 use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use anyhow::Context;
-use log::{debug, error};
+use log::error;
 use pci::config::CLASS_CODE_ISA_BRIDGE;
 use pci::config::{
     PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, HEADER_TYPE_MULTIFUNC,
@@ -264,27 +264,11 @@ impl PciDevOps for LPCBridge {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if offset + size > PCI_CONFIG_SPACE_SIZE || size > 4 {
-            debug!(
-                "Failed to read LPC bridge's pci config space: offset {}, data size {}",
-                offset, size
-            );
-            return;
-        }
         self.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let size = data.len();
-        let end = offset + size;
-        if end > PCI_CONFIG_SPACE_SIZE || size > 4 {
-            debug!(
-                "Failed to write LPC bridge's pci config space: offset {}, data size {}",
-                offset, size
-            );
-            return;
-        }
+        let end = offset + data.len();
 
         self.config.write(offset, data, 0);
         if ranges_overlap(

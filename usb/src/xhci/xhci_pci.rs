@@ -18,8 +18,7 @@ use address_space::{AddressSpace, Region};
 use machine_manager::config::XhciConfig;
 use pci::config::{
     PciConfig, RegionType, BAR_0, COMMAND, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO,
-    PCIE_CONFIG_SPACE_SIZE, PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS,
-    SUB_CLASS_CODE, VENDOR_ID,
+    PCI_CONFIG_SPACE_SIZE, REG_SIZE, REVISION_ID, ROM_ADDRESS, SUB_CLASS_CODE, VENDOR_ID,
 };
 use pci::{init_msix, le_write_u16, ranges_overlap, PciBus, PciDevOps};
 
@@ -241,28 +240,11 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        let data_size = data.len();
-        if offset + data_size > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
-            error!(
-                "Failed to read pci config space at offset 0x{:x} with data size {}",
-                offset, data_size
-            );
-            return;
-        }
         self.pci_config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let data_size = data.len();
-        let end = offset + data_size;
-        if end > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
-            error!(
-                "Failed to write pci config space at offset 0x{:x} with data size {}",
-                offset, data_size
-            );
-            return;
-        }
-
+        let end = offset + data.len();
         self.pci_config
             .write(offset, data, self.dev_id.clone().load(Ordering::Acquire));
         if ranges_overlap(

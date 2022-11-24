@@ -349,15 +349,6 @@ impl PciDevOps for RootPort {
     }
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if offset + size > PCIE_CONFIG_SPACE_SIZE || size > 4 {
-            error!(
-                "Failed to read pcie config space at offset {} with data size {}",
-                offset, size
-            );
-            return;
-        }
-
         self.config.read(offset, data);
     }
 
