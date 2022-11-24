@@ -259,7 +259,7 @@ impl VirtioDevice for Net {
             let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
 
             let ctrl_handler = NetCtrlHandler {
-                ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt),
+                ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, None),
                 mem_space,
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.driver_features,

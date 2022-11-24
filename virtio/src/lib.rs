@@ -133,6 +133,10 @@ pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
 pub const VIRTIO_NET_F_MRG_RXBUF: u32 = 15;
 /// Control channel is available.
 pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
+/// Control channel RX mode support.
+pub const VIRTIO_NET_F_CTRL_RX: u32 = 18;
+/// Extra RX mode control support.
+pub const VIRTIO_NET_F_CTRL_RX_EXTRA: u32 = 20;
 /// Device supports multi queue with automatic receive steering.
 pub const VIRTIO_NET_F_MQ: u32 = 22;
 /// Set Mac Address through control channel.
@@ -162,8 +166,24 @@ pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 pub const VIRTIO_NET_OK: u8 = 0;
 /// The device sets control err status to driver.
 pub const VIRTIO_NET_ERR: u8 = 1;
+
+/// Driver can send control commands.
+pub const VIRTIO_NET_CTRL_RX: u8 = 0;
+/// Control commands for promiscuous mode.
+pub const VIRTIO_NET_CTRL_RX_PROMISC: u8 = 0;
+/// Control commands for all-multicast receive.
+pub const VIRTIO_NET_CTRL_RX_ALLMULTI: u8 = 1;
+/// Control commands for all-unicast receive.
+pub const VIRTIO_NET_CTRL_RX_ALLUNI: u8 = 2;
+/// Control commands for suppressing multicast receive.
+pub const VIRTIO_NET_CTRL_RX_NOMULTI: u8 = 3;
+/// Control commands for suppressing unicast receive.
+pub const VIRTIO_NET_CTRL_RX_NOUNI: u8 = 4;
+/// Control commands for suppressing broadcast receive.
+pub const VIRTIO_NET_CTRL_RX_NOBCAST: u8 = 5;
+
 /// Driver configure the class before enabling virtqueue.
-pub const VIRTIO_NET_CTRL_MQ: u16 = 4;
+pub const VIRTIO_NET_CTRL_MQ: u8 = 4;
 /// Driver configure the command before enabling virtqueue.
 pub const VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET: u16 = 0;
 /// The minimum pairs of multiple queue.
@@ -406,12 +426,12 @@ pub fn iov_to_buf(mem_space: &AddressSpace, iovec: &[ElemIovec], buf: &mut [u8])
 }
 
 /// Discard "size" bytes of the front of iovec.
-pub fn iov_discard_front(iovec: &mut [ElemIovec], mut size: u64) -> Option<&[ElemIovec]> {
+pub fn iov_discard_front(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [ElemIovec]> {
     for (index, iov) in iovec.iter_mut().enumerate() {
         if iov.len as u64 > size {
             iov.addr.0 += size;
             iov.len -= size as u32;
-            return Some(&iovec[index..]);
+            return Some(&mut iovec[index..]);
         }
         size -= iov.len as u64;
     }
@@ -419,12 +439,12 @@ pub fn iov_discard_front(iovec: &mut [ElemIovec], mut size: u64) -> Option<&[Ele
 }
 
 /// Discard "size" bytes of the back of iovec.
-pub fn iov_discard_back(iovec: &mut [ElemIovec], mut size: u64) -> Option<&[ElemIovec]> {
+pub fn iov_discard_back(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [ElemIovec]> {
     let len = iovec.len();
     for (index, iov) in iovec.iter_mut().rev().enumerate() {
         if iov.len as u64 > size {
             iov.len -= size as u32;
-            return Some(&iovec[..(len - index)]);
+            return Some(&mut iovec[..(len - index)]);
         }
         size -= iov.len as u64;
     }
