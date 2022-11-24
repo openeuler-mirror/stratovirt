@@ -757,7 +757,8 @@ fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
     let path = format!("/sys/class/net/{}/tun_flags", dev_name);
     let tap_path = Path::new(&path);
     if !tap_path.exists() {
-        bail!("Tap path doesn't exist");
+        warn!("Tap interface does not exist");
+        return Ok(());
     }
 
     let is_mq = queue_pair > 1;

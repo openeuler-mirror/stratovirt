@@ -108,10 +108,7 @@ impl Tap {
         }
 
         if (features & IFF_MULTI_QUEUE == 0) && queue_pairs > 1 {
-            bail!(
-                "Tap device doesn't support mq, but command set queue pairs {}.",
-                queue_pairs
-            );
+            bail!("Needs multiqueue, but no kernel support for IFF_MULTI_QUEUE available");
         }
 
         Ok(Tap { file })
