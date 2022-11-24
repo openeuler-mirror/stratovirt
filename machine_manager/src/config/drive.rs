@@ -67,7 +67,7 @@ impl Default for BlkDevConfig {
             boot_index: None,
             chardev: None,
             socket_path: None,
-            aio: None,
+            aio: Some(AIO_NATIVE.to_string()),
         }
     }
 }
@@ -219,7 +219,9 @@ impl ConfigCheck for BlkDevConfig {
         };
         fake_drive.check()?;
         #[cfg(not(test))]
-        fake_drive.check_path()?;
+        if self.chardev.is_none() {
+            fake_drive.check_path()?;
+        }
 
         Ok(())
     }
