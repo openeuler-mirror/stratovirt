@@ -259,12 +259,12 @@ pub struct NetCtrlHandler {
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
-struct CrtlHdr {
+struct CtrlHdr {
     class: u8,
     cmd: u8,
 }
 
-impl ByteCode for CrtlHdr {}
+impl ByteCode for CtrlHdr {}
 
 impl NetCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
@@ -283,7 +283,7 @@ impl NetCtrlHandler {
             let in_size = Element::iovec_size(&elem.in_iovec);
             let out_size = Element::iovec_size(&elem.out_iovec);
             if in_size < mem::size_of_val(&ack) as u32
-                || out_size < mem::size_of::<CrtlHdr>() as u32
+                || out_size < mem::size_of::<CtrlHdr>() as u32
             {
                 bail!(
                     "Invalid length, in_iovec size is {}, out_iovec size is {}",
@@ -300,7 +300,7 @@ impl NetCtrlHandler {
             };
 
             // Get the control request header.
-            let mut ctrl_hdr = CrtlHdr::default();
+            let mut ctrl_hdr = CtrlHdr::default();
             let mut data_iovec = get_buf_and_discard(
                 &self.mem_space,
                 &mut elem.out_iovec,
