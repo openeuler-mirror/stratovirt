@@ -16,6 +16,12 @@ const VIRIOT_FS_HIGH_PRIO_QUEUE_NUM: u64 = 1;
 const VIRTIO_FS_REQ_QUEUES_NUM: u64 = 1;
 /// The max queue size.
 const VIRTIO_FS_MAX_QUEUE_SIZE: u16 = 1024;
+const VIRTIO_FS_VRING_IDX_MASK: usize = 0xff;
+/// For VHOST_USER_SET_VRING_KICK and VHOST_USER_SET_VRING_CALL and VHOST_USER_SET_
+/// VRING_ERR, Bits (0-7) of the payload contain the vring index. Bit 8 is the invalid
+/// FD flag. This flag is set when there is no file descriptor in the ancillary data.
+/// This signals that polling should be used instead of waiting for the kick.
+const VIRTIO_FS_VRING_NO_FD_MASK: usize = 0x1 << 8;
 
 use crate::cmdline::FsConfig;
 use std::fs::File;
@@ -368,24 +374,32 @@ impl VhostUserReqHandler for VirtioFs {
     }
 
     fn set_vring_call(&mut self, queue_index: usize, fd: RawFd) -> Result<()> {
+        if (queue_index & VIRTIO_FS_VRING_NO_FD_MASK) != 0 {
+            bail!("The polling mode is not supported");
+        }
+        let index = queue_index & VIRTIO_FS_VRING_IDX_MASK;
         self.config
-            .get_mut_queue_config(queue_index)
+            .get_mut_queue_config(index)
             .map(|queue_info| {
                 let call_evt = unsafe { EventFd::from_raw_fd(fd) };
                 queue_info.call_evt = Some(call_evt);
             })
-            .with_context(|| format!("Failed to set vring call, index: {}", queue_index))?;
+            .with_context(|| format!("Failed to set vring call, index: {}", index))?;
         Ok(())
     }
 
     fn set_vring_kick(&mut self, queue_index: usize, fd: RawFd) -> Result<()> {
+        if (queue_index & VIRTIO_FS_VRING_NO_FD_MASK) != 0 {
+            bail!("The polling mode is not supported");
+        }
+        let index = queue_index & VIRTIO_FS_VRING_IDX_MASK;
         self.config
-            .get_mut_queue_config(queue_index)
+            .get_mut_queue_config(index)
             .map(|queue_info| {
                 let kick_evt = unsafe { EventFd::from_raw_fd(fd) };
                 queue_info.kick_evt = Some(kick_evt);
             })
-            .with_context(|| format!("Failed to set vring kick, index: {}", queue_index))?;
+            .with_context(|| format!("Failed to set vring kick, index: {}", index))?;
         Ok(())
     }
 
