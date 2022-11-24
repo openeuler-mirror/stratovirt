@@ -158,8 +158,10 @@ pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 /// WRITE ZEROES is supported.
 pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 
-/// The device sets MQ ok status values to driver.
+/// The device sets control ok status to driver.
 pub const VIRTIO_NET_OK: u8 = 0;
+/// The device sets control err status to driver.
+pub const VIRTIO_NET_ERR: u8 = 1;
 /// Driver configure the class before enabling virtqueue.
 pub const VIRTIO_NET_CTRL_MQ: u16 = 4;
 /// Driver configure the command before enabling virtqueue.

@@ -21,7 +21,7 @@ use super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
     VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
     VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
     VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
@@ -115,7 +115,7 @@ impl NetCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
         let mut locked_queue = self.ctrl.queue.lock().unwrap();
         loop {
-            let ack = VIRTIO_NET_OK;
+            let mut ack = VIRTIO_NET_OK;
             let elem = locked_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -150,10 +150,8 @@ impl NetCtrlHandler {
                         }
                     }
                     _ => {
-                        bail!(
-                            "Control queue header class can't match {}",
-                            VIRTIO_NET_CTRL_MQ
-                        );
+                        error!("Control queue header class can't match {}", ctrl_hdr.class);
+                        ack = VIRTIO_NET_ERR;
                     }
                 }
             }
