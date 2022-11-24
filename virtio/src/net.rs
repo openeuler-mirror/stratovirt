@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
@@ -24,11 +25,13 @@ use super::{
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX,
     VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
     VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
-    VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
-    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6,
-    VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
+    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
+    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
@@ -62,6 +65,8 @@ pub const MAC_ADDR_LEN: usize = 6;
 const ETHERNET_HDR_LENGTH: usize = 14;
 /// The max "multicast + unicast" mac address table length.
 const CTRL_MAC_TABLE_LEN: usize = 64;
+/// From 802.1Q definition, the max vlan ID.
+const CTRL_MAX_VLAN: u16 = 1 << 12;
 
 type SenderConfig = Option<Tap>;
 
@@ -140,6 +145,8 @@ pub struct CtrlInfo {
     rx_mode: CtrlRxMode,
     /// The mac address information for packet receive filtering.
     mac_info: CtrlMacInfo,
+    /// The map of all the vlan ids.
+    vlan_map: HashMap<u16, u32>,
     /// The net device status.
     state: Arc<Mutex<VirtioNetState>>,
 }
@@ -149,6 +156,7 @@ impl CtrlInfo {
         CtrlInfo {
             rx_mode: CtrlRxMode::default(),
             mac_info: CtrlMacInfo::default(),
+            vlan_map: HashMap::new(),
             state,
         }
     }
@@ -278,12 +286,70 @@ impl CtrlInfo {
         ack
     }
 
+    fn handle_vlan_table(
+        &mut self,
+        mem_space: &AddressSpace,
+        cmd: u8,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> u8 {
+        let mut ack = VIRTIO_NET_OK;
+        let mut vid: u16 = 0;
+
+        *data_iovec = get_buf_and_discard(mem_space, data_iovec, vid.as_mut_bytes())
+            .unwrap_or_else(|e| {
+                error!("Failed to get vlan id, error is {}", e);
+                ack = VIRTIO_NET_ERR;
+                Vec::new()
+            });
+        if ack == VIRTIO_NET_ERR {
+            return ack;
+        }
+        if vid >= CTRL_MAX_VLAN {
+            return VIRTIO_NET_ERR;
+        }
+
+        match cmd {
+            VIRTIO_NET_CTRL_VLAN_ADD => {
+                if let Some(value) = self.vlan_map.get_mut(&(vid >> 5)) {
+                    *value |= 1 << (vid & 0x1f);
+                } else {
+                    self.vlan_map.insert(vid >> 5, 1 << (vid & 0x1f));
+                }
+            }
+            VIRTIO_NET_CTRL_VLAN_DEL => {
+                if let Some(value) = self.vlan_map.get_mut(&(vid >> 5)) {
+                    *value &= !(1 << (vid & 0x1f));
+                }
+            }
+            _ => {
+                error!("Invalid cmd {} when handling control vlan", cmd);
+                ack = VIRTIO_NET_ERR;
+            }
+        }
+        ack
+    }
+
     fn filter_packets(&mut self, buf: &[u8]) -> bool {
         // Broadcast address: 0xff:0xff:0xff:0xff:0xff:0xff.
         let bcast = [0xff; MAC_ADDR_LEN];
+        // TPID of the vlan tag, defined in IEEE 802.1Q, is 0x8100.
+        let vlan = [0x81, 0x00];
 
         if self.rx_mode.promisc {
             return false;
+        }
+
+        if buf[..vlan.len()] == vlan {
+            let vid = u16::from_be_bytes([buf[14], buf[15]]);
+            let value = if let Some(value) = self.vlan_map.get(&(vid >> 5)) {
+                *value
+            } else {
+                0
+            };
+
+            if value & (1 << (vid & 0x1f)) == 0 {
+                return true;
+            }
         }
 
         // The bit 0 in byte[0] means unicast(0) or multicast(1).
@@ -445,6 +511,13 @@ impl NetCtrlHandler {
                 }
                 VIRTIO_NET_CTRL_MAC => {
                     ack = ctrl_info.lock().unwrap().handle_mac(
+                        &self.mem_space,
+                        ctrl_hdr.cmd,
+                        &mut data_iovec,
+                    );
+                }
+                VIRTIO_NET_CTRL_VLAN => {
+                    ack = ctrl_info.lock().unwrap().handle_vlan_table(
                         &self.mem_space,
                         ctrl_hdr.cmd,
                         &mut data_iovec,
@@ -1255,6 +1328,7 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_TSO6
             | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_NET_F_CTRL_RX
+            | 1 << VIRTIO_NET_F_CTRL_VLAN
             | 1 << VIRTIO_NET_F_CTRL_RX_EXTRA
             | 1 << VIRTIO_NET_F_CTRL_MAC_ADDR
             | 1 << VIRTIO_F_RING_EVENT_IDX;
@@ -1522,6 +1596,7 @@ impl VirtioDevice for Net {
             let mut locked_ctrl = ctrl_info.lock().unwrap();
             locked_ctrl.rx_mode = Default::default();
             locked_ctrl.mac_info = Default::default();
+            locked_ctrl.vlan_map = HashMap::new();
         } else {
             bail!("Control information is None");
         }

@@ -135,6 +135,8 @@ pub const VIRTIO_NET_F_MRG_RXBUF: u32 = 15;
 pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
 /// Control channel RX mode support.
 pub const VIRTIO_NET_F_CTRL_RX: u32 = 18;
+/// Control channel VLAN filtering.
+pub const VIRTIO_NET_F_CTRL_VLAN: u32 = 19;
 /// Extra RX mode control support.
 pub const VIRTIO_NET_F_CTRL_RX_EXTRA: u32 = 20;
 /// Device supports multi queue with automatic receive steering.
@@ -188,6 +190,13 @@ pub const VIRTIO_NET_CTRL_MAC: u8 = 1;
 pub const VIRTIO_NET_CTRL_MAC_TABLE_SET: u8 = 0;
 /// The driver sets the default MAC address which rx filtering accepts.
 pub const VIRTIO_NET_CTRL_MAC_ADDR_SET: u8 = 1;
+
+/// The driver can send control commands for vlan filtering.
+pub const VIRTIO_NET_CTRL_VLAN: u8 = 2;
+/// The driver adds a vlan id to the vlan filtering table.
+pub const VIRTIO_NET_CTRL_VLAN_ADD: u8 = 0;
+/// The driver adds a vlan id from the vlan filtering table.
+pub const VIRTIO_NET_CTRL_VLAN_DEL: u8 = 1;
 
 /// Driver configure the class before enabling virtqueue.
 pub const VIRTIO_NET_CTRL_MQ: u8 = 4;
