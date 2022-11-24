@@ -143,7 +143,7 @@ impl<T: Clone + 'static> Aio<T> {
                 (self.complete_func)(&(*node).value, res);
                 self.aio_in_flight.unlink(&(*node));
                 // Construct Box to free mem automatically.
-                Box::from_raw(node);
+                drop(Box::from_raw(node));
             }
         }
         // Drop reference of 'ctx', so below 'process_list' can work.
