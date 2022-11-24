@@ -10,9 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::VmConfig;
+use std::net::Ipv4Addr;
+
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+
+use super::VmConfig;
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum MigrateMode {
@@ -44,10 +47,20 @@ pub fn parse_incoming_uri(uri: &str) -> Result<(MigrateMode, String)> {
         }
     } else if parse_vec.len() == 3 {
         match MigrateMode::from(parse_vec[0]) {
-            MigrateMode::Tcp => Ok((
-                MigrateMode::Tcp,
-                format!("{}:{}", parse_vec[1], parse_vec[2]),
-            )),
+            MigrateMode::Tcp => {
+                if parse_vec[1].parse::<Ipv4Addr>().is_err() {
+                    bail!("Invalid ip address {}", parse_vec[1]);
+                }
+                if parse_vec[2].parse::<u16>().is_err() {
+                    bail!("Invalid ip port {}", parse_vec[2]);
+                }
+
+                return Ok((
+                    MigrateMode::Tcp,
+                    format!("{}:{}", parse_vec[1], parse_vec[2]),
+                ));
+            }
+
             _ => bail!("Invalid incoming uri {}", uri),
         }
     } else {
@@ -106,6 +119,14 @@ mod tests {
         let incoming_case3 = "tcp:192.168.1.2:2:2";
         let result_3 = parse_incoming_uri(incoming_case3);
         assert!(result_3.is_err());
+
+        let incoming_case4 = "tcp:300.168.1.2:22";
+        let result_4 = parse_incoming_uri(incoming_case4);
+        assert!(result_4.is_err());
+
+        let incoming_case5 = "tcp:192.168.1.2:65568";
+        let result_5 = parse_incoming_uri(incoming_case5);
+        assert!(result_5.is_err());
     }
 
     #[test]
