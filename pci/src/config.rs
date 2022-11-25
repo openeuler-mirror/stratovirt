@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use address_space::Region;
-use log::error;
+use log::{error, warn};
 
 use crate::msix::Msix;
 use crate::{
@@ -490,7 +490,7 @@ impl PciConfig {
     /// * `data` - Buffer to put read data.
     pub fn read(&self, offset: usize, buf: &mut [u8]) {
         if let Err(err) = self.validate_config_boundary(offset, buf) {
-            error!("invalid read: {:?}", err);
+            warn!("invalid read: {:?}", err);
             return;
         }
         let size = buf.len();
