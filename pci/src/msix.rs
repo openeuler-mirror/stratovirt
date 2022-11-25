@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{GuestAddress, Region, RegionOps};
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
+use log::{error, warn};
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
@@ -282,7 +282,7 @@ impl Msix {
 
     pub fn notify(&mut self, vector: u16, dev_id: u16) {
         if vector >= self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
-            error!("Invaild msix vector {}.", vector);
+            warn!("Invalid msix vector {}.", vector);
             return;
         }
 
