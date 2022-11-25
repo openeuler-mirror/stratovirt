@@ -270,7 +270,7 @@ impl PciDevOps for LPCBridge {
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let end = offset + data.len();
 
-        self.config.write(offset, data, 0);
+        self.config.write(offset, data, 0, None, None);
         if ranges_overlap(
             offset,
             end,
