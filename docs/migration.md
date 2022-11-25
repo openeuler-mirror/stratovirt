@@ -111,3 +111,17 @@ Some device attributes can't be changed:
 - `m`
 
 If hot plug device before migrate source vm, add newly replaced device command should be add to destination vm.
+
+Before live migration:
+- source and destination host CPU needs to be the same architecture.
+- the VMs image needs to be shared by source and destination.
+- live migration may fail if the VM is performing lifecycle operations, such as reboot, shutdown.
+- the command to startup the VM needs to be consistent on source and destination host.
+
+During live migration:
+- source and destination networks cannot be disconnected.
+- it is banned to operate VM lifecycle, inclues using the QMP command and executing in the VM.
+- live migration time is affected by network performance, total memory of VM and applications.
+
+After live migration:
+- it needs to wait for the source VM to release resources before fetching back the live migration operation.
