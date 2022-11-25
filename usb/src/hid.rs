@@ -429,16 +429,18 @@ impl Hid {
                         packet.actual_length = KEYBOARD_REPORT_DESCRIPTOR.len() as u32;
                     }
                     _ => {
-                        error!("Unkown HID type");
+                        error!("Unknown HID type");
+                        packet.status = UsbPacketStatus::Stall;
                     }
                 },
                 _ => {
                     error!("Invalid value: {:?}", device_req);
+                    packet.status = UsbPacketStatus::Stall;
                 }
             },
             _ => {
-                packet.status = UsbPacketStatus::Stall;
                 error!("Unhandled request {}", device_req.request);
+                packet.status = UsbPacketStatus::Stall;
             }
         }
     }
@@ -463,6 +465,7 @@ impl Hid {
                 }
                 _ => {
                     error!("Unsupported HID type for report");
+                    packet.status = UsbPacketStatus::Stall;
                 }
             },
             HID_GET_PROTOCOL => {
@@ -488,10 +491,11 @@ impl Hid {
         match device_req.request {
             HID_SET_REPORT => match self.kind {
                 HidType::Keyboard => {
-                    error!("Keyboard set report not implemented");
+                    warn!("Keyboard set report not implemented");
                 }
                 _ => {
                     error!("Unsupported to set report");
+                    packet.status = UsbPacketStatus::Stall;
                 }
             },
             HID_SET_PROTOCOL => {
@@ -539,6 +543,7 @@ impl Hid {
                     }
                     _ => {
                         error!("Unsupported HID device");
+                        p.status = UsbPacketStatus::Stall;
                     }
                 }
                 let len = buf.len();
