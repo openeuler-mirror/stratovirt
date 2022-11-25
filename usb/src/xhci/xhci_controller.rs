@@ -1149,10 +1149,15 @@ impl XhciDevice {
             "kick_endpoint slotid {} epid {} dequeue {:x}",
             slot_id, ep_id, epctx.ring.dequeue
         );
-        if !self.endpoint_retry_transfer(slot_id, ep_id)? {
+        if self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
+            .retry
+            .is_some()
+            && !self.endpoint_retry_transfer(slot_id, ep_id)?
+        {
             // Return directly to retry again at the next kick.
             return Ok(());
         }
+
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if epctx.state == EP_HALTED {
             info!("xhci: endpoint halted");
@@ -1166,25 +1171,20 @@ impl XhciDevice {
             xfer.slotid = slot_id;
             xfer.epid = ep_id;
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-            match epctx.ring.fetch_td() {
-                Ok(Some(td)) => {
+            match epctx.ring.fetch_td()? {
+                Some(td) => {
                     debug!(
                         "fetch transfer trb {:?} ring dequeue {:?}",
                         td, epctx.ring.dequeue,
                     );
                     xfer.td = td;
                 }
-                Ok(None) => {
+                None => {
                     debug!("No TD in the transfer ring.");
                     break;
                 }
-                Err(e) => {
-                    bail!("fetch ring failed {}", e);
-                }
             }
-            if let Err(e) = self.endpoint_do_transfer(&mut xfer) {
-                error!("Failed to transfer {:?}", e);
-            }
+            self.endpoint_do_transfer(&mut xfer)?;
             let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
             if xfer.complete {
                 epctx.set_state(&self.mem_space, epctx.state)?;
@@ -1230,25 +1230,29 @@ impl XhciDevice {
         Ok(ep_ctx)
     }
 
-    /// Return true if retry is done.
-    /// Return false if packet is need to retry again.
-    /// Return error if retry failed.
+    /// Return Ok(true) if retry is done.
+    /// Return Ok(false) if packet is need to retry again.
+    /// Return Err() if retry failed.
     fn endpoint_retry_transfer(&mut self, slot_id: u32, ep_id: u32) -> Result<bool> {
         let slot = &mut self.slots[(slot_id - 1) as usize];
-        let mut xfer = if let Some(xfer) = &mut slot.endpoints[(ep_id - 1) as usize].retry {
-            xfer.clone()
-        } else {
-            // No need to retry.
+        // Safe because the retry is checked in the outer function call.
+        let xfer = &mut slot.endpoints[(ep_id - 1) as usize]
+            .retry
+            .as_ref()
+            .unwrap()
+            .clone();
+        if let Err(e) = self.setup_usb_packet(xfer) {
+            error!("Failed to setup packet when retry {}", e);
+            self.report_transfer_error(xfer)?;
             return Ok(true);
-        };
-        self.setup_usb_packet(&mut xfer)?;
-        self.device_handle_packet(&mut xfer.packet)?;
+        }
+        self.device_handle_packet(&mut xfer.packet);
         if xfer.packet.status == UsbPacketStatus::Nak {
             debug!("USB packet status is NAK");
             // NAK need to retry again.
             return Ok(false);
         }
-        self.complete_packet(&mut xfer)?;
+        self.complete_packet(xfer)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if xfer.complete {
             epctx.set_state(&self.mem_space, epctx.state)?;
@@ -1257,22 +1261,24 @@ impl XhciDevice {
         Ok(true)
     }
 
-    fn device_handle_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
+    fn device_handle_packet(&mut self, packet: &mut UsbPacket) {
         if let Some(ep) = &packet.ep {
             let ep = ep.upgrade().unwrap();
             let locked_ep = ep.lock().unwrap();
             let dev = if let Some(usb_dev) = &locked_ep.dev {
                 usb_dev.upgrade().unwrap()
             } else {
-                bail!("No device found in endpoint");
+                packet.status = UsbPacketStatus::NoDev;
+                error!("Failed to handle packet, No device found in endpoint");
+                return;
             };
             drop(locked_ep);
             let mut locked_dev = dev.lock().unwrap();
             locked_dev.handle_packet(packet);
         } else {
-            bail!("No endpoint found");
+            packet.status = UsbPacketStatus::NoDev;
+            error!("Failed to handle packet, No endpoint found");
         }
-        Ok(())
     }
 
     fn endpoint_do_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
@@ -1288,11 +1294,30 @@ impl XhciDevice {
     fn do_ctrl_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         let trb_setup = xfer.td[0];
         let mut trb_status = xfer.td[xfer.td.len() - 1];
-        let setup_type = trb_setup.get_type();
         let status_type = trb_status.get_type();
         if status_type == TRBType::TrEvdata && xfer.td.len() > 2 {
             trb_status = xfer.td[xfer.td.len() - 2];
         }
+        if let Err(e) = self.check_ctrl_transfer(&trb_setup, &trb_status) {
+            error!("Failed to check control transfer {}", e);
+            return self.report_transfer_error(xfer);
+        }
+
+        let bm_request_type = trb_setup.parameter as u8;
+        xfer.in_xfer =
+            bm_request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
+        if let Err(e) = self.setup_usb_packet(xfer) {
+            error!("Failed to setup packet when transfer control {}", e);
+            return self.report_transfer_error(xfer);
+        }
+        xfer.packet.parameter = trb_setup.parameter;
+        self.device_handle_packet(&mut xfer.packet);
+        self.complete_packet(xfer)?;
+        Ok(())
+    }
+
+    fn check_ctrl_transfer(&self, trb_setup: &XhciTRB, trb_status: &XhciTRB) -> Result<()> {
+        let setup_type = trb_setup.get_type();
         if setup_type != TRBType::TrSetup {
             bail!("The first TRB is not Setup");
         }
@@ -1308,14 +1333,6 @@ impl XhciDevice {
                 trb_setup.status & TRB_TR_LEN_MASK
             );
         }
-
-        let bm_request_type = trb_setup.parameter as u8;
-        xfer.in_xfer =
-            bm_request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
-        self.setup_usb_packet(xfer)?;
-        xfer.packet.parameter = trb_setup.parameter;
-        self.device_handle_packet(&mut xfer.packet)?;
-        self.complete_packet(xfer)?;
         Ok(())
     }
 
@@ -1326,10 +1343,13 @@ impl XhciDevice {
             || epctx.ep_type == EpType::BulkIn
             || epctx.ep_type == EpType::IntrIn;
         if epctx.ep_type != EpType::IntrOut && epctx.ep_type != EpType::IntrIn {
-            bail!("Unhandled ep_type {:?}", epctx.ep_type);
+            warn!("Unhandled ep_type {:?}", epctx.ep_type);
         }
-        self.setup_usb_packet(xfer)?;
-        self.device_handle_packet(&mut xfer.packet)?;
+        if let Err(e) = self.setup_usb_packet(xfer) {
+            error!("Failed to setup packet when transfer data {}", e);
+            return self.report_transfer_error(xfer);
+        }
+        self.device_handle_packet(&mut xfer.packet);
         self.complete_packet(xfer)?;
         Ok(())
     }
@@ -1367,7 +1387,7 @@ impl XhciDevice {
                 if let Some(hva) = self.mem_space.get_host_address(GuestAddress(dma_addr)) {
                     vec.push(Iovec::new(hva, chunk as usize));
                 } else {
-                    error!("HVA not existed {:x}", dma_addr);
+                    bail!("HVA not existed {:x}", dma_addr);
                 }
             }
         }
@@ -1430,7 +1450,8 @@ impl XhciDevice {
                 self.submit_transfer(xfer)?;
             }
             _ => {
-                bail!("Unhandle status {:?}", xfer.packet.status);
+                error!("Unhandle status {:?}", xfer.packet.status);
+                self.report_transfer_error(xfer)?;
             }
         }
         Ok(())
@@ -1490,6 +1511,21 @@ impl XhciDevice {
             }
         }
         Ok(())
+    }
+
+    fn report_transfer_error(&mut self, xfer: &XhciTransfer) -> Result<()> {
+        let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
+        evt.slot_id = xfer.slotid as u8;
+        evt.ep_id = xfer.epid as u8;
+        let mut idx = 0;
+        // According to 4.10.1 Transfer TRBs, the TRB pointer field in a Transfer TRB not
+        // only references the TRB that generated the event, but it also provides system software
+        // with thr latest value of the xHC Dequeue Pointer for the Transfer Ring.
+        if let Some(trb) = xfer.td.last() {
+            evt.ptr = trb.addr;
+            idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
+        }
+        self.send_event(&evt, idx)
     }
 
     fn send_transfer_event(
