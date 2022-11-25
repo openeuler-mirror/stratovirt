@@ -1080,6 +1080,11 @@ impl FileSystem {
     /// * `flags` - The flags used to open the file.
     /// * `fh` - The file handler is returned in the management of filesystem.
     pub fn open(&mut self, node_id: usize, flags: u32, fh: &mut u64) -> i32 {
+        // File creation should be done with create and mknod fuse messages.
+        if (flags & (libc::O_CREAT as u32 | libc::O_TMPFILE as u32)) != 0 {
+            return libc::EINVAL;
+        }
+
         let (inode_fd, file_type) = match self.find_inode(node_id) {
             Some(i) => (i.as_raw_fd(), i.file_type),
             None => {

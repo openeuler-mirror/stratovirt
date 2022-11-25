@@ -20,8 +20,8 @@ use std::ffi::CString;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-fn is_safe_path(path: CString) -> bool {
-    let path_str = match path.into_string() {
+fn is_safe_path(path: &CString) -> bool {
+    let path_str = match path.clone().into_string() {
         Ok(str_) => str_,
         Err(_e) => return false,
     };
@@ -37,6 +37,12 @@ fn is_safe_path(path: CString) -> bool {
     }
 
     true
+}
+
+fn is_empty_path(path: &CString) -> bool {
+    let bytes = path.clone().into_bytes();
+
+    bytes[0] == 0x0
 }
 
 /// Process the fuse message of FUSE_LOOKUP.
@@ -279,7 +285,11 @@ pub fn do_fuse_symlink(
         }
     };
 
-    if !is_safe_path(link_name.clone()) {
+    if is_empty_path(&link_name) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&link_name) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
@@ -345,7 +355,11 @@ pub fn do_fuse_mknod(
         }
     };
 
-    if !is_safe_path(name.clone()) {
+    if is_empty_path(&name) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&name) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
@@ -411,7 +425,11 @@ pub fn do_fuse_mkdir(
         }
     };
 
-    if !is_safe_path(name.clone()) {
+    if is_empty_path(&name) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&name) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
@@ -469,7 +487,11 @@ pub fn do_fuse_unlink(
         }
     };
 
-    if !is_safe_path(name.clone()) {
+    if is_empty_path(&name) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&name) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
@@ -502,7 +524,11 @@ pub fn do_fuse_rmdir(
         }
     };
 
-    if !is_safe_path(name.clone()) {
+    if is_empty_path(&name) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&name) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
@@ -551,7 +577,11 @@ pub fn do_fuse_rename(
         }
     };
 
-    if !is_safe_path(oldname.clone()) || !is_safe_path(newname.clone()) {
+    if is_empty_path(&oldname) || is_empty_path(&newname) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&oldname) || !is_safe_path(&newname) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
@@ -596,7 +626,11 @@ pub fn do_fuse_link(
         }
     };
 
-    if !is_safe_path(name.clone()) {
+    if is_empty_path(&name) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&name) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
@@ -1468,7 +1502,11 @@ pub fn do_fuse_create(
         }
     };
 
-    if !is_safe_path(name.clone()) {
+    if is_empty_path(&name) {
+        return reply_fuse_msg(writer, sys_mem, in_header, libc::ENOENT, None, 0_usize);
+    }
+
+    if !is_safe_path(&name) {
         return reply_fuse_msg(writer, sys_mem, in_header, libc::EINVAL, None, 0_usize);
     }
 
