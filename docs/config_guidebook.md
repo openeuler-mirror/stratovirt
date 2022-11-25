@@ -911,15 +911,15 @@ in StratoVirt process by default. It will make a slight influence on performance
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      47       |       46       |
-|        q35         |      60       |       61       |
+|      microvm       |      51       |       50       |
+|        q35         |      83       |       82       |
 
 * aarch64
 
 | Number of Syscalls | GNU Toolchain | MUSL Toolchain |
 | :----------------: | :-----------: | :------------: |
-|      microvm       |      45       |       45       |
-|        virt        |      59       |       57       |
+|      microvm       |      49       |       49       |
+|        virt        |      82       |       79       |
 
 If you want to disable seccomp, you can run StratoVirt with `-disable-seccomp`.
 ```shell
