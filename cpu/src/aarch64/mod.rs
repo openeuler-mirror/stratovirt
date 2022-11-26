@@ -318,7 +318,7 @@ impl StateTransfer for CPU {
         cpu_state_locked.cpreg_len = 0;
         for (index, cpreg) in cpreg_list.as_slice().iter().enumerate() {
             let mut cpreg_entry = CpregListEntry {
-                index: *cpreg,
+                reg_id: *cpreg,
                 value: 0,
             };
             if cpreg_entry.validate() {
