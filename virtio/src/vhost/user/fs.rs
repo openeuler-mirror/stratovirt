@@ -20,10 +20,8 @@ const VIRTIO_FS_QUEUE_SIZE: u16 = 128;
 use crate::VirtioError;
 use std::cmp;
 use std::io::Write;
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
-use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use address_space::AddressSpace;
@@ -32,13 +30,13 @@ use machine_manager::{
     event_loop::EventLoop,
 };
 use util::byte_code::ByteCode;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_u32;
 
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
-use super::super::{VhostNotify, VhostOps};
+use super::super::VhostOps;
 use super::VhostUserClient;
-use crate::{VirtioInterrupt, VirtioInterruptType};
+use crate::VirtioInterrupt;
 use anyhow::{anyhow, Context, Result};
 
 #[derive(Copy, Clone)]
@@ -58,53 +56,6 @@ impl Default for VirtioFsConfig {
 }
 
 impl ByteCode for VirtioFsConfig {}
-
-struct VhostUserFsHandler {
-    interrup_cb: Arc<VirtioInterrupt>,
-    host_notifies: Vec<VhostNotify>,
-}
-
-impl EventNotifierHelper for VhostUserFsHandler {
-    fn internal_notifiers(vhost_user_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
-        let mut notifiers = Vec::new();
-        let vhost_user = vhost_user_handler.clone();
-
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
-
-                let locked_vhost_user = vhost_user.lock().unwrap();
-
-                for host_notify in locked_vhost_user.host_notifies.iter() {
-                    if let Err(e) = (locked_vhost_user.interrup_cb)(
-                        &VirtioInterruptType::Vring,
-                        Some(&host_notify.queue.lock().unwrap()),
-                        false,
-                    ) {
-                        error!(
-                            "Failed to trigger interrupt for vhost user device, error is {:?}",
-                            e
-                        );
-                    }
-                }
-
-                None as Option<Vec<EventNotifier>>
-            });
-        let h = Arc::new(Mutex::new(handler));
-
-        for host_notify in vhost_user_handler.lock().unwrap().host_notifies.iter() {
-            notifiers.push(EventNotifier::new(
-                NotifierOperation::AddShared,
-                host_notify.notify_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                vec![h.clone()],
-            ));
-        }
-
-        notifiers
-    }
-}
 
 pub struct Fs {
     fs_cfg: FsConfig,
