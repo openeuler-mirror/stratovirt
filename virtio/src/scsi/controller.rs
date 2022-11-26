@@ -20,10 +20,14 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context, Result};
 
 use super::super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
-    VIRTIO_SCSI_F_CHANGE, VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
+    report_virtio_error, Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_SCSI_F_CHANGE,
+    VIRTIO_SCSI_F_HOTPLUG, VIRTIO_TYPE_SCSI,
 };
-use crate::ScsiBus::{virtio_scsi_get_lun, ScsiBus, ScsiRequest, EMULATE_SCSI_OPS, GOOD};
+use crate::ScsiBus::{
+    virtio_scsi_get_lun, ScsiBus, ScsiRequest, ScsiSense, CHECK_CONDITION, EMULATE_SCSI_OPS, GOOD,
+    SCSI_SENSE_INVALID_OPCODE,
+};
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use log::{error, info};
@@ -51,6 +55,9 @@ const QUEUE_SIZE_SCSI: u16 = 256;
 /// To do: support Override CDB/sense data size.(Guest controlled)
 pub const VIRTIO_SCSI_CDB_DEFAULT_SIZE: usize = 32;
 pub const VIRTIO_SCSI_SENSE_DEFAULT_SIZE: usize = 96;
+
+/// Basic length of fixed format sense data.
+pub const SCSI_SENSE_LEN: u32 = 18;
 
 /// The key is bus name, the value is the attached Scsi Controller.
 pub type ScsiCntlrMap = Arc<Mutex<HashMap<String, Arc<Mutex<ScsiCntlr>>>>>;
@@ -171,10 +178,15 @@ impl VirtioDevice for ScsiCntlr {
         self.state.config_space.seg_max = self.queue_size() as u32 - 2;
         self.state.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
         self.state.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
+        // num_queues: request queues number.
+        self.state.config_space.num_queues = self.config.queues;
 
         self.state.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_SCSI_F_HOTPLUG)
-            | (1_u64 << VIRTIO_SCSI_F_CHANGE);
+            | (1_u64 << VIRTIO_SCSI_F_CHANGE)
+            | (1_u64 << VIRTIO_F_RING_EVENT_IDX)
+            | (1_u64 << VIRTIO_F_RING_INDIRECT_DESC);
+
         Ok(())
     }
 
@@ -420,6 +432,19 @@ impl Default for VirtioScsiCmdResp {
     }
 }
 
+impl VirtioScsiCmdResp {
+    pub fn set_scsi_sense(&mut self, sense: ScsiSense) {
+        // Response code: current errors(0x70).
+        self.sense[0] = 0x70;
+        self.sense[2] = sense.key;
+        // Additional sense length: sense len - 8.
+        self.sense[7] = SCSI_SENSE_LEN as u8 - 8;
+        self.sense[12] = sense.asc;
+        self.sense[13] = sense.ascq;
+        self.sense_len = SCSI_SENSE_LEN;
+    }
+}
+
 impl ByteCode for VirtioScsiCmdResp {}
 
 /// T: request; U: response.
@@ -432,8 +457,11 @@ pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
     _cdb_size: u32,
     _sense_size: u32,
     mode: ScsiXferMode,
-    _interrupt_cb: Option<Arc<VirtioInterrupt>>,
-    _driver_features: u64,
+    interrupt_cb: Arc<VirtioInterrupt>,
+    /// Virtio device should report virtio error when fatal errors occur.
+    /// And then, deactivate eventfd is used to disable virtio queues.
+    deactivate_evt: EventFd,
+    driver_features: u64,
     /// resp GPA.
     resp_addr: GuestAddress,
     pub req: T,
@@ -445,7 +473,8 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
     fn new(
         mem_space: &Arc<AddressSpace>,
         queue: Arc<Mutex<Queue>>,
-        interrupt_cb: Option<Arc<VirtioInterrupt>>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        deactivate_evt: EventFd,
         driver_features: u64,
         elem: &Element,
     ) -> Result<Self> {
@@ -482,8 +511,9 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
             _cdb_size: VIRTIO_SCSI_CDB_DEFAULT_SIZE as u32,
             _sense_size: VIRTIO_SCSI_SENSE_DEFAULT_SIZE as u32,
             mode: ScsiXferMode::ScsiXferNone,
-            _interrupt_cb: interrupt_cb,
-            _driver_features: driver_features,
+            interrupt_cb,
+            deactivate_evt,
+            driver_features,
             resp_addr: in_iov_elem.addr,
             req: scsi_req,
             resp: scsi_resp,
@@ -539,24 +569,40 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
         Ok(request)
     }
 
-    pub fn complete(&self, mem_space: &Arc<AddressSpace>) -> bool {
+    pub fn complete(&self, mem_space: &Arc<AddressSpace>) -> Result<()> {
         if let Err(ref e) = mem_space.write_object(&self.resp, self.resp_addr) {
-            error!("Failed to write the scsi response {:?}", e);
-            return false;
+            bail!("Failed to write the scsi response {:?}", e);
         }
+
         let mut queue_lock = self.queue.lock().unwrap();
         if let Err(ref e) = queue_lock.vring.add_used(
             mem_space,
             self.desc_index,
             self.data_len + (size_of::<U>() as u32),
         ) {
-            error!(
+            bail!(
                 "Failed to add used ring(scsi completion), index {}, len {} {:?}",
-                self.desc_index, self.data_len, e
+                self.desc_index,
+                self.data_len,
+                e
             );
-            return false;
         }
-        true
+
+        if queue_lock
+            .vring
+            .should_notify(mem_space, self.driver_features)
+        {
+            if let Err(e) =
+                (*self.interrupt_cb.as_ref())(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+            {
+                bail!(
+                    "Failed to trigger interrupt(aio completion) for scsi controller, error is {:?}",
+                    e
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -577,82 +623,76 @@ pub struct ScsiCtrlHandler {
 
 impl ScsiCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
-        let mut queue = self.queue.lock().unwrap();
+        let result = self.handle_ctrl_request();
+        if result.is_err() {
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                Some(&self.deactivate_evt),
+            );
+        }
 
-        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+        result
+    }
+
+    fn handle_ctrl_request(&mut self) -> Result<()> {
+        if !self.queue.lock().unwrap().is_enabled() {
+            return Ok(());
+        }
+
+        loop {
+            let mut queue = self.queue.lock().unwrap();
+            let elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)?;
+            drop(queue);
             if elem.desc_num == 0 {
                 break;
             }
-            drop(queue);
+
             let ctrl_desc = elem.out_iovec.get(0).unwrap();
             let ctrl_type = self
                 .mem_space
                 .read_object::<u32>(ctrl_desc.addr)
                 .with_context(|| "Failed to get control queue descriptor")?;
+
             match ctrl_type {
                 VIRTIO_SCSI_T_TMF => {
-                    match VirtioScsiRequest::<VirtioScsiCtrlTmfReq, VirtioScsiCtrlTmfResp>::new(
-                        &self.mem_space,
-                        self.queue.clone(),
-                        Some(self.interrupt_cb.clone()),
-                        self.driver_features,
-                        &elem,
-                    ) {
-                        Ok(mut tmf) => {
-                            info!("incomplete tmf req, subtype {}!", tmf.req.subtype);
-
-                            tmf.resp.response = VIRTIO_SCSI_S_OK;
-                            tmf.complete(&self.mem_space);
-                        }
-                        Err(ref e) => {
-                            let mut queue = self.queue.lock().unwrap();
-                            queue
-                                .vring
-                                .add_used(&self.mem_space, elem.index, 0)
-                                .with_context(|| "Failed to add used ring")?;
-                            drop(queue);
-
-                            error!("Failed to create VIRTIO_SCSI_T_TMF request, {:?}", e);
-                        }
-                    }
+                    let mut tmf =
+                        VirtioScsiRequest::<VirtioScsiCtrlTmfReq, VirtioScsiCtrlTmfResp>::new(
+                            &self.mem_space,
+                            self.queue.clone(),
+                            self.interrupt_cb.clone(),
+                            self.deactivate_evt.try_clone().unwrap(),
+                            self.driver_features,
+                            &elem,
+                        )?;
+                    info!("incomplete tmf req, subtype {}!", tmf.req.subtype);
+                    // Scsi Task Management Function is not supported.
+                    // So, do nothing when stratovirt receives TMF request except responsing guest scsi drivers.
+                    tmf.resp.response = VIRTIO_SCSI_S_OK;
+                    tmf.complete(&self.mem_space)?;
                 }
-
                 VIRTIO_SCSI_T_AN_QUERY | VIRTIO_SCSI_T_AN_SUBSCRIBE => {
-                    match VirtioScsiRequest::<VirtioScsiCtrlAnReq, VirtioScsiCtrlAnResp>::new(
-                        &self.mem_space,
-                        self.queue.clone(),
-                        Some(self.interrupt_cb.clone()),
-                        self.driver_features,
-                        &elem,
-                    ) {
-                        Ok(mut an) => {
-                            info!("incomplete An req!");
-                            an.resp.evnet_actual = 0;
-                            an.resp.response = VIRTIO_SCSI_S_OK;
-                            an.complete(&self.mem_space);
-                        }
-                        Err(ref e) => {
-                            let mut queue = self.queue.lock().unwrap();
-                            queue
-                                .vring
-                                .add_used(&self.mem_space, elem.index, 0)
-                                .with_context(|| "Failed to add used ring")?;
-                            drop(queue);
-
-                            error!("Failed to create scsi ctrl an req, {:?}", e)
-                        }
-                    }
+                    let mut an =
+                        VirtioScsiRequest::<VirtioScsiCtrlAnReq, VirtioScsiCtrlAnResp>::new(
+                            &self.mem_space,
+                            self.queue.clone(),
+                            self.interrupt_cb.clone(),
+                            self.deactivate_evt.try_clone().unwrap(),
+                            self.driver_features,
+                            &elem,
+                        )?;
+                    an.resp.evnet_actual = 0;
+                    an.resp.response = VIRTIO_SCSI_S_OK;
+                    an.complete(&self.mem_space)?;
                 }
                 _ => {
-                    bail!("Control queue type doesn't support {}", ctrl_type);
+                    bail!("Invalid ctrl type {}", ctrl_type);
                 }
             }
-            queue = self.queue.lock().unwrap();
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-            || VirtioError::InterruptTrigger("scsi ctrl", VirtioInterruptType::Vring),
-        )?;
         Ok(())
     }
 
@@ -842,112 +882,114 @@ impl EventNotifierHelper for ScsiCmdHandler {
 
 impl ScsiCmdHandler {
     fn handle_cmd(&mut self) -> Result<()> {
-        let mut queue = self.queue.lock().unwrap();
+        let result = self.handle_cmd_request();
+        if result.is_err() {
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                Some(&self.deactivate_evt),
+            );
+        }
 
-        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
+        result
+    }
+
+    fn handle_cmd_request(&mut self) -> Result<()> {
+        if !self.queue.lock().unwrap().is_enabled() {
+            return Ok(());
+        }
+
+        loop {
+            let mut queue = self.queue.lock().unwrap();
+            let elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)?;
             if elem.desc_num == 0 {
                 break;
             }
-            match VirtioScsiRequest::<VirtioScsiCmdReq, VirtioScsiCmdResp>::new(
+            drop(queue);
+
+            let mut cmd = VirtioScsiRequest::<VirtioScsiCmdReq, VirtioScsiCmdResp>::new(
                 &self.mem_space,
                 self.queue.clone(),
-                Some(self.interrupt_cb.clone()),
+                self.interrupt_cb.clone(),
+                self.deactivate_evt.try_clone().unwrap(),
                 self.driver_features,
                 &elem,
-            ) {
-                Ok(mut cmd) => {
-                    drop(queue);
-                    let lun: [u8; 8] = cmd.req.lun;
-                    let scsibus = self.scsibus.lock().unwrap();
-                    let req_lun_id = virtio_scsi_get_lun(lun);
+            )?;
 
-                    if let Some(scsidevice) = scsibus.get_device(lun[1], req_lun_id) {
-                        drop(scsibus);
-                        let cmd_req = Arc::new(Mutex::new(cmd));
-                        let req = if let Ok(scsireq) =
-                            ScsiRequest::new(cmd_req, self.scsibus.clone(), scsidevice.clone())
-                        {
-                            Some(scsireq)
-                        } else {
-                            let mut queue = self.queue.lock().unwrap();
-                            queue
-                                .vring
-                                .add_used(&self.mem_space, elem.index, 0)
-                                .with_context(|| "Failed to add used ring")?;
-                            drop(queue);
-                            error!("Failed to create scsi request");
+            let lun = cmd.req.lun;
+            let scsibus = self.scsibus.lock().unwrap();
+            let req_lun_id = virtio_scsi_get_lun(lun);
 
-                            None
-                        };
+            let scsidevice = if let Some(scsi_device) = scsibus.get_device(lun[1], req_lun_id) {
+                scsi_device
+            } else {
+                // No such target. Response VIRTIO_SCSI_S_BAD_TARGET to guest scsi drivers.
+                // It's not an error!
+                cmd.resp.response = VIRTIO_SCSI_S_BAD_TARGET;
+                cmd.complete(&self.mem_space)?;
+                debug!(
+                    "no such scsi device target {}, lun {}",
+                    lun[1],
+                    virtio_scsi_get_lun(lun)
+                );
+                continue;
+            };
+            drop(scsibus);
 
-                        let scsi_dev_lock = scsidevice.lock().unwrap();
-                        let found_lun_id = scsi_dev_lock.config.lun;
-                        drop(scsi_dev_lock);
+            let cmd_h = Arc::new(Mutex::new(cmd));
+            let scsi_req = if let Ok(req) =
+                ScsiRequest::new(cmd_h.clone(), self.scsibus.clone(), scsidevice.clone())
+            {
+                req
+            } else {
+                // Wrong scsi cdb. Response CHECK_CONDITION / SCSI_SENSE_INVALID_OPCODE to guest scsi drivers.
+                let mut cmd_lock = cmd_h.lock().unwrap();
+                cmd_lock.resp.set_scsi_sense(SCSI_SENSE_INVALID_OPCODE);
+                cmd_lock.resp.status = CHECK_CONDITION;
+                cmd_lock.complete(&self.mem_space)?;
+                drop(cmd_lock);
 
-                        if let Some(scsireq) = req {
-                            if scsireq.opstype == EMULATE_SCSI_OPS {
-                                let scsicompletecb = ScsiCompleteCb::new(
-                                    self.mem_space.clone(),
-                                    Arc::new(Mutex::new(scsireq.clone())),
-                                );
-                                scsireq.emulate_execute(
-                                    scsicompletecb,
-                                    req_lun_id,
-                                    found_lun_id,
-                                )?;
-                            } else if let Some(disk_img) =
-                                scsidevice.lock().unwrap().disk_image.as_mut()
-                            {
-                                let scsicompletecb = ScsiCompleteCb::new(
-                                    self.mem_space.clone(),
-                                    Arc::new(Mutex::new(scsireq.clone())),
-                                );
-                                if let Some(ref mut aio) = self.aio {
-                                    scsireq.execute(
-                                        aio,
-                                        disk_img,
-                                        false,
-                                        None,
-                                        true,
-                                        scsicompletecb,
-                                    )?;
-                                }
-                            }
-                        }
-                    } else {
-                        cmd.resp.response = VIRTIO_SCSI_S_BAD_TARGET;
-                        cmd.complete(&self.mem_space);
+                error!("Failed to create scsi request");
+                continue;
+            };
+
+            // If found lun id is not equal to request lun id, this request is a target request.
+            let scsi_dev_lock = scsidevice.lock().unwrap();
+            let found_lun_id = scsi_dev_lock.config.lun;
+            drop(scsi_dev_lock);
+
+            if scsi_req.opstype == EMULATE_SCSI_OPS {
+                let scsicompletecb = ScsiCompleteCb::new(
+                    self.mem_space.clone(),
+                    Arc::new(Mutex::new(scsi_req.clone())),
+                );
+                scsi_req.emulate_execute(scsicompletecb, req_lun_id, found_lun_id)?;
+            } else if let Some(disk_img) = scsidevice.lock().unwrap().disk_image.as_mut() {
+                let scsicompletecb = ScsiCompleteCb::new(
+                    self.mem_space.clone(),
+                    Arc::new(Mutex::new(scsi_req.clone())),
+                );
+                if let Some(ref mut aio) = self.aio {
+                    if let Err(ref e) =
+                        scsi_req.execute(aio, disk_img, false, None, true, scsicompletecb)
+                    {
+                        // If read/write operation by rw_sync or flush operation fails, this request will not
+                        // call complete_func(). So we should process this error here. Otherwise, stratovirt
+                        // will not add used index and notify guest, and then guest will be stuck.
                         error!(
-                            "no such scsi device target {}, lun {}",
-                            lun[1],
-                            virtio_scsi_get_lun(lun)
+                            "Failed to execute scsi device non emulation request, {:?}",
+                            e
                         );
-                    };
-                }
-                Err(ref e) => {
-                    // If it fails, also need to free descriptor table entry.
-                    let mut queue = self.queue.lock().unwrap();
-                    queue
-                        .vring
-                        .add_used(&self.mem_space, elem.index, 0)
-                        .with_context(|| "Failed to add used ring")?;
-                    drop(queue);
-
-                    error!("Failed to create cmd request, {:?}", e);
+                        let mut cmd_lock = cmd_h.lock().unwrap();
+                        cmd_lock.resp.response = VIRTIO_SCSI_S_FAILURE;
+                        cmd_lock.complete(&self.mem_space)?;
+                        drop(cmd_lock);
+                    }
                 }
             }
-
-            queue = self.queue.lock().unwrap();
         }
-
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false).with_context(
-            || {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "scsi cmd",
-                    VirtioInterruptType::Vring
-                ))
-            },
-        )?;
 
         Ok(())
     }
@@ -967,7 +1009,15 @@ impl ScsiCmdHandler {
             virtio_scsi_req.resp.status = GOOD;
             virtio_scsi_req.resp.resid = 0;
             virtio_scsi_req.resp.sense_len = 0;
-            virtio_scsi_req.complete(&complete_cb.mem_space);
+            let result = virtio_scsi_req.complete(&complete_cb.mem_space);
+            if result.is_err() {
+                let deactivate_evt = &virtio_scsi_req.deactivate_evt;
+                report_virtio_error(
+                    virtio_scsi_req.interrupt_cb.clone(),
+                    virtio_scsi_req.driver_features,
+                    Some(deactivate_evt),
+                );
+            }
         }) as AioCompleteFunc<ScsiCompleteCb>);
 
         Ok(Box::new(Aio::new(complete_fun, None)?))

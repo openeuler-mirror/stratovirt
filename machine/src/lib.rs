@@ -637,10 +637,15 @@ pub trait MachineOps {
         Ok(())
     }
 
-    fn add_virtio_pci_scsi(&mut self, cfg_args: &str) -> Result<()> {
+    fn add_virtio_pci_scsi(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let multi_func = get_multi_function(cfg_args)?;
-        let device_cfg = parse_scsi_controller(cfg_args)?;
+        let queues_auto = Some(VirtioPciDevice::virtio_pci_auto_queues_num(
+            0,
+            vm_config.machine_config.nr_cpus,
+            MAX_VIRTIO_QUEUE,
+        ));
+        let device_cfg = parse_scsi_controller(cfg_args, queues_auto)?;
         let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(device_cfg.clone())));
 
         let bus_name = format!("{}.0", device_cfg.id);
@@ -1136,7 +1141,7 @@ pub trait MachineOps {
                     self.add_virtio_pci_blk(vm_config, cfg_args)?;
                 }
                 "virtio-scsi-pci" => {
-                    self.add_virtio_pci_scsi(cfg_args)?;
+                    self.add_virtio_pci_scsi(vm_config, cfg_args)?;
                 }
                 "scsi-hd" => {
                     self.add_scsi_device(vm_config, cfg_args, SCSI_TYPE_DISK)?;

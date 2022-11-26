@@ -50,7 +50,8 @@ use cpu::{CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
-    DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, VmConfig, MAX_VIRTIO_QUEUE,
+    DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
+    MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -59,8 +60,8 @@ use pci::hotplug::{handle_plug, handle_unplug_request};
 use pci::PciBus;
 use util::byte_code::ByteCode;
 use virtio::{
-    qmp_balloon, qmp_query_balloon, Block, BlockState, VhostKern, VhostUser, VirtioDevice,
-    VirtioNetState, VirtioPciDevice,
+    qmp_balloon, qmp_query_balloon, Block, BlockState, ScsiBus, ScsiCntlr, VhostKern, VhostUser,
+    VirtioDevice, VirtioNetState, VirtioPciDevice,
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -794,6 +795,46 @@ impl StdMachine {
         Ok(())
     }
 
+    fn plug_virtio_pci_scsi(
+        &mut self,
+        pci_bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        let multifunction = args.multifunction.unwrap_or(false);
+        let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
+        let dev_cfg = ScsiCntlrConfig {
+            id: args.id.clone(),
+            iothread: args.iothread.clone(),
+            queues: args.queues.unwrap_or_else(|| {
+                VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
+            }) as u32,
+        };
+        dev_cfg.check()?;
+
+        let device = Arc::new(Mutex::new(ScsiCntlr::ScsiCntlr::new(dev_cfg.clone())));
+
+        let bus_name = format!("{}.0", dev_cfg.id);
+        ScsiBus::create_scsi_bus(&bus_name, &device)?;
+        if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
+            let mut lock_cntlr_list = cntlr_list.lock().unwrap();
+            lock_cntlr_list.insert(bus_name.clone(), device.clone());
+        } else {
+            bail!("No scsi controller list found");
+        }
+
+        let result = self.add_virtio_pci_device(&args.id, pci_bdf, device, multifunction, false);
+        if let Err(ref e) = result {
+            self.get_scsi_cntlr_list()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .remove(&bus_name);
+            bail!("Failed to add virtio scsi controller, error is {:?}", e);
+        }
+
+        Ok(())
+    }
+
     fn get_socket_path(&self, vm_config: &VmConfig, chardev: String) -> Result<Option<String>> {
         let char_dev = if let Some(char_dev) = vm_config.chardev.get(&chardev) {
             char_dev
@@ -1046,6 +1087,17 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            "virtio-scsi-pci" => {
+                if let Err(e) = self.plug_virtio_pci_scsi(&pci_bdf, args.as_ref()) {
+                    error!("{:?}", e);
+                    let err_str = format!("Failed to add virtio scsi controller: {}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+
             "virtio-net-pci" => {
                 if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
                     error!("{:?}", e);

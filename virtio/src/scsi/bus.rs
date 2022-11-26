@@ -250,12 +250,13 @@ pub const SCSI_SENSE_SPACE_ALLOC_FAILED: ScsiSense = scsisense!(DATA_PROTECT, 0x
 
 #[derive(Default)]
 pub struct ScsiSense {
-    key: u8,
-    asc: u8,
-    ascq: u8,
+    /// Sense key.
+    pub key: u8,
+    /// Additional sense code.
+    pub asc: u8,
+    /// Additional sense code qualifier.
+    pub ascq: u8,
 }
-
-pub const SCSI_SENSE_LEN: u32 = 18;
 
 /// Mode page codes for mode sense/set.
 pub const MODE_PAGE_R_W_ERROR: u8 = 0x01;
@@ -467,7 +468,7 @@ impl ScsiRequest {
             aiocb.opcode = IoCmd::Fdsync;
             (*aio)
                 .as_mut()
-                .rw_sync(aiocb)
+                .flush_sync(aiocb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
             return Ok(0);
         }
@@ -595,7 +596,7 @@ impl ScsiRequest {
                     )?;
                 } else {
                     error!(
-                        "Error in processing scsi command 0x{:#x}, err is {:?}",
+                        "Error in processing scsi command {:#x}, err is {:?}",
                         self.cmd.command, e
                     );
                     self.cmd_complete(
@@ -612,18 +613,6 @@ impl ScsiRequest {
         Ok(())
     }
 
-    fn set_scsi_sense(&self, sense: ScsiSense) {
-        let mut req = self.virtioscsireq.lock().unwrap();
-        // Response code: current errors(0x70).
-        req.resp.sense[0] = 0x70;
-        req.resp.sense[2] = sense.key;
-        // Additional sense length: sense len - 8.
-        req.resp.sense[7] = SCSI_SENSE_LEN as u8 - 8;
-        req.resp.sense[12] = sense.asc;
-        req.resp.sense[13] = sense.ascq;
-        req.resp.sense_len = SCSI_SENSE_LEN;
-    }
-
     fn cmd_complete(
         &self,
         mem_space: &Arc<AddressSpace>,
@@ -632,10 +621,11 @@ impl ScsiRequest {
         scsisense: Option<ScsiSense>,
         outbuf: &[u8],
     ) -> Result<()> {
-        if let Some(sense) = scsisense {
-            self.set_scsi_sense(sense);
-        }
         let mut req = self.virtioscsireq.lock().unwrap();
+
+        if let Some(sense) = scsisense {
+            req.resp.set_scsi_sense(sense);
+        }
         req.resp.response = response;
         req.resp.status = status;
         req.resp.resid = 0;
@@ -658,7 +648,7 @@ impl ScsiRequest {
             }
         }
 
-        req.complete(mem_space);
+        req.complete(mem_space)?;
         Ok(())
     }
 }
@@ -960,12 +950,6 @@ fn scsi_command_emulate_vpd_page(
             outbuf[4] = 1;
             let max_xfer_length: u32 = u32::MAX / 512;
             BigEndian::write_u32(&mut outbuf[8..12], max_xfer_length);
-            let max_unmap_sectors: u32 = (1_u32 << 30) / 512;
-            BigEndian::write_u32(&mut outbuf[20..24], max_unmap_sectors);
-            let max_unmap_block_desc: u32 = 255;
-            BigEndian::write_u32(&mut outbuf[24..28], max_unmap_block_desc);
-            let opt_unmap_granulatity: u32 = (1_u32 << 12) / 512;
-            BigEndian::write_u32(&mut outbuf[28..32], opt_unmap_granulatity);
             BigEndian::write_u64(&mut outbuf[36..44], max_xfer_length as u64);
             buflen = outbuf.len();
         }
@@ -981,10 +965,10 @@ fn scsi_command_emulate_vpd_page(
         0xb2 => {
             // Logical Block Provisioning.
             // 0: Threshold exponent.
-            // 0xe0: LBPU | LBPWS | LBPWS10 | LBPRZ | ANC_SUP | DP.
+            // 0xe0: LBPU(bit 7) | LBPWS | LBPWS10 | LBPRZ | ANC_SUP | DP.
             // 0: Threshold percentage | Provisioning Type.
             // 0: Threshold percentage.
-            outbuf.append(&mut [0_u8, 0xe0_u8, 1_u8, 0_u8].to_vec());
+            outbuf.append(&mut [0_u8, 0x60_u8, 1_u8, 0_u8].to_vec());
             buflen = 8;
         }
         _ => {
@@ -1122,9 +1106,10 @@ fn scsi_command_emulate_read_capacity_10(
 
     let dev_lock = dev.lock().unwrap();
     let mut outbuf: Vec<u8> = vec![0; 8];
-    let nb_sectors = cmp::min(dev_lock.disk_sectors as u32, u32::MAX);
+    let mut nb_sectors = cmp::min(dev_lock.disk_sectors as u32, u32::MAX);
+    nb_sectors -= 1;
 
-    // Bytes[0-3]: Returned Logical Block Address.
+    // Bytes[0-3]: Returned Logical Block Address(the logical block address of the last logical block).
     // Bytes[4-7]: Logical Block Length In Bytes.
     BigEndian::write_u32(&mut outbuf[0..4], nb_sectors);
     BigEndian::write_u32(&mut outbuf[4..8], DEFAULT_SECTOR_SIZE);
@@ -1154,9 +1139,15 @@ fn scsi_command_emulate_mode_sense(
         cmd.buf[4]
     );
 
+    // Device specific paramteter field for direct access block devices:
+    // Bit 7: WP(Write Protect); bit 4: DPOFUA;
     if dev_lock.scsi_type == SCSI_TYPE_DISK {
         if dev_lock.state.features & (1 << SCSI_DISK_F_DPOFUA) != 0 {
             dev_specific_parameter = 0x10;
+        }
+        if dev_lock.config.read_only {
+            // Readonly.
+            dev_specific_parameter |= 0x80;
         }
     } else {
         dbd = true;
@@ -1318,11 +1309,12 @@ fn scsi_command_emulate_service_action_in_16(
     if cmd.buf[1] & 0x1f == SUBCODE_READ_CAPACITY_16 {
         let dev_lock = dev.lock().unwrap();
         let mut outbuf: Vec<u8> = vec![0; 32];
-        let nb_sectors = dev_lock.disk_sectors;
+        let mut nb_sectors = dev_lock.disk_sectors;
+        nb_sectors -= 1;
 
         drop(dev_lock);
 
-        // Byte[0-7]: Returned Logical BLock Address.
+        // Byte[0-7]: Returned Logical BLock Address(the logical block address of the last logical block).
         // Byte[8-11]: Logical Block Length in Bytes.
         BigEndian::write_u64(&mut outbuf[0..8], nb_sectors);
         BigEndian::write_u32(&mut outbuf[8..12], DEFAULT_SECTOR_SIZE);

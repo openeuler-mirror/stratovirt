@@ -77,7 +77,10 @@ impl ConfigCheck for ScsiCntlrConfig {
     }
 }
 
-pub fn parse_scsi_controller(drive_config: &str) -> Result<ScsiCntlrConfig> {
+pub fn parse_scsi_controller(
+    drive_config: &str,
+    queues_auto: Option<u16>,
+) -> Result<ScsiCntlrConfig> {
     let mut cmd_parser = CmdParser::new("virtio-scsi-pci");
     cmd_parser
         .push("")
@@ -85,7 +88,8 @@ pub fn parse_scsi_controller(drive_config: &str) -> Result<ScsiCntlrConfig> {
         .push("bus")
         .push("addr")
         .push("multifunction")
-        .push("iothread");
+        .push("iothread")
+        .push("num-queues");
 
     cmd_parser.parse(drive_config)?;
 
@@ -106,6 +110,12 @@ pub fn parse_scsi_controller(drive_config: &str) -> Result<ScsiCntlrConfig> {
         )));
     }
 
+    if let Some(queues) = cmd_parser.get_value::<u32>("num-queues")? {
+        cntlr_cfg.queues = queues;
+    } else if let Some(queues) = queues_auto {
+        cntlr_cfg.queues = queues as u32;
+    }
+
     cntlr_cfg.check()?;
     Ok(cntlr_cfg)
 }
@@ -120,6 +130,8 @@ pub struct ScsiDevConfig {
     pub serial: Option<String>,
     /// Scsi bus which the scsi device attaches to.
     pub bus: String,
+    /// Scsi device can not do write operation.
+    pub read_only: bool,
     /// Scsi four level hierarchical address(host, channel, target, lun).
     pub channel: u8,
     pub target: u8,
@@ -194,6 +206,7 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
 
     if let Some(drive_arg) = &vm_config.drives.remove(&scsi_drive) {
         scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
+        scsi_dev_cfg.read_only = drive_arg.read_only;
     }
 
     Ok(scsi_dev_cfg)
