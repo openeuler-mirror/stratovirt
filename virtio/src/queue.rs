@@ -158,6 +158,14 @@ impl Element {
             in_iovec: Vec::new(),
         }
     }
+
+    pub fn iovec_size(iovec: &[ElemIovec]) -> u32 {
+        let mut size: u32 = 0;
+        for elem in iovec.iter() {
+            size += elem.len;
+        }
+        size
+    }
 }
 
 /// Vring operations.

@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
@@ -19,15 +20,23 @@ use std::{cmp, fs, mem};
 
 use super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR,
-    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET,
+    VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX,
+    VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
+    VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
+    VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
+    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
     VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
     VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
     VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
-use crate::{report_virtio_error, virtio_has_feature, VirtioError};
+use crate::{
+    iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
+    Element, VirtioError,
+};
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
@@ -52,6 +61,12 @@ const QUEUE_NUM_NET: usize = 2;
 const QUEUE_SIZE_NET: u16 = 256;
 /// The Mac Address length.
 pub const MAC_ADDR_LEN: usize = 6;
+/// The length of ethernet header.
+const ETHERNET_HDR_LENGTH: usize = 14;
+/// The max "multicast + unicast" mac address table length.
+const CTRL_MAC_TABLE_LEN: usize = 64;
+/// From 802.1Q definition, the max vlan ID.
+const CTRL_MAX_VLAN: u16 = 1 << 12;
 
 type SenderConfig = Option<Tap>;
 
@@ -76,15 +91,345 @@ pub struct VirtioNetConfig {
 
 impl ByteCode for VirtioNetConfig {}
 
+/// The control mode used for packet receive filtering.
+pub struct CtrlRxMode {
+    /// If the device should receive all incoming packets.
+    promisc: bool,
+    /// If the device should allow all incoming multicast packets.
+    all_multi: bool,
+    /// If the device should allow all incoming unicast packets.
+    all_uni: bool,
+    /// Used to suppress multicast receive.
+    no_multi: bool,
+    /// Used to suppress unicast receive.
+    no_uni: bool,
+    /// Used to suppresses broadcast receive.
+    no_bcast: bool,
+}
+
+impl Default for CtrlRxMode {
+    fn default() -> Self {
+        Self {
+            // For compatibility with older guest drivers, it
+            // needs to default to promiscuous.
+            promisc: true,
+            all_multi: false,
+            all_uni: false,
+            no_multi: false,
+            no_uni: false,
+            no_bcast: false,
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct MacAddress {
+    pub address: [u8; MAC_ADDR_LEN],
+}
+
+/// The Mac information used to filter incoming packet.
+#[derive(Default)]
+struct CtrlMacInfo {
+    /// Unicast mac address table.
+    uni_mac_table: Vec<MacAddress>,
+    /// Unicast mac address overflow.
+    uni_mac_of: bool,
+    /// Multicast mac address table.
+    multi_mac_table: Vec<MacAddress>,
+    /// Multicast mac address overflow.
+    multi_mac_of: bool,
+}
+
+pub struct CtrlInfo {
+    /// The control rx mode for packet receive filtering.
+    rx_mode: CtrlRxMode,
+    /// The mac address information for packet receive filtering.
+    mac_info: CtrlMacInfo,
+    /// The map of all the vlan ids.
+    vlan_map: HashMap<u16, u32>,
+    /// The net device status.
+    state: Arc<Mutex<VirtioNetState>>,
+}
+
+impl CtrlInfo {
+    fn new(state: Arc<Mutex<VirtioNetState>>) -> Self {
+        CtrlInfo {
+            rx_mode: CtrlRxMode::default(),
+            mac_info: CtrlMacInfo::default(),
+            vlan_map: HashMap::new(),
+            state,
+        }
+    }
+
+    fn handle_rx_mode(
+        &mut self,
+        mem_space: &AddressSpace,
+        cmd: u8,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> Result<u8> {
+        // Get the command specific data, one byte containing 0(off) or 1(on).
+        let mut status: u8 = 0;
+        get_buf_and_discard(mem_space, data_iovec, status.as_mut_bytes())
+            .with_context(|| "Failed to get control data")?;
+        // 0: off, 1: on.
+        if ![0, 1].contains(&status) {
+            return Ok(VIRTIO_NET_ERR);
+        }
+        let mut on_off = false;
+        if status == 1 {
+            on_off = true;
+        }
+        let mut ack = VIRTIO_NET_OK;
+        match cmd {
+            VIRTIO_NET_CTRL_RX_PROMISC => self.rx_mode.promisc = on_off,
+            VIRTIO_NET_CTRL_RX_ALLMULTI => self.rx_mode.all_multi = on_off,
+            VIRTIO_NET_CTRL_RX_ALLUNI => self.rx_mode.all_uni = on_off,
+            VIRTIO_NET_CTRL_RX_NOMULTI => self.rx_mode.no_multi = on_off,
+            VIRTIO_NET_CTRL_RX_NOUNI => self.rx_mode.no_uni = on_off,
+            VIRTIO_NET_CTRL_RX_NOBCAST => self.rx_mode.no_bcast = on_off,
+            _ => {
+                error!("Invalid command {} for control rx mode", cmd);
+                ack = VIRTIO_NET_ERR;
+            }
+        }
+        Ok(ack)
+    }
+
+    fn set_mac_table(
+        &mut self,
+        mem_space: &AddressSpace,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> Result<u8> {
+        let ack = VIRTIO_NET_OK;
+        let mut mac_table_len = 0;
+        // Default for unicast.
+        let mut overflow = &mut self.mac_info.uni_mac_of;
+        let mut mac_table = &mut self.mac_info.uni_mac_table;
+
+        // 0 for unicast, 1 for multicast.
+        for i in 0..2 {
+            if i == 1 {
+                overflow = &mut self.mac_info.multi_mac_of;
+                mac_table_len = self.mac_info.uni_mac_table.len();
+                mac_table = &mut self.mac_info.multi_mac_table;
+            }
+
+            let mut entries: u32 = 0;
+            *data_iovec = get_buf_and_discard(mem_space, data_iovec, entries.as_mut_bytes())
+                .with_context(|| "Failed to get unicast MAC entries".to_string())?;
+            if entries == 0 {
+                mac_table.clear();
+                continue;
+            }
+
+            let mut macs = vec![0_u8; entries as usize * MAC_ADDR_LEN];
+            *data_iovec = get_buf_and_discard(mem_space, data_iovec, &mut macs)
+                .with_context(|| "Failed to get multicast MAC entries".to_string())?;
+            if entries as usize > CTRL_MAC_TABLE_LEN - mac_table_len {
+                *overflow = true;
+                mac_table.clear();
+                continue;
+            }
+
+            mac_table.clear();
+            for i in 0..entries {
+                let offset = i as usize * MAC_ADDR_LEN;
+                let mut mac: MacAddress = Default::default();
+                mac.address
+                    .copy_from_slice(&macs[offset..offset + MAC_ADDR_LEN]);
+                mac_table.push(mac);
+            }
+        }
+        Ok(ack)
+    }
+
+    fn handle_mac(
+        &mut self,
+        mem_space: &AddressSpace,
+        cmd: u8,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> u8 {
+        let mut ack = VIRTIO_NET_OK;
+        match cmd {
+            VIRTIO_NET_CTRL_MAC_ADDR_SET => {
+                let mut mac = [0; MAC_ADDR_LEN];
+                *data_iovec =
+                    get_buf_and_discard(mem_space, data_iovec, &mut mac).unwrap_or_else(|e| {
+                        error!("Failed to get MAC address, error is {}", e);
+                        ack = VIRTIO_NET_ERR;
+                        Vec::new()
+                    });
+                if ack == VIRTIO_NET_ERR {
+                    return VIRTIO_NET_ERR;
+                }
+                self.state
+                    .lock()
+                    .unwrap()
+                    .config_space
+                    .mac
+                    .copy_from_slice(&mac);
+            }
+            VIRTIO_NET_CTRL_MAC_TABLE_SET => {
+                ack = self
+                    .set_mac_table(mem_space, data_iovec)
+                    .unwrap_or_else(|e| {
+                        error!("Failed to get Unicast Mac address, error is {}", e);
+                        VIRTIO_NET_ERR
+                    });
+            }
+            _ => {
+                error!("Invalid cmd {} when handling control mac", cmd);
+                return VIRTIO_NET_ERR;
+            }
+        }
+
+        ack
+    }
+
+    fn handle_vlan_table(
+        &mut self,
+        mem_space: &AddressSpace,
+        cmd: u8,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> u8 {
+        let mut ack = VIRTIO_NET_OK;
+        let mut vid: u16 = 0;
+
+        *data_iovec = get_buf_and_discard(mem_space, data_iovec, vid.as_mut_bytes())
+            .unwrap_or_else(|e| {
+                error!("Failed to get vlan id, error is {}", e);
+                ack = VIRTIO_NET_ERR;
+                Vec::new()
+            });
+        if ack == VIRTIO_NET_ERR {
+            return ack;
+        }
+        if vid >= CTRL_MAX_VLAN {
+            return VIRTIO_NET_ERR;
+        }
+
+        match cmd {
+            VIRTIO_NET_CTRL_VLAN_ADD => {
+                if let Some(value) = self.vlan_map.get_mut(&(vid >> 5)) {
+                    *value |= 1 << (vid & 0x1f);
+                } else {
+                    self.vlan_map.insert(vid >> 5, 1 << (vid & 0x1f));
+                }
+            }
+            VIRTIO_NET_CTRL_VLAN_DEL => {
+                if let Some(value) = self.vlan_map.get_mut(&(vid >> 5)) {
+                    *value &= !(1 << (vid & 0x1f));
+                }
+            }
+            _ => {
+                error!("Invalid cmd {} when handling control vlan", cmd);
+                ack = VIRTIO_NET_ERR;
+            }
+        }
+        ack
+    }
+
+    fn filter_packets(&mut self, buf: &[u8]) -> bool {
+        // Broadcast address: 0xff:0xff:0xff:0xff:0xff:0xff.
+        let bcast = [0xff; MAC_ADDR_LEN];
+        // TPID of the vlan tag, defined in IEEE 802.1Q, is 0x8100.
+        let vlan = [0x81, 0x00];
+
+        if self.rx_mode.promisc {
+            return false;
+        }
+
+        if buf[..vlan.len()] == vlan {
+            let vid = u16::from_be_bytes([buf[14], buf[15]]);
+            let value = if let Some(value) = self.vlan_map.get(&(vid >> 5)) {
+                *value
+            } else {
+                0
+            };
+
+            if value & (1 << (vid & 0x1f)) == 0 {
+                return true;
+            }
+        }
+
+        // The bit 0 in byte[0] means unicast(0) or multicast(1).
+        if buf[0] & 0x01 > 0 {
+            if buf[..MAC_ADDR_LEN] == bcast {
+                return self.rx_mode.no_bcast;
+            }
+            if self.rx_mode.no_multi {
+                return true;
+            }
+            if self.rx_mode.all_multi || self.mac_info.multi_mac_of {
+                return false;
+            }
+            for mac in self.mac_info.multi_mac_table.iter() {
+                if buf[..MAC_ADDR_LEN] == mac.address {
+                    return false;
+                }
+            }
+        } else {
+            if self.rx_mode.no_uni {
+                return true;
+            }
+            if self.rx_mode.all_uni
+                || self.mac_info.uni_mac_of
+                || buf[..MAC_ADDR_LEN] == self.state.lock().unwrap().config_space.mac
+            {
+                return false;
+            }
+            for mac in self.mac_info.uni_mac_table.iter() {
+                if buf[..MAC_ADDR_LEN] == mac.address {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+}
+
+fn get_buf_and_discard(
+    mem_space: &AddressSpace,
+    iovec: &mut Vec<ElemIovec>,
+    buf: &mut [u8],
+) -> Result<Vec<ElemIovec>> {
+    iov_to_buf(mem_space, iovec, buf).and_then(|size| {
+        if size < buf.len() {
+            error!("Invalid length {}, expected length {}", size, buf.len());
+            bail!("Invalid length {}, expected length {}", size, buf.len());
+        }
+        Ok(())
+    })?;
+
+    if let Some(data_iovec) = iov_discard_front(iovec, buf.len() as u64) {
+        Ok(data_iovec.to_vec())
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 /// The control queue is used to verify the multi queue feature.
 pub struct CtrlVirtio {
+    /// The control queue.
     queue: Arc<Mutex<Queue>>,
+    /// The eventfd used to notify the control queue event.
     queue_evt: EventFd,
+    /// The information about control command.
+    ctrl_info: Option<Arc<Mutex<CtrlInfo>>>,
 }
 
 impl CtrlVirtio {
-    pub fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
-        Self { queue, queue_evt }
+    pub fn new(
+        queue: Arc<Mutex<Queue>>,
+        queue_evt: EventFd,
+        ctrl_info: Option<Arc<Mutex<CtrlInfo>>>,
+    ) -> Self {
+        Self {
+            queue,
+            queue_evt,
+            ctrl_info,
+        }
     }
 }
 
@@ -104,19 +449,19 @@ pub struct NetCtrlHandler {
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
-struct CrtlHdr {
+struct CtrlHdr {
     class: u8,
     cmd: u8,
 }
 
-impl ByteCode for CrtlHdr {}
+impl ByteCode for CtrlHdr {}
 
 impl NetCtrlHandler {
     fn handle_ctrl(&mut self) -> Result<()> {
         let mut locked_queue = self.ctrl.queue.lock().unwrap();
         loop {
-            let ack = VIRTIO_NET_OK;
-            let elem = locked_queue
+            let mut ack = VIRTIO_NET_OK;
+            let mut elem = locked_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net control queue")?;
@@ -124,42 +469,96 @@ impl NetCtrlHandler {
                 break;
             }
 
-            if let Some(ctrl_desc) = elem.out_iovec.get(0) {
-                let ctrl_hdr = self
-                    .mem_space
-                    .read_object::<CrtlHdr>(ctrl_desc.addr)
-                    .with_context(|| "Failed to get control queue descriptor")?;
-                match ctrl_hdr.class as u16 {
-                    VIRTIO_NET_CTRL_MQ => {
-                        if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
-                            bail!(
-                                "Control queue header command can't match {}",
-                                VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
-                            );
-                        }
-                        if let Some(mq_desc) = elem.out_iovec.get(1) {
-                            let queue_pairs = self
-                                .mem_space
-                                .read_object::<u16>(mq_desc.addr)
-                                .with_context(|| "Failed to read multi queue descriptor")?;
-                            if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
-                                .contains(&queue_pairs)
-                            {
-                                bail!("Invalid queue pairs {}", queue_pairs);
-                            }
-                        }
-                    }
-                    _ => {
-                        bail!(
-                            "Control queue header class can't match {}",
-                            VIRTIO_NET_CTRL_MQ
+            // Validate the control request.
+            let in_size = Element::iovec_size(&elem.in_iovec);
+            let out_size = Element::iovec_size(&elem.out_iovec);
+            if in_size < mem::size_of_val(&ack) as u32
+                || out_size < mem::size_of::<CtrlHdr>() as u32
+            {
+                bail!(
+                    "Invalid length, in_iovec size is {}, out_iovec size is {}",
+                    in_size,
+                    out_size
+                );
+            }
+
+            // Get the control information first.
+            let ctrl_info = if let Some(ctrl_info) = &self.ctrl.ctrl_info {
+                ctrl_info
+            } else {
+                bail!("Control information is None");
+            };
+
+            // Get the control request header.
+            let mut ctrl_hdr = CtrlHdr::default();
+            let mut data_iovec = get_buf_and_discard(
+                &self.mem_space,
+                &mut elem.out_iovec,
+                ctrl_hdr.as_mut_bytes(),
+            )
+            .with_context(|| "Failed to get control header")?;
+
+            match ctrl_hdr.class {
+                VIRTIO_NET_CTRL_RX => {
+                    ack = ctrl_info
+                        .lock()
+                        .unwrap()
+                        .handle_rx_mode(&self.mem_space, ctrl_hdr.cmd, &mut data_iovec)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to handle rx mode, error is {}", e);
+                            VIRTIO_NET_ERR
+                        });
+                }
+                VIRTIO_NET_CTRL_MAC => {
+                    ack = ctrl_info.lock().unwrap().handle_mac(
+                        &self.mem_space,
+                        ctrl_hdr.cmd,
+                        &mut data_iovec,
+                    );
+                }
+                VIRTIO_NET_CTRL_VLAN => {
+                    ack = ctrl_info.lock().unwrap().handle_vlan_table(
+                        &self.mem_space,
+                        ctrl_hdr.cmd,
+                        &mut data_iovec,
+                    );
+                }
+                VIRTIO_NET_CTRL_MQ => {
+                    if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
+                        error!(
+                            "Control queue header command can't match {}",
+                            VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
                         );
+                        ack = VIRTIO_NET_ERR;
+                    }
+                    if let Some(mq_desc) = elem.out_iovec.get(1) {
+                        let queue_pairs = self
+                            .mem_space
+                            .read_object::<u16>(mq_desc.addr)
+                            .with_context(|| "Failed to read multi queue descriptor")?;
+                        if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                            .contains(&queue_pairs)
+                        {
+                            error!("Invalid queue pairs {}", queue_pairs);
+                            ack = VIRTIO_NET_ERR;
+                        }
                     }
                 }
+                _ => {
+                    error!(
+                        "Control queue header class {} not supported",
+                        ctrl_hdr.class
+                    );
+                    ack = VIRTIO_NET_ERR;
+                }
             }
-            if let Some(status) = elem.in_iovec.get(0) {
-                self.mem_space.write_object::<u8>(&ack, status.addr)?;
-            }
+
+            // Write result to the device writable iovec.
+            let status = elem
+                .in_iovec
+                .get(0)
+                .with_context(|| "Failed to get device writable iovec")?;
+            self.mem_space.write_object::<u8>(&ack, status.addr)?;
 
             locked_queue
                 .vring
@@ -287,9 +686,42 @@ struct NetIoHandler {
     update_evt: EventFd,
     deactivate_evt: EventFd,
     is_listening: bool,
+    ctrl_info: Arc<Mutex<CtrlInfo>>,
 }
 
 impl NetIoHandler {
+    fn read_from_tap(queue: &mut Queue, iovecs: &[libc::iovec], tap: &mut Tap) -> i32 {
+        let size = unsafe {
+            libc::readv(
+                tap.as_raw_fd() as libc::c_int,
+                iovecs.as_ptr() as *const libc::iovec,
+                iovecs.len() as libc::c_int,
+            )
+        } as i32;
+        if size < 0 {
+            let e = std::io::Error::last_os_error();
+            queue.vring.push_back();
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                return size;
+            }
+
+            // If the backend tap device is removed, readv returns less than 0.
+            // At this time, the content in the tap needs to be cleaned up.
+            // Here, read is called to process, otherwise handle_rx may be triggered all the time.
+            let mut buf = [0; 1024];
+            match tap.read(&mut buf) {
+                Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
+                Err(e) => {
+                    // When the backend tap device is abnormally removed, read return EBADFD.
+                    error!("Failed to read tap: {}", e);
+                }
+            }
+            error!("Failed to call readv for net handle_rx: {}", e);
+        }
+
+        size
+    }
+
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
@@ -320,42 +752,42 @@ impl NetIoHandler {
                     bail!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
-            let write_count = unsafe {
-                libc::readv(
-                    tap.as_raw_fd() as libc::c_int,
-                    iovecs.as_ptr() as *const libc::iovec,
-                    iovecs.len() as libc::c_int,
-                )
-            };
-            if write_count < 0 {
-                let e = std::io::Error::last_os_error();
-                queue.vring.push_back();
-                if e.kind() == std::io::ErrorKind::WouldBlock {
-                    break;
-                }
 
-                // If the backend tap device is removed, readv returns less than 0.
-                // At this time, the content in the tap needs to be cleaned up.
-                // Here, read is called to process, otherwise handle_rx may be triggered all the time.
-                let mut buf = [0; 1024];
-                match tap.read(&mut buf) {
-                    Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
-                    Err(e) => {
-                        // When the backend tap device is abnormally removed, read return EBADFD.
-                        error!("Failed to read tap: {}", e);
-                    }
-                }
-                error!("Failed to call readv for net handle_rx: {}", e);
+            // Read the data from the tap device.
+            let size = NetIoHandler::read_from_tap(&mut queue, &iovecs, tap);
+            if size < 0 {
                 break;
+            }
+
+            let net_hdr_len = mem::size_of::<VirtioNetHdr>();
+            let mut buf = vec![0_u8; net_hdr_len + ETHERNET_HDR_LENGTH];
+            get_net_header(&iovecs, &mut buf).and_then(|size| {
+                if size != buf.len() {
+                    bail!(
+                        "Invalid header length {}, expected length {}",
+                        size,
+                        buf.len()
+                    );
+                }
+                Ok(())
+            })?;
+            if self
+                .ctrl_info
+                .lock()
+                .unwrap()
+                .filter_packets(&buf[net_hdr_len..])
+            {
+                queue.vring.push_back();
+                continue;
             }
 
             queue
                 .vring
-                .add_used(&self.mem_space, elem.index, write_count as u32)
+                .add_used(&self.mem_space, elem.index, size as u32)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring for net rx, index: {}, len: {}",
-                        elem.index, write_count
+                        elem.index, size
                     )
                 })?;
 
@@ -539,6 +971,21 @@ impl NetIoHandler {
     }
 }
 
+fn get_net_header(iovec: &[libc::iovec], buf: &mut [u8]) -> Result<usize> {
+    let mut start: usize = 0;
+    let mut end: usize = 0;
+
+    for elem in iovec {
+        end = cmp::min(start + elem.iov_len as usize, buf.len());
+        mem_to_buf(&mut buf[start..end], elem.iov_base as u64)?;
+        if end >= buf.len() {
+            break;
+        }
+        start = end;
+    }
+    Ok(end)
+}
+
 fn build_event_notifier(
     fd: RawFd,
     handler: Option<Box<NotifierCallback>>,
@@ -689,13 +1136,15 @@ pub struct Net {
     /// Tap device opened.
     taps: Option<Vec<Tap>>,
     /// The status of net device.
-    state: VirtioNetState,
+    state: Arc<Mutex<VirtioNetState>>,
     /// The send half of Rust's channel to send tap information.
     senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
     update_evt: EventFd,
     /// Eventfd for device deactivate.
     deactivate_evt: EventFd,
+    /// The information about control command.
+    ctrl_info: Option<Arc<Mutex<CtrlInfo>>>,
 }
 
 impl Default for Net {
@@ -703,10 +1152,11 @@ impl Default for Net {
         Self {
             net_cfg: Default::default(),
             taps: None,
-            state: VirtioNetState::default(),
+            state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            ctrl_info: None,
         }
     }
 }
@@ -716,10 +1166,11 @@ impl Net {
         Self {
             net_cfg,
             taps: None,
-            state: VirtioNetState::default(),
+            state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            ctrl_info: None,
         }
     }
 }
@@ -868,7 +1319,8 @@ impl VirtioDevice for Net {
             );
         }
 
-        self.state.device_features = 1 << VIRTIO_F_VERSION_1
+        let mut locked_state = self.state.lock().unwrap();
+        locked_state.device_features = 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_NET_F_CSUM
             | 1 << VIRTIO_NET_F_GUEST_CSUM
             | 1 << VIRTIO_NET_F_GUEST_TSO4
@@ -877,6 +1329,10 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_TSO4
             | 1 << VIRTIO_NET_F_HOST_TSO6
             | 1 << VIRTIO_NET_F_HOST_UFO
+            | 1 << VIRTIO_NET_F_CTRL_RX
+            | 1 << VIRTIO_NET_F_CTRL_VLAN
+            | 1 << VIRTIO_NET_F_CTRL_RX_EXTRA
+            | 1 << VIRTIO_NET_F_CTRL_MAC_ADDR
             | 1 << VIRTIO_F_RING_EVENT_IDX;
 
         let queue_pairs = self.net_cfg.queues / 2;
@@ -884,9 +1340,9 @@ impl VirtioDevice for Net {
             && queue_pairs >= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN
             && queue_pairs <= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX
         {
-            self.state.device_features |= 1 << VIRTIO_NET_F_MQ;
-            self.state.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
-            self.state.config_space.max_virtqueue_pairs = queue_pairs;
+            locked_state.device_features |= 1 << VIRTIO_NET_F_MQ;
+            locked_state.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
+            locked_state.config_space.max_virtqueue_pairs = queue_pairs;
         }
 
         if !self.net_cfg.host_dev_name.is_empty() {
@@ -914,14 +1370,14 @@ impl VirtioDevice for Net {
         // Using the first tap to test if all the taps have ufo.
         if let Some(tap) = self.taps.as_ref().map(|t| &t[0]) {
             if !tap.has_ufo() {
-                self.state.device_features &=
+                locked_state.device_features &=
                     !(1 << VIRTIO_NET_F_GUEST_UFO | 1 << VIRTIO_NET_F_HOST_UFO);
             }
         }
 
         if let Some(mac) = &self.net_cfg.mac {
-            self.state.device_features |=
-                build_device_config_space(&mut self.state.config_space, mac);
+            locked_state.device_features |=
+                build_device_config_space(&mut locked_state.config_space, mac);
         }
 
         Ok(())
@@ -956,22 +1412,23 @@ impl VirtioDevice for Net {
 
     /// Get device features from host.
     fn get_device_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.device_features, features_select)
+        read_u32(self.state.lock().unwrap().device_features, features_select)
     }
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        self.state.driver_features = self.checked_driver_features(page, value);
+        self.state.lock().unwrap().driver_features = self.checked_driver_features(page, value);
     }
 
     /// Get driver features by guest.
     fn get_driver_features(&self, features_select: u32) -> u32 {
-        read_u32(self.state.driver_features, features_select)
+        read_u32(self.state.lock().unwrap().driver_features, features_select)
     }
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config_space.as_bytes();
+        let locked_state = self.state.lock().unwrap();
+        let config_slice = locked_state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
@@ -985,9 +1442,11 @@ impl VirtioDevice for Net {
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         let data_len = data.len();
-        let config_slice = self.state.config_space.as_mut_bytes();
-        if !virtio_has_feature(self.state.driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
-            && !virtio_has_feature(self.state.driver_features, VIRTIO_F_VERSION_1)
+        let mut locked_state = self.state.lock().unwrap();
+        let driver_features = locked_state.driver_features;
+        let config_slice = locked_state.config_space.as_mut_bytes();
+        if !virtio_has_feature(driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
+            && !virtio_has_feature(driver_features, VIRTIO_F_VERSION_1)
             && offset == 0
             && data_len == MAC_ADDR_LEN
             && *data != config_slice[0..data_len]
@@ -1008,15 +1467,19 @@ impl VirtioDevice for Net {
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let queue_num = queues.len();
-        if (self.state.driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
+        let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
+        self.ctrl_info = Some(ctrl_info.clone());
+        if (self.state.lock().unwrap().driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0)
+            && (queue_num % 2 != 0)
+        {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
 
             let ctrl_handler = NetCtrlHandler {
-                ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt),
+                ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, Some(ctrl_info.clone())),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.driver_features,
+                driver_features: self.state.lock().unwrap().driver_features,
                 deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             };
 
@@ -1053,11 +1516,12 @@ impl VirtioDevice for Net {
                 tap_fd: -1,
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.driver_features,
+                driver_features: self.state.lock().unwrap().driver_features,
                 receiver,
                 update_evt: self.update_evt.try_clone().unwrap(),
                 deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                 is_listening: true,
+                ctrl_info: ctrl_info.clone(),
             };
             if let Some(tap) = &handler.tap {
                 handler.tap_fd = tap.as_raw_fd();
@@ -1128,6 +1592,19 @@ impl VirtioDevice for Net {
             .write(1)
             .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
+
+    fn reset(&mut self) -> Result<()> {
+        if let Some(ctrl_info) = &self.ctrl_info {
+            let mut locked_ctrl = ctrl_info.lock().unwrap();
+            locked_ctrl.rx_mode = Default::default();
+            locked_ctrl.mac_info = Default::default();
+            locked_ctrl.vlan_map = HashMap::new();
+        } else {
+            bail!("Control information is None");
+        }
+
+        Ok(())
+    }
 }
 
 // Send and Sync is not auto-implemented for `Sender` type.
@@ -1137,12 +1614,16 @@ unsafe impl Sync for Net {}
 
 impl StateTransfer for Net {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        Ok(self.state.as_bytes().to_vec())
+        Ok(self.state.lock().unwrap().as_bytes().to_vec())
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
-        self.state = *VirtioNetState::from_bytes(state)
-            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("NET")))?;
+        let s_len = std::mem::size_of::<VirtioNetState>();
+        if state.len() != s_len {
+            bail!("Invalid state length {}, expected {}", state.len(), s_len);
+        }
+        let mut locked_state = self.state.lock().unwrap();
+        locked_state.as_mut_bytes().copy_from_slice(state);
 
         Ok(())
     }
@@ -1169,8 +1650,8 @@ mod tests {
     fn test_net_init() {
         // test net new method
         let mut net = Net::default();
-        assert_eq!(net.state.device_features, 0);
-        assert_eq!(net.state.driver_features, 0);
+        assert_eq!(net.state.lock().unwrap().device_features, 0);
+        assert_eq!(net.state.lock().unwrap().driver_features, 0);
 
         assert_eq!(net.taps.is_none(), true);
         assert_eq!(net.senders.is_none(), true);
@@ -1198,8 +1679,10 @@ mod tests {
         net.write_config(0x00, &origin_data).unwrap();
 
         // test boundary condition of offset and data parameters
-        let device_config = net.state.config_space.as_bytes();
+        let locked_state = net.state.lock().unwrap();
+        let device_config = locked_state.config_space.as_bytes();
         let len = device_config.len() as u64;
+        drop(locked_state);
 
         let mut data: Vec<u8> = vec![0; 10];
         let offset: u64 = len + 1;
