@@ -19,16 +19,16 @@ use std::{cmp, fs, mem};
 
 use super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
-    VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST, VIRTIO_NET_CTRL_RX_NOMULTI,
-    VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC, VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM,
-    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX, VIRTIO_NET_F_CTRL_RX_EXTRA,
-    VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
-    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
-    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
-    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET,
+    VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX,
+    VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
+    VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
+    VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
+    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
+    VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6,
+    VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO,
+    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
@@ -60,6 +60,8 @@ const QUEUE_SIZE_NET: u16 = 256;
 pub const MAC_ADDR_LEN: usize = 6;
 /// The length of ethernet header.
 const ETHERNET_HDR_LENGTH: usize = 14;
+/// The max "multicast + unicast" mac address table length.
+const CTRL_MAC_TABLE_LEN: usize = 64;
 
 type SenderConfig = Option<Tap>;
 
@@ -115,9 +117,29 @@ impl Default for CtrlRxMode {
     }
 }
 
+#[derive(Default, Clone)]
+struct MacAddress {
+    pub address: [u8; MAC_ADDR_LEN],
+}
+
+/// The Mac information used to filter incoming packet.
+#[derive(Default)]
+struct CtrlMacInfo {
+    /// Unicast mac address table.
+    uni_mac_table: Vec<MacAddress>,
+    /// Unicast mac address overflow.
+    uni_mac_of: bool,
+    /// Multicast mac address table.
+    multi_mac_table: Vec<MacAddress>,
+    /// Multicast mac address overflow.
+    multi_mac_of: bool,
+}
+
 pub struct CtrlInfo {
     /// The control rx mode for packet receive filtering.
     rx_mode: CtrlRxMode,
+    /// The mac address information for packet receive filtering.
+    mac_info: CtrlMacInfo,
     /// The net device status.
     state: Arc<Mutex<VirtioNetState>>,
 }
@@ -126,6 +148,7 @@ impl CtrlInfo {
     fn new(state: Arc<Mutex<VirtioNetState>>) -> Self {
         CtrlInfo {
             rx_mode: CtrlRxMode::default(),
+            mac_info: CtrlMacInfo::default(),
             state,
         }
     }
@@ -164,6 +187,97 @@ impl CtrlInfo {
         Ok(ack)
     }
 
+    fn set_mac_table(
+        &mut self,
+        mem_space: &AddressSpace,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> Result<u8> {
+        let ack = VIRTIO_NET_OK;
+        let mut mac_table_len = 0;
+        // Default for unicast.
+        let mut overflow = &mut self.mac_info.uni_mac_of;
+        let mut mac_table = &mut self.mac_info.uni_mac_table;
+
+        // 0 for unicast, 1 for multicast.
+        for i in 0..2 {
+            if i == 1 {
+                overflow = &mut self.mac_info.multi_mac_of;
+                mac_table_len = self.mac_info.uni_mac_table.len();
+                mac_table = &mut self.mac_info.multi_mac_table;
+            }
+
+            let mut entries: u32 = 0;
+            *data_iovec = get_buf_and_discard(mem_space, data_iovec, entries.as_mut_bytes())
+                .with_context(|| "Failed to get unicast MAC entries".to_string())?;
+            if entries == 0 {
+                mac_table.clear();
+                continue;
+            }
+
+            let mut macs = vec![0_u8; entries as usize * MAC_ADDR_LEN];
+            *data_iovec = get_buf_and_discard(mem_space, data_iovec, &mut macs)
+                .with_context(|| "Failed to get multicast MAC entries".to_string())?;
+            if entries as usize > CTRL_MAC_TABLE_LEN - mac_table_len {
+                *overflow = true;
+                mac_table.clear();
+                continue;
+            }
+
+            mac_table.clear();
+            for i in 0..entries {
+                let offset = i as usize * MAC_ADDR_LEN;
+                let mut mac: MacAddress = Default::default();
+                mac.address
+                    .copy_from_slice(&macs[offset..offset + MAC_ADDR_LEN]);
+                mac_table.push(mac);
+            }
+        }
+        Ok(ack)
+    }
+
+    fn handle_mac(
+        &mut self,
+        mem_space: &AddressSpace,
+        cmd: u8,
+        data_iovec: &mut Vec<ElemIovec>,
+    ) -> u8 {
+        let mut ack = VIRTIO_NET_OK;
+        match cmd {
+            VIRTIO_NET_CTRL_MAC_ADDR_SET => {
+                let mut mac = [0; MAC_ADDR_LEN];
+                *data_iovec =
+                    get_buf_and_discard(mem_space, data_iovec, &mut mac).unwrap_or_else(|e| {
+                        error!("Failed to get MAC address, error is {}", e);
+                        ack = VIRTIO_NET_ERR;
+                        Vec::new()
+                    });
+                if ack == VIRTIO_NET_ERR {
+                    return VIRTIO_NET_ERR;
+                }
+                self.state
+                    .lock()
+                    .unwrap()
+                    .config_space
+                    .mac
+                    .copy_from_slice(&mac);
+            }
+            VIRTIO_NET_CTRL_MAC_TABLE_SET => {
+                ack = self
+                    .set_mac_table(mem_space, data_iovec)
+                    .unwrap_or_else(|e| {
+                        error!("Failed to get Unicast Mac address, error is {}", e);
+                        VIRTIO_NET_ERR
+                    });
+            }
+            _ => {
+                error!("Invalid cmd {} when handling control mac", cmd);
+                return VIRTIO_NET_ERR;
+            }
+        }
+
+        ack
+    }
+
     fn filter_packets(&mut self, buf: &[u8]) -> bool {
         // Broadcast address: 0xff:0xff:0xff:0xff:0xff:0xff.
         let bcast = [0xff; MAC_ADDR_LEN];
@@ -180,18 +294,28 @@ impl CtrlInfo {
             if self.rx_mode.no_multi {
                 return true;
             }
-            if self.rx_mode.all_multi {
+            if self.rx_mode.all_multi || self.mac_info.multi_mac_of {
                 return false;
+            }
+            for mac in self.mac_info.multi_mac_table.iter() {
+                if buf[..MAC_ADDR_LEN] == mac.address {
+                    return false;
+                }
             }
         } else {
             if self.rx_mode.no_uni {
                 return true;
             }
-
             if self.rx_mode.all_uni
+                || self.mac_info.uni_mac_of
                 || buf[..MAC_ADDR_LEN] == self.state.lock().unwrap().config_space.mac
             {
                 return false;
+            }
+            for mac in self.mac_info.uni_mac_table.iter() {
+                if buf[..MAC_ADDR_LEN] == mac.address {
+                    return false;
+                }
             }
         }
 
@@ -318,6 +442,13 @@ impl NetCtrlHandler {
                             error!("Failed to handle rx mode, error is {}", e);
                             VIRTIO_NET_ERR
                         });
+                }
+                VIRTIO_NET_CTRL_MAC => {
+                    ack = ctrl_info.lock().unwrap().handle_mac(
+                        &self.mem_space,
+                        ctrl_hdr.cmd,
+                        &mut data_iovec,
+                    );
                 }
                 VIRTIO_NET_CTRL_MQ => {
                     if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
@@ -1125,6 +1256,7 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_NET_F_CTRL_RX
             | 1 << VIRTIO_NET_F_CTRL_RX_EXTRA
+            | 1 << VIRTIO_NET_F_CTRL_MAC_ADDR
             | 1 << VIRTIO_F_RING_EVENT_IDX;
 
         let queue_pairs = self.net_cfg.queues / 2;
@@ -1389,6 +1521,7 @@ impl VirtioDevice for Net {
         if let Some(ctrl_info) = &self.ctrl_info {
             let mut locked_ctrl = ctrl_info.lock().unwrap();
             locked_ctrl.rx_mode = Default::default();
+            locked_ctrl.mac_info = Default::default();
         } else {
             bail!("Control information is None");
         }
