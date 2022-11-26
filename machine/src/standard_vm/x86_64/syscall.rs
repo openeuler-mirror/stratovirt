@@ -56,8 +56,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 80 syscalls
-/// * x86_64-unknown-musl: 79 syscalls
+/// * x86_64-unknown-gnu: 82 syscalls
+/// * x86_64-unknown-musl: 62 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -79,10 +79,12 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_close),
         BpfRule::new(libc::SYS_eventfd2),
         BpfRule::new(libc::SYS_epoll_ctl),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_ppoll),
         BpfRule::new(libc::SYS_fdatasync),
         BpfRule::new(libc::SYS_recvmsg),
         BpfRule::new(libc::SYS_sendmsg),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_sendmmsg),
         BpfRule::new(libc::SYS_recvfrom),
         BpfRule::new(libc::SYS_mremap),
@@ -127,6 +129,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_readlinkat),
         BpfRule::new(libc::SYS_readlink),
         BpfRule::new(libc::SYS_socket),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_bind),
         BpfRule::new(libc::SYS_connect),
         BpfRule::new(libc::SYS_getcwd),
@@ -136,20 +139,37 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_clone3),
         BpfRule::new(libc::SYS_prctl),
         BpfRule::new(libc::SYS_sendto),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getsockname),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getpeername),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_nanosleep),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_clock_nanosleep),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getuid),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_geteuid),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getgid),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getegid),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_gettid),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getdents64),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_clock_gettime),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getsockopt),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_uname),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_sysinfo),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_faccessat),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_shutdown),
         BpfRule::new(libc::SYS_getrandom),
         BpfRule::new(libc::SYS_setsockopt),
