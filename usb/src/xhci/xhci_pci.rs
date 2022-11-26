@@ -17,9 +17,10 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressSpace, Region};
 use machine_manager::config::XhciConfig;
 use pci::config::{
-    PciConfig, RegionType, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE, REVISION_ID,
-    SUB_CLASS_CODE, VENDOR_ID,
+    PciConfig, RegionType, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
+    PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
+use pci::msix::update_dev_id;
 use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
 
 use crate::bus::{BusDeviceMap, BusDeviceOps};
@@ -31,8 +32,6 @@ use crate::xhci::xhci_regs::{
 };
 use anyhow::{bail, Context, Result};
 
-const PCI_VENDOR_ID_NEC: u16 = 0x1033;
-const PCU_DEVICE_ID_NEC_UPD720200: u16 = 0x0194;
 /// 5.2 PCI Configuration Registers(USB)
 const PCI_CLASS_PI: u16 = 0x09;
 const PCI_INTERRUPT_PIN: u16 = 0x3d;
@@ -161,12 +160,12 @@ impl PciDevOps for XhciPciDevice {
         le_write_u16(
             &mut self.pci_config.config,
             VENDOR_ID as usize,
-            PCI_VENDOR_ID_NEC,
+            PCI_VENDOR_ID_REDHAT,
         )?;
         le_write_u16(
             &mut self.pci_config.config,
             DEVICE_ID as usize,
-            PCU_DEVICE_ID_NEC_UPD720200 as u16,
+            PCI_DEVICE_ID_REDHAT_XHCI,
         )?;
         le_write_u16(&mut self.pci_config.config, REVISION_ID as usize, 0x3_u16)?;
         le_write_u16(
@@ -244,6 +243,7 @@ impl PciDevOps for XhciPciDevice {
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
+        update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let locked_parent_bus = parent_bus.lock().unwrap();
 

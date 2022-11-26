@@ -984,7 +984,10 @@ impl XhciDevice {
             slot_ctx.as_mut_dwords(),
         )?;
         let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
-        if slot_state != SLOT_ADDRESSED && slot_state != SLOT_CONFIGURED {
+        if slot_state != SLOT_ADDRESSED
+            && slot_state != SLOT_CONFIGURED
+            && slot_state != SLOT_DEFAULT
+        {
             error!("Invalid slot state: {:?}", slot_state);
             return Ok(TRBCCode::ContextStateError);
         }
