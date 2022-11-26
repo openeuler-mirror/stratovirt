@@ -182,6 +182,13 @@ pub const VIRTIO_NET_CTRL_RX_NOUNI: u8 = 4;
 /// Control commands for suppressing broadcast receive.
 pub const VIRTIO_NET_CTRL_RX_NOBCAST: u8 = 5;
 
+/// The driver can send control commands for MAC address filtering.
+pub const VIRTIO_NET_CTRL_MAC: u8 = 1;
+/// The driver sets the unicast/multicast addresse table.
+pub const VIRTIO_NET_CTRL_MAC_TABLE_SET: u8 = 0;
+/// The driver sets the default MAC address which rx filtering accepts.
+pub const VIRTIO_NET_CTRL_MAC_ADDR_SET: u8 = 1;
+
 /// Driver configure the class before enabling virtqueue.
 pub const VIRTIO_NET_CTRL_MQ: u8 = 4;
 /// Driver configure the command before enabling virtqueue.
