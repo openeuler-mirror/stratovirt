@@ -534,8 +534,11 @@ impl CPUInterface for CPU {
 
                     return Ok(false);
                 }
-                VcpuExit::FailEntry => {
-                    info!("Vcpu{} received KVM_EXIT_FAIL_ENTRY signal", self.id());
+                VcpuExit::FailEntry(reason, cpuid) => {
+                    info!(
+                        "Vcpu{} received KVM_EXIT_FAIL_ENTRY signal. the vcpu could not be run due to unknown reasons({})",
+                        cpuid, reason
+                    );
                     return Ok(false);
                 }
                 VcpuExit::InternalError => {

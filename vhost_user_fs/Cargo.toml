@@ -10,12 +10,12 @@ description = "Provide virtio fs for VM"
 capng = "0.2.2"
 errno = "0.2.8"
 log = "0.4.8"
-libc = ">=0.2.71"
+libc = "0.2"
 thiserror = "1.0"
 anyhow = "1.0"
 libseccomp-sys = "0.2.1"
 error-chain = "0.12.4"
-vmm-sys-util = ">=0.7.0"
+vmm-sys-util = "0.11.0"
 address_space = { path = "../address_space" }
 hypervisor = { path = "../hypervisor" }
 machine_manager = { path = "../machine_manager" }

@@ -193,7 +193,7 @@ impl ArmCPUState {
             .with_context(|| "Failed to init kvm vcpu")?;
         self.mpidr = vcpu_fd
             .get_one_reg(SYS_MPIDR_EL1)
-            .with_context(|| "Failed to get mpidr")?;
+            .with_context(|| "Failed to get mpidr")? as u64;
 
         ArmCPUState::set_cpu_feature(vcpu_config, vcpu_fd)?;
         self.features = *vcpu_config;
