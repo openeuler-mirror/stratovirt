@@ -525,10 +525,11 @@ impl NetCtrlHandler {
                 }
                 VIRTIO_NET_CTRL_MQ => {
                     if ctrl_hdr.cmd as u16 != VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
-                        bail!(
+                        error!(
                             "Control queue header command can't match {}",
                             VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET
                         );
+                        ack = VIRTIO_NET_ERR;
                     }
                     if let Some(mq_desc) = elem.out_iovec.get(1) {
                         let queue_pairs = self
@@ -538,7 +539,8 @@ impl NetCtrlHandler {
                         if !(VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                             .contains(&queue_pairs)
                         {
-                            bail!("Invalid queue pairs {}", queue_pairs);
+                            error!("Invalid queue pairs {}", queue_pairs);
+                            ack = VIRTIO_NET_ERR;
                         }
                     }
                 }
