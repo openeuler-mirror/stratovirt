@@ -1296,17 +1296,11 @@ impl XhciDevice {
 
     /// Control Transfer, TRBs include Setup, Data(option), Status.
     fn do_ctrl_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
-        let trb_setup = xfer.td[0];
-        let mut trb_status = xfer.td[xfer.td.len() - 1];
-        let status_type = trb_status.get_type();
-        if status_type == TRBType::TrEvdata && xfer.td.len() > 2 {
-            trb_status = xfer.td[xfer.td.len() - 2];
-        }
-        if let Err(e) = self.check_ctrl_transfer(&trb_setup, &trb_status) {
+        if let Err(e) = self.check_ctrl_transfer(xfer) {
             error!("Failed to check control transfer {}", e);
             return self.report_transfer_error(xfer);
         }
-
+        let trb_setup = xfer.td[0];
         let bm_request_type = trb_setup.parameter as u8;
         xfer.in_xfer =
             bm_request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
@@ -1320,7 +1314,15 @@ impl XhciDevice {
         Ok(())
     }
 
-    fn check_ctrl_transfer(&self, trb_setup: &XhciTRB, trb_status: &XhciTRB) -> Result<()> {
+    fn check_ctrl_transfer(&self, xfer: &mut XhciTransfer) -> Result<()> {
+        let trb_setup = xfer.td[0];
+        let mut trb_status = xfer.td[xfer.td.len() - 1];
+        let status_type = trb_status.get_type();
+
+        if status_type == TRBType::TrEvdata && xfer.td.len() > 2 {
+            trb_status = xfer.td[xfer.td.len() - 2];
+        }
+
         let setup_type = trb_setup.get_type();
         if setup_type != TRBType::TrSetup {
             bail!("The first TRB is not Setup");
