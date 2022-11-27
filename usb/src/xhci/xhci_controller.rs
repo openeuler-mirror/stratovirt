@@ -33,6 +33,7 @@ use crate::xhci::xhci_ring::{
 use anyhow::{bail, Context, Result};
 
 use super::xhci_ring::SETUP_TRB_TR_LEN;
+use super::xhci_ring::TRB_TR_DIR;
 use super::xhci_ring::TRB_TR_LEN_MASK;
 
 pub const MAX_INTRS: u16 = 16;
@@ -1370,6 +1371,8 @@ impl XhciDevice {
         } else {
             USB_TOKEN_OUT
         };
+        let in_xfer = dir == USB_TOKEN_IN;
+
         // Map dma address to iovec.
         let mut vec = Vec::new();
         for trb in &xfer.td {
@@ -1377,12 +1380,20 @@ impl XhciDevice {
             if trb.control & TRB_TR_IOC == TRB_TR_IOC {
                 xfer.int_req = true;
             }
+
+            if trb_type == TRBType::TrData && (trb.control & TRB_TR_DIR == 0) == in_xfer {
+                bail!("Direction of data transfer is mismatch");
+            }
+
             if trb_type == TRBType::TrData
                 || trb_type == TRBType::TrNormal
                 || trb_type == TRBType::TrIsoch
             {
                 let chunk = trb.status & TRB_TR_LEN_MASK;
                 let dma_addr = if trb.control & TRB_TR_IDT == TRB_TR_IDT {
+                    if chunk > 8 && in_xfer {
+                        bail!("Invalid immediate data TRB");
+                    }
                     trb.addr
                 } else {
                     trb.parameter
