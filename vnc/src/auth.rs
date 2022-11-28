@@ -13,6 +13,7 @@
 use crate::{client::VncClient, VncError};
 use anyhow::{anyhow, Result};
 use libc::{c_char, c_int, c_uint, c_void};
+use log::{error, info};
 use sasl2_sys::prelude::{
     sasl_conn_t, sasl_dispose, sasl_getprop, sasl_listmech, sasl_security_properties_t,
     sasl_server_init, sasl_server_new, sasl_server_start, sasl_server_step, sasl_setprop,

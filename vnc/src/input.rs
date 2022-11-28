@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::client::VncClient;
+use log::error;
 use usb::{
     keyboard::keyboard_event,
     tablet::{pointer_event, pointer_sync},

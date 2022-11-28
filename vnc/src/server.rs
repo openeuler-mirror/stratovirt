@@ -29,6 +29,7 @@ use crate::{
     VncError,
 };
 use anyhow::{anyhow, Result};
+use log::{error, info};
 use machine_manager::{
     config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,

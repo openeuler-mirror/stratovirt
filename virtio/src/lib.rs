@@ -24,11 +24,11 @@
 //!
 //! - `x86_64`
 //! - `aarch64`
-#[macro_use]
-extern crate log;
+
 mod balloon;
 mod block;
 mod console;
+pub mod error;
 #[cfg(not(target_env = "musl"))]
 mod gpu;
 mod net;
@@ -39,8 +39,6 @@ pub mod vhost;
 mod virtio_mmio;
 #[allow(dead_code)]
 mod virtio_pci;
-extern crate util;
-pub mod error;
 pub use anyhow::Result;
 pub use balloon::*;
 pub use block::{Block, BlockState};
@@ -49,6 +47,7 @@ pub use error::VirtioError;
 pub use error::*;
 #[cfg(not(target_env = "musl"))]
 pub use gpu::*;
+use log::{error, warn};
 pub use net::*;
 pub use queue::*;
 pub use rng::{Rng, RngState};

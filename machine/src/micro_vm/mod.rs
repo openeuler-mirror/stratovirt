@@ -34,7 +34,6 @@ use util::aio::AIO_NATIVE;
 
 mod mem_layout;
 mod syscall;
-extern crate util;
 
 use super::Result as MachineResult;
 use log::error;

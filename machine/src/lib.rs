@@ -10,12 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod error;
 mod micro_vm;
 mod standard_vm;
 #[cfg(target_arch = "x86_64")]
 mod vm_state;
-extern crate util;
-pub mod error;
 
 pub use crate::error::MachineError;
 use std::collections::BTreeMap;

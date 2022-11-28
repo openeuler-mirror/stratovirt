@@ -14,22 +14,21 @@
 //!
 //! Offer snapshot and migration interface for VM.
 
-#[macro_use]
-extern crate log;
-use anyhow::anyhow;
 pub mod general;
 pub mod manager;
 pub mod migration;
 pub mod protocol;
 pub mod snapshot;
 
+use std::time::Duration;
 use std::{net::TcpStream, os::unix::net::UnixStream, thread};
 
+use anyhow::anyhow;
 pub use anyhow::Result;
+use log::error;
 use machine_manager::qmp::{qmp_schema, Response};
 pub use manager::{MigrationHook, MigrationManager};
 pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
-use std::time::Duration;
 pub mod error;
 pub use error::MigrationError;
 

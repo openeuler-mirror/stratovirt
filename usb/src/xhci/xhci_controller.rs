@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
+use log::{debug, error, info, warn};
 use machine_manager::config::XhciConfig;
 use util::num_ops::{read_u32, write_u64_low};
 

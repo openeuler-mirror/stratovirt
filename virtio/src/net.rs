@@ -37,7 +37,7 @@ use crate::{
 };
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
-use log::error;
+use log::{error, warn};
 use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
     event_loop::EventLoop,

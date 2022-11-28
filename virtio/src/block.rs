@@ -32,7 +32,7 @@ use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::error;
+use log::{error, warn};
 use machine_manager::{
     config::{BlkDevConfig, ConfigCheck},
     event_loop::EventLoop,

@@ -146,6 +146,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use address_space::AddressSpace;
+use log::error;
 use util::byte_code::ByteCode;
 
 use anyhow::{bail, Context, Result};

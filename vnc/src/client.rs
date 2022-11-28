@@ -25,6 +25,7 @@ use crate::{
     },
 };
 use anyhow::{anyhow, Result};
+use log::{error, info};
 use machine_manager::event_loop::EventLoop;
 use rustls::ServerConnection;
 use sscanf::scanf;

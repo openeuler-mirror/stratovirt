@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
+use log::{debug, error};
 use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
 use crate::config::*;

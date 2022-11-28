@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
+use log::debug;
 
 use crate::xhci::xhci_controller::dma_read_bytes;
 use anyhow::{bail, Result};

@@ -13,6 +13,7 @@
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
+use log::error;
 use vmm_sys_util::epoll::EventSet;
 
 use machine_manager::event_loop::EventLoop;

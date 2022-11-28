@@ -10,10 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[macro_use]
-extern crate log;
-extern crate vhost_user_fs;
 use anyhow::{bail, Context, Result};
+use log::{error, info};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::signal_handler;
 use std::collections::HashSet;

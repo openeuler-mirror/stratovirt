@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use log::error;
 use std::mem::size_of;
 use std::os::unix::io::RawFd;
 use std::slice;
