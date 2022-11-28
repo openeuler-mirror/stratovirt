@@ -109,7 +109,6 @@ pub struct XhciTransfer {
     slotid: u32,
     epid: u32,
     in_xfer: bool,
-    int_req: bool,
     running_retry: bool,
 }
 
@@ -123,7 +122,6 @@ impl XhciTransfer {
             slotid: 0,
             epid: 0,
             in_xfer: false,
-            int_req: false,
             running_retry: false,
         }
     }
@@ -843,7 +841,7 @@ impl XhciDevice {
         let usb_dev = locked_dev.get_mut_usb_device();
         let locked_usb = usb_dev.lock().unwrap();
         let ep = Arc::downgrade(&locked_usb.get_endpoint(USB_TOKEN_OUT as u32, 0));
-        p.init(USB_TOKEN_OUT as u32, ep, 0, false, false);
+        p.init(USB_TOKEN_OUT as u32, ep);
         drop(locked_usb);
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_OUT_REQUEST,
@@ -1403,10 +1401,6 @@ impl XhciDevice {
         let mut vec = Vec::new();
         for trb in &xfer.td {
             let trb_type = trb.get_type();
-            if trb.control & TRB_TR_IOC == TRB_TR_IOC {
-                xfer.int_req = true;
-            }
-
             if trb_type == TRBType::TrData && (trb.control & TRB_TR_DIR == 0) == in_xfer {
                 bail!("Direction of data transfer is mismatch");
             }
@@ -1431,7 +1425,7 @@ impl XhciDevice {
                 }
             }
         }
-        xfer.packet.init(dir as u32, ep, 0, false, xfer.int_req);
+        xfer.packet.init(dir as u32, ep);
         xfer.packet.iovecs = vec;
         Ok(())
     }

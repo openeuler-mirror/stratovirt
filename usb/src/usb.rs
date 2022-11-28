@@ -703,16 +703,13 @@ impl Iovec {
 pub struct UsbPacket {
     /// USB packet id.
     pub pid: u32,
-    pub id: u64,
     pub ep: Option<Weak<Mutex<UsbEndpoint>>>,
     pub iovecs: Vec<Iovec>,
-    /// control transfer
+    /// control transfer parameter.
     pub parameter: u64,
-    pub short_not_ok: bool,
-    pub int_req: bool,
-    /// USB packet return status
+    /// USB packet return status.
     pub status: UsbPacketStatus,
-    /// Actually transfer length
+    /// Actually transfer length.
     pub actual_length: u32,
     pub state: UsbPacketState,
 }
@@ -721,29 +718,19 @@ impl std::fmt::Display for UsbPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "pid {} id {} param {} status {:?} actual_length {}, state {:?}",
-            self.pid, self.id, self.parameter, self.status, self.actual_length, self.state
+            "pid {} param {} status {:?} actual_length {}, state {:?}",
+            self.pid, self.parameter, self.status, self.actual_length, self.state
         )
     }
 }
 
 impl UsbPacket {
-    pub fn init(
-        &mut self,
-        pid: u32,
-        ep: Weak<Mutex<UsbEndpoint>>,
-        id: u64,
-        short_or_ok: bool,
-        int_req: bool,
-    ) {
-        self.id = id;
+    pub fn init(&mut self, pid: u32, ep: Weak<Mutex<UsbEndpoint>>) {
         self.pid = pid;
         self.ep = Some(ep);
         self.status = UsbPacketStatus::Success;
         self.actual_length = 0;
         self.parameter = 0;
-        self.short_not_ok = short_or_ok;
-        self.int_req = int_req;
         self.state = UsbPacketState::Setup;
     }
 }
@@ -752,12 +739,9 @@ impl Default for UsbPacket {
     fn default() -> UsbPacket {
         UsbPacket {
             pid: 0,
-            id: 0,
             ep: None,
             iovecs: Vec::new(),
             parameter: 0,
-            short_not_ok: false,
-            int_req: false,
             status: UsbPacketStatus::NoDev,
             actual_length: 0,
             state: UsbPacketState::Undefined,
