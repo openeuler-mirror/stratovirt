@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use kvm_bindings::kvm_userspace_memory_region as MemorySlot;
+use log::{info, warn};
 
 use crate::general::Lifecycle;
 use crate::manager::MIGRATION_MANAGER;

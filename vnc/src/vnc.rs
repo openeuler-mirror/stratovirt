@@ -25,6 +25,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use core::time;
+use log::error;
 use machine_manager::{
     config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,

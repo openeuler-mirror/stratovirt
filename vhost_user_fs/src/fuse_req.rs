@@ -14,6 +14,7 @@ use super::fs::FileSystem;
 use super::fuse_msg::*;
 use super::fuse_proc::*;
 use address_space::AddressSpace;
+use log::error;
 use std::sync::{Arc, Mutex};
 use virtio::Element;
 
