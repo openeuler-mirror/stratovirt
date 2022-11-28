@@ -1608,10 +1608,10 @@ impl XhciDevice {
         debug!("flush_ep_transfer slotid {} epid {}", slotid, epid);
         let mut cnt = 0;
         let mut report = report;
-        let xfers = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
+        while let Some(mut xfer) = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
             .transfers
-            .clone();
-        for mut xfer in xfers {
+            .pop_front()
+        {
             cnt += self.do_ep_transfer(slotid, epid, &mut xfer, report)?;
             if cnt != 0 {
                 // Only report once.
@@ -1638,9 +1638,6 @@ impl XhciDevice {
                 self.submit_transfer(xfer)?;
             }
             let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(ep_id - 1) as usize];
-            if !epctx.enabled {
-                bail!("Endpoint is disabled");
-            }
             epctx.retry = None;
             xfer.running_retry = false;
             killed = 1;
