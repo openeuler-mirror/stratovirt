@@ -1117,6 +1117,11 @@ impl XhciDevice {
             error!("Endpoint is not halted");
             return Ok(TRBCCode::ContextStateError);
         }
+        if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Invalid)? > 0 {
+            warn!("endpoint reset when xfers running!");
+        }
+        let slot = &mut self.slots[(slot_id - 1) as usize];
+        let epctx = &mut slot.endpoints[(ep_id - 1) as usize];
         if let Some(port) = &slot.usb_port {
             if port.upgrade().unwrap().lock().unwrap().dev.is_some() {
                 epctx.set_state(&self.mem_space, EP_STOPPED)?;
