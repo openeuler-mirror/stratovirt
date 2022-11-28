@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use log::error;
+use machine_manager::temp_cleaner::TempCleaner;
 use std::mem::size_of;
 use std::os::unix::io::RawFd;
 use std::slice;
@@ -158,6 +159,7 @@ impl VhostUserServerHandler {
         sock.domain
             .bind(true)
             .with_context(|| format!("Failed to bind for vhost user server {}", path))?;
+        TempCleaner::add_path(path.to_string());
         limit_permission(path).with_context(|| format!("Failed to limit permission {}", path))?;
 
         Ok(VhostUserServerHandler { sock, backend })
