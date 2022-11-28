@@ -33,6 +33,7 @@ use crate::xhci::xhci_ring::{
 use anyhow::{bail, Context, Result};
 
 use super::xhci_ring::SETUP_TRB_TR_LEN;
+use super::xhci_ring::TRB_TR_DIR;
 use super::xhci_ring::TRB_TR_LEN_MASK;
 
 pub const MAX_INTRS: u16 = 16;
@@ -1295,17 +1296,11 @@ impl XhciDevice {
 
     /// Control Transfer, TRBs include Setup, Data(option), Status.
     fn do_ctrl_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
-        let trb_setup = xfer.td[0];
-        let mut trb_status = xfer.td[xfer.td.len() - 1];
-        let status_type = trb_status.get_type();
-        if status_type == TRBType::TrEvdata && xfer.td.len() > 2 {
-            trb_status = xfer.td[xfer.td.len() - 2];
-        }
-        if let Err(e) = self.check_ctrl_transfer(&trb_setup, &trb_status) {
+        if let Err(e) = self.check_ctrl_transfer(xfer) {
             error!("Failed to check control transfer {}", e);
             return self.report_transfer_error(xfer);
         }
-
+        let trb_setup = xfer.td[0];
         let bm_request_type = trb_setup.parameter as u8;
         xfer.in_xfer =
             bm_request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
@@ -1319,7 +1314,15 @@ impl XhciDevice {
         Ok(())
     }
 
-    fn check_ctrl_transfer(&self, trb_setup: &XhciTRB, trb_status: &XhciTRB) -> Result<()> {
+    fn check_ctrl_transfer(&self, xfer: &mut XhciTransfer) -> Result<()> {
+        let trb_setup = xfer.td[0];
+        let mut trb_status = xfer.td[xfer.td.len() - 1];
+        let status_type = trb_status.get_type();
+
+        if status_type == TRBType::TrEvdata && xfer.td.len() > 2 {
+            trb_status = xfer.td[xfer.td.len() - 2];
+        }
+
         let setup_type = trb_setup.get_type();
         if setup_type != TRBType::TrSetup {
             bail!("The first TRB is not Setup");
@@ -1370,6 +1373,8 @@ impl XhciDevice {
         } else {
             USB_TOKEN_OUT
         };
+        let in_xfer = dir == USB_TOKEN_IN;
+
         // Map dma address to iovec.
         let mut vec = Vec::new();
         for trb in &xfer.td {
@@ -1377,12 +1382,20 @@ impl XhciDevice {
             if trb.control & TRB_TR_IOC == TRB_TR_IOC {
                 xfer.int_req = true;
             }
+
+            if trb_type == TRBType::TrData && (trb.control & TRB_TR_DIR == 0) == in_xfer {
+                bail!("Direction of data transfer is mismatch");
+            }
+
             if trb_type == TRBType::TrData
                 || trb_type == TRBType::TrNormal
                 || trb_type == TRBType::TrIsoch
             {
                 let chunk = trb.status & TRB_TR_LEN_MASK;
                 let dma_addr = if trb.control & TRB_TR_IDT == TRB_TR_IDT {
+                    if chunk > 8 && in_xfer {
+                        bail!("Invalid immediate data TRB");
+                    }
                     trb.addr
                 } else {
                     trb.parameter
