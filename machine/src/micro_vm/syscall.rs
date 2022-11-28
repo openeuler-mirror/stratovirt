@@ -125,6 +125,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_mkdirat),
         #[cfg(all(target_env = "gnu", target_arch = "x86_64"))]
         BpfRule::new(libc::SYS_readlink),
+        BpfRule::new(libc::SYS_getrandom),
         madvise_rule(),
     ]
 }
