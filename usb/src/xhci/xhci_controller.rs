@@ -10,9 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::LinkedList;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
 use std::slice::from_raw_parts_mut;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress};
@@ -103,7 +105,7 @@ pub struct XhciTransfer {
     packet: UsbPacket,
     status: TRBCCode,
     td: Vec<XhciTRB>,
-    complete: bool,
+    complete: Arc<AtomicBool>,
     slotid: u32,
     epid: u32,
     in_xfer: bool,
@@ -117,13 +119,21 @@ impl XhciTransfer {
             packet: UsbPacket::default(),
             status: TRBCCode::Invalid,
             td: Vec::new(),
-            complete: false,
+            complete: Arc::new(AtomicBool::new(false)),
             slotid: 0,
             epid: 0,
             in_xfer: false,
             int_req: false,
             running_retry: false,
         }
+    }
+
+    fn is_completed(&self) -> bool {
+        self.complete.load(Ordering::Acquire)
+    }
+
+    fn set_comleted(&mut self, v: bool) {
+        self.complete.store(v, Ordering::SeqCst)
     }
 }
 
@@ -137,7 +147,7 @@ pub struct XhciEpContext {
     output_ctx_addr: DmaAddr,
     state: u32,
     interval: u32,
-    transfers: Vec<XhciTransfer>,
+    transfers: LinkedList<XhciTransfer>,
     retry: Option<XhciTransfer>,
 }
 
@@ -151,7 +161,7 @@ impl XhciEpContext {
             output_ctx_addr: 0,
             state: 0,
             interval: 0,
-            transfers: Vec::new(),
+            transfers: LinkedList::new(),
             retry: None,
         }
     }
@@ -197,6 +207,17 @@ impl XhciEpContext {
         ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
         dma_write_u32(mem, GuestAddress(self.output_ctx_addr), ep_ctx.as_dwords())?;
         Ok(())
+    }
+
+    /// Flush the transfer list, remove the transfer which is completed.
+    fn flush_transfer(&mut self) {
+        let mut undo = LinkedList::new();
+        while let Some(head) = self.transfers.pop_front() {
+            if !head.is_completed() {
+                undo.push_back(head);
+            }
+        }
+        self.transfers = undo;
     }
 }
 
@@ -1191,16 +1212,17 @@ impl XhciDevice {
             }
             self.endpoint_do_transfer(&mut xfer)?;
             let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-            if xfer.complete {
+            if xfer.is_completed() {
                 epctx.set_state(&self.mem_space, epctx.state)?;
+                epctx.flush_transfer();
             } else {
-                epctx.transfers.push(xfer.clone());
+                epctx.transfers.push_back(xfer.clone());
             }
             if epctx.state == EP_HALTED {
                 break;
             }
             // retry
-            if !xfer.complete && xfer.running_retry {
+            if !xfer.is_completed() && xfer.running_retry {
                 epctx.retry = Some(xfer);
                 break;
             }
@@ -1259,8 +1281,9 @@ impl XhciDevice {
         }
         self.complete_packet(xfer)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-        if xfer.complete {
+        if xfer.is_completed() {
             epctx.set_state(&self.mem_space, epctx.state)?;
+            epctx.flush_transfer();
         }
         epctx.retry = None;
         Ok(true)
@@ -1436,15 +1459,15 @@ impl XhciDevice {
     /// Update packet status and then submit transfer.
     fn complete_packet(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         if xfer.packet.status == UsbPacketStatus::Async {
-            xfer.complete = false;
+            xfer.set_comleted(false);
             xfer.running_retry = false;
             return Ok(());
         } else if xfer.packet.status == UsbPacketStatus::Nak {
-            xfer.complete = false;
+            xfer.set_comleted(false);
             xfer.running_retry = true;
             return Ok(());
         } else {
-            xfer.complete = true;
+            xfer.set_comleted(true);
             xfer.running_retry = false;
         }
         if xfer.packet.status == UsbPacketStatus::Success {
