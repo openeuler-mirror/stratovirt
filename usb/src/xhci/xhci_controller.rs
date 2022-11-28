@@ -1437,7 +1437,11 @@ impl XhciDevice {
             bail!("USB port not found slotid {} epid {}", slotid, epid);
         };
         let locked_port = port.lock().unwrap();
-        let dev = locked_port.dev.as_ref().unwrap();
+        let dev = if let Some(dev) = locked_port.dev.as_ref() {
+            dev
+        } else {
+            bail!("No device found in USB port.");
+        };
         let mut locked_dev = dev.lock().unwrap();
         let pid = if epid & 1 == 1 {
             USB_TOKEN_IN
