@@ -1273,11 +1273,6 @@ impl XhciDevice {
             .as_ref()
             .unwrap()
             .clone();
-        if let Err(e) = self.setup_usb_packet(xfer) {
-            error!("Failed to setup packet when retry {}", e);
-            self.report_transfer_error(xfer)?;
-            return Ok(true);
-        }
         self.device_handle_packet(&mut xfer.packet);
         if xfer.packet.status == UsbPacketStatus::Nak {
             debug!("USB packet status is NAK");
