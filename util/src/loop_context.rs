@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use libc::{c_void, read};
-use log::{error, warn};
+use log::warn;
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
 use crate::UtilError;
@@ -517,7 +517,7 @@ pub fn read_fd(fd: RawFd) -> u64 {
     };
 
     if ret == -1 {
-        error!("Failed to read fd");
+        warn!("Failed to read fd");
     }
 
     value
