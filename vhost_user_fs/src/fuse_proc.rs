@@ -15,6 +15,7 @@ const MAX_WRITE_SIZE: u32 = 1 << 20;
 use super::fs::FileSystem;
 use super::fuse_msg::*;
 use address_space::AddressSpace;
+use log::error;
 use std::convert::TryInto;
 use std::ffi::CString;
 use std::mem;

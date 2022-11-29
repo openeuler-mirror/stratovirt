@@ -12,6 +12,7 @@
 
 use crate::{auth::SubAuthState, client::VncClient, VncError};
 use anyhow::{anyhow, Result};
+use log::{error, info};
 use rustls::{
     self,
     cipher_suite::{

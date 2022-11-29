@@ -12,6 +12,8 @@
 
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
+use log::{debug, error, warn};
+
 use crate::config::*;
 use crate::usb::{usb_packet_transfer, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 

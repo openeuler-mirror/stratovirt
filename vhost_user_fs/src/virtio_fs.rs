@@ -28,6 +28,7 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
+use log::error;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};

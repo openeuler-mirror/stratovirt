@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use anyhow::{bail, Result};
+use log::error;
 use std::ffi::CString;
 use std::fs;
 use std::fs::File;

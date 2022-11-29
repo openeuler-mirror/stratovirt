@@ -10,13 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[macro_use]
-extern crate log;
-extern crate address_space;
-extern crate machine_manager;
-extern crate util;
-extern crate virtio;
-
 pub mod cmdline;
 pub mod fs;
 pub mod fs_ops;

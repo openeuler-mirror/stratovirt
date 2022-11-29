@@ -10,9 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[macro_use]
-extern crate log;
-
 pub mod error;
 pub use anyhow::Result;
 pub use error::UsbError;

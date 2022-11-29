@@ -22,6 +22,7 @@ use crate::descriptor::{
 };
 use crate::xhci::xhci_controller::XhciDevice;
 use anyhow::{bail, Result};
+use log::{debug, error, warn};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;

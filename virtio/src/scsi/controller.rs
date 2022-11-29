@@ -30,7 +30,7 @@ use crate::ScsiBus::{
 };
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
-use log::{error, info};
+use log::{debug, error, info};
 use machine_manager::{
     config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
