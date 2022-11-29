@@ -51,6 +51,8 @@ pub enum AuthState {
 pub enum SubAuthState {
     /// Send plain Message + no auth.
     VncAuthVencryptPlain = 256,
+    /// Tls vencry with anon + no auth.
+    VncAuthVencryptTlNone = 257,
     /// Tls vencrypt with x509 + no auth.
     VncAuthVencryptX509None = 260,
     /// Tls vencrypt with x509 + sasl.
