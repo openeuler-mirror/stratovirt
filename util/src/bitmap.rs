@@ -62,6 +62,62 @@ impl<T: BitOps> Bitmap<T> {
         Ok(())
     }
 
+    /// Set the range of bitmap.
+    ///
+    /// # Arguments
+    ///
+    /// * `start` - the begin bit.
+    /// * `len` - the end bit.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use util::bitmap::Bitmap;
+    /// let mut bitmap = Bitmap::<u64>::new(4);
+    /// assert!(bitmap.set_range(65, 10).is_ok());
+    /// assert_eq!(bitmap.contain(64).unwrap(), false);
+    /// assert_eq!(bitmap.contain(65).unwrap(), true);
+    /// assert_eq!(bitmap.contain(70).unwrap(), true);
+    /// assert_eq!(bitmap.contain(74).unwrap(), true);
+    /// assert_eq!(bitmap.contain(75).unwrap(), false);
+    /// ```
+    pub fn set_range(&mut self, start: usize, len: usize) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+
+        let mut index = self.bit_index(start);
+        let mut bits_to_set: usize = T::len() - self.bit_pos(start);
+        let mut mask_to_set: T = T::full().rhs(self.bit_pos(start));
+        let mut length: usize = len;
+        while length >= bits_to_set {
+            if index >= self.size() {
+                return Err(anyhow!(UtilError::OutOfBound(
+                    index as u64,
+                    self.vol() as u64
+                )));
+            }
+            length -= bits_to_set;
+            self.data[index] = T::bit_or(self.data[index], mask_to_set);
+            bits_to_set = T::len();
+            mask_to_set = T::full();
+            index += 1;
+        }
+        if length > 0 {
+            if index >= self.size() {
+                return Err(anyhow!(UtilError::OutOfBound(
+                    index as u64,
+                    self.vol() as u64
+                )));
+            }
+            bits_to_set = T::len() - self.bit_pos(start + len);
+            let mask_to_set_end: T = T::full().lhs(self.bit_pos(bits_to_set));
+            mask_to_set = T::bit_and(mask_to_set, mask_to_set_end);
+            self.data[index] = T::bit_or(self.data[index], mask_to_set);
+        }
+        Ok(())
+    }
+
     /// Clear the bit of bitmap.
     ///
     /// # Arguments
@@ -294,5 +350,36 @@ mod tests {
         assert!(bitmap.set(16).is_err());
         assert_eq!(bitmap.count_front_bits(16).unwrap(), 1);
         assert_eq!(bitmap.count_front_bits(15).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_bitmap_set_range() {
+        let mut bitmap = Bitmap::<u64>::new(4);
+        assert!(bitmap.set_range(256, 1).is_err());
+        assert!(bitmap.set_range(0, 257).is_err());
+        assert!(bitmap.set_range(0, 256).is_ok());
+        bitmap.clear_all();
+
+        assert!(bitmap.set_range(65, 10).is_ok());
+        assert_eq!(bitmap.contain(64).unwrap(), false);
+        assert_eq!(bitmap.contain(65).unwrap(), true);
+        assert_eq!(bitmap.contain(70).unwrap(), true);
+        assert_eq!(bitmap.contain(74).unwrap(), true);
+        assert_eq!(bitmap.contain(75).unwrap(), false);
+        bitmap.clear_all();
+
+        assert!(bitmap.set_range(63, 1).is_ok());
+        assert_eq!(bitmap.contain(62).unwrap(), false);
+        assert_eq!(bitmap.contain(63).unwrap(), true);
+        assert_eq!(bitmap.contain(64).unwrap(), false);
+        bitmap.clear_all();
+
+        assert!(bitmap.set_range(63, 66).is_ok());
+        assert_eq!(bitmap.contain(62).unwrap(), false);
+        assert_eq!(bitmap.contain(63).unwrap(), true);
+        assert_eq!(bitmap.contain(67).unwrap(), true);
+        assert_eq!(bitmap.contain(128).unwrap(), true);
+        assert_eq!(bitmap.contain(129).unwrap(), false);
+        bitmap.clear_all();
     }
 }
