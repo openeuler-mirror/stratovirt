@@ -88,7 +88,7 @@ impl VncServer {
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
             vnc_cursor: Arc::new(Mutex::new(VncCursor::default())),
             conn_limits: CONNECTION_LIMIT,
-            update_interval: Arc::new(Mutex::new(0_u32)),
+            update_interval: Arc::new(Mutex::new(DISPLAY_UPDATE_INTERVAL_DEFAULT as u32)),
         }
     }
 }
