@@ -497,7 +497,7 @@ pub trait UsbDeviceOps: Send + Sync {
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>>;
 
     /// Get the endpoint to wakeup.
-    fn get_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>>;
+    fn get_wakeup_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>>;
 
     /// Set the attached USB port.
     fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>) {
@@ -669,7 +669,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
         }
     }
     let locked_dev = dev.lock().unwrap();
-    let intr = if let Some(intr) = locked_dev.get_endpoint() {
+    let intr = if let Some(intr) = locked_dev.get_wakeup_endpoint() {
         intr
     } else {
         bail!("No interrupter found");
