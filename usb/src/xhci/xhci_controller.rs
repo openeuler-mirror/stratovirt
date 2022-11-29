@@ -81,6 +81,7 @@ const PORT_EVENT_ID_SHIFT: u32 = 24;
 const SLOT_CTX_PORT_NUMBER_SHIFT: u32 = 16;
 const ENDPOINT_ID_START: u32 = 1;
 const MAX_ENDPOINTS: u32 = 31;
+const TRANSFER_LEN_MASK: u32 = 0xffffff;
 /// XHCI config
 const XHCI_MAX_PORT2: u8 = 15;
 const XHCI_MAX_PORT3: u8 = 15;
@@ -1538,11 +1539,15 @@ impl XhciDevice {
                 self.send_transfer_event(xfer, trb, chunk, short_pkt, &mut edtla)?;
                 reported = true;
                 if xfer.status != TRBCCode::Success {
-                    // Send unSuccess event succeed,return directly.
-                    info!("submit_transfer xfer status {:?}", xfer.status);
+                    // Send unSuccess event succeed, return directly.
+                    warn!(
+                        "A warning is generated when the transfer is submitted, xfer status {:?}",
+                        xfer.status
+                    );
                     return Ok(());
                 }
             }
+            // Allow reporting events after IOC bit is set in setup TRB.
             if trb_type == TRBType::TrSetup {
                 reported = false;
                 short_pkt = false;
@@ -1570,7 +1575,7 @@ impl XhciDevice {
         &mut self,
         xfer: &XhciTransfer,
         trb: &XhciTRB,
-        chunk: u32,
+        transfered: u32,
         short_pkt: bool,
         edtla: &mut u32,
     ) -> Result<()> {
@@ -1578,22 +1583,18 @@ impl XhciDevice {
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
         evt.slot_id = xfer.slotid as u8;
         evt.ep_id = xfer.epid as u8;
-        evt.length = (trb.status & TRB_TR_LEN_MASK) - chunk;
+        evt.length = (trb.status & TRB_TR_LEN_MASK) - transfered;
         evt.flags = 0;
         evt.ptr = trb.addr;
-        evt.ccode = if xfer.status == TRBCCode::Success {
-            if short_pkt {
-                TRBCCode::ShortPacket
-            } else {
-                TRBCCode::Success
-            }
+        evt.ccode = if short_pkt && xfer.status == TRBCCode::Success {
+            TRBCCode::ShortPacket
         } else {
             xfer.status
         };
         if trb_type == TRBType::TrEvdata {
             evt.ptr = trb.parameter;
             evt.flags |= TRB_EV_ED;
-            evt.length = *edtla & 0xffffff;
+            evt.length = *edtla & TRANSFER_LEN_MASK;
             *edtla = 0;
         }
         let idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
