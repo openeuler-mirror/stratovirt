@@ -10,9 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::LinkedList;
 use std::mem::size_of;
 use std::slice::from_raw_parts;
 use std::slice::from_raw_parts_mut;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress};
@@ -79,6 +81,7 @@ const PORT_EVENT_ID_SHIFT: u32 = 24;
 const SLOT_CTX_PORT_NUMBER_SHIFT: u32 = 16;
 const ENDPOINT_ID_START: u32 = 1;
 const MAX_ENDPOINTS: u32 = 31;
+const TRANSFER_LEN_MASK: u32 = 0xffffff;
 /// XHCI config
 const XHCI_MAX_PORT2: u8 = 15;
 const XHCI_MAX_PORT3: u8 = 15;
@@ -103,11 +106,10 @@ pub struct XhciTransfer {
     packet: UsbPacket,
     status: TRBCCode,
     td: Vec<XhciTRB>,
-    complete: bool,
+    complete: Arc<AtomicBool>,
     slotid: u32,
     epid: u32,
     in_xfer: bool,
-    int_req: bool,
     running_retry: bool,
 }
 
@@ -117,13 +119,20 @@ impl XhciTransfer {
             packet: UsbPacket::default(),
             status: TRBCCode::Invalid,
             td: Vec::new(),
-            complete: false,
+            complete: Arc::new(AtomicBool::new(false)),
             slotid: 0,
             epid: 0,
             in_xfer: false,
-            int_req: false,
             running_retry: false,
         }
+    }
+
+    fn is_completed(&self) -> bool {
+        self.complete.load(Ordering::Acquire)
+    }
+
+    fn set_comleted(&mut self, v: bool) {
+        self.complete.store(v, Ordering::SeqCst)
     }
 }
 
@@ -137,7 +146,7 @@ pub struct XhciEpContext {
     output_ctx_addr: DmaAddr,
     state: u32,
     interval: u32,
-    transfers: Vec<XhciTransfer>,
+    transfers: LinkedList<XhciTransfer>,
     retry: Option<XhciTransfer>,
 }
 
@@ -151,7 +160,7 @@ impl XhciEpContext {
             output_ctx_addr: 0,
             state: 0,
             interval: 0,
-            transfers: Vec::new(),
+            transfers: LinkedList::new(),
             retry: None,
         }
     }
@@ -197,6 +206,17 @@ impl XhciEpContext {
         ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
         dma_write_u32(mem, GuestAddress(self.output_ctx_addr), ep_ctx.as_dwords())?;
         Ok(())
+    }
+
+    /// Flush the transfer list, remove the transfer which is completed.
+    fn flush_transfer(&mut self) {
+        let mut undo = LinkedList::new();
+        while let Some(head) = self.transfers.pop_front() {
+            if !head.is_completed() {
+                undo.push_back(head);
+            }
+        }
+        self.transfers = undo;
     }
 }
 
@@ -822,7 +842,7 @@ impl XhciDevice {
         let usb_dev = locked_dev.get_mut_usb_device();
         let locked_usb = usb_dev.lock().unwrap();
         let ep = Arc::downgrade(&locked_usb.get_endpoint(USB_TOKEN_OUT as u32, 0));
-        p.init(USB_TOKEN_OUT as u32, ep, 0, false, false);
+        p.init(USB_TOKEN_OUT as u32, ep);
         drop(locked_usb);
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_OUT_REQUEST,
@@ -1096,6 +1116,11 @@ impl XhciDevice {
             error!("Endpoint is not halted");
             return Ok(TRBCCode::ContextStateError);
         }
+        if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Invalid)? > 0 {
+            warn!("endpoint reset when xfers running!");
+        }
+        let slot = &mut self.slots[(slot_id - 1) as usize];
+        let epctx = &mut slot.endpoints[(ep_id - 1) as usize];
         if let Some(port) = &slot.usb_port {
             if port.upgrade().unwrap().lock().unwrap().dev.is_some() {
                 epctx.set_state(&self.mem_space, EP_STOPPED)?;
@@ -1191,16 +1216,17 @@ impl XhciDevice {
             }
             self.endpoint_do_transfer(&mut xfer)?;
             let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-            if xfer.complete {
+            if xfer.is_completed() {
                 epctx.set_state(&self.mem_space, epctx.state)?;
+                epctx.flush_transfer();
             } else {
-                epctx.transfers.push(xfer.clone());
+                epctx.transfers.push_back(xfer.clone());
             }
             if epctx.state == EP_HALTED {
                 break;
             }
             // retry
-            if !xfer.complete && xfer.running_retry {
+            if !xfer.is_completed() && xfer.running_retry {
                 epctx.retry = Some(xfer);
                 break;
             }
@@ -1246,11 +1272,6 @@ impl XhciDevice {
             .as_ref()
             .unwrap()
             .clone();
-        if let Err(e) = self.setup_usb_packet(xfer) {
-            error!("Failed to setup packet when retry {}", e);
-            self.report_transfer_error(xfer)?;
-            return Ok(true);
-        }
         self.device_handle_packet(&mut xfer.packet);
         if xfer.packet.status == UsbPacketStatus::Nak {
             debug!("USB packet status is NAK");
@@ -1259,8 +1280,9 @@ impl XhciDevice {
         }
         self.complete_packet(xfer)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-        if xfer.complete {
+        if xfer.is_completed() {
             epctx.set_state(&self.mem_space, epctx.state)?;
+            epctx.flush_transfer();
         }
         epctx.retry = None;
         Ok(true)
@@ -1380,10 +1402,6 @@ impl XhciDevice {
         let mut vec = Vec::new();
         for trb in &xfer.td {
             let trb_type = trb.get_type();
-            if trb.control & TRB_TR_IOC == TRB_TR_IOC {
-                xfer.int_req = true;
-            }
-
             if trb_type == TRBType::TrData && (trb.control & TRB_TR_DIR == 0) == in_xfer {
                 bail!("Direction of data transfer is mismatch");
             }
@@ -1408,7 +1426,7 @@ impl XhciDevice {
                 }
             }
         }
-        xfer.packet.init(dir as u32, ep, 0, false, xfer.int_req);
+        xfer.packet.init(dir as u32, ep);
         xfer.packet.iovecs = vec;
         Ok(())
     }
@@ -1420,7 +1438,11 @@ impl XhciDevice {
             bail!("USB port not found slotid {} epid {}", slotid, epid);
         };
         let locked_port = port.lock().unwrap();
-        let dev = locked_port.dev.as_ref().unwrap();
+        let dev = if let Some(dev) = locked_port.dev.as_ref() {
+            dev
+        } else {
+            bail!("No device found in USB port.");
+        };
         let mut locked_dev = dev.lock().unwrap();
         let pid = if epid & 1 == 1 {
             USB_TOKEN_IN
@@ -1436,15 +1458,15 @@ impl XhciDevice {
     /// Update packet status and then submit transfer.
     fn complete_packet(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         if xfer.packet.status == UsbPacketStatus::Async {
-            xfer.complete = false;
+            xfer.set_comleted(false);
             xfer.running_retry = false;
             return Ok(());
         } else if xfer.packet.status == UsbPacketStatus::Nak {
-            xfer.complete = false;
+            xfer.set_comleted(false);
             xfer.running_retry = true;
             return Ok(());
         } else {
-            xfer.complete = true;
+            xfer.set_comleted(true);
             xfer.running_retry = false;
         }
         if xfer.packet.status == UsbPacketStatus::Success {
@@ -1517,11 +1539,15 @@ impl XhciDevice {
                 self.send_transfer_event(xfer, trb, chunk, short_pkt, &mut edtla)?;
                 reported = true;
                 if xfer.status != TRBCCode::Success {
-                    // Send unSuccess event succeed,return directly.
-                    info!("submit_transfer xfer status {:?}", xfer.status);
+                    // Send unSuccess event succeed, return directly.
+                    warn!(
+                        "A warning is generated when the transfer is submitted, xfer status {:?}",
+                        xfer.status
+                    );
                     return Ok(());
                 }
             }
+            // Allow reporting events after IOC bit is set in setup TRB.
             if trb_type == TRBType::TrSetup {
                 reported = false;
                 short_pkt = false;
@@ -1549,7 +1575,7 @@ impl XhciDevice {
         &mut self,
         xfer: &XhciTransfer,
         trb: &XhciTRB,
-        chunk: u32,
+        transfered: u32,
         short_pkt: bool,
         edtla: &mut u32,
     ) -> Result<()> {
@@ -1557,22 +1583,18 @@ impl XhciDevice {
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::Success);
         evt.slot_id = xfer.slotid as u8;
         evt.ep_id = xfer.epid as u8;
-        evt.length = (trb.status & TRB_TR_LEN_MASK) - chunk;
+        evt.length = (trb.status & TRB_TR_LEN_MASK) - transfered;
         evt.flags = 0;
         evt.ptr = trb.addr;
-        evt.ccode = if xfer.status == TRBCCode::Success {
-            if short_pkt {
-                TRBCCode::ShortPacket
-            } else {
-                TRBCCode::Success
-            }
+        evt.ccode = if short_pkt && xfer.status == TRBCCode::Success {
+            TRBCCode::ShortPacket
         } else {
             xfer.status
         };
         if trb_type == TRBType::TrEvdata {
             evt.ptr = trb.parameter;
             evt.flags |= TRB_EV_ED;
-            evt.length = *edtla & 0xffffff;
+            evt.length = *edtla & TRANSFER_LEN_MASK;
             *edtla = 0;
         }
         let idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
@@ -1585,10 +1607,10 @@ impl XhciDevice {
         debug!("flush_ep_transfer slotid {} epid {}", slotid, epid);
         let mut cnt = 0;
         let mut report = report;
-        let xfers = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
+        while let Some(mut xfer) = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
             .transfers
-            .clone();
-        for mut xfer in xfers {
+            .pop_front()
+        {
             cnt += self.do_ep_transfer(slotid, epid, &mut xfer, report)?;
             if cnt != 0 {
                 // Only report once.
@@ -1615,9 +1637,6 @@ impl XhciDevice {
                 self.submit_transfer(xfer)?;
             }
             let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(ep_id - 1) as usize];
-            if !epctx.enabled {
-                bail!("Endpoint is disabled");
-            }
             epctx.retry = None;
             xfer.running_retry = false;
             killed = 1;
