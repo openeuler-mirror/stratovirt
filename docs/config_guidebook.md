@@ -60,7 +60,7 @@ Currently, these options are supported.
 
 ```shell
 # cmdline
--cpu [host,][pmu=on|off]
+-cpu host[,pmu=on|off]
 ```
 
 ### 1.3 Memory

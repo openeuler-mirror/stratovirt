@@ -485,7 +485,7 @@ impl<'a> Arg<'a> {
         } else {
             let font_str = if self.values.is_some() {
                 format!(
-                    "{}{}{} <{}>...",
+                    "{}{}{} {}...",
                     EIGHT_BLANK,
                     PREFIX_CHARS_LONG,
                     self.long.unwrap(),
@@ -493,7 +493,7 @@ impl<'a> Arg<'a> {
                 )
             } else {
                 format!(
-                    "{}{}{} <{}>",
+                    "{}{}{} {}",
                     EIGHT_BLANK,
                     PREFIX_CHARS_LONG,
                     self.long.unwrap(),
