@@ -184,7 +184,7 @@ impl FwCfgWriteCallback for RamfbState {
 
         self.create_display_surface(width, height, format, stride, addr);
 
-        vnc_display_switch(&mut self.surface.unwrap());
+        vnc_display_switch(&self.surface.unwrap());
         vnc_loop_update_display(0, 0, width as i32, height as i32);
     }
 }

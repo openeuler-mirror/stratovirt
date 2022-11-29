@@ -331,7 +331,7 @@ pub fn update_client_surface(server: &mut VncServer) {
 }
 
 /// Check if the suface for VncClient is need update
-fn check_surface(surface: &mut DisplaySurface) -> bool {
+fn check_surface(surface: &DisplaySurface) -> bool {
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
     let locked_server = server.lock().unwrap();
     if surface.image.is_null()
@@ -531,7 +531,7 @@ fn get_client_image() -> *mut pixman_image_t {
 
 /// Update guest_image
 /// Send a resize command to the client based on whether the image size has changed
-pub fn vnc_display_switch(surface: &mut DisplaySurface) {
+pub fn vnc_display_switch(surface: &DisplaySurface) {
     if VNC_SERVERS.lock().unwrap().is_empty() {
         return;
     }
