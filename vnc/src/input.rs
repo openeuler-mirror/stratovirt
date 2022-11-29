@@ -10,7 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::client::VncClient;
+use crate::{
+    client::ClientIoHandler,
+    pixman::{get_image_height, get_image_width},
+};
 use log::error;
 use usb::{
     keyboard::keyboard_event,
@@ -34,14 +37,14 @@ const ASCII_A: i32 = 65;
 const ASCII_Z: i32 = 90;
 const UPPERCASE_TO_LOWERCASE: i32 = 32;
 
-impl VncClient {
+impl ClientIoHandler {
     /// Keyboard event.
     pub fn key_envent(&mut self) {
         if self.expect == 1 {
             self.expect = 8;
             return;
         }
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
         let down = buf[1] as u8;
         let mut keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
 
@@ -53,9 +56,9 @@ impl VncClient {
         let keycode: u16;
         match self
             .server
+            .keysym2keycode
             .lock()
             .unwrap()
-            .keysym2keycode
             .get(&(keysym as u16))
         {
             Some(k) => keycode = *k,
@@ -64,7 +67,7 @@ impl VncClient {
             }
         }
         self.do_key_event(down, keycode);
-        self.update_event_handler(1, VncClient::handle_protocol_msg);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
     // Mouse event.
@@ -74,13 +77,17 @@ impl VncClient {
             return;
         }
 
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
         let mut x = ((buf[2] as u16) << 8) + buf[3] as u16;
         let mut y = ((buf[4] as u16) << 8) + buf[5] as u16;
 
         // Window size alignment.
-        x = ((x as u64 * ABS_MAX) / self.width as u64) as u16;
-        y = ((y as u64 * ABS_MAX) / self.height as u64) as u16;
+        let locked_surface = self.server.vnc_surface.lock().unwrap();
+        let width = get_image_width(locked_surface.server_image);
+        let height = get_image_height(locked_surface.server_image);
+        drop(locked_surface);
+        x = ((x as u64 * ABS_MAX) / width as u64) as u16;
+        y = ((y as u64 * ABS_MAX) / height as u64) as u16;
 
         // ASCII -> HidCode.
         let button_mask: u8 = match buf[1] as u8 {
@@ -100,7 +107,7 @@ impl VncClient {
             }
         }
 
-        self.update_event_handler(1, VncClient::handle_protocol_msg);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
     /// Do keyboard event.
@@ -132,7 +139,7 @@ impl VncClient {
 
     /// Client cut text.
     pub fn client_cut_event(&mut self) {
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
         if self.expect == 1 {
             self.expect = 8;
             return;
@@ -146,6 +153,6 @@ impl VncClient {
             }
         }
 
-        self.update_event_handler(1, VncClient::handle_protocol_msg);
+        self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 }

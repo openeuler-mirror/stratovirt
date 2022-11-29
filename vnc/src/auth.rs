@@ -10,7 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{client::VncClient, VncError};
+use crate::{
+    client::{ClientIoHandler, APP_NAME},
+    VncError,
+};
 use anyhow::{anyhow, Result};
 use libc::{c_char, c_int, c_uint, c_void};
 use log::{error, info};
@@ -27,8 +30,6 @@ use util::byte_code::ByteCode;
 
 /// Vnc Service.
 const SERVICE: &str = "vnc";
-/// Saslauthd service can fetch the configuration in the /etc/sasl2/${APP_NAME}.conf.
-const APP_NAME: &str = "stratovirt";
 const MECHNAME_MAX_LEN: u32 = 100;
 const MECHNAME_MIN_LEN: u32 = 1;
 const SASL_DATA_MAX_LEN: u32 = 1024 * 1024;
@@ -58,13 +59,24 @@ pub enum SubAuthState {
     VncAuthVencryptTlssasl = 264,
 }
 
+/// Configuration for authentication.
+/// Identity: authentication user.
+#[derive(Debug, Clone)]
+pub struct SaslAuth {
+    pub identity: String,
+}
+
+impl SaslAuth {
+    pub fn new(identity: String) -> Self {
+        SaslAuth { identity }
+    }
+}
+
 /// Struct of sasl authentiation.
 #[derive(Debug, Clone)]
-pub struct Sasl {
+pub struct SaslConfig {
     /// State of sasl connection .
     pub sasl_conn: *mut sasl_conn_t,
-    /// Identity user.
-    pub identity: String,
     /// Mech list server support.
     pub mech_list: String,
     /// Authentication mechanism currently in use.
@@ -77,11 +89,10 @@ pub struct Sasl {
     pub run_ssf: u32,
 }
 
-impl Sasl {
-    pub fn default() -> Self {
-        Sasl {
+impl Default for SaslConfig {
+    fn default() -> Self {
+        SaslConfig {
             sasl_conn: ptr::null_mut() as *mut sasl_conn_t,
-            identity: String::new(),
             mech_list: String::new(),
             mech_name: String::new(),
             sasl_stage: SaslStage::SaslServerStart,
@@ -91,13 +102,6 @@ impl Sasl {
     }
 }
 
-/// Configuration for authentication.
-/// Identity: authentication user.
-#[derive(Debug, Clone, Default)]
-pub struct SaslAuth {
-    pub identity: String,
-}
-
 /// Authentication stage.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SaslStage {
@@ -105,10 +109,10 @@ pub enum SaslStage {
     SaslServerStep,
 }
 
-impl VncClient {
+impl ClientIoHandler {
     /// Get length of mechname send form client.
     pub fn get_mechname_length(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
         let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
 
         if len > MECHNAME_MAX_LEN {
@@ -124,7 +128,7 @@ impl VncClient {
             ))));
         }
 
-        self.update_event_handler(len as usize, VncClient::get_sasl_mechname);
+        self.update_event_handler(len as usize, ClientIoHandler::get_sasl_mechname);
         Ok(())
     }
 
@@ -150,30 +154,32 @@ impl VncClient {
 
     /// Get authentication mechanism supported by client.
     pub fn get_sasl_mechname(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
-        let mech_name = String::from_utf8_lossy(buf).to_string();
+        let buf = self.read_incoming_msg();
+        let mech_name = String::from_utf8_lossy(&buf).to_string();
 
-        let mech_list: Vec<&str> = self.sasl.mech_list.split(',').collect();
+        let mut locked_security = self.server.security_type.lock().unwrap();
+        let mech_list: Vec<&str> = locked_security.saslconfig.mech_list.split(',').collect();
         for mech in mech_list {
             if mech_name == *mech {
-                self.sasl.mech_name = mech_name;
+                locked_security.saslconfig.mech_name = mech_name;
                 break;
             }
         }
         // Unsupported mechanism.
-        if self.sasl.mech_name.is_empty() {
+        if locked_security.saslconfig.mech_name.is_empty() {
             return Err(anyhow!(VncError::AuthFailed(
                 "Unsupported mechanism".to_string()
             )));
         }
+        drop(locked_security);
 
-        self.update_event_handler(4, VncClient::get_authmessage_length);
+        self.update_event_handler(4, ClientIoHandler::get_authmessage_length);
         Ok(())
     }
 
     /// Length of client authentication message.
     pub fn get_authmessage_length(&mut self) -> Result<()> {
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let len = u32::from_be_bytes(buf);
 
@@ -187,14 +193,14 @@ impl VncClient {
         if len == 0 {
             return self.client_sasl_auth();
         }
-        self.update_event_handler(len as usize, VncClient::client_sasl_auth);
+        self.update_event_handler(len as usize, ClientIoHandler::client_sasl_auth);
         Ok(())
     }
 
     /// Receive the authentication information from client and return the result.
     pub fn client_sasl_auth(&mut self) -> Result<()> {
         info!("Sasl Authentication");
-        let buf = self.buffpool.read_front(self.expect);
+        let buf = self.read_incoming_msg();
 
         let mut client_data = buf.to_vec();
         let mut client_len: c_uint = 0;
@@ -203,16 +209,18 @@ impl VncClient {
             client_data[self.expect - 1] = 0_u8;
         }
 
+        let server = self.server.clone();
+        let mut locked_security = server.security_type.lock().unwrap();
         let err: c_int;
         let mut serverout: *const c_char = ptr::null_mut();
         let mut serverout_len: c_uint = 0;
-        let mech_name = CString::new(self.sasl.mech_name.as_str()).unwrap();
+        let mech_name = CString::new(locked_security.saslconfig.mech_name.as_str()).unwrap();
 
         // Start authentication.
-        if self.sasl.sasl_stage == SaslStage::SaslServerStart {
+        if locked_security.saslconfig.sasl_stage == SaslStage::SaslServerStart {
             unsafe {
                 err = sasl_server_start(
-                    self.sasl.sasl_conn,
+                    locked_security.saslconfig.sasl_conn,
                     mech_name.as_ptr(),
                     client_data.as_ptr() as *const c_char,
                     client_len,
@@ -223,7 +231,7 @@ impl VncClient {
         } else {
             unsafe {
                 err = sasl_server_step(
-                    self.sasl.sasl_conn,
+                    locked_security.saslconfig.sasl_conn,
                     client_data.as_ptr() as *const c_char,
                     client_len,
                     &mut serverout,
@@ -233,12 +241,12 @@ impl VncClient {
         }
 
         if err != SASL_OK && err != SASL_CONTINUE {
-            unsafe { sasl_dispose(&mut self.sasl.sasl_conn) }
+            unsafe { sasl_dispose(&mut locked_security.saslconfig.sasl_conn) }
             error!("Auth failed!");
             return Err(anyhow!(VncError::AuthFailed("Auth failed!".to_string())));
         }
         if serverout_len > SASL_DATA_MAX_LEN {
-            unsafe { sasl_dispose(&mut self.sasl.sasl_conn) }
+            unsafe { sasl_dispose(&mut locked_security.saslconfig.sasl_conn) }
             error!("SASL data too long");
             return Err(anyhow!(VncError::AuthFailed(
                 "SASL data too long".to_string()
@@ -261,11 +269,14 @@ impl VncClient {
         } else if err == SASL_CONTINUE {
             buf.append(&mut (0_u8).as_bytes().to_vec());
         }
+        drop(locked_security);
 
         if err == SASL_CONTINUE {
             // Authentication continue.
-            self.sasl.sasl_stage = SaslStage::SaslServerStep;
-            self.update_event_handler(4, VncClient::get_authmessage_length);
+            let mut locked_security = server.security_type.lock().unwrap();
+            locked_security.saslconfig.sasl_stage = SaslStage::SaslServerStep;
+            self.update_event_handler(4, ClientIoHandler::get_authmessage_length);
+            drop(locked_security);
             return Ok(());
         } else {
             if let Err(err) = self.sasl_check_ssf() {
@@ -286,7 +297,7 @@ impl VncClient {
         }
 
         self.write_msg(&buf);
-        self.update_event_handler(1, VncClient::handle_client_init);
+        self.update_event_handler(1, ClientIoHandler::handle_client_init);
         Ok(())
     }
 
@@ -321,6 +332,7 @@ impl VncClient {
                 err
             ))));
         }
+        let mut saslconfig = SaslConfig::default();
         unsafe {
             err = sasl_server_new(
                 service.as_ptr(),
@@ -330,7 +342,7 @@ impl VncClient {
                 remote_addr.as_ptr(),
                 ptr::null_mut(),
                 SASL_SUCCESS_DATA,
-                &mut self.sasl.sasl_conn,
+                &mut saslconfig.sasl_conn,
             );
         }
         if err != SASL_OK {
@@ -340,6 +352,7 @@ impl VncClient {
                 err
             ))));
         }
+        self.server.security_type.lock().unwrap().saslconfig = saslconfig;
 
         Ok(())
     }
@@ -350,9 +363,10 @@ impl VncClient {
         let mut err: c_int;
         let ssf: sasl_ssf_t = 256;
         let ssf = &ssf as *const sasl_ssf_t;
+        let locked_security = self.server.security_type.lock().unwrap();
         unsafe {
             err = sasl_setprop(
-                self.sasl.sasl_conn,
+                locked_security.saslconfig.sasl_conn,
                 SASL_SSF_EXTERNAL as i32,
                 ssf as *const c_void,
             );
@@ -380,7 +394,7 @@ impl VncClient {
         let props = &saslprops as *const sasl_security_properties_t;
         unsafe {
             err = sasl_setprop(
-                self.sasl.sasl_conn,
+                locked_security.saslconfig.sasl_conn,
                 SASL_SEC_PROPS.try_into().unwrap(),
                 props as *const c_void,
             );
@@ -404,9 +418,10 @@ impl VncClient {
         let sep = CString::new(",").unwrap();
         let suffix = CString::new("").unwrap();
         let mut mechlist: *const c_char = ptr::null_mut();
+        let mut locked_security = self.server.security_type.lock().unwrap();
         unsafe {
             err = sasl_listmech(
-                self.sasl.sasl_conn,
+                locked_security.saslconfig.sasl_conn,
                 ptr::null_mut(),
                 prefix.as_ptr(),
                 sep.as_ptr(),
@@ -423,11 +438,12 @@ impl VncClient {
             )));
         }
         let mech_list = unsafe { CStr::from_ptr(mechlist as *const c_char) };
-        self.sasl.mech_list = String::from(mech_list.to_str().unwrap());
+        locked_security.saslconfig.mech_list = String::from(mech_list.to_str().unwrap());
         let mut buf = Vec::new();
-        let len = self.sasl.mech_list.len();
+        let len = locked_security.saslconfig.mech_list.len();
         buf.append(&mut (len as u32).to_be_bytes().to_vec());
-        buf.append(&mut self.sasl.mech_list.as_bytes().to_vec());
+        buf.append(&mut locked_security.saslconfig.mech_list.as_bytes().to_vec());
+        drop(locked_security);
         self.write_msg(&buf);
 
         Ok(())
@@ -435,12 +451,20 @@ impl VncClient {
 
     /// Check whether the ssf layer of sasl meets the strength requirements.
     fn sasl_check_ssf(&mut self) -> Result<()> {
-        if !self.sasl.want_ssf {
+        let server = self.server.clone();
+        let mut locked_security = server.security_type.lock().unwrap();
+        if !locked_security.saslconfig.want_ssf {
             return Ok(());
         }
         let err: c_int;
         let mut val: *const c_void = ptr::null_mut();
-        unsafe { err = sasl_getprop(self.sasl.sasl_conn, SASL_SSF as c_int, &mut val) }
+        unsafe {
+            err = sasl_getprop(
+                locked_security.saslconfig.sasl_conn,
+                SASL_SSF as c_int,
+                &mut val,
+            )
+        }
         if err != SASL_OK {
             error!("sasl_getprop: internal error");
             return Err(anyhow!(VncError::AuthFailed(String::from(
@@ -456,14 +480,23 @@ impl VncClient {
             ))));
         }
 
-        self.sasl.run_ssf = 1;
+        locked_security.saslconfig.run_ssf = 1;
+        drop(locked_security);
         Ok(())
     }
 
     /// Check username.
     fn sasl_check_authz(&mut self) -> Result<()> {
+        let locked_security = self.server.security_type.lock().unwrap();
         let mut val: *const c_void = ptr::null_mut();
-        let err = unsafe { sasl_getprop(self.sasl.sasl_conn, SASL_USERNAME as c_int, &mut val) };
+        let err = unsafe {
+            sasl_getprop(
+                locked_security.saslconfig.sasl_conn,
+                SASL_USERNAME as c_int,
+                &mut val,
+            )
+        };
+        drop(locked_security);
         if err != SASL_OK {
             return Err(anyhow!(VncError::AuthFailed(String::from(
                 "Cannot fetch SASL username"
@@ -477,11 +510,20 @@ impl VncClient {
         let username = unsafe { CStr::from_ptr(val as *const c_char) };
         let username = String::from(username.to_str().unwrap());
 
-        if self.sasl.identity != username {
+        let server = self.server.clone();
+        let locked_security = server.security_type.lock().unwrap();
+        if let Some(saslauth) = &locked_security.saslauth {
+            if saslauth.identity != username {
+                return Err(anyhow!(VncError::AuthFailed(String::from(
+                    "No SASL username set"
+                ))));
+            }
+        } else {
             return Err(anyhow!(VncError::AuthFailed(String::from(
                 "No SASL username set"
             ))));
         }
+        drop(locked_security);
 
         Ok(())
     }
