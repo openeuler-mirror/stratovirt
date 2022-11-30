@@ -1077,8 +1077,11 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
             if !locked_dirty.contain((i * bpl as u64 + x) as usize).unwrap() {
                 break;
             }
-            for j in x..x2 {
-                locked_dirty.clear((i * bpl as u64 + j) as usize).unwrap();
+            let start = (i * bpl as u64 + x) as usize;
+            let len = (x2 - x) as usize;
+            if let Err(e) = locked_dirty.clear_range(start, len) {
+                error!("clear bitmap error: {:?}", e);
+                return num_rects;
             }
             i += 1;
         }
