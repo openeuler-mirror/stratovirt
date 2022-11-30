@@ -851,7 +851,7 @@ impl XhciDevice {
             index: 0,
             length: 0,
         };
-        locked_dev.handle_control(&mut p, &device_req, &mut []);
+        locked_dev.handle_control(&mut p, &device_req);
     }
 
     fn get_device_context_addr(&self, slot_id: u32) -> u64 {

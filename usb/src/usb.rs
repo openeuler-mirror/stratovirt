@@ -359,7 +359,6 @@ impl UsbDevice {
         &mut self,
         packet: &mut UsbPacket,
         device_req: &UsbDeviceRequest,
-        data: &mut [u8],
     ) -> Result<bool> {
         let value = device_req.value as u32;
         let index = device_req.index as u32;
@@ -369,11 +368,11 @@ impl UsbDevice {
                 USB_REQUEST_GET_DESCRIPTOR => {
                     let res = self.get_descriptor(value)?;
                     let len = std::cmp::min(res.len() as u32, length);
-                    data[..(len as usize)].clone_from_slice(&res[..(len as usize)]);
+                    self.data_buf[..(len as usize)].clone_from_slice(&res[..(len as usize)]);
                     packet.actual_length = len;
                 }
                 USB_REQUEST_GET_CONFIGURATION => {
-                    data[0] = if let Some(conf) = &self.config {
+                    self.data_buf[0] = if let Some(conf) = &self.config {
                         conf.config_desc.bConfigurationValue
                     } else {
                         0
@@ -387,17 +386,17 @@ impl UsbDevice {
                         let x = &self.device_desc.as_ref().unwrap().confs[0];
                         x.clone()
                     };
-                    data[0] = 0;
+                    self.data_buf[0] = 0;
                     if conf.config_desc.bmAttributes & USB_CONFIGURATION_ATTR_SELF_POWER
                         == USB_CONFIGURATION_ATTR_SELF_POWER
                     {
-                        data[0] |= 1 << USB_DEVICE_SELF_POWERED;
+                        self.data_buf[0] |= 1 << USB_DEVICE_SELF_POWERED;
                     }
 
                     if self.remote_wakeup & USB_DEVICE_REMOTE_WAKEUP == USB_DEVICE_REMOTE_WAKEUP {
-                        data[0] |= 1 << USB_DEVICE_REMOTE_WAKEUP;
+                        self.data_buf[0] |= 1 << USB_DEVICE_REMOTE_WAKEUP;
                     }
-                    data[1] = 0x00;
+                    self.data_buf[1] = 0x00;
                     packet.actual_length = 2;
                 }
                 _ => {
@@ -433,7 +432,7 @@ impl UsbDevice {
             USB_INTERFACE_IN_REQUEST => match device_req.request {
                 USB_REQUEST_GET_INTERFACE => {
                     if index < self.ninterfaces {
-                        data[0] = self.altsetting[index as usize] as u8;
+                        self.data_buf[0] = self.altsetting[index as usize] as u8;
                         packet.actual_length = 1;
                     }
                 }
@@ -513,12 +512,7 @@ pub trait UsbDeviceOps: Send + Sync {
     }
 
     /// Handle control pakcet.
-    fn handle_control(
-        &mut self,
-        packet: &mut UsbPacket,
-        device_req: &UsbDeviceRequest,
-        data: &mut [u8],
-    );
+    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest);
 
     /// Handle data pakcet.
     fn handle_data(&mut self, packet: &mut UsbPacket);
@@ -544,10 +538,12 @@ pub trait UsbDeviceOps: Send + Sync {
         let ep = if let Some(ep) = &packet.ep {
             ep.upgrade().unwrap()
         } else {
+            packet.status = UsbPacketStatus::NoDev;
             bail!("Failed to find ep");
         };
         let locked_ep = ep.lock().unwrap();
         let nr = locked_ep.nr;
+        debug!("process_packet nr {}", nr);
         drop(locked_ep);
         if nr == 0 {
             if packet.parameter != 0 {
@@ -585,25 +581,26 @@ pub trait UsbDeviceOps: Send + Sync {
             length: (p.parameter >> 48) as u16,
         };
         if device_req.length as usize > locked_dev.data_buf.len() {
+            p.status = UsbPacketStatus::Stall;
             bail!("data buffer small len {}", device_req.length);
         }
         if p.pid as u8 == USB_TOKEN_OUT {
-            let len = locked_dev.data_buf.len();
-            usb_packet_transfer(p, &mut locked_dev.data_buf, len);
+            usb_packet_transfer(p, &mut locked_dev.data_buf, device_req.length as usize);
         }
-        // Drop locked for handle_control use it
+        // Drop locked for handle_control use it.
         drop(locked_dev);
-        let mut data_buf: [u8; 4096] = [0; 4096];
-        self.handle_control(p, &device_req, &mut data_buf);
+        self.handle_control(p, &device_req);
         let mut locked_dev = usb_dev.lock().unwrap();
-        locked_dev.data_buf = data_buf.to_vec();
         if p.status == UsbPacketStatus::Async {
             return Ok(());
         }
+        let mut len = device_req.length;
+        if len > p.actual_length as u16 {
+            len = p.actual_length as u16;
+        }
         if p.pid as u8 == USB_TOKEN_IN {
             p.actual_length = 0;
-            let len = locked_dev.data_buf.len();
-            usb_packet_transfer(p, &mut locked_dev.data_buf, len);
+            usb_packet_transfer(p, &mut locked_dev.data_buf, len as usize);
         }
         Ok(())
     }

@@ -29,6 +29,7 @@ use crate::{
     usb::{
         usb_endpoint_init, UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
         UsbDescOther, UsbDevice, UsbDeviceOps, UsbDeviceState, UsbEndpoint, UsbPacket,
+        UsbPacketStatus,
     },
     xhci::xhci_controller::XhciDevice,
 };
@@ -223,15 +224,10 @@ impl UsbDeviceOps for UsbTablet {
         locked_hid.reset();
     }
 
-    fn handle_control(
-        &mut self,
-        packet: &mut UsbPacket,
-        device_req: &UsbDeviceRequest,
-        data: &mut [u8],
-    ) {
+    fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
         debug!("handle_control request {:?}", device_req);
         let mut locked_dev = self.device.lock().unwrap();
-        match locked_dev.handle_control_for_descriptor(packet, device_req, data) {
+        match locked_dev.handle_control_for_descriptor(packet, device_req) {
             Ok(handled) => {
                 if handled {
                     debug!("Tablet control handled by descriptor, return directly.");
@@ -240,11 +236,12 @@ impl UsbDeviceOps for UsbTablet {
             }
             Err(e) => {
                 error!("Tablet descriptor error {}", e);
+                packet.status = UsbPacketStatus::Stall;
                 return;
             }
         }
         let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.handle_control_packet(packet, device_req, data);
+        locked_hid.handle_control_packet(packet, device_req, &mut locked_dev.data_buf);
     }
 
     fn handle_data(&mut self, p: &mut UsbPacket) {
