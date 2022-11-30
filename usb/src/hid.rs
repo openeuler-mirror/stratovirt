@@ -520,6 +520,7 @@ impl Hid {
                 self.handle_token_in(p);
             }
             _ => {
+                error!("Unhandled packet {}", p.pid);
                 p.status = UsbPacketStatus::Stall;
             }
         };
@@ -551,9 +552,11 @@ impl Hid {
                 let len = buf.len();
                 usb_packet_transfer(p, &mut buf, len);
             } else {
+                error!("Unhandled endpoint {}", locked_ep.nr);
                 p.status = UsbPacketStatus::Stall;
             }
         } else {
+            error!("USB endpoint not found {}", p);
             p.status = UsbPacketStatus::Stall;
         }
     }
