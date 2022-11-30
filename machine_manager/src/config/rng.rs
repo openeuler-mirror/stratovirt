@@ -10,11 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result};
-use super::{pci_args_check, ObjConfig};
+use super::error::ConfigError;
+use super::pci_args_check;
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_PATH_LENGTH};
 
 const MIN_BYTES_PER_SEC: u64 = 64;
@@ -37,29 +37,28 @@ pub struct RngConfig {
 impl ConfigCheck for RngConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_PATH_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("rng id".to_string(), MAX_PATH_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "rng id".to_string(),
+                MAX_PATH_LENGTH
+            )));
         }
 
         if self.random_file.len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "rng random file".to_string(),
                 MAX_PATH_LENGTH,
-            )
-            .into());
+            )));
         }
 
         if let Some(bytes_per_sec) = self.bytes_per_sec {
             if !(MIN_BYTES_PER_SEC..=MAX_BYTES_PER_SEC).contains(&bytes_per_sec) {
-                return Err(ErrorKind::IllegalValue(
+                return Err(anyhow!(ConfigError::IllegalValue(
                     "The bytes per second of rng device".to_string(),
                     MIN_BYTES_PER_SEC,
                     true,
                     MAX_BYTES_PER_SEC,
                     true,
-                )
-                .into());
+                )));
             }
         }
 
@@ -85,7 +84,7 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
     let rng = if let Some(rng_id) = cmd_parser.get_value::<String>("rng")? {
         rng_id
     } else {
-        return Err(ErrorKind::FieldIsMissing("rng", "rng").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("rng", "rng")));
     };
 
     rng_cfg.id = if let Some(rng_id) = cmd_parser.get_value::<String>("id")? {
@@ -114,16 +113,37 @@ pub fn parse_rng_dev(vm_config: &mut VmConfig, rng_config: &str) -> Result<RngCo
         bail!("Argument 'max-bytes' is missing");
     }
 
-    if let Some(object_cfg) = vm_config.object.remove(&rng) {
-        if let ObjConfig::Rng(obj_cfg) = object_cfg {
-            rng_cfg.random_file = obj_cfg.filename;
-        }
+    if let Some(rng_object) = vm_config.object.rng_object.remove(&rng) {
+        rng_cfg.random_file = rng_object.filename;
     } else {
         bail!("Object for rng-random device not found");
     }
 
     rng_cfg.check()?;
     Ok(rng_cfg)
+}
+
+pub fn parse_rng_obj(object_args: &str) -> Result<RngObjConfig> {
+    let mut cmd_params = CmdParser::new("rng-object");
+    cmd_params.push("").push("id").push("filename");
+
+    cmd_params.parse(object_args)?;
+    let id = if let Some(obj_id) = cmd_params.get_value::<String>("id")? {
+        obj_id
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rng-object")));
+    };
+    let filename = if let Some(name) = cmd_params.get_value::<String>("filename")? {
+        name
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "filename",
+            "rng-object"
+        )));
+    };
+    let rng_obj_cfg = RngObjConfig { id, filename };
+
+    Ok(rng_obj_cfg)
 }
 
 #[cfg(test)]

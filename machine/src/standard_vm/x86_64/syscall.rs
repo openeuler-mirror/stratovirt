@@ -47,6 +47,7 @@ const F_DUPFD_CLOEXEC: u32 = F_LINUX_SPECIFIC_BASE + 6;
 const TCGETS: u32 = 0x5401;
 const TCSETS: u32 = 0x5402;
 const TIOCGWINSZ: u32 = 0x5413;
+const FIONREAD: u32 = 0x541B;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
@@ -55,8 +56,8 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 62 syscalls
-/// * x86_64-unknown-musl: 61 syscalls
+/// * x86_64-unknown-gnu: 82 syscalls
+/// * x86_64-unknown-musl: 62 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -70,13 +71,21 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_epoll_wait),
         BpfRule::new(libc::SYS_io_getevents),
         BpfRule::new(libc::SYS_io_submit),
+        BpfRule::new(libc::SYS_io_destroy),
+        BpfRule::new(libc::SYS_io_uring_setup),
+        BpfRule::new(libc::SYS_io_uring_register),
+        BpfRule::new(libc::SYS_io_uring_enter),
         BpfRule::new(libc::SYS_dup),
         BpfRule::new(libc::SYS_close),
         BpfRule::new(libc::SYS_eventfd2),
         BpfRule::new(libc::SYS_epoll_ctl),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_ppoll),
         BpfRule::new(libc::SYS_fdatasync),
         BpfRule::new(libc::SYS_recvmsg),
         BpfRule::new(libc::SYS_sendmsg),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_sendmmsg),
         BpfRule::new(libc::SYS_recvfrom),
         BpfRule::new(libc::SYS_mremap),
         BpfRule::new(libc::SYS_io_setup),
@@ -86,6 +95,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
             .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFD)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_GETFD)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFL),
+        BpfRule::new(libc::SYS_flock),
         BpfRule::new(libc::SYS_rt_sigprocmask),
         BpfRule::new(libc::SYS_open),
         BpfRule::new(libc::SYS_openat),
@@ -119,6 +129,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_readlinkat),
         BpfRule::new(libc::SYS_readlink),
         BpfRule::new(libc::SYS_socket),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_bind),
         BpfRule::new(libc::SYS_connect),
         BpfRule::new(libc::SYS_getcwd),
         #[cfg(target_env = "musl")]
@@ -127,9 +139,37 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_clone3),
         BpfRule::new(libc::SYS_prctl),
         BpfRule::new(libc::SYS_sendto),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getsockname),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_getpeername),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_nanosleep),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_clock_nanosleep),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getuid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_geteuid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getgid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getegid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_gettid),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getdents64),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_clock_gettime),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_getsockopt),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_uname),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_sysinfo),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_faccessat),
+        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_shutdown),
         BpfRule::new(libc::SYS_getrandom),
         BpfRule::new(libc::SYS_setsockopt),
@@ -155,6 +195,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_USER_MEMORY_REGION)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IOEVENTFD)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SIGNAL_MSI)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FIONREAD)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_GUEST_CID() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_RUNNING() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_VRING_CALL() as u32)
@@ -224,12 +265,14 @@ fn madvise_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_FREE as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
     #[cfg(target_env = "gnu")]
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTDUMP as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
 }
 
 fn futex_rule() -> BpfRule {

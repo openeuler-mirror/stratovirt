@@ -10,29 +10,29 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        links {
-            AddressSpace(address_space::errors::Error, address_space::errors::ErrorKind);
-            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
-        }
-        foreign_links {
-            KvmIoctl(kvm_ioctls::Error);
-        }
-    }
-}
-
+pub mod error;
+pub use error::SysBusError;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use error_chain::bail;
+pub use anyhow::{bail, Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::errors::{Result, ResultExt};
+// Now that the serial device use a hardcoded IRQ number (4), and the starting
+// free IRQ number can be 5.
+#[cfg(target_arch = "x86_64")]
+pub const IRQ_BASE: i32 = 5;
+#[cfg(target_arch = "x86_64")]
+pub const IRQ_MAX: i32 = 15;
+
+// 0-31 is private to each CPU (SGIs and PPIs).
+#[cfg(target_arch = "aarch64")]
+pub const IRQ_BASE: i32 = 32;
+#[cfg(target_arch = "aarch64")]
+pub const IRQ_MAX: i32 = 191;
 
 pub struct SysBus {
     #[cfg(target_arch = "x86_64")]
@@ -43,6 +43,31 @@ pub struct SysBus {
     pub min_free_irq: i32,
     pub mmio_region: (u64, u64),
     pub min_free_base: u64,
+}
+
+impl fmt::Debug for SysBus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(target_arch = "x86_64")]
+        let debug = f
+            .debug_struct("SysBus")
+            .field("sys_io", &self.sys_io)
+            .field("sys_mem", &self.sys_mem)
+            .field("free_irqs", &self.free_irqs)
+            .field("min_free_irq", &self.min_free_irq)
+            .field("mmio_region", &self.mmio_region)
+            .field("min_free_base", &self.min_free_base)
+            .finish();
+        #[cfg(target_arch = "aarch64")]
+        let debug = f
+            .debug_struct("SysBus")
+            .field("sys_mem", &self.sys_mem)
+            .field("free_irqs", &self.free_irqs)
+            .field("min_free_irq", &self.min_free_irq)
+            .field("mmio_region", &self.mmio_region)
+            .field("min_free_base", &self.min_free_base)
+            .finish();
+        debug
+    }
 }
 
 impl SysBus {
@@ -98,7 +123,7 @@ impl SysBus {
                 self.sys_io
                     .root()
                     .add_subregion(region, region_base)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to register region in I/O space: offset={},size={}",
                             region_base, region_size
@@ -110,7 +135,7 @@ impl SysBus {
                 self.sys_io
                     .root()
                     .add_subregion(region, region_base)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to register region in I/O space: offset 0x{:x}, size {}",
                             region_base, region_size
@@ -122,7 +147,7 @@ impl SysBus {
                 self.sys_io
                     .root()
                     .add_subregion(region, region_base)
-                    .chain_err(|| {
+                    .with_context(|| {
                         format!(
                             "Failed to register region in I/O space: offset 0x{:x}, size {}",
                             region_base, region_size
@@ -133,7 +158,7 @@ impl SysBus {
                 .sys_mem
                 .root()
                 .add_subregion(region, region_base)
-                .chain_err(|| {
+                .with_context(|| {
                     format!(
                         "Failed to register region in memory space: offset={},size={}",
                         region_base, region_size
@@ -141,6 +166,14 @@ impl SysBus {
                 })?,
         }
 
+        self.devices.push(dev.clone());
+        Ok(())
+    }
+
+    pub fn attach_dynamic_device<T: 'static + SysBusDevOps>(
+        &mut self,
+        dev: &Arc<Mutex<T>>,
+    ) -> Result<()> {
         self.devices.push(dev.clone());
         Ok(())
     }
@@ -173,6 +206,7 @@ pub enum SysBusDevType {
     PL011,
     FwCfg,
     Flash,
+    Ramfb,
     Others,
 }
 

@@ -27,6 +27,7 @@
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
+mod error;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::GICConfig as ICGICConfig;
@@ -36,20 +37,7 @@ pub use aarch64::GICv2Config as ICGICv2Config;
 pub use aarch64::GICv3Config as ICGICv3Config;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::InterruptController;
-
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        errors {
-            #[cfg(target_arch = "aarch64")]
-            InvalidConfig(err_info: String) {
-                display("Invalid GIC config: {}.", err_info)
-            }
-            #[cfg(target_arch = "aarch64")]
-            CreateKvmDevice(err: kvm_ioctls::Error) {
-                display("Failed to create KVM device: {:#?}.", err)
-            }
-        }
-    }
-}
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::GIC_IRQ_MAX;
+pub use anyhow::Result;
+pub use error::InterruptError;

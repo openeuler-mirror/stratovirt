@@ -15,12 +15,12 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::mem::size_of;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::manager::{Instance, MIGRATION_MANAGER};
 use crate::protocol::{
     DeviceStateDesc, FileFormat, MigrationHeader, MigrationStatus, VersionCheck, HEADER_LENGTH,
 };
-use crate::MigrationManager;
+use crate::{MigrationError, MigrationManager};
+use anyhow::{anyhow, Context, Result};
 use util::{byte_code::ByteCode, unix::host_page_size};
 
 impl MigrationManager {
@@ -46,7 +46,7 @@ impl MigrationManager {
         let mut input_slice = [0u8; HEADER_LENGTH];
         input_slice[0..size_of::<MigrationHeader>()].copy_from_slice(header.as_bytes());
         fd.write(&input_slice)
-            .chain_err(|| "Failed to save migration header")?;
+            .with_context(|| "Failed to save migration header")?;
 
         Ok(())
     }
@@ -64,7 +64,7 @@ impl MigrationManager {
         fd.read_exact(&mut place_holder)?;
 
         Ok(*MigrationHeader::from_bytes(&header_bytes)
-            .ok_or(ErrorKind::FromBytesError("HEADER"))?)
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("HEADER")))?)
     }
 
     /// Write all `DeviceStateDesc` in `desc_db` hashmap to `Write` trait object.
@@ -82,7 +82,7 @@ impl MigrationManager {
             start += desc_bytes.len();
         }
         fd.write_all(&buffer)
-            .chain_err(|| "Failed to write descriptor message.")?;
+            .with_context(|| "Failed to write descriptor message.")?;
 
         Ok(())
     }
@@ -126,15 +126,15 @@ impl MigrationManager {
                 size_of::<Instance>() as usize,
             )
         })
-        .chain_err(|| "Failed to read instance of object")?;
+        .with_context(|| "Failed to read instance of object")?;
 
         let locked_desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
         let snap_desc = desc_db
             .get(&instance.object)
-            .chain_err(|| "Failed to get instance object")?;
+            .with_context(|| "Failed to get instance object")?;
         let current_desc = locked_desc_db
             .get(&snap_desc.name)
-            .chain_err(|| "Failed to get snap_desc name")?;
+            .with_context(|| "Failed to get snap_desc name")?;
 
         let mut state_data = Vec::new();
         state_data.resize(snap_desc.size as usize, 0);
@@ -145,14 +145,13 @@ impl MigrationManager {
             VersionCheck::Compat => {
                 current_desc
                     .add_padding(snap_desc, &mut state_data)
-                    .chain_err(|| "Failed to transform snapshot data version")?;
+                    .with_context(|| "Failed to transform snapshot data version")?;
             }
             VersionCheck::Mismatch => {
-                return Err(ErrorKind::VersionNotFit(
+                return Err(anyhow!(MigrationError::VersionNotFit(
                     current_desc.compat_version,
                     snap_desc.current_version,
-                )
-                .into())
+                )))
             }
         }
 

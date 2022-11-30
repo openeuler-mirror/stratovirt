@@ -15,10 +15,15 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 use std::{cmp, usize};
 
+use super::{
+    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace, VIRTIO_CONSOLE_F_SIZE,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
+};
+use crate::VirtioError;
 use address_space::AddressSpace;
+use anyhow::{anyhow, bail, Context, Result};
 use devices::legacy::{Chardev, InputReceiver};
-use error_chain::{bail, ChainedError};
-use log::{debug, error, warn};
+use log::{debug, error};
 use machine_manager::{
     config::{ChardevType, VirtioConsole},
     event_loop::EventLoop,
@@ -27,15 +32,9 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
-
-use super::errors::{ErrorKind, Result, ResultExt};
-use super::{
-    Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_CONSOLE_F_SIZE,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
-};
 
 /// Number of virtqueues.
 const QUEUE_NUM_CONSOLE: usize = 2;
@@ -47,6 +46,8 @@ const BUFF_SIZE: usize = 4096;
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 struct VirtioConsoleConfig {
+    cols: u16,
+    rows: u16,
     max_nr_ports: u32,
     emerg_wr: u32,
 }
@@ -57,6 +58,8 @@ impl VirtioConsoleConfig {
     /// Create configuration of virtio-console devices.
     pub fn new() -> Self {
         VirtioConsoleConfig {
+            cols: 0_u16,
+            rows: 0_u16,
             max_nr_ports: 1_u32,
             emerg_wr: 0_u32,
         }
@@ -88,6 +91,9 @@ impl InputReceiver for ConsoleHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut write_count = 0_usize;
             for elem_iov in elem.in_iovec.iter() {
                 let allow_write_count = cmp::min(write_count + elem_iov.len as usize, count);
@@ -104,10 +110,10 @@ impl InputReceiver for ConsoleHandler {
                     }
                     Err(ref e) => {
                         error!(
-                            "Failed to write slice for input console: addr {:X} len {} {}",
+                            "Failed to write slice for input console: addr {:X} len {} {:?}",
                             elem_iov.addr.0,
                             source_slice.len(),
-                            e.display_chain()
+                            e
                         );
                         break;
                     }
@@ -120,10 +126,8 @@ impl InputReceiver for ConsoleHandler {
                     .add_used(&self.mem_space, elem.index, write_count as u32)
             {
                 error!(
-                    "Failed to add used ring for input console, index: {} len: {} {}",
-                    elem.index,
-                    write_count,
-                    e.display_chain()
+                    "Failed to add used ring for input console, index: {} len: {} {:?}",
+                    elem.index, write_count, e
                 );
                 break;
             }
@@ -133,11 +137,13 @@ impl InputReceiver for ConsoleHandler {
             }
         }
 
-        if let Err(ref e) = (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock)) {
+        if let Err(ref e) =
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+        {
             error!(
-                "Failed to trigger interrupt for console, int-type {:?} {} ",
+                "Failed to trigger interrupt for console, int-type {:?} {:?} ",
                 VirtioInterruptType::Vring,
-                e.display_chain()
+                e
             )
         }
     }
@@ -149,6 +155,7 @@ impl InputReceiver for ConsoleHandler {
 
 impl ConsoleHandler {
     fn output_handle(&mut self) {
+        self.trace_request("Console".to_string(), "to IO".to_string());
         let mut queue_lock = self.output_queue.lock().unwrap();
         let mut buffer = [0_u8; 4096];
 
@@ -156,6 +163,9 @@ impl ConsoleHandler {
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let mut read_count = 0_usize;
             for elem_iov in elem.out_iovec.iter() {
                 let allow_read_count = cmp::min(read_count + elem_iov.len as usize, buffer.len());
@@ -172,10 +182,10 @@ impl ConsoleHandler {
                     }
                     Err(ref e) => {
                         error!(
-                            "Failed to read buffer for output console: addr: {:X}, len: {} {}",
+                            "Failed to read buffer for output console: addr: {:X}, len: {} {:?}",
                             elem_iov.addr.0,
                             allow_read_count - read_count,
-                            e.display_chain()
+                            e
                         );
                         break;
                     }
@@ -184,10 +194,10 @@ impl ConsoleHandler {
             if let Some(output) = &mut self.chardev.lock().unwrap().output {
                 let mut locked_output = output.lock().unwrap();
                 if let Err(e) = locked_output.write_all(&buffer[..read_count as usize]) {
-                    error!("Failed to write to console output: {}", e);
+                    error!("Failed to write to console output: {:?}", e);
                 }
                 if let Err(e) = locked_output.flush() {
-                    error!("Failed to flush console output: {}", e);
+                    error!("Failed to flush console output: {:?}", e);
                 }
             } else {
                 debug!("Failed to get output fd");
@@ -195,10 +205,8 @@ impl ConsoleHandler {
 
             if let Err(ref e) = queue_lock.vring.add_used(&self.mem_space, elem.index, 0) {
                 error!(
-                    "Failed to add used ring for output console, index: {} len: {} {}",
-                    elem.index,
-                    0,
-                    e.display_chain()
+                    "Failed to add used ring for output console, index: {} len: {} {:?}",
+                    elem.index, 0, e
                 );
                 break;
             }
@@ -235,25 +243,27 @@ impl ConsoleHandler {
                     ));
                 }
             }
-            ChardevType::Socket { .. } => {
-                if let Some(stream_fd) = locked_chardev.stream_fd {
+            ChardevType::Socket { .. } => match locked_chardev.stream_fd {
+                Some(stream_fd) => {
                     notifiers.push(EventNotifier::new(
-                        NotifierOperation::Delete,
+                        NotifierOperation::Park,
                         stream_fd,
                         None,
                         EventSet::IN | EventSet::HANG_UP,
                         Vec::new(),
                     ));
                 }
-                let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
-                notifiers.push(EventNotifier::new(
-                    NotifierOperation::Delete,
-                    listener_fd,
-                    None,
-                    EventSet::IN,
-                    Vec::new(),
-                ));
-            }
+                None => {
+                    let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
+                    notifiers.push(EventNotifier::new(
+                        NotifierOperation::Delete,
+                        listener_fd,
+                        None,
+                        EventSet::IN,
+                        Vec::new(),
+                    ));
+                }
+            },
             _ => (),
         }
         notifiers
@@ -315,6 +325,8 @@ pub struct Console {
     deactivate_evt: EventFd,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
+    /// Connectability status between guest and console.
+    console_connected: bool,
 }
 
 impl Console {
@@ -332,6 +344,7 @@ impl Console {
             },
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             chardev: Arc::new(Mutex::new(Chardev::new(console_cfg.chardev))),
+            console_connected: false,
         }
     }
 }
@@ -344,7 +357,7 @@ impl VirtioDevice for Console {
             .lock()
             .unwrap()
             .realize()
-            .chain_err(|| "Failed to realize chardev")?;
+            .with_context(|| "Failed to realize chardev")?;
         Ok(())
     }
 
@@ -370,13 +383,12 @@ impl VirtioDevice for Console {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.state.device_features;
-        if unrequested_features != 0 {
-            warn!("Received acknowledge request with unknown feature for console.");
-            v &= !unrequested_features;
-        }
-        self.state.driver_features |= v;
+        self.state.driver_features = self.checked_driver_features(page, value);
+    }
+
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.state.driver_features, features_select)
     }
 
     /// Read data of config from guest.
@@ -384,7 +396,7 @@ impl VirtioDevice for Console {
         let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
         if offset >= config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
 
         if let Some(end) = offset.checked_add(data.len() as u64) {
@@ -429,24 +441,37 @@ impl VirtioDevice for Console {
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
         )?;
+        self.console_connected = true;
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        if self.console_connected {
+            self.deactivate_evt
+                .write(1)
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn reset(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+        self.console_connected = false;
+        Ok(())
     }
 }
 
 impl StateTransfer for Console {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VirtioConsoleState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("CONSOLE"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("CONSOLE")))?;
 
         Ok(())
     }
@@ -463,6 +488,8 @@ impl StateTransfer for Console {
 }
 
 impl MigrationHook for Console {}
+
+impl VirtioTrace for ConsoleHandler {}
 
 #[cfg(test)]
 mod tests {
@@ -492,11 +519,13 @@ mod tests {
         let page = 0_u32;
         console.set_driver_features(page, driver_feature);
         assert_eq!(console.state.driver_features, 0_u64);
+        assert_eq!(console.get_driver_features(page) as u64, 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         console.set_driver_features(page, driver_feature);
         assert_eq!(console.state.driver_features, 0_u64);
+        assert_eq!(console.get_driver_features(page) as u64, 0_u64);
 
         //If both the device feature bit and the front-end driver feature bit are
         //supported at the same time,  this driver feature bit is supported.
@@ -507,6 +536,10 @@ mod tests {
         console.set_driver_features(page, driver_feature);
         assert_eq!(
             console.state.driver_features,
+            (1_u64 << VIRTIO_CONSOLE_F_SIZE)
+        );
+        assert_eq!(
+            console.get_driver_features(page) as u64,
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         console.state.driver_features = 0;
@@ -558,12 +591,12 @@ mod tests {
 
         //Check the configuration that needs to be read
         let offset = 0_u64;
-        let mut read_data: Vec<u8> = vec![0; 8];
-        let expect_data: Vec<u8> = vec![1, 0, 0, 0, 0, 0, 0, 0];
+        let mut read_data: Vec<u8> = vec![0; 12];
+        let expect_data: Vec<u8> = vec![0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(console.read_config(offset, &mut read_data).is_ok(), true);
         assert_eq!(read_data, expect_data);
 
-        let offset = 0_u64;
+        let offset = 4_u64;
         let mut read_data: Vec<u8> = vec![0; 1];
         let expect_data: Vec<u8> = vec![1];
         assert_eq!(console.read_config(offset, &mut read_data).is_ok(), true);

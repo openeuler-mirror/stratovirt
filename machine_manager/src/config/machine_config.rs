@@ -12,10 +12,10 @@
 
 use std::str::FromStr;
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result, ResultExt};
+use super::error::ConfigError;
 use crate::config::{
     CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig, MAX_NODES, MAX_STRING_LENGTH,
 };
@@ -31,7 +31,7 @@ const DEFAULT_MEMSIZE: u64 = 256;
 const MAX_NR_CPUS: u64 = 254;
 const MIN_NR_CPUS: u64 = 1;
 const MAX_MEMSIZE: u64 = 549_755_813_888;
-const MIN_MEMSIZE: u64 = 268_435_456;
+const MIN_MEMSIZE: u64 = 134_217_728;
 pub const M: u64 = 1024 * 1024;
 pub const G: u64 = 1024 * 1024 * 1024;
 
@@ -123,6 +123,23 @@ impl Default for MachineMemConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CpuConfig {
+    pub pmu: PmuConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PmuConfig {
+    On,
+    Off,
+}
+
+impl Default for PmuConfig {
+    fn default() -> Self {
+        PmuConfig::Off
+    }
+}
+
 /// Config struct for machine-config.
 /// Contains some basic Vm config about cpu, memory, name.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,6 +153,7 @@ pub struct MachineConfig {
     pub nr_sockets: u8,
     pub max_cpus: u8,
     pub mem_config: MachineMemConfig,
+    pub cpu_config: CpuConfig,
 }
 
 impl Default for MachineConfig {
@@ -151,6 +169,7 @@ impl Default for MachineConfig {
             nr_sockets: DEFAULT_SOCKETS,
             max_cpus: DEFAULT_MAX_CPUS,
             mem_config: MachineMemConfig::default(),
+            cpu_config: CpuConfig::default(),
         }
     }
 }
@@ -158,7 +177,7 @@ impl Default for MachineConfig {
 impl ConfigCheck for MachineConfig {
     fn check(&self) -> Result<()> {
         if self.mem_config.mem_size < MIN_MEMSIZE || self.mem_config.mem_size > MAX_MEMSIZE {
-            bail!("Memory size must >= 256MiB and <= 512GiB, default unit: MiB, current memory size: {:?} bytes",
+            bail!("Memory size must >= 128MiB and <= 512GiB, default unit: MiB, current memory size: {:?} bytes",
             &self.mem_config.mem_size);
         }
 
@@ -204,13 +223,13 @@ impl VmConfig {
         }
         if let Some(mach_type) = cmd_parser
             .get_value::<MachineType>("")
-            .chain_err(|| "Unrecognized machine type")?
+            .with_context(|| "Unrecognized machine type")?
         {
             self.machine_config.mach_type = mach_type;
         }
         if let Some(mach_type) = cmd_parser
             .get_value::<MachineType>("type")
-            .chain_err(|| "Unrecognized machine type")?
+            .with_context(|| "Unrecognized machine type")?
         {
             self.machine_config.mach_type = mach_type;
         }
@@ -236,7 +255,7 @@ impl VmConfig {
         } else if let Some(mem_size) = cmd_parser.get_value::<String>("size")? {
             memory_unit_conversion(&mem_size)?
         } else {
-            return Err(ErrorKind::FieldIsMissing("size", "memory").into());
+            return Err(anyhow!(ConfigError::FieldIsMissing("size", "memory")));
         };
 
         self.machine_config.mem_config.mem_size = mem;
@@ -263,13 +282,17 @@ impl VmConfig {
             cpu
         } else if let Some(cpu) = cmd_parser.get_value::<u64>("cpus")? {
             if cpu == 0 {
-                return Err(
-                    ErrorKind::IllegalValue("cpu".to_string(), 1, true, MAX_NR_CPUS, true).into(),
-                );
+                return Err(anyhow!(ConfigError::IllegalValue(
+                    "cpu".to_string(),
+                    1,
+                    true,
+                    MAX_NR_CPUS,
+                    true
+                )));
             }
             cpu
         } else {
-            return Err(ErrorKind::FieldIsMissing("cpus", "smp").into());
+            return Err(anyhow!(ConfigError::FieldIsMissing("cpus", "smp")));
         };
 
         let sockets = smp_read_and_check(&cmd_parser, "sockets", 0)?;
@@ -289,36 +312,33 @@ impl VmConfig {
 
         // limit cpu count
         if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&cpu) {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "CPU number".to_string(),
                 MIN_NR_CPUS,
                 true,
                 MAX_NR_CPUS,
                 true,
-            )
-            .into());
+            )));
         }
 
         if !(MIN_NR_CPUS..=MAX_NR_CPUS).contains(&max_cpus) {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "MAX CPU number".to_string(),
                 MIN_NR_CPUS,
                 true,
                 MAX_NR_CPUS,
                 true,
-            )
-            .into());
+            )));
         }
 
         if max_cpus < cpu {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "maxcpus".to_string(),
                 cpu as u64,
                 true,
                 MAX_NR_CPUS,
                 true,
-            )
-            .into());
+            )));
         }
 
         if sockets * dies * clusters * cores * threads != max_cpus {
@@ -336,6 +356,22 @@ impl VmConfig {
         Ok(())
     }
 
+    pub fn add_cpu_feature(&mut self, features: &str) -> Result<()> {
+        let mut cmd_parser = CmdParser::new("cpu");
+        cmd_parser.push("");
+        cmd_parser.push("pmu");
+        cmd_parser.parse(features)?;
+        //Check PMU when actually enabling PMU.
+        if let Some(k) = cmd_parser.get_value::<String>("pmu")? {
+            self.machine_config.cpu_config.pmu = match k.as_ref() {
+                "on" => PmuConfig::On,
+                "off" => PmuConfig::Off,
+                _ => bail!("Invalid PMU option,must be one of \'on\" or \"off\"."),
+            }
+        }
+        Ok(())
+    }
+
     pub fn add_mem_path(&mut self, mem_path: &str) -> Result<()> {
         self.machine_config.mem_config.mem_path = Some(mem_path.replace('\"', ""));
         Ok(())
@@ -350,13 +386,17 @@ impl VmConfig {
     fn get_mem_zone_id(&self, cmd_parser: &CmdParser) -> Result<String> {
         if let Some(id) = cmd_parser.get_value::<String>("id")? {
             if id.len() > MAX_STRING_LENGTH {
-                return Err(
-                    ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into(),
-                );
+                return Err(anyhow!(ConfigError::StringLengthTooLong(
+                    "id".to_string(),
+                    MAX_STRING_LENGTH
+                )));
             }
             Ok(id)
         } else {
-            Err(ErrorKind::FieldIsMissing("id", "memory-backend-ram").into())
+            Err(anyhow!(ConfigError::FieldIsMissing(
+                "id",
+                "memory-backend-ram"
+            )))
         }
     }
 
@@ -365,7 +405,10 @@ impl VmConfig {
             let size = memory_unit_conversion(&mem)?;
             Ok(size)
         } else {
-            Err(ErrorKind::FieldIsMissing("size", "memory-backend-ram").into())
+            Err(anyhow!(ConfigError::FieldIsMissing(
+                "size",
+                "memory-backend-ram"
+            )))
         }
     }
 
@@ -373,35 +416,46 @@ impl VmConfig {
         if let Some(mut host_nodes) = cmd_parser
             .get_value::<IntegerList>("host-nodes")
             .map_err(|_| {
-                ErrorKind::ConvertValueFailed(String::from("u32"), "host-nodes".to_string())
+                anyhow!(ConfigError::ConvertValueFailed(
+                    String::from("u32"),
+                    "host-nodes".to_string()
+                ))
             })?
             .map(|v| v.0.iter().map(|e| *e as u32).collect::<Vec<u32>>())
         {
             host_nodes.sort_unstable();
             if host_nodes[host_nodes.len() - 1] >= MAX_NODES {
-                return Err(ErrorKind::IllegalValue(
+                return Err(anyhow!(ConfigError::IllegalValue(
                     "host_nodes".to_string(),
                     0,
                     true,
                     MAX_NODES as u64,
                     false,
-                )
-                .into());
+                )));
             }
             Ok(Some(host_nodes))
         } else {
-            Err(ErrorKind::FieldIsMissing("host-nodes", "memory-backend-ram").into())
+            Err(anyhow!(ConfigError::FieldIsMissing(
+                "host-nodes",
+                "memory-backend-ram"
+            )))
         }
     }
 
     fn get_mem_zone_policy(&self, cmd_parser: &CmdParser) -> Result<String> {
         if let Some(policy) = cmd_parser.get_value::<String>("policy")? {
             if HostMemPolicy::from(policy.clone()) == HostMemPolicy::NotSupported {
-                return Err(ErrorKind::InvalidParam("policy".to_string(), policy).into());
+                return Err(anyhow!(ConfigError::InvalidParam(
+                    "policy".to_string(),
+                    policy
+                )));
             }
             Ok(policy)
         } else {
-            Err(ErrorKind::FieldIsMissing("policy", "memory-backend-ram").into())
+            Err(anyhow!(ConfigError::FieldIsMissing(
+                "policy",
+                "memory-backend-ram"
+            )))
         }
     }
 
@@ -445,9 +499,13 @@ impl VmConfig {
 fn smp_read_and_check(cmd_parser: &CmdParser, name: &str, default_val: u64) -> Result<u64> {
     if let Some(values) = cmd_parser.get_value::<u64>(name)? {
         if values == 0 {
-            return Err(
-                ErrorKind::IllegalValue(name.to_string(), 1, true, u8::MAX as u64, false).into(),
-            );
+            return Err(anyhow!(ConfigError::IllegalValue(
+                name.to_string(),
+                1,
+                true,
+                u8::MAX as u64,
+                false
+            )));
         }
         Ok(values)
     } else {
@@ -509,7 +567,10 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
             value
                 .parse::<u64>()
                 .map_err(|_| {
-                    ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
+                    anyhow!(ConfigError::ConvertValueFailed(
+                        origin_value.to_string(),
+                        String::from("u64")
+                    ))
                 })?
                 .checked_mul(M),
         )
@@ -522,13 +583,19 @@ fn memory_unit_conversion(origin_value: &str) -> Result<u64> {
             value
                 .parse::<u64>()
                 .map_err(|_| {
-                    ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
+                    anyhow!(ConfigError::ConvertValueFailed(
+                        origin_value.to_string(),
+                        String::from("u64")
+                    ))
                 })?
                 .checked_mul(G),
         )
     } else {
         let size = origin_value.parse::<u64>().map_err(|_| {
-            ErrorKind::ConvertValueFailed(origin_value.to_string(), String::from("u64"))
+            anyhow!(ConfigError::ConvertValueFailed(
+                origin_value.to_string(),
+                String::from("u64")
+            ))
         })?;
 
         let memory_size = size.checked_mul(M);
@@ -541,7 +608,7 @@ fn get_inner<T>(outer: Option<T>) -> Result<T> {
     if let Some(x) = outer {
         Ok(x)
     } else {
-        Err(ErrorKind::IntegerOverflow("-m".to_string()).into())
+        Err(anyhow!(ConfigError::IntegerOverflow("-m".to_string())))
     }
 }
 
@@ -569,6 +636,7 @@ mod tests {
             nr_sockets: 1,
             max_cpus: MIN_NR_CPUS as u8,
             mem_config: memory_config,
+            cpu_config: CpuConfig::default(),
         };
         assert!(machine_config.check().is_ok());
 
@@ -926,5 +994,22 @@ mod tests {
 
         let policy = HostMemPolicy::from(String::from("error"));
         assert!(policy == HostMemPolicy::NotSupported);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn test_cpu_features() {
+        //Test PMU flags
+        let mut vm_config = VmConfig::default();
+        vm_config.add_cpu_feature("host").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        vm_config.add_cpu_feature("host,pmu=off").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        vm_config.add_cpu_feature("pmu=off").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        vm_config.add_cpu_feature("host,pmu=on").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
+        vm_config.add_cpu_feature("pmu=on").unwrap();
+        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
     }
 }

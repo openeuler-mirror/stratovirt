@@ -14,85 +14,23 @@
 //!
 //! Offer snapshot and migration interface for VM.
 
-#[macro_use]
-extern crate error_chain;
-#[macro_use]
-extern crate log;
-
 pub mod general;
 pub mod manager;
 pub mod migration;
 pub mod protocol;
 pub mod snapshot;
 
+use std::time::Duration;
 use std::{net::TcpStream, os::unix::net::UnixStream, thread};
 
-use error_chain::ChainedError;
-
+use anyhow::anyhow;
+pub use anyhow::Result;
+use log::error;
 use machine_manager::qmp::{qmp_schema, Response};
 pub use manager::{MigrationHook, MigrationManager};
 pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
-use std::time::Duration;
-
-pub mod errors {
-    use super::protocol::MigrationStatus;
-
-    error_chain! {
-        links {
-            Util(util::errors::Error, util::errors::ErrorKind);
-            Hypervisor(hypervisor::errors::Error, hypervisor::errors::ErrorKind);
-        }
-        foreign_links {
-            Io(std::io::Error);
-            Ioctl(kvm_ioctls::Error);
-            Json(serde_json::Error);
-        }
-        errors {
-            VersionNotFit(compat_version: u32, current_version: u32) {
-                display("Migration compat_version {} higher than current version {}", compat_version, current_version)
-            }
-            HeaderItemNotFit(item: String) {
-                display("{} for snapshot file / migration stream is not fit", item)
-            }
-            InvalidStatusTransfer(status1: MigrationStatus, status2: MigrationStatus) {
-                display("Failed to transfer migration status from {} to {}.", status1, status2)
-            }
-            FromBytesError(name: &'static str) {
-                display("Can't restore structure from raw slice: {}", name)
-            }
-            GetGicRegsError(reg: &'static str, ret: String) {
-                display("Failed to get GIC {} register: {}", reg, ret)
-            }
-            SetGicRegsError(reg: &'static str, ret: String) {
-                display("Failed to set GIC {} register: {}", reg, ret)
-            }
-            SaveVmMemoryErr(e: String) {
-                display("Failed to save vm memory: {}", e)
-            }
-            RestoreVmMemoryErr(e: String) {
-                display("Failed to restore vm memory: {}", e)
-            }
-            SendVmMemoryErr(e: String) {
-                display("Failed to send vm memory: {}", e)
-            }
-            RecvVmMemoryErr(e: String) {
-                display("Failed to receive vm memory: {}", e)
-            }
-            ResponseErr {
-                display("Response error")
-            }
-            MigrationStatusErr(source: String, destination: String) {
-                display("Migration status mismatch: source {}, destination {}.", source, destination)
-            }
-            MigrationConfigErr(config_type: String, source: String, destination: String) {
-                display("Migration config {} mismatch: source {}, destination {}.", config_type, source, destination)
-            }
-            InvalidSnapshotPath {
-                display("Invalid snapshot path for restoring snapshot")
-            }
-        }
-    }
-}
+pub mod error;
+pub use error::MigrationError;
 
 /// Start to snapshot VM.
 ///
@@ -101,12 +39,8 @@ pub mod errors {
 /// * `path` - snapshot dir path. If path dir not exists, will create it.
 pub fn snapshot(path: String) -> Response {
     if let Err(e) = MigrationManager::save_snapshot(&path) {
-        error!(
-            "Failed to migrate to path \'{:?}\': {}",
-            path,
-            e.display_chain()
-        );
-        let _ = MigrationManager::set_status(MigrationStatus::Failed).map_err(|e| error!("{}", e));
+        error!("Failed to migrate to path \'{:?}\': {:?}", path, e);
+        let _ = MigrationManager::set_status(MigrationStatus::Failed).map_err(|e| anyhow!("{}", e));
         return Response::create_error_response(
             qmp_schema::QmpErrorClass::GenericError(e.to_string()),
             None,
@@ -128,10 +62,10 @@ pub fn migration_unix_mode(path: String) -> Response {
             let time_out = Some(Duration::from_secs(30));
             _sock
                 .set_read_timeout(time_out)
-                .unwrap_or_else(|e| error!("{}", e));
+                .unwrap_or_else(|e| error!("{:?}", e));
             _sock
                 .set_write_timeout(time_out)
-                .unwrap_or_else(|e| error!("{}", e));
+                .unwrap_or_else(|e| error!("{:?}", e));
             _sock
         }
         Err(e) => {
@@ -146,7 +80,7 @@ pub fn migration_unix_mode(path: String) -> Response {
         .name("unix_migrate".to_string())
         .spawn(move || {
             if let Err(e) = MigrationManager::send_migration(&mut socket) {
-                error!("Failed to send migration: {}", e.display_chain());
+                error!("Failed to send migration: {:?}", e);
                 let _ = MigrationManager::recover_from_migration();
                 let _ = MigrationManager::set_status(MigrationStatus::Failed)
                     .map_err(|e| error!("{}", e));
@@ -192,7 +126,7 @@ pub fn migration_tcp_mode(path: String) -> Response {
         .name("tcp_migrate".to_string())
         .spawn(move || {
             if let Err(e) = MigrationManager::send_migration(&mut socket) {
-                error!("Failed to send migration: {}", e.display_chain());
+                error!("Failed to send migration: {:?}", e);
                 let _ = MigrationManager::recover_from_migration();
                 let _ = MigrationManager::set_status(MigrationStatus::Failed)
                     .map_err(|e| error!("{}", e));

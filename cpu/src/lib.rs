@@ -34,69 +34,24 @@ mod aarch64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        foreign_links {
-            Signal(vmm_sys_util::errno::Error);
-        }
-        errors {
-            CreateVcpu(err_info: String) {
-                display("Failed to create kvm vcpu: {}!", err_info)
-            }
-            RealizeVcpu(err_info: String) {
-                display("Failed to configure kvm vcpu: {}!", err_info)
-            }
-            StartVcpu(err_info: String) {
-                display("Failed to starting kvm vcpu: {}!", err_info)
-            }
-            StopVcpu(err_info: String) {
-                display("Failed to stopping kvm vcpu: {}!", err_info)
-            }
-            KickVcpu(err_info: String) {
-                display("Failed to kick kvm vcpu: {}!", err_info)
-            }
-            DestroyVcpu(err_info: String) {
-                display("Failed to destroy kvm vcpu: {}!", err_info)
-            }
-            VcpuHltEvent(cpu_id: u8) {
-                display("CPU {}/KVM halted!", cpu_id)
-            }
-            VcpuExitReason(cpu_id: u8, err_info: String) {
-                display("CPU {}/KVM received an unexpected exit reason: {}!", cpu_id, err_info)
-            }
-            UnhandledKvmExit(cpu_id: u8) {
-                display("CPU {}/KVM received an unhandled kvm exit event!", cpu_id)
-            }
-            VcpuLocalThreadNotPresent {
-                display("Vcpu not present in local thread.")
-            }
-            NoMachineInterface {
-                display("No Machine Interface saved in CPU")
-            }
-            #[cfg(target_arch = "aarch64")]
-            GetSysRegister(err_info: String) {
-                description("Get sys Register error")
-                display("Failed to get system register: {}!", err_info)
-            }
-            #[cfg(target_arch = "aarch64")]
-            SetSysRegister(err_info: String) {
-                description("Set sys Register error")
-                display("Failed to Set system register: {}!", err_info)
-            }
-        }
-    }
-}
+pub mod error;
+use anyhow::{anyhow, Context, Result};
+pub use error::CpuError;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUCaps as CPUCaps;
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::ArmCPUFeatures as CPUFeatures;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUState as ArchCPU;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUTopology as CPUTopology;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::PMU_INTR;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::PPI_BASE;
 use machine_manager::qmp::qmp_schema;
 #[cfg(target_arch = "x86_64")]
 use x86_64::caps::X86CPUCaps as CPUCaps;
@@ -121,8 +76,6 @@ use machine_manager::machine::MachineInterface;
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
-use errors::{ErrorKind, Result, ResultExt};
-
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
 #[cfg(not(target_env = "musl"))]
@@ -133,6 +86,19 @@ const VCPU_TASK_SIGNAL: i32 = 35;
 const VCPU_RESET_SIGNAL: i32 = 35;
 #[cfg(target_env = "musl")]
 const VCPU_RESET_SIGNAL: i32 = 36;
+
+/// Watch `0x3ff` IO port to record the magic value trapped from guest kernel.
+#[cfg(all(target_arch = "x86_64", feature = "boot_time"))]
+const MAGIC_SIGNAL_GUEST_BOOT: u64 = 0x3ff;
+/// Watch Uart MMIO region to record the magic value trapped from guest kernel.
+#[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
+const MAGIC_SIGNAL_GUEST_BOOT: u64 = 0x9000f00;
+/// The boot start value can be verified before kernel start.
+#[cfg(feature = "boot_time")]
+const MAGIC_VALUE_SIGNAL_GUEST_BOOT_START: u8 = 0x01;
+/// The boot complete value can be verified before init guest userspace.
+#[cfg(feature = "boot_time")]
+const MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE: u8 = 0x02;
 
 /// State for `CPU` lifecycle.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -155,7 +121,12 @@ pub enum CpuLifecycleState {
 #[allow(clippy::upper_case_acronyms)]
 pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
-    fn realize(&self, boot: &CPUBootConfig, topology: &CPUTopology) -> Result<()>;
+    fn realize(
+        &self,
+        boot: &CPUBootConfig,
+        topology: &CPUTopology,
+        #[cfg(target_arch = "aarch64")] features: &CPUFeatures,
+    ) -> Result<()>;
 
     /// Start `CPU` thread and run virtual CPU in kvm.
     ///
@@ -290,25 +261,37 @@ impl CPU {
 }
 
 impl CPUInterface for CPU {
-    fn realize(&self, boot: &CPUBootConfig, topology: &CPUTopology) -> Result<()> {
+    fn realize(
+        &self,
+        boot: &CPUBootConfig,
+        topology: &CPUTopology,
+        #[cfg(target_arch = "aarch64")] config: &CPUFeatures,
+    ) -> Result<()> {
+        trace_cpu_boot_config(boot);
         let (cpu_state, _) = &*self.state;
         if *cpu_state.lock().unwrap() != CpuLifecycleState::Created {
-            return Err(
-                ErrorKind::RealizeVcpu(format!("VCPU{} may has realized.", self.id())).into(),
-            );
+            return Err(anyhow!(CpuError::RealizeVcpu(format!(
+                "VCPU{} may has realized.",
+                self.id()
+            ))));
         }
 
         self.arch_cpu
             .lock()
             .unwrap()
-            .set_boot_config(&self.fd, boot)
-            .chain_err(|| "Failed to realize arch cpu")?;
+            .set_boot_config(
+                &self.fd,
+                boot,
+                #[cfg(target_arch = "aarch64")]
+                config,
+            )
+            .with_context(|| "Failed to realize arch cpu")?;
 
         self.arch_cpu
             .lock()
             .unwrap()
             .set_cpu_topology(topology)
-            .chain_err(|| "Failed to realize arch cpu")?;
+            .with_context(|| "Failed to realize arch cpu")?;
 
         self.boot_state.lock().unwrap().set(&self.arch_cpu);
         Ok(())
@@ -332,7 +315,9 @@ impl CPUInterface for CPU {
     fn start(cpu: Arc<CPU>, thread_barrier: Arc<Barrier>, paused: bool) -> Result<()> {
         let (cpu_state, _) = &*cpu.state;
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
-            return Err(ErrorKind::StartVcpu("Cpu is already running".to_string()).into());
+            return Err(anyhow!(CpuError::StartVcpu(
+                "Cpu is already running".to_string()
+            )));
         }
         if paused {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
@@ -347,13 +332,15 @@ impl CPUInterface for CPU {
             .spawn(move || {
                 if let Err(e) = cpu_thread_worker.handle(thread_barrier) {
                     error!(
-                        "Some error occurred in cpu{} thread: {}",
-                        cpu_thread_worker.thread_cpu.id,
-                        error_chain::ChainedError::display_chain(&e)
+                        "{}",
+                        format!(
+                            "Some error occurred in cpu{} thread: {:?}",
+                            cpu_thread_worker.thread_cpu.id, e
+                        )
                     );
                 }
             })
-            .chain_err(|| format!("Failed to create thread for CPU {}/KVM", local_cpu.id()))?;
+            .with_context(|| format!("Failed to create thread for CPU {}/KVM", local_cpu.id()))?;
         local_cpu.set_task(Some(handle));
         Ok(())
     }
@@ -363,7 +350,7 @@ impl CPUInterface for CPU {
         match task.as_ref() {
             Some(thread) => thread
                 .kill(VCPU_RESET_SIGNAL)
-                .chain_err(|| ErrorKind::KickVcpu("Fail to reset vcpu".to_string())),
+                .with_context(|| anyhow!(CpuError::KickVcpu("Fail to reset vcpu".to_string()))),
             None => {
                 warn!("VCPU thread not started, no need to reset");
                 Ok(())
@@ -376,7 +363,7 @@ impl CPUInterface for CPU {
         match task.as_ref() {
             Some(thread) => thread
                 .kill(VCPU_TASK_SIGNAL)
-                .chain_err(|| ErrorKind::KickVcpu("Fail to kick vcpu".to_string())),
+                .with_context(|| anyhow!(CpuError::KickVcpu("Fail to kick vcpu".to_string()))),
             None => {
                 warn!("VCPU thread not started, no need to kick");
                 Ok(())
@@ -396,7 +383,7 @@ impl CPUInterface for CPU {
         match task.as_ref() {
             Some(thread) => {
                 if let Err(e) = thread.kill(VCPU_TASK_SIGNAL) {
-                    return Err(ErrorKind::StopVcpu(format!("{}", e)).into());
+                    return Err(anyhow!(CpuError::StopVcpu(format!("{:?}", e))));
                 }
             }
             None => {
@@ -419,8 +406,9 @@ impl CPUInterface for CPU {
         let (cpu_state, cvar) = &*self.state;
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Stopping;
-        } else {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Stopped {
+            *cpu_state.lock().unwrap() = CpuLifecycleState::Nothing;
+            return Ok(());
         }
 
         self.kick()?;
@@ -434,7 +422,10 @@ impl CPUInterface for CPU {
             *cpu_state = CpuLifecycleState::Nothing;
             Ok(())
         } else {
-            Err(ErrorKind::DestroyVcpu(format!("VCPU still in {:?} state", *cpu_state)).into())
+            Err(anyhow!(CpuError::DestroyVcpu(format!(
+                "VCPU still in {:?} state",
+                *cpu_state
+            ))))
         }
     }
 
@@ -445,7 +436,7 @@ impl CPUInterface for CPU {
         if let Some(vm) = self.vm.upgrade() {
             vm.lock().unwrap().destroy();
         } else {
-            return Err(ErrorKind::NoMachineInterface.into());
+            return Err(anyhow!(CpuError::NoMachineInterface));
         }
 
         if QmpChannel::is_connected() {
@@ -463,7 +454,7 @@ impl CPUInterface for CPU {
         if let Some(vm) = self.vm.upgrade() {
             vm.lock().unwrap().reset();
         } else {
-            return Err(ErrorKind::NoMachineInterface.into());
+            return Err(anyhow!(CpuError::NoMachineInterface));
         }
 
         if QmpChannel::is_connected() {
@@ -478,7 +469,7 @@ impl CPUInterface for CPU {
         let vm = if let Some(vm) = self.vm.upgrade() {
             vm
         } else {
-            return Err(ErrorKind::NoMachineInterface.into());
+            return Err(anyhow!(CpuError::NoMachineInterface));
         };
 
         match self.fd.run() {
@@ -489,18 +480,24 @@ impl CPUInterface for CPU {
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::IoOut(addr, data) => {
+                    #[cfg(feature = "boot_time")]
+                    capture_boot_signal(addr as u64, data);
+
                     vm.lock().unwrap().pio_out(u64::from(addr), data);
                 }
                 VcpuExit::MmioRead(addr, data) => {
                     vm.lock().unwrap().mmio_read(addr, data);
                 }
                 VcpuExit::MmioWrite(addr, data) => {
+                    #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
+                    capture_boot_signal(addr, data);
+
                     vm.lock().unwrap().mmio_write(addr, data);
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Hlt => {
                     info!("Vcpu{} received KVM_EXIT_HLT signal", self.id());
-                    return Err(ErrorKind::VcpuHltEvent(self.id()).into());
+                    return Err(anyhow!(CpuError::VcpuHltEvent(self.id())));
                 }
                 #[cfg(target_arch = "x86_64")]
                 VcpuExit::Shutdown => {
@@ -517,14 +514,14 @@ impl CPUInterface for CPU {
                             self.id()
                         );
                         self.guest_shutdown()
-                            .chain_err(|| "Some error occurred in guest shutdown")?;
+                            .with_context(|| "Some error occurred in guest shutdown")?;
                     } else if event == kvm_bindings::KVM_SYSTEM_EVENT_RESET {
                         info!(
                             "Vcpu{} received an KVM_SYSTEM_EVENT_RESET signal",
                             self.id()
                         );
                         self.guest_reset()
-                            .chain_err(|| "Some error occurred in guest reset")?;
+                            .with_context(|| "Some error occurred in guest reset")?;
                         return Ok(true);
                     } else {
                         error!(
@@ -546,7 +543,10 @@ impl CPUInterface for CPU {
                     return Ok(false);
                 }
                 r => {
-                    return Err(ErrorKind::VcpuExitReason(self.id(), format!("{:?}", r)).into());
+                    return Err(anyhow!(CpuError::VcpuExitReason(
+                        self.id(),
+                        format!("{:?}", r)
+                    )));
                 }
             },
             Err(ref e) => {
@@ -556,7 +556,7 @@ impl CPUInterface for CPU {
                         self.fd.set_kvm_immediate_exit(0);
                     }
                     _ => {
-                        return Err(ErrorKind::UnhandledKvmExit(self.id()).into());
+                        return Err(anyhow!(CpuError::UnhandledKvmExit(self.id())));
                     }
                 };
             }
@@ -597,7 +597,7 @@ impl CPUThreadWorker {
                 func(&local_thread_vcpu.thread_cpu);
                 Ok(())
             } else {
-                Err(ErrorKind::VcpuLocalThreadNotPresent.into())
+                Err(anyhow!(CpuError::VcpuLocalThreadNotPresent))
             }
         })
     }
@@ -623,7 +623,6 @@ impl CPUThreadWorker {
                         ) {
                             error!("Failed to reset vcpu state: {}", e.to_string())
                         }
-                        fence(Ordering::Release)
                     });
                 }
                 _ => {}
@@ -631,9 +630,9 @@ impl CPUThreadWorker {
         }
 
         register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
-            .chain_err(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
+            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
         register_signal_handler(VCPU_RESET_SIGNAL, handle_signal)
-            .chain_err(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
+            .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
 
         Ok(())
     }
@@ -672,7 +671,10 @@ impl CPUThreadWorker {
     fn handle(&self, thread_barrier: Arc<Barrier>) -> Result<()> {
         self.init_local_thread_vcpu();
         if let Err(e) = Self::init_signals() {
-            error!("Failed to init cpu{} signal:{}", self.thread_cpu.id, e);
+            error!(
+                "{}",
+                format!("Failed to init cpu{} signal:{:?}", self.thread_cpu.id, e)
+            );
         }
 
         self.thread_cpu.set_tid();
@@ -682,7 +684,7 @@ impl CPUThreadWorker {
         #[cfg(not(test))]
         self.thread_cpu
             .reset()
-            .chain_err(|| "Failed to reset for cpu register state")?;
+            .with_context(|| "Failed to reset for cpu register state")?;
 
         // Wait for all vcpu to complete the running
         // environment initialization.
@@ -694,7 +696,7 @@ impl CPUThreadWorker {
             if !self
                 .thread_cpu
                 .kvm_vcpu_exec()
-                .chain_err(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
+                .with_context(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
             {
                 break;
             }
@@ -810,6 +812,23 @@ impl CpuTopology {
             cluster_id: Some(_clusterid as isize),
             core_id: Some(coreid as isize),
             thread_id: Some(threadid as isize),
+        }
+    }
+}
+
+fn trace_cpu_boot_config(cpu_boot_config: &CPUBootConfig) {
+    util::ftrace!(trace_CPU_boot_config, "{:#?}", cpu_boot_config);
+}
+
+/// Capture the boot signal that trap from guest kernel, and then record
+/// kernel boot timestamp.
+#[cfg(feature = "boot_time")]
+fn capture_boot_signal(addr: u64, data: &[u8]) {
+    if addr == MAGIC_SIGNAL_GUEST_BOOT {
+        if data[0] == MAGIC_VALUE_SIGNAL_GUEST_BOOT_START {
+            info!("Kernel starts to boot!");
+        } else if data[0] == MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE {
+            info!("Kernel boot complete!");
         }
     }
 }

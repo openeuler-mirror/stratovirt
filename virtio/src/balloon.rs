@@ -19,10 +19,11 @@ use std::{
     time::Duration,
 };
 
+use crate::report_virtio_error;
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use error_chain::{bail, ChainedError};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use machine_manager::{
     config::BalloonConfig, event, event_loop::EventLoop, qmp::qmp_schema::BalloonInfo,
@@ -34,15 +35,15 @@ use util::{
     loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
-    num_ops::{read_u32, round_down, write_u32},
+    num_ops::{read_u32, round_down},
     seccomp::BpfRule,
     unix::host_page_size,
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use super::{
-    errors::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
+    error::*, virtio_has_feature, Element, Queue, VirtioDevice, VirtioInterrupt,
+    VirtioInterruptType, VirtioTrace, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BALLOON,
 };
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
@@ -61,7 +62,7 @@ static mut BALLOON_DEV: Option<Arc<Mutex<Balloon>>> = None;
 
 /// IO vector, used to find memory segments.
 #[derive(Clone, Copy, Default)]
-struct Iovec {
+struct GuestIovec {
     /// Base address of memory.
     iov_base: GuestAddress,
     /// Length of memory segments.
@@ -71,15 +72,15 @@ struct Iovec {
 /// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
 #[derive(Copy, Clone, Default)]
 struct VirtioBalloonConfig {
-    /// Number of pages host wants Guest to give up.
+    /// The target page numbers of balloon device.
     #[allow(dead_code)]
     pub num_pages: u32,
-    /// Number of pages we've actually got in balloon.
+    /// Number of pages we've actually got in balloon device.
     #[allow(dead_code)]
     pub actual: u32,
 }
 
-impl ByteCode for Iovec {}
+impl ByteCode for GuestIovec {}
 impl ByteCode for VirtioBalloonConfig {}
 
 /// Bitmap for balloon. It is used if the host page size is bigger than 4k.
@@ -107,7 +108,7 @@ impl BalloonedPageBitmap {
         match self.bitmap.count_front_bits(bits as usize) {
             Ok(nr) => nr == bits as usize,
             Err(ref e) => {
-                error!("Failed to count bits: {}", e);
+                error!("Failed to count bits: {:?}", e);
                 false
             }
         }
@@ -124,7 +125,7 @@ impl BalloonedPageBitmap {
 /// * `offset` - Offset.
 fn iov_to_buf<T: ByteCode>(
     address_space: &Arc<AddressSpace>,
-    &iov: &Iovec,
+    &iov: &GuestIovec,
     offset: u64,
 ) -> Option<T> {
     let obj_len = std::mem::size_of::<T>() as u64;
@@ -135,10 +136,7 @@ fn iov_to_buf<T: ByteCode>(
     match address_space.read_object::<T>(GuestAddress(iov.iov_base.raw_value() + offset)) {
         Ok(dat) => Some(dat),
         Err(ref e) => {
-            error!(
-                "Read virtioqueue failed: {}",
-                error_chain::ChainedError::display_chain(e)
-            );
+            error!("Read virtioqueue failed: {:?}", e);
             None
         }
     }
@@ -154,7 +152,7 @@ fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int
         };
         let e = std::io::Error::last_os_error();
         error!(
-            "Mark memory address: {} to {} failed: {}",
+            "Mark memory address: {} to {} failed: {:?}",
             addr as u64, evt_type, e
         );
     }
@@ -165,7 +163,7 @@ struct Request {
     /// Count of elements.
     elem_cnt: u32,
     /// The data which is both readable and writable.
-    iovec: Vec<Iovec>,
+    iovec: Vec<GuestIovec>,
 }
 
 impl Request {
@@ -188,10 +186,10 @@ impl Request {
             &elem.out_iovec
         };
         if iovec.is_empty() {
-            return Err(ErrorKind::ElementEmpty.into());
+            return Err(anyhow!(VirtioError::ElementEmpty));
         }
         for elem_iov in iovec {
-            request.iovec.push(Iovec {
+            request.iovec.push(GuestIovec {
                 iov_base: elem_iov.addr,
                 iov_len: elem_iov.len as u64,
             });
@@ -212,8 +210,11 @@ impl Request {
         address_space: &Arc<AddressSpace>,
         mem: &Arc<Mutex<BlnMemInfo>>,
     ) {
-        let advice = if req_type {
+        let mem_share = mem.lock().unwrap().mem_share();
+        let advice = if req_type && !mem_share {
             libc::MADV_DONTNEED
+        } else if req_type {
+            libc::MADV_REMOVE
         } else {
             libc::MADV_WILLNEED
         };
@@ -239,7 +240,11 @@ impl Request {
             }
             hvaset.sort_by_key(|&b| Reverse(b));
             let host_page_size = host_page_size();
-            if host_page_size == BALLOON_PAGE_SIZE {
+            // If host_page_size equals BALLOON_PAGE_SIZE, we can directly call the
+            // madvise function without any problem. And if the advice is MADV_WILLNEED,
+            // we just hint the whole host page it lives on, since we can't do anything
+            // smaller.
+            if host_page_size == BALLOON_PAGE_SIZE || advice == libc::MADV_WILLNEED {
                 while let Some(hva) = hvaset.pop() {
                     if last_addr == 0 {
                         free_len += 1;
@@ -289,7 +294,7 @@ impl Request {
                         host_page_bitmap.set_bit((hva % host_page_size) / BALLOON_PAGE_SIZE)
                     {
                         error!(
-                            "Failed to set bit with index: {} :{}",
+                            "Failed to set bit with index: {} :{:?}",
                             (hva % host_page_size) / BALLOON_PAGE_SIZE,
                             e
                         );
@@ -310,9 +315,14 @@ impl Request {
 
     fn release_pages(&self, mem: &Arc<Mutex<BlnMemInfo>>) {
         for iov in self.iovec.iter() {
+            let advice = if mem.lock().unwrap().mem_share() {
+                libc::MADV_REMOVE
+            } else {
+                libc::MADV_DONTNEED
+            };
             let gpa: GuestAddress = iov.iov_base;
             let hva = match mem.lock().unwrap().get_host_address(gpa) {
-                Some(addr) => (addr),
+                Some(addr) => addr,
                 None => {
                     error!("Can not get host address, gpa: {}", gpa.raw_value());
                     continue;
@@ -321,7 +331,7 @@ impl Request {
             memory_advise(
                 hva as *const libc::c_void as *mut _,
                 iov.iov_len as usize,
-                libc::MADV_DONTNEED,
+                advice,
             );
         }
     }
@@ -343,12 +353,16 @@ struct BlnMemoryRegion {
 
 struct BlnMemInfo {
     regions: Mutex<Vec<BlnMemoryRegion>>,
+    enabled: bool,
+    mem_share: bool,
 }
 
 impl BlnMemInfo {
-    fn new() -> BlnMemInfo {
+    fn new(mem_share: bool) -> BlnMemInfo {
         BlnMemInfo {
             regions: Mutex::new(Vec::new()),
+            enabled: false,
+            mem_share,
         }
     }
 
@@ -433,6 +447,11 @@ impl BlnMemInfo {
         }
         size
     }
+
+    /// Get Balloon memory type, shared or private.
+    fn mem_share(&self) -> bool {
+        self.mem_share
+    }
 }
 
 impl Listener for BlnMemInfo {
@@ -440,12 +459,24 @@ impl Listener for BlnMemInfo {
         0
     }
 
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    fn disable(&mut self) {
+        self.enabled = false;
+    }
+
     fn handle_request(
         &self,
         range: Option<&FlatRange>,
         _evtfd: Option<&RegionIoEventFd>,
         req_type: ListenerReqType,
-    ) -> std::result::Result<(), address_space::errors::Error> {
+    ) -> Result<(), anyhow::Error> {
         match req_type {
             ListenerReqType::AddRegion => {
                 let fr = range.unwrap();
@@ -484,7 +515,7 @@ struct BalloonIoHandler {
     /// Reporting EventFd.
     report_evt: Option<EventFd>,
     /// EventFd for device deactivate
-    deactivate_evt: RawFd,
+    deactivate_evt: EventFd,
     /// The interrupt call back function.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Balloon Memory information.
@@ -505,55 +536,77 @@ impl BalloonIoHandler {
     /// if `req_type` is `BALLOON_INFLATE_EVENT`, then inflate the balloon, otherwise, deflate the balloon.
     fn process_balloon_queue(&mut self, req_type: bool) -> Result<()> {
         let queue = if req_type {
+            self.trace_request("Balloon".to_string(), "to inflate".to_string());
             &self.inf_queue
         } else {
+            self.trace_request("Balloon".to_string(), "to deflate".to_string());
             &self.def_queue
         };
         let mut locked_queue = queue.lock().unwrap();
-        while let Ok(elem) = locked_queue
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-        {
+        loop {
+            let elem = locked_queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for process baloon queue")?;
+
+            if elem.desc_num == 0 {
+                break;
+            }
             let req = Request::parse(&elem, OUT_IOVEC)
-                .chain_err(|| "Fail to parse available descriptor chain")?;
+                .with_context(|| "Fail to parse available descriptor chain")?;
             if !self.mem_info.lock().unwrap().has_huge_page() {
                 req.mark_balloon_page(req_type, &self.mem_space, &self.mem_info);
             }
             locked_queue
                 .vring
                 .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
-                .chain_err(|| "Failed to add balloon response into used queue")?;
+                .with_context(|| "Failed to add balloon response into used queue")?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
+                .with_context(|| {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "balloon",
+                        VirtioInterruptType::Vring
+                    ))
+                })?
         }
 
-        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
-            .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
         Ok(())
     }
 
     fn reporting_evt_handler(&mut self) -> Result<()> {
         let queue = &self.report_queue;
         if queue.is_none() {
-            return Err(ErrorKind::VirtQueueIsNone.into());
+            return Err(anyhow!(VirtioError::VirtQueueIsNone));
         }
         let unwraped_queue = queue.as_ref().unwrap();
         let mut locked_queue = unwraped_queue.lock().unwrap();
-        while let Ok(elem) = locked_queue
-            .vring
-            .pop_avail(&self.mem_space, self.driver_features)
-        {
+        loop {
+            let elem = locked_queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)
+                .with_context(|| "Failed to pop avail ring for reporting free pages")?;
+
+            if elem.desc_num == 0 {
+                break;
+            }
             let req = Request::parse(&elem, IN_IOVEC)
-                .chain_err(|| "Fail to parse available descriptor chain")?;
+                .with_context(|| "Fail to parse available descriptor chain")?;
             if !self.mem_info.lock().unwrap().has_huge_page() {
                 req.release_pages(&self.mem_info);
             }
             locked_queue
                 .vring
                 .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
-                .chain_err(|| "Failed to add balloon response into used queue")?;
-
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue))
-                .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))?;
+                .with_context(|| "Failed to add balloon response into used queue")?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
+                .with_context(|| {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "balloon",
+                        VirtioInterruptType::Vring
+                    ))
+                })?;
         }
+
         Ok(())
     }
 
@@ -576,7 +629,7 @@ impl BalloonIoHandler {
         let notifiers = vec![
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.deactivate_evt,
+                self.deactivate_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -634,12 +687,14 @@ impl EventNotifierHelper for BalloonIoHandler {
         let cloned_balloon_io = balloon_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(e) = cloned_balloon_io
-                .lock()
-                .unwrap()
-                .process_balloon_queue(BALLOON_INFLATE_EVENT)
-            {
-                error!("Failed to inflate balloon: {}", e.display_chain());
+            let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+            if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_INFLATE_EVENT) {
+                error!("Failed to inflate balloon: {:?}", e);
+                report_virtio_error(
+                    locked_balloon_io.interrupt_cb.clone(),
+                    locked_balloon_io.driver_features,
+                    Some(&locked_balloon_io.deactivate_evt),
+                );
             };
             None
         });
@@ -652,12 +707,14 @@ impl EventNotifierHelper for BalloonIoHandler {
         let cloned_balloon_io = balloon_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(e) = cloned_balloon_io
-                .lock()
-                .unwrap()
-                .process_balloon_queue(BALLOON_DEFLATE_EVENT)
-            {
-                error!("Failed to deflate balloon: {}", e.display_chain());
+            let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+            if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_DEFLATE_EVENT) {
+                error!("Failed to deflate balloon: {:?}", e);
+                report_virtio_error(
+                    locked_balloon_io.interrupt_cb.clone(),
+                    locked_balloon_io.driver_features,
+                    Some(&locked_balloon_io.deactivate_evt),
+                );
             };
             None
         });
@@ -671,8 +728,14 @@ impl EventNotifierHelper for BalloonIoHandler {
             let cloned_balloon_io = balloon_io.clone();
             let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
-                if let Err(e) = cloned_balloon_io.lock().unwrap().reporting_evt_handler() {
-                    error!("Failed to report free pages: {}", e.display_chain());
+                let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+                if let Err(e) = locked_balloon_io.reporting_evt_handler() {
+                    error!("Failed to report free pages: {:?}", e);
+                    report_virtio_error(
+                        locked_balloon_io.interrupt_cb.clone(),
+                        locked_balloon_io.driver_features,
+                        Some(&locked_balloon_io.deactivate_evt),
+                    );
                 }
                 None
             });
@@ -686,7 +749,7 @@ impl EventNotifierHelper for BalloonIoHandler {
             Some(cloned_balloon_io.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(build_event_notifier(
-            locked_balloon_io.deactivate_evt,
+            locked_balloon_io.deactivate_evt.as_raw_fd(),
             handler,
         ));
 
@@ -720,9 +783,9 @@ pub struct Balloon {
     device_features: u64,
     /// Driver features.
     driver_features: u64,
-    /// Actual memory pages.
+    /// Actual memory pages of balloon device.
     actual: Arc<AtomicU32>,
-    /// Target memory pages.
+    /// Target memory pages of balloon device.
     num_pages: u32,
     /// Interrupt callback function.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
@@ -742,7 +805,7 @@ impl Balloon {
     /// # Arguments
     ///
     /// * `bln_cfg` - Balloon configuration.
-    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>) -> Balloon {
+    pub fn new(bln_cfg: &BalloonConfig, mem_space: Arc<AddressSpace>, mem_share: bool) -> Balloon {
         let mut device_features = 1u64 << VIRTIO_F_VERSION_1;
         if bln_cfg.deflate_on_oom {
             device_features |= 1u64 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM;
@@ -757,7 +820,7 @@ impl Balloon {
             actual: Arc::new(AtomicU32::new(0)),
             num_pages: 0u32,
             interrupt_cb: None,
-            mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
+            mem_info: Arc::new(Mutex::new(BlnMemInfo::new(mem_share))),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
@@ -778,10 +841,16 @@ impl Balloon {
     /// Notify configuration changes to VM.
     fn signal_config_change(&self) -> Result<()> {
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Config, None)
-                .chain_err(|| ErrorKind::InterruptTrigger("balloon", VirtioInterruptType::Vring))
+            interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "balloon",
+                    VirtioInterruptType::Vring
+                ))
+            })
         } else {
-            Err(ErrorKind::DeviceNotActivated("balloon".to_string()).into())
+            Err(anyhow!(VirtioError::DeviceNotActivated(
+                "balloon".to_string()
+            )))
         }
     }
 
@@ -797,11 +866,11 @@ impl Balloon {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
         }
         let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let current_ram_size =
+        let address_space_ram_size =
             (self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
-        let vm_target = cmp::min(target, current_ram_size);
-        self.num_pages = current_ram_size - vm_target;
-        self.signal_config_change().chain_err(|| {
+        let vm_target = cmp::min(target, address_space_ram_size);
+        self.num_pages = address_space_ram_size - vm_target;
+        self.signal_config_change().with_context(|| {
             "Failed to notify about configuration change after setting balloon memory"
         })?;
         let msg = BalloonInfo {
@@ -825,10 +894,9 @@ impl Balloon {
 impl VirtioDevice for Balloon {
     /// Realize a balloon device.
     fn realize(&mut self) -> Result<()> {
-        self.mem_info = Arc::new(Mutex::new(BlnMemInfo::new()));
         self.mem_space
             .register_listener(self.mem_info.clone())
-            .chain_err(|| "Failed to register memory listener defined by balloon device.")?;
+            .with_context(|| "Failed to register memory listener defined by balloon device.")?;
         Ok(())
     }
 
@@ -863,13 +931,12 @@ impl VirtioDevice for Balloon {
     /// * `page` - Selector of feature.
     /// * `value` - Value to be set.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.device_features;
-        if unrequested_features != 0 {
-            warn!("Received acknowledge request for unknown feature: {:x}", v);
-            v &= !unrequested_features;
-        }
-        self.driver_features |= v;
+        self.driver_features = self.checked_driver_features(page, value);
+    }
+
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.driver_features, features_select)
     }
 
     /// Read configuration.
@@ -883,17 +950,19 @@ impl VirtioDevice for Balloon {
             num_pages: self.num_pages,
             actual: self.actual.load(Ordering::Acquire),
         };
-        if offset != 0 {
-            return Err(ErrorKind::IncorrectOffset(0, offset).into());
+
+        let config_len = size_of::<VirtioBalloonConfig>() as u64;
+        let data_len = data.len() as u64;
+        if offset + data_len > config_len {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-        data.write_all(
-            &new_config.as_bytes()[offset as usize
-                ..cmp::min(
-                    offset as usize + data.len(),
-                    size_of::<VirtioBalloonConfig>(),
-                )],
-        )
-        .chain_err(|| "Failed to write data to 'data' while reading balloon config")?;
+
+        if let Some(end) = offset.checked_add(data_len) {
+            data.write_all(
+                &new_config.as_bytes()[offset as usize..cmp::min(end, config_len) as usize],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -909,7 +978,7 @@ impl VirtioDevice for Balloon {
         let new_actual = match unsafe { data.align_to::<u32>() } {
             (_, [new_config], _) => *new_config,
             _ => {
-                return Err(ErrorKind::FailedToWriteConfig.into());
+                return Err(anyhow!(VirtioError::FailedToWriteConfig));
             }
         };
         if old_actual != new_actual {
@@ -918,7 +987,7 @@ impl VirtioDevice for Balloon {
                 if !ret {
                     timer
                         .reset(Duration::new(1, 0), None)
-                        .chain_err(|| "Failed to reset timer for qmp event during ballooning")?;
+                        .with_context(|| "Failed to reset timer for qmp event during ballooning")?;
                 }
             }
         }
@@ -944,7 +1013,10 @@ impl VirtioDevice for Balloon {
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         if queues.len() != self.queue_num() {
-            return Err(ErrorKind::IncorrectQueueNum(QUEUE_NUM_BALLOON, queues.len()).into());
+            return Err(anyhow!(VirtioError::IncorrectQueueNum(
+                QUEUE_NUM_BALLOON,
+                queues.len()
+            )));
         }
 
         let inf_queue = queues[0].clone();
@@ -984,7 +1056,7 @@ impl VirtioDevice for Balloon {
             def_evt,
             report_queue,
             report_evt,
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
+            deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
@@ -995,7 +1067,7 @@ impl VirtioDevice for Balloon {
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
         )
-        .chain_err(|| "Failed to register balloon event notifier to MainLoop")?;
+        .with_context(|| "Failed to register balloon event notifier to MainLoop")?;
 
         Ok(())
     }
@@ -1003,7 +1075,7 @@ impl VirtioDevice for Balloon {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 
     fn update_config(
@@ -1023,11 +1095,7 @@ pub fn qmp_balloon(target: u64) -> bool {
                 return true;
             }
             Err(ref e) => {
-                error!(
-                    "Failed to set balloon memory size: {}, :{}",
-                    target,
-                    error_chain::ChainedError::display_chain(e)
-                );
+                error!("Failed to set balloon memory size: {}, :{:?}", target, e);
                 return false;
             }
         }
@@ -1054,6 +1122,8 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
         BpfRule::new(libc::SYS_timerfd_gettime),
     ])
 }
+
+impl VirtioTrace for BalloonIoHandler {}
 
 #[cfg(test)]
 mod tests {
@@ -1114,7 +1184,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space);
+        let mut bln = Balloon::new(&bln_cfg, mem_space, false);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);
@@ -1127,12 +1197,17 @@ mod tests {
         let fts = bln.get_device_features(1);
         assert_eq!(fts, (feature >> 32) as u32);
         bln.driver_features = 0;
-        bln.device_features = 1;
+        bln.device_features = 1 | 1 << 32;
         bln.set_driver_features(0, 1);
         assert_eq!(bln.driver_features, 1);
+        assert_eq!(bln.driver_features, bln.get_driver_features(0) as u64);
         bln.driver_features = 1 << 32;
         bln.set_driver_features(1, 1);
         assert_eq!(bln.driver_features, 1 << 32);
+        assert_eq!(
+            bln.driver_features,
+            (bln.get_driver_features(1) as u64) << 32
+        );
 
         // Test realize function.
         bln.realize().unwrap();
@@ -1156,7 +1231,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let balloon = Balloon::new(&bln_cfg, mem_space);
+        let balloon = Balloon::new(&bln_cfg, mem_space, false);
         let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
         let mut random_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
@@ -1175,7 +1250,7 @@ mod tests {
         };
 
         let mem_space = address_space_init();
-        let mut balloon = Balloon::new(&bln_cfg, mem_space);
+        let mut balloon = Balloon::new(&bln_cfg, mem_space, false);
         let write_data = [1, 0, 0, 0];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
@@ -1191,10 +1266,10 @@ mod tests {
             deflate_on_oom: true,
             free_page_reporting: Default::default(),
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone(), false);
         bln.realize().unwrap();
         let ram_fr1 = create_flat_range(0, MEMORY_SIZE, 0);
-        let blninfo = BlnMemInfo::new();
+        let blninfo = BlnMemInfo::new(false);
         assert!(blninfo
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_ok());
@@ -1203,13 +1278,15 @@ mod tests {
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 
@@ -1264,7 +1341,7 @@ mod tests {
             def_evt: event_def,
             report_queue: None,
             report_evt: None,
-            deactivate_evt: event_deactivate.as_raw_fd(),
+            deactivate_evt: event_deactivate.try_clone().unwrap(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),
@@ -1281,7 +1358,7 @@ mod tests {
         let desc = SplitVringDesc {
             addr: GuestAddress(0x2000),
             len: 4,
-            flags: 1,
+            flags: 0,
             next: 1,
         };
 
@@ -1290,12 +1367,12 @@ mod tests {
             .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_inf.desc_table.0))
             .unwrap();
 
-        let ele = Iovec {
+        let ele = GuestIovec {
             iov_base: GuestAddress(0xff),
-            iov_len: std::mem::size_of::<Iovec>() as u64,
+            iov_len: std::mem::size_of::<GuestIovec>() as u64,
         };
         mem_space
-            .write_object::<Iovec>(&ele, GuestAddress(0x2000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000))
             .unwrap();
         mem_space
             .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4 as u64))
@@ -1312,7 +1389,7 @@ mod tests {
         let desc = SplitVringDesc {
             addr: GuestAddress(0x2000),
             len: 4,
-            flags: 1,
+            flags: 0,
             next: 1,
         };
 
@@ -1321,7 +1398,7 @@ mod tests {
             .unwrap();
 
         mem_space
-            .write_object::<Iovec>(&ele, GuestAddress(0x3000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000))
             .unwrap();
         mem_space
             .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4 as u64))
@@ -1339,13 +1416,15 @@ mod tests {
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 
@@ -1367,7 +1446,7 @@ mod tests {
             deflate_on_oom: true,
             free_page_reporting: Default::default(),
         };
-        let mut bln = Balloon::new(&bln_cfg, mem_space.clone());
+        let mut bln = Balloon::new(&bln_cfg, mem_space.clone(), false);
         assert!(bln
             .activate(mem_space, interrupt_cb, &queues, queue_evts)
             .is_err());
@@ -1381,7 +1460,7 @@ mod tests {
         blndef.memory_size = 0x8000;
         blndef.userspace_addr = 0;
 
-        let blninfo = BlnMemInfo::new();
+        let blninfo = BlnMemInfo::new(false);
         assert_eq!(blninfo.priority(), 0);
 
         blninfo.regions.lock().unwrap().push(blndef);
@@ -1390,7 +1469,7 @@ mod tests {
 
         let ram_size = 0x800;
         let ram_fr1 = create_flat_range(0, ram_size, 0);
-        let blninfo = BlnMemInfo::new();
+        let blninfo = BlnMemInfo::new(false);
         assert!(blninfo
             .handle_request(Some(&ram_fr1), None, ListenerReqType::AddRegion)
             .is_ok());
@@ -1432,7 +1511,7 @@ mod tests {
             free_page_reporting: true,
         };
         let mem_space = address_space_init();
-        let mut bln = Balloon::new(&bln_cfg, mem_space);
+        let mut bln = Balloon::new(&bln_cfg, mem_space, false);
         assert_eq!(bln.driver_features, 0);
         assert_eq!(bln.actual.load(Ordering::Acquire), 0);
         assert_eq!(bln.num_pages, 0);

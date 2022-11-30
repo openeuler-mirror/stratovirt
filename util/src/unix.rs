@@ -10,20 +10,22 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::anyhow;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
 use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
-use error_chain::bail;
 use libc::{
     c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, CMSG_LEN, CMSG_SPACE, MSG_NOSIGNAL,
     MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
 };
 use log::error;
 
-use super::errors::{ErrorKind, Result, ResultExt};
+use crate::UtilError;
+use anyhow::{bail, Context, Result};
 
 /// This function returns the caller's thread ID(TID).
 pub fn gettid() -> u64 {
@@ -39,7 +41,7 @@ pub fn limit_permission(path: &str) -> Result<()> {
     if ret == 0 {
         Ok(())
     } else {
-        Err(ErrorKind::ChmodFailed(ret).into())
+        Err(anyhow!(UtilError::ChmodFailed(ret)))
     }
 }
 
@@ -115,7 +117,7 @@ pub fn do_mmap(
         )
     };
     if hva == libc::MAP_FAILED {
-        return Err(std::io::Error::last_os_error()).chain_err(|| "Mmap failed.");
+        return Err(std::io::Error::last_os_error()).with_context(|| "Mmap failed.");
     }
     if !dump_guest_core {
         set_memory_undumpable(hva, len);
@@ -167,39 +169,51 @@ impl UnixSock {
     }
 
     /// Bind assigns a unique listener for the socket.
-    fn bind(&mut self, unlink: bool) -> Result<()> {
-        if unlink {
+    pub fn bind(&mut self, unlink: bool) -> Result<()> {
+        if unlink && Path::new(self.path.as_str()).exists() {
             std::fs::remove_file(self.path.as_str())
-                .chain_err(|| format!("Failed to remove socket file {}.", self.path.as_str()))?;
+                .with_context(|| format!("Failed to remove socket file {}.", self.path.as_str()))?;
         }
         let listener = UnixListener::bind(self.path.as_str())
-            .chain_err(|| format!("Failed to bind the socket {}", self.path))?;
+            .with_context(|| format!("Failed to bind the socket {}", self.path))?;
         self.listener = Some(listener);
 
         Ok(())
     }
 
     /// The listener accepts incoming client connections.
-    fn accept(&mut self) -> Result<()> {
+    pub fn accept(&mut self) -> Result<()> {
         let (sock, _addr) = self
             .listener
             .as_ref()
             .unwrap()
             .accept()
-            .chain_err(|| format!("Failed to accept the socket {}", self.path))?;
+            .with_context(|| format!("Failed to accept the socket {}", self.path))?;
         self.sock = Some(sock);
 
         Ok(())
     }
 
-    fn is_accepted(&self) -> bool {
+    pub fn is_accepted(&self) -> bool {
         self.sock.is_some()
+    }
+
+    pub fn server_connection_refuse(&mut self) -> Result<()> {
+        // Refuse connection by finishing life cycle of stream fd from listener fd.
+        self.listener.as_ref().unwrap().accept().with_context(|| {
+            format!(
+                "Failed to accept the socket for refused connection {}",
+                self.path
+            )
+        })?;
+
+        Ok(())
     }
 
     /// Unix socket stream create a connection for requests.
     pub fn connect(&mut self) -> Result<()> {
         let sock = UnixStream::connect(self.path.as_str())
-            .chain_err(|| format!("Failed to connect the socket {}", self.path))?;
+            .with_context(|| format!("Failed to connect the socket {}", self.path))?;
         self.sock = Some(sock);
 
         Ok(())
@@ -418,7 +432,6 @@ impl UnixSock {
 
             cmsg_ptr = self.get_next_cmsg(&msg, &cmsg, cmsg_ptr);
         }
-
         Ok((total_read as usize, in_fds_count as usize))
     }
 }

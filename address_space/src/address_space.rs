@@ -10,20 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use arc_swap::ArcSwap;
+use std::fmt;
+use std::fmt::Debug;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-
-use arc_swap::ArcSwap;
 use util::byte_code::ByteCode;
 
-use crate::errors::{ErrorKind, Result, ResultExt};
 use crate::{
-    AddressRange, FlatRange, GuestAddress, Listener, ListenerReqType, Region, RegionIoEventFd,
-    RegionType,
+    AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener, ListenerReqType, Region,
+    RegionIoEventFd, RegionType,
 };
+use anyhow::{anyhow, Context, Result};
 
-/// Contain an array of `FlatRange`.
-#[derive(Default, Clone)]
+/// Contains an array of `FlatRange`.
+#[derive(Default, Clone, Debug)]
 pub(crate) struct FlatView(pub Vec<FlatRange>);
 
 impl FlatView {
@@ -62,13 +63,23 @@ type ListenerObj = Arc<Mutex<dyn Listener>>;
 pub struct AddressSpace {
     /// Root Region of this AddressSpace.
     root: Region,
-    /// Flat_view is the output of rendering all regions in parent address-space,
-    /// every time the topology changed (add/delete region), flat_view would be updated.
+    /// `flat_view` is the output of rendering all regions in parent `address-space`,
+    /// every time the topology changed (add/delete region), `flat_view` would be updated.
     flat_view: Arc<ArcSwap<FlatView>>,
     /// The triggered call-backs when flat_view changed.
     listeners: Arc<Mutex<Vec<ListenerObj>>>,
     /// The current layout of ioeventfds, which is compared with new ones in topology-update stage.
     ioeventfds: Arc<Mutex<Vec<RegionIoEventFd>>>,
+}
+
+impl fmt::Debug for AddressSpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AddressSpace")
+            .field("root", &self.root)
+            .field("flat_view", &self.flat_view)
+            .field("ioeventfds", &self.ioeventfds)
+            .finish()
+    }
 }
 
 impl AddressSpace {
@@ -89,7 +100,7 @@ impl AddressSpace {
         if !space.root.subregions().is_empty() {
             space
                 .update_topology()
-                .chain_err(|| "Failed to update topology for address_space")?;
+                .with_context(|| "Failed to update topology for address_space")?;
         }
 
         Ok(space)
@@ -230,12 +241,12 @@ impl AddressSpace {
                 } else {
                     if !is_add {
                         self.call_listeners(Some(old_r), None, ListenerReqType::DeleteRegion)
-                            .chain_err(|| {
-                                ErrorKind::UpdateTopology(
+                            .with_context(|| {
+                                anyhow!(AddressSpaceError::UpdateTopology(
                                     old_r.addr_range.base.raw_value(),
                                     old_r.addr_range.size,
                                     old_r.owner.region_type(),
-                                )
+                                ))
                             })?;
                     }
                     old_idx += 1;
@@ -246,12 +257,12 @@ impl AddressSpace {
             // current old_range is None, or current new_range is before old_range
             if is_add && new_range.is_some() {
                 self.call_listeners(new_range, None, ListenerReqType::AddRegion)
-                    .chain_err(|| {
-                        ErrorKind::UpdateTopology(
+                    .with_context(|| {
+                        anyhow!(AddressSpaceError::UpdateTopology(
                             new_range.unwrap().addr_range.base.raw_value(),
                             new_range.unwrap().addr_range.size,
                             new_range.unwrap().owner.region_type(),
-                        )
+                        ))
                     })?;
             }
             new_idx += 1;
@@ -275,24 +286,24 @@ impl AddressSpace {
             let new_fd = new_evtfds.get(new_idx);
             if old_fd.is_some() && (new_fd.is_none() || old_fd.unwrap().before(new_fd.unwrap())) {
                 self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)
-                    .chain_err(|| {
-                        ErrorKind::UpdateTopology(
+                    .with_context(|| {
+                        anyhow!(AddressSpaceError::UpdateTopology(
                             old_fd.unwrap().addr_range.base.raw_value(),
                             old_fd.unwrap().addr_range.size,
                             RegionType::IO,
-                        )
+                        ))
                     })?;
                 old_idx += 1;
             } else if new_fd.is_some()
                 && (old_fd.is_none() || new_fd.unwrap().before(old_fd.unwrap()))
             {
                 self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)
-                    .chain_err(|| {
-                        ErrorKind::UpdateTopology(
+                    .with_context(|| {
+                        anyhow!(AddressSpaceError::UpdateTopology(
                             new_fd.unwrap().addr_range.base.raw_value(),
                             new_fd.unwrap().addr_range.size,
                             RegionType::IO,
-                        )
+                        ))
                     })?;
                 new_idx += 1;
             } else {
@@ -327,7 +338,7 @@ impl AddressSpace {
         }
 
         self.update_ioeventfds_pass(&ioeventfds)
-            .chain_err(|| "Failed to update ioeventfds")?;
+            .with_context(|| "Failed to update ioeventfds")?;
         *self.ioeventfds.lock().unwrap() = ioeventfds;
         Ok(())
     }
@@ -381,7 +392,7 @@ impl AddressSpace {
         None
     }
 
-    /// Return the end address of memory  according to all Ram regions in AddressSpace.
+    /// Return the end address of memory according to all Ram regions in AddressSpace.
     pub fn memory_end_address(&self) -> GuestAddress {
         self.flat_view
             .load()
@@ -409,13 +420,13 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .chain_err(|| ErrorKind::RegionNotFound(addr.raw_value()))?;
+            .with_context(|| anyhow!(AddressSpaceError::RegionNotFound(addr.raw_value())))?;
 
         let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
         let offset_in_region = fr.offset_in_region + offset;
         fr.owner
             .read(dst, region_base, offset_in_region, count)
-            .chain_err(|| {
+            .with_context(|| {
                 format!(
                 "Failed to read region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
                 region_base.raw_value(),
@@ -441,13 +452,13 @@ impl AddressSpace {
         let (fr, offset) = view
             .find_flatrange(addr)
             .map(|fr| (fr, addr.offset_from(fr.addr_range.base)))
-            .chain_err(|| ErrorKind::RegionNotFound(addr.raw_value()))?;
+            .with_context(|| anyhow!(AddressSpaceError::RegionNotFound(addr.raw_value())))?;
 
         let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
         let offset_in_region = fr.offset_in_region + offset;
         fr.owner
             .write(src, region_base, offset_in_region, count)
-            .chain_err(||
+            .with_context(||
                 format!(
                     "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
                     region_base.raw_value(),
@@ -467,7 +478,7 @@ impl AddressSpace {
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn write_object<T: ByteCode>(&self, data: &T, addr: GuestAddress) -> Result<()> {
         self.write(&mut data.as_bytes(), addr, std::mem::size_of::<T>() as u64)
-            .chain_err(|| "Failed to write object")
+            .with_context(|| "Failed to write object")
     }
 
     /// Write an object to memory via host address.
@@ -481,10 +492,10 @@ impl AddressSpace {
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
         let mut dst = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>() as usize)
+            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };
         dst.write_all(data.as_bytes())
-            .chain_err(|| "Failed to write object via host address")
+            .with_context(|| "Failed to write object via host address")
     }
 
     /// Read some data from memory to form an object.
@@ -502,7 +513,7 @@ impl AddressSpace {
             addr,
             std::mem::size_of::<T>() as u64,
         )
-        .chain_err(|| "Failed to read object")?;
+        .with_context(|| "Failed to read object")?;
         Ok(obj)
     }
 
@@ -518,10 +529,10 @@ impl AddressSpace {
         let mut obj = T::default();
         let mut dst = obj.as_mut_bytes();
         let src = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>() as usize)
+            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };
         dst.write_all(src)
-            .chain_err(|| "Failed to read object via host address")?;
+            .with_context(|| "Failed to read object via host address")?;
 
         Ok(obj)
     }
@@ -534,16 +545,16 @@ impl AddressSpace {
         let new_fv = self
             .root
             .generate_flatview(GuestAddress(0), addr_range)
-            .chain_err(|| "Failed to generate new topology")?;
+            .with_context(|| "Failed to generate new topology")?;
 
         self.update_topology_pass(&old_fv, &new_fv, false)
-            .chain_err(|| "Failed to update topology (first pass)")?;
+            .with_context(|| "Failed to update topology (first pass)")?;
         self.update_topology_pass(&old_fv, &new_fv, true)
-            .chain_err(|| "Failed to update topology (second pass)")?;
+            .with_context(|| "Failed to update topology (second pass)")?;
 
         self.flat_view.store(Arc::new(new_fv));
         self.update_ioeventfds()
-            .chain_err(|| "Failed to generate and update ioeventfds")?;
+            .with_context(|| "Failed to generate and update ioeventfds")?;
         Ok(())
     }
 }
@@ -558,11 +569,24 @@ mod test {
     #[derive(Default, Clone)]
     struct TestListener {
         reqs: Arc<Mutex<Vec<(ListenerReqType, AddressRange)>>>,
+        enabled: bool,
     }
 
     impl Listener for TestListener {
         fn priority(&self) -> i32 {
             2
+        }
+
+        fn enabled(&self) -> bool {
+            self.enabled
+        }
+
+        fn enable(&mut self) {
+            self.enabled = true;
+        }
+
+        fn disable(&mut self) {
+            self.enabled = false;
         }
 
         fn handle_request(
@@ -593,49 +617,153 @@ mod test {
     #[test]
     fn test_listeners() {
         // define an array of listeners in order to check the priority order
-        struct ListenerPrior0;
+        #[derive(Default)]
+        struct ListenerPrior0 {
+            enabled: bool,
+        }
         impl Listener for ListenerPrior0 {
             fn priority(&self) -> i32 {
                 0
             }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
         }
-        struct ListenerPrior3;
+        #[derive(Default)]
+        struct ListenerPrior3 {
+            enabled: bool,
+        }
         impl Listener for ListenerPrior3 {
             fn priority(&self) -> i32 {
                 3
             }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
         }
-        struct ListenerPrior4;
+        #[derive(Default)]
+        struct ListenerPrior4 {
+            enabled: bool,
+        }
         impl Listener for ListenerPrior4 {
             fn priority(&self) -> i32 {
                 4
             }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
         }
-        struct ListenerNeg;
+        #[derive(Default)]
+        struct ListenerNeg {
+            enabled: bool,
+        }
         impl Listener for ListenerNeg {
             fn priority(&self) -> i32 {
                 -1
+            }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
             }
         }
 
         let root = Region::init_container_region(8000);
         let space = AddressSpace::new(root).unwrap();
-        let listener1 = Arc::new(Mutex::new(ListenerPrior0));
-        let listener2 = Arc::new(Mutex::new(ListenerPrior0));
-        let listener3 = Arc::new(Mutex::new(ListenerPrior3));
-        let listener4 = Arc::new(Mutex::new(ListenerPrior4));
-        let listener5 = Arc::new(Mutex::new(ListenerNeg));
-        space.register_listener(listener1).unwrap();
-        space.register_listener(listener3).unwrap();
-        space.register_listener(listener5).unwrap();
-        space.register_listener(listener2).unwrap();
-        space.register_listener(listener4).unwrap();
+        let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
+        let listener4 = Arc::new(Mutex::new(ListenerPrior4::default()));
+        let listener5 = Arc::new(Mutex::new(ListenerNeg::default()));
+        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener3.clone()).unwrap();
+        space.register_listener(listener5.clone()).unwrap();
+        space.register_listener(listener2.clone()).unwrap();
+        space.register_listener(listener4.clone()).unwrap();
 
         let mut pre_prior = std::i32::MIN;
         for listener in space.listeners.lock().unwrap().iter() {
             let curr = listener.lock().unwrap().priority();
             assert!(pre_prior <= curr);
             pre_prior = curr;
+        }
+
+        space.unregister_listener(listener4).unwrap();
+        assert_eq!(space.listeners.lock().unwrap().len(), 4);
+        space.unregister_listener(listener3).unwrap();
+        // It only contains listener1, listener5, listener2.
+        assert_eq!(space.listeners.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_unregister_listener() {
+        #[derive(Default)]
+        struct ListenerPrior0 {
+            enabled: bool,
+        }
+        impl Listener for ListenerPrior0 {
+            fn priority(&self) -> i32 {
+                0
+            }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn enable(&mut self) {
+                self.enabled = true;
+            }
+
+            fn disable(&mut self) {
+                self.enabled = false;
+            }
+        }
+
+        let root = Region::init_container_region(8000);
+        let space = AddressSpace::new(root).unwrap();
+        let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
+        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener2.clone()).unwrap();
+
+        space.unregister_listener(listener2).unwrap();
+        assert_eq!(space.listeners.lock().unwrap().len(), 1);
+        for listener in space.listeners.lock().unwrap().iter() {
+            assert_eq!(listener.lock().unwrap().enabled(), true);
         }
     }
 

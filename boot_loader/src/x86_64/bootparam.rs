@@ -19,7 +19,8 @@ use super::{
     X86BootLoaderConfig, EBDA_START, MB_BIOS_BEGIN, REAL_MODE_IVT_BEGIN, VGA_RAM_BEGIN,
     VMLINUX_RAM_START,
 };
-use crate::errors::{ErrorKind, Result};
+use crate::error::BootLoaderError;
+use anyhow::{anyhow, Result};
 
 pub const E820_RAM: u32 = 1;
 pub const E820_RESERVED: u32 = 2;
@@ -91,13 +92,13 @@ impl RealModeKernelHeader {
 
     pub fn check_valid_kernel(&self) -> Result<()> {
         if self.header != HDRS {
-            return Err(ErrorKind::ElfKernel.into());
+            return Err(anyhow!(BootLoaderError::ElfKernel));
         }
         if (self.version < BOOT_VERSION) || ((self.loadflags & 0x1) == 0x0) {
-            return Err(ErrorKind::InvalidBzImage.into());
+            return Err(anyhow!(BootLoaderError::InvalidBzImage));
         }
         if self.version < 0x202 {
-            return Err(ErrorKind::OldVersionKernel.into());
+            return Err(anyhow!(BootLoaderError::OldVersionKernel));
         }
         Ok(())
     }

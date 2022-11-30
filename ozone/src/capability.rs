@@ -12,8 +12,9 @@
 
 //! Remove all capability for ozone when uid is 0, use -capability cap_* to add capability.
 
-use crate::{syscall, ErrorKind, Result, ResultExt};
-use error_chain::bail;
+use crate::syscall;
+use crate::OzoneError;
+use anyhow::{anyhow, bail, Context, Result};
 use std::{collections::HashMap, io::Write};
 
 const CAPS_V3: u32 = 0x20080522;
@@ -109,9 +110,9 @@ fn has_cap(cap: u8) -> Result<bool> {
 // so we set Bounding to limit child process.
 pub fn clear_all_capabilities() -> Result<()> {
     for cap in 0..NR_ALL_CAP {
-        if has_cap(cap).chain_err(|| ErrorKind::CapsError("CAPGET"))? {
+        if has_cap(cap).with_context(|| anyhow!(OzoneError::CapsError("CAPGET")))? {
             syscall::drop_bounding_caps(cap)
-                .chain_err(|| ErrorKind::CapsError("PR_CAPBSET_DROP"))?;
+                .with_context(|| anyhow!(OzoneError::CapsError("PR_CAPBSET_DROP")))?;
         }
     }
 
@@ -130,10 +131,10 @@ pub fn set_capability_for_ozone(capability: &str) -> Result<()> {
                 let warning = format!("Alert! Adding dangerous capability {:?} to ozone , it might cause risk of escape!\n", cap);
                 std::io::stdout()
                     .write(warning.as_bytes())
-                    .chain_err(|| "Failed to write warnings")?;
+                    .with_context(|| "Failed to write warnings")?;
                 std::io::stdout()
                     .flush()
-                    .chain_err(|| "Failed to flush stdout")?;
+                    .with_context(|| "Failed to flush stdout")?;
             }
         } else {
             bail!("Invalid capability argument: {:?}", cap);
@@ -144,9 +145,9 @@ pub fn set_capability_for_ozone(capability: &str) -> Result<()> {
         if cap_add_arr.contains(item.0) {
             continue;
         }
-        if has_cap(item.1 .0).chain_err(|| ErrorKind::CapsError("CAPGET"))? {
+        if has_cap(item.1 .0).with_context(|| anyhow!(OzoneError::CapsError("CAPGET")))? {
             syscall::drop_bounding_caps(item.1 .0)
-                .chain_err(|| ErrorKind::CapsError("PR_CAPBSET_DROP"))?;
+                .with_context(|| anyhow!(OzoneError::CapsError("PR_CAPBSET_DROP")))?;
         }
     }
     Ok(())

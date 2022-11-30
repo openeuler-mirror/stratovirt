@@ -17,12 +17,13 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
+use log::info;
 use once_cell::sync::Lazy;
 
-use crate::errors::{Result, ResultExt};
 use crate::general::translate_id;
 use crate::migration::DirtyBitmap;
 use crate::protocol::{DeviceStateDesc, MemBlock, MigrationStatus, StateTransfer};
+use anyhow::{Context, Result};
 use machine_manager::config::VmConfig;
 use machine_manager::machine::MachineLifecycle;
 use util::byte_code::ByteCode;
@@ -55,7 +56,7 @@ pub trait MigrationHook: StateTransfer {
     fn save_device(&self, id: u64, fd: &mut dyn Write) -> Result<()> {
         let state_data = self
             .get_state_vec()
-            .chain_err(|| "Failed to get device state")?;
+            .with_context(|| "Failed to get device state")?;
 
         fd.write_all(
             Instance {
@@ -64,9 +65,9 @@ pub trait MigrationHook: StateTransfer {
             }
             .as_bytes(),
         )
-        .chain_err(|| "Failed to write instance id.")?;
+        .with_context(|| "Failed to write instance id.")?;
         fd.write_all(&state_data)
-            .chain_err(|| "Failed to write device state")?;
+            .with_context(|| "Failed to write device state")?;
 
         Ok(())
     }

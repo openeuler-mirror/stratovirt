@@ -12,9 +12,9 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
+use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
-use super::errors::Result;
 use crate::config::*;
 use crate::descriptor::{UsbConfigDescriptor, UsbDeviceDescriptor, UsbEndpointDescriptor};
 use crate::descriptor::{UsbDescriptorOps, UsbInterfaceDescriptor};
@@ -32,6 +32,7 @@ use crate::{
     },
     xhci::xhci_controller::XhciDevice,
 };
+use anyhow::Result;
 
 const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
 const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
@@ -129,7 +130,7 @@ impl UsbTablet {
         Self {
             id,
             device: Arc::new(Mutex::new(UsbDevice::new())),
-            hid: Arc::new(Mutex::new(Hid::new())),
+            hid: Arc::new(Mutex::new(Hid::new(HidType::Tablet))),
             ctrl: None,
             endpoint: None,
         }
@@ -138,7 +139,6 @@ impl UsbTablet {
     pub fn realize(self) -> Result<Arc<Mutex<Self>>> {
         let mut locked_usb = self.device.lock().unwrap();
         locked_usb.product_desc = String::from("StratoVirt USB Tablet");
-        locked_usb.auto_attach = true;
         locked_usb.strings = Vec::new();
         drop(locked_usb);
         let tablet = Arc::new(Mutex::new(self));
@@ -153,9 +153,6 @@ impl UsbTablet {
     fn init_hid(&mut self) -> Result<()> {
         let mut locked_usb = self.device.lock().unwrap();
         locked_usb.usb_desc = Some(DESC_TABLET.clone());
-        let mut hid = self.hid.lock().unwrap();
-        hid.kind = HidType::Tablet;
-        drop(hid);
         let ep = locked_usb.get_endpoint(USB_TOKEN_IN as u32, 1);
         self.endpoint = Some(Arc::downgrade(&ep));
         locked_usb.init_descriptor()?;
@@ -239,12 +236,15 @@ impl UsbDeviceOps for UsbTablet {
         debug!("handle_control request {:?}", device_req);
         let mut locked_dev = self.device.lock().unwrap();
         match locked_dev.handle_control_for_descriptor(packet, device_req, data) {
-            Ok(_) => {
-                debug!("Tablet Device control handled by descriptor, return directly.");
-                return;
+            Ok(handled) => {
+                if handled {
+                    debug!("Tablet control handled by descriptor, return directly.");
+                    return;
+                }
             }
             Err(e) => {
-                debug!("Tablet not handled by descriptor, fallthrough {}", e);
+                error!("Tablet descriptor error {}", e);
+                return;
             }
         }
         let mut locked_hid = self.hid.lock().unwrap();

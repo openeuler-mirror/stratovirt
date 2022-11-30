@@ -21,6 +21,7 @@ pub mod legacy;
 
 #[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{
-    errors as IntCtrlErrs, ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController,
+    ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, InterruptError as IntCtrlErrs,
+    GIC_IRQ_MAX,
 };
-pub use legacy::errors as LegacyErrs;
+pub use legacy::error::LegacyError as LegacyErrs;

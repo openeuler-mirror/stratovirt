@@ -11,18 +11,28 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
-use std::convert::TryFrom;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use super::{
+    iov_discard_back, iov_discard_front, iov_to_buf, report_virtio_error, virtio_has_feature,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
+    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+};
+use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
-use error_chain::{bail, ChainedError};
-use log::error;
+use anyhow::{anyhow, bail, Context, Result};
+use byteorder::{ByteOrder, LittleEndian};
+use log::{error, warn};
 use machine_manager::{
     config::{BlkDevConfig, ConfigCheck},
     event_loop::EventLoop,
@@ -32,24 +42,18 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::{Aio, AioCb, AioCompleteFunc, IoCmd, Iovec};
+use util::aio::{
+    iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
+};
 use util::byte_code::ByteCode;
+use util::file::open_disk_file;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
+use util::offset_of;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-
-use super::errors::{ErrorKind, Result, ResultExt};
-use super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_BLK_F_FLUSH,
-    VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX,
-    VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_BLOCK,
-};
-
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
 /// Size of each virtqueue.
@@ -60,8 +64,12 @@ const SECTOR_SHIFT: u8 = 9;
 const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
+/// Number of max merged requests.
+const MAX_NUM_MERGE_REQS: u16 = 32;
+/// Max time for every round of process queue.
+const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
 
-type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool);
+type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, Option<String>);
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -72,15 +80,6 @@ fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     id_bytes
 }
 
-fn write_buf_mem(buf: &[u8], hva: u64) -> Result<()> {
-    let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
-    (&mut slice)
-        .write(buf)
-        .chain_err(|| format!("Failed to write buf(hva:{})", hva))?;
-
-    Ok(())
-}
-
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct RequestOutHeader {
@@ -89,30 +88,14 @@ struct RequestOutHeader {
     sector: u64,
 }
 
-impl RequestOutHeader {
-    fn is_valid(&self) -> bool {
-        match self.request_type {
-            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_FLUSH | VIRTIO_BLK_T_GET_ID => true,
-            _ => {
-                error!(
-                    "request type {} is not supported for block",
-                    self.request_type
-                );
-                false
-            }
-        }
-    }
-}
-
 impl ByteCode for RequestOutHeader {}
 
 #[derive(Clone)]
 pub struct AioCompleteCb {
     queue: Arc<Mutex<Queue>>,
     mem_space: Arc<AddressSpace>,
-    desc_index: u16,
-    rw_len: u32,
-    req_status_addr: GuestAddress,
+    /// The head of merged Request list.
+    req: Rc<Request>,
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     driver_features: u64,
 }
@@ -121,20 +104,61 @@ impl AioCompleteCb {
     fn new(
         queue: Arc<Mutex<Queue>>,
         mem_space: Arc<AddressSpace>,
-        desc_index: u16,
-        rw_len: u32,
-        req_status_addr: GuestAddress,
+        req: Rc<Request>,
         interrupt_cb: Option<Arc<VirtioInterrupt>>,
         driver_features: u64,
     ) -> Self {
         AioCompleteCb {
             queue,
             mem_space,
-            desc_index,
-            rw_len,
-            req_status_addr,
+            req,
             interrupt_cb,
             driver_features,
+        }
+    }
+
+    fn complete_request(&self, status: u8) {
+        let mut req = Some(self.req.as_ref());
+        while let Some(req_raw) = req {
+            self.complete_one_request(req_raw, status);
+            req = req_raw.next.as_ref().as_ref();
+        }
+    }
+
+    fn complete_one_request(&self, req: &Request, status: u8) {
+        if let Err(ref e) = self.mem_space.write_object(&status, req.in_header) {
+            error!("Failed to write the status (aio completion) {:?}", e);
+            return;
+        }
+
+        let mut queue_lock = self.queue.lock().unwrap();
+        if let Err(ref e) = queue_lock
+            .vring
+            .add_used(&self.mem_space, req.desc_index, req.in_len)
+        {
+            error!(
+                "Failed to add used ring(aio completion), index {}, len {} {:?}",
+                req.desc_index, req.in_len, e,
+            );
+            return;
+        }
+
+        if queue_lock
+            .vring
+            .should_notify(&self.mem_space, self.driver_features)
+        {
+            if let Err(e) = (*self.interrupt_cb.as_ref().unwrap())(
+                &VirtioInterruptType::Vring,
+                Some(&queue_lock),
+                false,
+            ) {
+                error!(
+                    "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
+                    e
+                );
+                return;
+            }
+            self.trace_send_interrupt("Block".to_string());
         }
     }
 }
@@ -145,12 +169,15 @@ struct Request {
     out_header: RequestOutHeader,
     iovec: Vec<Iovec>,
     data_len: u64,
+    in_len: u32,
     in_header: GuestAddress,
+    /// Point to the next merged Request.
+    next: Box<Option<Request>>,
 }
 
 impl Request {
-    fn new(mem_space: &Arc<AddressSpace>, elem: &Element) -> Result<Self> {
-        if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() || elem.desc_num < 2 {
+    fn new(handler: &BlockIoHandler, elem: &mut Element, status: &mut u8) -> Result<Self> {
+        if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() {
             bail!(
                 "Missed header for block request: out {} in {} desc num {}",
                 elem.out_iovec.len(),
@@ -159,73 +186,80 @@ impl Request {
             );
         }
 
-        let out_iov_elem = elem.out_iovec.get(0).unwrap();
-        if out_iov_elem.len < size_of::<RequestOutHeader>() as u32 {
-            bail!(
-                "Invalid out header for block request: length {}",
-                out_iov_elem.len
-            );
-        }
+        let mut out_header = RequestOutHeader::default();
+        iov_to_buf(
+            &handler.mem_space,
+            &elem.out_iovec,
+            out_header.as_mut_bytes(),
+        )
+        .and_then(|size| {
+            if size < size_of::<RequestOutHeader>() {
+                bail!("Invalid out header for block request: length {}", size);
+            }
+            Ok(())
+        })?;
+        out_header.request_type = LittleEndian::read_u32(out_header.request_type.as_bytes());
+        out_header.sector = LittleEndian::read_u64(out_header.sector.as_bytes());
 
-        let out_header = mem_space
-            .read_object::<RequestOutHeader>(out_iov_elem.addr)
-            .chain_err(|| {
-                ErrorKind::ReadObjectErr("the block's request header", out_iov_elem.addr.0)
-            })?;
-
-        if !out_header.is_valid() {
-            bail!("Unsupported block request type");
-        }
-
-        let pos = elem.in_iovec.len() - 1;
-        let in_iov_elem = elem.in_iovec.get(pos).unwrap();
+        let in_iov_elem = elem.in_iovec.last().unwrap();
         if in_iov_elem.len < 1 {
             bail!(
-                "Invalid out header for block request: length {}",
+                "Invalid in header for block request: length {}",
                 in_iov_elem.len
             );
         }
+        let in_header = GuestAddress(in_iov_elem.addr.0 + in_iov_elem.len as u64 - 1);
 
         let mut request = Request {
             desc_index: elem.index,
             out_header,
             iovec: Vec::with_capacity(elem.desc_num as usize),
             data_len: 0,
-            in_header: in_iov_elem.addr,
+            in_len: 0,
+            in_header,
+            next: Box::new(None),
         };
 
+        // Count in_len before discard iovec.
+        // We always write the last status byte, so count all in_iovs.
+        for in_iov in elem.in_iovec.iter() {
+            request.in_len += in_iov.len;
+        }
+
         match out_header.request_type {
-            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_GET_ID => {
-                for (index, elem_iov) in elem.in_iovec.iter().enumerate() {
-                    if index == elem.in_iovec.len() - 1 {
-                        break;
+            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_GET_ID | VIRTIO_BLK_T_OUT => {
+                let data_iovec = match out_header.request_type {
+                    VIRTIO_BLK_T_OUT => {
+                        iov_discard_front(&mut elem.out_iovec, size_of::<RequestOutHeader>() as u64)
                     }
-                    if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
+                    // Otherwise discard the last "status" byte.
+                    _ => iov_discard_back(&mut elem.in_iovec, 1),
+                };
+                if data_iovec.is_none() {
+                    bail!("Empty data for block request");
+                }
+                for elem_iov in data_iovec.unwrap() {
+                    if let Some(hva) = handler.mem_space.get_host_address(elem_iov.addr) {
                         let iov = Iovec {
                             iov_base: hva,
                             iov_len: u64::from(elem_iov.len),
                         };
                         request.iovec.push(iov);
                         request.data_len += u64::from(elem_iov.len);
+                    } else {
+                        bail!("Map desc base {:?} failed", elem_iov.addr);
                     }
                 }
             }
-            VIRTIO_BLK_T_OUT => {
-                for (index, elem_iov) in elem.out_iovec.iter().enumerate() {
-                    if index == 0 {
-                        continue;
-                    }
-                    if let Some(hva) = mem_space.get_host_address(elem_iov.addr) {
-                        let iov = Iovec {
-                            iov_base: hva,
-                            iov_len: u64::from(elem_iov.len),
-                        };
-                        request.iovec.push(iov);
-                        request.data_len += u64::from(elem_iov.len);
-                    }
-                }
+            VIRTIO_BLK_T_FLUSH => (),
+            others => {
+                error!("Request type {} is not supported for block", others);
+                *status = VIRTIO_BLK_S_UNSUPP;
             }
-            _ => (),
+        }
+
+        if !request.io_range_valid(handler.disk_sectors) {
+            *status = VIRTIO_BLK_S_IOERR;
         }
 
         Ok(request)
@@ -236,68 +270,67 @@ impl Request {
         &self,
         aio: &mut Box<Aio<AioCompleteCb>>,
         disk: &File,
-        disk_sectors: u64,
         serial_num: &Option<String>,
         direct: bool,
+        aio_type: &Option<String>,
         last_aio: bool,
         iocompletecb: AioCompleteCb,
-    ) -> Result<u32> {
-        let mut top: u64 = self.data_len / SECTOR_SIZE;
-        if self.data_len % SECTOR_SIZE != 0 {
-            top += 1;
-        }
-        top.checked_add(self.out_header.sector)
-            .filter(|off| off <= &disk_sectors)
-            .chain_err(|| {
-                format!(
-                    "offset {} invalid, disk sector {}",
-                    self.out_header.sector, disk_sectors
-                )
-            })?;
-
+    ) -> Result<()> {
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
             offset: (self.out_header.sector << SECTOR_SHIFT) as usize,
+            nbytes: 0,
             process: true,
             iocb: None,
             iocompletecb,
         };
 
-        for iov in self.iovec.iter() {
-            let iovec = Iovec {
-                iov_base: iov.iov_base,
-                iov_len: iov.iov_len,
-            };
-            aiocb.iovec.push(iovec);
+        let mut req = Some(self);
+        while let Some(req_raw) = req {
+            for iov in req_raw.iovec.iter() {
+                let iovec = Iovec {
+                    iov_base: iov.iov_base,
+                    iov_len: iov.iov_len,
+                };
+                aiocb.iovec.push(iovec);
+                aiocb.nbytes += iov.iov_len;
+            }
+            req = req_raw.next.as_ref().as_ref();
         }
 
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
-                if direct {
-                    for iov in self.iovec.iter() {
+                if aio_type.is_some() {
+                    for iov in aiocb.iovec.iter() {
                         MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
                     }
-                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
-                        "Failed to process block request for reading asynchronously"
-                    })?;
+                    (*aio)
+                        .as_mut()
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
+                        .with_context(|| {
+                            "Failed to process block request for reading asynchronously"
+                        })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for reading synchronously"
                     })?;
                 }
             }
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::Pwritev;
-                if direct {
-                    (*aio).as_mut().rw_aio(aiocb, SECTOR_SIZE).chain_err(|| {
-                        "Failed to process block request for writing asynchronously"
-                    })?;
+                if aio_type.is_some() {
+                    (*aio)
+                        .as_mut()
+                        .rw_aio(aiocb, SECTOR_SIZE, direct)
+                        .with_context(|| {
+                            "Failed to process block request for writing asynchronously"
+                        })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).chain_err(|| {
+                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for writing synchronously"
                     })?;
                 }
@@ -306,34 +339,46 @@ impl Request {
                 aiocb.opcode = IoCmd::Fdsync;
                 (*aio)
                     .as_mut()
-                    .rw_sync(aiocb)
-                    .chain_err(|| "Failed to process block request for flushing")?;
+                    .flush_sync(aiocb)
+                    .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
-                if let Some(serial) = serial_num {
-                    let serial_vec = get_serial_num_config(serial);
-
-                    for iov in self.iovec.iter() {
-                        if (iov.iov_len as usize) < serial_vec.len() {
-                            bail!(
-                                "The buffer length {} is less than the length {} of serial num",
-                                iov.iov_len,
-                                serial_vec.len()
-                            );
-                        }
-                        write_buf_mem(&serial_vec, iov.iov_base)
-                            .chain_err(|| "Failed to write buf for virtio block id")?;
-                    }
-                }
-
-                return Ok(1);
+                let serial = serial_num.clone().unwrap_or_else(|| String::from(""));
+                let serial_vec = get_serial_num_config(&serial);
+                iov_from_buf_direct(&self.iovec, &serial_vec)?;
+                aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_OK);
             }
             _ => bail!(
                 "The type {} of block request is not supported",
                 self.out_header.request_type
             ),
         };
-        Ok(0)
+        Ok(())
+    }
+
+    fn io_range_valid(&self, disk_sectors: u64) -> bool {
+        match self.out_header.request_type {
+            VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
+                if self.data_len % SECTOR_SIZE != 0 {
+                    error!("Failed to process block request with size not aligned to 512B");
+                    return false;
+                }
+                if self
+                    .get_req_sector_num()
+                    .checked_add(self.out_header.sector)
+                    .filter(|&off| off <= disk_sectors)
+                    .is_none()
+                {
+                    error!(
+                        "offset {} invalid, disk sector {}",
+                        self.out_header.sector, disk_sectors
+                    );
+                    return false;
+                }
+                true
+            }
+            _ => true,
+        }
     }
 
     fn get_req_sector_num(&self) -> u64 {
@@ -355,8 +400,10 @@ struct BlockIoHandler {
     disk_sectors: u64,
     /// Serial number of the block device.
     serial_num: Option<String>,
-    /// if use direct access io.
+    /// If use direct access io.
     direct: bool,
+    /// Async IO type.
+    aio_type: Option<String>,
     /// Aio context.
     aio: Option<Box<Aio<AioCompleteCb>>>,
     /// Bit mask of features negotiated by the backend and the frontend.
@@ -376,52 +423,63 @@ struct BlockIoHandler {
 }
 
 impl BlockIoHandler {
-    fn merge_req_queue(&self, mut req_queue: Vec<Request>) -> Vec<Request> {
-        if req_queue.len() == 1 {
-            return req_queue;
-        }
-
+    fn merge_req_queue(
+        &self,
+        mut req_queue: Vec<Request>,
+        last_aio_index: &mut usize,
+    ) -> Vec<Request> {
         req_queue.sort_by(|a, b| a.out_header.sector.cmp(&b.out_header.sector));
-        let mut merge_req_queue = Vec::<Request>::new();
-        let mut continue_merge: bool = false;
 
-        for req in &req_queue {
-            if continue_merge {
-                if let Some(last_req) = merge_req_queue.last_mut() {
-                    if last_req.out_header.sector + last_req.get_req_sector_num()
-                        != req.out_header.sector
-                    {
-                        continue_merge = false;
-                        merge_req_queue.push(req.clone());
-                    } else {
-                        for iov in req.iovec.iter() {
-                            let iovec = Iovec {
-                                iov_base: iov.iov_base,
-                                iov_len: iov.iov_len,
-                            };
-                            last_req.data_len += iovec.iov_len;
-                            last_req.iovec.push(iovec);
-                        }
-                    }
+        let mut merge_req_queue = Vec::<Request>::new();
+        let mut last_req: Option<&mut Request> = None;
+        let mut merged_reqs = 1;
+
+        *last_aio_index = 0;
+        for req in req_queue {
+            let io = req.out_header.request_type == VIRTIO_BLK_T_IN
+                || req.out_header.request_type == VIRTIO_BLK_T_OUT;
+            let can_merge = match last_req {
+                Some(ref req_ref) => {
+                    io && merged_reqs < MAX_NUM_MERGE_REQS
+                        && req_ref.out_header.request_type == req.out_header.request_type
+                        && (req_ref.out_header.sector + req_ref.get_req_sector_num()
+                            == req.out_header.sector)
                 }
+                None => false,
+            };
+
+            if can_merge {
+                let last_req_raw = last_req.unwrap();
+                last_req_raw.next = Box::new(Some(req));
+                last_req = last_req_raw.next.as_mut().as_mut();
+                merged_reqs += 1;
             } else {
-                merge_req_queue.push(req.clone());
+                if io {
+                    *last_aio_index = merge_req_queue.len();
+                }
+                merge_req_queue.push(req);
+                last_req = merge_req_queue.last_mut();
+                merged_reqs = 1;
             }
         }
 
         merge_req_queue
     }
 
-    fn process_queue(&mut self) -> Result<bool> {
+    fn process_queue_internal(&mut self) -> Result<bool> {
         let mut req_queue = Vec::new();
-        let mut req_index = 0;
         let mut last_aio_req_index = 0;
-        let mut need_interrupt = false;
         let mut done = false;
 
-        let mut queue = self.queue.lock().unwrap();
+        loop {
+            let mut queue = self.queue.lock().unwrap();
+            let mut elem = queue
+                .vring
+                .pop_avail(&self.mem_space, self.driver_features)?;
+            if elem.desc_num == 0 {
+                break;
+            }
 
-        while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             // limit io operations if iops is configured
             if let Some(lb) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
@@ -437,201 +495,176 @@ impl BlockIoHandler {
                 };
             }
 
-            match Request::new(&self.mem_space, &elem) {
-                Ok(req) => {
-                    match req.out_header.request_type {
-                        VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
-                            last_aio_req_index = req_index;
-                        }
-                        _ => {}
-                    }
-                    req_queue.push(req);
-                    req_index += 1;
-                    done = true;
-                }
-                Err(ref e) => {
-                    //  If it fails, also need to free descriptor table entry.
-                    queue
-                        .vring
-                        .add_used(&self.mem_space, elem.index, 0)
-                        .chain_err(|| "Failed to add used ring")?;
-                    need_interrupt = true;
-
-                    error!(
-                        "failed to create block request, {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
-                }
-            };
+            // Init and put valid request into request queue.
+            let mut status = VIRTIO_BLK_S_OK;
+            let req = Request::new(self, &mut elem, &mut status)?;
+            if status != VIRTIO_BLK_S_OK {
+                let aiocompletecb = AioCompleteCb::new(
+                    self.queue.clone(),
+                    self.mem_space.clone(),
+                    Rc::new(req),
+                    Some(self.interrupt_cb.clone()),
+                    self.driver_features,
+                );
+                // unlock queue, because it will be hold below.
+                drop(queue);
+                aiocompletecb.complete_request(status);
+                continue;
+            }
+            // Avoid bogus guest stuck IO thread.
+            if req_queue.len() >= queue.vring.actual_size() as usize {
+                bail!("The front driver may be damaged, avail requests more than queue size");
+            }
+            req_queue.push(req);
+            done = true;
         }
 
-        // unlock queue, because it will be hold below.
-        drop(queue);
-
-        let merge_req_queue = self.merge_req_queue(req_queue);
-
-        if let Some(disk_img) = self.disk_image.as_mut() {
-            req_index = 0;
-            for req in merge_req_queue.iter() {
-                if let Some(ref mut aio) = self.aio {
-                    let rw_len = match req.out_header.request_type {
-                        VIRTIO_BLK_T_IN => u32::try_from(req.data_len)
-                            .chain_err(|| "Convert block request len to u32 with overflow.")?,
-                        _ => 0u32,
-                    };
-
-                    let aiocompletecb = AioCompleteCb::new(
-                        self.queue.clone(),
-                        self.mem_space.clone(),
-                        req.desc_index,
-                        rw_len,
-                        req.in_header,
-                        Some(self.interrupt_cb.clone()),
-                        self.driver_features,
-                    );
-
-                    match req.execute(
-                        aio,
-                        disk_img,
-                        self.disk_sectors,
-                        &self.serial_num,
-                        self.direct,
-                        last_aio_req_index == req_index,
-                        aiocompletecb,
-                    ) {
-                        Ok(v) => {
-                            if v == 1 {
-                                // get device id
-                                self.mem_space
-                                    .write_object(&VIRTIO_BLK_S_OK, req.in_header)
-                                    .chain_err(|| "Failed to write result for the request for block with device id")?;
-                                self.queue.lock().unwrap().vring.add_used(
-                                    &self.mem_space,
-                                    req.desc_index,
-                                    1,
-                                ).chain_err(|| "Failed to add the request for block with device id to used ring")?;
-
-                                if self
-                                    .queue
-                                    .lock()
-                                    .unwrap()
-                                    .vring
-                                    .should_notify(&self.mem_space, self.driver_features)
-                                {
-                                    need_interrupt = true;
-                                }
-                            }
-                        }
-                        Err(ref e) => {
-                            error!(
-                                "Failed to execute block request, {}",
-                                error_chain::ChainedError::display_chain(e)
-                            );
-                        }
-                    }
-                    req_index += 1;
-                }
-            }
-        } else if !merge_req_queue.is_empty() {
-            for req in merge_req_queue.iter() {
-                self.queue
-                    .lock()
-                    .unwrap()
-                    .vring
-                    .add_used(&self.mem_space, req.desc_index, 1)
-                    .chain_err(|| {
-                        "Failed to add used ring, when block request queue isn't empty"
-                    })?;
-            }
-            need_interrupt = true
+        if req_queue.is_empty() {
+            return Ok(done);
         }
 
-        if need_interrupt {
-            (self.interrupt_cb)(
-                &VirtioInterruptType::Vring,
-                Some(&self.queue.lock().unwrap()),
-            )
-            .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Vring))?;
+        let merge_req_queue = self.merge_req_queue(req_queue, &mut last_aio_req_index);
+        for (req_index, req) in merge_req_queue.into_iter().enumerate() {
+            let req_rc = Rc::new(req);
+            let aiocompletecb = AioCompleteCb::new(
+                self.queue.clone(),
+                self.mem_space.clone(),
+                req_rc.clone(),
+                Some(self.interrupt_cb.clone()),
+                self.driver_features,
+            );
+            if let Some(disk_img) = self.disk_image.as_ref() {
+                if let Err(ref e) = req_rc.execute(
+                    self.aio.as_mut().unwrap(),
+                    disk_img,
+                    &self.serial_num,
+                    self.direct,
+                    &self.aio_type,
+                    req_index == last_aio_req_index,
+                    aiocompletecb.clone(),
+                ) {
+                    error!("Failed to execute block request, {:?}", e);
+                    aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
+                }
+            } else {
+                warn!("Failed to execute block request, disk_img not specified");
+                aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
+            }
         }
 
         Ok(done)
     }
 
-    fn build_aio(&self) -> Result<Box<Aio<AioCompleteCb>>> {
+    fn process_queue_suppress_notify(&mut self) -> Result<bool> {
+        let mut done = false;
+        let start_time = Instant::now();
+
+        if !self.queue.lock().unwrap().is_enabled() {
+            done = true;
+            return Ok(done);
+        }
+        while self
+            .queue
+            .lock()
+            .unwrap()
+            .vring
+            .avail_ring_len(&self.mem_space)?
+            != 0
+        {
+            // Do not stuck IO thread.
+            let now = Instant::now();
+            if (now - start_time).as_millis() > MAX_MILLIS_TIME_PROCESS_QUEUE as u128 {
+                // Make sure we can come back.
+                self.queue_evt.try_clone()?.write(1)?;
+                break;
+            }
+
+            self.queue.lock().unwrap().vring.suppress_queue_notify(
+                &self.mem_space,
+                self.driver_features,
+                true,
+            )?;
+
+            done = self.process_queue_internal()?;
+
+            self.queue.lock().unwrap().vring.suppress_queue_notify(
+                &self.mem_space,
+                self.driver_features,
+                false,
+            )?;
+
+            // See whether we have been throttled.
+            if let Some(lb) = self.leak_bucket.as_mut() {
+                if let Some(ctx) = EventLoop::get_ctx(self.iothread.as_ref()) {
+                    if lb.throttled(ctx, 0) {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(done)
+    }
+
+    fn process_queue(&mut self) -> Result<bool> {
+        self.trace_request("Block".to_string(), "to IO".to_string());
+        let result = self.process_queue_suppress_notify();
+        if result.is_err() {
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                Some(&self.deactivate_evt),
+            );
+        }
+        result
+    }
+
+    fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
         let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
-            let status = if ret < 0 {
-                ret
+            let mut status = if ret < 0 {
+                VIRTIO_BLK_S_IOERR
             } else {
-                i64::from(VIRTIO_BLK_S_OK)
+                VIRTIO_BLK_S_OK
             };
 
             let complete_cb = &aiocb.iocompletecb;
-            if let Err(ref e) = complete_cb
-                .mem_space
-                .write_object(&status, complete_cb.req_status_addr)
+            // When driver does not accept FLUSH feature, the device must be of
+            // writethrough cache type, so flush data before updating used ring.
+            if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
+                && aiocb.opcode == IoCmd::Pwritev
+                && ret >= 0
             {
-                error!(
-                    "Failed to write the status (aio completion) {}",
-                    error_chain::ChainedError::display_chain(e)
-                );
-                return;
-            }
-
-            let mut queue_lock = complete_cb.queue.lock().unwrap();
-            if let Err(ref e) = queue_lock.vring.add_used(
-                &complete_cb.mem_space,
-                complete_cb.desc_index,
-                complete_cb.rw_len,
-            ) {
-                error!(
-                    "Failed to add used ring(aio completion), index {}, len {} {}",
-                    complete_cb.desc_index,
-                    complete_cb.rw_len,
-                    error_chain::ChainedError::display_chain(e),
-                );
-                return;
-            }
-
-            if queue_lock
-                .vring
-                .should_notify(&complete_cb.mem_space, complete_cb.driver_features)
-            {
-                if let Err(e) = (*complete_cb.interrupt_cb.as_ref().unwrap())(
-                    &VirtioInterruptType::Vring,
-                    Some(&queue_lock),
-                ) {
-                    error!(
-                        "Failed to trigger interrupt(aio completion) for block device, error is {}",
-                        e.display_chain()
-                    );
+                if let Err(ref e) = raw_datasync(aiocb.file_fd) {
+                    error!("Failed to flush data before send response to guest {:?}", e);
+                    status = VIRTIO_BLK_S_IOERR;
                 }
             }
+
+            complete_cb.complete_request(status);
         }) as AioCompleteFunc<AioCompleteCb>);
 
-        Ok(Box::new(Aio::new(complete_func)?))
+        Ok(Box::new(Aio::new(complete_func, engine)?))
     }
 
     fn update_evt_handler(&mut self) {
         match self.receiver.recv() {
-            Ok((image, disk_sectors, serial_num, direct)) => {
+            Ok((image, disk_sectors, serial_num, direct, aio_type)) => {
                 self.disk_sectors = disk_sectors;
                 self.disk_image = image;
                 self.serial_num = serial_num;
                 self.direct = direct;
+                self.aio_type = aio_type;
             }
             Err(_) => {
                 self.disk_sectors = 0;
                 self.disk_image = None;
                 self.serial_num = None;
                 self.direct = true;
+                self.aio_type = Some(String::from(AIO_NATIVE));
             }
         };
 
         if let Err(ref e) = self.process_queue() {
-            error!(
-                "Failed to handle block IO for updating handler {}",
-                error_chain::ChainedError::display_chain(e)
-            );
+            error!("Failed to handle block IO for updating handler {:?}", e);
         }
     }
 
@@ -723,10 +756,7 @@ impl EventNotifierHelper for BlockIoHandler {
             read_fd(fd);
 
             if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
-                error!(
-                    "Failed to handle block IO {}",
-                    error_chain::ChainedError::display_chain(e)
-                );
+                error!("Failed to handle block IO {:?}", e);
             }
             None
         });
@@ -737,7 +767,7 @@ impl EventNotifierHelper for BlockIoHandler {
                 .lock()
                 .unwrap()
                 .process_queue()
-                .chain_err(|| "Failed to handle block IO")
+                .with_context(|| "Failed to handle block IO")
                 .ok()?;
             if done {
                 Some(Vec::new())
@@ -771,10 +801,7 @@ impl EventNotifierHelper for BlockIoHandler {
                 }
 
                 if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
-                    error!(
-                        "Failed to handle block IO {}",
-                        error_chain::ChainedError::display_chain(e)
-                    );
+                    error!("Failed to handle block IO {:?}", e);
                 }
                 None
             });
@@ -789,10 +816,7 @@ impl EventNotifierHelper for BlockIoHandler {
 
                 if let Some(aio) = &mut h_clone.lock().unwrap().aio {
                     if let Err(ref e) = aio.handle() {
-                        error!(
-                            "Failed to handle aio, {}",
-                            error_chain::ChainedError::display_chain(e)
-                        );
+                        error!("Failed to handle aio, {:?}", e);
                     }
                 }
                 None
@@ -802,7 +826,7 @@ impl EventNotifierHelper for BlockIoHandler {
             let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
                 let mut done = false;
                 if let Some(aio) = &mut h_clone.lock().unwrap().aio {
-                    done = aio.handle().chain_err(|| "Failed to handle aio").ok()?;
+                    done = aio.handle().with_context(|| "Failed to handle aio").ok()?;
                 }
                 if done {
                     Some(Vec::new())
@@ -842,7 +866,7 @@ impl ByteCode for VirtioBlkGeometry {}
 
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
-struct VirtioBlkConfig {
+pub struct VirtioBlkConfig {
     /// The capacity in 512 byte sectors.
     capacity: u64,
     /// The maximum segment size.
@@ -866,7 +890,7 @@ struct VirtioBlkConfig {
     /// Reserved data.
     unused: u8,
     /// Number of virtio queues, only available when `VIRTIO_BLK_F_MQ` is set.
-    num_queues: u16,
+    pub num_queues: u16,
     /// The maximum discard sectors for one segment.
     max_discard_sectors: u32,
     /// The maximum number of discard segments in a discard command.
@@ -891,11 +915,11 @@ impl ByteCode for VirtioBlkConfig {}
 #[desc_version(compat_version = "0.1.0")]
 pub struct BlockState {
     /// Bitmask of features supported by the backend.
-    device_features: u64,
+    pub device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
+    pub driver_features: u64,
     /// Config space of the block device.
-    config_space: VirtioBlkConfig,
+    pub config_space: VirtioBlkConfig,
 }
 
 /// Block device structure.
@@ -951,8 +975,8 @@ impl Block {
         // capacity: 64bits
         let num_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
         self.state.config_space.capacity = num_sectors;
-        // seg_max = 128-2: 32bits
-        self.state.config_space.seg_max = 126;
+        // seg_max = queue_size - 2: 32bits
+        self.state.config_space.seg_max = self.queue_size() as u32 - 2;
     }
 }
 
@@ -974,7 +998,6 @@ impl VirtioDevice for Block {
             self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
         self.state.device_features |= 1_u64 << VIRTIO_F_RING_INDIRECT_DESC;
-        self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
         self.state.device_features |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
         self.state.device_features |= 1_u64 << VIRTIO_F_RING_EVENT_IDX;
 
@@ -985,45 +1008,20 @@ impl VirtioDevice for Block {
             self.state.config_space.num_queues = self.blk_cfg.queues;
         }
 
+        let mut disk_image = None;
         let mut disk_size = DUMMY_IMG_SIZE;
-
         if !self.blk_cfg.path_on_host.is_empty() {
-            self.disk_image = None;
-
-            let mut file = if self.blk_cfg.direct {
-                OpenOptions::new()
-                    .read(true)
-                    .write(!self.blk_cfg.read_only)
-                    .custom_flags(libc::O_DIRECT)
-                    .open(&self.blk_cfg.path_on_host)
-                    .chain_err(|| {
-                        format!(
-                            "failed to open the file by O_DIRECT for block {}",
-                            self.blk_cfg.path_on_host
-                        )
-                    })?
-            } else {
-                OpenOptions::new()
-                    .read(true)
-                    .write(!self.blk_cfg.read_only)
-                    .open(&self.blk_cfg.path_on_host)
-                    .chain_err(|| {
-                        format!(
-                            "failed to open the file for block {}",
-                            self.blk_cfg.path_on_host
-                        )
-                    })?
-            };
-
-            disk_size = file
-                .seek(SeekFrom::End(0))
-                .chain_err(|| "Failed to seek the end for block")? as u64;
-
-            self.disk_image = Some(Arc::new(file));
-        } else {
-            self.disk_image = None;
+            let mut file = open_disk_file(
+                &self.blk_cfg.path_on_host,
+                self.blk_cfg.read_only,
+                self.blk_cfg.direct,
+            )?;
+            disk_size =
+                file.seek(SeekFrom::End(0))
+                    .with_context(|| "Failed to seek the end for block")? as u64;
+            disk_image = Some(Arc::new(file));
         }
-
+        self.disk_image = disk_image;
         self.disk_sectors = disk_size >> SECTOR_SHIFT;
         self.state.config_space.capacity = self.disk_sectors;
 
@@ -1057,38 +1055,46 @@ impl VirtioDevice for Block {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.state.device_features;
-        if unrequested_features != 0 {
-            v &= !unrequested_features;
-        }
-        self.state.driver_features |= v;
+        self.state.driver_features = self.checked_driver_features(page, value);
+    }
+
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.state.driver_features, features_select)
     }
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
+        // F_DISCARD is not supported for now, so related config does not exist.
+        let config_len = offset_of!(VirtioBlkConfig, max_discard_sectors) as u64;
+        let read_end = offset as usize + data.len();
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
+        }
+
         let config_slice = self.state.config_space.as_bytes();
-        let config_len = config_slice.len() as u64;
-        if offset >= config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len).into());
-        }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
-        }
+        data.write_all(&config_slice[(offset as usize)..read_end])?;
 
         Ok(())
     }
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let data_len = data.len();
-        let config_slice = self.state.config_space.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(ErrorKind::DevConfigOverflow(offset, config_len as u64).into());
+        // F_DISCARD is not supported for now, so related config does not exist.
+        let config_len = offset_of!(VirtioBlkConfig, max_discard_sectors) as u64;
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+        // The only writable field is "writeback", but it's not supported for now,
+        // so do nothing here.
 
         Ok(())
     }
@@ -1116,6 +1122,7 @@ impl VirtioDevice for Block {
                 disk_image: self.disk_image.clone(),
                 disk_sectors: self.disk_sectors,
                 direct: self.blk_cfg.direct,
+                aio_type: self.blk_cfg.aio.clone(),
                 serial_num: self.blk_cfg.serial_num.clone(),
                 aio: None,
                 driver_features: self.state.driver_features,
@@ -1127,7 +1134,7 @@ impl VirtioDevice for Block {
                 leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
             };
 
-            handler.aio = Some(handler.build_aio()?);
+            handler.aio = Some(handler.build_aio(self.blk_cfg.aio.as_ref())?);
 
             EventLoop::update_event(
                 EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
@@ -1143,7 +1150,7 @@ impl VirtioDevice for Block {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
@@ -1169,18 +1176,23 @@ impl VirtioDevice for Block {
                         self.disk_sectors,
                         self.blk_cfg.serial_num.clone(),
                         self.blk_cfg.direct,
+                        self.blk_cfg.aio.clone(),
                     ))
-                    .chain_err(|| ErrorKind::ChannelSend("image fd".to_string()))?;
+                    .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
             }
 
             self.update_evt
                 .write(1)
-                .chain_err(|| ErrorKind::EventFdWrite)?;
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
         }
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Config, None)
-                .chain_err(|| ErrorKind::InterruptTrigger("block", VirtioInterruptType::Config))?;
+            interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
+                anyhow!(VirtioError::InterruptTrigger(
+                    "block",
+                    VirtioInterruptType::Config
+                ))
+            })?;
         }
 
         Ok(())
@@ -1193,13 +1205,13 @@ impl VirtioDevice for Block {
 unsafe impl Sync for Block {}
 
 impl StateTransfer for Block {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *BlockState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("BLOCK"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("BLOCK")))?;
 
         Ok(())
     }
@@ -1214,6 +1226,9 @@ impl StateTransfer for Block {
 }
 
 impl MigrationHook for Block {}
+
+impl VirtioTrace for BlockIoHandler {}
+impl VirtioTrace for AioCompleteCb {}
 
 #[cfg(test)]
 mod tests {
@@ -1283,7 +1298,7 @@ mod tests {
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and
-    // read date are same; Input invalid offset or date length, it will failed.
+    // read data are not same; Input invalid offset or data length, it will failed.
     #[test]
     fn test_read_write_config() {
         let mut block = Block::default();
@@ -1293,7 +1308,7 @@ mod tests {
         let mut read_config_space = [0u8; 8];
         block.write_config(0, &expect_config_space).unwrap();
         block.read_config(0, &mut read_config_space).unwrap();
-        assert_eq!(read_config_space, expect_config_space);
+        assert_ne!(read_config_space, expect_config_space);
 
         // Invalid write
         assert!(block
@@ -1322,12 +1337,14 @@ mod tests {
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.state.driver_features, 0_u64);
+        assert_eq!(block.get_driver_features(page) as u64, 0_u64);
         assert_eq!(block.get_device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.state.driver_features, 0_u64);
+        assert_eq!(block.get_driver_features(page) as u64, 0_u64);
         assert_eq!(block.get_device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
@@ -1342,6 +1359,10 @@ mod tests {
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
         );
         assert_eq!(
+            block.get_driver_features(page) as u64,
+            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+        );
+        assert_eq!(
             block.get_device_features(page),
             (1_u32 << VIRTIO_F_RING_INDIRECT_DESC)
         );
@@ -1352,6 +1373,7 @@ mod tests {
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.state.driver_features, 0);
+        assert_eq!(block.get_driver_features(page), 0);
         assert_eq!(block.get_device_features(page), 0_u32);
         block.state.driver_features = 0;
     }
@@ -1402,7 +1424,7 @@ mod tests {
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
@@ -1410,7 +1432,7 @@ mod tests {
                 interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
-                    .chain_err(|| ErrorKind::EventFdWrite)?;
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
 
                 Ok(())
             },

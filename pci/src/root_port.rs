@@ -14,29 +14,31 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
-use error_chain::{bail, ChainedError};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
 use machine_manager::event;
 use machine_manager::qmp::{qmp_schema as schema, QmpChannel};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use once_cell::sync::OnceCell;
 use util::byte_code::ByteCode;
 
 use super::config::{
-    PciConfig, PcieDevType, BAR_0, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE,
-    COMMAND_MEMORY_SPACE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE,
-    PCIE_CONFIG_SPACE_SIZE, PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC,
-    PCI_EXP_LNKSTA, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW, PCI_EXP_SLTCTL, PCI_EXP_SLTCTL_PCC,
-    PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTSTA, PCI_EXP_SLTSTA_PDC,
-    PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE, PREF_MEMORY_LIMIT,
-    PREF_MEM_RANGE_64BIT, REG_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+    PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
+    DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, IO_BASE, MEMORY_BASE, PCIE_CONFIG_SPACE_SIZE,
+    PCI_EXP_HP_EV_ABP, PCI_EXP_HP_EV_CCI, PCI_EXP_HP_EV_PDC, PCI_EXP_LNKSTA,
+    PCI_EXP_LNKSTA_CLS_2_5GB, PCI_EXP_LNKSTA_DLLLA, PCI_EXP_LNKSTA_NLW_X1, PCI_EXP_SLTCTL,
+    PCI_EXP_SLTCTL_PCC, PCI_EXP_SLTCTL_PIC, PCI_EXP_SLTCTL_PWR_IND_BLINK,
+    PCI_EXP_SLTCTL_PWR_IND_OFF, PCI_EXP_SLTCTL_PWR_IND_ON, PCI_EXP_SLTCTL_PWR_OFF, PCI_EXP_SLTSTA,
+    PCI_EXP_SLTSTA_PDC, PCI_EXP_SLTSTA_PDS, PCI_VENDOR_ID_REDHAT, PREF_MEMORY_BASE,
+    PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
-use crate::errors::{Result, ResultExt};
 use crate::hotplug::HotplugOps;
-use crate::init_multifunction;
 use crate::msix::init_msix;
+use crate::{init_multifunction, PciError};
 use crate::{
     le_read_u16, le_write_clear_value_u16, le_write_set_value_u16, le_write_u16, ranges_overlap,
     PciDevOps,
@@ -119,10 +121,10 @@ impl RootPort {
     fn hotplug_command_completed(&mut self) {
         if let Err(e) = le_write_set_value_u16(
             &mut self.config.config,
-            (self.config.ext_cap_offset + PCI_EXP_SLTSTA) as usize,
+            (self.config.pci_express_cap_offset + PCI_EXP_SLTSTA) as usize,
             PCI_EXP_HP_EV_CCI,
         ) {
-            error!("{}", e.display_chain());
+            error!("{}", format!("{:?}", e));
             error!("Failed to write command completed");
         }
     }
@@ -139,7 +141,7 @@ impl RootPort {
 
     /// Update register when the guest OS trigger the removal of the device.
     fn update_register_status(&mut self) -> Result<()> {
-        let cap_offset = self.config.ext_cap_offset;
+        let cap_offset = self.config.pci_express_cap_offset;
         le_write_clear_value_u16(
             &mut self.config.config,
             (cap_offset + PCI_EXP_SLTSTA) as usize,
@@ -167,7 +169,7 @@ impl RootPort {
         for dev in devices.values() {
             let mut locked_dev = dev.lock().unwrap();
             if let Err(e) = locked_dev.unrealize() {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
                 error!("Failed to unrealize device {}.", locked_dev.name());
             }
             info!("Device {} unplug from {}", locked_dev.name(), self.name);
@@ -196,9 +198,9 @@ impl RootPort {
                 .unwrap()
                 .io_region
                 .add_subregion(self.io_region.clone(), 0)
-                .chain_err(|| "Failed to add IO container region.")
+                .with_context(|| "Failed to add IO container region.")
             {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
             }
         }
         if command & COMMAND_MEMORY_SPACE != 0 {
@@ -210,15 +212,15 @@ impl RootPort {
                 .unwrap()
                 .mem_region
                 .add_subregion(self.mem_region.clone(), 0)
-                .chain_err(|| "Failed to add memory container region.")
+                .with_context(|| "Failed to add memory container region.")
             {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
             }
         }
     }
 
     fn do_unplug(&mut self, offset: usize, end: usize, old_ctl: u16) {
-        let cap_offset = self.config.ext_cap_offset;
+        let cap_offset = self.config.pci_express_cap_offset;
         // Only care the write config about slot control
         if !ranges_overlap(
             offset,
@@ -243,11 +245,14 @@ impl RootPort {
             self.remove_devices();
 
             if let Err(e) = self.update_register_status() {
-                error!("{}", e.display_chain());
+                error!("{}", format!("{:?}", e));
                 error!("Failed to update register status");
             }
         }
 
+        // According to the PCIe specification 6.7.3, CCI events is different from others.
+        // To avoid mixing them together, trigger a notify for each.
+        self.hotplug_event_notify();
         self.hotplug_command_completed();
         self.hotplug_event_notify();
     }
@@ -307,11 +312,11 @@ impl PciDevOps for RootPort {
         locked_parent_bus
             .io_region
             .add_subregion(self.sec_bus.lock().unwrap().io_region.clone(), 0)
-            .chain_err(|| "Failed to register subregion in I/O space.")?;
+            .with_context(|| "Failed to register subregion in I/O space.")?;
         locked_parent_bus
             .mem_region
             .add_subregion(self.sec_bus.lock().unwrap().mem_region.clone(), 0)
-            .chain_err(|| "Failed to register subregion in memory space.")?;
+            .with_context(|| "Failed to register subregion in memory space.")?;
 
         let name = self.name.clone();
         let root_port = Arc::new(Mutex::new(self));
@@ -343,16 +348,7 @@ impl PciDevOps for RootPort {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if offset + size > PCIE_CONFIG_SPACE_SIZE || size > 4 {
-            error!(
-                "Failed to read pcie config space at offset {} with data size {}",
-                offset, size
-            );
-            return;
-        }
-
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         self.config.read(offset, data);
     }
 
@@ -367,23 +363,18 @@ impl PciDevOps for RootPort {
             return;
         }
 
-        let cap_offset = self.config.ext_cap_offset;
+        let cap_offset = self.config.pci_express_cap_offset;
         let old_ctl =
             le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTCTL) as usize).unwrap();
 
-        self.config
-            .write(offset, data, self.dev_id.load(Ordering::Acquire));
-        if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
-            || ranges_overlap(offset, end, BAR_0 as usize, BAR_0 as usize + REG_SIZE * 2)
-        {
-            if let Err(e) = self.config.update_bar_mapping(
-                #[cfg(target_arch = "x86_64")]
-                &self.io_region,
-                &self.mem_region,
-            ) {
-                error!("{}", e.display_chain());
-            }
-        }
+        self.config.write(
+            offset,
+            data,
+            self.dev_id.load(Ordering::Acquire),
+            #[cfg(target_arch = "x86_64")]
+            Some(&self.io_region),
+            Some(&self.mem_region),
+        );
         if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
             || ranges_overlap(offset, end, IO_BASE as usize, (IO_BASE + 2) as usize)
             || ranges_overlap(
@@ -410,9 +401,9 @@ impl PciDevOps for RootPort {
                 .lock()
                 .unwrap()
                 .reset()
-                .chain_err(|| "Fail to reset sec_bus in root port")
+                .with_context(|| "Fail to reset sec_bus in root port")?;
         } else {
-            let cap_offset = self.config.ext_cap_offset;
+            let cap_offset = self.config.pci_express_cap_offset;
             le_write_u16(
                 &mut self.config.config,
                 (cap_offset + PCI_EXP_SLTSTA) as usize,
@@ -428,8 +419,9 @@ impl PciDevOps for RootPort {
                 (cap_offset + PCI_EXP_LNKSTA) as usize,
                 PCI_EXP_LNKSTA_DLLLA,
             )?;
-            Ok(())
         }
+        self.config.reset_bridge_regs()?;
+        self.config.reset_common_regs()
     }
 
     fn get_dev_path(&self) -> Option<String> {
@@ -446,43 +438,57 @@ impl HotplugOps for RootPort {
             .lock()
             .unwrap()
             .devfn()
-            .chain_err(|| "Failed to get devfn")?;
+            .with_context(|| "Failed to get devfn")?;
         // Only if devfn is equal to 0, hot plugging is supported.
-        if devfn == 0 {
-            let offset = self.config.ext_cap_offset;
-            le_write_set_value_u16(
-                &mut self.config.config,
-                (offset + PCI_EXP_SLTSTA) as usize,
-                PCI_EXP_SLTSTA_PDS | PCI_EXP_HP_EV_PDC | PCI_EXP_HP_EV_ABP,
-            )?;
-            le_write_set_value_u16(
-                &mut self.config.config,
-                (offset + PCI_EXP_LNKSTA) as usize,
-                PCI_EXP_LNKSTA_NLW | PCI_EXP_LNKSTA_DLLLA,
-            )?;
-            self.hotplug_event_notify();
+        if devfn != 0 {
+            return Err(anyhow!(PciError::HotplugUnsupported(devfn)));
         }
+
+        let offset = self.config.pci_express_cap_offset;
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_SLTSTA) as usize,
+            PCI_EXP_SLTSTA_PDS | PCI_EXP_HP_EV_PDC | PCI_EXP_HP_EV_ABP,
+        )?;
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_LNKSTA) as usize,
+            PCI_EXP_LNKSTA_CLS_2_5GB | PCI_EXP_LNKSTA_NLW_X1 | PCI_EXP_LNKSTA_DLLLA,
+        )?;
+        self.hotplug_event_notify();
+
         Ok(())
     }
 
     fn unplug_request(&mut self, dev: &Arc<Mutex<dyn PciDevOps>>) -> Result<()> {
+        let pcie_cap_offset = self.config.pci_express_cap_offset;
+        let sltctl = le_read_u16(
+            &self.config.config,
+            (pcie_cap_offset + PCI_EXP_SLTCTL) as usize,
+        )
+        .unwrap();
+
+        if (sltctl & PCI_EXP_SLTCTL_PIC) == PCI_EXP_SLTCTL_PWR_IND_BLINK {
+            bail!("Guest is still on the fly of another (un)pluging");
+        }
+
         let devfn = dev
             .lock()
             .unwrap()
             .devfn()
-            .chain_err(|| "Failed to get devfn")?;
+            .with_context(|| "Failed to get devfn")?;
         if devfn != 0 {
             return self.unplug(dev);
         }
 
-        let offset = self.config.ext_cap_offset;
+        let offset = self.config.pci_express_cap_offset;
         le_write_clear_value_u16(
             &mut self.config.config,
             (offset + PCI_EXP_LNKSTA) as usize,
             PCI_EXP_LNKSTA_DLLLA,
         )?;
 
-        let mut slot_status = PCI_EXP_HP_EV_ABP;
+        let mut slot_status = 0;
         if let Some(&true) = FAST_UNPLUG_FEATURE.get() {
             slot_status |= PCI_EXP_HP_EV_PDC;
         }
@@ -490,6 +496,19 @@ impl HotplugOps for RootPort {
             &mut self.config.config,
             (offset + PCI_EXP_SLTSTA) as usize,
             slot_status,
+        )?;
+
+        if ((sltctl & PCI_EXP_SLTCTL_PIC) == PCI_EXP_SLTCTL_PWR_IND_OFF)
+            && ((sltctl & PCI_EXP_SLTCTL_PCC) == PCI_EXP_SLTCTL_PWR_OFF)
+        {
+            // if the slot has already been unpluged, skip notifing the guest.
+            return Ok(());
+        }
+
+        le_write_set_value_u16(
+            &mut self.config.config,
+            (offset + PCI_EXP_SLTSTA) as usize,
+            slot_status | PCI_EXP_HP_EV_ABP,
         )?;
         self.hotplug_event_notify();
         Ok(())
@@ -500,7 +519,7 @@ impl HotplugOps for RootPort {
             .lock()
             .unwrap()
             .devfn()
-            .chain_err(|| "Failed to get devfn")?;
+            .with_context(|| "Failed to get devfn")?;
         let mut locked_dev = dev.lock().unwrap();
         locked_dev.unrealize()?;
         self.sec_bus.lock().unwrap().devices.remove(&devfn);
@@ -509,7 +528,7 @@ impl HotplugOps for RootPort {
 }
 
 impl StateTransfer for RootPort {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = RootPortState::default();
 
         for idx in 0..self.config.config.len() {
@@ -524,9 +543,9 @@ impl StateTransfer for RootPort {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let root_port_state = *RootPortState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("ROOT_PORT"))?;
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("ROOT_PORT")))?;
 
         let length = self.config.config.len();
         self.config.config = root_port_state.config_space[..length].to_vec();

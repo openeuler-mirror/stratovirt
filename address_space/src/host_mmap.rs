@@ -16,7 +16,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 
-use error_chain::bail;
+use anyhow::{bail, Context, Result};
 use log::{error, info};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
 use util::{
@@ -24,7 +24,6 @@ use util::{
     unix::{do_mmap, host_page_size},
 };
 
-use crate::errors::{Result, ResultExt};
 use crate::{AddressRange, GuestAddress};
 
 const MAX_PREALLOC_THREAD: u8 = 16;
@@ -34,7 +33,7 @@ const MPOL_MF_STRICT: u32 = 1;
 const MPOL_MF_MOVE: u32 = 2;
 
 /// FileBackend represents backend-file of `HostMemMapping`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FileBackend {
     /// File we used to map memory.
     pub file: Arc<File>,
@@ -75,13 +74,16 @@ impl FileBackend {
     pub fn new_mem(file_path: &str, file_len: u64) -> Result<FileBackend> {
         let path = std::path::Path::new(&file_path);
         let file = if path.is_dir() {
+            // The last six characters of template file must be "XXXXXX" for `mkstemp`
+            // function to create unique temporary file.
             let fs_path = format!("{}{}", file_path, "/stratovirt_backmem_XXXXXX");
             let fs_cstr = std::ffi::CString::new(fs_path.clone()).unwrap().into_raw();
 
             let raw_fd = unsafe { libc::mkstemp(fs_cstr) };
             if raw_fd < 0 {
-                return Err(std::io::Error::last_os_error())
-                    .chain_err(|| format!("Failed to create file in directory: {} ", file_path));
+                return Err(std::io::Error::last_os_error()).with_context(|| {
+                    format!("Failed to create file in directory: {} ", file_path)
+                });
             }
 
             if unsafe { libc::unlink(fs_cstr) } != 0 {
@@ -100,7 +102,7 @@ impl FileBackend {
                 .write(true)
                 .create(true)
                 .open(path)
-                .chain_err(|| format!("Failed to open file: {}", file_path))?;
+                .with_context(|| format!("Failed to open file: {}", file_path))?;
 
             if existed
                 && unsafe { libc::unlink(std::ffi::CString::new(file_path).unwrap().into_raw()) }
@@ -128,7 +130,7 @@ impl FileBackend {
         let old_file_len = file.metadata().unwrap().len();
         if old_file_len == 0 {
             file.set_len(file_len)
-                .chain_err(|| format!("Failed to set length of file: {}", file_path))?;
+                .with_context(|| format!("Failed to set length of file: {}", file_path))?;
         } else if old_file_len < file_len {
             bail!(
             "Backing file {} does not has sufficient resource for allocating RAM (size is 0x{:X})",
@@ -151,8 +153,12 @@ impl FileBackend {
 ///
 /// * `nr_vcpus` - Number of vcpus.
 fn max_nr_threads(nr_vcpus: u8) -> u8 {
-    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u8 };
-    min(min(nr_host_cpu, MAX_PREALLOC_THREAD), nr_vcpus)
+    let nr_host_cpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    if nr_host_cpu > 0 {
+        return min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus);
+    }
+    // If fails to call `sysconf` function, just use a single thread to touch pages.
+    1
 }
 
 /// Touch pages to pre-alloc memory for VM.
@@ -182,7 +188,7 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 ///
 /// # Arguments
 ///
-/// * `host_addr` - The start host address of memory of the virtual machine.
+/// * `host_addr` - The start host address to pre allocate.
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
 fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
@@ -208,7 +214,7 @@ fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     // join all threads to wait for pre-allocating.
     while let Some(thread) = threads_join.pop() {
         if let Err(ref e) = thread.join() {
-            error!("Failed to join thread: {:?}", e);
+            error!("{}", format!("Failed to join thread: {:?}", e));
         }
     }
 }
@@ -230,7 +236,7 @@ pub fn create_host_mmaps(
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
         f_back = Some(
             FileBackend::new_mem(path, file_len)
-                .chain_err(|| "Failed to create file that backs memory")?,
+                .with_context(|| "Failed to create file that backs memory")?,
         );
     } else if mem_config.mem_share {
         let file_len = ranges.iter().fold(0, |acc, x| acc + x.1);
@@ -239,13 +245,13 @@ pub fn create_host_mmaps(
         let anon_fd =
             unsafe { libc::syscall(libc::SYS_memfd_create, anon_mem_name.as_ptr(), 0) } as RawFd;
         if anon_fd < 0 {
-            return Err(std::io::Error::last_os_error()).chain_err(|| "Failed to create memfd");
+            return Err(std::io::Error::last_os_error()).with_context(|| "Failed to create memfd");
         }
 
         let anon_file = unsafe { File::from_raw_fd(anon_fd) };
         anon_file
             .set_len(file_len)
-            .chain_err(|| "Failed to set the length of anonymous file that backs memory")?;
+            .with_context(|| "Failed to set the length of anonymous file that backs memory")?;
 
         f_back = Some(FileBackend {
             file: Arc::new(anon_file),
@@ -333,7 +339,7 @@ pub fn set_host_memory_policy(
             max_node as u64,
             MPOL_MF_STRICT | MPOL_MF_MOVE,
         )
-        .chain_err(|| "Failed to call mbind")?;
+        .with_context(|| "Failed to call mbind")?;
         host_addr_start += zone.size;
     }
 
@@ -341,6 +347,7 @@ pub fn set_host_memory_policy(
 }
 
 /// Record information of memory mapping.
+#[derive(Debug)]
 pub struct HostMemMapping {
     /// Record the range of one memory segment.
     address_range: AddressRange,
@@ -577,5 +584,31 @@ mod test {
         let total_mmaps_size = host_mmaps.iter().fold(0_u64, |acc, x| acc + x.size());
         assert_eq!(total_mem_size, total_file_size);
         assert_eq!(total_mem_size, total_mmaps_size);
+    }
+
+    #[test]
+    fn test_memory_prealloc() {
+        // Mmap and prealloc with anonymous memory.
+        let host_addr = do_mmap(&None, 0x20_0000, 0, false, false, false).unwrap();
+        // Check the thread number equals to minimum value.
+        assert_eq!(max_nr_threads(1), 1);
+        // The max threads limit is 16, or the number of host CPUs, it will never be 20.
+        assert_ne!(max_nr_threads(20), 20);
+        mem_prealloc(host_addr, 0x20_0000, 20);
+
+        // Mmap and prealloc with file backend.
+        let file_path = String::from("back_mem_test");
+        let file_size = 0x10_0000;
+        let f_back = FileBackend::new_mem(&file_path, file_size).unwrap();
+        let host_addr = do_mmap(
+            &Some(f_back.file.as_ref()),
+            0x10_0000,
+            f_back.offset,
+            false,
+            true,
+            false,
+        )
+        .unwrap();
+        mem_prealloc(host_addr, 0x10_0000, 2);
     }
 }

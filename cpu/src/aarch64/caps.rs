@@ -17,6 +17,7 @@ use kvm_bindings::{
     KVM_REG_SIZE_U64,
 };
 use kvm_ioctls::{Cap, Kvm, VcpuFd};
+use machine_manager::config::{CpuConfig, PmuConfig};
 
 use super::core_regs::{get_one_reg_vec, set_one_reg_vec, Result};
 
@@ -43,6 +44,22 @@ impl ArmCPUCaps {
             user_mem: kvm.check_extension(Cap::UserMemory),
             psci02: kvm.check_extension(Cap::ArmPsci02),
             mp_state: kvm.check_extension(Cap::MpState),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ArmCPUFeatures {
+    pub pmu: bool,
+}
+
+impl From<&CpuConfig> for ArmCPUFeatures {
+    fn from(conf: &CpuConfig) -> Self {
+        Self {
+            pmu: match &conf.pmu {
+                PmuConfig::On => true,
+                PmuConfig::Off => false,
+            },
         }
     }
 }

@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 
 use vmm_sys_util::eventfd::EventFd;
 
-use super::errors::Result;
 use super::{Queue, QueueConfig};
+use anyhow::Result;
 
 /// Vhost vring call notify structure.
 pub struct VhostNotify {

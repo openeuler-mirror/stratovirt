@@ -14,16 +14,15 @@ use std::fs::metadata;
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
+use util::aio::{AIO_IOURING, AIO_NATIVE};
 
-use super::{
-    errors::{ErrorKind, Result},
-    pci_args_check,
-};
+use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH,
+    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 
 const MAX_SERIAL_NUM: usize = 20;
@@ -42,6 +41,9 @@ pub struct BlkDevConfig {
     pub iops: Option<u64>,
     pub queues: u16,
     pub boot_index: Option<u8>,
+    pub chardev: Option<String>,
+    pub socket_path: Option<String>,
+    pub aio: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +65,9 @@ impl Default for BlkDevConfig {
             iops: None,
             queues: 1,
             boot_index: None,
+            chardev: None,
+            socket_path: None,
+            aio: Some(AIO_NATIVE.to_string()),
         }
     }
 }
@@ -77,6 +82,7 @@ pub struct DriveConfig {
     pub read_only: bool,
     pub direct: bool,
     pub iops: Option<u64>,
+    pub aio: Option<String>,
 }
 
 impl Default for DriveConfig {
@@ -87,6 +93,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             iops: None,
+            aio: Some(String::from(AIO_NATIVE)),
         }
     }
 }
@@ -100,25 +107,32 @@ impl DriveConfig {
                 if ((meta.st_mode() & libc::S_IFREG) != libc::S_IFREG)
                     && ((meta.st_mode() & libc::S_IFBLK) != libc::S_IFBLK)
                 {
-                    return Err(ErrorKind::UnRegularFile("Drive File".to_string()).into());
+                    return Err(anyhow!(ConfigError::UnRegularFileOrBlk(
+                        self.path_on_host.clone()
+                    )));
                 }
             }
             Err(e) => {
-                error!("Failed to check the drive metadata: {}", e);
-                return Err(ErrorKind::UnRegularFile("Drive File".to_string()).into());
+                error!("Failed to check the drive metadata: {:?}", e);
+                return Err(anyhow!(ConfigError::NoMetadata(
+                    self.path_on_host.clone(),
+                    e.to_string(),
+                )));
             }
         }
         if let Some(file_name) = blk.file_name() {
             if file_name.len() > MAX_STRING_LENGTH {
-                return Err(ErrorKind::StringLengthTooLong(
+                return Err(anyhow!(ConfigError::StringLengthTooLong(
                     "File name".to_string(),
                     MAX_STRING_LENGTH,
-                )
-                .into());
+                )));
             }
         } else {
             error!("Failed to check the drive file name");
-            return Err(ErrorKind::UnRegularFile("Drive File".to_string()).into());
+            return Err(anyhow!(ConfigError::InvalidParam(
+                self.path_on_host.clone(),
+                "file".to_string(),
+            )));
         }
         Ok(())
     }
@@ -127,26 +141,37 @@ impl DriveConfig {
 impl ConfigCheck for DriveConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong("Drive id".to_string(), MAX_STRING_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "Drive id".to_string(),
+                MAX_STRING_LENGTH
+            )));
         }
         if self.path_on_host.len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "Drive device path".to_string(),
                 MAX_PATH_LENGTH,
-            )
-            .into());
+            )));
         }
         if self.iops.is_some() && self.iops.unwrap() > MAX_IOPS {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "iops of block device".to_string(),
                 0,
                 true,
                 MAX_IOPS,
                 true,
-            )
-            .into());
+            )));
+        }
+        if self.aio == Some(String::from(AIO_NATIVE)) && !self.direct {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "aio".to_string(),
+                "native aio type should be used with \"direct\" on".to_string(),
+            )));
+        }
+        if self.aio.is_none() && self.direct {
+            return Err(anyhow!(ConfigError::InvalidParam(
+                "aio".to_string(),
+                "low performance expected when use sync io with \"direct\" on".to_string(),
+            )));
         }
         Ok(())
     }
@@ -155,57 +180,47 @@ impl ConfigCheck for DriveConfig {
 impl ConfigCheck for BlkDevConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "drive device id".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
-        }
-
-        if self.path_on_host.len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
-                "drive device path".to_string(),
-                MAX_PATH_LENGTH,
-            )
-            .into());
+            )));
         }
 
         if self.serial_num.is_some() && self.serial_num.as_ref().unwrap().len() > MAX_SERIAL_NUM {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "drive serial number".to_string(),
                 MAX_SERIAL_NUM,
-            )
-            .into());
+            )));
         }
 
         if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "iothread name".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
-        }
-
-        if self.iops.is_some() && self.iops.unwrap() > MAX_IOPS {
-            return Err(ErrorKind::IllegalValue(
-                "iops of block device".to_string(),
-                0,
-                true,
-                MAX_IOPS,
-                true,
-            )
-            .into());
+            )));
         }
 
         if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "number queues of block device".to_string(),
                 1,
                 true,
                 MAX_VIRTIO_QUEUE as u64,
                 true,
-            )
-            .into());
+            )));
+        }
+
+        let fake_drive = DriveConfig {
+            path_on_host: self.path_on_host.clone(),
+            direct: self.direct,
+            iops: self.iops,
+            aio: self.aio.clone(),
+            ..Default::default()
+        };
+        fake_drive.check()?;
+        #[cfg(not(test))]
+        if self.chardev.is_none() {
+            fake_drive.check_path()?;
         }
 
         Ok(())
@@ -224,13 +239,13 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         drive.id = id;
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "blk").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "blk")));
     }
 
     if let Some(file) = cmd_parser.get_value::<String>("file")? {
         drive.path_on_host = file;
     } else {
-        return Err(ErrorKind::FieldIsMissing("file", "blk").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("file", "blk")));
     }
 
     if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
@@ -240,10 +255,37 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         drive.direct = direct.into();
     }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
+    drive.aio = if let Some(aio) = cmd_parser.get_value::<String>("aio")? {
+        let aio_off = "off";
+        if aio != AIO_NATIVE && aio != AIO_IOURING && aio != aio_off {
+            bail!(
+                "Invalid aio configure, should be one of {}|{}|{}",
+                AIO_NATIVE,
+                AIO_IOURING,
+                aio_off
+            );
+        }
+        if aio != aio_off {
+            Some(aio)
+        } else {
+            None
+        }
+    } else if drive.direct {
+        Some(AIO_NATIVE.to_string())
+    } else {
+        None
+    };
+    drive.check()?;
+    #[cfg(not(test))]
+    drive.check_path()?;
     Ok(drive)
 }
 
-pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevConfig> {
+pub fn parse_blk(
+    vm_config: &mut VmConfig,
+    drive_config: &str,
+    queues_auto: Option<u16>,
+) -> Result<BlkDevConfig> {
     let mut cmd_parser = CmdParser::new("virtio-blk");
     cmd_parser
         .push("")
@@ -269,7 +311,7 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
     let blkdrive = if let Some(drive) = cmd_parser.get_value::<String>("drive")? {
         drive
     } else {
-        return Err(ErrorKind::FieldIsMissing("drive", "blk").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("drive", "blk")));
     };
 
     if let Some(iothread) = cmd_parser.get_value::<String>("iothread")? {
@@ -288,6 +330,8 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
 
     if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
         blkdevcfg.queues = queues;
+    } else if let Some(queues) = queues_auto {
+        blkdevcfg.queues = queues;
     }
 
     if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
@@ -295,8 +339,57 @@ pub fn parse_blk(vm_config: &mut VmConfig, drive_config: &str) -> Result<BlkDevC
         blkdevcfg.read_only = drive_arg.read_only;
         blkdevcfg.direct = drive_arg.direct;
         blkdevcfg.iops = drive_arg.iops;
+        blkdevcfg.aio = drive_arg.aio.clone();
     } else {
         bail!("No drive configured matched for blk device");
+    }
+    blkdevcfg.check()?;
+    Ok(blkdevcfg)
+}
+
+pub fn parse_vhost_user_blk_pci(
+    vm_config: &mut VmConfig,
+    drive_config: &str,
+    queues_auto: Option<u16>,
+) -> Result<BlkDevConfig> {
+    let mut cmd_parser = CmdParser::new("vhost-user-blk-pci");
+    cmd_parser
+        .push("")
+        .push("id")
+        .push("bus")
+        .push("addr")
+        .push("num-queues")
+        .push("chardev");
+
+    cmd_parser.parse(drive_config)?;
+
+    pci_args_check(&cmd_parser)?;
+
+    let mut blkdevcfg = BlkDevConfig::default();
+
+    if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
+        blkdevcfg.chardev = Some(chardev);
+    } else {
+        return Err(anyhow!(ConfigError::FieldIsMissing(
+            "chardev",
+            "vhost-user-blk-pci"
+        )));
+    };
+
+    if let Some(id) = cmd_parser.get_value::<String>("id")? {
+        blkdevcfg.id = id;
+    } else {
+        bail!("No id configured for blk device");
+    }
+
+    if let Some(queues) = cmd_parser.get_value::<u16>("num-queues")? {
+        blkdevcfg.queues = queues;
+    } else if let Some(queues) = queues_auto {
+        blkdevcfg.queues = queues;
+    }
+
+    if let Some(chardev) = &blkdevcfg.chardev {
+        blkdevcfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
     }
     blkdevcfg.check()?;
     Ok(blkdevcfg)
@@ -315,15 +408,14 @@ pub struct PFlashConfig {
 impl ConfigCheck for PFlashConfig {
     fn check(&self) -> Result<()> {
         if self.path_on_host.len() > MAX_PATH_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "drive device path".to_string(),
                 MAX_PATH_LENGTH,
-            )
-            .into());
+            )));
         }
 
         if self.unit >= MAX_UNIT_ID {
-            return Err(ErrorKind::UnitIdError(self.unit, MAX_UNIT_ID).into());
+            return Err(anyhow!(ConfigError::UnitIdError(self.unit, MAX_UNIT_ID)));
         }
         Ok(())
     }
@@ -366,7 +458,7 @@ impl VmConfig {
             .push("format")
             .push("if")
             .push("throttling.iops-total")
-            .push("serial");
+            .push("aio");
 
         cmd_parser.parse(block_config)?;
         let drive_cfg = parse_drive(cmd_parser)?;
@@ -407,9 +499,10 @@ impl VmConfig {
         if self.pflashs.is_some() {
             for pf in self.pflashs.as_ref().unwrap() {
                 if pf.unit == pflash.unit {
-                    return Err(
-                        ErrorKind::IdRepeat("pflash".to_string(), pf.unit.to_string()).into(),
-                    );
+                    return Err(anyhow!(ConfigError::IdRepeat(
+                        "pflash".to_string(),
+                        pf.unit.to_string()
+                    )));
                 }
             }
             self.pflashs.as_mut().unwrap().push(pflash);
@@ -441,7 +534,7 @@ impl VmConfig {
         if let Some(drive_path) = cmd_parser.get_value::<String>("file")? {
             pflash.path_on_host = drive_path;
         } else {
-            return Err(ErrorKind::FieldIsMissing("file", "pflash").into());
+            return Err(anyhow!(ConfigError::FieldIsMissing("file", "pflash")));
         }
 
         if let Some(read_only) = cmd_parser.get_value::<ExBool>("readonly")? {
@@ -451,7 +544,7 @@ impl VmConfig {
         if let Some(unit_id) = cmd_parser.get_value::<u64>("unit")? {
             pflash.unit = unit_id as usize;
         } else {
-            return Err(ErrorKind::FieldIsMissing("unit", "pflash").into());
+            return Err(anyhow!(ConfigError::FieldIsMissing("unit", "pflash")));
         }
 
         pflash.check()?;
@@ -476,6 +569,7 @@ mod tests {
         let blk_cfg_res = parse_blk(
             &mut vm_config,
             "virtio-blk-device,drive=rootfs,id=rootfs,iothread=iothread1,serial=111111,num-queues=4",
+            None,
         );
         assert!(blk_cfg_res.is_ok());
         let blk_device_config = blk_cfg_res.unwrap();
@@ -493,6 +587,7 @@ mod tests {
         let blk_cfg_res = parse_blk(
             &mut vm_config,
             "virtio-blk-device,drive=rootfs1,id=rootfs1,iothread=iothread1,iops=200,serial=111111",
+            None,
         );
         assert!(blk_cfg_res.is_err()); // Can not find drive named "rootfs1".
     }
@@ -504,7 +599,7 @@ mod tests {
             .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
         let blk_cfg = "virtio-blk-pci,id=rootfs,bus=pcie.0,addr=0x1.0x2,drive=rootfs,serial=111111,num-queues=4";
-        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
+        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg, None);
         assert!(blk_cfg_res.is_ok());
         let drive_configs = blk_cfg_res.unwrap();
         assert_eq!(drive_configs.id, "rootfs");
@@ -521,16 +616,16 @@ mod tests {
         assert_eq!(pci.addr, (1, 2));
 
         //  drive "rootfs" has been removed.
-        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg);
+        let blk_cfg_res = parse_blk(&mut vm_config, blk_cfg, None);
         assert!(blk_cfg_res.is_err());
 
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_drive("id=rootfs,file=/path/to/rootfs,serial=111111,readonly=off,direct=on")
+            .add_drive("id=rootfs,file=/path/to/rootfs,readonly=off,direct=on")
             .is_ok());
         let blk_cfg =
             "virtio-blk-pci,id=blk1,bus=pcie.0,addr=0x1.0x2,drive=rootfs,multifunction=on";
-        assert!(parse_blk(&mut vm_config, blk_cfg).is_ok());
+        assert!(parse_blk(&mut vm_config, blk_cfg, None).is_ok());
     }
 
     #[test]

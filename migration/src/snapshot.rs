@@ -10,15 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::general::{translate_id, Lifecycle};
+use crate::manager::{MigrationManager, MIGRATION_MANAGER};
+use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus, HEADER_LENGTH};
+use crate::MigrationError;
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-
-use crate::errors::{ErrorKind, Result, ResultExt};
-use crate::general::{translate_id, Lifecycle};
-use crate::manager::{MigrationManager, MIGRATION_MANAGER};
-use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus, HEADER_LENGTH};
 use util::unix::host_page_size;
 
 pub const SERIAL_SNAPSHOT_ID: &str = "serial";
@@ -102,12 +102,12 @@ impl MigrationManager {
 
         let mut snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
-            return Err(ErrorKind::InvalidSnapshotPath.into());
+            return Err(anyhow!(MigrationError::InvalidSnapshotPath));
         }
 
         snapshot_path.push(MEMORY_PATH_SUFFIX);
         let mut memory_file =
-            File::open(&snapshot_path).chain_err(|| "Failed to open memory snapshot file")?;
+            File::open(&snapshot_path).with_context(|| "Failed to open memory snapshot file")?;
         let memory_header = Self::restore_header(&mut memory_file)?;
         memory_header.check_header()?;
         if memory_header.format != FileFormat::MemoryFull {
@@ -115,20 +115,20 @@ impl MigrationManager {
         }
         snapshot_path.pop();
         snapshot_path.push(DEVICE_PATH_SUFFIX);
-        let mut device_state_file =
-            File::open(&snapshot_path).chain_err(|| "Failed to open device state snapshot file")?;
+        let mut device_state_file = File::open(&snapshot_path)
+            .with_context(|| "Failed to open device state snapshot file")?;
         let device_state_header = Self::restore_header(&mut device_state_file)?;
         device_state_header.check_header()?;
         if device_state_header.format != FileFormat::Device {
             bail!("Invalid device state snapshot file");
         }
 
-        Self::restore_memory(&mut memory_file).chain_err(|| "Failed to load snapshot memory")?;
+        Self::restore_memory(&mut memory_file).with_context(|| "Failed to load snapshot memory")?;
         let snapshot_desc_db =
             Self::restore_desc_db(&mut device_state_file, device_state_header.desc_len)
-                .chain_err(|| "Failed to load device descriptor db")?;
+                .with_context(|| "Failed to load device descriptor db")?;
         Self::restore_vmstate(snapshot_desc_db, &mut device_state_file)
-            .chain_err(|| "Failed to load snapshot device state")?;
+            .with_context(|| "Failed to load snapshot device state")?;
         Self::resume()?;
 
         // Set status to `Completed`
@@ -182,7 +182,7 @@ impl MigrationManager {
         // Save CPUs state.
         for (id, cpu) in locked_vmm.cpus.iter() {
             cpu.save_device(*id, fd)
-                .chain_err(|| "Failed to save cpu state")?;
+                .with_context(|| "Failed to save cpu state")?;
         }
 
         #[cfg(target_arch = "x86_64")]
@@ -193,7 +193,7 @@ impl MigrationManager {
                 .as_ref()
                 .unwrap()
                 .save_device(translate_id(KVM_SNAPSHOT_ID), fd)
-                .chain_err(|| "Failed to save kvm state")?;
+                .with_context(|| "Failed to save kvm state")?;
         }
 
         // Save devices state.
@@ -202,7 +202,7 @@ impl MigrationManager {
                 .lock()
                 .unwrap()
                 .save_device(*id, fd)
-                .chain_err(|| "Failed to save device state")?;
+                .with_context(|| "Failed to save device state")?;
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -211,14 +211,14 @@ impl MigrationManager {
             let gic_id = translate_id(GICV3_SNAPSHOT_ID);
             if let Some(gic) = locked_vmm.gic_group.get(&gic_id) {
                 gic.save_device(gic_id, fd)
-                    .chain_err(|| "Failed to save gic state")?;
+                    .with_context(|| "Failed to save gic state")?;
             }
 
             // Save GICv3 ITS device state.
             let its_id = translate_id(GICV3_ITS_SNAPSHOT_ID);
             if let Some(its) = locked_vmm.gic_group.get(&its_id) {
                 its.save_device(its_id, fd)
-                    .chain_err(|| "Failed to save gic its state")?;
+                    .with_context(|| "Failed to save gic its state")?;
             }
         }
 
@@ -241,7 +241,7 @@ impl MigrationManager {
             let (cpu_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(cpu) = locked_vmm.cpus.get(&id) {
                 cpu.restore_device(&cpu_data)
-                    .chain_err(|| "Failed to restore cpu state")?;
+                    .with_context(|| "Failed to restore cpu state")?;
             }
         }
 
@@ -251,7 +251,7 @@ impl MigrationManager {
             if let Some(kvm) = &locked_vmm.kvm {
                 let (kvm_data, _) = Self::check_vm_state(fd, &snap_desc_db)?;
                 kvm.restore_device(&kvm_data)
-                    .chain_err(|| "Failed to restore kvm state")?;
+                    .with_context(|| "Failed to restore kvm state")?;
             }
         }
 
@@ -263,7 +263,7 @@ impl MigrationManager {
                     .lock()
                     .unwrap()
                     .restore_mut_device(&device_data)
-                    .chain_err(|| "Failed to restore device state")?;
+                    .with_context(|| "Failed to restore device state")?;
             }
         }
 
@@ -274,7 +274,7 @@ impl MigrationManager {
                 let (gic_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
                 if let Some(gic) = locked_vmm.gic_group.get(&id) {
                     gic.restore_device(&gic_data)
-                        .chain_err(|| "Failed to restore gic state")?;
+                        .with_context(|| "Failed to restore gic state")?;
                 }
             }
         }

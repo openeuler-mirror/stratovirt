@@ -10,10 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::errors::{ErrorKind, Result, ResultExt};
+use super::error::ConfigError;
 use super::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 use crate::config::ExBool;
 
@@ -53,11 +53,10 @@ pub struct RootPortConfig {
 impl ConfigCheck for RootPortConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "root_port id".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         Ok(())
@@ -85,7 +84,7 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
     let slot = addr_vec.get(0).unwrap();
     let without_prefix = slot.trim_start_matches("0x");
     let slot = u8::from_str_radix(without_prefix, 16)
-        .chain_err(|| format!("Invalid slot num: {}", slot))?;
+        .with_context(|| format!("Invalid slot num: {}", slot))?;
     if slot > 31 {
         bail!("Invalid slot num: {}", slot);
     }
@@ -93,7 +92,7 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
         let function = addr_vec.get(1).unwrap();
         let without_prefix = function.trim_start_matches("0x");
         u8::from_str_radix(without_prefix, 16)
-            .chain_err(|| format!("Invalid function num: {}", function))?
+            .with_context(|| format!("Invalid function num: {}", function))?
     } else {
         0
     };
@@ -115,7 +114,7 @@ pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
         bail!("Bus not specified for pci device");
     }
     if let Some(addr) = cmd_parser.get_value::<String>("addr")? {
-        pci_bdf.addr = get_pci_df(&addr).chain_err(|| "Failed to get addr")?;
+        pci_bdf.addr = get_pci_df(&addr).with_context(|| "Failed to get addr")?;
     } else {
         bail!("No addr found for pci device");
     }
@@ -129,7 +128,7 @@ pub fn get_multi_function(pci_cfg: &str) -> Result<bool> {
 
     if let Some(multi_func) = cmd_parser
         .get_value::<ExBool>("multifunction")
-        .chain_err(|| "Failed to get multifunction parameter, please set on or off (default).")?
+        .with_context(|| "Failed to get multifunction parameter, please set on or off (default).")?
     {
         return Ok(multi_func.inner);
     }
@@ -154,14 +153,14 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
         let without_prefix = port.trim_start_matches("0x");
         root_port.port = u8::from_str_radix(without_prefix, 16).unwrap();
     } else {
-        return Err(ErrorKind::FieldIsMissing("port", "rootport").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("port", "rootport")));
     }
     let _ = cmd_parser.get_value::<u8>("chassis")?;
 
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
         root_port.id = id;
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "rootport").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "rootport")));
     }
     root_port.multifunction =
         if let Some(multi_func) = cmd_parser.get_value::<ExBool>("multifunction")? {

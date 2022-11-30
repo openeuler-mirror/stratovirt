@@ -12,14 +12,12 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use log::{debug, error};
 use pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
         REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
     },
-    errors::Result as PciResult,
-    le_write_u16, PciBus, PciDevOps,
+    le_write_u16, PciBus, PciDevOps, Result as PciResult,
 };
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
@@ -80,42 +78,12 @@ impl PciDevOps for PciHostRoot {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if size > 4 {
-            error!(
-                "Failed to read PciHostRoot config space: Invalid data size {}",
-                size
-            );
-            return;
-        }
-        if offset + size > PCI_CONFIG_SPACE_SIZE {
-            debug!(
-                "Failed to read PciHostRoot config space: offset {}, size {}, config space size {}",
-                offset, size, PCI_CONFIG_SPACE_SIZE
-            );
-            return;
-        }
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         self.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let size = data.len();
-        if size > 4 {
-            error!(
-                "Failed to write PciHostRoot config space: Invalid data size {}",
-                size
-            );
-            return;
-        }
-        if offset + size > PCI_CONFIG_SPACE_SIZE {
-            debug!(
-                "Failed to write PciHostRoot config space: offset {}, size {}, config space size {}",
-                offset, size, PCI_CONFIG_SPACE_SIZE
-            );
-            return;
-        }
-        self.config.write(offset, data, 0);
+        self.config.write(offset, data, 0, None);
     }
 
     fn name(&self) -> String {

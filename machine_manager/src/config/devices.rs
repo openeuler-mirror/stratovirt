@@ -10,8 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::errors::Result;
 use super::{CmdParser, VmConfig};
+use anyhow::Result;
 
 impl VmConfig {
     pub fn add_device(&mut self, device_config: &str) -> Result<()> {

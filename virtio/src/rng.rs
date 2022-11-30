@@ -25,19 +25,19 @@ use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::{read_u32, write_u32};
+use util::num_ops::read_u32;
 
-use error_chain::bail;
-use log::{error, warn};
+use log::error;
 use migration_derive::{ByteCode, Desc};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::errors::{ErrorKind, Result, ResultExt};
 use super::{
-    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_RNG,
+    ElemIovec, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioTrace,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
+use crate::error::VirtioError;
+use anyhow::{anyhow, bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
 const QUEUE_SIZE_RNG: u16 = 256;
@@ -71,7 +71,7 @@ impl RngHandler {
         for iov in in_iov {
             self.mem_space
                 .write(&mut buffer[offset..].as_ref(), iov.addr, iov.len as u64)
-                .chain_err(|| "Failed to write request data for virtio rng")?;
+                .with_context(|| "Failed to write request data for virtio rng")?;
             offset += iov.len as usize;
         }
 
@@ -79,15 +79,23 @@ impl RngHandler {
     }
 
     fn process_queue(&mut self) -> Result<()> {
+        self.trace_request("Rng".to_string(), "to IO".to_string());
         let mut queue_lock = self.queue.lock().unwrap();
         let mut need_interrupt = false;
+
+        if !queue_lock.is_enabled() {
+            return Ok(());
+        }
 
         while let Ok(elem) = queue_lock
             .vring
             .pop_avail(&self.mem_space, self.driver_features)
         {
+            if elem.desc_num == 0 {
+                break;
+            }
             let size =
-                get_req_data_size(&elem.in_iovec).chain_err(|| "Failed to get request size")?;
+                get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
                 if let Some(ctx) = EventLoop::get_ctx(None) {
@@ -107,14 +115,14 @@ impl RngHandler {
                 size as usize,
                 0,
             )
-            .chain_err(|| format!("Failed to read random file, size: {}", size))?;
+            .with_context(|| format!("Failed to read random file, size: {}", size))?;
 
             self.write_req_data(&elem.in_iovec, &mut buffer)?;
 
             queue_lock
                 .vring
                 .add_used(&self.mem_space, elem.index, size)
-                .chain_err(|| {
+                .with_context(|| {
                     format!(
                         "Failed to add used ring, index: {}, size: {}",
                         elem.index, size
@@ -125,8 +133,14 @@ impl RngHandler {
         }
 
         if need_interrupt {
-            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock))
-                .chain_err(|| ErrorKind::InterruptTrigger("rng", VirtioInterruptType::Vring))?;
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                .with_context(|| {
+                    anyhow!(VirtioError::InterruptTrigger(
+                        "rng",
+                        VirtioInterruptType::Vring
+                    ))
+                })?;
+            self.trace_send_interrupt("Rng".to_string());
         }
 
         Ok(())
@@ -173,10 +187,7 @@ impl EventNotifierHelper for RngHandler {
             read_fd(fd);
 
             if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
-                error!(
-                    "Failed to process queue for virtio rng, err: {}",
-                    error_chain::ChainedError::display_chain(e),
-                );
+                error!("Failed to process queue for virtio rng, err: {:?}", e,);
             }
 
             None
@@ -214,10 +225,7 @@ impl EventNotifierHelper for RngHandler {
                 }
 
                 if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
-                    error!(
-                        "Failed to process queue for virtio rng, err: {}",
-                        error_chain::ChainedError::display_chain(e),
-                    );
+                    error!("Failed to process queue for virtio rng, err: {:?}", e,);
                 }
 
                 None
@@ -296,9 +304,9 @@ impl VirtioDevice for Rng {
     /// Realize virtio rng device.
     fn realize(&mut self) -> Result<()> {
         self.check_random_file()
-            .chain_err(|| "Failed to check random file")?;
+            .with_context(|| "Failed to check random file")?;
         let file = File::open(&self.rng_cfg.random_file)
-            .chain_err(|| "Failed to open file of random number generator")?;
+            .with_context(|| "Failed to open file of random number generator")?;
 
         self.random_file = Some(file);
         self.state.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
@@ -327,13 +335,12 @@ impl VirtioDevice for Rng {
 
     /// Set driver features by guest.
     fn set_driver_features(&mut self, page: u32, value: u32) {
-        let mut v = write_u32(value, page);
-        let unrequested_features = v & !self.state.device_features;
-        if unrequested_features != 0 {
-            warn!("Received acknowledge request with unknown feature: {:x}", v);
-            v &= !unrequested_features;
-        }
-        self.state.driver_features |= v;
+        self.state.driver_features = self.checked_driver_features(page, value);
+    }
+
+    /// Get driver features by guest.
+    fn get_driver_features(&self, features_select: u32) -> u32 {
+        read_u32(self.state.driver_features, features_select)
     }
 
     /// Read data of config from guest.
@@ -373,7 +380,7 @@ impl VirtioDevice for Rng {
                 .as_ref()
                 .unwrap()
                 .try_clone()
-                .chain_err(|| "Failed to clone random file for virtio rng")?,
+                .with_context(|| "Failed to clone random file for virtio rng")?,
             leak_bucket: self.rng_cfg.bytes_per_sec.map(LeakBucket::new),
         };
 
@@ -388,18 +395,18 @@ impl VirtioDevice for Rng {
     fn deactivate(&mut self) -> Result<()> {
         self.deactivate_evt
             .write(1)
-            .chain_err(|| ErrorKind::EventFdWrite)
+            .with_context(|| anyhow!(VirtioError::EventFdWrite))
     }
 }
 
 impl StateTransfer for Rng {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *RngState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("RNG"))?;
+            .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("RNG")))?;
 
         Ok(())
     }
@@ -414,6 +421,8 @@ impl StateTransfer for Rng {
 }
 
 impl MigrationHook for Rng {}
+
+impl VirtioTrace for RngHandler {}
 
 #[cfg(test)]
 mod tests {
@@ -501,12 +510,14 @@ mod tests {
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(rng.state.driver_features, 0_u64);
+        assert_eq!(rng.get_driver_features(page) as u64, 0_u64);
         assert_eq!(rng.get_device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(rng.state.driver_features, 0_u64);
+        assert_eq!(rng.get_driver_features(page) as u64, 0_u64);
         assert_eq!(rng.get_device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
@@ -518,6 +529,10 @@ mod tests {
         rng.set_driver_features(page, driver_feature);
         assert_eq!(
             rng.state.driver_features,
+            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
+        );
+        assert_eq!(
+            rng.get_driver_features(page) as u64,
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
         );
         assert_eq!(
@@ -576,13 +591,15 @@ mod tests {
         let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 
@@ -659,13 +676,15 @@ mod tests {
         let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
-            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>| {
+            move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
                 let status = match int_type {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
                 interrupt_status.fetch_or(status, Ordering::SeqCst);
-                interrupt_evt.write(1).chain_err(|| ErrorKind::EventFdWrite)
+                interrupt_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))
             },
         ) as VirtioInterrupt);
 

@@ -28,6 +28,9 @@ pub const ACPI_GTDT_CAP_ALWAYS_ON: u32 = 4;
 /// IORT node types, reference: ARM Document number: ARM DEN 0049B, October 2015.
 pub const ACPI_IORT_NODE_ITS_GROUP: u8 = 0x00;
 pub const ACPI_IORT_NODE_PCI_ROOT_COMPLEX: u8 = 0x02;
+/// Root Complex Node in IORT
+pub const ROOT_COMPLEX_ENTRY_SIZE: u16 = 36;
+pub const ID_MAPPING_ENTRY_SIZE: u16 = 20;
 /// Interrupt controller structure types for MADT.
 pub const ACPI_MADT_GENERIC_CPU_INTERFACE: u8 = 11;
 pub const ACPI_MADT_GENERIC_DISTRIBUTOR: u8 = 12;

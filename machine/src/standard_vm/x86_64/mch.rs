@@ -13,19 +13,17 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{Region, RegionOps};
-use error_chain::{bail, ChainedError};
-use log::{debug, error};
+use anyhow::{bail, Result};
+use log::error;
 use pci::{
     config::{
         PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE,
         VENDOR_ID,
     },
-    errors::Result as PciResult,
-    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevOps,
+    le_read_u64, le_write_u16, ranges_overlap, PciBus, PciDevOps, Result as PciResult,
 };
 
 use super::VENDOR_ID_INTEL;
-use crate::standard_vm::errors::Result;
 
 const DEVICE_ID_INTEL_Q35_MCH: u16 = 0x29c0;
 
@@ -140,47 +138,16 @@ impl PciDevOps for Mch {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if size > 4 {
-            error!(
-                "Failed to read MCH config space: Invalid data size {}",
-                size
-            );
-            return;
-        }
-        if offset + size > PCI_CONFIG_SPACE_SIZE {
-            debug!(
-                "Failed to read MCH config space: offset {}, size {}, config space size {}",
-                offset, size, PCI_CONFIG_SPACE_SIZE
-            );
-            return;
-        }
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         self.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let size = data.len();
-        let end = offset + size;
-        if size > 4 {
-            error!(
-                "Failed to write MCH config space: Invalid data size {}",
-                size
-            );
-            return;
-        }
-        if offset + size > PCI_CONFIG_SPACE_SIZE {
-            debug!(
-                "Failed to write MCH config space: offset {}, size {}, config space size {}",
-                offset, size, PCI_CONFIG_SPACE_SIZE
-            );
-            return;
-        }
-
-        self.config.write(offset, data, 0);
+        let end = offset + data.len();
+        self.config.write(offset, data, 0, None, None);
         if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8) {
             if let Err(e) = self.update_pciexbar_mapping() {
-                error!("{}", e.display_chain());
+                error!("{:?}", e);
             }
         }
     }

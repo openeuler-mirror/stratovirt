@@ -225,6 +225,9 @@ class MicroVM(BaseVM):
         if "vhost_type" in kwargs:
             self.vhost_type = kwargs.get("vhost_type")
             del kwargs["vhost_type"]
+        if "cpu_features" in kwargs:
+            self.configdict["machine-config"]["cpu_features"] = kwargs.get("cpu_features")
+            del kwargs["cpu_features"]
 
         for key, value in kwargs.items():
             if hasattr(self, key):
@@ -259,6 +262,10 @@ class MicroVM(BaseVM):
                 self.add_args('-m', _temp_mem_args)
             if "mem_path" in configdict["machine-config"]:
                 self.add_args('-mem-path', configdict["machine-config"]["mem_path"])
+            # make CPU feature cmdline
+            if "cpu_features" in configdict["machine-config"]:
+                self.add_args('-cpu', configdict["machine-config"]["cpu_features"])
+
 
         # make block cmdline
         for block in configdict.get("block", []):

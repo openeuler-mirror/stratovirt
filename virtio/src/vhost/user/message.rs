@@ -10,10 +10,15 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::bail;
+use std::mem::size_of;
 /// The version of the protocol StratoVirt support.
 pub const VHOST_USER_VERSION: u32 = 0x1;
 pub const VHOST_USER_MSG_MAX_SIZE: usize = 0x1000;
 pub const MAX_ATTACHED_FD_ENTRIES: usize = 32;
+pub const VHOST_USER_F_PROTOCOL_FEATURES: u32 = 30;
+pub const VHOST_USER_MAX_CONFIG_SIZE: u32 = 256;
+use anyhow::Result;
 
 /// Type of requests sending from vhost user device to the userspace process.
 #[repr(u32)]
@@ -54,6 +59,47 @@ pub enum VhostUserMsgReq {
     GetInflightFd = 31,
     SetInflightFd = 32,
     MaxCmd = 33,
+}
+
+impl From<u32> for VhostUserMsgReq {
+    fn from(t: u32) -> Self {
+        match t {
+            0 => VhostUserMsgReq::None,
+            1 => VhostUserMsgReq::GetFeatures,
+            2 => VhostUserMsgReq::SetFeatures,
+            3 => VhostUserMsgReq::SetOwner,
+            4 => VhostUserMsgReq::ResetOwner,
+            5 => VhostUserMsgReq::SetMemTable,
+            6 => VhostUserMsgReq::SetLogBase,
+            7 => VhostUserMsgReq::SetLogFd,
+            8 => VhostUserMsgReq::SetVringNum,
+            9 => VhostUserMsgReq::SetVringAddr,
+            10 => VhostUserMsgReq::SetVringBase,
+            11 => VhostUserMsgReq::GetVringBase,
+            12 => VhostUserMsgReq::SetVringKick,
+            13 => VhostUserMsgReq::SetVringCall,
+            14 => VhostUserMsgReq::SetVringErr,
+            15 => VhostUserMsgReq::GetProtocolFeatures,
+            16 => VhostUserMsgReq::SetProtocolFeatures,
+            17 => VhostUserMsgReq::GetQueueNum,
+            18 => VhostUserMsgReq::SetVringEnable,
+            19 => VhostUserMsgReq::SendRarp,
+            20 => VhostUserMsgReq::NetSetMtu,
+            21 => VhostUserMsgReq::SetSlaveReqFd,
+            22 => VhostUserMsgReq::IotlbMsg,
+            23 => VhostUserMsgReq::SetVringEndian,
+            24 => VhostUserMsgReq::GetConfig,
+            25 => VhostUserMsgReq::SetConfig,
+            26 => VhostUserMsgReq::CreateCryptoSession,
+            27 => VhostUserMsgReq::CloseCryptoSession,
+            28 => VhostUserMsgReq::PostcopyAdvise,
+            29 => VhostUserMsgReq::PostcopyListen,
+            30 => VhostUserMsgReq::PostcopyEnd,
+            31 => VhostUserMsgReq::GetInflightFd,
+            32 => VhostUserMsgReq::SetInflightFd,
+            _ => VhostUserMsgReq::MaxCmd,
+        }
+    }
 }
 
 /// The meaning of flag bits for header of vhost user message.
@@ -100,7 +146,7 @@ impl VhostUserMsgHdr {
     }
 
     /// Check whether reply for this message is requested.
-    fn need_reply(&self) -> bool {
+    pub fn need_reply(&self) -> bool {
         (self.flags & VhostUserHdrFlag::NeedReply as u32) != 0
     }
 
@@ -125,6 +171,32 @@ impl Default for VhostUserMsgHdr {
             flags: VHOST_USER_VERSION,
             size: 0,
         }
+    }
+}
+
+/// Struct for get and set config to vhost user.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct VhostUserConfig<T: Default + Sized> {
+    offset: u32,
+    size: u32,
+    flags: u32,
+    pub config: T,
+}
+
+impl<T: Default + Sized> VhostUserConfig<T> {
+    /// Create a new instance of `VhostUserConfig`.
+    pub fn new(offset: u32, flags: u32, config: T) -> Result<Self> {
+        let size = size_of::<T>() as u32;
+        if size > VHOST_USER_MAX_CONFIG_SIZE {
+            bail!("Failed to create VhostUserConfig: exceed max config size.")
+        }
+        Ok(VhostUserConfig {
+            offset,
+            size,
+            flags,
+            config,
+        })
     }
 }
 

@@ -15,9 +15,10 @@ use std::sync::Arc;
 
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
+use log::debug;
 
-use crate::errors::Result;
 use crate::xhci::xhci_controller::dma_read_bytes;
+use anyhow::{bail, Result};
 
 /// Transfer Request Block
 pub const TRB_SIZE: u32 = 16;
@@ -37,9 +38,18 @@ pub const TRB_TR_CH: u32 = 1 << 4;
 pub const TRB_TR_IOC: u32 = 1 << 5;
 /// Immediate Data.
 pub const TRB_TR_IDT: u32 = 1 << 6;
+/// Direction of the data transfer.
+pub const TRB_TR_DIR: u32 = 1 << 16;
+/// TRB Transfer Length Mask
+pub const TRB_TR_LEN_MASK: u32 = 0x1ffff;
+/// Setup Stage TRB Length always 8
+pub const SETUP_TRB_TR_LEN: u32 = 8;
 
 const TRB_LINK_LIMIT: u32 = 32;
-const RING_LEN_LIMIT: u32 = 32;
+/// The max size of a ring segment in bytes is 64k.
+const RING_SEGMENT_LIMIT: u32 = 0x1_0000;
+/// The max size of ring.
+const RING_LEN_LIMIT: u32 = TRB_LINK_LIMIT * RING_SEGMENT_LIMIT / TRB_SIZE;
 
 /// TRB Type Definitions. See the spec 6.4.6 TRB types.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -76,9 +86,6 @@ pub enum TRBType {
     ErHostController,
     ErDeviceNotification,
     ErMfindexWrap,
-    /* vendor specific bits */
-    CrVendorNecFirmwareRevision = 49,
-    CrVendorNecChallengeResponse = 50,
     Unknown,
 }
 
@@ -117,8 +124,6 @@ impl From<u32> for TRBType {
             37 => TRBType::ErHostController,
             38 => TRBType::ErDeviceNotification,
             39 => TRBType::ErMfindexWrap,
-            49 => TRBType::CrVendorNecFirmwareRevision,
-            50 => TRBType::CrVendorNecChallengeResponse,
             _ => TRBType::Unknown,
         }
     }
@@ -221,15 +226,20 @@ impl XhciRing {
         self.ccs = true;
     }
 
+    pub fn set_cycle_bit(&mut self, v: bool) {
+        self.ccs = v;
+    }
+
     /// Fetch TRB from the ring.
-    pub fn fetch_trb(&mut self) -> Result<XhciTRB> {
+    pub fn fetch_trb(&mut self) -> Result<Option<XhciTRB>> {
         let mut link_cnt = 0;
         loop {
             let mut trb = self.read_trb(self.dequeue)?;
             trb.addr = self.dequeue;
             trb.ccs = self.ccs;
             if trb.get_cycle_bit() != self.ccs {
-                bail!("TRB cycle bit not matched");
+                debug!("TRB cycle bit not matched");
+                return Ok(None);
             }
             let trb_type = trb.get_type();
             debug!("Fetch TRB: type {:?} trb {:?}", trb_type, trb);
@@ -244,7 +254,7 @@ impl XhciRing {
                 }
             } else {
                 self.dequeue += TRB_SIZE as u64;
-                return Ok(trb);
+                return Ok(Some(trb));
             }
         }
     }
@@ -262,19 +272,24 @@ impl XhciRing {
         Ok(trb)
     }
 
-    /// Get the number of TRBs in the TD if success.
-    pub fn get_transfer_len(&self) -> Result<usize> {
-        let mut len = 0;
+    /// Get the transfer descriptor which includes one or more TRBs.
+    /// Return None if the td is not ready.
+    /// Return Vec if the td is ok.
+    /// Return Error if read trb failed.
+    pub fn fetch_td(&mut self) -> Result<Option<Vec<XhciTRB>>> {
         let mut dequeue = self.dequeue;
         let mut ccs = self.ccs;
         let mut ctrl_td = false;
         let mut link_cnt = 0;
+        let mut td = Vec::new();
         for _ in 0..RING_LEN_LIMIT {
-            let trb = self.read_trb(dequeue)?;
+            let mut trb = self.read_trb(dequeue)?;
+            trb.addr = dequeue;
+            trb.ccs = ccs;
             if trb.get_cycle_bit() != ccs {
-                // TRB is not ready
+                // TRB is not ready.
                 debug!("TRB cycle bit not matched");
-                return Ok(0);
+                return Ok(None);
             }
             let trb_type = trb.get_type();
             if trb_type == TRBType::TrLink {
@@ -287,7 +302,7 @@ impl XhciRing {
                     ccs = !ccs;
                 }
             } else {
-                len += 1;
+                td.push(trb);
                 dequeue += TRB_SIZE as u64;
                 if trb_type == TRBType::TrSetup {
                     ctrl_td = true;
@@ -295,7 +310,10 @@ impl XhciRing {
                     ctrl_td = false;
                 }
                 if !ctrl_td && (trb.control & TRB_TR_CH != TRB_TR_CH) {
-                    return Ok(len);
+                    // Update the dequeue pointer and ccs flag.
+                    self.dequeue = dequeue;
+                    self.ccs = ccs;
+                    return Ok(Some(td));
                 }
             }
         }

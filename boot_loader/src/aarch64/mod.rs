@@ -15,12 +15,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::error::BootLoaderError;
 use address_space::{AddressSpace, GuestAddress};
-use devices::legacy::{errors::ErrorKind as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
+use anyhow::{anyhow, Context, Result};
+use devices::legacy::{error::LegacyError as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
 use log::info;
 use util::byte_code::ByteCode;
-
-use crate::errors::{ErrorKind, Result, ResultExt};
 
 const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
 
@@ -53,7 +53,8 @@ fn load_kernel(
     kernel_path: &Path,
     sys_mem: &Arc<AddressSpace>,
 ) -> Result<u64> {
-    let mut kernel_image = File::open(kernel_path).chain_err(|| ErrorKind::BootLoaderOpenKernel)?;
+    let mut kernel_image =
+        File::open(kernel_path).with_context(|| anyhow!(BootLoaderError::BootLoaderOpenKernel))?;
     let kernel_size = kernel_image.metadata().unwrap().len();
     let kernel_end = kernel_start + kernel_size;
 
@@ -66,10 +67,10 @@ fn load_kernel(
                 FwCfgEntryType::KernelSize,
                 (kernel_size as u32).as_bytes().to_vec(),
             )
-            .chain_err(|| FwcfgErrorKind::AddEntryErr("KernelSize".to_string()))?;
+            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("KernelSize".to_string())))?;
         lock_dev
             .add_data_entry(FwCfgEntryType::KernelData, kernel_data)
-            .chain_err(|| FwcfgErrorKind::AddEntryErr("KernelData".to_string()))?;
+            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("KernelData".to_string())))?;
     } else {
         if sys_mem
             .memory_end_address()
@@ -77,11 +78,14 @@ fn load_kernel(
             .checked_sub(kernel_end)
             .is_none()
         {
-            return Err(ErrorKind::KernelOverflow(kernel_start, kernel_size).into());
+            return Err(anyhow!(BootLoaderError::KernelOverflow(
+                kernel_start,
+                kernel_size
+            )));
         }
         sys_mem
             .write(&mut kernel_image, GuestAddress(kernel_start), kernel_size)
-            .chain_err(|| "Fail to write kernel to guest memory")?;
+            .with_context(|| "Fail to write kernel to guest memory")?;
     }
     Ok(kernel_end)
 }
@@ -92,7 +96,8 @@ fn load_initrd(
     sys_mem: &Arc<AddressSpace>,
     kernel_end: u64,
 ) -> Result<(u64, u64)> {
-    let mut initrd_image = File::open(initrd_path).chain_err(|| ErrorKind::BootLoaderOpenInitrd)?;
+    let mut initrd_image =
+        File::open(initrd_path).with_context(|| anyhow!(BootLoaderError::BootLoaderOpenInitrd))?;
     let initrd_size = initrd_image.metadata().unwrap().len();
 
     let initrd_start = if let Some(addr) = sys_mem
@@ -103,7 +108,10 @@ fn load_initrd(
     {
         addr
     } else {
-        return Err(ErrorKind::InitrdOverflow(kernel_end, initrd_size).into());
+        return Err(anyhow!(BootLoaderError::InitrdOverflow(
+            kernel_end,
+            initrd_size
+        )));
     };
 
     if let Some(fw_cfg) = fwcfg {
@@ -115,20 +123,20 @@ fn load_initrd(
                 FwCfgEntryType::InitrdAddr,
                 (initrd_start as u32).as_bytes().to_vec(),
             )
-            .chain_err(|| FwcfgErrorKind::AddEntryErr("InitrdAddr".to_string()))?;
+            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("InitrdAddr".to_string())))?;
         lock_dev
             .add_data_entry(
                 FwCfgEntryType::InitrdSize,
                 (initrd_size as u32).as_bytes().to_vec(),
             )
-            .chain_err(|| FwcfgErrorKind::AddEntryErr("InitrdSize".to_string()))?;
+            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("InitrdSize".to_string())))?;
         lock_dev
             .add_data_entry(FwCfgEntryType::InitrdData, initrd_data)
-            .chain_err(|| FwcfgErrorKind::AddEntryErr("InitrdData".to_string()))?;
+            .with_context(|| anyhow!(FwcfgErrorKind::AddEntryErr("InitrdData".to_string())))?;
     } else {
         sys_mem
             .write(&mut initrd_image, GuestAddress(initrd_start), initrd_size)
-            .chain_err(|| "Fail to write initrd to guest memory")?;
+            .with_context(|| "Fail to write initrd to guest memory")?;
     }
 
     Ok((initrd_start, initrd_size))
@@ -168,7 +176,9 @@ pub fn load_linux(
         .filter(|addr| addr >= &config.mem_start)
         .is_none()
     {
-        return Err(ErrorKind::DTBOverflow(sys_mem.memory_end_address().raw_value()).into());
+        return Err(anyhow!(BootLoaderError::DTBOverflow(
+            sys_mem.memory_end_address().raw_value()
+        )));
     }
 
     let kernel_start = config.mem_start + AARCH64_KERNEL_OFFSET;
@@ -189,13 +199,13 @@ pub fn load_linux(
         config.kernel.as_ref().unwrap(),
         sys_mem,
     )
-    .chain_err(|| "Fail to load kernel")?;
+    .with_context(|| "Fail to load kernel")?;
 
     let mut initrd_start = 0_u64;
     let mut initrd_size = 0_u64;
     if config.initrd.is_some() {
         let initrd_tuple = load_initrd(fwcfg, config.initrd.as_ref().unwrap(), sys_mem, kernel_end)
-            .chain_err(|| "Fail to load initrd")?;
+            .with_context(|| "Fail to load initrd")?;
         initrd_start = initrd_tuple.0;
         initrd_size = initrd_tuple.1;
     } else {

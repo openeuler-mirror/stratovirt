@@ -15,19 +15,19 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
-use super::errors::Result;
+use crate::config::*;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
     UsbInterfaceDescriptor,
 };
 use crate::xhci::xhci_controller::XhciDevice;
-use crate::{
-    config::*,
-    xhci::xhci_controller::{get_field, set_field},
-};
+use anyhow::{bail, Result};
+use log::{debug, error, warn};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;
+/// USB max address.
+const USB_MAX_ADDRESS: u8 = 127;
 
 /// USB packet return status.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -139,26 +139,16 @@ pub struct UsbPort {
     pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
     pub speed_mask: u32,
     pub path: String,
-    pub index: u32,
+    pub index: u8,
 }
 
 impl UsbPort {
-    pub fn new(index: u32) -> Self {
+    pub fn new(index: u8) -> Self {
         Self {
             dev: None,
             speed_mask: 0,
             path: String::new(),
             index,
-        }
-    }
-
-    /// If the USB port attached USB device.
-    pub fn is_attached(&self) -> bool {
-        if let Some(dev) = &self.dev {
-            let locked_dev = dev.lock().unwrap();
-            locked_dev.attached()
-        } else {
-            false
         }
     }
 }
@@ -240,8 +230,6 @@ pub struct UsbDevice {
     pub speed_mask: u32,
     pub addr: u8,
     pub product_desc: String,
-    pub auto_attach: bool,
-    pub attached: bool,
     pub state: UsbDeviceState,
     pub setup_buf: Vec<u8>,
     pub data_buf: Vec<u8>,
@@ -267,7 +255,6 @@ impl UsbDevice {
     pub fn new() -> Self {
         let mut dev = UsbDevice {
             port: None,
-            attached: false,
             speed: 0,
             speed_mask: 0,
             addr: 0,
@@ -281,7 +268,6 @@ impl UsbDevice {
             ep_in: Vec::new(),
             ep_out: Vec::new(),
             product_desc: String::new(),
-            auto_attach: false,
             strings: Vec::new(),
             usb_desc: None,
             device_desc: None,
@@ -366,12 +352,23 @@ impl UsbDevice {
         }
     }
 
+    /// Handle USB control request which is for descriptor.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet`     - USB packet.
+    /// * `device_req` - USB device request.
+    /// * `data`       - USB control transfer data.
+    ///
+    /// # Returns
+    ///
+    /// Return true if request is handled, false is unhandled.
     pub fn handle_control_for_descriptor(
         &mut self,
         packet: &mut UsbPacket,
         device_req: &UsbDeviceRequest,
         data: &mut [u8],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let value = device_req.value as u32;
         let index = device_req.index as u32;
         let length = device_req.length as u32;
@@ -412,19 +409,20 @@ impl UsbDevice {
                     packet.actual_length = 2;
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             USB_DEVICE_OUT_REQUEST => match device_req.request {
                 USB_REQUEST_SET_ADDRESS => {
-                    self.addr = value as u8;
+                    if value as u8 > USB_MAX_ADDRESS {
+                        packet.status = UsbPacketStatus::Stall;
+                        bail!("The address is invalid {}", value);
+                    } else {
+                        self.addr = value as u8;
+                    }
                 }
                 USB_REQUEST_SET_CONFIGURATION => {
-                    return self.set_config_descriptor(value as u8);
+                    self.set_config_descriptor(value as u8)?;
                 }
                 USB_REQUEST_CLEAR_FEATURE => {
                     if value == USB_DEVICE_REMOTE_WAKEUP {
@@ -437,11 +435,7 @@ impl UsbDevice {
                     }
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             USB_INTERFACE_IN_REQUEST => match device_req.request {
@@ -452,30 +446,22 @@ impl UsbDevice {
                     }
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             USB_INTERFACE_OUT_REQUEST => match device_req.request {
                 USB_REQUEST_SET_INTERFACE => {
-                    return self.set_interface_descriptor(index, value);
+                    self.set_interface_descriptor(index, value)?;
                 }
                 _ => {
-                    bail!(
-                        "Unhandled request: type {} request {}",
-                        device_req.request_type,
-                        device_req.request
-                    );
+                    return Ok(false);
                 }
             },
             _ => {
-                bail!("Unhandled request: type {}", device_req.request_type);
+                return Ok(false);
             }
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -492,7 +478,6 @@ pub trait UsbDeviceOps: Send + Sync {
     fn handle_attach(&mut self) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
         let mut locked_dev = usb_dev.lock().unwrap();
-        locked_dev.attached = true;
         locked_dev.state = UsbDeviceState::Attached;
         drop(locked_dev);
         let usb_dev = self.get_mut_usb_device();
@@ -560,13 +545,6 @@ pub trait UsbDeviceOps: Send + Sync {
         let usb_dev = self.get_usb_device();
         let locked_dev = usb_dev.lock().unwrap();
         locked_dev.speed
-    }
-
-    /// If USB device is attached.
-    fn attached(&self) -> bool {
-        let usb_dev = self.get_usb_device();
-        let locked_dev = usb_dev.lock().unwrap();
-        locked_dev.attached
     }
 
     fn process_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
@@ -679,14 +657,9 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     };
     if wakeup {
         let mut locked_port = xhci_port.lock().unwrap();
-        let port_status = get_field(locked_port.portsc, PORTSC_PLS_MASK, PORTSC_PLS_SHIFT);
+        let port_status = locked_port.get_port_link_state();
         if port_status == PLS_U3 {
-            locked_port.portsc = set_field(
-                locked_port.portsc,
-                PLS_RESUME,
-                PORTSC_PLS_MASK,
-                PORTSC_PLS_SHIFT,
-            );
+            locked_port.set_port_link_state(PLS_RESUME);
             debug!(
                 "Update portsc when notify controller, port {} status {}",
                 locked_port.portsc, port_status
@@ -730,16 +703,13 @@ impl Iovec {
 pub struct UsbPacket {
     /// USB packet id.
     pub pid: u32,
-    pub id: u64,
     pub ep: Option<Weak<Mutex<UsbEndpoint>>>,
     pub iovecs: Vec<Iovec>,
-    /// control transfer
+    /// control transfer parameter.
     pub parameter: u64,
-    pub short_not_ok: bool,
-    pub int_req: bool,
-    /// USB packet return status
+    /// USB packet return status.
     pub status: UsbPacketStatus,
-    /// Actually transfer length
+    /// Actually transfer length.
     pub actual_length: u32,
     pub state: UsbPacketState,
 }
@@ -748,29 +718,19 @@ impl std::fmt::Display for UsbPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "pid {} id {} param {} status {:?} actual_length {}, state {:?}",
-            self.pid, self.id, self.parameter, self.status, self.actual_length, self.state
+            "pid {} param {} status {:?} actual_length {}, state {:?}",
+            self.pid, self.parameter, self.status, self.actual_length, self.state
         )
     }
 }
 
 impl UsbPacket {
-    pub fn init(
-        &mut self,
-        pid: u32,
-        ep: Weak<Mutex<UsbEndpoint>>,
-        id: u64,
-        short_or_ok: bool,
-        int_req: bool,
-    ) {
-        self.id = id;
+    pub fn init(&mut self, pid: u32, ep: Weak<Mutex<UsbEndpoint>>) {
         self.pid = pid;
         self.ep = Some(ep);
         self.status = UsbPacketStatus::Success;
         self.actual_length = 0;
         self.parameter = 0;
-        self.short_not_ok = short_or_ok;
-        self.int_req = int_req;
         self.state = UsbPacketState::Setup;
     }
 }
@@ -779,12 +739,9 @@ impl Default for UsbPacket {
     fn default() -> UsbPacket {
         UsbPacket {
             pid: 0,
-            id: 0,
             ep: None,
             iovecs: Vec::new(),
             parameter: 0,
-            short_not_ok: false,
-            int_req: false,
             status: UsbPacketStatus::NoDev,
             actual_length: 0,
             state: UsbPacketState::Undefined,
@@ -801,7 +758,7 @@ fn write_mem(hva: u64, buf: &[u8]) {
     use std::io::Write;
     let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
     if let Err(e) = (&mut slice).write(buf) {
-        error!("Failed to write mem {}", e);
+        error!("Failed to write mem {:?}", e);
     }
 }
 

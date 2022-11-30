@@ -341,6 +341,14 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-block-jobs")]
+    #[strum(serialize = "query-block-jobs")]
+    query_block_jobs {
+        #[serde(default)]
+        arguments: query_block_jobs,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "query-gic-capabilities")]
     #[strum(serialize = "query-gic-capabilities")]
     query_gic_capabilities {
@@ -1811,6 +1819,25 @@ impl Command for query_named_block_nodes {
 pub struct query_blockstats {}
 
 impl Command for query_blockstats {
+    type Res = Vec<Cmd>;
+
+    fn back(self) -> Vec<Cmd> {
+        Default::default()
+    }
+}
+
+/// Query jobs of blocks.
+///
+/// # Example
+///
+/// ```text
+/// -> { "execute": "query-block_jobs" }
+/// <- {"return":[]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_block_jobs {}
+
+impl Command for query_block_jobs {
     type Res = Vec<Cmd>;
 
     fn back(self) -> Vec<Cmd> {

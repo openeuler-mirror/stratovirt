@@ -18,11 +18,10 @@ use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::loop_context::EventLoopContext;
+use crate::time::NANOSECONDS_PER_SECOND;
 
 /// Used to improve the accuracy of bucket level.
 const ACCURACY_SCALE: u64 = 1000;
-/// Nanoseconds per second.
-const NANOS_PER_SEC: u64 = 1_000_000_000;
 
 /// Structure used to describe a Leaky Bucket.
 pub struct LeakBucket {
@@ -73,10 +72,10 @@ impl LeakBucket {
         // update the water level
         let now = Instant::now();
         let nanos = (now - self.prev_time).as_nanos();
-        if nanos > (self.level * NANOS_PER_SEC / self.capacity) as u128 {
+        if nanos > (self.level * NANOSECONDS_PER_SECOND / self.capacity) as u128 {
             self.level = 0;
         } else {
-            self.level -= nanos as u64 * self.capacity / NANOS_PER_SEC;
+            self.level -= nanos as u64 * self.capacity / NANOSECONDS_PER_SECOND;
         }
 
         self.prev_time = now;
@@ -87,12 +86,12 @@ impl LeakBucket {
             let func = Box::new(move || {
                 wakeup_clone
                     .write(1)
-                    .unwrap_or_else(|e| error!("LeakBucket send event to device failed {}", e));
+                    .unwrap_or_else(|e| error!("LeakBucket send event to device failed {:?}", e));
             });
 
             loop_context.delay_call(
                 func,
-                (self.level - self.capacity) * NANOS_PER_SEC / self.capacity,
+                (self.level - self.capacity) * NANOSECONDS_PER_SECOND / self.capacity,
             );
 
             self.timer_started = true;

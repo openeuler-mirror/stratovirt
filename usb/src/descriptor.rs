@@ -12,9 +12,10 @@
 
 use std::sync::Arc;
 
+use anyhow::{bail, Result};
+use log::error;
 use util::byte_code::ByteCode;
 
-use super::errors::Result;
 use crate::config::*;
 use crate::usb::{UsbDescConfig, UsbDescEndpoint, UsbDescIface, UsbDevice};
 

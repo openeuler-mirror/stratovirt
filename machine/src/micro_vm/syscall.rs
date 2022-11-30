@@ -48,10 +48,10 @@ const KVM_RUN: u32 = 0xae80;
 ///
 /// # Notes
 /// This allowlist limit syscall with:
-/// * x86_64-unknown-gnu: 44 syscalls
-/// * x86_64-unknown-musl: 43 syscalls
-/// * aarch64-unknown-gnu: 42 syscalls
-/// * aarch64-unknown-musl: 42 syscalls
+/// * x86_64-unknown-gnu: 48 syscalls
+/// * x86_64-unknown-musl: 47 syscalls
+/// * aarch64-unknown-gnu: 46 syscalls
+/// * aarch64-unknown-musl: 46 syscalls
 /// To reduce performance losses, the syscall rules is ordered by frequency.
 pub fn syscall_whitelist() -> Vec<BpfRule> {
     vec![
@@ -66,6 +66,10 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_epoll_wait),
         BpfRule::new(libc::SYS_io_getevents),
         BpfRule::new(libc::SYS_io_submit),
+        BpfRule::new(libc::SYS_io_destroy),
+        BpfRule::new(libc::SYS_io_uring_enter),
+        BpfRule::new(libc::SYS_io_uring_setup),
+        BpfRule::new(libc::SYS_io_uring_register),
         BpfRule::new(libc::SYS_dup),
         BpfRule::new(libc::SYS_close),
         BpfRule::new(libc::SYS_eventfd2),
@@ -81,6 +85,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
             .add_constraint(SeccompCmpOpt::Eq, 1, F_DUPFD_CLOEXEC)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_SETFD)
             .add_constraint(SeccompCmpOpt::Eq, 1, F_GETFD),
+        BpfRule::new(libc::SYS_flock),
         BpfRule::new(libc::SYS_rt_sigprocmask),
         #[cfg(target_arch = "x86_64")]
         BpfRule::new(libc::SYS_open),
@@ -120,6 +125,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_mkdirat),
         #[cfg(all(target_env = "gnu", target_arch = "x86_64"))]
         BpfRule::new(libc::SYS_readlink),
+        BpfRule::new(libc::SYS_getrandom),
         madvise_rule(),
     ]
 }
@@ -185,11 +191,13 @@ fn madvise_rule() -> BpfRule {
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_FREE as u32)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
     #[cfg(not(target_env = "musl"))]
     return BpfRule::new(libc::SYS_madvise)
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_DONTNEED as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_WILLNEED as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
 }
 
 fn futex_rule() -> BpfRule {

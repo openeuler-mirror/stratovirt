@@ -77,10 +77,10 @@
 //! ```
 //! This programe will be trapped.
 
-use error_chain::bail;
+use anyhow::bail;
 
-use crate::errors::Result;
 use crate::offset_of;
+use anyhow::Result;
 
 // BPF Instruction classes
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/bpf_common.h#L7

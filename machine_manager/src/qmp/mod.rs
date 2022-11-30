@@ -43,15 +43,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use util::leak_bucket::LeakBucket;
 use util::set_termi_canon_mode;
+use util::time::NANOSECONDS_PER_SECOND;
 
 use self::qmp_schema::{self as schema, QmpCommand};
 use crate::event_loop::EventLoop;
 use crate::machine::MachineExternalInterface;
 use crate::socket::SocketRWHandler;
-use crate::{
-    errors::{Result, ResultExt},
-    temp_cleaner::TempCleaner,
-};
+use crate::temp_cleaner::TempCleaner;
+use anyhow::{Context, Result};
 
 static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
 
@@ -335,7 +334,8 @@ pub fn create_timestamp() -> TimeStamp {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards");
     let seconds = u128::from(since_the_epoch.as_secs());
-    let microseconds = (since_the_epoch.as_nanos() - seconds * 1_000_000_000) / (1_000_u128);
+    let microseconds =
+        (since_the_epoch.as_nanos() - seconds * (NANOSECONDS_PER_SECOND as u128)) / (1_000_u128);
     TimeStamp {
         seconds: seconds as u64,
         microseconds: microseconds as u64,
@@ -369,7 +369,7 @@ pub fn handle_qmp(
             .send_str(&serde_json::to_string(&Response::create_error_response(
                 err_resp, None,
             ))?)
-            .chain_err(|| "Failed to send message to qmp client.")?;
+            .with_context(|| "Failed to send message to qmp client.")?;
         return Ok(());
     }
 
@@ -442,6 +442,7 @@ fn qmp_command_exec(
         (query_block, query_block),
         (query_named_block_nodes, query_named_block_nodes),
         (query_blockstats, query_blockstats),
+        (query_block_jobs, query_block_jobs),
         (query_gic_capabilities, query_gic_capabilities),
         (query_iothreads, query_iothreads),
         (query_migrate, query_migrate),

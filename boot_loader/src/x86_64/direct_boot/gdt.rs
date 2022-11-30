@@ -12,15 +12,13 @@
 
 use std::sync::Arc;
 
-use address_space::{AddressSpace, GuestAddress};
-use kvm_bindings::kvm_segment;
-
 use super::super::BootGdtSegment;
 use super::super::{
     BOOT_GDT_MAX, BOOT_GDT_OFFSET, BOOT_IDT_OFFSET, GDT_ENTRY_BOOT_CS, GDT_ENTRY_BOOT_DS,
 };
-use crate::errors::{Result, ResultExt};
-
+use address_space::{AddressSpace, GuestAddress};
+use anyhow::{Context, Result};
+use kvm_bindings::kvm_segment;
 // /*
 //  * Constructor for a conventional segment GDT (or LDT) entry.
 //  * This is a macro so it can be used in initializers.
@@ -95,7 +93,7 @@ fn write_gdt_table(table: &[u64], guest_mem: &Arc<AddressSpace>) -> Result<()> {
     for (_, entry) in table.iter().enumerate() {
         guest_mem
             .write_object(entry, GuestAddress(boot_gdt_addr))
-            .chain_err(|| format!("Failed to load gdt to 0x{:x}", boot_gdt_addr))?;
+            .with_context(|| format!("Failed to load gdt to 0x{:x}", boot_gdt_addr))?;
         boot_gdt_addr += 8;
     }
     Ok(())
@@ -105,7 +103,7 @@ fn write_idt_value(val: u64, guest_mem: &Arc<AddressSpace>) -> Result<()> {
     let boot_idt_addr = BOOT_IDT_OFFSET;
     guest_mem
         .write_object(&val, GuestAddress(boot_idt_addr))
-        .chain_err(|| format!("Failed to load gdt to 0x{:x}", boot_idt_addr))?;
+        .with_context(|| format!("Failed to load gdt to 0x{:x}", boot_idt_addr))?;
 
     Ok(())
 }

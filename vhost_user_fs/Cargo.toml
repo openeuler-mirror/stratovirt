@@ -1,0 +1,29 @@
+[package]
+name = "vhost_user_fs"
+version = "2.2.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2021"
+license = "Mulan PSL v2"
+description = "Provide virtio fs for VM"
+
+[dependencies]
+capng = "0.2.2"
+errno = "0.2.8"
+log = "0.4.8"
+libc = ">=0.2.71"
+thiserror = "1.0"
+anyhow = "1.0"
+libseccomp-sys = "0.2.1"
+error-chain = "0.12.4"
+vmm-sys-util = ">=0.7.0"
+address_space = { path = "../address_space" }
+hypervisor = { path = "../hypervisor" }
+machine_manager = { path = "../machine_manager" }
+migration = { path = "../migration" }
+migration_derive = { path = "../migration_derive" }
+sysbus = { path = "../sysbus" }
+util = { path = "../util" }
+pci = { path = "../pci" }
+acpi = { path = "../acpi" }
+devices = {path = "../devices"}
+virtio = {path = "../virtio"}

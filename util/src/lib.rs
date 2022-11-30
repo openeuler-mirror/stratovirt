@@ -19,6 +19,8 @@ pub mod daemonize;
 #[cfg(target_arch = "aarch64")]
 pub mod device_tree;
 pub mod edid;
+pub mod error;
+pub mod file;
 pub mod leak_bucket;
 mod link_list;
 pub mod logger;
@@ -31,126 +33,11 @@ pub mod reader;
 pub mod seccomp;
 pub mod syscall;
 pub mod tap;
+pub mod time;
 pub mod trace;
 pub mod unix;
-
-pub mod errors {
-    use error_chain::error_chain;
-
-    error_chain! {
-        foreign_links {
-            KvmIoctl(kvm_ioctls::Error);
-            Io(std::io::Error);
-            Nul(std::ffi::NulError);
-        }
-        errors {
-            // arg_parser submodule error
-            MissingArgument(t: String) {
-                description("The required argument was not provided.")
-                display("Argument '{}' required, but not found. Use \'-h\' or \'-help\' to get usage.", t)
-            }
-            MissingValue(t: String) {
-                description("A value for args was not provided.")
-                display("The argument '{}' requires a value, but none was supplied. Use \'-h\' or \'-help\' to get usage.", t)
-            }
-            IllegelValue(t1: String, t2: String) {
-                description("A value is illegel for args.")
-                display("The value '{}' is illegel for argument '{}'. Use \'-h\' or \'-help\' to get usage.", t1, t2)
-            }
-            ValueOutOfPossible(t1: String, t2: String) {
-                description("A value for args is out of possile values.")
-                display("The value of argument '{}' must be in '{}'. Use \'-h\' or \'-help\' to get usage.", t1, t2)
-            }
-            UnexpectedArguments(t: String) {
-                description("The provided argument was not expected.")
-                display("Found argument '{}' which wasn't expected, or isn't valid in the context. Use \'-h\' or \'-help\' to get usage.", t)
-            }
-            DuplicateArgument(t: String) {
-                description("The argument was provided more than once.")
-                display("The argument '{}' was provided more than once. Use \'-h\' or \'-help\' to get usage.", t)
-            }
-            DuplicateValue(t: String) {
-                description("The argument value was provided more than once.")
-                display("The argument '{}' only need one value. Use \'-h\' or \'-help\' to get usage.", t)
-            }
-            // daemonize submodule error
-            DaemonFork {
-                description("Unable to fork.")
-                display("Unable to fork.")
-            }
-            DaemonSetsid {
-                description("Unable to create new session.")
-                display("Unable to create new session.")
-            }
-            DaemonRedirectStdio {
-                description("Unable to redirect standard streams to /dev/null.")
-                display("Unable to redirect standard streams to /dev/null.")
-            }
-            PidFileExist {
-                description("Pidfile path is existed yet.")
-                display("Pidfile path is existed yet.")
-            }
-            // epoll_context error
-            BadSyscall(err: std::io::Error) {
-                description("Return a bad syscall.")
-                display("Found bad syscall, error is {} .", err)
-            }
-            UnExpectedOperationType {
-                description("Unsupported notifier operation type.")
-                display("Unsupported Epoll notifier operation type.")
-            }
-            EpollWait(err: std::io::Error) {
-                description("Failed to execute epoll_wait syscall.")
-                display("Failed to execute epoll_wait syscall: {} .", err)
-            }
-            NoRegisterFd(t: i32) {
-                description("The fd is not registered in epoll.")
-                display("The fd {} is not registered in epoll.", t)
-            }
-            NoParkedFd(t: i32) {
-                description("Found no parked fd in registered.")
-                display("Found no parked fd {}.", t)
-            }
-            BadNotifierOperation {
-                description("Bad Notifier Operation.")
-                display("Notifier Operation non allowed.")
-            }
-            ChmodFailed(e: i32) {
-                description("Chmod command failed.")
-                display("Chmod command failed, os error {}", e)
-            }
-            OutOfBound(index: u64, bound: u64) {
-                description("Index out of bound of array")
-                display("Index :{} out of bound :{}", index, bound)
-            }
-            NodeDepthMismatch(target_dep: u32, real_dep: u32) {
-                description("Fdt structure nested node depth mismatch")
-                display("Desired node depth :{}, current node depth :{}", target_dep, real_dep)
-            }
-            NodeUnclosed(unclose: u32) {
-                description("Fdt structure block node unclose")
-                display("Still have {} node open when terminating the fdt", unclose)
-            }
-            IllegelPropertyPos {
-                description("Cann't add property outside the node")
-                display("Failed to add property because there is no open node")
-            }
-            IllegalString(s: String) {
-                description("The string for fdt should not contain null")
-                display("Failed to add string to fdt because of null character inside \"{}\"", s)
-            }
-            MemReserveOverlap {
-                description("The mem reserve entry should not overlap")
-                display("Failed to add overlapped mem reserve entries to fdt")
-            }
-            SetPropertyErr(s: String) {
-                description("Cann't set property for fdt node")
-                display("Failed to set {} property", s)
-            }
-        }
-    }
-}
-
+pub use anyhow::Result;
+pub use error::UtilError;
 use libc::{tcgetattr, tcsetattr, termios, OPOST, TCSANOW};
 use log::debug;
 use once_cell::sync::Lazy;

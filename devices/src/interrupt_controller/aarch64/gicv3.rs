@@ -16,7 +16,8 @@ use super::{
     state::{GICv3ItsState, GICv3State},
     GICConfig, GICDevice, KvmDevice, UtilResult,
 };
-use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
+use crate::interrupt_controller::error::InterruptError;
+use anyhow::{anyhow, Context, Result};
 
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::DeviceFd;
@@ -104,7 +105,11 @@ impl GICv3 {
     fn new(config: &GICConfig) -> Result<Self> {
         let v3config = match config.v3.as_ref() {
             Some(v3) => v3,
-            None => return Err(ErrorKind::InvalidConfig("no v3 config found".to_string()).into()),
+            None => {
+                return Err(anyhow!(InterruptError::InvalidConfig(
+                    "no v3 config found".to_string()
+                )))
+            }
         };
         let mut gic_device = kvm_bindings::kvm_create_device {
             type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
@@ -120,7 +125,7 @@ impl GICv3 {
             .create_device(&mut gic_device)
         {
             Ok(fd) => fd,
-            Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
+            Err(e) => return Err(anyhow!(InterruptError::CreateKvmDevice(e))),
         };
 
         // Calculate GIC redistributor regions' address range according to vcpu count.
@@ -159,7 +164,7 @@ impl GICv3 {
 
         if let Some(its_range) = v3config.its_range {
             gicv3.its_dev = Some(Arc::new(
-                GICv3Its::new(&its_range).chain_err(|| "Failed to create ITS")?,
+                GICv3Its::new(&its_range).with_context(|| "Failed to create ITS")?,
             ));
         }
 
@@ -173,7 +178,7 @@ impl GICv3 {
                 kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
                 kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION as u64,
             )
-            .chain_err(|| {
+            .with_context(|| {
                 "Multiple redistributors are acquired while KVM does not provide support."
             })?;
         }
@@ -186,7 +191,7 @@ impl GICv3 {
                 &self.redist_regions.get(0).unwrap().base as *const u64 as u64,
                 true,
             )
-            .chain_err(|| "Failed to set GICv3 attribute: redistributor address")?;
+            .with_context(|| "Failed to set GICv3 attribute: redistributor address")?;
         } else {
             for redist in &self.redist_regions {
                 KvmDevice::kvm_device_access(
@@ -196,7 +201,7 @@ impl GICv3 {
                     &redist.base_attr as *const u64 as u64,
                     true,
                 )
-                .chain_err(|| "Failed to set GICv3 attribute: redistributor region address")?;
+                .with_context(|| "Failed to set GICv3 attribute: redistributor region address")?;
             }
         }
 
@@ -207,7 +212,7 @@ impl GICv3 {
             &self.dist_base as *const u64 as u64,
             true,
         )
-        .chain_err(|| "Failed to set GICv3 attribute: distributor address")?;
+        .with_context(|| "Failed to set GICv3 attribute: distributor address")?;
 
         KvmDevice::kvm_device_check(&self.fd, kvm_bindings::KVM_DEV_ARM_VGIC_GRP_NR_IRQS, 0)?;
 
@@ -219,7 +224,7 @@ impl GICv3 {
             &self.nr_irqs as *const u32 as u64,
             true,
         )
-        .chain_err(|| "Failed to set GICv3 attribute: irqs")?;
+        .with_context(|| "Failed to set GICv3 attribute: irqs")?;
 
         // Finalize the GIC.
         KvmDevice::kvm_device_access(
@@ -229,7 +234,7 @@ impl GICv3 {
             0,
             true,
         )
-        .chain_err(|| "KVM failed to initialize GICv3")?;
+        .with_context(|| "KVM failed to initialize GICv3")?;
 
         let mut state = self.state.lock().unwrap();
         *state = KvmVmState::Running;
@@ -260,7 +265,10 @@ impl MachineLifecycle for GICv3 {
         // The ITS tables need to be flushed into guest RAM before VM pause.
         if let Some(its_dev) = &self.its_dev {
             if let Err(e) = its_dev.access_gic_its_tables(true) {
-                error!("Failed to access GIC ITS tables, error: {}", e);
+                error!(
+                    "{}",
+                    format!("Failed to access GIC ITS tables, error: {:?}", e)
+                );
                 return false;
             }
         }
@@ -314,7 +322,7 @@ impl GICv3Access for GICv3 {
             gicd_value as *mut u32 as u64,
             write,
         )
-        .chain_err(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
+        .with_context(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
     }
 
     fn access_gic_redistributor(
@@ -331,7 +339,7 @@ impl GICv3Access for GICv3 {
             gicr_value as *mut u32 as u64,
             write,
         )
-        .chain_err(|| {
+        .with_context(|| {
             format!(
                 "Failed to access gic redistributor for offset 0x{:x}",
                 offset
@@ -353,7 +361,7 @@ impl GICv3Access for GICv3 {
             gicc_value as *mut u64 as u64,
             write,
         )
-        .chain_err(|| format!("Failed to access gic cpu for offset 0x{:x}", offset))
+        .with_context(|| format!("Failed to access gic cpu for offset 0x{:x}", offset))
     }
 
     fn access_gic_line_level(&self, offset: u64, gicll_value: &mut u32, write: bool) -> Result<()> {
@@ -389,10 +397,10 @@ impl GICDevice for GICv3 {
     }
 
     fn realize(&self) -> Result<()> {
-        self.realize().chain_err(|| "Failed to realize GICv3")?;
+        self.realize().with_context(|| "Failed to realize GICv3")?;
 
         if let Some(its) = &self.its_dev {
-            its.realize().chain_err(|| "Failed to realize ITS")?;
+            its.realize().with_context(|| "Failed to realize ITS")?;
         }
 
         Ok(())
@@ -440,6 +448,10 @@ impl GICDevice for GICv3 {
 
         Ok(())
     }
+
+    fn get_redist_count(&self) -> u8 {
+        self.redist_regions.len() as u8
+    }
 }
 
 pub struct GICv3Its {
@@ -470,7 +482,7 @@ impl GICv3Its {
             .create_device(&mut its_device)
         {
             Ok(fd) => fd,
-            Err(e) => return Err(ErrorKind::CreateKvmDevice(e).into()),
+            Err(e) => return Err(anyhow!(InterruptError::CreateKvmDevice(e))),
         };
 
         Ok(GICv3Its {
@@ -486,7 +498,7 @@ impl GICv3Its {
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
             u64::from(kvm_bindings::KVM_VGIC_ITS_ADDR_TYPE),
         )
-        .chain_err(|| "ITS address attribute is not supported for KVM")?;
+        .with_context(|| "ITS address attribute is not supported for KVM")?;
 
         KvmDevice::kvm_device_access(
             &self.fd,
@@ -495,7 +507,7 @@ impl GICv3Its {
             &self.msi_base as *const u64 as u64,
             true,
         )
-        .chain_err(|| "Failed to set ITS attribute: ITS address")?;
+        .with_context(|| "Failed to set ITS attribute: ITS address")?;
 
         // Finalize the GIC Its.
         KvmDevice::kvm_device_access(
@@ -505,7 +517,7 @@ impl GICv3Its {
             &self.msi_base as *const u64 as u64,
             true,
         )
-        .chain_err(|| "KVM failed to initialize ITS")?;
+        .with_context(|| "KVM failed to initialize ITS")?;
 
         Ok(())
     }
@@ -545,6 +557,8 @@ mod tests {
     use super::super::GICv3Config;
     use super::*;
 
+    use crate::GIC_IRQ_MAX;
+
     #[test]
     #[serial]
     fn test_create_gicv3() {
@@ -557,7 +571,7 @@ mod tests {
         let gic_conf = GICConfig {
             version: Some(GICVersion::GICv3),
             vcpu_count: 4,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v2: None,
             v3: Some(GICv3Config {
                 msi: false,
@@ -581,7 +595,7 @@ mod tests {
         let gic_config = GICConfig {
             version: Some(GICVersion::GICv3),
             vcpu_count: 4_u64,
-            max_irq: 192_u32,
+            max_irq: GIC_IRQ_MAX,
             v2: None,
             v3: Some(GICv3Config {
                 msi: false,
@@ -607,7 +621,7 @@ mod tests {
         let gic_config = GICConfig {
             version: Some(GICVersion::GICv3),
             vcpu_count: 210_u64,
-            max_irq: 192_u32,
+            max_irq: GIC_IRQ_MAX,
             v3: Some(GICv3Config {
                 msi: true,
                 dist_range: (0x0800_0000, 0x0001_0000),

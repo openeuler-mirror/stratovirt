@@ -16,13 +16,12 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex, RwLock};
 
-use error_chain::bail;
+use anyhow::{bail, Result};
 use log::{error, info};
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 
-use super::errors::Result;
 use crate::machine::MachineExternalInterface;
 use crate::{
     qmp::qmp_schema::QmpEvent,
@@ -202,7 +201,7 @@ impl Socket {
                         performer,
                         &mut shared_leak_bucket.lock().unwrap(),
                     ) {
-                        error!("{}", e);
+                        error!("{:?}", e);
                     }
                 }
                 if event & EventSet::HANG_UP == EventSet::HANG_UP {

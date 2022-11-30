@@ -293,6 +293,9 @@ pub trait DeviceInterface {
             ("iothread", "object"),
             #[cfg(target_arch = "aarch64")]
             ("gpex-pcihost", "pcie-host-bridge"),
+            ("nec-usb-xhci", "base-xhci"),
+            ("usb-tablet", "usb-hid"),
+            ("usb-kbd", "usb-hid"),
         ];
 
         for list in list_types {
@@ -391,6 +394,12 @@ pub trait DeviceInterface {
     }
 
     fn query_blockstats(&self) -> Response {
+        let vec_cmd: Vec<ChardevInfo> = Vec::new();
+        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+    }
+
+    fn query_block_jobs(&self) -> Response {
+        // Fix me: qmp command call, return none temporarily.
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
         Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
     }

@@ -12,8 +12,6 @@
 
 use std::sync::{Arc, Mutex};
 
-#[cfg(target_arch = "aarch64")]
-use acpi::AmlOne;
 use acpi::{
     AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlByte, AmlCacheable, AmlCreateDWordField,
     AmlDWord, AmlDWordDesc, AmlDevice, AmlEisaId, AmlElse, AmlEqual, AmlISARanges, AmlIf,
@@ -23,8 +21,11 @@ use acpi::{
 };
 #[cfg(target_arch = "x86_64")]
 use acpi::{AmlIoDecode, AmlIoResource};
+#[cfg(target_arch = "aarch64")]
+use acpi::{AmlOne, AmlQWordDesc};
 use address_space::{AddressSpace, GuestAddress, RegionOps};
-use sysbus::{errors::Result as SysBusResult, SysBusDevOps};
+use anyhow::Context;
+use sysbus::SysBusDevOps;
 
 use crate::{bus::PciBus, PciDevOps};
 #[cfg(target_arch = "x86_64")]
@@ -59,6 +60,8 @@ pub struct PciHost {
     pcie_mmio_range: (u64, u64),
     #[cfg(target_arch = "aarch64")]
     pcie_pio_range: (u64, u64),
+    #[cfg(target_arch = "aarch64")]
+    high_pcie_mmio_range: (u64, u64),
 }
 
 impl PciHost {
@@ -68,12 +71,17 @@ impl PciHost {
     ///
     /// * `sys_io` - IO space which the host bridge maps (only on x86_64).
     /// * `sys_mem`- Memory space which the host bridge maps.
+    /// * `pcie_ecam_range` - PCIe ECAM base address and length.
+    /// * `pcie_mmio_range` - PCIe MMIO base address and length.
+    /// * `pcie_pio_range` - PCIe PIO base addreass and length (only on aarch64).
+    /// * `high_pcie_mmio_range` - PCIe high MMIO base address and length (only on aarch64).
     pub fn new(
         #[cfg(target_arch = "x86_64")] sys_io: &Arc<AddressSpace>,
         sys_mem: &Arc<AddressSpace>,
         pcie_ecam_range: (u64, u64),
         pcie_mmio_range: (u64, u64),
         #[cfg(target_arch = "aarch64")] pcie_pio_range: (u64, u64),
+        #[cfg(target_arch = "aarch64")] high_pcie_mmio_range: (u64, u64),
     ) -> Self {
         #[cfg(target_arch = "x86_64")]
         let io_region = sys_io.root().clone();
@@ -93,6 +101,8 @@ impl PciHost {
             pcie_mmio_range,
             #[cfg(target_arch = "aarch64")]
             pcie_pio_range,
+            #[cfg(target_arch = "aarch64")]
+            high_pcie_mmio_range,
         }
     }
 
@@ -250,11 +260,9 @@ impl SysBusDevOps for PciHost {
         }
     }
 
-    fn reset(&mut self) -> SysBusResult<()> {
-        use sysbus::errors::ResultExt as SysBusResultExt;
-
+    fn reset(&mut self) -> sysbus::Result<()> {
         for (_id, pci_dev) in self.root_bus.lock().unwrap().devices.iter_mut() {
-            SysBusResultExt::chain_err(pci_dev.lock().unwrap().reset(true), || {
+            sysbus::Result::with_context(pci_dev.lock().unwrap().reset(true), || {
                 "Fail to reset pci device under pci host"
             })?;
         }
@@ -275,7 +283,11 @@ fn build_osc_for_aml(pci_host_bridge: &mut AmlDevice) {
     if_obj_0.append_child(AmlCreateDWordField::new(AmlArg(3), AmlInteger(8), "CDW3"));
     let cdw3 = AmlName("CDW3".to_string());
     if_obj_0.append_child(AmlStore::new(cdw3.clone(), AmlLocal(0)));
-    if_obj_0.append_child(AmlAnd::new(AmlLocal(0), AmlInteger(0x1f), AmlLocal(0)));
+    /*
+     * Hotplug: We now support PCIe native hotplug(bit 0) with PCI Express Capability Structure(bit 4)
+     * other bits: bit1: SHPC; bit2: PME; bit3: AER;
+     */
+    if_obj_0.append_child(AmlAnd::new(AmlLocal(0), AmlInteger(0x11), AmlLocal(0)));
     let mut if_obj_1 = AmlIf::new(AmlLNot::new(AmlEqual::new(AmlArg(1), AmlInteger(1))));
     let cdw1 = AmlName("CDW1".to_string());
     if_obj_1.append_child(AmlOr::new(cdw1.clone(), AmlInteger(0x08), cdw1.clone()));
@@ -315,8 +327,12 @@ fn build_osc_for_aml(pci_host_bridge: &mut AmlDevice) {
         AmlName("CDW3".to_string()),
         AmlName("CTRL".to_string()),
     ));
+    /*
+     * Hotplug: We now support PCIe native hotplug(bit 0) with PCI Express Capability Structure(bit 4)
+     * other bits: bit1: SHPC; bit2: PME; bit3: AER;
+     */
     if_obj_0.append_child(AmlStore::new(
-        AmlAnd::new(AmlName("CTRL".to_string()), AmlInteger(0x1d), AmlLocal(0)),
+        AmlAnd::new(AmlName("CTRL".to_string()), AmlInteger(0x11), AmlLocal(0)),
         AmlName("CTRL".to_string()),
     ));
     let mut if_obj_1 = AmlIf::new(AmlLNot::new(AmlEqual::new(AmlArg(1), AmlInteger(1))));
@@ -424,6 +440,17 @@ impl AmlBuilder for PciHost {
                 0,
                 pcie_pio.1 as u32,
             ));
+            let high_pcie_mmio = self.high_pcie_mmio_range;
+            crs.append_child(AmlQWordDesc::new_memory(
+                AmlAddressSpaceDecode::Positive,
+                AmlCacheable::NonCacheable,
+                AmlReadAndWrite::ReadWrite,
+                0,
+                high_pcie_mmio.0 as u64,
+                (high_pcie_mmio.0 + high_pcie_mmio.1) as u64 - 1,
+                0,
+                high_pcie_mmio.1 as u64,
+            ));
         }
         crs.append_child(AmlDWordDesc::new_memory(
             AmlAddressSpaceDecode::Positive,
@@ -465,8 +492,8 @@ pub mod tests {
     use super::*;
     use crate::bus::PciBus;
     use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE, SECONDARY_BUS_NUM};
-    use crate::errors::Result;
     use crate::root_port::RootPort;
+    use crate::Result;
 
     struct PciDevice {
         devfn: u8,
@@ -491,12 +518,20 @@ pub mod tests {
             Ok(())
         }
 
-        fn read_config(&self, offset: usize, data: &mut [u8]) {
+        fn read_config(&mut self, offset: usize, data: &mut [u8]) {
             self.config.read(offset, data);
         }
 
         fn write_config(&mut self, offset: usize, data: &[u8]) {
-            self.config.write(offset, data, 0);
+            #[allow(unused_variables)]
+            self.config.write(
+                offset,
+                data,
+                0,
+                #[cfg(target_arch = "x86_64")]
+                None,
+                None,
+            );
         }
 
         fn name(&self) -> String {
@@ -534,6 +569,8 @@ pub mod tests {
             (0xC000_0000, 0x3000_0000),
             #[cfg(target_arch = "aarch64")]
             (0xF000_0000, 0x1000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (512 << 30, 512 << 30),
         )))
     }
 

@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Context};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Result as IoResult, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -18,11 +18,12 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use vmm_sys_util::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
 
-use super::errors::{Result, ResultExt};
+use anyhow::Result;
 
 pub const TUN_F_CSUM: u32 = 1;
 pub const TUN_F_TSO4: u32 = 2;
 pub const TUN_F_TSO6: u32 = 4;
+pub const TUN_F_TSO_ECN: u32 = 8;
 pub const TUN_F_UFO: u32 = 16;
 pub const TUN_F_VIRTIO: u32 = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 | TUN_F_UFO;
 
@@ -53,7 +54,7 @@ impl Tap {
 
         if let Some(name) = name {
             if name.len() > 15 {
-                return Err(format!("Open tap {} failed, name too long.", name).into());
+                return Err(anyhow!("Open tap {} failed, name too long.", name));
             }
 
             let mut ifr_name = [0_u8; 16];
@@ -74,15 +75,14 @@ impl Tap {
                 .write(true)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
                 .open(TUNTAP_PATH)
-                .chain_err(|| format!("Open {} failed.", TUNTAP_PATH))?;
+                .with_context(|| format!("Open {} failed.", TUNTAP_PATH))?;
 
             let ret = unsafe { ioctl_with_mut_ref(&file_, TUNSETIFF(), &mut if_req) };
             if ret < 0 {
-                return Err(format!(
+                return Err(anyhow!(
                     "Failed to set tap ifr flags, error is {}",
                     std::io::Error::last_os_error()
-                )
-                .into());
+                ));
             }
 
             file = file_;
@@ -92,28 +92,23 @@ impl Tap {
                 File::from_raw_fd(fd)
             };
         } else {
-            return Err(format!(
+            return Err(anyhow!(
                 "Open tap failed, unsupported operation, error is {}",
                 std::io::Error::last_os_error()
-            )
-            .into());
+            ));
         }
 
         let mut features = 0;
         let ret = unsafe { ioctl_with_mut_ref(&file, TUNGETFEATURES(), &mut features) };
         if ret < 0 {
-            return Err(format!(
+            return Err(anyhow!(
                 "Failed to get tap features, error is {}.",
                 std::io::Error::last_os_error()
-            )
-            .into());
+            ));
         }
 
         if (features & IFF_MULTI_QUEUE == 0) && queue_pairs > 1 {
-            bail!(
-                "Tap device doesn't support mq, but command set queue pairs {}.",
-                queue_pairs
-            );
+            bail!("Needs multiqueue, but no kernel support for IFF_MULTI_QUEUE available");
         }
 
         Ok(Tap { file })
@@ -122,7 +117,7 @@ impl Tap {
     pub fn set_offload(&self, flags: u32) -> Result<()> {
         let ret = unsafe { ioctl_with_val(&self.file, TUNSETOFFLOAD(), flags as libc::c_ulong) };
         if ret < 0 {
-            return Err("ioctl TUNSETOFFLOAD failed.".to_string().into());
+            return Err(anyhow!("ioctl TUNSETOFFLOAD failed.".to_string()));
         }
 
         Ok(())
@@ -131,10 +126,15 @@ impl Tap {
     pub fn set_hdr_size(&self, len: u32) -> Result<()> {
         let ret = unsafe { ioctl_with_ref(&self.file, TUNSETVNETHDRSZ(), &len) };
         if ret < 0 {
-            return Err("ioctl TUNSETVNETHDRSZ failed.".to_string().into());
+            return Err(anyhow!("ioctl TUNSETVNETHDRSZ failed.".to_string()));
         }
 
         Ok(())
+    }
+
+    pub fn has_ufo(&self) -> bool {
+        let flags = TUN_F_CSUM | TUN_F_UFO;
+        (unsafe { ioctl_with_val(&self.file, TUNSETOFFLOAD(), flags as libc::c_ulong) }) >= 0
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {

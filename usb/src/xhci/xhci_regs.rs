@@ -16,61 +16,64 @@ use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
-use util::num_ops::{read_u32, write_u64_high, write_u64_low};
+use log::{debug, error};
+use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
 use crate::config::*;
-use crate::errors::Result;
 use crate::usb::UsbPort;
-use crate::xhci::xhci_controller::{set_field, XhciDevice, XhciEvent};
+use crate::xhci::xhci_controller::{XhciDevice, XhciEvent};
 use crate::xhci::xhci_ring::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
+use anyhow::Result;
 
 /// Capability offset or size.
 pub(crate) const XHCI_CAP_LENGTH: u32 = 0x40;
 pub(crate) const XHCI_OFF_DOORBELL: u32 = 0x2000;
 pub(crate) const XHCI_OFF_RUNTIME: u32 = 0x1000;
-/// Capability Registers
-/// Capability Register Length
+/// Capability Registers.
+/// Capability Register Length.
 const XHCI_CAP_REG_CAPLENGTH: u64 = 0x00;
-/// Interface Version Number
+/// Interface Version Number.
 const XHCI_CAP_REG_HCIVERSION: u64 = 0x02;
-/// Structural Parameters 1
+/// Structural Parameters 1.
 const XHCI_CAP_REG_HCSPARAMS1: u64 = 0x04;
-/// Structural Parameters 2
+/// Structural Parameters 2.
 const XHCI_CAP_REG_HCSPARAMS2: u64 = 0x08;
-/// Structural Parameters 3
+/// Structural Parameters 3.
 const XHCI_CAP_REG_HCSPARAMS3: u64 = 0x0c;
-/// Capability Parameters 1
+/// Capability Parameters 1.
 const XHCI_CAP_REG_HCCPARAMS1: u64 = 0x10;
-/// Doorbell Offset
+/// Doorbell Offset.
 const XHCI_CAP_REG_DBOFF: u64 = 0x14;
-/// Runtime Register Space Offset
+/// Runtime Register Space Offset.
 const XHCI_CAP_REG_RTSOFF: u64 = 0x18;
+/// Capability Parameters 2.
+const XHCI_CAP_REG_HCCPARAMS2: u64 = 0x1c;
 const XHCI_VERSION: u32 = 0x100;
-/// Number of Device Slots(MaxSlots)
+/// Number of Device Slots(MaxSlots).
 const CAP_HCSP_NDS_SHIFT: u32 = 0;
-/// Number of Interrupters(MaxIntrs)
+/// Number of Interrupters(MaxIntrs).
 const CAP_HCSP_NI_SHIFT: u32 = 8;
-/// Number of Ports(MaxPorts)
+/// Number of Ports(MaxPorts).
 const CAP_HCSP_NP_SHIFT: u32 = 24;
-/// 64-bit Addressing Capability
+/// 64-bit Addressing Capability.
 const CAP_HCCP_AC64: u32 = 0x1;
-/// xHCI Extended Capabilities Pointer
+/// xHCI Extended Capabilities Pointer.
 const CAP_HCCP_EXCP_SHIFT: u32 = 16;
-/// Maximum Primary Stream Array Size
+/// Maximum Primary Stream Array Size.
 const CAP_HCCP_MPSAS_SHIFT: u32 = 12;
-/// Extended Capability Code (Supported Protocol)
+/// Extended Capability Code (Supported Protocol).
 const CAP_EXT_CAP_ID_SUPPORT_PROTOCOL: u8 = 2;
-/// xHCI Supported Protocol Capability (Name String)
+/// xHCI Supported Protocol Capability (Name String).
 const CAP_EXT_USB_NAME_STRING: u32 = 0x20425355;
-/// Supported Protocol Capability (Major Revision and Minor Revision)
+/// Supported Protocol Capability (Major Revision and Minor Revision).
 const CAP_EXT_REVISION_SHIFT: u32 = 16;
-/// Next xHCI Extended Capability Pointer
+/// Next xHCI Extended Capability Pointer.
 const CAP_EXT_NEXT_CAP_POINTER_SHIFT: u32 = 8;
-/// USB 2.0
+/// USB 2.0.
 const CAP_EXT_USB_REVISION_2_0: u32 = 0x0200;
-/// USB 3.0
+/// USB 3.0.
 const CAP_EXT_USB_REVISION_3_0: u32 = 0x0300;
-/// Operational Registers
+/// Operational Registers.
 const XHCI_OPER_REG_USBCMD: u64 = 0x00;
 const XHCI_OPER_REG_USBSTS: u64 = 0x04;
 const XHCI_OPER_REG_PAGESIZE: u64 = 0x08;
@@ -81,7 +84,13 @@ const XHCI_OPER_REG_DCBAAP_LO: u64 = 0x30;
 const XHCI_OPER_REG_DCBAAP_HI: u64 = 0x34;
 const XHCI_OPER_REG_CONFIG: u64 = 0x38;
 const XHCI_OPER_PAGESIZE: u32 = 1;
-/// Interrupter Registers
+/// Command Ring Control Register RCS/CS/CA mask.
+const XHCI_CRCR_CTRL_LO_MASK: u32 = 0xffffffc7;
+/// Command Ring Pointer Mask.
+const XHCI_CRCR_CRP_MASK: u64 = !0x3f;
+/// Notification Enable.
+const XHCI_OPER_NE_MASK: u32 = 0xffff;
+/// Interrupter Registers.
 const XHCI_INTR_REG_IMAN: u64 = 0x00;
 const XHCI_INTR_REG_IMOD: u64 = 0x04;
 const XHCI_INTR_REG_ERSTSZ: u64 = 0x08;
@@ -90,10 +99,11 @@ const XHCI_INTR_REG_ERSTBA_HI: u64 = 0x14;
 const XHCI_INTR_REG_ERDP_LO: u64 = 0x18;
 const XHCI_INTR_REG_ERDP_HI: u64 = 0x1c;
 const XHCI_INTR_REG_SIZE: u64 = 0x20;
-/// Doorbell Register Bit Field
-/// DB Target
+const XHCI_INTR_REG_SHIFT: u64 = 5;
+/// Doorbell Register Bit Field.
+/// DB Target.
 const DB_TARGET_MASK: u32 = 0xff;
-/// Port Registers
+/// Port Registers.
 const XHCI_PORTSC: u64 = 0x0;
 const XHCI_PORTPMSC: u64 = 0x4;
 const XHCI_PORTLI: u64 = 0x8;
@@ -135,6 +145,11 @@ impl XchiOperReg {
         self.cmd_ring_ctrl = 0;
         self.dcbaap = 0;
         self.config = 0;
+    }
+
+    /// Run the command ring.
+    pub fn start_cmd_ring(&mut self) {
+        self.cmd_ring_ctrl |= CMD_RING_CTRL_CRR as u64;
     }
 }
 
@@ -220,14 +235,14 @@ pub struct XhciPort {
     /// Port Status and Control
     pub portsc: u32,
     /// Port ID
-    pub port_idx: u32,
+    pub port_idx: u8,
     pub usb_port: Option<Weak<Mutex<UsbPort>>>,
     pub speed_mask: u32,
     pub name: String,
 }
 
 impl XhciPort {
-    pub fn new(xhci: &Weak<Mutex<XhciDevice>>, name: String, i: u32) -> Self {
+    pub fn new(xhci: &Weak<Mutex<XhciDevice>>, name: String, i: u8) -> Self {
         Self {
             xhci: xhci.clone(),
             portsc: 0,
@@ -236,6 +251,17 @@ impl XhciPort {
             usb_port: None,
             name,
         }
+    }
+
+    /// Get port link state from port status and control register.
+    pub fn get_port_link_state(&self) -> u32 {
+        self.portsc >> PORTSC_PLS_SHIFT & PORTSC_PLS_MASK
+    }
+
+    /// Set port link state in port status and control register.
+    pub fn set_port_link_state(&mut self, pls: u32) {
+        self.portsc &= !(PORTSC_PLS_MASK << PORTSC_PLS_SHIFT);
+        self.portsc |= (pls & PORTSC_PLS_MASK) << PORTSC_PLS_SHIFT;
     }
 }
 
@@ -253,7 +279,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 XHCI_VERSION << hci_version_offset | XHCI_CAP_LENGTH
             }
             XHCI_CAP_REG_HCSPARAMS1 => {
-                max_ports << CAP_HCSP_NP_SHIFT
+                (max_ports as u32) << CAP_HCSP_NP_SHIFT
                     | max_intrs << CAP_HCSP_NI_SHIFT
                     | (locked_dev.slots.len() as u32) << CAP_HCSP_NDS_SHIFT
             }
@@ -267,6 +293,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
             XHCI_CAP_REG_DBOFF => XHCI_OFF_DOORBELL,
             XHCI_CAP_REG_RTSOFF => XHCI_OFF_RUNTIME,
+            XHCI_CAP_REG_HCCPARAMS2 => 0,
             // Extended capabilities (USB 2.0)
             0x20 => {
                 CAP_EXT_USB_REVISION_2_0 << CAP_EXT_REVISION_SHIFT
@@ -274,7 +301,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
             }
             0x24 => CAP_EXT_USB_NAME_STRING,
-            0x28 => (locked_dev.numports_2 << 8) | 1,
+            0x28 => ((locked_dev.numports_2 as u32) << 8) | 1,
             0x2c => 0x0,
             // Extended capabilities (USB 3.0)
             0x30 => {
@@ -282,18 +309,14 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
             }
             0x34 => CAP_EXT_USB_NAME_STRING,
-            0x38 => (locked_dev.numports_3 << 8) | (locked_dev.numports_2 + 1),
+            0x38 => ((locked_dev.numports_3 as u32) << 8) | (locked_dev.numports_2 + 1) as u32,
             0x3c => 0x0,
             _ => {
                 error!("Failed to read xhci cap: not implemented");
                 0
             }
         };
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read oper registers: {}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let cap_write = move |_data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
@@ -321,8 +344,16 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             XHCI_OPER_REG_USBSTS => locked_xhci.oper.usb_status,
             XHCI_OPER_REG_PAGESIZE => XHCI_OPER_PAGESIZE,
             XHCI_OPER_REG_DNCTRL => locked_xhci.oper.dev_notify_ctrl,
-            XHCI_OPER_REG_CMD_RING_CTRL_LO => read_u32(locked_xhci.oper.cmd_ring_ctrl, 0) & !0xe,
-            XHCI_OPER_REG_CMD_RING_CTRL_HI => read_u32(locked_xhci.oper.cmd_ring_ctrl, 1),
+            XHCI_OPER_REG_CMD_RING_CTRL_LO => {
+                // 5.4.5 Command Ring Control Register
+                // Table 5-24 shows read RCS CS CA always returns 0.
+                read_u32(locked_xhci.oper.cmd_ring_ctrl, 0) & CMD_RING_CTRL_CRR
+            }
+            XHCI_OPER_REG_CMD_RING_CTRL_HI => {
+                // 5.4.5 Command Ring Control Register
+                // Table 5-24 shows read CRP always returns 0.
+                0
+            }
             XHCI_OPER_REG_DCBAAP_LO => read_u32(locked_xhci.oper.dcbaap, 0),
             XHCI_OPER_REG_DCBAAP_HI => read_u32(locked_xhci.oper.dcbaap, 1),
             XHCI_OPER_REG_CONFIG => locked_xhci.oper.config,
@@ -334,23 +365,16 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 0
             }
         };
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read oper registers: {}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let xhci = xhci_dev.clone();
     let oper_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
         debug!("oper write {:x} {:x}", addr.0, offset);
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         let mut locked_xhci = xhci.lock().unwrap();
         match offset {
             XHCI_OPER_REG_USBCMD => {
@@ -366,52 +390,48 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 if value & USB_CMD_CSS == USB_CMD_CSS {
                     locked_xhci.oper.usb_status &= !USB_STS_SRE;
                 }
+                // When the restore command is issued, an error is reported and then
+                // guest OS performs a complete initialization.
                 if value & USB_CMD_CRS == USB_CMD_CRS {
                     locked_xhci.oper.usb_status |= USB_STS_SRE;
                 }
                 locked_xhci.oper.usb_cmd = value & 0xc0f;
-                locked_xhci.update_mf();
                 if value & USB_CMD_HCRST == USB_CMD_HCRST {
                     locked_xhci.reset();
                 }
                 locked_xhci.update_intr(0);
             }
             XHCI_OPER_REG_USBSTS => {
+                // Write 1 to clear.
                 locked_xhci.oper.usb_status &=
                     !(value & (USB_STS_HSE | USB_STS_EINT | USB_STS_PCD | USB_STS_SRE));
                 locked_xhci.update_intr(0);
             }
-            XHCI_OPER_REG_DNCTRL => locked_xhci.oper.dev_notify_ctrl = value & 0xffff,
+            XHCI_OPER_REG_DNCTRL => locked_xhci.oper.dev_notify_ctrl = value & XHCI_OPER_NE_MASK,
             XHCI_OPER_REG_CMD_RING_CTRL_LO => {
-                let lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0) & CMD_RING_CTRL_CRR;
+                let mut crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0);
+                crc_lo = (value & XHCI_CRCR_CTRL_LO_MASK) | (crc_lo & CMD_RING_CTRL_CRR);
                 locked_xhci.oper.cmd_ring_ctrl =
-                    write_u64_low(locked_xhci.oper.cmd_ring_ctrl, (value & 0xffffffcf) | lo);
+                    write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
             }
             XHCI_OPER_REG_CMD_RING_CTRL_HI => {
-                locked_xhci.oper.cmd_ring_ctrl =
-                    write_u64_high(locked_xhci.oper.cmd_ring_ctrl, value);
+                let crc_hi = (value as u64) << 32;
                 let mut crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0);
-                if crc_lo & (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS)
-                    == (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS)
+                if crc_lo & (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS) != 0
                     && (crc_lo & CMD_RING_CTRL_CRR) == CMD_RING_CTRL_CRR
                 {
                     let event =
                         XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::CommandRingStopped);
                     crc_lo &= !CMD_RING_CTRL_CRR;
-                    locked_xhci.oper.cmd_ring_ctrl =
-                        write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
                     if let Err(e) = locked_xhci.send_event(&event, 0) {
-                        error!("Failed to send event: {}", e);
+                        error!("Failed to send event: {:?}", e);
                     }
                 } else {
-                    let crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0) & !0x3f;
-                    let crc_hi = ((value << 16) as u64) << 16;
-                    let addr = crc_hi | crc_lo as u64;
+                    let addr = (crc_hi | crc_lo as u64) & XHCI_CRCR_CRP_MASK;
                     locked_xhci.cmd_ring.init(addr);
                 }
                 crc_lo &= !(CMD_RING_CTRL_CA | CMD_RING_CTRL_CS);
-                locked_xhci.oper.cmd_ring_ctrl =
-                    write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
+                locked_xhci.oper.cmd_ring_ctrl = write_u64_low(crc_hi, crc_lo);
             }
             XHCI_OPER_REG_DCBAAP_LO => {
                 locked_xhci.oper.dcbaap = write_u64_low(locked_xhci.oper.dcbaap, value & 0xffffffc0)
@@ -450,9 +470,13 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 error!("Failed to read runtime registers, offset is {:x}", offset);
             }
         } else {
-            let idx = (offset - XHCI_INTR_REG_SIZE) / XHCI_INTR_REG_SIZE;
+            let idx = ((offset - XHCI_INTR_REG_SIZE) >> XHCI_INTR_REG_SHIFT) as usize;
             let mut xhci = xhci.lock().unwrap();
-            let intr = &mut xhci.intrs[idx as usize];
+            if idx >= xhci.intrs.len() {
+                error!("Invalid interrupter index: {} idx {}", offset, idx);
+                return false;
+            }
+            let intr = &mut xhci.intrs[idx];
             value = match offset & 0x1f {
                 XHCI_INTR_REG_IMAN => intr.iman,
                 XHCI_INTR_REG_IMOD => intr.imod,
@@ -470,31 +494,25 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 }
             };
         }
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data when read runtime registers: {}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let xhci = xhci_dev.clone();
     let runtime_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         debug!("runtime write {:x} {:x} {:x}", addr.0, offset, value);
         if offset < 0x20 {
-            error!("runtime write not implemented: offset {}", offset);
+            error!("Runtime write not implemented: offset {}", offset);
+            return false;
         }
         let mut xhci = xhci.lock().unwrap();
-        let idx = ((offset - XHCI_INTR_REG_SIZE) / XHCI_INTR_REG_SIZE) as u32;
-        if idx > xhci.intrs.len() as u32 {
+        let idx = ((offset - XHCI_INTR_REG_SIZE) >> XHCI_INTR_REG_SHIFT) as u32;
+        if idx >= xhci.intrs.len() as u32 {
             error!("Invalid interrupter index: {} idx {}", offset, idx);
-            return true;
+            return false;
         }
         let intr = &mut xhci.intrs[idx as usize];
         match offset & 0x1f {
@@ -504,9 +522,7 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 }
                 intr.iman &= !IMAN_IE;
                 intr.iman |= value & IMAN_IE;
-                if idx == 0 {
-                    xhci.update_intr(idx);
-                }
+                xhci.update_intr(idx);
             }
             XHCI_INTR_REG_IMOD => intr.imod = value,
             XHCI_INTR_REG_ERSTSZ => intr.erstsz = value & 0xffff,
@@ -516,18 +532,19 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             XHCI_INTR_REG_ERSTBA_HI => {
                 intr.erstba = write_u64_high(intr.erstba, value);
                 if let Err(e) = xhci.reset_event_ring(idx) {
-                    error!("Failed to reset event ring: {}", e);
+                    error!("Failed to reset event ring: {:?}", e);
                 }
             }
             XHCI_INTR_REG_ERDP_LO => {
-                let mut erdp_lo = read_u32(intr.erdp, 0);
-                if value & ERDP_EHB == ERDP_EHB {
-                    erdp_lo &= !ERDP_EHB;
+                // ERDP_EHB is write 1 clear.
+                let mut erdp_lo = value & !ERDP_EHB;
+                if value & ERDP_EHB != ERDP_EHB {
+                    let erdp_old = read_u32(intr.erdp, 0);
+                    erdp_lo |= erdp_old & ERDP_EHB;
                 }
-                erdp_lo = (value & !ERDP_EHB) | (erdp_lo & ERDP_EHB);
                 intr.erdp = write_u64_low(intr.erdp, erdp_lo);
                 if value & ERDP_EHB == ERDP_EHB {
-                    let erdp = intr.erdp & 0x0000_FFFF_FFFF_FFFF_u64;
+                    let erdp = intr.erdp;
                     let dp_idx = (erdp - intr.er_start) / TRB_SIZE as u64;
                     if erdp >= intr.er_start
                         && erdp < intr.er_start + (TRB_SIZE * intr.er_size) as u64
@@ -560,44 +577,38 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
 pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let doorbell_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
         debug!("doorbell read addr {:x} offset {:x}", addr.0, offset);
-        if let Err(e) = write_data(data, 0) {
-            error!("Failed to write data: {}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, 0)
     };
     let xhci = xhci_dev.clone();
     let doorbell_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
-                return false;
-            }
-        };
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
         debug!("doorbell write {:x} {:x}", addr.0, offset);
         if !xhci.lock().unwrap().running() {
             error!("Failed to write doorbell, XHCI is not running");
-            return true;
+            return false;
         }
         let mut xhci = xhci.lock().unwrap();
         let slot_id = (offset >> 2) as u32;
         if slot_id == 0 {
             if value == 0 {
                 if let Err(e) = xhci.handle_command() {
-                    error!("Failed to process commands: {}", e);
+                    error!("Failed to handle command: {:?}", e);
+                    xhci.host_controller_error();
+                    return false;
                 }
             } else {
-                error!("Invalid doorbell write: value {:x}", value)
+                error!("Invalid doorbell write: value {:x}", value);
+                return false;
             }
         } else {
             let ep_id = value & DB_TARGET_MASK;
-            if slot_id > xhci.slots.len() as u32 {
-                error!("Invalid slot_id {}", slot_id);
-            } else if ep_id == 0 || ep_id > 31 {
-                error!("Invalid epid {}", ep_id,);
-            } else if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
-                error!("Failed to kick endpoint: {}", e);
+            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
+                error!("Failed to kick endpoint: {:?}", e);
+                xhci.host_controller_error();
+                return false;
             }
         }
         true
@@ -622,110 +633,33 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
             XHCI_PORTHLPMC => 0,
             _ => {
                 error!("Faield to read port register: offset {:x}", offset);
-                0
+                return false;
             }
         };
-        if let Err(e) = write_data(data, value) {
-            error!("Failed to write data: {}", e);
-            return false;
-        }
-        true
+        write_data_u32(data, value)
     };
 
     let port = xhci_port.clone();
     let port_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-        let value = match read_data(data) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to read data: offset 0x{:x}, {}", offset, e);
+        let mut value = 0;
+        if !read_data_u32(data, &mut value) {
+            return false;
+        }
+        debug!("port write {:x} {:x} {:x}", addr.0, offset, value);
+        match offset {
+            XHCI_PORTSC => {
+                if let Err(e) = xhci_portsc_write(&port, value) {
+                    error!("Failed to write portsc register, {:?}", e);
+                    return false;
+                }
+            }
+            XHCI_PORTPMSC => (),
+            XHCI_PORTLI => (),
+            XHCI_PORTHLPMC => (),
+            _ => {
+                error!("Invalid port link state offset {}", offset);
                 return false;
             }
-        };
-        let locked_port = port.lock().unwrap();
-        debug!(
-            "port write {} {:x} {:x} {:x}",
-            locked_port.name, addr.0, offset, value
-        );
-        let xhci = locked_port.xhci.upgrade().unwrap();
-        drop(locked_port);
-        // Lock controller first.
-        let mut locked_xhci = xhci.lock().unwrap();
-        #[allow(clippy::never_loop)]
-        loop {
-            match offset {
-                XHCI_PORTSC => {
-                    if value & PORTSC_WPR == PORTSC_WPR {
-                        if let Err(e) = locked_xhci.reset_port(&port, true) {
-                            error!("Failed to warn reset port {}", e);
-                        }
-                        break;
-                    }
-                    if value & PORTSC_PR == PORTSC_PR {
-                        if let Err(e) = locked_xhci.reset_port(&port, false) {
-                            error!("Failed to reset port {}", e);
-                        }
-                        break;
-                    }
-                    let mut locked_port = port.lock().unwrap();
-                    let mut portsc = locked_port.portsc;
-                    let mut notify = 0;
-                    portsc &= !(value
-                        & (PORTSC_CSC
-                            | PORTSC_PEC
-                            | PORTSC_WRC
-                            | PORTSC_OCC
-                            | PORTSC_PRC
-                            | PORTSC_PLC
-                            | PORTSC_CEC));
-                    if value & PORTSC_LWS == PORTSC_LWS {
-                        let old_pls = (locked_port.portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
-                        let new_pls = (value >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
-                        match new_pls {
-                            PLS_U0 => {
-                                if old_pls != PLS_U0 {
-                                    portsc = set_field(
-                                        portsc,
-                                        new_pls,
-                                        PORTSC_PLS_MASK,
-                                        PORTSC_PLS_SHIFT,
-                                    );
-                                    notify = PORTSC_PLC;
-                                }
-                            }
-                            PLS_U3 => {
-                                if old_pls < PLS_U3 {
-                                    portsc = set_field(
-                                        portsc,
-                                        new_pls,
-                                        PORTSC_PLS_MASK,
-                                        PORTSC_PLS_SHIFT,
-                                    );
-                                }
-                            }
-                            PLS_RESUME => {}
-                            _ => {
-                                error!("Invalid port link state, ignore the write.");
-                            }
-                        }
-                    }
-                    portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
-                    portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
-                    locked_port.portsc = portsc;
-                    drop(locked_port);
-                    if notify != 0 {
-                        if let Err(e) = locked_xhci.port_notify(&port, notify) {
-                            error!("Failed to notify: {}", e);
-                        }
-                    }
-                }
-                XHCI_PORTPMSC => (),
-                XHCI_PORTLI => (),
-                XHCI_PORTHLPMC => (),
-                _ => {
-                    error!("Invalid port link state offset {}", offset);
-                }
-            }
-            break;
         }
         true
     };
@@ -736,34 +670,65 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
     }
 }
 
-fn write_data(data: &mut [u8], value: u32) -> Result<()> {
-    match data.len() {
-        1 => data[0] = value as u8,
-        2 => {
-            LittleEndian::write_u16(data, value as u16);
-        }
-        4 => {
-            LittleEndian::write_u32(data, value);
-        }
-        _ => {
-            bail!(
-                "Invalid data length: value {}, data len {}",
-                value,
-                data.len()
-            );
-        }
-    };
+fn xhci_portsc_write(port: &Arc<Mutex<XhciPort>>, value: u32) -> Result<()> {
+    let locked_port = port.lock().unwrap();
+    let xhci = locked_port.xhci.upgrade().unwrap();
+    drop(locked_port);
+    // Lock controller first.
+    let mut locked_xhci = xhci.lock().unwrap();
+    if value & PORTSC_WPR == PORTSC_WPR {
+        return locked_xhci.reset_port(port, true);
+    }
+    if value & PORTSC_PR == PORTSC_PR {
+        return locked_xhci.reset_port(port, false);
+    }
+    let mut locked_port = port.lock().unwrap();
+    let mut portsc = locked_port.portsc;
+    let mut notify = 0;
+    // Write 1 to clear.
+    portsc &= !(value
+        & (PORTSC_CSC
+            | PORTSC_PEC
+            | PORTSC_WRC
+            | PORTSC_OCC
+            | PORTSC_PRC
+            | PORTSC_PLC
+            | PORTSC_CEC));
+    if value & PORTSC_LWS == PORTSC_LWS {
+        let old_pls = (locked_port.portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
+        let new_pls = (value >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK;
+        notify = xhci_portsc_ls_write(&mut locked_port, old_pls, new_pls);
+    }
+    portsc &= !(PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
+    portsc |= value & (PORTSC_PP | PORTSC_WCE | PORTSC_WDE | PORTSC_WOE);
+    locked_port.portsc = portsc;
+    drop(locked_port);
+    if notify != 0 {
+        locked_xhci.port_notify(port, notify)?;
+    }
     Ok(())
 }
 
-fn read_data(data: &[u8]) -> Result<u32> {
-    let value = match data.len() {
-        1 => data[0] as u32,
-        2 => LittleEndian::read_u16(data) as u32,
-        4 => LittleEndian::read_u32(data),
-        _ => {
-            bail!("Invalid data length: data len {}", data.len());
+fn xhci_portsc_ls_write(port: &mut XhciPort, old_pls: u32, new_pls: u32) -> u32 {
+    match new_pls {
+        PLS_U0 => {
+            if old_pls != PLS_U0 {
+                port.set_port_link_state(new_pls);
+                return PORTSC_PLC;
+            }
         }
-    };
-    Ok(value)
+        PLS_U3 => {
+            if old_pls < PLS_U3 {
+                port.set_port_link_state(new_pls);
+            }
+        }
+        PLS_RESUME => {}
+        _ => {
+            error!(
+                "Unhandled port link state, ignore the write. old {:x} new {:x}",
+                old_pls, new_pls
+            );
+        }
+    }
+    0
 }

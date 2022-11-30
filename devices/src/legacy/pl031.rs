@@ -13,8 +13,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use super::error::LegacyError;
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
+use anyhow::{anyhow, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::error;
 use migration::{
@@ -24,9 +26,8 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
+use util::num_ops::write_data_u32;
 use vmm_sys_util::eventfd::EventFd;
-
-use super::errors::{ErrorKind, Result, ResultExt};
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
 /// Data Register.
@@ -104,7 +105,7 @@ impl PL031 {
     ) -> Result<()> {
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
         self.set_sys_resource(sysbus, region_base, region_size)
-            .chain_err(|| ErrorKind::SetSysResErr)?;
+            .with_context(|| anyhow!(LegacyError::SetSysResErr))?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
@@ -139,13 +140,7 @@ impl SysBusDevOps for PL031 {
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if (0xFE0..0x1000).contains(&offset) {
             let value = u32::from(RTC_PERIPHERAL_ID[((offset - 0xFE0) >> 2) as usize]);
-            match data.len() {
-                1 => data[0] = value as u8,
-                2 => LittleEndian::write_u16(data, value as u16),
-                4 => LittleEndian::write_u32(data, value as u32),
-                _ => {}
-            }
-            return true;
+            return write_data_u32(data, value);
         }
 
         let mut value: u32 = 0;
@@ -160,14 +155,7 @@ impl SysBusDevOps for PL031 {
             _ => {}
         }
 
-        match data.len() {
-            1 => data[0] = value as u8,
-            2 => LittleEndian::write_u16(data, value as u16),
-            4 => LittleEndian::write_u32(data, value as u32),
-            _ => {}
-        }
-
-        true
+        write_data_u32(data, value)
     }
 
     /// Write data to registers by guest.
@@ -215,15 +203,15 @@ impl AmlBuilder for PL031 {
 }
 
 impl StateTransfer for PL031 {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let state = self.state;
 
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *PL031State::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("PL031"))?;
+            .ok_or_else(|| anyhow!(migration::MigrationError::FromBytesError("PL031")))?;
 
         Ok(())
     }
@@ -238,3 +226,41 @@ impl StateTransfer for PL031 {
 }
 
 impl MigrationHook for PL031 {}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use util::time::mktime64;
+
+    const WIGGLE: u32 = 2;
+
+    #[test]
+    fn test_set_year_20xx() {
+        let mut rtc = PL031::default();
+        // Set rtc time: 2013-11-13 02:04:56.
+        let wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
+        let mut data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
+        let rtick = LittleEndian::read_u32(&data);
+
+        assert!((rtick - wtick) <= WIGGLE);
+    }
+
+    #[test]
+    fn test_set_year_1970() {
+        let mut rtc = PL031::default();
+        // Set rtc time (min): 1970-01-01 00:00:00.
+        let wtick = mktime64(1970, 1, 1, 0, 0, 0) as u32;
+        let mut data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
+        let rtick = LittleEndian::read_u32(&data);
+
+        assert!((rtick - wtick) <= WIGGLE);
+    }
+}

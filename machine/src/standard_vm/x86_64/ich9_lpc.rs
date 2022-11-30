@@ -15,22 +15,21 @@ use std::sync::{
     Arc, Mutex, Weak,
 };
 
+use super::VENDOR_ID_INTEL;
+use crate::standard_vm::Result;
 use acpi::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
-use error_chain::ChainedError;
-use log::{debug, error};
+use anyhow::Context;
+use log::error;
 use pci::config::CLASS_CODE_ISA_BRIDGE;
 use pci::config::{
     PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE, HEADER_TYPE_MULTIFUNC,
     PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
-use pci::errors::Result as PciResult;
+use pci::Result as PciResult;
 use pci::{le_write_u16, le_write_u32, ranges_overlap, PciBus, PciDevOps};
 use util::byte_code::ByteCode;
 use vmm_sys_util::eventfd::EventFd;
-
-use super::VENDOR_ID_INTEL;
-use crate::standard_vm::errors::Result;
 
 const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
 
@@ -221,8 +220,6 @@ impl PciDevOps for LPCBridge {
     }
 
     fn realize(mut self) -> PciResult<()> {
-        use pci::errors::ResultExt;
-
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -245,15 +242,15 @@ impl PciDevOps for LPCBridge {
         )?;
 
         self.init_sleep_reg()
-            .chain_err(|| "Fail to init IO region for sleep control register")?;
+            .with_context(|| "Fail to init IO region for sleep control register")?;
 
         self.init_reset_ctrl_reg()
-            .chain_err(|| "Fail to init IO region for reset control register")?;
+            .with_context(|| "Fail to init IO region for reset control register")?;
 
         self.init_pm_evt_reg()
-            .chain_err(|| "Fail to init IO region for PM events register")?;
+            .with_context(|| "Fail to init IO region for PM events register")?;
         self.init_pm_ctrl_reg()
-            .chain_err(|| "Fail to init IO region for PM control register")?;
+            .with_context(|| "Fail to init IO region for PM control register")?;
 
         let parent_bus = self.parent_bus.clone();
         parent_bus
@@ -266,30 +263,14 @@ impl PciDevOps for LPCBridge {
         Ok(())
     }
 
-    fn read_config(&self, offset: usize, data: &mut [u8]) {
-        let size = data.len();
-        if offset + size > PCI_CONFIG_SPACE_SIZE || size > 4 {
-            debug!(
-                "Failed to read LPC bridge's pci config space: offset {}, data size {}",
-                offset, size
-            );
-            return;
-        }
+    fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         self.config.read(offset, data);
     }
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let size = data.len();
-        let end = offset + size;
-        if end > PCI_CONFIG_SPACE_SIZE || size > 4 {
-            debug!(
-                "Failed to write LPC bridge's pci config space: offset {}, data size {}",
-                offset, size
-            );
-            return;
-        }
+        let end = offset + data.len();
 
-        self.config.write(offset, data, 0);
+        self.config.write(offset, data, 0, None, None);
         if ranges_overlap(
             offset,
             end,
@@ -297,7 +278,7 @@ impl PciDevOps for LPCBridge {
             PM_BASE_OFFSET as usize + 4,
         ) {
             if let Err(e) = self.update_pm_base() {
-                error!("Failed to update PM base addr: {}", e.display_chain());
+                error!("Failed to update PM base addr: {:?}", e);
             }
         }
     }

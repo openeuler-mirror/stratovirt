@@ -13,16 +13,15 @@
 use std::marker::{Send, Sync};
 use std::sync::{Arc, Mutex};
 
+use super::{GICConfig, GICDevice, KvmDevice, UtilResult};
+use crate::interrupt_controller::InterruptError;
 use address_space::AddressSpace;
+use anyhow::{anyhow, Context, Result};
 use hypervisor::kvm::KVM_FDS;
 use kvm_ioctls::DeviceFd;
 use log::error;
 use machine_manager::machine::{KvmVmState, MachineLifecycle};
 use util::device_tree::{self, FdtBuilder};
-
-use super::{GICConfig, GICDevice, KvmDevice, UtilResult};
-use crate::interrupt_controller::errors::{ErrorKind, Result, ResultExt};
-
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
 const KVM_VGIC_V2_DIST_SIZE: u64 = 0x1000;
 const KVM_VGIC_V2_CPU_SIZE: u64 = 0x2000;
@@ -87,7 +86,11 @@ impl GICv2 {
     fn new(config: &GICConfig) -> Result<Self> {
         let v2config = match config.v2.as_ref() {
             Some(v2) => v2,
-            None => return Err(ErrorKind::InvalidConfig("no v2 config found".to_string()).into()),
+            None => {
+                return Err(anyhow!(InterruptError::InvalidConfig(
+                    "no v2 config found".to_string()
+                )))
+            }
         };
 
         let mut gic_device = kvm_bindings::kvm_create_device {
@@ -102,7 +105,7 @@ impl GICv2 {
             .as_ref()
             .unwrap()
             .create_device(&mut gic_device)
-            .chain_err(|| "Failed to create GICv2 device")?;
+            .with_context(|| "Failed to create GICv2 device")?;
 
         let cpu_interface_region = GicCpuInterfaceRegion {
             base: v2config.dist_range.0 + KVM_VGIC_V2_DIST_SIZE,
@@ -135,7 +138,7 @@ impl GICv2 {
             &self.nr_irqs as *const u32 as u64,
             true,
         )
-        .chain_err(|| "Failed to set GICv2 attribute: irqs")?;
+        .with_context(|| "Failed to set GICv2 attribute: irqs")?;
 
         // Finalize the GIC.
         KvmDevice::kvm_device_access(
@@ -145,7 +148,7 @@ impl GICv2 {
             0,
             true,
         )
-        .chain_err(|| "KVM failed to initialize GICv2")?;
+        .with_context(|| "KVM failed to initialize GICv2")?;
 
         KvmDevice::kvm_device_access(
             &self.fd,
@@ -154,7 +157,7 @@ impl GICv2 {
             &self.dist_guest_region.base as *const u64 as u64,
             true,
         )
-        .chain_err(|| "Failed to set GICv2 attribute: distributor address")?;
+        .with_context(|| "Failed to set GICv2 attribute: distributor address")?;
 
         KvmDevice::kvm_device_access(
             &self.fd,
@@ -163,7 +166,7 @@ impl GICv2 {
             &self.cpu_interface_region.base as *const u64 as u64,
             true,
         )
-        .chain_err(|| "Failed to set GICv2 attribute: cpu address")?;
+        .with_context(|| "Failed to set GICv2 attribute: cpu address")?;
 
         *self.state.lock().unwrap() = KvmVmState::Running;
 
@@ -225,7 +228,7 @@ impl GICv2Access for GICv2 {
             gicd_value as *mut u32 as u64,
             write,
         )
-        .chain_err(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
+        .with_context(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
     }
 
     fn access_gic_cpu(
@@ -242,7 +245,7 @@ impl GICv2Access for GICv2 {
             gicc_value as *mut u64 as u64,
             write,
         )
-        .chain_err(|| format!("Failed to access gic cpu for offset 0x{:x}", offset))
+        .with_context(|| format!("Failed to access gic cpu for offset 0x{:x}", offset))
     }
 }
 
@@ -254,7 +257,7 @@ impl GICDevice for GICv2 {
     }
 
     fn realize(&self) -> Result<()> {
-        self.realize().chain_err(|| "Failed to realize GICv2")?;
+        self.realize().with_context(|| "Failed to realize GICv2")?;
 
         Ok(())
     }
@@ -299,6 +302,8 @@ mod tests {
     use super::super::GICv2Config;
     use super::*;
 
+    use crate::GIC_IRQ_MAX;
+
     #[test]
     #[serial]
     fn test_create_gicv2() {
@@ -311,7 +316,7 @@ mod tests {
         let gic_conf = GICConfig {
             version: Some(GICVersion::GICv2),
             vcpu_count: 4,
-            max_irq: 192,
+            max_irq: GIC_IRQ_MAX,
             v2: Some(GICv2Config {
                 dist_range: (0x0800_0000, 0x0001_0000),
                 cpu_range: (0x080A_0000, 0x00F6_0000),

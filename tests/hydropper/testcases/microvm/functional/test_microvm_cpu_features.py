@@ -177,3 +177,25 @@ def test_brand_string(microvm):
 
     assert guest_brand_string == expected_guest_brand_string
 
+
+@pytest.mark.skipif("platform.machine().startswith('x86_64')")
+@pytest.mark.acceptance
+def test_pmu(microvm):
+    '''Test for PMU events and interrupt.
+    '''
+    test_vm = microvm 
+    test_vm.basic_config(vcpu_count=1,cpu_features="pmu=on")
+    test_vm.launch()
+
+    #PMU events available?
+    guest_cmd = "perf list | grep cache-misses"
+    status, output = test_vm.serial_cmd(guest_cmd)
+    assert status == 0
+
+    #PMU interrupt available?
+    guest_cmd = "cat /proc/interrupts | grep -i 'pmu' | head -1"
+    status, output = test_vm.serial_cmd(guest_cmd)
+    assert status == 0
+
+
+

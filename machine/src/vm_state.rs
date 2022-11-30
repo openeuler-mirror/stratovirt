@@ -13,6 +13,7 @@
 use kvm_bindings::{kvm_clock_data, kvm_irqchip, kvm_pit_state2, KVM_IRQCHIP_IOAPIC};
 use migration_derive::{ByteCode, Desc};
 
+use anyhow::anyhow;
 use hypervisor::kvm::KVM_FDS;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::byte_code::ByteCode;
@@ -32,7 +33,7 @@ pub struct KvmDeviceState {
 }
 
 impl StateTransfer for KvmDevice {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
 
@@ -60,12 +61,12 @@ impl StateTransfer for KvmDevice {
         .to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
 
         let kvm_state = KvmDeviceState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("KVM_DEVICE"))?;
+            .ok_or_else(|| anyhow!(migration::MigrationError::FromBytesError("KVM_DEVICE")))?;
 
         vm_fd.set_pit2(&kvm_state.pit_state)?;
         vm_fd.set_clock(&kvm_state.kvm_clock)?;

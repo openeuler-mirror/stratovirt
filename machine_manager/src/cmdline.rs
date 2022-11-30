@@ -12,13 +12,12 @@
 
 use std::os::unix::net::UnixListener;
 
-use error_chain::bail;
+use anyhow::{bail, Context, Result};
 use util::arg_parser::{Arg, ArgMatches, ArgParser};
 use util::unix::{limit_permission, parse_unix_uri};
 
 use crate::{
     config::{add_trace_events, ChardevType, CmdParser, MachineType, VmConfig},
-    errors::{Result, ResultExt},
     temp_cleaner::TempCleaner,
 };
 
@@ -75,51 +74,86 @@ macro_rules! add_args_to_config_multi {
 pub fn create_args_parser<'a>() -> ArgParser<'a> {
     ArgParser::new("StratoVirt")
         .version(VERSION.unwrap_or("unknown"))
-        .author("Huawei Technologies Co., Ltd")
+        .author("The StratoVirt Project Developers")
         .about("A light kvm-based hypervisor.")
         .arg(
             Arg::with_name("name")
             .long("name")
-            .value_name("vm_name")
+            .value_name("[vm_name]")
             .help("set the name of the guest.")
             .takes_value(true),
         )
         .arg(
             Arg::with_name("machine")
             .long("machine")
-            .value_name("[type=]name[,dump_guest_core=on|off][,mem-share=on|off]")
-            .help("selects emulated machine and set properties")
+            .value_name("[type=]<name>[,dump_guest_core=on|off][,mem-share=on|off]")
+            .help("'type' selects emulated machine type and set properties. \
+                   'dump_guest_core' includes guest memory in a core dump. \
+                   'mem-share' sets guest memory is shareable.")
             .takes_value(true),
         )
         .arg(
             Arg::with_name("smp")
             .long("smp")
-            .value_name("[cpus=]n[,maxcpus=cpus][,sockets=sockets][,dies=dies][,clusters=clusters][,cores=cores][,threads=threads]")
-            .help("set the number of CPUs to 'n' (default: 1). maxcpus=maximum number of total CPUs, including online and offline CPUs. \
-                   sockets is the number of sockets on the machine. \
-                   dies is the number of dies in one socket. \
-                   clusters is the number of clusters in one die. cores is the number of cores in one cluster. \
-                   threads is the number of threads in one core")
+            .value_name("[cpus=]<n>[,maxcpus=<cpus>][,sockets=<sockets>][,dies=<dies>][,clusters=<clusters>][,cores=<cores>][,threads=<threads>]")
+            .help("'cpus' sets the number of CPUs to 'n' (default: 1). 'maxcpus' sets number of total CPUs, including online and offline CPUs. \
+                   'sockets' is the number of sockets on the machine. \
+                   'dies' is the number of dies in one socket. \
+                   'clusters' is the number of clusters in one die. \
+                   'cores' is the number of cores in one cluster. \
+                   'threads' is the number of threads in one core")
             .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("cpu")
+            .long("cpu")
+            .value_name("host[,pmu=on|off]")
+            .help("set CPU model and features.")
+            .can_no_value(false)
+            .takes_value(true)
+        )
+        .arg(
+            Arg::with_name("freeze_cpu")
+            .short("S")
+            .long("freeze")
+            .help("freeze CPU at startup")
+            .takes_value(false)
+            .required(false),
         )
         .arg(
             Arg::with_name("memory")
             .long("m")
-            .value_name("[size=]megs[m|M|g|G]")
-            .help("configure guest RAM")
+            .value_name("[size=]<megs>[m|M|g|G]")
+            .help("configure guest RAM(default unit: MiB).")
             .takes_value(true),
         )
         .arg(
             Arg::with_name("mem-path")
             .long("mem-path")
-            .value_name("filebackend file path")
+            .value_name("<filebackend file path>")
             .help("configure file path that backs guest memory.")
             .takes_value(true),
         )
         .arg(
+            Arg::with_name("mem-prealloc")
+            .long("mem-prealloc")
+            .help("Prealloc memory for VM")
+            .takes_value(false)
+            .required(false),
+        )
+        .arg(
+            Arg::with_name("numa")
+            .multiple(true)
+            .long("numa")
+            .value_name("<parameters>")
+            .help("\n\t\tset numa node: -numa node,nodeid=<0>,cpus=<0-1>,memdev=<mem0>; \
+                   \n\t\tset numa distance: -numa dist,src=<0>,dst=<1>,val=<20> ")
+            .takes_values(true),
+        )
+        .arg(
             Arg::with_name("kernel")
             .long("kernel")
-            .value_name("kernel_path")
+            .value_name("<kernel_path>")
             .help("use uncompressed kernel image")
             .takes_value(true),
         )
@@ -127,30 +161,32 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("kernel-cmdline")
             .multiple(true)
             .long("append")
-            .value_name("kernel cmdline parameters")
+            .value_name("<kernel cmdline parameters>")
             .help("use 'cmdline' as kernel command line")
             .takes_values(true),
         )
         .arg(
             Arg::with_name("initrd-file")
             .long("initrd")
-            .value_name("initrd_path")
+            .value_name("<initrd_path>")
             .help("use 'initrd-file' as initial ram disk")
             .takes_value(true),
         )
         .arg(
             Arg::with_name("qmp")
             .long("qmp")
-            .value_name("unix:socket_path")
-            .help("set qmp's unixsocket path")
+            .value_name("unix:<socket_path>")
+            .help("set QMP's unix socket path")
             .takes_value(true)
         )
         .arg(
             Arg::with_name("drive")
             .multiple(true)
             .long("drive")
-            .value_name("file=path,id=str[,readonly=][,direct=][,serial=][,iothread=][iops=]")
-            .help("use 'file' as a drive image")
+            .value_name("<parameters>")
+            .help("\n\t\tset block drive image: -drive id=<drive_id>,file=<path_on_host>[,readonly=on|off][,direct=on|off][,throttling.iops-total=<200>]; \
+                   \n\t\tset pflash drive image: -drive file=<pflash_path>,if=pflash,unit=0|1[,readonly=true|false]; \
+                   \n\t\tset scsi drive image: -drive id=<drive-scsi0-0-0-0>,file=<path_on_host>[,readonly=true|false]")
             .takes_values(true),
         )
         .arg(
@@ -158,7 +194,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .multiple(true)
             .long("netdev")
             .value_name(
-                "id=str,netdev=str[,mac=][,fds=][,vhost=on|off][,vhostfd=][,iothread=]",
+                "tap,id=<str>,ifname=<tap_name>[,queue=<N>]",
             )
             .help("configure a host TAP network with ID 'str'")
             .takes_values(true),
@@ -167,7 +203,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("chardev")
             .multiple(true)
             .long("chardev")
-            .value_name("id=str,path=socket_path")
+            .value_name("socket,id=<str>,path=<socket_path>")
             .help("set char device virtio console for vm")
             .takes_values(true),
         )
@@ -175,21 +211,43 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("device")
             .multiple(true)
             .long("device")
-            .value_name("vsock,id=str,guest-cid=u32[,vhostfd=]")
-            .help("add virtio vsock device and sets properties")
+            .value_name("<parameters>")
+            .help("\n\t\tadd virtio mmio block: -device virtio-blk-device,id=<blk_id>,drive=<drive_id>[,iothread=<iothread1>][,serial=<serial_num>]; \
+                   \n\t\tadd virtio pci block: -device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>]; \
+                   \n\t\tadd vhost user pci block: -device vhost-user-blk-pci,id=<blk_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,num-queues=<N>][,bootindex=<N>]; \
+                   \n\t\tadd virtio mmio net: -device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<12:34:56:78:9A:BC>]; \
+                   \n\t\tadd virtio pci net: -device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction=on|off][,iothread=<iothread1>][,mac=<12:34:56:78:9A:BC>][,mq=on|off]; \
+                   \n\t\tadd vhost mmio net: -device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<12:34:56:78:9A:BC>]; \
+                   \n\t\tadd vhost pci net: -device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction=on|off][,iothread=<iothread1>][,mac=<12:34:56:78:9A:BC>][,mq=on|off]; \
+                   \n\t\tadd virtio mmio console: -device virtio-serial-device[,id=<virtio-serial0>] -device virtconsole,id=console_id,chardev=<virtioconsole1>; \
+                   \n\t\tadd virtio pci console: -device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off] -device virtconsole,id=<console_id>,chardev=<virtioconsole1>; \
+                   \n\t\tadd vhost mmio vsock: -device vhost-vsock-device,id=<vsock_id>,guest-cid=<N>; \
+                   \n\t\tadd vhost pci vsock: -device vhost-vsock-pci,id=<vsock_id>,guest-cid=<N>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off]; \
+                   \n\t\tadd virtio mmio balloon: -device virtio-balloon-device[,deflate-on-oom=true|false][,free-page-reporting=true|false]; \
+                   \n\t\tadd virtio pci balloon: -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]; \
+                   \n\t\tadd virtio mmio rng: -device virtio-rng-device,rng=<objrng0>,max-bytes=<1234>,period=<1000>; \
+                   \n\t\tadd virtio pci rng: -device virtio-rng-pci,id=<rng_id>,rng=<objrng0>,max-bytes=<1234>,period=<1000>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
+                   \n\t\tadd pcie root port: -device pcie-root-port,id=<pcie.1>,port=<0x1>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
+                   \n\t\tadd vfio pci: -device vfio-pci,id=<vfio_id>,host=<0000:1a:00.3>,bus=<pcie.0>,addr=<0x03>[,multifunction=on|off]; \
+                   \n\t\tadd usb controller: -device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>; \
+                   \n\t\tadd usb keyboard: -device usb-kbd,id=<kbd>; \
+                   \n\t\tadd usb tablet-device usb-tablet,id=<tablet>; \
+                   \n\t\tadd scsi controller: -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off][,iothread=<iothread1>][,num-queues=<N>]; \
+                   \n\t\tadd scsi hard disk: -device scsi-hd,scsi-id=<0>,bus=<scsi0.0>,lun=<0>,drive=<drive-scsi0-0-0-0>,id=<scsi0-0-0-0>; \
+                   \n\t\tadd vhost user fs: -device vhost-user-fs-pci,id=<device_id>,chardev=<chardev_id>,tag=<mount_tag>")
             .takes_values(true),
         )
         .arg(
             Arg::with_name("serial")
             .long("serial")
-            .value_name("backend[,path=,server,nowait] or chardev:char_id")
+            .value_name("backend[,path=<str>,server,nowait] or chardev:<char_id>")
             .help("add serial and set chardev for it")
             .takes_value(true),
         )
         .arg(
             Arg::with_name("display log")
             .long("D")
-            .value_name("log path")
+            .value_name("[log path]")
             .help("output log to logfile (default stderr)")
             .takes_value(true)
             .can_no_value(true),
@@ -197,13 +255,14 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("pidfile")
             .long("pidfile")
-            .value_name("pidfile path")
+            .value_name("<pidfile path>")
             .help("write PID to 'file'")
             .takes_value(true),
         )
         .arg(
             Arg::with_name("daemonize")
             .long("daemonize")
+            .value_name("")
             .help("daemonize StratoVirt after initializing")
             .takes_value(false)
             .required(false),
@@ -211,46 +270,37 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("disable-seccomp")
             .long("disable-seccomp")
+            .value_name("")
             .help("not use seccomp sandbox for StratoVirt")
-            .takes_value(false)
-            .required(false),
-        )
-        .arg(
-            Arg::with_name("freeze_cpu")
-            .short("S")
-            .long("freeze")
-            .help("Freeze CPU at startup")
             .takes_value(false)
             .required(false),
         )
         .arg(
             Arg::with_name("incoming")
             .long("incoming")
-            .help("wait for the URI to be specified via migrate_incoming")
-            .value_name("incoming")
+            .value_name("<parameters>")
+            .help("\n\t\tdo the migration using tcp socket: -incoming tcp:<ip>:<port>; \
+                   \n\t\tdo the migration using unix socket: -incoming unix:<socket path>; \
+                   \n\t\tdo the virtual machine snapshot: -incoming file:<file path>")
             .takes_value(true),
         )
         .arg(
             Arg::with_name("object")
             .multiple(true)
             .long("object")
-            .value_name("-object virtio-rng-device,rng=rng_name,max-bytes=1234,period=1000")
-            .help("add object")
+            .value_name("<parameters>")
+            .help("\n\t\tadd memory backend ram object: -object memory-backend-ram,id=<memid>,size=<2G>,host-nodes=<0-1>,policy=<bind>; \
+                   \n\t\tadd iothread object: -object iothread,id=<iothread_id>; \
+                   \n\t\tadd rng object: -object rng-random,id=<rng_id>,filename=<file_path>; \
+                   \n\t\tadd vnc tls object: -object tls-creds-x509,id=<vnc_id>,dir=</etc/pki/vnc>; \
+                   \n\t\tadd authz object: -object authz-simple,id=<authz_id>,identity=<username>")
             .takes_values(true),
         )
         .arg(
             Arg::with_name("mon")
             .long("mon")
-            .value_name("chardev=chardev_id,id=mon_id[,mode=control]")
+            .value_name("chardev=<chardev_id>,id=<mon_id>[,mode=control]")
             .help("-mon is another way to create qmp channel. To use it, the chardev should be specified")
-            .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("cpu")
-            .long("cpu")
-            .value_name("host")
-            .hidden(true)
-            .can_no_value(true)
             .takes_value(true),
         )
         .arg(
@@ -353,13 +403,6 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_value(true),
         )
         .arg(
-            Arg::with_name("mem-prealloc")
-            .long("mem-prealloc")
-            .help("Prealloc memory for VM")
-            .takes_value(false)
-            .required(false),
-        )
-        .arg(
             Arg::with_name("trace")
             .multiple(false)
             .long("trace")
@@ -371,20 +414,10 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("global")
             .multiple(true)
             .long("global")
-            .value_name("[key=value]")
+            .value_name("[key=<value>]")
             .help("set global config")
             .takes_values(true)
             .required(false),
-        )
-        .arg(
-            Arg::with_name("numa")
-            .multiple(true)
-            .long("numa")
-            .value_name("node,nodeid=0,cpus=0-1,memdev=mem0> \
-            -numa <dist,src=0,dst=1,val=20> \
-            -object <memory-backend-ram,size=2G,id=mem0,[host-nodes=0,policy=bind]")
-            .help("numa describes the memory read/write latency, bandwidth between Initiator Proximity Domains and Target Proximity Domains(Memory)")
-            .takes_values(true),
         )
         .arg(
             Arg::with_name("vnc")
@@ -421,6 +454,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config!((args.value_of("memory")), vm_cfg, add_memory);
     add_args_to_config!((args.value_of("mem-path")), vm_cfg, add_mem_path);
     add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
+    add_args_to_config!((args.value_of("cpu")), vm_cfg, add_cpu_feature);
     add_args_to_config!((args.value_of("kernel")), vm_cfg, add_kernel);
     add_args_to_config!((args.value_of("initrd-file")), vm_cfg, add_initrd);
     add_args_to_config!((args.value_of("serial")), vm_cfg, add_serial);
@@ -454,7 +488,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     if vm_cfg.machine_config.mach_type != MachineType::None {
         vm_cfg
             .check_vmconfig(args.is_present("daemonize"))
-            .chain_err(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
+            .with_context(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
     }
     Ok(vm_cfg)
 }
@@ -476,7 +510,8 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 
         cmd_parser.parse(&qmp_config)?;
         if let Some(uri) = cmd_parser.get_value::<String>("")? {
-            let api_path = parse_unix_uri(&uri).chain_err(|| "Failed to parse qmp socket path")?;
+            let api_path =
+                parse_unix_uri(&uri).with_context(|| "Failed to parse qmp socket path")?;
             sock_paths.push(api_path);
         } else {
             bail!("No uri found for qmp");
@@ -537,7 +572,7 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
     for path in sock_paths {
         listeners.push(
             bind_socket(path.clone())
-                .chain_err(|| format!("Failed to bind socket for path: {:?}", &path))?,
+                .with_context(|| format!("Failed to bind socket for path: {:?}", &path))?,
         )
     }
 
@@ -545,11 +580,11 @@ pub fn check_api_channel(args: &ArgMatches, vm_config: &mut VmConfig) -> Result<
 }
 
 fn bind_socket(path: String) -> Result<UnixListener> {
-    let listener =
-        UnixListener::bind(&path).chain_err(|| format!("Failed to bind socket file {}", &path))?;
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("Failed to bind socket file {}", &path))?;
     // Add file to temporary pool, so it could be cleaned when vm exits.
     TempCleaner::add_path(path.clone());
     limit_permission(&path)
-        .chain_err(|| format!("Failed to limit permission for socket file {}", &path))?;
+        .with_context(|| format!("Failed to limit permission for socket file {}", &path))?;
     Ok(listener)
 }

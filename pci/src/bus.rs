@@ -14,13 +14,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::Region;
-use error_chain::bail;
 use log::debug;
 
-use super::config::{SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM};
+use super::config::{
+    BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET, SECONDARY_BUS_NUM, SUBORDINATE_BUS_NUM,
+};
 use super::hotplug::HotplugOps;
 use super::PciDevOps;
-use crate::errors::{Result, ResultExt};
+use anyhow::{bail, Context, Result};
 
 type DeviceBusInfo = (Arc<Mutex<PciBus>>, Arc<Mutex<dyn PciDevOps>>);
 
@@ -75,19 +76,9 @@ impl PciBus {
     ///
     /// * `offset` - Offset of bus number register.
     pub fn number(&self, offset: usize) -> u8 {
-        if self.parent_bridge.is_none() {
-            return 0;
-        }
-
         let mut data = vec![0_u8; 1];
-        self.parent_bridge
-            .as_ref()
-            .unwrap()
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .read_config(offset, &mut data);
+        self.get_bridge_control_reg(offset, &mut data);
+
         data[0]
     }
 
@@ -106,6 +97,10 @@ impl PciBus {
     }
 
     fn in_range(&self, bus_num: u8) -> bool {
+        if self.is_during_reset() {
+            return false;
+        }
+
         let secondary_bus_num: u8 = self.number(SECONDARY_BUS_NUM as usize);
         let subordinate_bus_num: u8 = self.number(SUBORDINATE_BUS_NUM as usize);
         if bus_num > secondary_bus_num && bus_num <= subordinate_bus_num {
@@ -187,11 +182,11 @@ impl PciBus {
         let mut dev_locked = dev.lock().unwrap();
         dev_locked
             .unrealize()
-            .chain_err(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
+            .with_context(|| format!("Failed to unrealize device {}", dev_locked.name()))?;
 
         let devfn = dev_locked
             .devfn()
-            .chain_err(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
+            .with_context(|| format!("Failed to get devfn: device {}", dev_locked.name()))?;
 
         let mut locked_bus = bus.lock().unwrap();
         if locked_bus.devices.get(&devfn).is_some() {
@@ -209,7 +204,7 @@ impl PciBus {
                 .lock()
                 .unwrap()
                 .reset(false)
-                .chain_err(|| "Fail to reset pci dev")?;
+                .with_context(|| "Fail to reset pci dev")?;
         }
 
         for child_bus in self.child_buses.iter_mut() {
@@ -217,10 +212,34 @@ impl PciBus {
                 .lock()
                 .unwrap()
                 .reset()
-                .chain_err(|| "Fail to reset child bus")?;
+                .with_context(|| "Fail to reset child bus")?;
         }
 
         Ok(())
+    }
+
+    fn is_during_reset(&self) -> bool {
+        let mut data = vec![0_u8; 2];
+        self.get_bridge_control_reg(BRIDGE_CONTROL as usize + 1, &mut data);
+        if data[1] & ((BRIDGE_CTL_SEC_BUS_RESET >> 8) as u8) != 0 {
+            return true;
+        }
+        false
+    }
+
+    fn get_bridge_control_reg(&self, offset: usize, data: &mut [u8]) {
+        if self.parent_bridge.is_none() {
+            return;
+        }
+
+        self.parent_bridge
+            .as_ref()
+            .unwrap()
+            .upgrade()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .read_config(offset, data);
     }
 }
 
@@ -231,9 +250,9 @@ mod tests {
     use super::*;
     use crate::bus::PciBus;
     use crate::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
-    use crate::errors::Result;
     use crate::root_port::RootPort;
     use crate::PciHost;
+    use anyhow::Result;
 
     #[derive(Clone)]
     struct PciDevice {
@@ -252,12 +271,20 @@ mod tests {
             Ok(())
         }
 
-        fn read_config(&self, offset: usize, data: &mut [u8]) {
+        fn read_config(&mut self, offset: usize, data: &mut [u8]) {
             self.config.read(offset, data);
         }
 
         fn write_config(&mut self, offset: usize, data: &[u8]) {
-            self.config.write(offset, data, 0);
+            #[allow(unused_variables)]
+            self.config.write(
+                offset,
+                data,
+                0,
+                #[cfg(target_arch = "x86_64")]
+                None,
+                None,
+            );
         }
 
         fn name(&self) -> String {
@@ -303,6 +330,8 @@ mod tests {
             (0xC000_0000, 0x3000_0000),
             #[cfg(target_arch = "aarch64")]
             (0xF000_0000, 0x1000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (512 << 30, 512 << 30),
         )))
     }
 

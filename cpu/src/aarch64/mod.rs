@@ -13,22 +13,27 @@
 pub mod caps;
 mod core_regs;
 
+use std::mem::forget;
+use std::os::unix::prelude::{AsRawFd, FromRawFd};
 use std::sync::{Arc, Mutex};
 
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
-    kvm_mp_state, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, RegList, KVM_MP_STATE_RUNNABLE,
-    KVM_MP_STATE_STOPPED,
+    kvm_device_attr, kvm_mp_state, kvm_regs, kvm_vcpu_events, kvm_vcpu_init, RegList,
+    KVM_ARM_VCPU_PMU_V3_CTRL, KVM_ARM_VCPU_PMU_V3_INIT, KVM_ARM_VCPU_PMU_V3_IRQ,
+    KVM_MP_STATE_RUNNABLE, KVM_MP_STATE_STOPPED,
 };
-use kvm_ioctls::VcpuFd;
+use kvm_ioctls::{DeviceFd, VcpuFd};
 
-pub use self::caps::ArmCPUCaps;
 use self::caps::CpregListEntry;
+pub use self::caps::{ArmCPUCaps, ArmCPUFeatures};
 use self::core_regs::{get_core_regs, set_core_regs};
-use crate::errors::{Result, ResultExt};
 use crate::CPU;
+use anyhow::{anyhow, Context, Result};
 
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 
@@ -48,6 +53,12 @@ const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
 const SYS_MPIDR_EL1: u64 = 0x6030_0000_0013_c005;
 const KVM_MAX_CPREG_ENTRIES: usize = 500;
 
+/// Interrupt ID for pmu.
+/// See: https://developer.arm.com/documentation/den0094/b/
+/// And: https://developer.arm.com/documentation/dai0492/b/
+pub const PPI_BASE: u32 = 16;
+pub const PMU_INTR: u32 = 7;
+
 /// AArch64 CPU booting configure information
 ///
 /// Before jumping into the kernel, primary CPU general-purpose
@@ -55,14 +66,14 @@ const KVM_MAX_CPREG_ENTRIES: usize = 500;
 /// tree blob (dtb) in system RAM.
 ///
 /// See: https://elixir.bootlin.com/linux/v5.6/source/Documentation/arm64/booting.rst
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct ArmCPUBootConfig {
     pub fdt_addr: u64,
     pub boot_pc: u64,
 }
 
 #[allow(dead_code)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub struct ArmCPUTopology {
     threads: u8,
     cores: u8,
@@ -102,6 +113,8 @@ pub struct ArmCPUState {
     cpreg_len: usize,
     /// The list of Cpreg.
     cpreg_list: [CpregListEntry; 512],
+    /// Vcpu features
+    features: ArmCPUFeatures,
 }
 
 impl ArmCPUState {
@@ -137,6 +150,7 @@ impl ArmCPUState {
         self.mp_state = locked_cpu_state.mp_state;
         self.cpreg_len = locked_cpu_state.cpreg_len;
         self.cpreg_list = locked_cpu_state.cpreg_list;
+        self.features = locked_cpu_state.features;
     }
 
     /// Set register value in `ArmCPUState` according to `boot_config`.
@@ -149,6 +163,7 @@ impl ArmCPUState {
         &mut self,
         vcpu_fd: &Arc<VcpuFd>,
         boot_config: &ArmCPUBootConfig,
+        vcpu_config: &ArmCPUFeatures,
     ) -> Result<()> {
         KVM_FDS
             .load()
@@ -156,7 +171,7 @@ impl ArmCPUState {
             .as_ref()
             .unwrap()
             .get_preferred_target(&mut self.kvi)
-            .chain_err(|| "Failed to get kvm vcpu preferred target")?;
+            .with_context(|| "Failed to get kvm vcpu preferred target")?;
 
         // support PSCI 0.2
         // We already checked that the capability is supported.
@@ -166,14 +181,22 @@ impl ArmCPUState {
             self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
         }
 
+        // Enable PMU from config.
+        if vcpu_config.pmu {
+            self.kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PMU_V3;
+        }
+
         self.set_core_reg(boot_config);
 
         vcpu_fd
             .vcpu_init(&self.kvi)
-            .chain_err(|| "Failed to init kvm vcpu")?;
+            .with_context(|| "Failed to init kvm vcpu")?;
         self.mpidr = vcpu_fd
             .get_one_reg(SYS_MPIDR_EL1)
-            .chain_err(|| "Failed to get mpidr")?;
+            .with_context(|| "Failed to get mpidr")?;
+
+        ArmCPUState::set_cpu_feature(vcpu_config, vcpu_fd)?;
+        self.features = *vcpu_config;
 
         Ok(())
     }
@@ -194,18 +217,18 @@ impl ArmCPUState {
     /// * `vcpu_fd` - Vcpu file descriptor in kvm.
     pub fn reset_vcpu(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
         set_core_regs(vcpu_fd, self.core_regs)
-            .chain_err(|| format!("Failed to set core register for CPU {}", self.apic_id))?;
+            .with_context(|| format!("Failed to set core register for CPU {}", self.apic_id))?;
         vcpu_fd
             .set_mp_state(self.mp_state)
-            .chain_err(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
+            .with_context(|| format!("Failed to set mpstate for CPU {}", self.apic_id))?;
         for cpreg in self.cpreg_list[0..self.cpreg_len].iter() {
             cpreg
                 .set_cpreg(&vcpu_fd.clone())
-                .chain_err(|| format!("Failed to set cpreg for CPU {}", self.apic_id))?;
+                .with_context(|| format!("Failed to set cpreg for CPU {}", self.apic_id))?;
         }
         vcpu_fd
             .set_vcpu_events(&self.cpu_events)
-            .chain_err(|| format!("Failed to set vcpu event for CPU {}", self.apic_id))?;
+            .with_context(|| format!("Failed to set vcpu event for CPU {}", self.apic_id))?;
 
         Ok(())
     }
@@ -238,10 +261,47 @@ impl ArmCPUState {
             self.core_regs.regs.pc = boot_config.boot_pc;
         }
     }
+
+    fn set_cpu_feature(features: &ArmCPUFeatures, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
+        if !features.pmu {
+            return Ok(());
+        }
+
+        let pmu_attr = kvm_device_attr {
+            group: KVM_ARM_VCPU_PMU_V3_CTRL,
+            attr: KVM_ARM_VCPU_PMU_V3_INIT as u64,
+            addr: 0,
+            flags: 0,
+        };
+        let vcpu_device = unsafe { DeviceFd::from_raw_fd(vcpu_fd.as_raw_fd()) };
+        vcpu_device
+            .has_device_attr(&pmu_attr)
+            .with_context(|| "Kernel does not support PMU for vCPU")?;
+        // Set IRQ 23, PPI 7 for PMU.
+        let irq = PMU_INTR + PPI_BASE;
+        let pmu_irq_attr = kvm_device_attr {
+            group: KVM_ARM_VCPU_PMU_V3_CTRL,
+            attr: KVM_ARM_VCPU_PMU_V3_IRQ as u64,
+            addr: &irq as *const u32 as u64,
+            flags: 0,
+        };
+
+        vcpu_device
+            .set_device_attr(&pmu_irq_attr)
+            .with_context(|| "Failed to set IRQ for PMU")?;
+        // Init PMU after setting IRQ.
+        vcpu_device
+            .set_device_attr(&pmu_attr)
+            .with_context(|| "Failed to enable PMU for vCPU")?;
+        // forget `vcpu_device` to avoid fd close on exit, as DeviceFd is backed by File.
+        forget(vcpu_device);
+
+        Ok(())
+    }
 }
 
 impl StateTransfer for CPU {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
 
         cpu_state_locked.core_regs = get_core_regs(&self.fd)?;
@@ -272,15 +332,18 @@ impl StateTransfer for CPU {
         Ok(cpu_state_locked.as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state(&self, state: &[u8]) -> migration::Result<()> {
         let cpu_state = *ArmCPUState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("CPU"))?;
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("CPU")))?;
 
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
         *cpu_state_locked = cpu_state;
 
         self.fd.vcpu_init(&cpu_state.kvi)?;
 
+        //Init CPU features.
+        ArmCPUState::set_cpu_feature(&cpu_state.features, &self.fd)
+            .map_err(|_| migration::MigrationError::FromBytesError("failed to set features."))?;
         Ok(())
     }
 

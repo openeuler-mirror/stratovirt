@@ -7,7 +7,6 @@ license = "Mulan PSL v2"
 description = "Emulation machines"
 
 [dependencies]
-error-chain = "0.12.4"
 kvm-bindings = { version = ">=0.5.0", features = ["fam-wrappers"] }
 kvm-ioctls = ">=0.11.0"
 log = "0.4"
@@ -16,6 +15,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 vmm-sys-util = ">=0.10.0"
 vfio-bindings = "0.3"
+thiserror = "1.0"
+anyhow = "1.0"
 acpi = { path = "../acpi" }
 address_space = { path = "../address_space" }
 boot_loader = { path = "../boot_loader" }
@@ -38,3 +39,4 @@ vnc = { path = "../vnc" }
 [features]
 default = ["qmp"]
 qmp = []
+boot_time = ["cpu/boot_time"]

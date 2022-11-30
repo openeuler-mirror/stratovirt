@@ -12,11 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::Result;
-use crate::config::{
-    errors::ErrorKind,
-    {CmdParser, VmConfig},
-};
+use crate::config::ConfigError;
+use crate::config::{CmdParser, VmConfig};
+use anyhow::{anyhow, Result};
+use std::net::Ipv4Addr;
 
 /// Configuration of vnc.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -33,6 +32,9 @@ pub struct VncConfig {
     pub sasl_authz: String,
 }
 
+const VNC_MAX_PORT_NUM: i32 = 65535;
+const VNC_PORT_OFFSET: i32 = 5900;
+
 impl VmConfig {
     /// Make configuration for vnc: "chardev" -> "vnc".
     pub fn add_vnc(&mut self, vnc_config: &str) -> Result<()> {
@@ -45,17 +47,16 @@ impl VmConfig {
         cmd_parser.parse(vnc_config)?;
 
         let mut vnc_config = VncConfig::default();
+        // Parse Ip:Port.
         if let Some(addr) = cmd_parser.get_value::<String>("")? {
-            let v: Vec<&str> = addr.split(':').collect();
-            if v.len() != 2 {
-                return Err(ErrorKind::FieldIsMissing("ip", "port").into());
+            if let Err(e) = parse_port(&mut vnc_config, addr) {
+                return Err(e);
             }
-            vnc_config.ip = v[0].to_string();
-            vnc_config.port = v[1].to_string();
         } else {
-            return Err(ErrorKind::FieldIsMissing("ip", "port").into());
+            return Err(anyhow!(ConfigError::FieldIsMissing("ip", "port")));
         }
 
+        // VNC Security Type.
         if let Some(tls_creds) = cmd_parser.get_value::<String>("tls-creds")? {
             vnc_config.tls_creds = tls_creds
         }
@@ -73,6 +74,31 @@ impl VmConfig {
     }
 }
 
+/// Parse Ip:port.
+fn parse_port(vnc_config: &mut VncConfig, addr: String) -> Result<()> {
+    let v: Vec<&str> = addr.split(':').collect();
+    if v.len() != 2 {
+        return Err(anyhow!(ConfigError::FieldIsMissing("ip", "port")));
+    }
+    let ip = v[0]
+        .parse::<Ipv4Addr>()
+        .map_err(|_| anyhow!("Invalid Ip param for vnc!"))?;
+    let base_port = v[1]
+        .parse::<i32>()
+        .map_err(|_| anyhow!("Invalid Port param for vnc!"))?;
+    // Prevent the base_port out of bounds.
+    if !(0..=VNC_MAX_PORT_NUM - VNC_PORT_OFFSET).contains(&base_port) {
+        return Err(anyhow!(ConfigError::InvalidParam(
+            base_port.to_string(),
+            "port".to_string()
+        )));
+    }
+    vnc_config.ip = ip.to_string();
+    vnc_config.port = ((base_port + VNC_PORT_OFFSET) as u16).to_string();
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,30 +106,46 @@ mod tests {
     #[test]
     fn test_add_vnc() {
         let mut vm_config = VmConfig::default();
-        vm_config
-            .add_vnc("0.0.0.0:1,tls-creds=vnc-tls-creds0,sasl,sasl-authz=authz0")
-            .unwrap();
+        let config_line = "0.0.0.0:1,tls-creds=vnc-tls-creds0,sasl,sasl-authz=authz0";
+        assert!(vm_config.add_vnc(config_line).is_ok());
         let vnc_config = vm_config.vnc.unwrap();
         assert_eq!(vnc_config.ip, String::from("0.0.0.0"));
-        assert_eq!(vnc_config.port, String::from("1"));
+        assert_eq!(vnc_config.port, String::from("5901"));
         assert_eq!(vnc_config.tls_creds, String::from("vnc-tls-creds0"));
         assert_eq!(vnc_config.sasl, true);
         assert_eq!(vnc_config.sasl_authz, String::from("authz0"));
 
         let mut vm_config = VmConfig::default();
-        vm_config
-            .add_vnc("0.0.0.0:1,tls-creds=vnc-tls-creds0")
-            .unwrap();
+        let config_line = "0.0.0.0:5900,tls-creds=vnc-tls-creds0";
+        assert!(vm_config.add_vnc(config_line).is_ok());
         let vnc_config = vm_config.vnc.unwrap();
         assert_eq!(vnc_config.sasl, false);
+        assert_eq!(vnc_config.port, String::from("11800"));
 
         let mut vm_config = VmConfig::default();
-        let res = vm_config.add_vnc("tls-creds=vnc-tls-creds0");
-        assert!(res.is_err());
-
-        let mut vm_config = VmConfig::default();
-        let _res = vm_config.add_vnc("0.0.0.0:1,sasl,sasl-authz=authz0");
+        let config_line = "0.0.0.0:1,sasl,sasl-authz=authz0";
+        assert!(vm_config.add_vnc(config_line).is_ok());
         let vnc_config = vm_config.vnc.unwrap();
         assert_eq!(vnc_config.tls_creds, "".to_string());
+
+        // Invalie format of ip:port.
+        let config_lines = [
+            "tls-creds=vnc-tls-creds0", // No ip:port.
+            "127.0.0.1",                // No port.
+            "1",                        // No ip.
+            "0.0.0.0:65536",            // Invalid port.
+            "0.0.0.0:59636",            // Invalid port.
+            "0.0.0.0:2147483647",       // Invalie port.
+            "0.0.0.0:-1",               // Invalid port.
+            "0.0.0.0:123ab",            // Invalid port.
+            "127.257.0.1:0",            // Invalid ip.
+            "127.0.0.0.1:0",            // Invalid ip.
+            "127.12ab.0.1:0",           // Invalid ip.
+            "127.0.1:0",                // Invalid ip.
+        ];
+        for config_line in config_lines {
+            let mut vm_config = VmConfig::default();
+            assert!(vm_config.add_vnc(config_line).is_err());
+        }
     }
 }

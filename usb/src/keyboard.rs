@@ -12,16 +12,16 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
+use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
-use super::errors::Result;
 use crate::config::*;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
     UsbInterfaceDescriptor,
 };
 use crate::hid::{
-    Hid, HidType, DESC_STRINGS, QUEUE_MASK, STR_CONFIG_KEYBOARD, STR_MANUFACTURER,
+    Hid, HidType, DESC_STRINGS, QUEUE_LENGTH, QUEUE_MASK, STR_CONFIG_KEYBOARD, STR_MANUFACTURER,
     STR_PRODUCT_KEYBOARD, STR_SERIAL_KEYBOARD,
 };
 use crate::usb::{
@@ -30,6 +30,7 @@ use crate::usb::{
     UsbEndpoint, UsbPacket,
 };
 use crate::xhci::xhci_controller::XhciDevice;
+use anyhow::Result;
 
 /// USB Keyboard Descriptor
 static DESC_KEYBOARD: Lazy<Arc<UsbDesc>> = Lazy::new(|| {
@@ -124,7 +125,7 @@ impl UsbKeyboard {
         Self {
             id,
             device: Arc::new(Mutex::new(UsbDevice::new())),
-            hid: Arc::new(Mutex::new(Hid::new())),
+            hid: Arc::new(Mutex::new(Hid::new(HidType::Keyboard))),
             ctrl: None,
             endpoint: None,
         }
@@ -133,7 +134,6 @@ impl UsbKeyboard {
     pub fn realize(self) -> Result<Arc<Mutex<Self>>> {
         let mut locked_usb = self.device.lock().unwrap();
         locked_usb.product_desc = String::from("StratoVirt USB keyboard");
-        locked_usb.auto_attach = true;
         locked_usb.strings = Vec::new();
         drop(locked_usb);
         let kbd = Arc::new(Mutex::new(self));
@@ -148,9 +148,6 @@ impl UsbKeyboard {
     fn init_hid(&mut self) -> Result<()> {
         let mut locked_usb = self.device.lock().unwrap();
         locked_usb.usb_desc = Some(DESC_KEYBOARD.clone());
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.kind = HidType::Keyboard;
-        drop(locked_hid);
         let ep = locked_usb.get_endpoint(USB_TOKEN_IN as u32, 1);
         self.endpoint = Some(Arc::downgrade(&ep));
         locked_usb.init_descriptor()?;
@@ -162,6 +159,11 @@ impl UsbKeyboard {
 pub fn keyboard_event(kbd: &Arc<Mutex<UsbKeyboard>>, scan_codes: &[u32]) -> Result<()> {
     let locked_kbd = kbd.lock().unwrap();
     let mut locked_hid = locked_kbd.hid.lock().unwrap();
+    if scan_codes.len() as u32 + locked_hid.num > QUEUE_LENGTH {
+        debug!("Keyboard queue is full!");
+        // Return ok to ignore the request.
+        return Ok(());
+    }
     for code in scan_codes {
         let index = ((locked_hid.head + locked_hid.num) & QUEUE_MASK) as usize;
         locked_hid.num += 1;
@@ -193,12 +195,15 @@ impl UsbDeviceOps for UsbKeyboard {
         debug!("handle_control request {:?}", device_req);
         let mut locked_dev = self.device.lock().unwrap();
         match locked_dev.handle_control_for_descriptor(packet, device_req, data) {
-            Ok(_) => {
-                debug!("Keyboard control handled by descriptor, return directly.");
-                return;
+            Ok(handled) => {
+                if handled {
+                    debug!("Keyboard control handled by descriptor, return directly.");
+                    return;
+                }
             }
             Err(e) => {
-                debug!("Keyboard not handled by descriptor, fallthrough {}", e);
+                error!("Keyboard descriptor error {}", e);
+                return;
             }
         }
         let mut locked_hid = self.hid.lock().unwrap();

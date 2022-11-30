@@ -10,8 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use super::Result;
-use error_chain::bail;
+use std::sync::atomic::{fence, Ordering};
+
+use super::{AioContext, IoEvent, Result};
+use anyhow::bail;
 use kvm_bindings::__IncompleteArrayField;
 
 pub const IOCB_FLAG_RESFD: u32 = 1;
@@ -43,7 +45,7 @@ pub struct IoCb {
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum IoCmd {
     Pread = 0,
     Pwrite = 1,
@@ -52,16 +54,6 @@ pub enum IoCmd {
     Noop = 6,
     Preadv = 7,
     Pwritev = 8,
-}
-
-#[repr(C)]
-#[allow(non_camel_case_types)]
-#[derive(Default)]
-pub struct IoEvent {
-    pub data: u64,
-    pub obj: u64,
-    pub res: i64,
-    pub res2: i64,
 }
 
 #[allow(non_camel_case_types)]
@@ -74,7 +66,16 @@ pub struct EventResult {
 
 pub struct LibaioContext {
     pub ctx: *mut IoContext,
+    pub events: Vec<IoEvent>,
     pub max_size: i32,
+}
+
+impl Drop for LibaioContext {
+    fn drop(&mut self) {
+        if !self.ctx.is_null() {
+            unsafe { libc::syscall(libc::SYS_io_destroy, self.ctx) };
+        }
+    }
 }
 
 #[repr(C)]
@@ -102,32 +103,53 @@ impl LibaioContext {
             bail!("Failed to setup aio context, return {}.", ret);
         }
 
-        Ok(LibaioContext { ctx, max_size })
+        Ok(LibaioContext {
+            ctx,
+            events: Vec::with_capacity(max_size as usize),
+            max_size,
+        })
     }
+}
 
-    pub fn submit(&self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<()> {
+/// Implements the AioContext for libaio.
+impl AioContext for LibaioContext {
+    /// Submit requests.
+    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize> {
         let ret = unsafe { libc::syscall(libc::SYS_io_submit, self.ctx, nr, iocbp.as_ptr()) };
-        if ret < 0 {
+        if ret >= 0 {
+            return Ok(ret as usize);
+        }
+        if errno::errno().0 != libc::EAGAIN {
             bail!("Failed to submit aio, return {}.", ret);
         }
-
-        Ok(())
+        Ok(0)
     }
 
-    pub fn get_events(&self) -> (&[IoEvent], u32, u32) {
+    /// Get the IO events.
+    fn get_events(&mut self) -> &[IoEvent] {
         let ring = self.ctx as *mut AioRing;
         let head = unsafe { (*ring).head };
         let tail = unsafe { (*ring).tail };
         let ring_nr = unsafe { (*ring).nr };
+        let io_events: &[IoEvent] = unsafe { (*ring).io_events.as_slice(ring_nr as usize) };
+
         let nr = if tail >= head {
             tail - head
         } else {
-            ring_nr - head
+            ring_nr - head + tail
         };
-        unsafe { (*ring).head = (head + nr) % ring_nr };
 
-        let io_events: &[IoEvent] = unsafe { (*ring).io_events.as_slice(ring_nr as usize) };
+        // Avoid speculatively loading ring.io_events before observing tail.
+        fence(Ordering::Acquire);
+        self.events.clear();
+        for i in head..(head + nr) {
+            self.events.push(io_events[(i % ring_nr) as usize].clone());
+        }
 
-        (io_events, head, head + nr)
+        // Avoid head is updated before we consume all io_events.
+        fence(Ordering::Release);
+        unsafe { (*ring).head = tail };
+
+        &self.events
     }
 }

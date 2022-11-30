@@ -202,7 +202,29 @@ $ qemu-img convert -f qcow2 -O raw openEuler-21.03-x86_64.qcow2 openEuler-21.03-
 
 Now the available raw image is obtained.
 
-### 4. Boot command line sample
+### 4. Boot with kernel directly 
+
+It can directly boot from kernel. In this mode, UEFI and ACPI will not be used. And VM will skip the UEFI, directly start the kernel to reduce boot 
+up time.
+
+Run the following commands to direct boot VM from kernel:
+
+```shell
+/usr/bin/stratovirt \
+    -machine virt \
+    -kernel /path/to/kernel \
+    -smp 1 \
+    -m 2G \
+    -append "console=${con} reboot=k panic=1 root=/dev/vda rw" \
+    -drive file=/path/to/rootfs,id=rootfs,readonly=off,direct=off \
+    -device virtio-blk-pci,drive=rootfs,id=blk1,bus=pcie.0,addr=0x2 \
+    -qmp unix:/path/to/socket,server,nowait \
+    -serial stdio
+```
+
+Note: This mode currently only supports arm architecture.
+
+### 5. Boot command line sample
 
 Note that standard need two PFlash devices which will use two firmware files from
 EDK II binary. If you don't need to store boot information, data storage file can

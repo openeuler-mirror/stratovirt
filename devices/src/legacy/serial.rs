@@ -19,25 +19,24 @@ use acpi::{
     AmlResourceUsage, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
-use error_chain::bail;
 use hypervisor::kvm::KVM_FDS;
 use log::error;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::{BootSource, Param};
 use machine_manager::{config::SerialConfig, event_loop::EventLoop};
 use migration::{
-    snapshot::SERIAL_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
-    StateTransfer,
+    snapshot::SERIAL_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
+    MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use sysbus::{errors::Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType, SysRes};
+use sysbus::{SysBus, SysBusDevOps, SysBusDevType, SysRes};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::chardev::{Chardev, InputReceiver};
-use super::errors::{ErrorKind, Result};
-
+use super::error::LegacyError;
+use anyhow::{anyhow, bail, Context, Result};
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
 const UART_IER_RDI: u8 = 0x01;
@@ -59,6 +58,9 @@ const UART_MCR_LOOP: u8 = 0x10;
 const UART_MSR_CTS: u8 = 0x10;
 const UART_MSR_DSR: u8 = 0x20;
 const UART_MSR_DCD: u8 = 0x80;
+
+/// IRQ number of serial device.
+const UART_IRQ: i32 = 4;
 
 const RECEIVER_BUFF_SIZE: usize = 1024;
 
@@ -140,16 +142,14 @@ impl Serial {
         region_size: u64,
         #[cfg(target_arch = "aarch64")] bs: &Arc<Mutex<BootSource>>,
     ) -> Result<()> {
-        use super::errors::ResultExt;
-
         self.chardev
             .lock()
             .unwrap()
             .realize()
-            .chain_err(|| "Failed to realize chardev")?;
+            .with_context(|| "Failed to realize chardev")?;
         self.interrupt_evt = Some(EventFd::new(libc::EFD_NONBLOCK)?);
         self.set_sys_resource(sysbus, region_base, region_size)
-            .chain_err(|| ErrorKind::SetSysResErr)?;
+            .with_context(|| anyhow!(LegacyError::SetSysResErr))?;
 
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev, region_base, region_size)?;
@@ -170,7 +170,7 @@ impl Serial {
             EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
             None,
         )
-        .chain_err(|| ErrorKind::RegNotifierErr)?;
+        .with_context(|| anyhow!(LegacyError::RegNotifierErr))?;
         Ok(())
     }
 
@@ -278,8 +278,6 @@ impl Serial {
     // * fail to write serial.
     // * fail to flush serial.
     fn write_internal(&mut self, offset: u64, data: u8) -> Result<()> {
-        use super::errors::ResultExt;
-
         match offset {
             0 => {
                 if self.state.lcr & UART_LCR_DLAB != 0 {
@@ -308,10 +306,10 @@ impl Serial {
                         let mut locked_output = output.as_ref().unwrap().lock().unwrap();
                         locked_output
                             .write_all(&[data])
-                            .chain_err(|| "serial: failed to write.")?;
+                            .with_context(|| "serial: failed to write.")?;
                         locked_output
                             .flush()
-                            .chain_err(|| "serial: failed to flush.")?;
+                            .with_context(|| "serial: failed to flush.")?;
                     }
 
                     self.update_iir();
@@ -382,10 +380,10 @@ impl SysBusDevOps for Serial {
         self.interrupt_evt.as_ref()
     }
 
-    fn set_irq(&mut self, _sysbus: &mut SysBus) -> SysBusResult<i32> {
+    fn set_irq(&mut self, _sysbus: &mut SysBus) -> sysbus::Result<i32> {
         let mut irq: i32 = -1;
         if let Some(e) = self.interrupt_evt() {
-            irq = 4;
+            irq = UART_IRQ;
             KVM_FDS.load().register_irqfd(e, irq as u32)?;
         }
         Ok(irq)
@@ -429,7 +427,7 @@ impl AmlBuilder for Serial {
 }
 
 impl StateTransfer for Serial {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut state = self.state;
         let (rbr_state, _) = self.rbr.as_slices();
         state.rbr_len = rbr_state.len();
@@ -438,9 +436,9 @@ impl StateTransfer for Serial {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let serial_state = *SerialState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("SERIAL"))?;
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("SERIAL")))?;
         let mut rbr = VecDeque::<u8>::default();
         for i in 0..serial_state.rbr_len {
             rbr.push_back(serial_state.rbr_value[i]);

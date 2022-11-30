@@ -10,16 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use error_chain::bail;
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    errors::{ErrorKind, Result},
-    pci_args_check,
-};
+use super::{error::ConfigError, pci_args_check};
+use crate::config::get_chardev_socket_path;
 use crate::config::{
-    ChardevType, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH,
-    MAX_VIRTIO_QUEUE,
+    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::{qmp_schema, QmpChannel};
 
@@ -53,19 +50,33 @@ impl Default for NetDevcfg {
 impl ConfigCheck for NetDevcfg {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "id".to_string(),
+                MAX_STRING_LENGTH
+            )));
         }
 
         if self.ifname.len() > MAX_STRING_LENGTH {
-            return Err(
-                ErrorKind::StringLengthTooLong(self.ifname.clone(), MAX_STRING_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                self.ifname.clone(),
+                MAX_STRING_LENGTH
+            )));
         }
 
         if let Some(vhost_type) = self.vhost_type.as_ref() {
             if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
-                return Err(ErrorKind::UnknownVhostType.into());
+                return Err(anyhow!(ConfigError::UnknownVhostType));
             }
+        }
+
+        if !is_netdev_queues_valid(self.queues) {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "number queues of net device".to_string(),
+                1,
+                true,
+                MAX_VIRTIO_QUEUE as u64 / 2,
+                true,
+            )));
         }
 
         Ok(())
@@ -115,51 +126,36 @@ impl Default for NetworkInterfaceConfig {
 impl ConfigCheck for NetworkInterfaceConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "id".to_string(),
+                MAX_STRING_LENGTH
+            )));
         }
 
         if self.host_dev_name.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 self.host_dev_name.clone(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         if self.mac.is_some() && !check_mac_address(self.mac.as_ref().unwrap()) {
-            return Err(ErrorKind::MacFormatError.into());
-        }
-
-        if let Some(vhost_type) = self.vhost_type.as_ref() {
-            if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
-                return Err(ErrorKind::UnknownVhostType.into());
-            }
-        }
-
-        if self.queues < 1 || self.queues > MAX_VIRTIO_QUEUE as u16 {
-            return Err(ErrorKind::IllegalValue(
-                "number queues of net device".to_string(),
-                1,
-                true,
-                MAX_VIRTIO_QUEUE as u64 / 2,
-                true,
-            )
-            .into());
+            return Err(anyhow!(ConfigError::MacFormatError));
         }
 
         if self.iothread.is_some() && self.iothread.as_ref().unwrap().len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong(
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
                 "iothread name".to_string(),
                 MAX_STRING_LENGTH,
-            )
-            .into());
+            )));
         }
 
         if self.socket_path.is_some() && self.socket_path.as_ref().unwrap().len() > MAX_PATH_LENGTH
         {
-            return Err(
-                ErrorKind::StringLengthTooLong("socket path".to_string(), MAX_PATH_LENGTH).into(),
-            );
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "socket path".to_string(),
+                MAX_PATH_LENGTH
+            )));
         }
 
         Ok(())
@@ -170,7 +166,11 @@ fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
     if let Some(fds) = cmd_parser.get_value::<String>(name)? {
         let mut raw_fds = Vec::new();
         for fd in fds.split(':').collect::<Vec<&str>>().iter() {
-            raw_fds.push((*fd).parse::<i32>().map_err(|_| "Failed to parse fds")?);
+            raw_fds.push(
+                (*fd)
+                    .parse::<i32>()
+                    .map_err(|_| anyhow!("Failed to parse fds"))?,
+            );
         }
         Ok(Some(raw_fds))
     } else {
@@ -191,16 +191,25 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
     if let Some(net_id) = cmd_parser.get_value::<String>("id")? {
         net.id = net_id;
     } else {
-        return Err(ErrorKind::FieldIsMissing("id", "netdev").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("id", "netdev")));
     }
     if let Some(ifname) = cmd_parser.get_value::<String>("ifname")? {
         net.ifname = ifname;
     }
     if let Some(queue_pairs) = cmd_parser.get_value::<u16>("queues")? {
         let queues = queue_pairs * 2;
-        if queues > net.queues {
-            net.queues = queues;
+
+        if !is_netdev_queues_valid(queues) {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "number queues of net device".to_string(),
+                1,
+                true,
+                MAX_VIRTIO_QUEUE as u64 / 2,
+                true,
+            )));
         }
+
+        net.queues = queues;
     }
 
     if let Some(tap_fd) = parse_fds(&cmd_parser, "fd")? {
@@ -244,6 +253,8 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
     }
 
+    net.check()?;
+
     Ok(net)
 }
 
@@ -268,7 +279,7 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     let netdev = if let Some(devname) = cmd_parser.get_value::<String>("netdev")? {
         devname
     } else {
-        return Err(ErrorKind::FieldIsMissing("netdev", "net").into());
+        return Err(anyhow!(ConfigError::FieldIsMissing("netdev", "net")));
     };
     let netid = if let Some(id) = cmd_parser.get_value::<String>("id")? {
         id
@@ -290,28 +301,7 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
         netdevinterfacecfg.queues = netcfg.queues;
         if let Some(chardev) = &netcfg.chardev {
-            if let Some(char_dev) = vm_config.chardev.remove(chardev) {
-                match &char_dev.backend {
-                    ChardevType::Socket {
-                        path,
-                        server,
-                        nowait,
-                    } => {
-                        if *server || *nowait {
-                            bail!(
-                                "Argument \'server\' or \'nowait\' is not need for chardev \'{}\'",
-                                path
-                            );
-                        }
-                        netdevinterfacecfg.socket_path = Some(path.clone());
-                    }
-                    _ => {
-                        bail!("Chardev {:?} backend should be socket type.", &chardev);
-                    }
-                }
-            } else {
-                bail!("Chardev: {:?} not found for character device", &chardev);
-            }
+            netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
         }
     } else {
         bail!("Netdev: {:?} not found for net device", &netdev);
@@ -465,6 +455,10 @@ fn check_mac_address(mac: &str) -> bool {
     }
 
     true
+}
+
+fn is_netdev_queues_valid(queues: u16) -> bool {
+    queues >= 1 && queues <= MAX_VIRTIO_QUEUE as u16
 }
 
 #[cfg(test)]
@@ -665,6 +659,27 @@ mod tests {
         assert!(netdev_conf.check().is_ok());
         netdev_conf.vhost_type = Some(String::from("vhost-"));
         assert!(netdev_conf.check().is_err());
+    }
+
+    #[test]
+    fn test_add_netdev_with_different_queues() {
+        let mut vm_config = VmConfig::default();
+
+        let set_queues = |q: u16| {
+            format!(
+                "vhost-user,id=netdevid{num},chardev=chardevid,queues={num}",
+                num = q.to_string()
+            )
+        };
+
+        assert!(vm_config.add_netdev(&set_queues(0)).is_err());
+        assert!(vm_config.add_netdev(&set_queues(1)).is_ok());
+        assert!(vm_config
+            .add_netdev(&set_queues(MAX_VIRTIO_QUEUE as u16 / 2))
+            .is_ok());
+        assert!(vm_config
+            .add_netdev(&set_queues(MAX_VIRTIO_QUEUE as u16 / 2 + 1))
+            .is_err());
     }
 
     #[test]

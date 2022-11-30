@@ -10,22 +10,25 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::max;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{GuestAddress, Region, RegionOps};
-use error_chain::bail;
 use hypervisor::kvm::{MsiVector, KVM_FDS};
-use log::error;
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-use util::{byte_code::ByteCode, num_ops::round_up, unix::host_page_size};
-
-use crate::config::{CapId, PciConfig, RegionType, SECONDARY_BUS_NUM};
-use crate::errors::{Result, ResultExt};
-use crate::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+use log::{error, warn};
+use migration::{
+    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
 };
+use migration_derive::{ByteCode, Desc};
+use util::{byte_code::ByteCode, num_ops::round_up};
+
+use crate::config::{CapId, PciConfig, RegionType, MINMUM_BAR_SIZE_FOR_MMIO, SECONDARY_BUS_NUM};
+use crate::{
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
+    ranges_overlap, PciBus,
+};
+use anyhow::{anyhow, bail, Context, Result};
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
 pub const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
@@ -177,9 +180,10 @@ impl Msix {
         let table_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
             if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
                 error!(
-                    "Fail to read msi table, illegal data length {}, offset {}",
-                    data.len(),
-                    offset
+                    "It's forbidden to read out of the msix table(size: {}), with offset of {} and size of {}",
+                    cloned_msix.lock().unwrap().table.len(),
+                    offset,
+                    data.len()
                 );
                 return false;
             }
@@ -189,6 +193,15 @@ impl Msix {
         };
         let cloned_msix = msix.clone();
         let table_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
+            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+                error!(
+                    "It's forbidden to write out of the msix table(size: {}), with offset of {} and size of {}",
+                    cloned_msix.lock().unwrap().table.len(),
+                    offset,
+                    data.len()
+                );
+                return false;
+            }
             let mut locked_msix = cloned_msix.lock().unwrap();
             let vector: u16 = offset as u16 / MSIX_TABLE_ENTRY_SIZE;
             let was_masked: bool = locked_msix.is_vector_masked(vector);
@@ -222,7 +235,7 @@ impl Msix {
         let table_region = Region::init_io_region(table_size, table_region_ops);
         region
             .add_subregion(table_region, table_offset)
-            .chain_err(|| "Failed to register MSI-X table region.")?;
+            .with_context(|| "Failed to register MSI-X table region.")?;
 
         let cloned_msix = msix.clone();
         let pba_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
@@ -246,7 +259,7 @@ impl Msix {
         let pba_region = Region::init_io_region(pba_size, pba_region_ops);
         region
             .add_subregion(pba_region, pba_offset)
-            .chain_err(|| "Failed to register MSI-X PBA region.")?;
+            .with_context(|| "Failed to register MSI-X PBA region.")?;
 
         Ok(())
     }
@@ -269,7 +282,7 @@ impl Msix {
 
     pub fn notify(&mut self, vector: u16, dev_id: u16) {
         if vector >= self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
-            error!("Invaild msix vector {}.", vector);
+            warn!("Invalid msix vector {}.", vector);
             return;
         }
 
@@ -281,7 +294,19 @@ impl Msix {
         send_msix(self.get_message(vector), dev_id);
     }
 
-    pub fn write_config(&mut self, config: &[u8], dev_id: u16) {
+    pub fn write_config(&mut self, config: &[u8], dev_id: u16, offset: usize, data: &[u8]) {
+        let len = data.len();
+        let msix_cap_control_off: usize = self.msix_cap_offset as usize + MSIX_CAP_CONTROL as usize;
+        // Only care about the bits Masked(14) & Enabled(15) in msix control register.
+        if !ranges_overlap(
+            offset,
+            offset + len,
+            msix_cap_control_off + 1,
+            msix_cap_control_off + 2,
+        ) {
+            return;
+        }
+
         let func_masked: bool = is_msix_func_masked(self.msix_cap_offset as usize, config);
         let enabled: bool = is_msix_enabled(self.msix_cap_offset as usize, config);
 
@@ -300,7 +325,7 @@ impl Msix {
 }
 
 impl StateTransfer for Msix {
-    fn get_state_vec(&self) -> migration::errors::Result<Vec<u8>> {
+    fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
         let mut state = MsixState::default();
 
         for (idx, table_byte) in self.table.iter().enumerate() {
@@ -317,9 +342,9 @@ impl StateTransfer for Msix {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> migration::errors::Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         let msix_state = *MsixState::from_bytes(state)
-            .ok_or(migration::errors::ErrorKind::FromBytesError("MSIX_DEVICE"))?;
+            .ok_or_else(|| anyhow!(MigrationError::FromBytesError("MSIX_DEVICE")))?;
 
         let table_length = self.table.len();
         let pba_length = self.pba.len();
@@ -343,7 +368,7 @@ impl StateTransfer for Msix {
 }
 
 impl MigrationHook for Msix {
-    fn resume(&mut self) -> migration::errors::Result<()> {
+    fn resume(&mut self) -> migration::Result<()> {
         if self.enabled && !self.func_masked {
             for vector in 0..self.table.len() as u16 / MSIX_TABLE_ENTRY_SIZE {
                 if self.is_vector_masked(vector) {
@@ -420,7 +445,7 @@ fn send_msix(msg: Message, dev_id: u16) {
         pad: [0; 12],
     };
     if let Err(e) = KVM_FDS.load().vm_fd.as_ref().unwrap().signal_msi(kvm_msi) {
-        error!("Send msix error: {}", e);
+        error!("Send msix error: {:?}", e);
     };
 }
 
@@ -444,8 +469,11 @@ pub fn init_msix(
     parent_region: Option<&Region>,
     offset_opt: Option<(u32, u32)>,
 ) -> Result<()> {
-    if vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
-        bail!("Too many msix vectors.");
+    if vector_nr == 0 || vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
+        bail!(
+            "invalid msix vectors, which should be in [1, {}]",
+            MSIX_TABLE_SIZE_MAX + 1
+        );
     }
 
     let msix_cap_offset: usize = config.add_pci_cap(CapId::Msix as u8, MSIX_CAP_SIZE as usize)?;
@@ -458,16 +486,24 @@ pub fn init_msix(
     )?;
     offset = msix_cap_offset + MSIX_CAP_TABLE as usize;
     let table_size = vector_nr * MSIX_TABLE_ENTRY_SIZE as u32;
+    let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
     let (table_offset, pba_offset) = if let Some((table, pba)) = offset_opt {
         (table, pba)
     } else {
         (0, table_size)
     };
+    if ranges_overlap(
+        table_offset.try_into().unwrap(),
+        table_size.try_into().unwrap(),
+        pba_offset.try_into().unwrap(),
+        pba_size.try_into().unwrap(),
+    ) {
+        bail!("msix table and pba table overlapped.");
+    }
     le_write_u32(&mut config.config, offset, table_offset | bar_id as u32)?;
     offset = msix_cap_offset + MSIX_CAP_PBA as usize;
     le_write_u32(&mut config.config, offset, pba_offset | bar_id as u32)?;
 
-    let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
     let msix = Arc::new(Mutex::new(Msix::new(
         table_size,
         pba_size,
@@ -484,7 +520,7 @@ pub fn init_msix(
         )?;
     } else {
         let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
-        bar_size = round_up(bar_size, host_page_size()).unwrap();
+        bar_size = max(bar_size, MINMUM_BAR_SIZE_FOR_MMIO as u64);
         let region = Region::init_container_region(bar_size);
         Msix::register_memory_region(
             msix.clone(),
@@ -493,7 +529,7 @@ pub fn init_msix(
             table_offset as u64,
             pba_offset as u64,
         )?;
-        config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size);
+        config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size)?;
     }
 
     config.msix = Some(msix.clone());
@@ -528,6 +564,18 @@ mod tests {
         assert!(init_msix(
             0,
             MSIX_TABLE_SIZE_MAX as u32 + 2,
+            &mut pci_config,
+            Arc::new(AtomicU16::new(0)),
+            "msix",
+            None,
+            None,
+        )
+        .is_err());
+
+        // No vector.
+        assert!(init_msix(
+            0,
+            0,
             &mut pci_config,
             Arc::new(AtomicU16::new(0)),
             "msix",
@@ -627,7 +675,12 @@ mod tests {
         let val = le_read_u16(&pci_config.config, offset).unwrap();
         le_write_u16(&mut pci_config.config, offset, val | MSIX_CAP_ENABLE).unwrap();
         locked_msix.set_pending_vector(0);
-        locked_msix.write_config(&pci_config.config, 0);
+        locked_msix.write_config(
+            &pci_config.config,
+            0,
+            offset,
+            &[0, val as u8 | MSIX_CAP_ENABLE as u8],
+        );
 
         assert!(!locked_msix.func_masked);
         assert!(locked_msix.enabled);

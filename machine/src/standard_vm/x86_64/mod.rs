@@ -14,15 +14,14 @@ pub(crate) mod ich9_lpc;
 mod mch;
 mod syscall;
 
+use crate::error::MachineError;
+use log::error;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
-
-use error_chain::{bail, ChainedError};
-use log::error;
 use vmm_sys_util::{eventfd::EventFd, ioctl_ioc_nr, ioctl_iow_nr};
 
 use acpi::{
@@ -34,7 +33,7 @@ use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::{
-    errors::ErrorKind as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
+    error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
     SERIAL_ADDR,
 };
 use hypervisor::kvm::KVM_FDS;
@@ -52,7 +51,7 @@ use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
 use mch::Mch;
 use migration::{MigrationManager, MigrationStatus};
 use pci::{PciDevOps, PciHost};
-use sysbus::SysBus;
+use sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
 use syscall::syscall_whitelist;
 use usb::bus::BusDeviceMap;
 use util::{
@@ -60,10 +59,11 @@ use util::{
 };
 
 use self::ich9_lpc::SLEEP_CTRL_OFFSET;
-use super::errors::{ErrorKind, Result};
+use super::error::StandardVmError;
 use super::{AcpiBuilder, StdMachineOps};
-use crate::errors::{ErrorKind as MachineErrorKind, Result as MachineResult};
 use crate::{vm_state, MachineOps};
+use anyhow::{anyhow, bail, Context, Result};
+use virtio::ScsiCntlr::ScsiCntlrMap;
 #[cfg(not(target_env = "musl"))]
 use vnc::vnc;
 
@@ -126,12 +126,12 @@ pub struct StdMachine {
     fwcfg_dev: Option<Arc<Mutex<FwCfgIO>>>,
     /// Bus device used to attach other devices. Only USB controller used now.
     bus_device: BusDeviceMap,
+    /// Scsi Controller List.
+    scsi_cntlr_list: ScsiCntlrMap,
 }
 
 impl StdMachine {
-    pub fn new(vm_config: &VmConfig) -> MachineResult<Self> {
-        use crate::errors::ResultExt;
-
+    pub fn new(vm_config: &VmConfig) -> Result<Self> {
         let cpu_topo = CpuTopology::new(
             vm_config.machine_config.nr_cpus,
             vm_config.machine_config.nr_sockets,
@@ -142,13 +142,13 @@ impl StdMachine {
             vm_config.machine_config.max_cpus,
         );
         let sys_io = AddressSpace::new(Region::init_container_region(1 << 16))
-            .chain_err(|| MachineErrorKind::CrtMemSpaceErr)?;
+            .with_context(|| anyhow!(MachineError::CrtMemSpaceErr))?;
         let sys_mem = AddressSpace::new(Region::init_container_region(u64::max_value()))
-            .chain_err(|| MachineErrorKind::CrtIoSpaceErr)?;
+            .with_context(|| anyhow!(MachineError::CrtIoSpaceErr))?;
         let sysbus = SysBus::new(
             &sys_io,
             &sys_mem,
-            (5, 15),
+            (IRQ_BASE, IRQ_MAX),
             (
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize].0,
                 MEM_LAYOUT[LayoutEntryType::Mmio as usize + 1].0,
@@ -171,40 +171,36 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
-            power_button: EventFd::new(libc::EFD_NONBLOCK)
-                .chain_err(|| MachineErrorKind::InitEventFdErr("power_button".to_string()))?,
+            power_button: EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
+            })?,
             vm_config: Mutex::new(vm_config.clone()),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
             bus_device: Arc::new(Mutex::new(HashMap::new())),
+            scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> MachineResult<()> {
-        use crate::errors::ResultExt as MachineResultExt;
-
+    pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            MachineResultExt::chain_err(cpu.kick(), || {
-                format!("Failed to kick vcpu{}", cpu_index)
-            })?;
+            Result::with_context(cpu.kick(), || format!("Failed to kick vcpu{}", cpu_index))?;
 
             cpu.set_to_boot_state();
         }
 
-        MachineResultExt::chain_err(locked_vm.reset_all_devices(), || {
+        Result::with_context(locked_vm.reset_all_devices(), || {
             "Fail to reset all devices"
         })?;
-        MachineResultExt::chain_err(locked_vm.reset_fwcfg_boot_order(), || {
+        Result::with_context(locked_vm.reset_fwcfg_boot_order(), || {
             "Fail to update boot order information to FwCfg device"
         })?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            MachineResultExt::chain_err(cpu.reset(), || {
-                format!("Failed to reset vcpu{}", cpu_index)
-            })?;
+            Result::with_context(cpu.reset(), || format!("Failed to reset vcpu{}", cpu_index))?;
         }
 
         Ok(())
@@ -214,11 +210,7 @@ impl StdMachine {
         let locked_vm = vm.lock().unwrap();
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
             if let Err(e) = cpu.destroy() {
-                error!(
-                    "Failed to destroy vcpu{}, error is {}",
-                    cpu_index,
-                    e.display_chain()
-                );
+                error!("Failed to destroy vcpu{}, error is {:?}", cpu_index, e);
             }
         }
 
@@ -227,9 +219,7 @@ impl StdMachine {
         true
     }
 
-    fn arch_init() -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
+    fn arch_init() -> Result<()> {
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let identity_addr: u64 = MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0;
@@ -247,7 +237,7 @@ impl StdMachine {
         // Page table takes 1 page, TSS takes the following 3 pages.
         vm_fd
             .set_tss_address((identity_addr + 0x1000) as usize)
-            .chain_err(|| MachineErrorKind::SetTssErr)?;
+            .with_context(|| anyhow!(MachineError::SetTssErr))?;
 
         let pit_config = kvm_pit_config {
             flags: KVM_PIT_SPEAKER_DUMMY,
@@ -255,20 +245,18 @@ impl StdMachine {
         };
         vm_fd
             .create_pit2(pit_config)
-            .chain_err(|| MachineErrorKind::CrtPitErr)?;
+            .with_context(|| anyhow!(MachineError::CrtPitErr))?;
         Ok(())
     }
 
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
-        use super::errors::ResultExt;
-
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
         self.register_reset_event(&ich.reset_req, vm)
-            .chain_err(|| "Fail to register reset event in LPC")?;
+            .with_context(|| "Fail to register reset event in LPC")?;
         self.register_acpi_shutdown_event(&ich.shutdown_req, clone_vm)
-            .chain_err(|| "Fail to register shutdown event in LPC")?;
+            .with_context(|| "Fail to register shutdown event in LPC")?;
         PciDevOps::realize(ich)?;
         Ok(())
     }
@@ -276,8 +264,6 @@ impl StdMachine {
 
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self) -> Result<()> {
-        use super::errors::ResultExt;
-
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
@@ -290,45 +276,42 @@ impl StdMachineOps for StdMachine {
                 mmconfig_region.clone(),
                 MEM_LAYOUT[LayoutEntryType::PcieEcam as usize].0,
             )
-            .chain_err(|| "Failed to register ECAM in memory space.")?;
+            .with_context(|| "Failed to register ECAM in memory space.")?;
 
         let pio_addr_ops = PciHost::build_pio_addr_ops(self.pci_host.clone());
         let pio_addr_region = Region::init_io_region(4, pio_addr_ops);
         self.sys_io
             .root()
             .add_subregion(pio_addr_region, 0xcf8)
-            .chain_err(|| "Failed to register CONFIG_ADDR port in I/O space.")?;
+            .with_context(|| "Failed to register CONFIG_ADDR port in I/O space.")?;
         let pio_data_ops = PciHost::build_pio_data_ops(self.pci_host.clone());
         let pio_data_region = Region::init_io_region(4, pio_data_ops);
         self.sys_io
             .root()
             .add_subregion(pio_data_region, 0xcfc)
-            .chain_err(|| "Failed to register CONFIG_DATA port in I/O space.")?;
+            .with_context(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
         let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
         PciDevOps::realize(mch)?;
         Ok(())
     }
 
-    fn add_fwcfg_device(&mut self) -> super::errors::Result<Arc<Mutex<dyn FwCfgOps>>> {
-        use super::errors::ResultExt;
-
+    fn add_fwcfg_device(&mut self, nr_cpus: u8) -> super::Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         let mut fwcfg = FwCfgIO::new(self.sys_mem.clone());
-        let ncpus = self.cpus.len();
-        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())?;
-        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, ncpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
+        fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, nr_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::Irq0Override, 1_u32.as_bytes().to_vec())?;
 
         let boot_order = Vec::<u8>::new();
         fwcfg
             .add_file_entry("bootorder", boot_order)
-            .chain_err(|| DevErrorKind::AddEntryErr("bootorder".to_string()))?;
+            .with_context(|| anyhow!(DevErrorKind::AddEntryErr("bootorder".to_string())))?;
 
         let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut self.sysbus)
-            .chain_err(|| "Failed to realize fwcfg device")?;
+            .with_context(|| "Failed to realize fwcfg device")?;
         self.fwcfg_dev = Some(fwcfg_dev.clone());
 
-        Ok(fwcfg_dev)
+        Ok(Some(fwcfg_dev))
     }
 
     fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
@@ -361,16 +344,14 @@ impl MachineOps for StdMachine {
         ranges
     }
 
-    fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
+    fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {
         KVM_FDS
             .load()
             .vm_fd
             .as_ref()
             .unwrap()
             .create_irq_chip()
-            .chain_err(|| MachineErrorKind::CrtIrqchipErr)?;
+            .with_context(|| anyhow!(MachineError::CrtIrqchipErr))?;
         KVM_FDS
             .load()
             .irq_route_table
@@ -381,12 +362,7 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn load_boot_source(
-        &self,
-        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
-    ) -> MachineResult<CPUBootConfig> {
-        use crate::errors::ResultExt;
-
+    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
         let boot_source = self.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
@@ -405,7 +381,7 @@ impl MachineOps for StdMachine {
             prot64_mode: false,
         };
         let layout = load_linux(&bootloader_config, &self.sys_mem, fwcfg)
-            .chain_err(|| MachineErrorKind::LoadKernErr)?;
+            .with_context(|| anyhow!(MachineError::LoadKernErr))?;
 
         Ok(CPUBootConfig {
             prot64_mode: false,
@@ -416,28 +392,25 @@ impl MachineOps for StdMachine {
         })
     }
 
-    fn add_rtc_device(&mut self, mem_size: u64) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
-        let mut rtc = RTC::new().chain_err(|| "Failed to create RTC device")?;
+    fn add_rtc_device(&mut self, mem_size: u64) -> Result<()> {
+        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
         rtc.set_memory(
             mem_size,
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
-        RTC::realize(rtc, &mut self.sysbus).chain_err(|| "Failed to realize RTC device")?;
+        RTC::realize(rtc, &mut self.sysbus).with_context(|| "Failed to realize RTC device")?;
 
         Ok(())
     }
 
-    fn add_serial_device(&mut self, config: &SerialConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
+    fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
         let serial = Serial::new(config.clone());
         serial
             .realize(&mut self.sysbus, region_base, region_size)
-            .chain_err(|| "Failed to realize serial device.")?;
+            .with_context(|| "Failed to realize serial device.")?;
         Ok(())
     }
 
@@ -445,9 +418,8 @@ impl MachineOps for StdMachine {
         syscall_whitelist()
     }
 
-    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
-        use crate::errors::ResultExt;
-
+    fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
+        let nr_cpus = vm_config.machine_config.nr_cpus;
         let clone_vm = vm.clone();
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
@@ -456,13 +428,12 @@ impl MachineOps for StdMachine {
             &vm_config.machine_config.mem_config,
             &locked_vm.sys_io,
             &locked_vm.sys_mem,
-            vm_config.machine_config.nr_cpus,
+            nr_cpus,
         )?;
 
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut vcpu_fds = vec![];
         for cpu_id in 0..nr_cpus {
             vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id as u64)?));
@@ -470,19 +441,19 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .init_pci_host()
-            .chain_err(|| ErrorKind::InitPCIeHostErr)?;
+            .with_context(|| anyhow!(StandardVmError::InitPCIeHostErr))?;
         locked_vm
             .init_ich9_lpc(clone_vm)
-            .chain_err(|| "Fail to init LPC bridge")?;
+            .with_context(|| "Fail to init LPC bridge")?;
         locked_vm.add_devices(vm_config)?;
         #[cfg(not(target_env = "musl"))]
         vnc::vnc_init(&vm_config.vnc, &vm_config.object)
-            .chain_err(|| "Failed to init VNC server!")?;
-        let fwcfg = locked_vm.add_fwcfg_device()?;
+            .with_context(|| "Failed to init VNC server!")?;
+        let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(Some(&fwcfg))?)
+            Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
         } else {
             None
         };
@@ -493,16 +464,16 @@ impl MachineOps for StdMachine {
         ));
         locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
-            vm_config.machine_config.nr_cpus,
+            nr_cpus,
             &topology,
             &vcpu_fds,
             &boot_config,
         )?);
 
-        if migrate.0 == MigrateMode::Unknown {
+        if migrate.0 == MigrateMode::Unknown && fwcfg.is_some() {
             locked_vm
-                .build_acpi_tables(&fwcfg)
-                .chain_err(|| "Failed to create ACPI tables")?;
+                .build_acpi_tables(&fwcfg.unwrap())
+                .with_context(|| "Failed to create ACPI tables")?;
         }
 
         StdMachine::arch_init()?;
@@ -510,7 +481,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .reset_fwcfg_boot_order()
-            .chain_err(|| "Fail to update boot order imformation to FwCfg device")?;
+            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
         MigrationManager::register_vm_config(vm_config);
         MigrationManager::register_vm_instance(vm.clone());
@@ -525,9 +496,7 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> MachineResult<()> {
-        use super::errors::ResultExt;
-
+    fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
         let mut configs_vec = configs.to_vec();
         configs_vec.sort_by_key(|c| c.unit);
         // The two PFlash devices locates below 4GB, this variable represents the end address
@@ -538,7 +507,9 @@ impl MachineOps for StdMachine {
                 .read(true)
                 .write(!config.read_only)
                 .open(&config.path_on_host)
-                .chain_err(|| ErrorKind::OpenFileErr(config.path_on_host.clone()))?;
+                .with_context(|| {
+                    anyhow!(StandardVmError::OpenFileErr(config.path_on_host.clone()))
+                })?;
             let pfl_size = fd.metadata().unwrap().len();
 
             if config.unit == 0 {
@@ -576,7 +547,7 @@ impl MachineOps for StdMachine {
                 1_u32,
                 config.read_only,
             )
-            .chain_err(|| ErrorKind::InitPflashErr)?;
+            .with_context(|| anyhow!(StandardVmError::InitPflashErr))?;
             PFlash::realize(
                 pflash,
                 &mut self.sysbus,
@@ -584,14 +555,14 @@ impl MachineOps for StdMachine {
                 pfl_size,
                 backend,
             )
-            .chain_err(|| ErrorKind::RlzPflashErr)?;
+            .with_context(|| anyhow!(StandardVmError::RlzPflashErr))?;
             flash_end -= pfl_size;
         }
 
         Ok(())
     }
 
-    fn run(&self, paused: bool) -> MachineResult<()> {
+    fn run(&self, paused: bool) -> Result<()> {
         <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 
@@ -619,9 +590,11 @@ impl MachineOps for StdMachine {
         &self.sysbus
     }
 
-    fn get_fwcfg_dev(&mut self) -> MachineResult<Arc<Mutex<dyn FwCfgOps>>> {
-        // Unwrap is safe. Because after standard machine realize, this will not be None.F
-        Ok(self.fwcfg_dev.clone().unwrap())
+    fn get_fwcfg_dev(&mut self) -> Option<Arc<Mutex<dyn FwCfgOps>>> {
+        if let Some(fwcfg_dev) = &self.fwcfg_dev {
+            return Some(fwcfg_dev.clone());
+        }
+        None
     }
 
     fn get_boot_order_list(&self) -> Option<Arc<Mutex<Vec<BootIndexInfo>>>> {
@@ -631,6 +604,10 @@ impl MachineOps for StdMachine {
     fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
         Some(&self.bus_device)
     }
+
+    fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
+        Some(&self.scsi_cntlr_list)
+    }
 }
 
 impl AcpiBuilder for StdMachine {
@@ -638,8 +615,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut dsdt = AcpiTable::new(*b"DSDT", 2, *b"STRATO", *b"VIRTDSDT", 1);
 
         // 1. CPU info.
@@ -669,7 +645,7 @@ impl AcpiBuilder for StdMachine {
         dsdt.append_child(AmlNameDecl::new("_S5", package).aml_bytes().as_slice());
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
-            .chain_err(|| "Fail to add DSTD table to loader")?;
+            .with_context(|| "Fail to add DSTD table to loader")?;
         Ok(dsdt_begin as u64)
     }
 
@@ -677,8 +653,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
+    ) -> super::Result<u64> {
         let mut madt = AcpiTable::new(*b"APIC", 5, *b"STRATO", *b"VIRTAPIC", 1);
 
         madt.append_child(LAPIC_BASE_ADDR.as_bytes());
@@ -707,7 +682,7 @@ impl AcpiBuilder for StdMachine {
         });
 
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
-            .chain_err(|| "Fail to add DSTD table to loader")?;
+            .with_context(|| "Fail to add DSTD table to loader")?;
         Ok(madt_begin as u64)
     }
 
@@ -810,12 +785,7 @@ impl AcpiBuilder for StdMachine {
         &self,
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-    ) -> super::errors::Result<u64> {
-        use super::errors::ResultExt;
-        if self.numa_nodes.is_none() {
-            return Ok(0);
-        }
-
+    ) -> super::Result<u64> {
         let mut srat = AcpiTable::new(*b"SRAT", 1, *b"STRATO", *b"VIRTSRAT", 1);
         srat.append_child(&[1_u8; 4_usize]);
         srat.append_child(&[0_u8; 8_usize]);
@@ -827,7 +797,7 @@ impl AcpiBuilder for StdMachine {
         }
 
         let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
-            .chain_err(|| "Fail to add SRAT table to loader")?;
+            .with_context(|| "Fail to add SRAT table to loader")?;
         Ok(srat_begin as u64)
     }
 }
@@ -902,7 +872,7 @@ impl MachineAddressInterface for StdMachine {
         let count = data.len() as u64;
         if addr == SLEEP_CTRL_OFFSET as u64 {
             if let Err(e) = self.cpus[0].pause() {
-                error!("Fail to pause bsp, {}", e.display_chain());
+                error!("Fail to pause bsp, {:?}", e);
             }
         }
         self.sys_io
@@ -956,10 +926,8 @@ impl EventLoopManager for StdMachine {
         *vmstate == KvmVmState::Shutdown
     }
 
-    fn loop_cleanup(&self) -> util::errors::Result<()> {
-        use util::errors::ResultExt;
-
-        set_termi_canon_mode().chain_err(|| "Failed to set terminal to canonical mode")?;
+    fn loop_cleanup(&self) -> util::Result<()> {
+        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
         Ok(())
     }
 }

@@ -215,7 +215,7 @@ pub fn chmod(file_path: &str, mode: libc::mode_t) -> Result<()> {
 /// * `major_id` - The major device number.
 /// * `minor_id` - The minor device number.
 pub fn makedev(major_id: u32, minor_id: u32) -> Result<libc::dev_t> {
-    Ok(unsafe { libc::makedev(major_id, minor_id) })
+    Ok(libc::makedev(major_id, minor_id))
 }
 
 /// Create a special or ordinary file.

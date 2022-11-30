@@ -10,20 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use log::warn;
-
-use super::{
-    errors::{ErrorKind, Result},
-    M,
-};
+use super::{error::ConfigError, M};
 use crate::config::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
+use anyhow::{anyhow, Result};
+use log::warn;
 
 /// The maximum number of scanouts.
 pub const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
 
 pub const VIRTIO_GPU_MAX_HOSTMEM: u64 = 256 * M;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GpuConfig {
     pub id: String,
     pub max_outputs: u32,
@@ -49,18 +46,20 @@ impl Default for GpuConfig {
 impl ConfigCheck for GpuConfig {
     fn check(&self) -> Result<()> {
         if self.id.len() > MAX_STRING_LENGTH {
-            return Err(ErrorKind::StringLengthTooLong("id".to_string(), MAX_STRING_LENGTH).into());
+            return Err(anyhow!(ConfigError::StringLengthTooLong(
+                "id".to_string(),
+                MAX_STRING_LENGTH
+            )));
         }
 
         if self.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 {
-            return Err(ErrorKind::IllegalValue(
+            return Err(anyhow!(ConfigError::IllegalValue(
                 "max_outputs".to_string(),
                 0,
                 false,
                 VIRTIO_GPU_MAX_SCANOUTS as u64,
                 true,
-            )
-            .into());
+            )));
         }
 
         if self.max_hostmem < VIRTIO_GPU_MAX_HOSTMEM {
