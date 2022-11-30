@@ -321,7 +321,7 @@ impl UsbDescriptorOps for UsbDevice {
     }
 
     fn init_endpoint(&mut self) -> Result<()> {
-        self.init_usb_endpoint();
+        self.reset_usb_endpoint();
         for i in 0..self.ninterfaces {
             let iface = self.ifaces[i as usize].as_ref();
             if iface.is_none() {
