@@ -179,9 +179,7 @@ impl ClientIoHandler {
             } else {
                 info!("Finished tls handshaking");
                 // Tls handshake finished.
-                if let Err(e) = self.handle_vencrypt_subauth() {
-                    return Err(e);
-                }
+                self.handle_vencrypt_subauth()?;
             }
         } else {
             return Err(anyhow!(VncError::AuthFailed(String::from(
@@ -197,9 +195,7 @@ impl ClientIoHandler {
             SubAuthState::VncAuthVencryptX509Sasl => {
                 self.expect = 4;
                 self.msg_handler = ClientIoHandler::get_mechname_length;
-                if let Err(e) = self.start_sasl_auth() {
-                    return Err(e);
-                }
+                self.start_sasl_auth()?;
             }
             SubAuthState::VncAuthVencryptX509None => {
                 let buf = [0u8; 4];
@@ -239,11 +235,10 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
 
     // Load cacert.pem and provide verification for certificate chain
     let client_auth = if args.verifypeer {
-        let roots;
-        match load_certs(server_cacert.as_str()) {
-            Ok(r) => roots = r,
+        let roots = match load_certs(server_cacert.as_str()) {
+            Ok(r) => r,
             Err(e) => return Err(e),
-        }
+        };
         let mut client_auth_roots = RootCertStore::empty();
         for root in roots {
             client_auth_roots.add(&root).unwrap();
@@ -261,18 +256,16 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
     let suites = TLS_CIPHER_SUITES.to_vec();
     // Tls protocol version supported by server.
     let versions = TLS_VERSIONS.to_vec();
-    let certs: Vec<rustls::Certificate>;
-    let privkey: rustls::PrivateKey;
     // Server certificate.
-    match load_certs(server_cert.as_str()) {
-        Ok(c) => certs = c,
+    let certs: Vec<rustls::Certificate> = match load_certs(server_cert.as_str()) {
+        Ok(c) => c,
         Err(e) => return Err(e),
     };
     // Server private key.
-    match load_private_key(server_key.as_str()) {
-        Ok(key) => privkey = key,
+    let privkey: rustls::PrivateKey = match load_private_key(server_key.as_str()) {
+        Ok(key) => key,
         Err(e) => return Err(e),
-    }
+    };
 
     let mut config = rustls::ServerConfig::builder()
         .with_cipher_suites(&suites)
@@ -300,23 +293,22 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
 ///
 /// * `filepath` - the path private key.
 fn load_private_key(filepath: &str) -> Result<rustls::PrivateKey> {
-    let keyfile;
-    match File::open(filepath) {
-        Ok(file) => keyfile = file,
+    let file = match File::open(filepath) {
+        Ok(file) => file,
         Err(e) => {
-            error!("Private key file is no exit!: {}", e);
+            error!("Can not open file of the private key!: {}", e);
             return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
-                "Private key file is no exit!",
+                "File of the private key is no exit!",
             ))));
         }
-    }
+    };
 
-    let mut reader = BufReader::new(keyfile);
+    let mut reader = BufReader::new(file);
     loop {
-        match rustls_pemfile::read_one(&mut reader).expect("Cannot parse private key .pem file") {
-            Some(rustls_pemfile::Item::RSAKey(key)) => return Ok(rustls::PrivateKey(key)),
-            Some(rustls_pemfile::Item::PKCS8Key(key)) => return Ok(rustls::PrivateKey(key)),
-            Some(rustls_pemfile::Item::ECKey(key)) => return Ok(rustls::PrivateKey(key)),
+        match rustls_pemfile::read_one(&mut reader).expect("Cannot parse .pem file") {
+            Some(rustls_pemfile::Item::RSAKey(ras)) => return Ok(rustls::PrivateKey(ras)),
+            Some(rustls_pemfile::Item::PKCS8Key(pkcs8)) => return Ok(rustls::PrivateKey(pkcs8)),
+            Some(rustls_pemfile::Item::ECKey(ec)) => return Ok(rustls::PrivateKey(ec)),
             None => break,
             _ => {}
         }
@@ -334,16 +326,15 @@ fn load_private_key(filepath: &str) -> Result<rustls::PrivateKey> {
 ///
 /// * `filepath` - the file path of certificate.
 fn load_certs(filepath: &str) -> Result<Vec<rustls::Certificate>> {
-    let certfile;
-    match File::open(filepath) {
-        Ok(file) => certfile = file,
+    let certfile = match File::open(filepath) {
+        Ok(file) => file,
         Err(e) => {
             error!("Cannot open certificate file: {}", e);
             return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
                 "Cannot open certificate file",
             ))));
         }
-    }
+    };
     let mut reader = BufReader::new(certfile);
     let certs = rustls_pemfile::certs(&mut reader)
         .unwrap()

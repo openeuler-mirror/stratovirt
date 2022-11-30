@@ -930,20 +930,17 @@ impl StdMachine {
         bdf: &PciBdf,
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
-        let host;
-        let sysfsdev;
-
-        if args.host.is_none() {
-            host = "";
+        let host = if args.host.is_none() {
+            ""
         } else {
-            host = args.host.as_ref().unwrap();
-        }
+            args.host.as_ref().unwrap()
+        };
 
-        if args.sysfsdev.is_none() {
-            sysfsdev = "";
+        let sysfsdev = if args.sysfsdev.is_none() {
+            ""
         } else {
-            sysfsdev = args.sysfsdev.as_ref().unwrap();
-        }
+            args.sysfsdev.as_ref().unwrap()
+        };
 
         if args.host.is_none() && args.sysfsdev.is_none() {
             bail!("Neither option \"host\" nor \"sysfsdev\" was not provided.");

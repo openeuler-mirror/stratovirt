@@ -163,7 +163,7 @@ impl CtrlInfo {
         &mut self,
         mem_space: &AddressSpace,
         cmd: u8,
-        data_iovec: &mut Vec<ElemIovec>,
+        data_iovec: &mut [ElemIovec],
     ) -> Result<u8> {
         // Get the command specific data, one byte containing 0(off) or 1(on).
         let mut status: u8 = 0;
@@ -389,7 +389,7 @@ impl CtrlInfo {
 
 fn get_buf_and_discard(
     mem_space: &AddressSpace,
-    iovec: &mut Vec<ElemIovec>,
+    iovec: &mut [ElemIovec],
     buf: &mut [u8],
 ) -> Result<Vec<ElemIovec>> {
     iov_to_buf(mem_space, iovec, buf).and_then(|size| {
@@ -1331,8 +1331,8 @@ impl VirtioDevice for Net {
 
         let queue_pairs = self.net_cfg.queues / 2;
         if self.net_cfg.mq
-            && queue_pairs >= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN
-            && queue_pairs <= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX
+            && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                .contains(&queue_pairs)
         {
             locked_state.device_features |= 1 << VIRTIO_NET_F_MQ;
             locked_state.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;

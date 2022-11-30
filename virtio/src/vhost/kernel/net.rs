@@ -149,8 +149,8 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_UFO;
 
         if self.net_cfg.mq
-            && queue_pairs >= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN
-            && queue_pairs <= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX
+            && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                .contains(&queue_pairs)
         {
             device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
             device_features |= 1 << VIRTIO_NET_F_MQ;

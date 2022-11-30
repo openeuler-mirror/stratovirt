@@ -221,7 +221,7 @@ impl QmpGreeting {
 ///
 /// It contains two kind response: `BadResponse` and `GoodResponse`. This two
 /// kind response are fit by executing qmp command by success and failure.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Response {
     #[serde(rename = "return", default, skip_serializing_if = "Option::is_none")]
     return_: Option<Value>,
@@ -289,7 +289,7 @@ impl From<bool> for Response {
 }
 
 /// `ErrorMessage` for Qmp Response.
-#[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorMessage {
     #[serde(rename = "class")]
     errorkind: String,
@@ -311,7 +311,7 @@ impl ErrorMessage {
 }
 
 /// Empty message for QMP.
-#[derive(Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Empty {}
 
 /// Command trait for Deserialize and find back Response.

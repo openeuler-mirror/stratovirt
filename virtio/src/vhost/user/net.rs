@@ -144,8 +144,8 @@ impl VirtioDevice for Net {
 
         let queue_pairs = self.net_cfg.queues / 2;
         if self.net_cfg.mq
-            && queue_pairs >= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN
-            && queue_pairs <= VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX
+            && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
+                .contains(&queue_pairs)
         {
             self.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
             self.device_features |= 1 << VIRTIO_NET_F_MQ;

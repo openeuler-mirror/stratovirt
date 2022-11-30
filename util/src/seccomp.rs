@@ -136,7 +136,7 @@ const AUDIT_ARCH_X86_64: u32 = EM_X86_64 | __AUDIT_ATCH_64BIT | __AUDIT_ARCH_LE;
 const AUDIT_ARCH_AARCH64: u32 = EM_AARCH64 | __AUDIT_ATCH_64BIT | __AUDIT_ARCH_LE;
 
 /// Compared operator in bpf filter rule.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum SeccompCmpOpt {
     /// Equal.
     Eq,
@@ -158,7 +158,7 @@ pub enum SeccompCmpOpt {
 /// These operation one-to-one correspondence with BPF-filter return value:
 /// `SECCOMP_RET_KILL_PROCESS`, `SECCOMP_RET_KILL_THREAD`, `SECCOMP_RET_TRAP`,
 /// `SECCOMP_RET_ERRNO`, `SECCOMP_RET_TRACE`, `SECCOMP_RET_ALLOW`, `SECCOMP_RET_LOG`.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SeccompOpt {
     /// Kill the task immediately.
     Kill,
@@ -220,7 +220,7 @@ impl SeccompData {
 ///
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/filter.h#L24
 #[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SockFilter {
     /// Actual filter code
     code: u16,

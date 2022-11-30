@@ -174,13 +174,12 @@ impl FwCfgWriteCallback for RamfbState {
                 .unwrap(),
         );
 
-        let format: pixman_format_code_t;
-        if fourcc == DrmFourcc::Xrgb8888 as u32 {
-            format = pixman_format_code_t::PIXMAN_x8r8g8b8;
+        let format: pixman_format_code_t = if fourcc == DrmFourcc::Xrgb8888 as u32 {
+            pixman_format_code_t::PIXMAN_x8r8g8b8
         } else {
             error!("Unsupported drm format: {}", fourcc);
             return;
-        }
+        };
 
         self.create_display_surface(width, height, format, stride, addr);
 

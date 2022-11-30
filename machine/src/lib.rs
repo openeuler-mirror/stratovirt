@@ -779,12 +779,11 @@ pub trait MachineOps {
         multifunc: bool,
     ) -> Result<()> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
-        let path;
-        if !host.is_empty() {
-            path = format!("/sys/bus/pci/devices/{}", host);
+        let path = if !host.is_empty() {
+            format!("/sys/bus/pci/devices/{}", host)
         } else {
-            path = sysfsdev.to_string();
-        }
+            sysfsdev.to_string()
+        };
         let device = VfioDevice::new(Path::new(&path), self.get_sys_mem())
             .with_context(|| "Failed to create vfio device.")?;
         let vfio_pci = VfioPciDevice::new(

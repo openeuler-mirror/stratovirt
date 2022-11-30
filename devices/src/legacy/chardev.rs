@@ -37,6 +37,8 @@ pub trait InputReceiver: Send {
     fn get_remain_space_size(&mut self) -> usize;
 }
 
+type ReceFn = Option<Arc<dyn Fn(&[u8]) + Send + Sync>>;
+
 /// Character device structure.
 pub struct Chardev {
     /// Id of chardev.
@@ -52,7 +54,7 @@ pub struct Chardev {
     /// Fd of socket stream.
     pub stream_fd: Option<i32>,
     /// Handle the input data and trigger interrupt if necessary.
-    receive: Option<Arc<dyn Fn(&[u8]) + Send + Sync>>,
+    receive: ReceFn,
     /// Return the remain space size of receiver buffer.
     get_remain_space_size: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
 }
