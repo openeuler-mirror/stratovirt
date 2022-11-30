@@ -10,10 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{
-    collections::LinkedList,
-    sync::{Arc, Mutex, Weak},
-};
+use std::sync::{Arc, Mutex, Weak};
 
 use crate::config::*;
 use crate::descriptor::{
@@ -82,10 +79,7 @@ pub struct UsbEndpoint {
     pub usb_type: u8,
     pub ifnum: u8,
     pub max_packet_size: u32,
-    pub pipeline: bool,
-    pub halted: bool,
     pub dev: Option<Weak<Mutex<dyn UsbDeviceOps>>>,
-    pub queue: LinkedList<UsbPacket>,
 }
 
 impl UsbEndpoint {
@@ -96,10 +90,7 @@ impl UsbEndpoint {
             usb_type,
             ifnum,
             max_packet_size,
-            pipeline: false,
-            halted: false,
             dev: None,
-            queue: LinkedList::new(),
         }
     }
 
@@ -115,7 +106,7 @@ impl UsbEndpoint {
     }
 }
 
-/// Init USB endpoint, similar with init_usb_endpoint, but set dev in endpoint.
+/// Init USB endpoint, and set dev in endpoint.
 pub fn usb_endpoint_init(dev: &Arc<Mutex<dyn UsbDeviceOps>>) {
     let mut locked_dev = dev.lock().unwrap();
     let usb_dev = locked_dev.get_mut_usb_device();
@@ -123,12 +114,9 @@ pub fn usb_endpoint_init(dev: &Arc<Mutex<dyn UsbDeviceOps>>) {
     locked_dev.reset_usb_endpoint();
     let mut ep_ctl = locked_dev.ep_ctl.lock().unwrap();
     ep_ctl.dev = Some(Arc::downgrade(dev));
-    ep_ctl.queue = LinkedList::new();
     for i in 0..USB_MAX_ENDPOINTS {
         let mut ep_in = locked_dev.ep_in[i as usize].lock().unwrap();
         let mut ep_out = locked_dev.ep_out[i as usize].lock().unwrap();
-        ep_in.queue = LinkedList::new();
-        ep_out.queue = LinkedList::new();
         ep_in.dev = Some(Arc::downgrade(dev));
         ep_out.dev = Some(Arc::downgrade(dev));
     }
@@ -307,25 +295,12 @@ impl UsbDevice {
         }
     }
 
-    pub fn init_usb_endpoint(&mut self) {
-        self.reset_usb_endpoint();
-        let mut ep_ctl = self.ep_ctl.lock().unwrap();
-        ep_ctl.queue = LinkedList::new();
-        for i in 0..USB_MAX_ENDPOINTS {
-            let mut ep_in = self.ep_in[i as usize].lock().unwrap();
-            let mut ep_out = self.ep_out[i as usize].lock().unwrap();
-            ep_in.queue = LinkedList::new();
-            ep_out.queue = LinkedList::new();
-        }
-    }
-
     pub fn reset_usb_endpoint(&mut self) {
         let mut ep_ctl = self.ep_ctl.lock().unwrap();
         ep_ctl.nr = 0;
         ep_ctl.usb_type = USB_ENDPOINT_ATTR_CONTROL;
         ep_ctl.ifnum = 0;
         ep_ctl.max_packet_size = 64;
-        ep_ctl.pipeline = false;
         for i in 0..USB_MAX_ENDPOINTS {
             let mut ep_in = self.ep_in[i as usize].lock().unwrap();
             let mut ep_out = self.ep_out[i as usize].lock().unwrap();
@@ -339,8 +314,6 @@ impl UsbDevice {
             ep_out.ifnum = USB_INTERFACE_INVALID;
             ep_in.max_packet_size = 0;
             ep_out.max_packet_size = 0;
-            ep_in.pipeline = false;
-            ep_out.pipeline = false;
         }
     }
 
