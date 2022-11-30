@@ -231,12 +231,8 @@ pub struct UsbDevice {
     pub addr: u8,
     pub product_desc: String,
     pub state: UsbDeviceState,
-    pub setup_buf: Vec<u8>,
     pub data_buf: Vec<u8>,
     pub remote_wakeup: u32,
-    pub setup_state: SetupState,
-    pub setup_len: u32,
-    pub setup_index: u32,
     pub ep_ctl: Arc<Mutex<UsbEndpoint>>,
     pub ep_in: Vec<Arc<Mutex<UsbEndpoint>>>,
     pub ep_out: Vec<Arc<Mutex<UsbEndpoint>>>,
@@ -276,13 +272,9 @@ impl UsbDevice {
             config: None,
             altsetting: vec![0; USB_MAX_INTERFACES as usize],
             state: UsbDeviceState::Removed,
-            setup_buf: vec![0_u8; 8],
             data_buf: vec![0_u8; 4096],
             ifaces: vec![None; USB_MAX_INTERFACES as usize],
             remote_wakeup: 0,
-            setup_index: 0,
-            setup_len: 0,
-            setup_state: SetupState::Idle,
         };
 
         for i in 0..USB_MAX_ENDPOINTS as u8 {
@@ -585,22 +577,16 @@ pub trait UsbDeviceOps: Send + Sync {
     fn do_parameter(&mut self, p: &mut UsbPacket) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
         let mut locked_dev = usb_dev.lock().unwrap();
-        for i in 0..8 {
-            locked_dev.setup_buf[i] = (p.parameter >> (i * 8)) as u8;
-        }
-        locked_dev.setup_state = SetupState::Parameter;
-        locked_dev.setup_index = 0;
         let device_req = UsbDeviceRequest {
-            request_type: locked_dev.setup_buf[0],
-            request: locked_dev.setup_buf[1],
-            value: (locked_dev.setup_buf[3] as u16) << 8 | locked_dev.setup_buf[2] as u16,
-            index: (locked_dev.setup_buf[5] as u16) << 8 | locked_dev.setup_buf[4] as u16,
-            length: (locked_dev.setup_buf[7] as u16) << 8 | locked_dev.setup_buf[6] as u16,
+            request_type: p.parameter as u8,
+            request: (p.parameter >> 8) as u8,
+            value: (p.parameter >> 16) as u16,
+            index: (p.parameter >> 32) as u16,
+            length: (p.parameter >> 48) as u16,
         };
         if device_req.length as usize > locked_dev.data_buf.len() {
             bail!("data buffer small len {}", device_req.length);
         }
-        locked_dev.setup_len = device_req.length as u32;
         if p.pid as u8 == USB_TOKEN_OUT {
             let len = locked_dev.data_buf.len();
             usb_packet_transfer(p, &mut locked_dev.data_buf, len);
@@ -613,9 +599,6 @@ pub trait UsbDeviceOps: Send + Sync {
         locked_dev.data_buf = data_buf.to_vec();
         if p.status == UsbPacketStatus::Async {
             return Ok(());
-        }
-        if p.actual_length < locked_dev.setup_len {
-            locked_dev.setup_len = p.actual_length;
         }
         if p.pid as u8 == USB_TOKEN_IN {
             p.actual_length = 0;
