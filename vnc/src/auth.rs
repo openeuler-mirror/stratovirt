@@ -103,7 +103,7 @@ impl Default for SaslConfig {
 }
 
 /// Authentication stage.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SaslStage {
     SaslServerStart,
     SaslServerStep,
@@ -137,17 +137,11 @@ impl ClientIoHandler {
     /// 2. Get the mechlist support by Sasl server.
     /// 3. Send the mechlist to client.
     pub fn start_sasl_auth(&mut self) -> Result<()> {
-        if let Err(e) = self.sasl_server_init() {
-            return Err(e);
-        }
+        self.sasl_server_init()?;
 
-        if let Err(e) = self.set_ssf_for_sasl() {
-            return Err(e);
-        }
+        self.set_ssf_for_sasl()?;
 
-        if let Err(e) = self.send_mech_list() {
-            return Err(e);
-        }
+        self.send_mech_list()?;
 
         Ok(())
     }
@@ -311,13 +305,13 @@ impl ClientIoHandler {
             .local_addr()
             .unwrap()
             .to_string()
-            .replace(":", ";");
+            .replace(':', ";");
         let remote_addr = self
             .stream
             .peer_addr()
             .unwrap()
             .to_string()
-            .replace(":", ";");
+            .replace(':', ";");
         info!("local_addr: {} remote_addr: {}", local_addr, remote_addr);
         let local_addr = CString::new(local_addr).unwrap();
         let remote_addr = CString::new(remote_addr).unwrap();

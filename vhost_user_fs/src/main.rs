@@ -66,7 +66,7 @@ fn main() {
     ::std::process::exit(match run() {
         Ok(ret) => ExitCode::code(ret),
         Err(ref e) => {
-            write!(&mut ::std::io::stderr(), "{}", format!("{:?}\r\n", e))
+            write!(&mut ::std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
                 .expect("Error writing to stderr");
 
             1

@@ -520,12 +520,11 @@ impl ScsiRequest {
         debug!("scsi command is {:#x}", self.cmd.command);
         let mut not_supported_flag = false;
         let mut sense = None;
-        let result;
 
         // Requested lun id is not equal to found device id means it may be a target request.
         // REPORT LUNS is also a target request command.
-        if req_lun_id != found_lun_id || self.cmd.command == REPORT_LUNS {
-            result = match self.cmd.command {
+        let result = if req_lun_id != found_lun_id || self.cmd.command == REPORT_LUNS {
+            match self.cmd.command {
                 REPORT_LUNS => scsi_command_emulate_report_luns(&self.cmd, &self.dev),
                 INQUIRY => scsi_command_emulate_target_inquiry(req_lun_id, &self.cmd),
                 REQUEST_SENSE => {
@@ -541,10 +540,10 @@ impl ScsiRequest {
                     sense = Some(SCSI_SENSE_INVALID_OPCODE);
                     Err(anyhow!("Invalid emulation target scsi command"))
                 }
-            };
+            }
         } else {
             // It's not a target request.
-            result = match self.cmd.command {
+            match self.cmd.command {
                 REQUEST_SENSE => {
                     sense = Some(SCSI_SENSE_NO_SENSE);
                     Ok(Vec::new())
@@ -568,8 +567,8 @@ impl ScsiRequest {
                     not_supported_flag = true;
                     Err(anyhow!("Emulation scsi command is not supported now!"))
                 }
-            };
-        }
+            }
+        };
 
         match result {
             Ok(outbuf) => {

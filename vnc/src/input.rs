@@ -53,19 +53,16 @@ impl ClientIoHandler {
             keysym += UPPERCASE_TO_LOWERCASE;
         }
 
-        let keycode: u16;
-        match self
+        let keycode: u16 = match self
             .server
             .keysym2keycode
             .lock()
             .unwrap()
             .get(&(keysym as u16))
         {
-            Some(k) => keycode = *k,
-            None => {
-                keycode = 0;
-            }
-        }
+            Some(k) => *k,
+            None => 0,
+        };
         self.do_key_event(down, keycode);
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }

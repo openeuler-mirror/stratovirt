@@ -609,18 +609,13 @@ pub fn make_server_config(
     object: &ObjectConfig,
 ) -> Result<()> {
     // Set security config.
-    if let Err(e) = server
+    server
         .security_type
         .lock()
         .unwrap()
-        .set_security_config(vnc_cfg, object)
-    {
-        return Err(e);
-    }
+        .set_security_config(vnc_cfg, object)?;
     // Set auth type.
-    if let Err(e) = server.security_type.lock().unwrap().set_auth() {
-        return Err(e);
-    }
+    server.security_type.lock().unwrap().set_auth()?;
     let mut locked_keysym2keycode = server.keysym2keycode.lock().unwrap();
     // Mapping ASCII to keycode.
     for &(k, v) in KEYSYM2KEYCODE.iter() {

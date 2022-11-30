@@ -81,7 +81,7 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
             addr_vec.len()
         );
     }
-    let slot = addr_vec.get(0).unwrap();
+    let slot = addr_vec.first().unwrap();
     let without_prefix = slot.trim_start_matches("0x");
     let slot = u8::from_str_radix(without_prefix, 16)
         .with_context(|| format!("Invalid slot num: {}", slot))?;

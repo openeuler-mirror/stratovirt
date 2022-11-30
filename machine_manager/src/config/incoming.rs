@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::VmConfig;
 
-#[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum MigrateMode {
     File,
     Unix,
@@ -55,10 +55,10 @@ pub fn parse_incoming_uri(uri: &str) -> Result<(MigrateMode, String)> {
                     bail!("Invalid ip port {}", parse_vec[2]);
                 }
 
-                return Ok((
+                Ok((
                     MigrateMode::Tcp,
                     format!("{}:{}", parse_vec[1], parse_vec[2]),
-                ));
+                ))
             }
 
             _ => bail!("Invalid incoming uri {}", uri),

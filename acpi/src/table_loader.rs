@@ -209,12 +209,9 @@ impl TableLoader {
     ///
     /// * `file_name` - The name of file to find.
     fn find_matched_file(&self, file_name: &str) -> Option<&TableLoaderFileEntry> {
-        for file_entry in &self.files {
-            if file_entry.file_name == file_name {
-                return Some(file_entry);
-            }
-        }
-        None
+        self.files
+            .iter()
+            .find(|&file_entry| file_entry.file_name == file_name)
     }
 
     /// Add loader entry of type `Allocate`.

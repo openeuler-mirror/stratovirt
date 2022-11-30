@@ -35,7 +35,7 @@ const TWENTY_FOUT_BLANK: &str = "                        ";
 type ArgsMap = BTreeMap<String, Vec<String>>;
 
 /// Format help type.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum HelpType {
     /// Argument as a Flag.
     Flags,
