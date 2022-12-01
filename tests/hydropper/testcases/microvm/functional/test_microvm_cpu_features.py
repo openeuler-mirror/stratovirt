@@ -14,6 +14,7 @@
 import platform
 import logging
 import re
+import json
 from enum import Enum
 from enum import auto
 import pytest
@@ -21,67 +22,42 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logging.basicConfig(filename='/var/log/pytest.log',
                     level=logging.DEBUG, format=LOG_FORMAT)
 
-def _check_guest_cmd_output(microvm, guest_cmd, expected_header,
-                            expected_separator,
-                            expected_key_value_store):
-    status, output = microvm.serial_cmd(guest_cmd)
+def _parse_output(output):
 
-    assert status == 0
-    for line in output.splitlines():
-        line = line.strip()
-        if line != '':
-            # all the keys have been matched. Stop.
-            if not expected_key_value_store:
-                break
+    cpu_info = {}
+    for item in output:
+        cpu_info.update({item['field']: item['data']})
+        cpu_info.update(_parse_output(item.get('children', [])))
+    return cpu_info
 
-            # try to match the header if needed.
-            if expected_header not in (None, ''):
-                if line.strip() == expected_header:
-                    expected_header = None
-                continue
+def _get_cpu_info(test_microvm):
 
-            # see if any key matches.
-            # we use a try-catch block here since line.split() may fail.
-            try:
-                [key, value] = list(
-                    map(lambda x: x.strip(), line.split(expected_separator)))
-            except ValueError:
-                continue
-
-            if key in expected_key_value_store.keys():
-                assert value == expected_key_value_store[key], \
-                    "%s does not have the expected value" % key
-                del expected_key_value_store[key]
-
-        else:
-            break
-
-    assert not expected_key_value_store, \
-        "some keys in dictionary have not been found in the output: %s" \
-        % expected_key_value_store
-
+    output = json.loads(test_microvm.ssh_session.cmd_output("lscpu -J"))
+    return _parse_output(output.get("lscpu", []))
 
 def _check_cpu_topology(test_microvm, expected_cpu_count,
                         expected_threads_per_core,
                         expected_cores_per_socket,
                         expected_cpus_list):
-    expected_cpu_topology = {
-        "CPU(s)": str(expected_cpu_count),
-        "On-line CPU(s) list": expected_cpus_list,
-        "Thread(s) per core": str(expected_threads_per_core),
-        "Core(s) per socket": str(expected_cores_per_socket),
-        "Socket(s)": str(int(expected_cpu_count / expected_cores_per_socket / expected_threads_per_core)),
-    }
-    status, output = test_microvm.serial_cmd("lscpu")
-    assert status == 0, str(output)
-    if "Core(s) per cluster" in output and "aarch64" in platform.machine():
-        expected_cpu_topology["Core(s) per cluster"] = expected_cpu_topology["Core(s) per socket"]
-        del expected_cpu_topology["Core(s) per socket"]
-        expected_cpu_topology["Cluster(s)"] = expected_cpu_topology["Socket(s)"]
-        del expected_cpu_topology["Socket(s)"]
 
-    _check_guest_cmd_output(test_microvm, "lscpu", None, ':',
-                            expected_cpu_topology)
+    expected_cpu_topology = {
+        "CPU(s):": str(expected_cpu_count),
+        "On-line CPU(s) list:": expected_cpus_list,
+        "Thread(s) per core:": str(expected_threads_per_core),
+        "Core(s) per socket:": str(expected_cores_per_socket),
+        "Socket(s):": str(int(expected_cpu_count / expected_cores_per_socket / expected_threads_per_core)),
+    }
+
+    cpu_info = _get_cpu_info(test_microvm)
+    if "Core(s) per cluster:" in cpu_info.keys():
+        expected_cpu_topology["Core(s) per cluster:"] = expected_cpu_topology["Core(s) per socket:"]
+        del expected_cpu_topology["Core(s) per socket:"]
+    if "Cluster(s):" in cpu_info.keys():
+        expected_cpu_topology["Cluster(s):"] = expected_cpu_topology["Socket(s):"]
+        del expected_cpu_topology["Socket(s):"]
+
+    for key, expect_value in expected_cpu_topology.items():
+        assert cpu_info[key] == expect_value
 
 
 @pytest.mark.acceptance
