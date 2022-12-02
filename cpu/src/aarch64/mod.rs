@@ -193,7 +193,7 @@ impl ArmCPUState {
             .with_context(|| "Failed to init kvm vcpu")?;
         self.mpidr = vcpu_fd
             .get_one_reg(SYS_MPIDR_EL1)
-            .with_context(|| "Failed to get mpidr")?;
+            .with_context(|| "Failed to get mpidr")? as u64;
 
         ArmCPUState::set_cpu_feature(vcpu_config, vcpu_fd)?;
         self.features = *vcpu_config;
@@ -318,7 +318,7 @@ impl StateTransfer for CPU {
         cpu_state_locked.cpreg_len = 0;
         for (index, cpreg) in cpreg_list.as_slice().iter().enumerate() {
             let mut cpreg_entry = CpregListEntry {
-                index: *cpreg,
+                reg_id: *cpreg,
                 value: 0,
             };
             if cpreg_entry.validate() {
