@@ -96,25 +96,29 @@ pub use listener::KvmMemoryListener;
 pub use listener::{Listener, ListenerReqType};
 pub use region::{FlatRange, Region, RegionIoEventFd, RegionType};
 
+/// Read data from Region to argument `data`,
+/// return `true` if read successfully, or return `false`.
+///
+/// # Arguments
+///
+/// * `data` - A u8-type array.
+/// * `base` - Base address.
+/// * `offset` - Offset from base address.
+type ReadFn = std::sync::Arc<dyn Fn(&mut [u8], GuestAddress, u64) -> bool + Send + Sync>;
+
+/// Write `data` to memory,
+/// return `true` if write successfully, or return `false`.
+///
+/// # Arguments
+///
+/// * `data` - A u8-type array.
+/// * `base` - Base address.
+/// * `offset` - Offset from base address.
+type WriteFn = std::sync::Arc<dyn Fn(&[u8], GuestAddress, u64) -> bool + Send + Sync>;
+
 /// Provide Some operations of `Region`, mainly used by Vm's devices.
 #[derive(Clone)]
 pub struct RegionOps {
-    /// Read data from Region to argument `data`,
-    /// return `true` if read successfully, or return `false`.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - A u8-type array.
-    /// * `base` - Base address.
-    /// * `offset` - Offset from base address.
-    pub read: std::sync::Arc<dyn Fn(&mut [u8], GuestAddress, u64) -> bool + Send + Sync>,
-    /// Write `data` to memory,
-    /// return `true` if write successfully, or return `false`.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - A u8-type array.
-    /// * `base` - Base address.
-    /// * `offset` - Offset from base address.
-    pub write: std::sync::Arc<dyn Fn(&[u8], GuestAddress, u64) -> bool + Send + Sync>,
+    pub read: ReadFn,
+    pub write: WriteFn,
 }

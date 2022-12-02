@@ -105,15 +105,14 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
     }
 
     let addr = format!("{}:{}", vnc_cfg.ip, vnc_cfg.port);
-    let listener: TcpListener;
-    match TcpListener::bind(&addr.as_str()) {
-        Ok(l) => listener = l,
+    let listener: TcpListener = match TcpListener::bind(addr.as_str()) {
+        Ok(l) => l,
         Err(e) => {
             let msg = format!("Bind {} failed {}", addr, e);
             error!("{}", e);
             return Err(anyhow!(VncError::TcpBindFailed(msg)));
         }
-    }
+    };
 
     listener
         .set_nonblocking(true)
@@ -122,18 +121,14 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
     let refresh_fd = Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
     let server = Arc::new(VncServer::new(refresh_fd, get_client_image()));
     // Parameter configuation for VncServeer.
-    if let Err(err) = make_server_config(&server, vnc_cfg, object) {
-        return Err(err);
-    }
+    make_server_config(&server, vnc_cfg, object)?;
 
     // Add an VncServer.
     add_vnc_server(server.clone());
     // Register the event to listen for client's connection.
     let vnc_io = Arc::new(Mutex::new(VncConnHandler::new(listener, server)));
     // Vnc_thread: a thread to send the framebuffer
-    if let Err(err) = start_vnc_thread() {
-        return Err(err);
-    }
+    start_vnc_thread()?;
 
     EventLoop::update_event(EventNotifierHelper::internal_notifiers(vnc_io), None)?;
     Ok(())

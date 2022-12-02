@@ -194,7 +194,7 @@ impl<T: Clone + 'static> Aio<T> {
             if is_err {
                 // Fail one request, retry the rest.
                 if let Some(node) = self.aio_in_queue.pop_tail() {
-                    (self.complete_func)(&(*node).value, -1);
+                    (self.complete_func)(&(node).value, -1);
                 }
             } else if nr == 0 {
                 // If can't submit any request, break the loop
@@ -216,7 +216,7 @@ impl<T: Clone + 'static> Aio<T> {
         let mut iocb = IoCb {
             aio_lio_opcode: cb.opcode as u16,
             aio_fildes: cb.file_fd as u32,
-            aio_buf: (&*cb.iovec).as_ptr() as u64,
+            aio_buf: (*cb.iovec).as_ptr() as u64,
             aio_nbytes: cb.iovec.len() as u64,
             aio_offset: cb.offset as u64,
             aio_flags: IOCB_FLAG_RESFD,

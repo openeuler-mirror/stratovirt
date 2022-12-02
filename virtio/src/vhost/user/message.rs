@@ -202,7 +202,7 @@ impl<T: Default + Sized> VhostUserConfig<T> {
 
 /// Memory region information for the message of memory table.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct RegionMemInfo {
     /// Guest physical address of the memory region.
     pub guest_phys_addr: u64,

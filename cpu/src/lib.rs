@@ -101,7 +101,7 @@ const MAGIC_VALUE_SIGNAL_GUEST_BOOT_START: u8 = 0x01;
 const MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE: u8 = 0x02;
 
 /// State for `CPU` lifecycle.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CpuLifecycleState {
     /// `CPU` structure is only be initialized, but nothing set.
     Nothing = 0,

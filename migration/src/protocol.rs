@@ -33,7 +33,7 @@ use util::byte_code::ByteCode;
 /// Failed ---------> Setup: reset migration resource.
 /// Any ------------> Failed: something wrong in migration.
 /// Any ------------> Canceled: cancel migration.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MigrationStatus {
     /// Migration resource is not prepared all
     None,
@@ -111,7 +111,7 @@ impl MigrationStatus {
 
 /// Structure defines the transmission protocol between the source with destination VM.
 #[repr(u16)]
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum TransStatus {
     /// Active migration.
     Active,
@@ -297,7 +297,7 @@ pub const HEADER_LENGTH: usize = 4096;
 
 /// Format type for migration.
 /// Different file format will have different file layout.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FileFormat {
     Device,
     MemoryFull,
@@ -458,7 +458,7 @@ impl MigrationHeader {
 }
 
 /// Version check result enum.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum VersionCheck {
     /// Version is completely same.
     Same,
@@ -518,7 +518,7 @@ pub struct DeviceStateDesc {
 }
 
 /// The structure to describe struct field in `DeviceState` structure.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FieldDesc {
     /// Field var name.
     pub var_name: String,

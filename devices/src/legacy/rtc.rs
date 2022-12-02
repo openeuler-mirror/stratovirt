@@ -338,7 +338,7 @@ impl RTC {
             + bcd_to_bin(self.cmos_data[RTC_CENTURY_BCD as usize]) * 100;
 
         // Check rtc time is valid to prevent tick_offset overflow.
-        if year < 1970 || mon > 12 || mon < 1 || day > 31 || day < 1 {
+        if year < 1970 || !(1..=12).contains(&mon) || !(1..=31).contains(&day) {
             warn!(
                 "RTC: the updated rtc time {}-{}-{} may be invalid.",
                 year, mon, day

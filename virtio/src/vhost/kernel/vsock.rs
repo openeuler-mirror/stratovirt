@@ -61,7 +61,7 @@ impl VhostVsockBackend for VhostBackend {
     }
 
     fn set_running(&self, start: bool) -> Result<()> {
-        let on: u32 = if start { 1 } else { 0 };
+        let on: u32 = u32::from(start);
         let ret = unsafe { ioctl_with_ref(&self.fd, VHOST_VSOCK_SET_RUNNING(), &on) };
         if ret < 0 {
             return Err(anyhow!(VirtioError::VhostIoctl(

@@ -93,11 +93,11 @@ fn compress_each_tile<'a>(
     let mut n_subtiles = 0; // Number of subrectangle.
     let mut tmp_buf: Vec<u8> = Vec::new();
 
-    if *last_bg == None || Some(bg) != *last_bg {
+    if last_bg.is_none() || Some(bg) != *last_bg {
         flag |= BACKGROUND_SPECIFIC;
         *last_bg = Some(bg);
     }
-    if n_colors < 3 && (*last_fg == None || Some(fg) != *last_fg) {
+    if n_colors < 3 && (last_fg.is_none() || Some(fg) != *last_fg) {
         flag |= FOREGROUND_SPECIFIC;
         *last_fg = Some(fg);
     }
@@ -110,7 +110,7 @@ fn compress_each_tile<'a>(
         }
         3 => {
             flag |= ANY_SUBRECTS | SUBRECTS_COLOURED;
-            if *last_bg == None || Some(bg) != *last_bg {
+            if last_bg.is_none() || Some(bg) != *last_bg {
                 flag |= BACKGROUND_SPECIFIC;
             }
             n_subtiles = subrectangle_with_pixel_value(

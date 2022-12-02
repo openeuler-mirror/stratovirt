@@ -77,7 +77,7 @@ fn main() {
     ::std::process::exit(match run() {
         Ok(ret) => ExitCode::code(ret),
         Err(ref e) => {
-            write!(&mut ::std::io::stderr(), "{}", format!("{:?}\r\n", e))
+            write!(&mut ::std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
                 .expect("Error writing to stderr");
 
             1
@@ -136,7 +136,7 @@ fn run() -> Result<()> {
             if cmd_args.is_present("display log") {
                 error!("{}", format!("{:?}", e));
             } else {
-                write!(&mut std::io::stderr(), "{}", format!("{:?}", e))
+                write!(&mut std::io::stderr(), "{}", format_args!("{:?}", e))
                     .expect("Failed to write to stderr");
             }
             // clean temporary file

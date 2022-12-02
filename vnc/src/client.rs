@@ -129,7 +129,7 @@ impl Default for VncVersion {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub enum UpdateState {
     No,
     Incremental,
@@ -323,15 +323,11 @@ impl ClientIoHandler {
 impl ClientIoHandler {
     fn client_handle_read(&mut self) -> Result<(), anyhow::Error> {
         // Read message from tcpstream.
-        if let Err(e) = self.read_msg() {
-            return Err(e);
-        }
+        self.read_msg()?;
 
         let client = self.client.clone();
         while client.in_buffer.lock().unwrap().len() >= self.expect {
-            if let Err(e) = (self.msg_handler)(self) {
-                return Err(e);
-            }
+            (self.msg_handler)(self)?;
 
             if self.client.conn_state.lock().unwrap().dis_conn {
                 return Err(anyhow!(VncError::Disconnection));
@@ -391,11 +387,10 @@ impl ClientIoHandler {
         if self.tls_conn.is_none() {
             return Ok(0_usize);
         }
-        let tc: &mut ServerConnection;
-        match &mut self.tls_conn {
-            Some(sc) => tc = sc,
+        let tc: &mut ServerConnection = match &mut self.tls_conn {
+            Some(sc) => sc,
             None => return Ok(0_usize),
-        }
+        };
 
         if let Err(e) = tc.read_tls(&mut self.stream) {
             error!("tls_conn read error {:?}", e);
@@ -449,13 +444,12 @@ impl ClientIoHandler {
         let buf_size = buf.len();
         let mut offset = 0;
 
-        let tc: &mut ServerConnection;
-        match &mut self.tls_conn {
-            Some(ts) => tc = ts,
+        let tc: &mut ServerConnection = match &mut self.tls_conn {
+            Some(ts) => ts,
             None => {
                 return;
             }
-        }
+        };
 
         while offset < buf_size {
             let next = cmp::min(buf_size, offset + MAX_SEND_LEN);
@@ -505,17 +499,14 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         let res = String::from_utf8_lossy(&buf);
         let ver_str = &res[0..12].to_string();
-        let ver;
-        match scanf!(ver_str, "RFB {usize:/\\d\\{3\\}/}.{usize:/\\d\\{3\\}/}\n") {
-            Ok(v) => {
-                ver = v;
-            }
+        let ver = match scanf!(ver_str, "RFB {usize:/\\d\\{3\\}/}.{usize:/\\d\\{3\\}/}\n") {
+            Ok(v) => v,
             Err(e) => {
                 let msg = format!("Unsupport RFB version: {}", e);
                 error!("{}", msg);
                 return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
             }
-        }
+        };
 
         let mut version = VncVersion::new(ver.0 as u16, ver.1 as u16);
         if version.major != 3 || ![3, 4, 5, 7, 8].contains(&version.minor) {
@@ -1165,11 +1156,7 @@ pub fn is_need_update(client: &Arc<ClientState>) -> bool {
 pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
     let mut locked_dpm = client.client_dpm.lock().unwrap();
     locked_dpm.pf.init_pixelformat();
-    let big_endian: u8 = if cfg!(target_endian = "big") {
-        1_u8
-    } else {
-        0_u8
-    };
+    let big_endian: u8 = u8::from(cfg!(target_endian = "big"));
     buf.append(&mut (locked_dpm.pf.pixel_bits as u8).to_be_bytes().to_vec()); // Bit per pixel.
     buf.append(&mut (locked_dpm.pf.depth as u8).to_be_bytes().to_vec()); // Depth.
     buf.append(&mut (big_endian as u8).to_be_bytes().to_vec()); // Big-endian flag.
