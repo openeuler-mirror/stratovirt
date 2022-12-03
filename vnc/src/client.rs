@@ -18,7 +18,8 @@ use crate::{
     utils::BuffPool,
     vnc::{
         framebuffer_upadate, set_area_dirty, write_pixel, DisplayMouse, BIT_PER_BYTE,
-        DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO,
+        DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_OUTPUT_LIMIT,
+        OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
     },
     VncError,
 };
@@ -349,12 +350,19 @@ impl ClientIoHandler {
 
     fn client_handle_write(&mut self) {
         let client = self.client.clone();
+        if client.conn_state.lock().unwrap().dis_conn {
+            return;
+        }
         let mut locked_buffer = client.out_buffer.lock().unwrap();
-        let len = locked_buffer.len();
-        let buf = locked_buffer.read_front(len);
-        self.write_msg(buf);
-        locked_buffer.remov_front(len);
+        while let Some(bytes) = locked_buffer.read_front_chunk() {
+            self.write_msg(bytes);
+            locked_buffer.remove_front_chunk();
+        }
         drop(locked_buffer);
+    }
+
+    pub fn flush(&mut self) {
+        self.client_handle_write();
     }
 
     /// Read buf from stream, return the size.
@@ -378,11 +386,10 @@ impl ClientIoHandler {
                 Err(e) => return Err(e),
             }
         }
-        self.client
-            .in_buffer
-            .lock()
-            .unwrap()
-            .read(&mut buf[..len].to_vec());
+        if len > 0 {
+            buf = buf[..len].to_vec();
+            self.client.in_buffer.lock().unwrap().append_limit(buf);
+        }
 
         Ok(len)
     }
@@ -518,7 +525,8 @@ impl ClientIoHandler {
         if version.major != 3 || ![3, 4, 5, 7, 8].contains(&version.minor) {
             let mut buf = Vec::new();
             buf.append(&mut (AuthState::Invalid as u32).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
+            self.flush();
             return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         }
 
@@ -837,7 +845,7 @@ impl ClientIoHandler {
         desktop_resize(&client, &server, &mut buf);
         // VNC display cursor define.
         display_cursor_define(&client, &server, &mut buf);
-        client.out_buffer.lock().unwrap().read(&mut buf);
+        vnc_write(&client, buf);
         vnc_flush_notify(&client);
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
@@ -898,8 +906,9 @@ impl ClientIoHandler {
 
     /// Read the data from the receiver buffer.
     pub fn read_incoming_msg(&mut self) -> Vec<u8> {
+        let mut buf: Vec<u8> = vec![0_u8; self.expect];
         let mut locked_in_buffer = self.client.in_buffer.lock().unwrap();
-        let buf = locked_in_buffer.read_front(self.expect).to_vec();
+        let _size: usize = locked_in_buffer.read_front(&mut buf, self.expect);
         buf
     }
 
@@ -918,7 +927,7 @@ impl ClientIoHandler {
             .in_buffer
             .lock()
             .unwrap()
-            .remov_front(self.expect);
+            .remove_front(self.expect);
         self.expect = expect;
         self.msg_handler = msg_handler;
     }
@@ -1320,6 +1329,36 @@ pub fn display_cursor_define(
         write_pixel(data_ptr, data_size as usize, &dpm, buf);
         buf.append(&mut mask);
     }
+}
+
+pub fn vnc_write(client: &Arc<ClientState>, buf: Vec<u8>) {
+    if client.conn_state.lock().unwrap().dis_conn {
+        return;
+    }
+    let mut locked_buffer = client.out_buffer.lock().unwrap();
+    if !locked_buffer.is_enough(buf.len()) {
+        client.conn_state.lock().unwrap().dis_conn = true;
+        return;
+    }
+    locked_buffer.append_limit(buf);
+}
+
+/// Set the limit size of the output buffer to prevent the client
+/// from stopping receiving data.
+pub fn vnc_update_output_throttle(client: &Arc<ClientState>) {
+    let locked_dpm = client.client_dpm.lock().unwrap();
+    let width = locked_dpm.client_width;
+    let height = locked_dpm.client_height;
+    let bytes_per_pixel = locked_dpm.pf.pixel_bytes;
+    let mut offset = width * height * (bytes_per_pixel as i32) * OUTPUT_THROTTLE_SCALE;
+    drop(locked_dpm);
+
+    offset = cmp::max(offset, MIN_OUTPUT_LIMIT);
+    client
+        .out_buffer
+        .lock()
+        .unwrap()
+        .set_limit(Some(offset as usize));
 }
 
 /// Consume the output buffer.

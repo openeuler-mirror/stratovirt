@@ -136,7 +136,7 @@ impl ClientIoHandler {
             .in_buffer
             .lock()
             .unwrap()
-            .remov_front(self.expect);
+            .remove_front(self.expect);
         self.expect = 0;
         self.msg_handler = ClientIoHandler::tls_handshake;
         Ok(())
