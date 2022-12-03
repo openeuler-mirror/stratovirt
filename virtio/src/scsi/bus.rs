@@ -24,7 +24,8 @@ use crate::ScsiCntlr::{
     VirtioScsiRequest, VIRTIO_SCSI_CDB_DEFAULT_SIZE, VIRTIO_SCSI_S_OK,
 };
 use crate::ScsiDisk::{
-    ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
+    ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
+    SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
     SCSI_TYPE_ROM,
 };
 use address_space::AddressSpace;
@@ -519,12 +520,17 @@ impl ScsiRequest {
         last_aio: bool,
         iocompletecb: ScsiCompleteCb,
     ) -> Result<u32> {
+        let dev_lock = self.dev.lock().unwrap();
+        let offset = match dev_lock.scsi_type {
+            SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
+            _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
+        };
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
             opcode: IoCmd::Noop,
             iovec: Vec::new(),
-            offset: (self.cmd.lba << 9) as usize,
+            offset: (self.cmd.lba << offset) as usize,
             nbytes: 0,
             process: true,
             iocb: None,
