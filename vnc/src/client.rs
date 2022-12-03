@@ -154,6 +154,10 @@ impl Rectangle {
 /// Display Output mode information of client.
 #[derive(Clone)]
 pub struct DisplayMode {
+    /// Width of client display.
+    pub client_width: i32,
+    /// Height of client display.
+    pub client_height: i32,
     /// Encoding type.
     pub enc: i32,
     /// Data storage type for client.
@@ -167,6 +171,8 @@ pub struct DisplayMode {
 impl DisplayMode {
     pub fn new(enc: i32, client_be: bool, convert: bool, pf: PixelFormat) -> Self {
         DisplayMode {
+            client_width: 0,
+            client_height: 0,
             enc,
             client_be,
             convert,
@@ -552,19 +558,24 @@ impl ClientIoHandler {
     pub fn handle_client_init(&mut self) -> Result<()> {
         let mut buf = Vec::new();
         // Send server framebuffer info.
+        let client = self.client.clone();
         let locked_surface = self.server.vnc_surface.lock().unwrap();
+        let mut locked_dpm = client.client_dpm.lock().unwrap();
         let width = get_image_width(locked_surface.server_image);
         let height = get_image_height(locked_surface.server_image);
-        drop(locked_surface);
         if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
             || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
         {
             error!("Invalid Image Size!");
             return Err(anyhow!(VncError::InvalidImageSize));
         }
+        locked_dpm.client_width = width;
+        locked_dpm.client_height = height;
+        drop(locked_dpm);
+        drop(locked_surface);
+
         buf.append(&mut (width as u16).to_be_bytes().to_vec());
         buf.append(&mut (height as u16).to_be_bytes().to_vec());
-        let client = self.client.clone();
         pixel_format_message(&client, &mut buf);
 
         buf.append(&mut (APP_NAME.to_string().len() as u32).to_be_bytes().to_vec());
@@ -1173,8 +1184,9 @@ pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
 
 /// Set Desktop Size.
 pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
-    let locked_state = client.conn_state.lock().unwrap();
     let locked_surface = server.vnc_surface.lock().unwrap();
+    let locked_state = client.conn_state.lock().unwrap();
+    let mut locked_dpm = client.client_dpm.lock().unwrap();
     if !locked_state.has_feature(VncFeatures::VncFeatureResizeExt)
         && !locked_state.has_feature(VncFeatures::VncFeatureResize)
     {
@@ -1182,15 +1194,21 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
     }
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
-    drop(locked_state);
-    drop(locked_surface);
-
     if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
         || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
     {
         error!("Invalid Image Size!");
         return;
     }
+
+    if locked_dpm.client_width == width && locked_dpm.client_height == height {
+        return;
+    }
+    locked_dpm.client_width = width;
+    locked_dpm.client_height = height;
+    drop(locked_dpm);
+    drop(locked_state);
+    drop(locked_surface);
 
     buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
     buf.append(&mut (0_u8).to_be_bytes().to_vec());
@@ -1199,20 +1217,11 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
 }
 
 /// Set color depth for client.
-pub fn set_color_depth(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
+pub fn set_color_depth(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
     let locked_state = client.conn_state.lock().unwrap();
     if locked_state.has_feature(VncFeatures::VncFeatureWmvi) {
-        let locked_surface = server.vnc_surface.lock().unwrap();
-        let width = get_image_width(locked_surface.server_image);
-        let height = get_image_height(locked_surface.server_image);
-        drop(locked_surface);
-
-        if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
-            || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
-        {
-            error!("Invalid Image Size!");
-            return;
-        }
+        let width = client.client_dpm.lock().unwrap().client_width;
+        let height = client.client_dpm.lock().unwrap().client_height;
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
         buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Padding.
         buf.append(&mut (1_u16).to_be_bytes().to_vec()); // Number of pixel block.
