@@ -473,4 +473,48 @@ mod tests {
 
         assert!(bitmap.clear_range(0, 256).is_ok());
     }
+
+    #[test]
+    fn test_bitmap_find_next_zero() {
+        let mut bitmap = Bitmap::<u64>::new(4);
+        assert!(bitmap.set_range(0, 256).is_ok());
+        assert!(bitmap.clear(0).is_ok());
+        assert!(bitmap.clear(32).is_ok());
+        assert!(bitmap.clear(64).is_ok());
+        assert!(bitmap.clear(128).is_ok());
+
+        let mut offset = 0;
+        offset = bitmap.find_next_zero(offset).unwrap();
+        assert_eq!(offset, 0);
+        offset = bitmap.find_next_zero(offset + 1).unwrap();
+        assert_eq!(offset, 32);
+        offset = bitmap.find_next_zero(offset + 1).unwrap();
+        assert_eq!(offset, 64);
+        offset = bitmap.find_next_zero(offset + 1).unwrap();
+        assert_eq!(offset, 128);
+        offset = bitmap.find_next_zero(offset + 1).unwrap();
+        assert_eq!(offset, 256);
+    }
+
+    #[test]
+    fn test_bitmap_find_next_bit() {
+        let mut bitmap = Bitmap::<u64>::new(4);
+        bitmap.clear_all();
+        assert!(bitmap.set(0).is_ok());
+        assert!(bitmap.set(32).is_ok());
+        assert!(bitmap.set(64).is_ok());
+        assert!(bitmap.set(128).is_ok());
+
+        let mut offset = 0;
+        offset = bitmap.find_next_bit(offset).unwrap();
+        assert_eq!(offset, 0);
+        offset = bitmap.find_next_bit(offset + 1).unwrap();
+        assert_eq!(offset, 32);
+        offset = bitmap.find_next_bit(offset + 1).unwrap();
+        assert_eq!(offset, 64);
+        offset = bitmap.find_next_bit(offset + 1).unwrap();
+        assert_eq!(offset, 128);
+        offset = bitmap.find_next_bit(offset + 1).unwrap();
+        assert_eq!(offset, 256);
+    }
 }
