@@ -12,8 +12,9 @@
 
 use crate::{
     client::{
-        desktop_resize, display_cursor_define, set_color_depth, vnc_flush_notify, DisplayMode,
-        RectInfo, Rectangle, ServerMsg, ENCODING_HEXTILE, ENCODING_RAW,
+        desktop_resize, display_cursor_define, set_color_depth, vnc_flush_notify,
+        vnc_update_output_throttle, vnc_write, DisplayMode, RectInfo, Rectangle, ServerMsg,
+        ENCODING_HEXTILE, ENCODING_RAW,
     },
     encoding::enc_hextile::hextile_send_framebuffer_update,
     pixman::{
@@ -56,6 +57,10 @@ pub const DIRTY_WIDTH_BITS: u16 = MAX_WINDOW_WIDTH / DIRTY_PIXELS_NUM;
 pub const VNC_BITMAP_WIDTH: u64 =
     round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) * u64::BITS as u64;
 
+/// Output throttle scale.
+pub const OUTPUT_THROTTLE_SCALE: i32 = 5;
+/// Min size of output buffer.
+pub const MIN_OUTPUT_LIMIT: i32 = 1024 * 1024 * OUTPUT_THROTTLE_SCALE;
 const DEFAULT_REFRESH_INTERVAL: u64 = 30;
 pub const BIT_PER_BYTE: u32 = 8;
 const MILLI_PER_SEC: u64 = 1_000_000;
@@ -181,7 +186,7 @@ fn start_vnc_thread() -> Result<()> {
             drop(locked_surface);
 
             let client = rect_info.client;
-            client.out_buffer.lock().unwrap().read(&mut buf);
+            vnc_write(&client, buf);
             vnc_flush_notify(&client);
         })
         .unwrap();
@@ -561,7 +566,7 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
         desktop_resize(&client, &server, &mut buf);
         // Cursor define.
         display_cursor_define(&client, &server, &mut buf);
-        client.out_buffer.lock().unwrap().read(&mut buf);
+        vnc_write(&client, buf);
         vnc_flush_notify(&client);
         client.dirty_bitmap.lock().unwrap().clear_all();
         set_area_dirty(
@@ -573,6 +578,7 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
             guest_width,
             guest_height,
         );
+        vnc_update_output_throttle(&client);
     }
     vnc_refresh_notify(&server);
 }
@@ -620,7 +626,7 @@ pub fn vnc_display_cursor(cursor: &mut DisplayMouse) {
         let client = client_io.lock().unwrap().client.clone();
         let mut buf: Vec<u8> = Vec::new();
         display_cursor_define(&client, &server, &mut buf);
-        client.out_buffer.lock().unwrap().read(&mut buf);
+        vnc_write(&client, buf);
         vnc_flush_notify(&client);
     }
 }

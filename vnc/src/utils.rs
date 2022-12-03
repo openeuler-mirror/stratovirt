@@ -10,16 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp;
+use std::collections::LinkedList;
+use std::io::Read;
 
-/// Simple bufferpool can improve read performance of tcpstream.
+/// Linked the bytes buffer by linklist, to avoid the
+/// extra copies when appending a new bytes buffer.
 pub struct BuffPool {
     /// Cache received data.
-    buf: Vec<u8>,
-    /// Start Byte.
-    pos: usize,
-    /// Number of bytes in buff.
-    cap: usize,
+    buf_list: LinkedList<Vec<u8>>,
+    /// Limit size of the buffpool.
+    limit: Option<usize>,
+    /// Total length of Buffer.
+    len: usize,
 }
 
 impl Default for BuffPool {
@@ -28,57 +30,164 @@ impl Default for BuffPool {
     }
 }
 
-/// The buffpool to improve read performance.
 impl BuffPool {
     pub fn new() -> Self {
-        BuffPool {
-            buf: Vec::new(),
-            pos: 0,
-            cap: 0,
+        Self {
+            buf_list: LinkedList::new(),
+            limit: None,
+            len: 0,
         }
     }
 
-    /// Read from the buff.
-    pub fn read(&mut self, buf: &mut Vec<u8>) {
-        self.buf.drain(..self.pos);
-        self.buf.append(buf);
-        self.pos = 0;
-        self.cap = self.buf.len();
+    /// Update the length of bufflist.
+    fn update_len(&mut self) {
+        let mut len: usize = 0;
+        for bytes in &self.buf_list {
+            len += bytes.len();
+        }
+        self.len = len;
     }
 
-    /// Return the len of the buffpool.
-    pub fn len(&mut self) -> usize {
-        self.cap
+    /// Return the len of the pool.
+    pub fn len(&self) -> usize {
+        self.len
     }
 
-    /// Is empty.
-    pub fn is_empty(&mut self) -> bool {
-        self.cap != 0
+    /// If it is empty.
+    pub fn is_empty(&self) -> bool {
+        self.buf_list.is_empty()
     }
 
-    /// Read from front.
-    pub fn read_front(&mut self, len: usize) -> &[u8] {
-        let length = cmp::min(self.cap, len);
-        &self.buf[self.pos..self.pos + length]
+    /// For a given length of buffer data, whether there is
+    /// enough space left to store.
+    pub fn is_enough(&self, require: usize) -> bool {
+        if let Some(limit) = self.limit {
+            if self.len() + require > limit {
+                return false;
+            }
+        }
+        true
     }
 
-    /// Remove front.
-    pub fn remov_front(&mut self, len: usize) {
-        self.pos = cmp::min(self.pos + len, self.buf.len());
-        self.cap = cmp::max(0_usize, self.cap - len);
+    /// Set the limitation for bufferpool.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut buffpool = BuffPool::new();
+    /// buffpool.set_limit(Some(1));
+    /// assert!(!buffpool.is_enough(2));
+    /// ```
+    pub fn set_limit(&mut self, limit: Option<usize>) {
+        self.limit = limit;
+    }
+
+    /// Add data to the bufferpool. If the remaining
+    /// free space is not enough, it will not work. So it is
+    /// recommended to call is_enouth() before this function.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut buffpool = BuffPool::new();
+    /// buffpool.append_limit((0_u8).to_be_bytes().to_vec());
+    /// ```
+    pub fn append_limit(&mut self, buf: Vec<u8>) {
+        let len = buf.len();
+        if len == 0 {
+            return;
+        }
+        if self.is_enough(len) {
+            self.buf_list.push_back(buf);
+        }
+        self.update_len();
+    }
+
+    /// Read the first n bytes.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut buffpool = BuffPool::new();
+    /// buffpool.append_limit((0x12345678 as u32).to_be_bytes().to_vec());
+    /// let mut buf: Vec<u8> = vec![0_u8; 4];
+    /// buffpool.read_front(&mut buf, 4);
+    /// assert_eq!(buf, vec![18, 52, 86, 120]);
+    /// ```
+    pub fn read_front(&mut self, buf: &mut [u8], len: usize) -> usize {
+        if buf.len() < len {
+            return 0_usize;
+        }
+
+        let mut offset: usize = 0;
+        for bytes in &self.buf_list {
+            if let Ok(n) = bytes.as_slice().read(&mut buf[offset..]) {
+                offset += n;
+            } else {
+                return 0_usize;
+            }
+            if offset >= len {
+                break;
+            }
+        }
+        offset
+    }
+
+    /// Remove the first n bytes.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut buffpool = BuffPool::new();
+    /// buffpool.append_limit((0x12345678 as u32).to_be_bytes().to_vec());
+    /// buffpool.remove_front(1);
+    /// let mut buf: Vec<u8> = vec![0_u8; 3];
+    /// buffpool.read_front(&mut buf, 3);
+    /// assert_eq!(buf, vec![52, 86, 120]);
+    /// ```
+    pub fn remove_front(&mut self, mut len: usize) {
+        while let Some(mut bytes) = self.buf_list.pop_front() {
+            if len < bytes.len() {
+                self.buf_list.push_front(bytes.split_off(len));
+                break;
+            } else {
+                len -= bytes.len();
+            }
+        }
+        self.update_len();
+    }
+
+    /// Read first chunk of vec in linklist.
+    pub fn read_front_chunk(&mut self) -> Option<&Vec<u8>> {
+        self.buf_list.front()
+    }
+
+    /// Remove first front chunk of vec in linklist.
+    pub fn remove_front_chunk(&mut self) {
+        if !self.is_empty() {
+            self.buf_list.pop_front();
+        }
+        self.update_len();
     }
 }
-
-#[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
-    fn test_buff_pool() {
+    fn test_buffpool_base() {
         let mut buffpool = BuffPool::new();
-        buffpool.read(&mut (0x12345678 as u32).to_be_bytes().to_vec());
-        assert!(buffpool.len() == 4 as usize);
-        buffpool.remov_front(1);
-        assert!(buffpool.read_front(3) == vec![52, 86, 120]);
+        buffpool.set_limit(Some(7));
+        buffpool.append_limit((0x12345678 as u32).to_be_bytes().to_vec());
+        buffpool.append_limit((0x12 as u8).to_be_bytes().to_vec());
+        buffpool.append_limit((0x1234 as u16).to_be_bytes().to_vec());
+        assert!(buffpool.len() == 7 as usize);
+        buffpool.remove_front(1);
+        assert!(buffpool.len() == 6 as usize);
+        let mut buf: Vec<u8> = vec![0_u8; 4];
+        buffpool.read_front(&mut buf, 4);
+        assert!(buf == vec![52, 86, 120, 18]);
+
+        let ans: Vec<Vec<u8>> = vec![vec![52, 86, 120], vec![18], vec![18, 52]];
+        let mut idx: usize = 0;
+        while let Some(buf) = buffpool.read_front_chunk() {
+            assert_eq!(ans[idx], buf.to_vec());
+            idx += 1;
+            buffpool.remove_front_chunk();
+        }
     }
 }
