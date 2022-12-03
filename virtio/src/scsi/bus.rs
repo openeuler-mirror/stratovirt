@@ -182,8 +182,6 @@ const SECTOR_SHIFT: u8 = 9;
 /// Size of a sector of the block device.
 const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 
-const SCSI_DEFAULT_BLOCK_SIZE: i32 = 512;
-
 /// Sense Keys.
 pub const NO_SENSE: u8 = 0x00;
 pub const RECOVERED_ERROR: u8 = 0x01;
@@ -340,6 +338,7 @@ impl ScsiBus {
     pub fn scsi_bus_parse_req_cdb(
         &self,
         cdb: [u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE],
+        dev: Arc<Mutex<ScsiDevice>>,
     ) -> Option<ScsiCommand> {
         let buf: [u8; SCSI_CMD_BUF_SIZE] = (cdb[0..SCSI_CMD_BUF_SIZE])
             .try_into()
@@ -350,7 +349,7 @@ impl ScsiBus {
             return None;
         }
 
-        let xfer = scsi_cdb_xfer(&cdb);
+        let xfer = scsi_cdb_xfer(&cdb, dev);
         if xfer < 0 {
             return None;
         }
@@ -414,7 +413,7 @@ impl ScsiRequest {
         if let Some(cmd) = scsibus
             .lock()
             .unwrap()
-            .scsi_bus_parse_req_cdb(req.lock().unwrap().req.cdb)
+            .scsi_bus_parse_req_cdb(req.lock().unwrap().req.cdb, scsidevice.clone())
         {
             let ops = cmd.command;
             let opstype = scsi_operation_type(ops);
@@ -705,7 +704,11 @@ fn scsi_cdb_length(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
     }
 }
 
-fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
+fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
+    let dev_lock = dev.lock().unwrap();
+    let block_size = dev_lock.block_size as i32;
+    drop(dev_lock);
+
     let mut xfer = match cdb[0] >> 5 {
         // Group Code  |  Transfer length. |
         // 000b        |  Byte[4].         |
@@ -734,13 +737,13 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
             } else if cdb[1] & 4 != 0 {
                 xfer = 1;
             }
-            xfer *= SCSI_DEFAULT_BLOCK_SIZE;
+            xfer *= block_size;
         }
         WRITE_SAME_10 | WRITE_SAME_16 => {
             if cdb[1] & 1 != 0 {
                 xfer = 0;
             } else {
-                xfer = SCSI_DEFAULT_BLOCK_SIZE;
+                xfer = block_size;
             }
         }
         READ_CAPACITY_10 => {
@@ -755,12 +758,12 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
         WRITE_6 | READ_6 | READ_REVERSE => {
             // length 0 means 256 blocks.
             if xfer == 0 {
-                xfer = 256 * SCSI_DEFAULT_BLOCK_SIZE;
+                xfer = 256 * block_size;
             }
         }
         WRITE_10 | WRITE_VERIFY_10 | WRITE_12 | WRITE_VERIFY_12 | WRITE_16 | WRITE_VERIFY_16
         | READ_10 | READ_12 | READ_16 => {
-            xfer *= SCSI_DEFAULT_BLOCK_SIZE;
+            xfer *= block_size;
         }
         FORMAT_UNIT => {
             xfer = match cdb[1] & 16 {
@@ -1104,14 +1107,16 @@ fn scsi_command_emulate_read_capacity_10(
     }
 
     let dev_lock = dev.lock().unwrap();
+    let block_size = dev_lock.block_size;
     let mut outbuf: Vec<u8> = vec![0; 8];
     let mut nb_sectors = cmp::min(dev_lock.disk_sectors as u32, u32::MAX);
+    nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
     nb_sectors -= 1;
 
     // Bytes[0-3]: Returned Logical Block Address(the logical block address of the last logical block).
     // Bytes[4-7]: Logical Block Length In Bytes.
     BigEndian::write_u32(&mut outbuf[0..4], nb_sectors);
-    BigEndian::write_u32(&mut outbuf[4..8], DEFAULT_SECTOR_SIZE);
+    BigEndian::write_u32(&mut outbuf[4..8], block_size);
 
     Ok(outbuf)
 }
@@ -1127,7 +1132,9 @@ fn scsi_command_emulate_mode_sense(
     let mut outbuf: Vec<u8> = vec![0];
     let dev_lock = dev.lock().unwrap();
     let mut dev_specific_parameter: u8 = 0;
-    let nb_sectors = dev_lock.disk_sectors;
+    let mut nb_sectors = dev_lock.disk_sectors as u32;
+    let block_size = dev_lock.block_size as u32;
+    nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
 
     debug!(
         "MODE SENSE page_code {:x}, page_control {:x}, subpage {:x}, dbd bit {:x}, Allocation length {}",
@@ -1180,7 +1187,7 @@ fn scsi_command_emulate_mode_sense(
         // Byte[5-7]: Block Length.
         let mut block_desc: Vec<u8> = vec![0; 8];
         BigEndian::write_u32(&mut block_desc[0..4], nb_sectors as u32 & 0xffffff);
-        BigEndian::write_u32(&mut block_desc[4..8], DEFAULT_SECTOR_SIZE);
+        BigEndian::write_u32(&mut block_desc[4..8], block_size);
         outbuf.append(&mut block_desc);
     }
 
@@ -1307,8 +1314,10 @@ fn scsi_command_emulate_service_action_in_16(
     // Byte 1: bit0 - bit4: Service Action(0x10), bit 5 - bit 7: Reserved.
     if cmd.buf[1] & 0x1f == SUBCODE_READ_CAPACITY_16 {
         let dev_lock = dev.lock().unwrap();
+        let block_size = dev_lock.block_size;
         let mut outbuf: Vec<u8> = vec![0; 32];
         let mut nb_sectors = dev_lock.disk_sectors;
+        nb_sectors /= (block_size / DEFAULT_SECTOR_SIZE) as u64;
         nb_sectors -= 1;
 
         drop(dev_lock);
@@ -1316,7 +1325,7 @@ fn scsi_command_emulate_service_action_in_16(
         // Byte[0-7]: Returned Logical BLock Address(the logical block address of the last logical block).
         // Byte[8-11]: Logical Block Length in Bytes.
         BigEndian::write_u64(&mut outbuf[0..8], nb_sectors);
-        BigEndian::write_u32(&mut outbuf[8..12], DEFAULT_SECTOR_SIZE);
+        BigEndian::write_u32(&mut outbuf[8..12], block_size);
 
         return Ok(outbuf);
     }
