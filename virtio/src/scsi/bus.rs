@@ -94,6 +94,7 @@ pub const WRITE_LONG_10: u8 = 0x3f;
 pub const CHANGE_DEFINITION: u8 = 0x40;
 pub const WRITE_SAME_10: u8 = 0x41;
 pub const UNMAP: u8 = 0x42;
+/// The Read TOC command requests that the Drive read data from a table of contets.
 pub const READ_TOC: u8 = 0x43;
 pub const REPORT_DENSITY_SUPPORT: u8 = 0x44;
 pub const GET_CONFIGURATION: u8 = 0x46;
@@ -284,6 +285,82 @@ const TYPE_UNKNOWN: u8 = 0x1f;
 const TYPE_INACTIVE: u8 = 0x20;
 /// Scsi target device is not capable of supporting a peripheral device connected to this logical unit.
 const TYPE_NO_LUN: u8 = 0x7f;
+
+/// Notification Classes for GET EVENT STATUS NOTIFICATION.
+/// 000b: No requested Event Clases are supported.
+pub const GESN_NO_REQUESTED_EVENT: u8 = 0;
+/// 001b: Operational Change Request/Notification.
+pub const GESN_OPERATIONAL_CHANGE: u8 = 1;
+/// 010b: Power Management.
+pub const GESN_POWER_MANAGEMENT: u8 = 2;
+/// 011b: External Request.
+pub const GESN_EXTERNAL_REQUEST: u8 = 3;
+/// 100b: Media.
+pub const GESN_MEDIA: u8 = 4;
+/// 101b: Multiple Hosts.
+pub const GESN_MULTIPLE_HOSTS: u8 = 5;
+/// 110b: Device Busy.
+/// 111b: Reserved.
+pub const GESN_DEVICE_BUSY: u8 = 6;
+
+/// Media Status in Get Event Status Notification.
+/// If the Media Present bit is set to zero, no media is present in the Drive.
+/// If the Media Present bit is set to one, media is present in the Drive.
+pub const GESN_MS_DOOR_OR_TRAY_OPEN_BIT: u8 = 0;
+/// If the Door or Tray Open bit is set to zero, the Tray or Door mechanism is in the closed state.
+/// If the Door or Tray Open bit is set to one, the Tray or Door mechanism is in the open state.
+/// If the Drive does not have either a tray or a door, this bit shall be set to zero.
+pub const GESN_MS_MEDIA_PRESENT_BIT: u8 = 1;
+
+/// Event Code in Get Event Status Notification.
+/// Media status is unchanged.
+pub const GESN_EC_NOCHG: u8 = 0;
+/// The Drive has received a request from the user(usually through a mechanical switch on the Drive)
+/// to eject the specified slot or media.
+pub const GESN_EC_EJECTREQUEST: u8 = 1;
+/// The specified slot(or the Drive) has received new media, and is ready to access it.
+pub const GESN_EC_NEWMEDIA: u8 = 2;
+/// The media has been removed from the specified slot, and the Drive is unable to access the media
+/// without user intervention. This applies to media changers only.
+pub const GESN_EC_MEDIAREMOVAL: u8 = 3;
+/// The user has requested that the media in the specified slot be loaded. This applies to media changers only.
+pub const GESN_EC_MEDIACHANGED: u8 = 4;
+/// A DVD+RW background format has completed. Since DVD+RW Drives are capable of generationg multiple
+/// media events concurrently, such Drives shall be capable of queuing media events.
+pub const GESN_EC_BGFORMATCOMPLETED: u8 = 5;
+/// A DVD+RW background format has been automatically restarted by the Drive. Since DVD+RW Drives are
+/// capable of generationg multiple media events concurrently, such Drives shall be capable of queuing
+/// media event.
+pub const GESN_EC_BGFORMATRESTARTED: u8 = 6;
+
+/// Some generally useful CD-ROM information. From <linux/cdrom.h>
+/// Max. minutes per CD.
+pub const CD_MINS: u32 = 74;
+/// Seconds per minute.
+pub const CD_SECS: u32 = 60;
+/// Frames per second.
+pub const CD_FRAMES: u32 = 75;
+/// Bytes per frame, "cooked" mode.
+pub const CD_FRAME_SIZE: u32 = 2048;
+/// MSF numbering offset of the first frame.
+pub const CD_MSF_OFFSET: u32 = 150;
+/// Max bytes supported for CD in stratovirt now.
+pub const CD_MAX_BYTES: u32 = CD_MINS * CD_SECS * CD_FRAMES * CD_FRAME_SIZE;
+pub const CD_MAX_SECTORS: u32 = CD_MAX_BYTES / DEFAULT_SECTOR_SIZE;
+
+/// Profile Number for GET CONFIGURATION command in MMC-6.
+/// Read only Compact Disc capable.
+const GC_PROFILE_CD_ROM: u16 = 0x0008;
+/// Read only DVD.
+const GC_PROFILE_DVD_ROM: u16 = 0x0010;
+
+/// Features Codes for GET CONFIGURATION command in MMC-6.
+/// A list of all Profiles supported by the Drive.
+const GC_FC_PROFILE_LIST: u16 = 0x0000;
+/// Mandatory behavior for all devices.
+const GC_FC_CORE: u16 = 0x0001;
+/// The medium may be removed from the device.
+const GC_FC_REMOVEABLE_MEDIUM: u16 = 0x0003;
 
 pub struct ScsiBus {
     /// Bus name.
@@ -562,6 +639,14 @@ impl ScsiRequest {
                 SERVICE_ACTION_IN_16 => {
                     scsi_command_emulate_service_action_in_16(&self.cmd, &self.dev)
                 }
+                READ_DISC_INFORMATION => {
+                    scsi_command_emulate_read_disc_information(&self.cmd, &self.dev)
+                }
+                GET_EVENT_STATUS_NOTIFICATION => {
+                    scsi_command_emulate_get_event_status_notification(&self.cmd, &self.dev)
+                }
+                READ_TOC => scsi_command_emulate_read_toc(&self.cmd, &self.dev),
+                GET_CONFIGURATION => scsi_command_emulate_get_configuration(&self.cmd, &self.dev),
                 _ => {
                     not_supported_flag = true;
                     Err(anyhow!("Emulation scsi command is not supported now!"))
@@ -707,6 +792,7 @@ fn scsi_cdb_length(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
 fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
     let dev_lock = dev.lock().unwrap();
     let block_size = dev_lock.block_size as i32;
+    let scsi_type = dev_lock.scsi_type;
     drop(dev_lock);
 
     let mut xfer = match cdb[0] >> 5 {
@@ -753,7 +839,10 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDe
             xfer = 6;
         }
         SEND_VOLUME_TAG => {
-            xfer = i32::from(cdb[9]) | i32::from(cdb[8]) << 8;
+            xfer = match scsi_type {
+                SCSI_TYPE_DISK => i32::from(cdb[9]) | i32::from(cdb[8]) << 8,
+                _ => i32::from(cdb[10]) | i32::from(cdb[8]) << 8,
+            };
         }
         WRITE_6 | READ_6 | READ_REVERSE => {
             // length 0 means 256 blocks.
@@ -766,12 +855,14 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDe
             xfer *= block_size;
         }
         FORMAT_UNIT => {
-            xfer = match cdb[1] & 16 {
-                0 => 0,
-                _ => match cdb[1] & 32 {
-                    0 => 4,
-                    _ => 8,
-                },
+            xfer = if (scsi_type == SCSI_TYPE_ROM) && (cdb[1] & 16 != 0) {
+                12
+            } else if cdb[1] & 16 == 0 {
+                0
+            } else if cdb[1] & 32 == 0 {
+                4
+            } else {
+                8
             };
         }
         INQUIRY | RECEIVE_DIAGNOSTIC | SEND_DIAGNOSTIC => {
@@ -783,8 +874,13 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDe
         PERSISTENT_RESERVE_OUT => {
             xfer = BigEndian::read_i32(&cdb[5..]);
         }
-        ERASE_12 | MECHANISM_STATUS | READ_DVD_STRUCTURE | SEND_DVD_STRUCTURE | MAINTENANCE_OUT
-        | MAINTENANCE_IN => {}
+        ERASE_12 => {}
+        MECHANISM_STATUS | READ_DVD_STRUCTURE | SEND_DVD_STRUCTURE | MAINTENANCE_OUT
+        | MAINTENANCE_IN => {
+            if scsi_type == SCSI_TYPE_ROM {
+                xfer = i32::from(cdb[9]) | i32::from(cdb[8]) << 8;
+            }
+        }
         ATA_PASSTHROUGH_12 => {}
         ATA_PASSTHROUGH_16 => {}
         _ => {}
@@ -1133,6 +1229,7 @@ fn scsi_command_emulate_mode_sense(
     let dev_lock = dev.lock().unwrap();
     let mut dev_specific_parameter: u8 = 0;
     let mut nb_sectors = dev_lock.disk_sectors as u32;
+    let scsi_type = dev_lock.scsi_type;
     let block_size = dev_lock.block_size as u32;
     nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
 
@@ -1147,7 +1244,7 @@ fn scsi_command_emulate_mode_sense(
 
     // Device specific paramteter field for direct access block devices:
     // Bit 7: WP(Write Protect); bit 4: DPOFUA;
-    if dev_lock.scsi_type == SCSI_TYPE_DISK {
+    if scsi_type == SCSI_TYPE_DISK {
         if dev_lock.state.features & (1 << SCSI_DISK_F_DPOFUA) != 0 {
             dev_specific_parameter = 0x10;
         }
@@ -1198,10 +1295,10 @@ fn scsi_command_emulate_mode_sense(
     if page_code == 0x3f {
         // 3Fh Return all pages not including subpages.
         for pg in 0..page_code {
-            let _ = scsi_command_emulate_mode_sense_page(pg, page_control, &mut outbuf);
+            let _ = scsi_command_emulate_mode_sense_page(pg, page_control, &mut outbuf, scsi_type);
         }
     } else {
-        scsi_command_emulate_mode_sense_page(page_code, page_control, &mut outbuf)?;
+        scsi_command_emulate_mode_sense_page(page_code, page_control, &mut outbuf, scsi_type)?;
     }
 
     // The Mode Data Length field indicates the length in bytes of the following data
@@ -1222,7 +1319,32 @@ fn scsi_command_emulate_mode_sense_page(
     page: u8,
     page_control: u8,
     outbuf: &mut Vec<u8>,
+    scsi_type: u32,
 ) -> Result<Vec<u8>> {
+    if scsi_type == SCSI_TYPE_DISK
+        && ![
+            MODE_PAGE_HD_GEOMETRY,
+            MODE_PAGE_FLEXIBLE_DISK_GEOMETRY,
+            MODE_PAGE_CACHING,
+            MODE_PAGE_R_W_ERROR,
+        ]
+        .contains(&page)
+        || scsi_type == SCSI_TYPE_ROM
+            && ![
+                MODE_PAGE_CACHING,
+                MODE_PAGE_R_W_ERROR,
+                MODE_PAGE_AUDIO_CTL,
+                MODE_PAGE_CAPABILITIES,
+            ]
+            .contains(&page)
+    {
+        bail!(
+            "Invalid Mode Sense command, page control ({:x}), page ({:x}), scsi device type ({})",
+            page_control,
+            page,
+            scsi_type
+        );
+    }
     let buflen = outbuf.len();
     match page {
         MODE_PAGE_CACHING => {
@@ -1243,6 +1365,53 @@ fn scsi_command_emulate_mode_sense_page(
                 // 0x80: AWRE(Automatic Write Reallocation Enabled).
                 outbuf[buflen + 2] = 0x80;
             }
+        }
+        MODE_PAGE_CAPABILITIES => {
+            // MM Capabilities and Mechanical Status Page(Page Code 0x2A).
+            // This mode page is legacy and was most recently defined in MMC-3.
+            // Outbuf in CD/DVD Capabilities and Mechanical Status Page:
+            // Byte[buflen + 0]: PS | Reserved | Bits[0-5]: Page Code(0x2A).
+            // Byte[buflen + 1]: Page Length(28 + 4 * (maximum number of n)).
+            // Byte[buflen + 2]: Bits[6-7]: Reserved | DVD-RAW Read(1) | DVD-R READ(1) |
+            //                   DVD-ROM READ(1) | Method 2 | CD-RW Read(1) | CD-R Read(1).
+            // Byte[buflen + 3]: Bits[6-7]: Reserved | DVD-RAW WRITE | DVD-R WRITE |
+            //                   Reserved | Test Write | CD-R/RW Write | CD-R Write.
+            // Byte[buflen + 4]: BUF | Multi Session(1) | Mode 2 Form 2(1) | Mode 2 Form 1(1) |
+            //                   Digital Port 2(1) | Digital Port 1(1) | Composite(1) | Audio Play(1).
+            // Byte[buflen + 5]: Read Bar Code(1) | UPC(1) | ISRC(1) | C2 Pointers supported(1) |
+            //                   R-W Deinterleaved & corrected(1) | R-W supported(1) |
+            //                   CD-DA Stream is Accurate(1) | CD-DA Cmds supported(1).
+            // Byte[buflen + 6]: Bits[5-7]: Loading Mechanism Type(1) | Reserved | Eject(1) | Prevent Jumper(1) |
+            //                   Lock State | Lock(1).
+            // Byte[buflen + 7]: Bits[6-7]: Reserved | R-W in Lead-in | Side Change Capable | SSS |
+            //                   Changer Supports Disc Present | Separate Channel Mute | Separate volume levels
+            // Bytes[buflen + 8 - buflen + 9]: Obsolete.
+            // Bytes[buflen + 10 - buflen + 11]: Number of Volume Levels Supported.
+            // Bytes[buflen + 12 - buflen + 13]: Buffer Size Supported.
+            // Bytes[buflen + 14 - buflen + 15]: Obsolete.
+            // Byte[buflen + 16]: Reserved.
+            // Byte[buflen + 17]: Bits[6-7]: Reserved | Bits[4-5]: Length | LSBF | RCK | BCKF | Reserved.
+            // Bytes[buflen + 18 - buflen + 21]: Obsolete.
+            // Bytes[buflen + 22 - buflen + 23]: Copy Management Revision Supported.
+            // Bytes[buflen + 24 - buflen + 26]: Reserved.
+            // Byte[buflen + 27]: Bits[2-7]: Reserved. Bits[0-1]: Rotation Control Selected.
+            // Bytes[buflen + 28 - buflen + 29]: Current Write Speed Selected.
+            // Bytes[buflen + 31]: Number of Logical Unit Write Speed Performance Descriptor Tables(n).
+            outbuf.resize(buflen + 32, 0);
+            outbuf[buflen] = page;
+            outbuf[buflen + 1] = 28;
+
+            if page_control == 1 {
+                bail!("Not supported page control");
+            }
+
+            outbuf[buflen + 2] = 0x3b;
+            outbuf[buflen + 4] = 0x7f;
+            outbuf[buflen + 5] = 0xff;
+            // Stratovirt does not implement tray for CD, so set "Lock State" to 0.
+            outbuf[buflen + 6] = 0x2d;
+            BigEndian::write_u16(&mut outbuf[(buflen + 10)..(buflen + 12)], 2);
+            BigEndian::write_u16(&mut outbuf[(buflen + 12)..(buflen + 14)], 2048);
         }
         _ => {
             bail!(
@@ -1335,4 +1504,295 @@ fn scsi_command_emulate_service_action_in_16(
         SERVICE_ACTION_IN_16,
         cmd.buf[1] & 31
     );
+}
+
+fn scsi_command_emulate_read_disc_information(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    // Byte1: Bits[0-2]: Data type.
+    // Data Type | Returned Data.               |
+    //    000b   | Standard Disc Information.   |
+    //    001b   | Track Resources Information. |
+    //    010b   | POW Resources Information.   |
+    // 011b-111b | Reserved                     |
+    let data_type = cmd.buf[1] & 7;
+
+    // Types 001b/010b are only defined for Blu-Ray.
+    if data_type != 0 {
+        bail!("Unsupported read disc information data type {}!", data_type);
+    }
+    if dev.lock().unwrap().scsi_type != SCSI_TYPE_ROM {
+        bail!("Read disc information command is only for scsi multi-media device!");
+    }
+
+    // Outbuf:
+    // Bytes[0-1]: Disc Information Length(32).
+    // Byte2: Disc Information Data Type(000b) | Erasable(0) | State of last Session(01b) | Disc Status(11b).
+    // Byte3: Number of First Track on Disc.
+    // Byte4: Number of Sessions.
+    // Byte5: First Track Number in Last Session(Least Significant Byte).
+    // Byte6: Last Track Number in Last Session(Last Significant Byte).
+    // Byte7: DID_V | DBC_V | URU:Unrestricted Use Disc(1) | DAC_V | Reserved | Legacy | BG Format Status.
+    // Byte8: Disc Type(00h: CD-DA or CD-ROM Disc).
+    // Byte9: Number of sessions(Most Significant Byte).
+    // Byte10: First Trace Number in Last Session(Most Significant Byte).
+    // Byte11: Last Trace Number in Last Session(Most Significant Byte).
+    // Bytes12-15: Disc Identification.
+    // Bytes16-19: Last Session Lead-in Start Address.
+    // Bytes20-23: Last Possible Lead-Out Start Address.
+    // Bytes24-31: Disc Bar Code.
+    // Byte32: Disc Application Code.
+    // Byte33: Number of OPC Tables.(0)
+    let mut outbuf: Vec<u8> = vec![0; 34];
+    outbuf[1] = 32;
+    outbuf[2] = 0xe;
+    outbuf[3] = 1;
+    outbuf[4] = 1;
+    outbuf[5] = 1;
+    outbuf[6] = 1;
+    outbuf[7] = 0x20;
+
+    Ok(outbuf)
+}
+
+/// Format field for READ TOC command.
+/// The Track/Session Number field specifies starting track number for which the data is returned.
+/// For multi-session discs, TOC data is returned for all sessions. Track number Aah is reported
+/// only for the Lead-out area of the last complete session.
+const RT_FORMATTED_TOC: u8 = 0x0000;
+/// This format returns the first complete session number, last complete session number and last
+/// complete session starting address.
+const RT_MULTI_SESSION_INFORMATION: u8 = 0x0001;
+/// This format returns all Q sub-code data in the Lead-IN(TOC) areas starting from a session number
+/// as specified in the Track/Session Number field.
+const RT_RAW_TOC: u8 = 0x0010;
+
+fn scsi_command_emulate_read_toc(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    // Byte1: Bit1: MSF.(MSF: Minute, Second, Frame)
+    // MSF = 1: the address fields in some returned data formats shall be in MSF form.
+    // MSF = 0: the address fields in some returned data formats shall be in LBA form.
+    let msf = cmd.buf[1] & 2;
+    // Byte2: Bits[0-3]: Format(Select specific returned data format)(CD: 0,1,2).
+    let format = cmd.buf[2] & 0xf;
+    // Byte6: Track/Session Number.
+    let track_number = cmd.buf[6];
+    let mut outbuf: Vec<u8> = vec![0; 0];
+
+    match format {
+        RT_FORMATTED_TOC => {
+            let nb_sectors = dev.lock().unwrap().disk_sectors as u32;
+            let mut buf = cdrom_read_formatted_toc(nb_sectors, msf, track_number)?;
+            outbuf.append(&mut buf);
+        }
+        RT_MULTI_SESSION_INFORMATION => {
+            outbuf.resize(12, 0);
+            outbuf[1] = 0x0a;
+            outbuf[2] = 0x01;
+            outbuf[3] = 0x01;
+        }
+        RT_RAW_TOC => {}
+        _ => {
+            bail!("Invalid read toc format {}", format);
+        }
+    }
+
+    Ok(outbuf)
+}
+
+fn scsi_command_emulate_get_configuration(
+    _cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    let dev_lock = dev.lock().unwrap();
+    if dev_lock.scsi_type != SCSI_TYPE_ROM {
+        bail!("Invalid scsi type {}", dev_lock.scsi_type);
+    }
+
+    // 8 bytes(Feature Header) + 12 bytes(Profile List Feature) +
+    // 12bytes(Core Feature) + 8bytes(Removable media feature) = 40 bytes.
+    let mut outbuf = vec![0; 40];
+
+    // Outbuf:
+    // Bytes[0-7]: Feature Header.
+    // Bytes[0-3]: Data Length(36 = 40 - 4).
+    // Bytes[4-5]: Reserved.
+    // Bytes[6-7]: Current Profile.
+    BigEndian::write_u32(&mut outbuf[0..4], 36);
+    let current = if dev_lock.disk_sectors > CD_MAX_SECTORS as u64 {
+        GC_PROFILE_DVD_ROM
+    } else {
+        GC_PROFILE_CD_ROM
+    };
+    BigEndian::write_u16(&mut outbuf[6..8], current);
+
+    // Bytes[8-n]: Feature Descriptor(s):
+    // Bytes[8-19]: Feature 0: Profile List Feature:
+    // Bytes[8-9]: Feature code(0000h).
+    // Byte[10]: Bits[6-7]: Reserved. Bits[2-5]: Version. Bit 1: Persistent. Bit 0: Current(1).
+    // Byte[11]: Additional Length.
+    // Byte[12-19]: Profile Descriptors.(2 descriptors: CD and DVD)
+    // Byte[12-13]： Profile Number(CD).
+    // Byte[14]: Bits[1-7]: Reserved. Bit 0: CurrentP.
+    // Byte[15]: Reserved.
+    // Byte[16-17]: Profile Number(DVD).
+    // Byte[18]: Bits[1-7]: Reserved. Bit 0: CurrentP.
+    // Byte[19]: Reserved.
+    BigEndian::write_u16(&mut outbuf[8..10], GC_FC_PROFILE_LIST);
+    outbuf[10] = 0x03;
+    outbuf[11] = 8;
+    BigEndian::write_u16(&mut outbuf[12..14], GC_PROFILE_CD_ROM);
+    outbuf[14] |= (current == GC_PROFILE_CD_ROM) as u8;
+    BigEndian::write_u16(&mut outbuf[16..18], GC_PROFILE_DVD_ROM);
+    outbuf[18] |= (current == GC_PROFILE_DVD_ROM) as u8;
+
+    // Bytes[8-n]: Feature Descriptor(s):
+    // Bytes[20-31]: Feature 1: Core Feature:
+    // Bytes[20-21]: Feature Code(0001h).
+    // Byte[22]: Bits[6-7]: Reserved. Bits[2-5]: Version(0010b). Bit 1: Persistent(1). Bit 0: Current(1).
+    // Byte[23]: Additional Length(8).
+    // Bytes[24-27]: Physical Interface Standard. (Scsi Family: 00000001h)
+    // Byte[28]: Bits[2-7]: Reserved. Bit 1: INQ2. Bit 0: DBE(1).
+    // Bytes[29-31]: Reserved.
+    BigEndian::write_u16(&mut outbuf[20..22], GC_FC_CORE);
+    outbuf[22] = 0x0b;
+    outbuf[23] = 8;
+    BigEndian::write_u32(&mut outbuf[24..28], 1);
+    outbuf[28] = 1;
+
+    // Bytes[8-n]: Feature Descriptor(s):
+    // Bytes[32-40]: Feature 2: Removable media feature:
+    // Bytes[32-33]: Feature Code(0003h).
+    // Byte[34]: Bits[6-7]: Reserved. Bit[2-5]: Version(0010b). Bit 1: Persistent(1). Bit 0: Current(1).
+    // Byte[35]: Additional Length(4).
+    // Byte[36]: Bits[5-7]: Loading Mechanism Type(001b). Bit4: Load(1). Bit 3: Eject(1). Bit 2: Pvnt Jmpr.
+    //           Bit 1: DBML. Bit 0: Lock(1).
+    // Byte[37-39]: Reserved.
+    BigEndian::write_u16(&mut outbuf[32..34], GC_FC_REMOVEABLE_MEDIUM);
+    outbuf[34] = 0x0b;
+    outbuf[35] = 4;
+    outbuf[36] = 0x39;
+
+    Ok(outbuf)
+}
+
+fn scsi_command_emulate_get_event_status_notification(
+    cmd: &ScsiCommand,
+    dev: &Arc<Mutex<ScsiDevice>>,
+) -> Result<Vec<u8>> {
+    // Byte4: Notification Class Request.
+    let notification_class_request = cmd.buf[4];
+    let dev_lock = dev.lock().unwrap();
+
+    if dev_lock.scsi_type != SCSI_TYPE_ROM {
+        bail!("Invalid scsi tye {}", dev_lock.scsi_type);
+    }
+
+    // Byte1: Bit0: Polled.
+    // Polled = 1: the Host is requesting polled operation.
+    // Polled = 0: the Host is requesting asynchronous operation.
+    if cmd.buf[1] & 1 == 0 {
+        bail!("Asynchronous. Do not support.");
+    }
+
+    // Outbuf:
+    // Bytes[0-3]: Event Header.
+    // Bytes[4-n]: Event Descriptor.
+    // Bytes[0-1]: Event Descriptor Length.
+    // Byte2: Bit7: NEC(No Event Available). Bits[0-2]: Notification Class.
+    // NEC = 1: The Drive supports none of the requested notification classes.
+    // NEC = 0: At least one of the requested notification classes is supported.
+    // Byte3: Supported Event Class.
+    let mut outbuf: Vec<u8> = vec![0; 4];
+
+    outbuf[3] = 1 << GESN_MEDIA;
+    if notification_class_request & (1 << GESN_MEDIA) != 0 {
+        // NCE = 0, notification class = media.
+        outbuf[2] = GESN_MEDIA;
+        outbuf.resize(8, 0);
+        // Bytes[4-7]: Media Event Descriptor.
+        // Byte4: Bits[4-7]: reserved. Bits[0-3]: Event Code.
+        // Byte5: Media Status. Bits[2-7] reserved. Bit 1: Media Present. Bit 0: Door or Tray open.
+        // Byte6: Start Slot.
+        // Byte7: End Slot.
+
+        // Do not support hot-plug/hot-unplug scsi cd which will be present all the time once vm starts.
+        // To do: this outbuf event code and media status should be changed after allowing hot-plug.
+        outbuf[4] = GESN_EC_NOCHG;
+        outbuf[5] = 1 << GESN_MS_MEDIA_PRESENT_BIT;
+    } else {
+        // NCE = 1.
+        outbuf[2] = 0x80;
+    }
+
+    let len = outbuf.len() as u16 - 2;
+    BigEndian::write_u16(&mut outbuf[0..2], len);
+
+    Ok(outbuf)
+}
+
+/// LBA to MSF translation is defined in MMC6 Table 647.
+/// MSF values are converted to LBA values via such formula:
+/// lba = ((m * CD_SECS) + s) * CD_FRAMES + f) - CD_MSF_OFFSET.
+fn lba_to_msf(lba: u32) -> Vec<u8> {
+    let minute = ((lba + CD_MSF_OFFSET) / CD_FRAMES / CD_SECS) as u8;
+    let second = ((lba + CD_MSF_OFFSET) / CD_FRAMES % CD_SECS) as u8;
+    let frame = ((lba + CD_MSF_OFFSET) % CD_FRAMES) as u8;
+
+    vec![minute, second, frame]
+}
+
+fn cdrom_read_formatted_toc(nb_sectors: u32, msf: u8, track_number: u8) -> Result<Vec<u8>> {
+    // Track number 0xaa is reported only for the Lead-out area of the last complete session.
+    if track_number > 1 && track_number != 0xaa {
+        bail!("Invalid track number!");
+    }
+
+    let mut outbuf: Vec<u8> = vec![0; 4];
+
+    // Outbuf:
+    // Bytes[0-1]: TOC Data Length.
+    // Byte[2]: First Track Number(1).
+    // Byte[3]: Last Track Number(1).
+    outbuf[2] = 1;
+    outbuf[3] = 1;
+    if track_number <= 1 {
+        // Byte[4]: Reserved.
+        // Byte[5]: Bits[5-7]: ADR, Bits[0-4]: CONTROL.
+        // Byte[6]: Track Number.
+        // Byte[7]: Reserved.
+        // Bytes[8-11]: Track Start Address(LBA form = 000000h, MSF form = 00:00:02:00).
+        outbuf.append(&mut [0, 0x14, 1, 0].to_vec());
+        if msf != 0 {
+            // MSF form.
+            outbuf.push(0);
+            outbuf.append(&mut lba_to_msf(0));
+        } else {
+            outbuf.append(&mut [0, 0, 0, 0].to_vec());
+        }
+    }
+
+    // Lead Out Track.
+    // Byte[temporary buflen]: Reserved.
+    // Byte[temporary buflen + 1]: Bits[5-7]: ADR, Bits[0-4]: CONTROL.
+    // Byte[temporary buflen + 2]: Track Number.
+    // Byte[temporary buflen + 3]: Reserved.
+    // Bytes[temporary buflen + 4 - temporary buflen + 7]: Track Start Address.
+    outbuf.append(&mut [0, 0x14, 0xaa, 0].to_vec());
+    if msf != 0 {
+        outbuf.push(0);
+        outbuf.append(&mut lba_to_msf(nb_sectors));
+    } else {
+        let pos = outbuf.len();
+        outbuf.resize(pos + 4, 0);
+        BigEndian::write_u32(&mut outbuf[pos..pos + 4], nb_sectors);
+    }
+
+    let len = outbuf.len() as u16;
+    BigEndian::write_u16(&mut outbuf[0..2], len - 2);
+
+    Ok(outbuf)
 }
