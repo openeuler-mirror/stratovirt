@@ -558,7 +558,7 @@ pub fn vnc_display_switch(surface: &DisplaySurface) {
         let height = vnc_height(guest_height);
         let mut buf: Vec<u8> = Vec::new();
         // Set Color depth.
-        set_color_depth(&client, &server, &mut buf);
+        set_color_depth(&client, &mut buf);
         // Desktop_resize.
         desktop_resize(&client, &server, &mut buf);
         // Cursor define.
