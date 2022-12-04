@@ -804,7 +804,6 @@ It determines the order of bootable devices which firmware will use for booting 
 -drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
 -device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0[,serial=123456,bootindex=1]
 ```
-Note: Only support scsi-id=0 and lun number should start from 0 Now.
 ### 2.18 VNC
 VNC can provide the users with way to login virtual machines remotely.
 
