@@ -32,13 +32,13 @@ pub mod error;
 #[cfg(not(target_env = "musl"))]
 mod gpu;
 mod net;
-mod queue;
 mod rng;
 mod scsi;
 pub mod vhost;
 mod virtio_mmio;
 #[allow(dead_code)]
 mod virtio_pci;
+mod virtqueue;
 pub use anyhow::Result;
 pub use balloon::*;
 pub use block::{Block, BlockState};
@@ -49,7 +49,6 @@ pub use error::*;
 pub use gpu::*;
 use log::{error, warn};
 pub use net::*;
-pub use queue::*;
 pub use rng::{Rng, RngState};
 pub use scsi::bus as ScsiBus;
 pub use scsi::controller as ScsiCntlr;
@@ -58,6 +57,7 @@ pub use vhost::kernel as VhostKern;
 pub use vhost::user as VhostUser;
 pub use virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
 pub use virtio_pci::VirtioPciDevice;
+pub use virtqueue::*;
 
 use std::cmp;
 use std::sync::{Arc, Mutex};
