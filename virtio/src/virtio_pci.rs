@@ -1198,7 +1198,7 @@ impl PciDevOps for VirtioPciDevice {
         self.config.register_bar(
             VIRTIO_PCI_MEM_BAR_IDX as usize,
             modern_mem_region,
-            RegionType::Mem32Bit,
+            RegionType::Mem64Bit,
             false,
             mem_region_size,
         )?;
