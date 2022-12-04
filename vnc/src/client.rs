@@ -509,6 +509,7 @@ impl ClientIoHandler {
 
     /// Exchange RFB protocol version with client.
     fn handle_version(&mut self) -> Result<()> {
+        let client = self.client.clone();
         let buf = self.read_incoming_msg();
         let res = String::from_utf8_lossy(&buf);
         let ver_str = &res[0..12].to_string();
@@ -542,7 +543,7 @@ impl ClientIoHandler {
                 AuthState::No => {
                     let mut buf = Vec::new();
                     buf.append(&mut (AuthState::No as u32).to_be_bytes().to_vec());
-                    self.write_msg(&buf);
+                    vnc_write(&client, buf);
                     self.update_event_handler(1, ClientIoHandler::handle_client_init);
                 }
                 _ => {
@@ -556,9 +557,10 @@ impl ClientIoHandler {
             let mut buf = [0u8; 2];
             buf[0] = 1; // Number of security types.
             buf[1] = auth as u8;
-            self.write_msg(&buf);
+            vnc_write(&client, buf.to_vec());
             self.update_event_handler(1, ClientIoHandler::handle_auth);
         }
+        self.flush();
         Ok(())
     }
 
@@ -588,7 +590,8 @@ impl ClientIoHandler {
 
         buf.append(&mut (APP_NAME.to_string().len() as u32).to_be_bytes().to_vec());
         buf.append(&mut APP_NAME.to_string().as_bytes().to_vec());
-        self.write_msg(&buf);
+        vnc_write(&client, buf);
+        self.flush();
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
     }
@@ -597,7 +600,8 @@ impl ClientIoHandler {
     fn handle_auth(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let auth = self.server.security_type.lock().unwrap().auth;
-        let version = self.client.conn_state.lock().unwrap().version.clone();
+        let client = self.client.clone();
+        let version = client.conn_state.lock().unwrap().version.clone();
 
         if buf[0] != auth as u8 {
             self.auth_failed("Authentication failed");
@@ -609,7 +613,7 @@ impl ClientIoHandler {
             AuthState::No => {
                 if version.minor >= 8 {
                     let buf = [0u8; 4];
-                    self.write_msg(&buf);
+                    vnc_write(&client, buf.to_vec());
                 }
                 self.update_event_handler(1, ClientIoHandler::handle_client_init);
             }
@@ -619,7 +623,7 @@ impl ClientIoHandler {
                 buf[0] = 0_u8;
                 buf[1] = 2_u8;
 
-                self.write_msg(&buf);
+                vnc_write(&client, buf.to_vec());
                 self.update_event_handler(2, ClientIoHandler::client_vencrypt_init);
             }
             _ => {
@@ -628,6 +632,7 @@ impl ClientIoHandler {
                 return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
             }
         }
+        self.flush();
         Ok(())
     }
 
@@ -686,7 +691,9 @@ impl ClientIoHandler {
             buf.append(&mut (b as u16).to_be_bytes().to_vec());
         }
 
-        self.write_msg(&buf);
+        let client = self.client.clone();
+        vnc_write(&client, buf);
+        self.flush();
     }
 
     /// Set image format.
@@ -901,7 +908,9 @@ impl ClientIoHandler {
             buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
             buf.append(&mut err_msg.as_bytes().to_vec());
         }
-        self.write_msg(&buf);
+        let client = self.client.clone();
+        vnc_write(&client, buf);
+        self.flush();
     }
 
     /// Read the data from the receiver buffer.

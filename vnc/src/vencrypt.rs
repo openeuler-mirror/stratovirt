@@ -10,7 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use crate::{auth::SubAuthState, client::ClientIoHandler, VncError};
+use crate::{
+    auth::SubAuthState,
+    client::{vnc_write, ClientIoHandler},
+    VncError,
+};
 use anyhow::{anyhow, Result};
 use log::{error, info};
 use rustls::{
@@ -67,13 +71,15 @@ impl ClientIoHandler {
     /// Exchange auth version with client
     pub fn client_vencrypt_init(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
+        let client = self.client.clone();
         let subauth = self.server.security_type.lock().unwrap().subauth;
         // VeNCrypt version 0.2.
         if buf[0] != 0 || buf[1] != 2 {
             let mut buf = Vec::new();
             // Reject version.
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
+            self.flush();
             return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         } else {
             let mut buf = Vec::new();
@@ -83,9 +89,10 @@ impl ClientIoHandler {
             buf.append(&mut (1_u8).to_be_bytes().to_vec());
             // The supported auth.
             buf.append(&mut (subauth as u32).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
         }
 
+        self.flush();
         self.update_event_handler(4, ClientIoHandler::client_vencrypt_auth);
         Ok(())
     }
@@ -95,13 +102,15 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let auth = u32::from_be_bytes(buf);
+        let client = self.client.clone();
         let subauth = self.server.security_type.lock().unwrap().subauth;
 
         if auth != subauth as u32 {
             let mut buf = Vec::new();
             // Reject auth.
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
+            self.flush();
             error!("Authentication failed");
             return Err(anyhow!(VncError::AuthFailed(String::from(
                 "Authentication failed"
@@ -111,7 +120,8 @@ impl ClientIoHandler {
         let mut buf = Vec::new();
         // Accept auth.
         buf.append(&mut (1_u8).to_be_bytes().to_vec());
-        self.write_msg(&buf);
+        vnc_write(&client, buf);
+        self.flush();
 
         if let Some(tls_config) = self.server.security_type.lock().unwrap().tls_config.clone() {
             match rustls::ServerConnection::new(tls_config) {
@@ -191,6 +201,7 @@ impl ClientIoHandler {
 
     fn handle_vencrypt_subauth(&mut self) -> Result<()> {
         let subauth = self.server.security_type.lock().unwrap().subauth;
+        let client = self.client.clone();
         match subauth {
             SubAuthState::VncAuthVencryptX509Sasl => {
                 self.expect = 4;
@@ -199,7 +210,8 @@ impl ClientIoHandler {
             }
             SubAuthState::VncAuthVencryptX509None => {
                 let buf = [0u8; 4];
-                self.write_msg(&buf);
+                vnc_write(&client, buf.to_vec());
+                self.flush();
                 self.expect = 1;
                 self.msg_handler = ClientIoHandler::handle_client_init;
             }
@@ -211,7 +223,8 @@ impl ClientIoHandler {
                     let err_msg: String = "Unsupported subauth type".to_string();
                     buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
                     buf.append(&mut err_msg.as_bytes().to_vec());
-                    self.write_msg(&buf);
+                    vnc_write(&client, buf);
+                    self.flush();
                 }
                 error!("Unsupported subauth type");
                 return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
