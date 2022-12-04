@@ -201,9 +201,12 @@ fn get_notifier_handler(
             let locked_chardev = chardev.lock().unwrap();
             let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();
             let mut buffer = vec![0_u8; buff_size];
-            if let Some(input) = locked_chardev.input.clone() {
+            let input_h = locked_chardev.input.clone();
+            let receive = locked_chardev.receive.clone();
+            drop(locked_chardev);
+            if let Some(input) = input_h {
                 if let Ok(index) = input.lock().unwrap().chr_read_raw(&mut buffer) {
-                    locked_chardev.receive.as_ref().unwrap()(&mut buffer[..index]);
+                    receive.as_ref().unwrap()(&mut buffer[..index]);
                 } else {
                     error!("Failed to read input data");
                 }
