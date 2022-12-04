@@ -821,7 +821,7 @@ impl MachineOps for LightMachine {
     }
 
     fn run(&self, paused: bool) -> MachineResult<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 
@@ -869,7 +869,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        <Self as MachineOps>::vm_state_transfer(
+        self.vm_state_transfer(
             &self.cpus,
             #[cfg(target_arch = "aarch64")]
             &self.irq_chip,

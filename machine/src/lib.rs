@@ -1315,10 +1315,7 @@ pub trait MachineOps {
     /// * `paused` - After started, paused all vcpu or not.
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_start(paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
-    where
-        Self: Sized,
-    {
+    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
         let nr_vcpus = cpus.len();
         let cpus_thread_barrier = Arc::new(Barrier::new((nr_vcpus + 1) as usize));
         for cpu_index in 0..nr_vcpus {
@@ -1345,13 +1342,11 @@ pub trait MachineOps {
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
     fn vm_pause(
+        &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
         vm_state: &mut KvmVmState,
-    ) -> Result<()>
-    where
-        Self: Sized,
-    {
+    ) -> Result<()> {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.pause()
                 .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
@@ -1371,10 +1366,7 @@ pub trait MachineOps {
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_resume(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
-    where
-        Self: Sized,
-    {
+    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.resume()
                 .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
@@ -1391,10 +1383,7 @@ pub trait MachineOps {
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_destroy(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
-    where
-        Self: Sized,
-    {
+    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.destroy()
                 .with_context(|| format!("Failed to destroy vcpu{}", cpu_index))?;
@@ -1414,15 +1403,13 @@ pub trait MachineOps {
     /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
     fn vm_state_transfer(
+        &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
         vm_state: &mut KvmVmState,
         old_state: KvmVmState,
         new_state: KvmVmState,
-    ) -> Result<()>
-    where
-        Self: Sized,
-    {
+    ) -> Result<()> {
         use KvmVmState::*;
 
         if *vm_state != old_state {
@@ -1430,21 +1417,23 @@ pub trait MachineOps {
         }
 
         match (old_state, new_state) {
-            (Created, Running) => <Self as MachineOps>::vm_start(false, cpus, vm_state)
+            (Created, Running) => self
+                .vm_start(false, cpus, vm_state)
                 .with_context(|| "Failed to start vm.")?,
-            (Running, Paused) => <Self as MachineOps>::vm_pause(
-                cpus,
-                #[cfg(target_arch = "aarch64")]
-                irq_chip,
-                vm_state,
-            )
-            .with_context(|| "Failed to pause vm.")?,
-            (Paused, Running) => <Self as MachineOps>::vm_resume(cpus, vm_state)
+            (Running, Paused) => self
+                .vm_pause(
+                    cpus,
+                    #[cfg(target_arch = "aarch64")]
+                    irq_chip,
+                    vm_state,
+                )
+                .with_context(|| "Failed to pause vm.")?,
+            (Paused, Running) => self
+                .vm_resume(cpus, vm_state)
                 .with_context(|| "Failed to resume vm.")?,
-            (_, Shutdown) => {
-                <Self as MachineOps>::vm_destroy(cpus, vm_state)
-                    .with_context(|| "Failed to destroy vm.")?;
-            }
+            (_, Shutdown) => self
+                .vm_destroy(cpus, vm_state)
+                .with_context(|| "Failed to destroy vm.")?,
             (_, _) => {
                 bail!("Vm lifecycle error: this transform is illegal.");
             }

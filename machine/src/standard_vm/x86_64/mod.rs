@@ -559,7 +559,7 @@ impl MachineOps for StdMachine {
     }
 
     fn run(&self, paused: bool) -> Result<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
@@ -835,13 +835,8 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        <Self as MachineOps>::vm_state_transfer(
-            &self.cpus,
-            &mut self.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        )
-        .is_ok()
+        self.vm_state_transfer(&self.cpus, &mut self.vm_state.0.lock().unwrap(), old, new)
+            .is_ok()
     }
 }
 
