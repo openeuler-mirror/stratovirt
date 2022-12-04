@@ -88,7 +88,7 @@ impl VncServer {
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
             vnc_cursor: Arc::new(Mutex::new(VncCursor::default())),
             conn_limits: CONNECTION_LIMIT,
-            update_interval: Arc::new(Mutex::new(0_u32)),
+            update_interval: Arc::new(Mutex::new(DISPLAY_UPDATE_INTERVAL_DEFAULT as u32)),
         }
     }
 }
@@ -257,26 +257,36 @@ impl SecurityType {
 
     /// Encryption configuration.
     fn set_auth(&mut self) -> Result<()> {
+        let is_x509: bool;
+        let is_anon: bool;
+        let is_sasl: bool = self.saslauth.is_some();
+
         if let Some(tlscred) = self.tlscreds.clone() {
+            is_x509 = tlscred.cred_type == *X509_CERT;
+            is_anon = tlscred.cred_type == *ANON_CERT;
             self.auth = AuthState::Vencrypt;
-            if tlscred.cred_type != *X509_CERT && tlscred.cred_type != *ANON_CERT {
-                error!("Unsupported tls cred type");
-                return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
-                    "Unsupported tls cred type",
-                ))));
-            }
-            if self.saslauth.is_some() {
-                if tlscred.cred_type == *"x509" {
-                    self.subauth = SubAuthState::VncAuthVencryptX509Sasl;
-                } else {
-                    self.subauth = SubAuthState::VncAuthVencryptTlssasl;
-                }
-            } else {
-                self.subauth = SubAuthState::VncAuthVencryptX509None;
-            }
         } else {
             self.auth = AuthState::No;
             self.subauth = SubAuthState::VncAuthVencryptPlain;
+            return Ok(());
+        }
+
+        if !is_x509 && !is_anon {
+            error!("Unsupported tls cred type");
+            return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
+                "Unsupported tls cred type",
+            ))));
+        }
+        if is_sasl {
+            if is_x509 {
+                self.subauth = SubAuthState::VncAuthVencryptX509Sasl;
+            } else {
+                self.subauth = SubAuthState::VncAuthVencryptTlssasl;
+            }
+        } else if is_x509 {
+            self.subauth = SubAuthState::VncAuthVencryptX509None;
+        } else {
+            self.subauth = SubAuthState::VncAuthVencryptTlNone;
         }
         Ok(())
     }
