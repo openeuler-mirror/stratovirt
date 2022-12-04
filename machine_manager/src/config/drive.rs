@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fs::metadata;
+use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
 
@@ -28,6 +28,18 @@ use crate::config::{
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
+
+/// Represent a single drive backend file.
+pub struct DriveFile {
+    /// The opened file.
+    pub file: File,
+    /// File path.
+    pub path: String,
+    /// File is read only or not.
+    pub read_only: bool,
+    /// File lock status.
+    pub locked: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

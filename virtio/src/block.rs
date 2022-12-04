@@ -46,7 +46,7 @@ use util::aio::{
     iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
 };
 use util::byte_code::ByteCode;
-use util::file::open_disk_file;
+use util::file::open_file;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -1011,7 +1011,7 @@ impl VirtioDevice for Block {
         let mut disk_image = None;
         let mut disk_size = DUMMY_IMG_SIZE;
         if !self.blk_cfg.path_on_host.is_empty() {
-            let mut file = open_disk_file(
+            let mut file = open_file(
                 &self.blk_cfg.path_on_host,
                 self.blk_cfg.read_only,
                 self.blk_cfg.direct,

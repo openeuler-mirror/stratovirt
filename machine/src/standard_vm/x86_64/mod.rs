@@ -39,8 +39,8 @@ use devices::legacy::{
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, BootSource, Incoming, MigrateMode, NumaNode, NumaNodes,
-    PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
+    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -128,6 +128,8 @@ pub struct StdMachine {
     bus_device: BusDeviceMap,
     /// Scsi Controller List.
     scsi_cntlr_list: ScsiCntlrMap,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl StdMachine {
@@ -180,6 +182,7 @@ impl StdMachine {
             fwcfg_dev: None,
             bus_device: Arc::new(Mutex::new(HashMap::new())),
             scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
+            drive_files: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -412,6 +415,10 @@ impl MachineOps for StdMachine {
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
         syscall_whitelist()
+    }
+
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.drive_files.clone()
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
