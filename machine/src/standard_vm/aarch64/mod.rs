@@ -152,6 +152,8 @@ pub struct StdMachine {
     bus_device: BusDeviceMap,
     /// Scsi Controller List.
     scsi_cntlr_list: ScsiCntlrMap,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl StdMachine {
@@ -204,6 +206,7 @@ impl StdMachine {
             fwcfg_dev: None,
             bus_device: Arc::new(Mutex::new(HashMap::new())),
             scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
+            drive_files: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -456,6 +459,10 @@ impl MachineOps for StdMachine {
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
         syscall_whitelist()
+    }
+
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.drive_files.clone()
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {

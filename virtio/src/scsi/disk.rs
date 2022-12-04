@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::ScsiBus::ScsiBus;
 use machine_manager::config::ScsiDevConfig;
-use util::file::open_disk_file;
+use util::file::open_file;
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -137,7 +137,7 @@ impl ScsiDevice {
         if !self.config.path_on_host.is_empty() {
             self.disk_image = None;
 
-            let mut file = open_disk_file(
+            let mut file = open_file(
                 &self.config.path_on_host,
                 self.config.read_only,
                 self.config.direct,

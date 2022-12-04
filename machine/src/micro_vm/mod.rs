@@ -37,6 +37,7 @@ mod syscall;
 
 use super::Result as MachineResult;
 use log::error;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -63,7 +64,7 @@ use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, Incoming, MigrateMode,
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, DriveFile, Incoming, MigrateMode,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -180,6 +181,8 @@ pub struct LightMachine {
     power_button: EventFd,
     // All configuration information of virtual machine.
     vm_config: Mutex<VmConfig>,
+    // Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl LightMachine {
@@ -236,6 +239,7 @@ impl LightMachine {
             vm_state,
             power_button,
             vm_config: Mutex::new(vm_config.clone()),
+            drive_files: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -711,6 +715,10 @@ impl MachineOps for LightMachine {
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
         syscall_whitelist()
+    }
+
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.drive_files.clone()
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
