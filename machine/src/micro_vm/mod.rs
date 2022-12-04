@@ -611,6 +611,10 @@ impl MachineOps for LightMachine {
         &self.vm_config
     }
 
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.vm_state
+    }
+
     fn get_migrate_info(&self) -> Incoming {
         if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
             return (*mode, path.to_string());
@@ -918,7 +922,7 @@ impl MachineAddressInterface for LightMachine {
 
 impl DeviceInterface for LightMachine {
     fn query_status(&self) -> Response {
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().deref().0.lock().unwrap();
         let qmp_state = match *vmstate {
             KvmVmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,

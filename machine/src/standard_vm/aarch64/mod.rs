@@ -356,10 +356,6 @@ impl StdMachineOps for StdMachine {
         Ok(Some(fwcfg_dev))
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.vm_state
-    }
-
     fn get_cpu_topo(&self) -> &CpuTopology {
         &self.cpu_topo
     }
@@ -623,6 +619,10 @@ impl MachineOps for StdMachine {
 
     fn get_vm_config(&self) -> &Mutex<VmConfig> {
         &self.vm_config
+    }
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.vm_state
     }
 
     fn get_migrate_info(&self) -> Incoming {

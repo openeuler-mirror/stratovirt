@@ -22,7 +22,7 @@ use std::fs::remove_file;
 use std::net::TcpListener;
 use std::os::unix::{io::AsRawFd, net::UnixListener};
 use std::path::Path;
-use std::sync::{Arc, Barrier, Mutex, Weak};
+use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
 use kvm_ioctls::VcpuFd;
 use log::warn;
@@ -297,6 +297,8 @@ pub trait MachineOps {
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace>;
 
     fn get_vm_config(&self) -> &Mutex<VmConfig>;
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
 
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.

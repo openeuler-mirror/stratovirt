@@ -34,7 +34,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use super::Result as MachineResult;
 use crate::MachineOps;
@@ -173,8 +173,6 @@ trait StdMachineOps: AcpiBuilder {
     fn add_fwcfg_device(&mut self, _nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         bail!("Not implemented");
     }
-
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
 
     fn get_cpu_topo(&self) -> &CpuTopology;
 
