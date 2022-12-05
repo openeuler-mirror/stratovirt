@@ -65,8 +65,12 @@ const SECTOR_SHIFT: u8 = 9;
 const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
-/// Number of max merged requests.
+/// Max number reqs of a merged request.
 const MAX_NUM_MERGE_REQS: u16 = 32;
+/// Max number iovs of a merged request.
+const MAX_NUM_MERGE_IOVS: usize = 1024;
+/// Max number bytes of a merged request.
+const MAX_NUM_MERGE_BYTES: u64 = i32::MAX as u64;
 /// Max time for every round of process queue.
 const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
 
@@ -433,15 +437,21 @@ impl BlockIoHandler {
 
         let mut merge_req_queue = Vec::<Request>::new();
         let mut last_req: Option<&mut Request> = None;
-        let mut merged_reqs = 1;
+        let mut merged_reqs = 0;
+        let mut merged_iovs = 0;
+        let mut merged_bytes = 0;
 
         *last_aio_index = 0;
         for req in req_queue {
+            let req_iovs = req.iovec.len();
+            let req_bytes = req.data_len;
             let io = req.out_header.request_type == VIRTIO_BLK_T_IN
                 || req.out_header.request_type == VIRTIO_BLK_T_OUT;
             let can_merge = match last_req {
                 Some(ref req_ref) => {
                     io && merged_reqs < MAX_NUM_MERGE_REQS
+                        && merged_iovs + req_iovs <= MAX_NUM_MERGE_IOVS
+                        && merged_bytes + req_bytes <= MAX_NUM_MERGE_BYTES
                         && req_ref.out_header.request_type == req.out_header.request_type
                         && (req_ref.out_header.sector + req_ref.get_req_sector_num()
                             == req.out_header.sector)
@@ -454,6 +464,8 @@ impl BlockIoHandler {
                 last_req_raw.next = Box::new(Some(req));
                 last_req = last_req_raw.next.as_mut().as_mut();
                 merged_reqs += 1;
+                merged_iovs += req_iovs;
+                merged_bytes += req_bytes;
             } else {
                 if io {
                     *last_aio_index = merge_req_queue.len();
@@ -461,6 +473,8 @@ impl BlockIoHandler {
                 merge_req_queue.push(req);
                 last_req = merge_req_queue.last_mut();
                 merged_reqs = 1;
+                merged_iovs = req_iovs;
+                merged_bytes = req_bytes;
             }
         }
 
