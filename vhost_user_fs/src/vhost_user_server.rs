@@ -157,7 +157,7 @@ impl VhostUserServerHandler {
     pub fn new(path: &str, backend: Arc<Mutex<dyn VhostUserReqHandler>>) -> Result<Self> {
         let mut sock = VhostUserSock::new(path);
         sock.domain
-            .bind(true)
+            .bind(false)
             .with_context(|| format!("Failed to bind for vhost user server {}", path))?;
         TempCleaner::add_path(path.to_string());
         limit_permission(path).with_context(|| format!("Failed to limit permission {}", path))?;
