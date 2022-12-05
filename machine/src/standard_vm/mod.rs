@@ -1238,6 +1238,7 @@ impl DeviceInterface for StdMachine {
             Ok(()) => Response::create_empty_response(),
             Err(e) => {
                 error!("{:?}", e);
+                // It's safe to unwrap as the path has been registered.
                 self.unregister_drive_file(&args.file.filename).unwrap();
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1255,6 +1256,7 @@ impl DeviceInterface for StdMachine {
             .del_drive_by_id(&node_name)
         {
             Ok(path) => {
+                // It's safe to unwrap as the path has been registered.
                 self.unregister_drive_file(&path).unwrap();
                 Response::create_empty_response()
             }
