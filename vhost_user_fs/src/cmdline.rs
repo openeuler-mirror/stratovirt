@@ -140,11 +140,6 @@ impl FsConfig {
             );
         }
 
-        let sock_path = PathBuf::from(&self.sock_path);
-        if !sock_path.is_file() {
-            bail!("The socket path {} is not a file", self.sock_path);
-        }
-
         Ok(())
     }
 }
