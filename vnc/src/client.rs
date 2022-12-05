@@ -18,7 +18,8 @@ use crate::{
     utils::BuffPool,
     vnc::{
         framebuffer_upadate, set_area_dirty, write_pixel, DisplayMouse, BIT_PER_BYTE,
-        DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, VNC_RECT_INFO,
+        DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_OUTPUT_LIMIT,
+        OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
     },
     VncError,
 };
@@ -154,6 +155,10 @@ impl Rectangle {
 /// Display Output mode information of client.
 #[derive(Clone)]
 pub struct DisplayMode {
+    /// Width of client display.
+    pub client_width: i32,
+    /// Height of client display.
+    pub client_height: i32,
     /// Encoding type.
     pub enc: i32,
     /// Data storage type for client.
@@ -167,6 +172,8 @@ pub struct DisplayMode {
 impl DisplayMode {
     pub fn new(enc: i32, client_be: bool, convert: bool, pf: PixelFormat) -> Self {
         DisplayMode {
+            client_width: 0,
+            client_height: 0,
             enc,
             client_be,
             convert,
@@ -343,12 +350,19 @@ impl ClientIoHandler {
 
     fn client_handle_write(&mut self) {
         let client = self.client.clone();
+        if client.conn_state.lock().unwrap().dis_conn {
+            return;
+        }
         let mut locked_buffer = client.out_buffer.lock().unwrap();
-        let len = locked_buffer.len();
-        let buf = locked_buffer.read_front(len);
-        self.write_msg(buf);
-        locked_buffer.remov_front(len);
+        while let Some(bytes) = locked_buffer.read_front_chunk() {
+            self.write_msg(bytes);
+            locked_buffer.remove_front_chunk();
+        }
         drop(locked_buffer);
+    }
+
+    pub fn flush(&mut self) {
+        self.client_handle_write();
     }
 
     /// Read buf from stream, return the size.
@@ -372,11 +386,10 @@ impl ClientIoHandler {
                 Err(e) => return Err(e),
             }
         }
-        self.client
-            .in_buffer
-            .lock()
-            .unwrap()
-            .read(&mut buf[..len].to_vec());
+        if len > 0 {
+            buf = buf[..len].to_vec();
+            self.client.in_buffer.lock().unwrap().append_limit(buf);
+        }
 
         Ok(len)
     }
@@ -496,6 +509,7 @@ impl ClientIoHandler {
 
     /// Exchange RFB protocol version with client.
     fn handle_version(&mut self) -> Result<()> {
+        let client = self.client.clone();
         let buf = self.read_incoming_msg();
         let res = String::from_utf8_lossy(&buf);
         let ver_str = &res[0..12].to_string();
@@ -512,7 +526,8 @@ impl ClientIoHandler {
         if version.major != 3 || ![3, 4, 5, 7, 8].contains(&version.minor) {
             let mut buf = Vec::new();
             buf.append(&mut (AuthState::Invalid as u32).to_be_bytes().to_vec());
-            self.write_msg(&buf);
+            vnc_write(&client, buf);
+            self.flush();
             return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         }
 
@@ -528,7 +543,7 @@ impl ClientIoHandler {
                 AuthState::No => {
                     let mut buf = Vec::new();
                     buf.append(&mut (AuthState::No as u32).to_be_bytes().to_vec());
-                    self.write_msg(&buf);
+                    vnc_write(&client, buf);
                     self.update_event_handler(1, ClientIoHandler::handle_client_init);
                 }
                 _ => {
@@ -542,9 +557,10 @@ impl ClientIoHandler {
             let mut buf = [0u8; 2];
             buf[0] = 1; // Number of security types.
             buf[1] = auth as u8;
-            self.write_msg(&buf);
+            vnc_write(&client, buf.to_vec());
             self.update_event_handler(1, ClientIoHandler::handle_auth);
         }
+        self.flush();
         Ok(())
     }
 
@@ -552,24 +568,30 @@ impl ClientIoHandler {
     pub fn handle_client_init(&mut self) -> Result<()> {
         let mut buf = Vec::new();
         // Send server framebuffer info.
+        let client = self.client.clone();
         let locked_surface = self.server.vnc_surface.lock().unwrap();
+        let mut locked_dpm = client.client_dpm.lock().unwrap();
         let width = get_image_width(locked_surface.server_image);
         let height = get_image_height(locked_surface.server_image);
-        drop(locked_surface);
         if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
             || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
         {
             error!("Invalid Image Size!");
             return Err(anyhow!(VncError::InvalidImageSize));
         }
+        locked_dpm.client_width = width;
+        locked_dpm.client_height = height;
+        drop(locked_dpm);
+        drop(locked_surface);
+
         buf.append(&mut (width as u16).to_be_bytes().to_vec());
         buf.append(&mut (height as u16).to_be_bytes().to_vec());
-        let client = self.client.clone();
         pixel_format_message(&client, &mut buf);
 
         buf.append(&mut (APP_NAME.to_string().len() as u32).to_be_bytes().to_vec());
         buf.append(&mut APP_NAME.to_string().as_bytes().to_vec());
-        self.write_msg(&buf);
+        vnc_write(&client, buf);
+        self.flush();
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
     }
@@ -578,7 +600,8 @@ impl ClientIoHandler {
     fn handle_auth(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let auth = self.server.security_type.lock().unwrap().auth;
-        let version = self.client.conn_state.lock().unwrap().version.clone();
+        let client = self.client.clone();
+        let version = client.conn_state.lock().unwrap().version.clone();
 
         if buf[0] != auth as u8 {
             self.auth_failed("Authentication failed");
@@ -590,7 +613,7 @@ impl ClientIoHandler {
             AuthState::No => {
                 if version.minor >= 8 {
                     let buf = [0u8; 4];
-                    self.write_msg(&buf);
+                    vnc_write(&client, buf.to_vec());
                 }
                 self.update_event_handler(1, ClientIoHandler::handle_client_init);
             }
@@ -600,7 +623,7 @@ impl ClientIoHandler {
                 buf[0] = 0_u8;
                 buf[1] = 2_u8;
 
-                self.write_msg(&buf);
+                vnc_write(&client, buf.to_vec());
                 self.update_event_handler(2, ClientIoHandler::client_vencrypt_init);
             }
             _ => {
@@ -609,6 +632,7 @@ impl ClientIoHandler {
                 return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
             }
         }
+        self.flush();
         Ok(())
     }
 
@@ -667,7 +691,9 @@ impl ClientIoHandler {
             buf.append(&mut (b as u16).to_be_bytes().to_vec());
         }
 
-        self.write_msg(&buf);
+        let client = self.client.clone();
+        vnc_write(&client, buf);
+        self.flush();
     }
 
     /// Set image format.
@@ -826,7 +852,7 @@ impl ClientIoHandler {
         desktop_resize(&client, &server, &mut buf);
         // VNC display cursor define.
         display_cursor_define(&client, &server, &mut buf);
-        client.out_buffer.lock().unwrap().read(&mut buf);
+        vnc_write(&client, buf);
         vnc_flush_notify(&client);
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
@@ -882,13 +908,16 @@ impl ClientIoHandler {
             buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
             buf.append(&mut err_msg.as_bytes().to_vec());
         }
-        self.write_msg(&buf);
+        let client = self.client.clone();
+        vnc_write(&client, buf);
+        self.flush();
     }
 
     /// Read the data from the receiver buffer.
     pub fn read_incoming_msg(&mut self) -> Vec<u8> {
+        let mut buf: Vec<u8> = vec![0_u8; self.expect];
         let mut locked_in_buffer = self.client.in_buffer.lock().unwrap();
-        let buf = locked_in_buffer.read_front(self.expect).to_vec();
+        let _size: usize = locked_in_buffer.read_front(&mut buf, self.expect);
         buf
     }
 
@@ -907,7 +936,7 @@ impl ClientIoHandler {
             .in_buffer
             .lock()
             .unwrap()
-            .remov_front(self.expect);
+            .remove_front(self.expect);
         self.expect = expect;
         self.msg_handler = msg_handler;
     }
@@ -1176,8 +1205,9 @@ pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
 
 /// Set Desktop Size.
 pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
-    let locked_state = client.conn_state.lock().unwrap();
     let locked_surface = server.vnc_surface.lock().unwrap();
+    let locked_state = client.conn_state.lock().unwrap();
+    let mut locked_dpm = client.client_dpm.lock().unwrap();
     if !locked_state.has_feature(VncFeatures::VncFeatureResizeExt)
         && !locked_state.has_feature(VncFeatures::VncFeatureResize)
     {
@@ -1185,15 +1215,21 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
     }
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
-    drop(locked_state);
-    drop(locked_surface);
-
     if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
         || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
     {
         error!("Invalid Image Size!");
         return;
     }
+
+    if locked_dpm.client_width == width && locked_dpm.client_height == height {
+        return;
+    }
+    locked_dpm.client_width = width;
+    locked_dpm.client_height = height;
+    drop(locked_dpm);
+    drop(locked_state);
+    drop(locked_surface);
 
     buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
     buf.append(&mut (0_u8).to_be_bytes().to_vec());
@@ -1202,20 +1238,11 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
 }
 
 /// Set color depth for client.
-pub fn set_color_depth(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
+pub fn set_color_depth(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
     let locked_state = client.conn_state.lock().unwrap();
     if locked_state.has_feature(VncFeatures::VncFeatureWmvi) {
-        let locked_surface = server.vnc_surface.lock().unwrap();
-        let width = get_image_width(locked_surface.server_image);
-        let height = get_image_height(locked_surface.server_image);
-        drop(locked_surface);
-
-        if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
-            || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
-        {
-            error!("Invalid Image Size!");
-            return;
-        }
+        let width = client.client_dpm.lock().unwrap().client_width;
+        let height = client.client_dpm.lock().unwrap().client_height;
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
         buf.append(&mut (0_u8).to_be_bytes().to_vec()); // Padding.
         buf.append(&mut (1_u16).to_be_bytes().to_vec()); // Number of pixel block.
@@ -1311,6 +1338,36 @@ pub fn display_cursor_define(
         write_pixel(data_ptr, data_size as usize, &dpm, buf);
         buf.append(&mut mask);
     }
+}
+
+pub fn vnc_write(client: &Arc<ClientState>, buf: Vec<u8>) {
+    if client.conn_state.lock().unwrap().dis_conn {
+        return;
+    }
+    let mut locked_buffer = client.out_buffer.lock().unwrap();
+    if !locked_buffer.is_enough(buf.len()) {
+        client.conn_state.lock().unwrap().dis_conn = true;
+        return;
+    }
+    locked_buffer.append_limit(buf);
+}
+
+/// Set the limit size of the output buffer to prevent the client
+/// from stopping receiving data.
+pub fn vnc_update_output_throttle(client: &Arc<ClientState>) {
+    let locked_dpm = client.client_dpm.lock().unwrap();
+    let width = locked_dpm.client_width;
+    let height = locked_dpm.client_height;
+    let bytes_per_pixel = locked_dpm.pf.pixel_bytes;
+    let mut offset = width * height * (bytes_per_pixel as i32) * OUTPUT_THROTTLE_SCALE;
+    drop(locked_dpm);
+
+    offset = cmp::max(offset, MIN_OUTPUT_LIMIT);
+    client
+        .out_buffer
+        .lock()
+        .unwrap()
+        .set_limit(Some(offset as usize));
 }
 
 /// Consume the output buffer.
