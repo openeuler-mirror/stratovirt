@@ -1242,10 +1242,9 @@ mod tests {
     use super::super::*;
     use super::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use machine_manager::config::IothreadConfig;
+    use machine_manager::config::{IothreadConfig, VmConfig};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::{thread, time::Duration};
-    use util::file::open_file;
     use vmm_sys_util::tempfile::TempFile;
 
     const QUEUE_NUM_BLK: usize = 1;
@@ -1298,22 +1297,13 @@ mod tests {
         block.blk_cfg.direct = false;
         let f = TempFile::new().unwrap();
         block.blk_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
-        let drive_file = DriveFile {
-            file: open_file(
-                &block.blk_cfg.path_on_host,
-                block.blk_cfg.read_only,
-                block.blk_cfg.direct,
-            )
-            .unwrap(),
-            path: block.blk_cfg.path_on_host.clone(),
-            read_only: block.blk_cfg.read_only,
-            locked: false,
-        };
-        block
-            .drive_files
-            .lock()
-            .unwrap()
-            .insert(block.blk_cfg.path_on_host.clone(), drive_file);
+        VmConfig::add_drive_file(
+            &mut block.drive_files.lock().unwrap(),
+            &block.blk_cfg.path_on_host,
+            block.blk_cfg.read_only,
+            block.blk_cfg.direct,
+        )
+        .unwrap();
         assert!(block.realize().is_ok());
 
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
@@ -1443,6 +1433,14 @@ mod tests {
         // config iothread and iops
         block.blk_cfg.iothread = Some(thread_name);
         block.blk_cfg.iops = Some(100);
+
+        VmConfig::add_drive_file(
+            &mut block.drive_files.lock().unwrap(),
+            &block.blk_cfg.path_on_host,
+            block.blk_cfg.read_only,
+            block.blk_cfg.direct,
+        )
+        .unwrap();
 
         let mem_space = address_space_init();
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();

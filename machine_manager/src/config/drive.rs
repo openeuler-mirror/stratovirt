@@ -33,6 +33,8 @@ const MAX_UNIT_ID: usize = 2;
 pub struct DriveFile {
     /// The opened file.
     pub file: File,
+    /// The num of drives share same file.
+    pub count: u32,
     /// File path.
     pub path: String,
     /// File is read only or not.

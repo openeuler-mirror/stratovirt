@@ -246,9 +246,10 @@ impl VmConfig {
         read_only: bool,
         direct: bool,
     ) -> Result<()> {
-        if let Some(drive_file) = drive_files.get(path) {
+        if let Some(drive_file) = drive_files.get_mut(path) {
             if drive_file.read_only && read_only {
                 // File can be shared with read_only.
+                drive_file.count += 1;
                 return Ok(());
             } else {
                 return Err(anyhow!(
@@ -259,11 +260,31 @@ impl VmConfig {
         }
         let drive_file = DriveFile {
             file: open_file(path, read_only, direct)?,
+            count: 1,
             read_only,
             path: path.to_string(),
             locked: false,
         };
         drive_files.insert(path.to_string(), drive_file);
+        Ok(())
+    }
+
+    /// Remove a file from drive file store.
+    pub fn remove_drive_file(
+        drive_files: &mut HashMap<String, DriveFile>,
+        path: &str,
+    ) -> Result<()> {
+        if let Some(drive_file) = drive_files.get_mut(path) {
+            drive_file.count -= 1;
+            if drive_file.count == 0 {
+                drive_files.remove(path);
+            }
+        } else {
+            return Err(anyhow!(
+                "Failed to remove drive {}, it does not exist",
+                path
+            ));
+        }
         Ok(())
     }
 
