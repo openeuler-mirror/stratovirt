@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
 use std::sync::{Arc, Mutex, Weak};
@@ -17,8 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{bail, Context, Result};
 
 use crate::ScsiBus::ScsiBus;
-use machine_manager::config::ScsiDevConfig;
-use util::file::open_file;
+use machine_manager::config::{DriveFile, ScsiDevConfig};
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -92,6 +92,8 @@ pub struct ScsiDevice {
     pub scsi_type: u32,
     /// Scsi Bus attached to.
     pub parent_bus: Weak<Mutex<ScsiBus>>,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl Default for ScsiDevice {
@@ -103,12 +105,17 @@ impl Default for ScsiDevice {
             disk_sectors: 0,
             scsi_type: SCSI_TYPE_DISK,
             parent_bus: Weak::new(),
+            drive_files: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
 
 impl ScsiDevice {
-    pub fn new(config: ScsiDevConfig, scsi_type: u32) -> ScsiDevice {
+    pub fn new(
+        config: ScsiDevConfig,
+        scsi_type: u32,
+        drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    ) -> ScsiDevice {
         ScsiDevice {
             config,
             state: ScsiDevState::new(),
@@ -116,6 +123,7 @@ impl ScsiDevice {
             disk_sectors: 0,
             scsi_type,
             parent_bus: Weak::new(),
+            drive_files,
         }
     }
 
@@ -137,11 +145,10 @@ impl ScsiDevice {
         if !self.config.path_on_host.is_empty() {
             self.disk_image = None;
 
-            let mut file = open_file(
-                &self.config.path_on_host,
-                self.config.read_only,
-                self.config.direct,
-            )?;
+            let drive_files = self.drive_files.lock().unwrap();
+            // It's safe to unwrap as the path has been registered.
+            let drive_file = drive_files.get(&self.config.path_on_host).unwrap();
+            let mut file = drive_file.file.try_clone()?;
 
             disk_size = file
                 .seek(SeekFrom::End(0))

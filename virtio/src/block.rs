@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
@@ -33,6 +34,7 @@ use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
+use machine_manager::config::DriveFile;
 use machine_manager::{
     config::{BlkDevConfig, ConfigCheck},
     event_loop::EventLoop,
@@ -46,7 +48,6 @@ use util::aio::{
     iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
 };
 use util::byte_code::ByteCode;
-use util::file::open_file;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -940,6 +941,8 @@ pub struct Block {
     update_evt: EventFd,
     /// Eventfd for device deactivate.
     deactivate_evt: EventFd,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl Default for Block {
@@ -953,12 +956,16 @@ impl Default for Block {
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            drive_files: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
 
 impl Block {
-    pub fn new(blk_cfg: BlkDevConfig) -> Block {
+    pub fn new(
+        blk_cfg: BlkDevConfig,
+        drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    ) -> Block {
         Self {
             blk_cfg,
             disk_image: None,
@@ -968,6 +975,7 @@ impl Block {
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            drive_files,
         }
     }
 
@@ -1011,11 +1019,10 @@ impl VirtioDevice for Block {
         let mut disk_image = None;
         let mut disk_size = DUMMY_IMG_SIZE;
         if !self.blk_cfg.path_on_host.is_empty() {
-            let mut file = open_file(
-                &self.blk_cfg.path_on_host,
-                self.blk_cfg.read_only,
-                self.blk_cfg.direct,
-            )?;
+            let drive_files = self.drive_files.lock().unwrap();
+            // It's safe to unwrap as the path has been registered.
+            let drive_file = drive_files.get(&self.blk_cfg.path_on_host).unwrap();
+            let mut file = drive_file.file.try_clone()?;
             disk_size =
                 file.seek(SeekFrom::End(0))
                     .with_context(|| "Failed to seek the end for block")? as u64;
@@ -1238,6 +1245,7 @@ mod tests {
     use machine_manager::config::IothreadConfig;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::{thread, time::Duration};
+    use util::file::open_file;
     use vmm_sys_util::tempfile::TempFile;
 
     const QUEUE_NUM_BLK: usize = 1;
@@ -1290,6 +1298,22 @@ mod tests {
         block.blk_cfg.direct = false;
         let f = TempFile::new().unwrap();
         block.blk_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
+        let drive_file = DriveFile {
+            file: open_file(
+                &block.blk_cfg.path_on_host,
+                block.blk_cfg.read_only,
+                block.blk_cfg.direct,
+            )
+            .unwrap(),
+            path: block.blk_cfg.path_on_host.clone(),
+            read_only: block.blk_cfg.read_only,
+            locked: false,
+        };
+        block
+            .drive_files
+            .lock()
+            .unwrap()
+            .insert(block.blk_cfg.path_on_host.clone(), drive_file);
         assert!(block.realize().is_ok());
 
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);

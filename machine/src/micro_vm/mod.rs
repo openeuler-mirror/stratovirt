@@ -239,7 +239,7 @@ impl LightMachine {
             vm_state,
             power_button,
             vm_config: Mutex::new(vm_config.clone()),
-            drive_files: Arc::new(Mutex::new(HashMap::new())),
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
 
@@ -1103,7 +1103,7 @@ impl DeviceInterface for LightMachine {
 
         let config = BlkDevConfig {
             id: args.node_name.clone(),
-            path_on_host: args.file.filename,
+            path_on_host: args.file.filename.clone(),
             read_only,
             direct,
             serial_num: None,
@@ -1127,10 +1127,19 @@ impl DeviceInterface for LightMachine {
                 None,
             );
         }
+        // Register drive backend file for hotplugged drive.
+        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+            error!("{:?}", e);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{:?}", e);
+                self.unregister_drive_file(&args.file.filename).unwrap();
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
