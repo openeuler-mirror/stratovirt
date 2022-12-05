@@ -239,12 +239,21 @@ const PCI_EXP_SLTCTL_EIC: u16 = 0x0800;
 pub const PCI_EXP_SLTSTA: u16 = 26;
 /// Attention Button Pressed
 pub const PCI_EXP_SLTSTA_ABP: u16 = 0x0001;
+/// Power Fault Detected
+pub const PCI_EXP_SLTSTA_PFD: u16 = 0x0002;
+/// MRL Sensor Changed
+pub const PCI_EXP_SLTSTA_MRLSC: u16 = 0x0004;
 /// Presence Detect Changed
 pub const PCI_EXP_SLTSTA_PDC: u16 = 0x0008;
 /// Command Completed
 pub const PCI_EXP_SLTSTA_CC: u16 = 0x0010;
 /// Presence Detect State
 pub const PCI_EXP_SLTSTA_PDS: u16 = 0x0040;
+pub const PCI_EXP_SLOTSTA_EVENTS: u16 = PCI_EXP_SLTSTA_ABP
+    | PCI_EXP_SLTSTA_PFD
+    | PCI_EXP_SLTSTA_MRLSC
+    | PCI_EXP_SLTSTA_PDC
+    | PCI_EXP_SLTSTA_CC;
 
 // System error on correctable error enable.
 const PCI_EXP_RTCTL_SECEE: u16 = 0x01;
