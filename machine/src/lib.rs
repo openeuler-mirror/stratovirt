@@ -627,7 +627,10 @@ pub trait MachineOps {
             self.check_bootindex(bootindex)
                 .with_context(|| "Fail to add virtio pci blk device for invalid bootindex")?;
         }
-        let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
+        let device = Arc::new(Mutex::new(Block::new(
+            device_cfg.clone(),
+            self.get_drive_files(),
+        )));
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .with_context(|| "Failed to add virtio pci device")?;
@@ -681,6 +684,7 @@ pub trait MachineOps {
         let device = Arc::new(Mutex::new(ScsiDisk::ScsiDevice::new(
             device_cfg.clone(),
             scsi_type,
+            self.get_drive_files(),
         )));
 
         let lock_cntlr_list = if let Some(cntlr_list) = self.get_scsi_cntlr_list() {

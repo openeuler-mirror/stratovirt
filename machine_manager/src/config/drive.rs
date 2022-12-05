@@ -497,13 +497,12 @@ impl VmConfig {
     /// # Arguments
     ///
     /// * `drive_id` - Drive id.
-    pub fn del_drive_by_id(&mut self, drive_id: &str) -> Result<()> {
+    pub fn del_drive_by_id(&mut self, drive_id: &str) -> Result<String> {
         if self.drives.get(drive_id).is_some() {
-            self.drives.remove(drive_id);
+            Ok(self.drives.remove(drive_id).unwrap().path_on_host)
         } else {
             bail!("Drive {} not found", drive_id);
         }
-        Ok(())
     }
 
     /// Add new flash device to `VmConfig`.

@@ -17,7 +17,6 @@ mod syscall;
 use crate::error::MachineError;
 use log::error;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
@@ -182,7 +181,7 @@ impl StdMachine {
             fwcfg_dev: None,
             bus_device: Arc::new(Mutex::new(HashMap::new())),
             scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
-            drive_files: Arc::new(Mutex::new(HashMap::new())),
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
 
@@ -506,13 +505,7 @@ impl MachineOps for StdMachine {
         // of current PFlash device.
         let mut flash_end: u64 = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
         for config in configs_vec {
-            let mut fd = OpenOptions::new()
-                .read(true)
-                .write(!config.read_only)
-                .open(&config.path_on_host)
-                .with_context(|| {
-                    anyhow!(StandardVmError::OpenFileErr(config.path_on_host.clone()))
-                })?;
+            let mut fd = self.fetch_drive_file(&config.path_on_host)?;
             let pfl_size = fd.metadata().unwrap().len();
 
             if config.unit == 0 {

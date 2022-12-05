@@ -16,7 +16,6 @@ mod syscall;
 pub use crate::error::MachineError;
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
@@ -47,8 +46,8 @@ use devices::legacy::{
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, BootSource, Incoming, MigrateMode, NumaNode, NumaNodes,
-    PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
+    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -206,7 +205,7 @@ impl StdMachine {
             fwcfg_dev: None,
             bus_device: Arc::new(Mutex::new(HashMap::new())),
             scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
-            drive_files: Arc::new(Mutex::new(HashMap::new())),
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
 
@@ -582,11 +581,7 @@ impl MachineOps for StdMachine {
             let (fd, read_only) = if i < configs_vec.len() {
                 let path = &configs_vec[i].path_on_host;
                 let read_only = configs_vec[i].read_only;
-                let fd = OpenOptions::new()
-                    .read(true)
-                    .write(!read_only)
-                    .open(path)
-                    .with_context(|| anyhow!(StdErrorKind::OpenFileErr(path.to_string())))?;
+                let fd = self.fetch_drive_file(path)?;
                 (Some(fd), read_only)
             } else {
                 (None, false)
