@@ -426,6 +426,12 @@ impl VhostUserReqHandler for VirtioFs {
         let mut queue_info = self.config.get_mut_queue_config(queue_index)?;
         queue_info.config.ready = status == 1;
 
+        // Before setting up new notifiers, we should remove old ones.
+        if let Some(fs_handler) = self.fs_handlers.get_mut(queue_index).unwrap().take() {
+            EventLoop::update_event(fs_handler.lock().unwrap().delete_notifiers(), None)
+                .with_context(|| "Failed to update event for queue status which is not ready")?;
+        };
+
         if status == 1 {
             if queue_info.kick_evt.is_none() || queue_info.call_evt.is_none() {
                 bail!(
@@ -450,10 +456,8 @@ impl VhostUserReqHandler for VirtioFs {
             self.fs_handlers[queue_index] = Some(fs_handler.clone());
             EventLoop::update_event(EventNotifierHelper::internal_notifiers(fs_handler), None)
                 .with_context(|| "Failed to update event for queue status which is ready")?;
-        } else if let Some(fs_handler) = self.fs_handlers.get_mut(queue_index).unwrap().take() {
-            EventLoop::update_event(fs_handler.lock().unwrap().delete_notifiers(), None)
-                .with_context(|| "Failed to update event for queue status which is not ready")?;
         }
+
         Ok(())
     }
 }
