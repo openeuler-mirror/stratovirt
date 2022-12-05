@@ -14,6 +14,7 @@
 import platform
 import logging
 import re
+import json
 from enum import Enum
 from enum import auto
 import pytest
@@ -21,92 +22,42 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logging.basicConfig(filename='/var/log/pytest.log',
                     level=logging.DEBUG, format=LOG_FORMAT)
 
-class CpuVendor(Enum):
-    """CPU vendors enum."""
+def _parse_output(output):
 
-    AMD = auto()
-    INTEL = auto()
+    cpu_info = {}
+    for item in output:
+        cpu_info.update({item['field']: item['data']})
+        cpu_info.update(_parse_output(item.get('children', [])))
+    return cpu_info
 
+def _get_cpu_info(test_microvm):
 
-def _get_cpu_vendor():
-    cif = open('/proc/cpuinfo', 'r')
-    host_vendor_id = None
-    while True:
-        line = cif.readline()
-        if line == '':
-            break
-        matchoutput = re.search("^vendor_id\\s+:\\s+(.+)$", line)
-        if matchoutput:
-            host_vendor_id = matchoutput.group(1)
-    cif.close()
-    assert host_vendor_id is not None
-
-    if host_vendor_id == "AuthenticAMD":
-        return CpuVendor.AMD
-    return CpuVendor.INTEL
-
-
-def _check_guest_cmd_output(microvm, guest_cmd, expected_header,
-                            expected_separator,
-                            expected_key_value_store):
-    status, output = microvm.serial_cmd(guest_cmd)
-
-    assert status == 0
-    for line in output.splitlines():
-        line = line.strip()
-        if line != '':
-            # all the keys have been matched. Stop.
-            if not expected_key_value_store:
-                break
-
-            # try to match the header if needed.
-            if expected_header not in (None, ''):
-                if line.strip() == expected_header:
-                    expected_header = None
-                continue
-
-            # see if any key matches.
-            # we use a try-catch block here since line.split() may fail.
-            try:
-                [key, value] = list(
-                    map(lambda x: x.strip(), line.split(expected_separator)))
-            except ValueError:
-                continue
-
-            if key in expected_key_value_store.keys():
-                assert value == expected_key_value_store[key], \
-                    "%s does not have the expected value" % key
-                del expected_key_value_store[key]
-
-        else:
-            break
-
-    assert not expected_key_value_store, \
-        "some keys in dictionary have not been found in the output: %s" \
-        % expected_key_value_store
-
+    output = json.loads(test_microvm.ssh_session.cmd_output("lscpu -J"))
+    return _parse_output(output.get("lscpu", []))
 
 def _check_cpu_topology(test_microvm, expected_cpu_count,
                         expected_threads_per_core,
                         expected_cores_per_socket,
                         expected_cpus_list):
-    expected_cpu_topology = {
-        "CPU(s)": str(expected_cpu_count),
-        "On-line CPU(s) list": expected_cpus_list,
-        "Thread(s) per core": str(expected_threads_per_core),
-        "Core(s) per socket": str(expected_cores_per_socket),
-        "Socket(s)": str(int(expected_cpu_count / expected_cores_per_socket / expected_threads_per_core)),
-    }
-    status, output = test_microvm.serial_cmd("lscpu")
-    assert status == 0, str(output)
-    if "Core(s) per cluster" in output and "aarch64" in platform.machine():
-        expected_cpu_topology["Core(s) per cluster"] = expected_cpu_topology["Core(s) per socket"]
-        del expected_cpu_topology["Core(s) per socket"]
-        expected_cpu_topology["Cluster(s)"] = expected_cpu_topology["Socket(s)"]
-        del expected_cpu_topology["Socket(s)"]
 
-    _check_guest_cmd_output(test_microvm, "lscpu", None, ':',
-                            expected_cpu_topology)
+    expected_cpu_topology = {
+        "CPU(s):": str(expected_cpu_count),
+        "On-line CPU(s) list:": expected_cpus_list,
+        "Thread(s) per core:": str(expected_threads_per_core),
+        "Core(s) per socket:": str(expected_cores_per_socket),
+        "Socket(s):": str(int(expected_cpu_count / expected_cores_per_socket / expected_threads_per_core)),
+    }
+
+    cpu_info = _get_cpu_info(test_microvm)
+    if "Core(s) per cluster:" in cpu_info.keys():
+        expected_cpu_topology["Core(s) per cluster:"] = expected_cpu_topology["Core(s) per socket:"]
+        del expected_cpu_topology["Core(s) per socket:"]
+    if "Cluster(s):" in cpu_info.keys():
+        expected_cpu_topology["Cluster(s):"] = expected_cpu_topology["Socket(s):"]
+        del expected_cpu_topology["Socket(s):"]
+
+    for key, expect_value in expected_cpu_topology.items():
+        assert cpu_info[key] == expect_value
 
 
 @pytest.mark.acceptance
@@ -143,9 +94,6 @@ def test_128vcpu_topo(microvm):
 @pytest.mark.acceptance
 def test_brand_string(microvm):
     """Ensure the guest band string is correct.
-       In x86_64 platform, the guest brand string is:
-
-       Intel(R) Xeon(R) Processor @ {host frequency}
     """
     branch_string_format = "^model name\\s+:\\s+(.+)$"
     host_brand_string = None
@@ -169,13 +117,7 @@ def test_brand_string(microvm):
     assert matchoutput
     guest_brand_string = matchoutput.group(1)
     assert guest_brand_string
-
-    cpu_vendor = _get_cpu_vendor()
-    expected_guest_brand_string = ""
-    if cpu_vendor == CpuVendor.INTEL:
-        expected_guest_brand_string = host_brand_string
-
-    assert guest_brand_string == expected_guest_brand_string
+    assert guest_brand_string == host_brand_string
 
 
 @pytest.mark.skipif("platform.machine().startswith('x86_64')")
