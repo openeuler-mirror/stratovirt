@@ -52,8 +52,6 @@ const ECAM_OFFSET_MASK: u64 = 0xfff;
 #[derive(Clone)]
 pub struct PciHost {
     pub root_bus: Arc<Mutex<PciBus>>,
-    #[allow(dead_code)]
-    device: Option<Arc<Mutex<dyn PciDevOps>>>,
     #[cfg(target_arch = "x86_64")]
     config_addr: u32,
     pcie_ecam_range: (u64, u64),
@@ -94,7 +92,6 @@ impl PciHost {
         );
         PciHost {
             root_bus: Arc::new(Mutex::new(root_bus)),
-            device: None,
             #[cfg(target_arch = "x86_64")]
             config_addr: 0,
             pcie_ecam_range,
