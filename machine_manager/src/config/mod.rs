@@ -253,7 +253,8 @@ impl VmConfig {
                 return Ok(());
             } else {
                 return Err(anyhow!(
-                    "Failed to add drive {}, file can only be shared with read_only",
+                    "Failed to add drive {}, file can only be shared with read_only. \
+                    Is it used more than once or another process using the same file?",
                     path
                 ));
             }
