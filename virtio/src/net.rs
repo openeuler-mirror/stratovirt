@@ -27,10 +27,12 @@ use super::{
     VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
     VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
     VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6,
-    VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
+    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
+    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
@@ -54,8 +56,8 @@ use util::tap::{
     Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-/// Number of virtqueues.
-const QUEUE_NUM_NET: usize = 2;
+/// Number of virtqueues(rx/tx/ctrl).
+const QUEUE_NUM_NET: usize = 3;
 /// Size of each virtqueue.
 const QUEUE_SIZE_NET: u16 = 256;
 /// The Mac Address length.
@@ -1368,6 +1370,11 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_TSO4
             | 1 << VIRTIO_NET_F_HOST_TSO6
             | 1 << VIRTIO_NET_F_HOST_UFO
+            | 1 << VIRTIO_NET_F_CTRL_RX
+            | 1 << VIRTIO_NET_F_CTRL_VLAN
+            | 1 << VIRTIO_NET_F_CTRL_RX_EXTRA
+            | 1 << VIRTIO_NET_F_CTRL_MAC_ADDR
+            | 1 << VIRTIO_NET_F_CTRL_VQ
             | 1 << VIRTIO_F_RING_EVENT_IDX;
 
         let queue_pairs = self.net_cfg.queues / 2;
@@ -1376,7 +1383,6 @@ impl VirtioDevice for Net {
                 .contains(&queue_pairs)
         {
             locked_state.device_features |= 1 << VIRTIO_NET_F_MQ;
-            locked_state.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
             locked_state.config_space.max_virtqueue_pairs = queue_pairs;
         }
 
@@ -1708,7 +1714,7 @@ mod tests {
         // test net realize method
         net.realize().unwrap();
         assert_eq!(net.device_type(), 1);
-        assert_eq!(net.queue_num(), 2);
+        assert_eq!(net.queue_num(), 3);
         assert_eq!(net.queue_size(), 256);
 
         // test read_config and write_config method
