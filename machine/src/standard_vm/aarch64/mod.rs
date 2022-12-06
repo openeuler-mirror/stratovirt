@@ -16,7 +16,6 @@ mod syscall;
 pub use crate::error::MachineError;
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
@@ -47,8 +46,8 @@ use devices::legacy::{
 use devices::{ICGICConfig, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
 use hypervisor::kvm::KVM_FDS;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, BootSource, Incoming, MigrateMode, NumaNode, NumaNodes,
-    PFlashConfig, SerialConfig, VmConfig,
+    parse_incoming_uri, BootIndexInfo, BootSource, DriveFile, Incoming, MigrateMode, NumaNode,
+    NumaNodes, PFlashConfig, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -152,6 +151,8 @@ pub struct StdMachine {
     bus_device: BusDeviceMap,
     /// Scsi Controller List.
     scsi_cntlr_list: ScsiCntlrMap,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl StdMachine {
@@ -204,6 +205,7 @@ impl StdMachine {
             fwcfg_dev: None,
             bus_device: Arc::new(Mutex::new(HashMap::new())),
             scsi_cntlr_list: Arc::new(Mutex::new(HashMap::new())),
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
 
@@ -356,10 +358,6 @@ impl StdMachineOps for StdMachine {
         Ok(Some(fwcfg_dev))
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
-        &self.vm_state
-    }
-
     fn get_cpu_topo(&self) -> &CpuTopology {
         &self.cpu_topo
     }
@@ -460,6 +458,10 @@ impl MachineOps for StdMachine {
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
         syscall_whitelist()
+    }
+
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.drive_files.clone()
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
@@ -579,11 +581,7 @@ impl MachineOps for StdMachine {
             let (fd, read_only) = if i < configs_vec.len() {
                 let path = &configs_vec[i].path_on_host;
                 let read_only = configs_vec[i].read_only;
-                let fd = OpenOptions::new()
-                    .read(true)
-                    .write(!read_only)
-                    .open(path)
-                    .with_context(|| anyhow!(StdErrorKind::OpenFileErr(path.to_string())))?;
+                let fd = self.fetch_drive_file(path)?;
                 (Some(fd), read_only)
             } else {
                 (None, false)
@@ -614,7 +612,7 @@ impl MachineOps for StdMachine {
     }
 
     fn run(&self, paused: bool) -> Result<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace> {
@@ -623,6 +621,10 @@ impl MachineOps for StdMachine {
 
     fn get_vm_config(&self) -> &Mutex<VmConfig> {
         &self.vm_config
+    }
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.vm_state
     }
 
     fn get_migrate_info(&self) -> Incoming {
@@ -981,7 +983,7 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        <Self as MachineOps>::vm_state_transfer(
+        self.vm_state_transfer(
             &self.cpus,
             &self.irq_chip,
             &mut self.vm_state.0.lock().unwrap(),

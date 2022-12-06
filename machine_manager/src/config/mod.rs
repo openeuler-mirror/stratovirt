@@ -64,7 +64,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
-use util::trace::enable_trace_events;
+use util::{file::open_file, trace::enable_trace_events};
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
@@ -237,6 +237,58 @@ impl VmConfig {
             }
         }
         Ok(())
+    }
+
+    /// Add a file to drive file store.
+    pub fn add_drive_file(
+        drive_files: &mut HashMap<String, DriveFile>,
+        path: &str,
+        read_only: bool,
+        direct: bool,
+    ) -> Result<()> {
+        if let Some(drive_file) = drive_files.get(path) {
+            if drive_file.read_only && read_only {
+                // File can be shared with read_only.
+                return Ok(());
+            } else {
+                return Err(anyhow!(
+                    "Failed to add drive {}, file can only be shared with read_only",
+                    path
+                ));
+            }
+        }
+        let drive_file = DriveFile {
+            file: open_file(path, read_only, direct)?,
+            read_only,
+            path: path.to_string(),
+            locked: false,
+        };
+        drive_files.insert(path.to_string(), drive_file);
+        Ok(())
+    }
+
+    /// Create initial drive file store from cmdline drive.
+    pub fn init_drive_files(&self) -> Result<HashMap<String, DriveFile>> {
+        let mut drive_files: HashMap<String, DriveFile> = HashMap::new();
+        for drive in self.drives.values() {
+            Self::add_drive_file(
+                &mut drive_files,
+                &drive.path_on_host,
+                drive.read_only,
+                drive.direct,
+            )?;
+        }
+        if let Some(pflashs) = self.pflashs.as_ref() {
+            for pflash in pflashs {
+                Self::add_drive_file(
+                    &mut drive_files,
+                    &pflash.path_on_host,
+                    pflash.read_only,
+                    false,
+                )?;
+            }
+        }
+        Ok(drive_files)
     }
 }
 

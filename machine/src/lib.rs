@@ -17,15 +17,17 @@ mod standard_vm;
 mod vm_state;
 
 pub use crate::error::MachineError;
-use std::collections::BTreeMap;
-use std::fs::remove_file;
+use std::collections::{BTreeMap, HashMap};
+use std::fs::{remove_file, File};
 use std::net::TcpListener;
+use std::ops::Deref;
 use std::os::unix::{io::AsRawFd, net::UnixListener};
 use std::path::Path;
-use std::sync::{Arc, Barrier, Mutex, Weak};
+use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
 use kvm_ioctls::VcpuFd;
 use log::warn;
+use util::file::{lock_file, unlock_file};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub use micro_vm::LightMachine;
@@ -52,8 +54,8 @@ use machine_manager::config::{
     parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev, parse_root_port,
     parse_scsi_controller, parse_scsi_device, parse_usb_keyboard, parse_usb_tablet, parse_vfio,
     parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, parse_xhci,
-    BootIndexInfo, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
-    NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    BootIndexInfo, DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance,
+    NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
     MAX_VIRTIO_QUEUE,
 };
 use machine_manager::{
@@ -297,6 +299,8 @@ pub trait MachineOps {
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace>;
 
     fn get_vm_config(&self) -> &Mutex<VmConfig>;
+
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
 
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
@@ -623,7 +627,10 @@ pub trait MachineOps {
             self.check_bootindex(bootindex)
                 .with_context(|| "Fail to add virtio pci blk device for invalid bootindex")?;
         }
-        let device = Arc::new(Mutex::new(Block::new(device_cfg.clone())));
+        let device = Arc::new(Mutex::new(Block::new(
+            device_cfg.clone(),
+            self.get_drive_files(),
+        )));
         let pci_dev = self
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .with_context(|| "Failed to add virtio pci device")?;
@@ -690,6 +697,7 @@ pub trait MachineOps {
         let device = Arc::new(Mutex::new(ScsiDisk::ScsiDevice::new(
             device_cfg.clone(),
             scsi_type,
+            self.get_drive_files(),
         )));
 
         let cntlr_list = self
@@ -1289,6 +1297,74 @@ pub trait MachineOps {
         Ok(())
     }
 
+    /// Get the drive backend files.
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>>;
+
+    /// Fetch a cloned file from drive backend files.
+    fn fetch_drive_file(&self, path: &str) -> Result<File> {
+        let files = self.get_drive_files();
+        let drive_files = files.lock().unwrap();
+        match drive_files.get(path) {
+            Some(drive_file) => drive_file
+                .file
+                .try_clone()
+                .with_context(|| format!("Failed to clone drive backend file {}", path)),
+            None => Err(anyhow!("The file {} is not in drive backend", path)),
+        }
+    }
+
+    /// Register a new drive backend file.
+    fn register_drive_file(&self, path: &str, read_only: bool, direct: bool) -> Result<()> {
+        let files = self.get_drive_files();
+        let mut drive_files = files.lock().unwrap();
+        VmConfig::add_drive_file(&mut drive_files, path, read_only, direct)?;
+
+        // Lock the added file if VM is running.
+        let drive_file = drive_files.get_mut(path).unwrap();
+        let vm_state = self.get_vm_state().deref().0.lock().unwrap();
+        if *vm_state == KvmVmState::Running {
+            if let Err(e) = lock_file(&drive_file.file, path, read_only) {
+                drive_files.remove(path);
+                return Err(e);
+            }
+            drive_file.locked = true;
+        }
+        Ok(())
+    }
+
+    /// Unregister a drive backend file.
+    fn unregister_drive_file(&self, path: &str) -> Result<DriveFile> {
+        self.get_drive_files()
+            .lock()
+            .unwrap()
+            .remove(path)
+            .with_context(|| "Failed to unregister drive file")
+    }
+
+    /// Active drive backend files. i.e., Apply lock.
+    fn active_drive_files(&self) -> Result<()> {
+        for drive_file in self.get_drive_files().lock().unwrap().values_mut() {
+            if drive_file.locked {
+                continue;
+            }
+            lock_file(&drive_file.file, &drive_file.path, drive_file.read_only)?;
+            drive_file.locked = true;
+        }
+        Ok(())
+    }
+
+    /// Deactive drive backend files. i.e., Release lock.
+    fn deactive_drive_files(&self) -> Result<()> {
+        for drive_file in self.get_drive_files().lock().unwrap().values_mut() {
+            if !drive_file.locked {
+                continue;
+            }
+            unlock_file(&drive_file.file, &drive_file.path)?;
+            drive_file.locked = false;
+        }
+        Ok(())
+    }
+
     /// Realize the machine.
     ///
     /// # Arguments
@@ -1313,17 +1389,20 @@ pub trait MachineOps {
     /// * `paused` - After started, paused all vcpu or not.
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_start(paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
-    where
-        Self: Sized,
-    {
+    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+        if !paused {
+            self.active_drive_files()?;
+        }
+
         let nr_vcpus = cpus.len();
         let cpus_thread_barrier = Arc::new(Barrier::new((nr_vcpus + 1) as usize));
         for cpu_index in 0..nr_vcpus {
             let cpu_thread_barrier = cpus_thread_barrier.clone();
             let cpu = cpus[cpu_index as usize].clone();
-            CPU::start(cpu, cpu_thread_barrier, paused)
-                .with_context(|| format!("Failed to run vcpu{}", cpu_index))?;
+            if let Err(e) = CPU::start(cpu, cpu_thread_barrier, paused) {
+                self.deactive_drive_files()?;
+                return Err(anyhow!("Failed to run vcpu{}, {:?}", cpu_index, e));
+            }
         }
 
         if paused {
@@ -1343,16 +1422,18 @@ pub trait MachineOps {
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
     fn vm_pause(
+        &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
         vm_state: &mut KvmVmState,
-    ) -> Result<()>
-    where
-        Self: Sized,
-    {
+    ) -> Result<()> {
+        self.deactive_drive_files()?;
+
         for (cpu_index, cpu) in cpus.iter().enumerate() {
-            cpu.pause()
-                .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
+            if let Err(e) = cpu.pause() {
+                self.active_drive_files()?;
+                return Err(anyhow!("Failed to pause vcpu{}, {:?}", cpu_index, e));
+            }
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -1369,13 +1450,14 @@ pub trait MachineOps {
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_resume(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
-    where
-        Self: Sized,
-    {
+    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
+        self.active_drive_files()?;
+
         for (cpu_index, cpu) in cpus.iter().enumerate() {
-            cpu.resume()
-                .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
+            if let Err(e) = cpu.resume() {
+                self.deactive_drive_files()?;
+                return Err(anyhow!("Failed to resume vcpu{}, {:?}", cpu_index, e));
+            }
         }
 
         *vm_state = KvmVmState::Running;
@@ -1389,10 +1471,7 @@ pub trait MachineOps {
     ///
     /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm kvm vm state.
-    fn vm_destroy(cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()>
-    where
-        Self: Sized,
-    {
+    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut KvmVmState) -> Result<()> {
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.destroy()
                 .with_context(|| format!("Failed to destroy vcpu{}", cpu_index))?;
@@ -1412,15 +1491,13 @@ pub trait MachineOps {
     /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
     fn vm_state_transfer(
+        &self,
         cpus: &[Arc<CPU>],
         #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
         vm_state: &mut KvmVmState,
         old_state: KvmVmState,
         new_state: KvmVmState,
-    ) -> Result<()>
-    where
-        Self: Sized,
-    {
+    ) -> Result<()> {
         use KvmVmState::*;
 
         if *vm_state != old_state {
@@ -1428,21 +1505,23 @@ pub trait MachineOps {
         }
 
         match (old_state, new_state) {
-            (Created, Running) => <Self as MachineOps>::vm_start(false, cpus, vm_state)
+            (Created, Running) => self
+                .vm_start(false, cpus, vm_state)
                 .with_context(|| "Failed to start vm.")?,
-            (Running, Paused) => <Self as MachineOps>::vm_pause(
-                cpus,
-                #[cfg(target_arch = "aarch64")]
-                irq_chip,
-                vm_state,
-            )
-            .with_context(|| "Failed to pause vm.")?,
-            (Paused, Running) => <Self as MachineOps>::vm_resume(cpus, vm_state)
+            (Running, Paused) => self
+                .vm_pause(
+                    cpus,
+                    #[cfg(target_arch = "aarch64")]
+                    irq_chip,
+                    vm_state,
+                )
+                .with_context(|| "Failed to pause vm.")?,
+            (Paused, Running) => self
+                .vm_resume(cpus, vm_state)
                 .with_context(|| "Failed to resume vm.")?,
-            (_, Shutdown) => {
-                <Self as MachineOps>::vm_destroy(cpus, vm_state)
-                    .with_context(|| "Failed to destroy vm.")?;
-            }
+            (_, Shutdown) => self
+                .vm_destroy(cpus, vm_state)
+                .with_context(|| "Failed to destroy vm.")?,
             (_, _) => {
                 bail!("Vm lifecycle error: this transform is illegal.");
             }

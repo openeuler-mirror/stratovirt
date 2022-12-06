@@ -16,16 +16,24 @@ use std::os::unix::io::AsRawFd;
 
 use anyhow::{bail, Context, Result};
 
-pub fn open_disk_file(path: &str, read_only: bool, direct: bool) -> Result<File> {
+pub fn open_file(path: &str, read_only: bool, direct: bool) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(!read_only);
     if direct {
         options.custom_flags(libc::O_DIRECT);
     }
-    let file = options
-        .open(path)
-        .with_context(|| format!("failed to open the file for block {}", path))?;
+    let file = options.open(path).with_context(|| {
+        format!(
+            "failed to open the file for block {}. Error: {}",
+            path,
+            std::io::Error::last_os_error(),
+        )
+    })?;
 
+    Ok(file)
+}
+
+pub fn lock_file(file: &File, path: &str, read_only: bool) -> Result<()> {
     let (lockop, lockname) = if read_only {
         (libc::LOCK_SH | libc::LOCK_NB, "read lock")
     } else {
@@ -34,10 +42,25 @@ pub fn open_disk_file(path: &str, read_only: bool, direct: bool) -> Result<File>
     let ret = unsafe { libc::flock(file.as_raw_fd(), lockop) };
     if ret < 0 {
         bail!(
-            "Failed to get {} on file: {}. Maybe it's used more than once.",
+            "Failed to get {} on file: {}. Maybe it's used more than once. Error: {}",
             lockname,
-            path
+            path,
+            std::io::Error::last_os_error(),
         );
     }
-    Ok(file)
+
+    Ok(())
+}
+
+pub fn unlock_file(file: &File, path: &str) -> Result<()> {
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    if ret < 0 {
+        bail!(
+            "Failed to release lock on file: {}. Error: {}",
+            path,
+            std::io::Error::last_os_error(),
+        );
+    }
+
+    Ok(())
 }

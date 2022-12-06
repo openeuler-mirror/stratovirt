@@ -34,7 +34,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use super::Result as MachineResult;
 use crate::MachineOps;
@@ -173,8 +173,6 @@ trait StdMachineOps: AcpiBuilder {
     fn add_fwcfg_device(&mut self, _nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
         bail!("Not implemented");
     }
-
-    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
 
     fn get_cpu_topo(&self) -> &CpuTopology;
 
@@ -780,7 +778,7 @@ impl StdMachine {
         }
 
         let blk_id = blk.id.clone();
-        let blk = Arc::new(Mutex::new(Block::new(blk)));
+        let blk = Arc::new(Mutex::new(Block::new(blk, self.get_drive_files())));
         let pci_dev = self
             .add_virtio_pci_device(&args.id, pci_bdf, blk.clone(), multifunction, false)
             .with_context(|| "Failed to add virtio pci block device")?;
@@ -1196,7 +1194,7 @@ impl DeviceInterface for StdMachine {
         };
         let config = DriveConfig {
             id: args.node_name,
-            path_on_host: args.file.filename,
+            path_on_host: args.file.filename.clone(),
             read_only,
             direct,
             iops: args.iops,
@@ -1209,6 +1207,7 @@ impl DeviceInterface for StdMachine {
         };
 
         if let Err(e) = config.check() {
+            error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
@@ -1216,6 +1215,15 @@ impl DeviceInterface for StdMachine {
         }
         // Check whether path is valid after configuration check
         if let Err(e) = config.check_path() {
+            error!("{:?}", e);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
+        // Register drive backend file for hotplug drive.
+        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+            error!("{:?}", e);
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
@@ -1228,10 +1236,14 @@ impl DeviceInterface for StdMachine {
             .add_drive_with_config(config)
         {
             Ok(()) => Response::create_empty_response(),
-            Err(e) => Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
-                None,
-            ),
+            Err(e) => {
+                error!("{:?}", e);
+                self.unregister_drive_file(&args.file.filename).unwrap();
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
         }
     }
 
@@ -1242,7 +1254,10 @@ impl DeviceInterface for StdMachine {
             .unwrap()
             .del_drive_by_id(&node_name)
         {
-            Ok(()) => Response::create_empty_response(),
+            Ok(path) => {
+                self.unregister_drive_file(&path).unwrap();
+                Response::create_empty_response()
+            }
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,

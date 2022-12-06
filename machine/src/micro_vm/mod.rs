@@ -37,6 +37,7 @@ mod syscall;
 
 use super::Result as MachineResult;
 use log::error;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -63,7 +64,7 @@ use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
 use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, Incoming, MigrateMode,
+    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, DriveFile, Incoming, MigrateMode,
 };
 use machine_manager::event;
 use machine_manager::machine::{
@@ -180,6 +181,8 @@ pub struct LightMachine {
     power_button: EventFd,
     // All configuration information of virtual machine.
     vm_config: Mutex<VmConfig>,
+    // Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 impl LightMachine {
@@ -236,6 +239,7 @@ impl LightMachine {
             vm_state,
             power_button,
             vm_config: Mutex::new(vm_config.clone()),
+            drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
 
@@ -611,6 +615,10 @@ impl MachineOps for LightMachine {
         &self.vm_config
     }
 
+    fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {
+        &self.vm_state
+    }
+
     fn get_migrate_info(&self) -> Incoming {
         if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
             return (*mode, path.to_string());
@@ -707,6 +715,10 @@ impl MachineOps for LightMachine {
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
         syscall_whitelist()
+    }
+
+    fn get_drive_files(&self) -> Arc<Mutex<HashMap<String, DriveFile>>> {
+        self.drive_files.clone()
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> MachineResult<()> {
@@ -817,7 +829,7 @@ impl MachineOps for LightMachine {
     }
 
     fn run(&self, paused: bool) -> MachineResult<()> {
-        <Self as MachineOps>::vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
+        self.vm_start(paused, &self.cpus, &mut self.vm_state.0.lock().unwrap())
     }
 }
 
@@ -865,7 +877,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn notify_lifecycle(&self, old: KvmVmState, new: KvmVmState) -> bool {
-        <Self as MachineOps>::vm_state_transfer(
+        self.vm_state_transfer(
             &self.cpus,
             #[cfg(target_arch = "aarch64")]
             &self.irq_chip,
@@ -918,7 +930,7 @@ impl MachineAddressInterface for LightMachine {
 
 impl DeviceInterface for LightMachine {
     fn query_status(&self) -> Response {
-        let vmstate = self.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().deref().0.lock().unwrap();
         let qmp_state = match *vmstate {
             KvmVmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
@@ -1091,7 +1103,7 @@ impl DeviceInterface for LightMachine {
 
         let config = BlkDevConfig {
             id: args.node_name.clone(),
-            path_on_host: args.file.filename,
+            path_on_host: args.file.filename.clone(),
             read_only,
             direct,
             serial_num: None,
@@ -1115,10 +1127,19 @@ impl DeviceInterface for LightMachine {
                 None,
             );
         }
+        // Register drive backend file for hotplugged drive.
+        if let Err(e) = self.register_drive_file(&args.file.filename, read_only, direct) {
+            error!("{:?}", e);
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            );
+        }
         match self.add_replaceable_config(&args.node_name, Arc::new(config)) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{:?}", e);
+                self.unregister_drive_file(&args.file.filename).unwrap();
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
