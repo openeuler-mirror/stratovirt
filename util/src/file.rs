@@ -42,7 +42,8 @@ pub fn lock_file(file: &File, path: &str, read_only: bool) -> Result<()> {
     let ret = unsafe { libc::flock(file.as_raw_fd(), lockop) };
     if ret < 0 {
         bail!(
-            "Failed to get {} on file: {}. Maybe it's used more than once. Error: {}",
+            "Failed to get {} on file: {}. Is it used more than once or \
+            another process using the same file?. Error: {}",
             lockname,
             path,
             std::io::Error::last_os_error(),
