@@ -54,9 +54,9 @@ mod usb;
 mod vfio;
 pub mod vnc;
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::{any::Any, fs::File};
 
 use serde::{Deserialize, Serialize};
 
@@ -286,6 +286,17 @@ impl VmConfig {
             ));
         }
         Ok(())
+    }
+
+    /// Get a file from drive file store.
+    pub fn fetch_drive_file(drive_files: &HashMap<String, DriveFile>, path: &str) -> Result<File> {
+        match drive_files.get(path) {
+            Some(drive_file) => drive_file
+                .file
+                .try_clone()
+                .with_context(|| format!("Failed to clone drive backend file {}", path)),
+            None => Err(anyhow!("The file {} is not in drive backend", path)),
+        }
     }
 
     /// Create initial drive file store from cmdline drive.
