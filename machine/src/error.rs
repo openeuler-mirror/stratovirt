@@ -87,6 +87,9 @@ pub enum MachineError {
     #[error("Failed to create irq chip.")]
     #[cfg(target_arch = "x86_64")]
     CrtIrqchipErr,
+    #[error("Failed to set identity map address.")]
+    #[cfg(target_arch = "x86_64")]
+    SetIdentityMapAddr,
     #[error("Failed to set tss address.")]
     #[cfg(target_arch = "x86_64")]
     SetTssErr,
