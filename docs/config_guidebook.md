@@ -398,7 +398,8 @@ It has no effect when vhost is set.
 * vhost: whether to run as a vhost-net device.
 * vhostfd: the file descriptor of opened tap device.
 * vhostfds: file descriptors of opened tap device.
-* mac: set mac address in VM (optional).
+* mac: set mac address in VM (optional). A default mac address will be created when it is not assigned by user. So, it may
+  cause the same mac address between two virtio-net devices when one device has mac and the other hasn't.
 * mq: the optional mq attribute enable device multiple queue feature.
 
 Two more properties are supported for virtio pci net device.
