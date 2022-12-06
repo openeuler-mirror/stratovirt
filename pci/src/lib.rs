@@ -200,21 +200,18 @@ pub trait PciDevOps: Send {
         parent_dev_path
     }
 
-    /// Fill the device patch accroding to parent device patch and device function.
+    /// Fill the device path accroding to parent device path and device function.
     fn populate_dev_path(&self, parent_dev_path: String, devfn: u8, dev_type: &str) -> String {
-        let mut dev_path = parent_dev_path;
-        dev_path.push_str(dev_type);
-
         let slot = pci_slot(devfn);
-        dev_path.push_str(&slot.to_string());
-
         let function = pci_func(devfn);
-        if function != 0 {
-            dev_path.push(',');
-            dev_path.push_str(&function.to_string());
-        }
 
-        dev_path
+        let slot_function = if function != 0 {
+            format!("{:x},{:x}", slot, function)
+        } else {
+            format!("{:x}", slot)
+        };
+
+        format!("{}{}{}", parent_dev_path, dev_type, slot_function)
     }
 
     /// Get firmware device path.

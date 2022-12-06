@@ -784,7 +784,7 @@ Virtio Scsi HardDisk is a virtual block device, which process read and write req
 
 Note: Only support using raw image file as backend now.
 
-Seven properties can be set for virtio-scsi hd.
+Ten properties can be set for virtio-scsi hd.
 
 * file: the path of backend image file.
 * id: unique device id.
@@ -795,13 +795,15 @@ Seven properties can be set for virtio-scsi hd.
 * readonly: whether scsi device is read-only or not. Default option is false. (optional)
 * direct: open block device with `O_DIRECT` mode. (optional) If not set, default is true.
 * aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
+* bootindex: the boot order of the scsi device. (optional) If not set, the priority is lowest.
+The number ranges from 0 to 255, the smaller the number, the higher the priority.
+It determines the order of bootable devices which firmware will use for booting the guest OS.
 
 ```shell
 -device virtio-scsi-pci,bus=pcie.1,addr=0x0,id=scsi0[,multifunction=on,iothread=iothread1,num-queues=4]
 -drive file=path_on_host,id=drive-scsi0-0-0-0[,readonly=true,aio=native,direct=true]
--device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0
+-device scsi-hd,bus=scsi0.0,scsi-id=0,lun=0,drive=drive-scsi0-0-0-0,id=scsi0-0-0-0[,serial=123456,bootindex=1]
 ```
-Note: Only support scsi-id=0 and lun number should start from 0 Now.
 ### 2.18 VNC
 VNC can provide the users with way to login virtual machines remotely.
 

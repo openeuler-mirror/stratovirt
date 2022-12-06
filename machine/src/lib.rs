@@ -628,6 +628,13 @@ pub trait MachineOps {
             .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .with_context(|| "Failed to add virtio pci device")?;
         if let Some(bootindex) = device_cfg.boot_index {
+            // Eg: OpenFirmware device path(virtio-blk disk):
+            // /pci@i0cf8/scsi@6[,3]/disk@0,0
+            //   |             |  |       | |
+            //   |             |  |       | |
+            //   |             |  |     fixed 0.
+            //   |         PCI slot,[function] holding disk.
+            //  PCI root as system bus port.
             if let Some(dev_path) = pci_dev.lock().unwrap().get_dev_path() {
                 self.add_bootindex_devices(bootindex, &dev_path, &device_cfg.id);
             }
@@ -661,9 +668,11 @@ pub trait MachineOps {
             bail!("No scsi controller list found!");
         }
 
-        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, multi_func, false)
+        let pci_dev = self
+            .add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), multi_func, false)
             .with_context(|| "Failed to add virtio scsi controller")?;
         self.reset_bus(&device_cfg.id)?;
+        device.lock().unwrap().config.boot_prefix = pci_dev.lock().unwrap().get_dev_path();
         Ok(())
     }
 
@@ -674,24 +683,26 @@ pub trait MachineOps {
         scsi_type: u32,
     ) -> Result<()> {
         let device_cfg = parse_scsi_device(vm_config, cfg_args)?;
+        if let Some(bootindex) = device_cfg.boot_index {
+            self.check_bootindex(bootindex)
+                .with_context(|| "Failed to add scsi device for invalid bootindex")?;
+        }
         let device = Arc::new(Mutex::new(ScsiDisk::ScsiDevice::new(
             device_cfg.clone(),
             scsi_type,
         )));
 
-        let lock_cntlr_list = if let Some(cntlr_list) = self.get_scsi_cntlr_list() {
-            cntlr_list.lock().unwrap()
-        } else {
-            bail!("Wrong! No scsi controller list found")
-        };
+        let cntlr_list = self
+            .get_scsi_cntlr_list()
+            .ok_or_else(|| anyhow!("Wrong! No scsi controller list found!"))?;
+        let cntlr_list_clone = cntlr_list.clone();
+        let cntlr_list_lock = cntlr_list_clone.lock().unwrap();
 
-        let lock_cntlr = if let Some(cntlr) = lock_cntlr_list.get(&device_cfg.bus) {
-            cntlr.lock().unwrap()
-        } else {
-            bail!("Wrong! Bus {} not found in list", &device_cfg.bus)
-        };
+        let cntlr = cntlr_list_lock
+            .get(&device_cfg.bus)
+            .ok_or_else(|| anyhow!("Wrong! Bus {} not found in list", &device_cfg.bus))?;
 
-        if let Some(bus) = &lock_cntlr.bus {
+        if let Some(bus) = &cntlr.lock().unwrap().bus {
             if bus
                 .lock()
                 .unwrap()
@@ -710,6 +721,21 @@ pub trait MachineOps {
         }
 
         device.lock().unwrap().realize()?;
+
+        if let Some(bootindex) = device_cfg.boot_index {
+            let mut cntlr_locked = cntlr.lock().unwrap();
+            // Eg: OpenFirmware device path(virtio-scsi disk):
+            // /pci@i0cf8/scsi@7[,3]/channel@0/disk@2,3
+            //   |             |  |      |          | |
+            //   |             |  |      |     target,lun.
+            //   |             |  |   channel(unused, fixed 0).
+            //   |         PCI slot,[function] holding SCSI controller.
+            //  PCI root as system bus port.
+            let dev_path = cntlr_locked.config.boot_prefix.as_mut().unwrap();
+            let str = format! {"/channel@0/disk@{:x},{:x}", device_cfg.target, device_cfg.lun};
+            dev_path.push_str(&str);
+            self.add_bootindex_devices(bootindex, dev_path, &device_cfg.id);
+        }
         Ok(())
     }
 
