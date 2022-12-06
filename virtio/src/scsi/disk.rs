@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{bail, Context, Result};
 
 use crate::ScsiBus::ScsiBus;
-use machine_manager::config::{DriveFile, ScsiDevConfig};
+use machine_manager::config::{DriveFile, ScsiDevConfig, VmConfig};
 
 /// SCSI DEVICE TYPES.
 pub const SCSI_TYPE_DISK: u32 = 0x00;
@@ -146,10 +146,7 @@ impl ScsiDevice {
             self.disk_image = None;
 
             let drive_files = self.drive_files.lock().unwrap();
-            // It's safe to unwrap as the path has been registered.
-            let drive_file = drive_files.get(&self.config.path_on_host).unwrap();
-            let mut file = drive_file.file.try_clone()?;
-
+            let mut file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
             disk_size = file
                 .seek(SeekFrom::End(0))
                 .with_context(|| "Failed to seek the end for scsi device")?

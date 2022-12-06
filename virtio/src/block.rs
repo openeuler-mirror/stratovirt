@@ -34,7 +34,7 @@ use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
-use machine_manager::config::DriveFile;
+use machine_manager::config::{DriveFile, VmConfig};
 use machine_manager::{
     config::{BlkDevConfig, ConfigCheck},
     event_loop::EventLoop,
@@ -1034,9 +1034,7 @@ impl VirtioDevice for Block {
         let mut disk_size = DUMMY_IMG_SIZE;
         if !self.blk_cfg.path_on_host.is_empty() {
             let drive_files = self.drive_files.lock().unwrap();
-            // It's safe to unwrap as the path has been registered.
-            let drive_file = drive_files.get(&self.blk_cfg.path_on_host).unwrap();
-            let mut file = drive_file.file.try_clone()?;
+            let mut file = VmConfig::fetch_drive_file(&drive_files, &self.blk_cfg.path_on_host)?;
             disk_size =
                 file.seek(SeekFrom::End(0))
                     .with_context(|| "Failed to seek the end for block")? as u64;
