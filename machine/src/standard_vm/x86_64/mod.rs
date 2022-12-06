@@ -21,7 +21,7 @@ use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
-use vmm_sys_util::{eventfd::EventFd, ioctl_ioc_nr, ioctl_iow_nr};
+use vmm_sys_util::eventfd::EventFd;
 
 use acpi::{
     AcpiIoApic, AcpiLocalApic, AcpiSratMemoryAffinity, AcpiSratProcessorAffinity, AcpiTable,
@@ -226,16 +226,10 @@ impl StdMachine {
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let identity_addr: u64 = MEM_LAYOUT[LayoutEntryType::IdentTss as usize].0;
 
-        ioctl_iow_nr!(
-            KVM_SET_IDENTITY_MAP_ADDR,
-            kvm_bindings::KVMIO,
-            0x48,
-            std::os::raw::c_ulong
-        );
-        // Safe because the following ioctl only sets identity map address to KVM.
-        unsafe {
-            vmm_sys_util::ioctl::ioctl_with_ref(vm_fd, KVM_SET_IDENTITY_MAP_ADDR(), &identity_addr);
-        }
+        vm_fd
+            .set_identity_map_address(identity_addr)
+            .with_context(|| anyhow!(MachineError::SetIdentityMapAddr))?;
+
         // Page table takes 1 page, TSS takes the following 3 pages.
         vm_fd
             .set_tss_address((identity_addr + 0x1000) as usize)
@@ -434,6 +428,7 @@ impl MachineOps for StdMachine {
         )?;
 
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
+        StdMachine::arch_init()?;
         let kvm_fds = KVM_FDS.load();
         let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
         let mut vcpu_fds = vec![];
@@ -478,7 +473,6 @@ impl MachineOps for StdMachine {
                 .with_context(|| "Failed to create ACPI tables")?;
         }
 
-        StdMachine::arch_init()?;
         locked_vm.register_power_event(&locked_vm.power_button)?;
 
         locked_vm
