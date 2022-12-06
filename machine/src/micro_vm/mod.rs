@@ -429,6 +429,9 @@ impl LightMachine {
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
         for (index, config) in configs_lock.iter().enumerate() {
             if config.id == id {
+                if let Some(blkconf) = config.dev_config.as_any().downcast_ref::<BlkDevConfig>() {
+                    self.unregister_drive_file(&blkconf.path_on_host)?;
+                }
                 configs_lock.remove(index);
                 is_exist = true;
                 break;
