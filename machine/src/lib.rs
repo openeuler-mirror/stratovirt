@@ -460,6 +460,11 @@ pub trait MachineOps {
         let id_clone = dev_cfg.id.clone();
         let sys_mem = self.get_sys_mem().clone();
         let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
+
+        if !vm_config.machine_config.mem_config.mem_share {
+            bail!("When configuring the vhost-user-fs-device or vhost-user-fs-pci device, the memory must be shared.");
+        }
+
         if cfg_args.contains("vhost-user-fs-device") {
             let device = VirtioMmioDevice::new(&sys_mem, device);
             self.realize_virtio_mmio_device(device)
