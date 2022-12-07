@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -26,10 +27,12 @@ use super::{
     VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
     VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
     VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM,
-    VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6,
-    VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO,
-    VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
+    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
+    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
@@ -53,8 +56,8 @@ use util::tap::{
     Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
 };
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-/// Number of virtqueues.
-const QUEUE_NUM_NET: usize = 2;
+/// Number of virtqueues(rx/tx/ctrl).
+const QUEUE_NUM_NET: usize = 3;
 /// Size of each virtqueue.
 const QUEUE_SIZE_NET: u16 = 256;
 /// The Mac Address length.
@@ -65,8 +68,16 @@ const ETHERNET_HDR_LENGTH: usize = 14;
 const CTRL_MAC_TABLE_LEN: usize = 64;
 /// From 802.1Q definition, the max vlan ID.
 const CTRL_MAX_VLAN: u16 = 1 << 12;
+/// The max num of the mac address.
+const MAX_MAC_ADDR_NUM: usize = 0xff;
 
 type SenderConfig = Option<Tap>;
+
+/// The first default mac address.
+const FIRST_DEFAULT_MAC: [u8; MAC_ADDR_LEN] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+/// Used to mark if the last byte of the mac address is used.
+static USED_MAC_TABLE: Lazy<Arc<Mutex<[i8; MAX_MAC_ADDR_NUM]>>> =
+    Lazy::new(|| Arc::new(Mutex::new([0_i8; MAX_MAC_ADDR_NUM])));
 
 /// Configuration of virtio-net devices.
 #[repr(C, packed)]
@@ -1196,6 +1207,38 @@ pub fn build_device_config_space(device_config: &mut VirtioNetConfig, mac: &str)
     config_features
 }
 
+/// Mark the mac table used or free.
+fn mark_mac_table(mac: &[u8], used: bool) {
+    if mac[..MAC_ADDR_LEN - 1] != FIRST_DEFAULT_MAC[..MAC_ADDR_LEN - 1] {
+        return;
+    }
+    let mut val = -1_i8;
+    if used {
+        val = 1;
+    }
+    let mut locked_mac_table = USED_MAC_TABLE.lock().unwrap();
+    for i in FIRST_DEFAULT_MAC[MAC_ADDR_LEN - 1]..MAX_MAC_ADDR_NUM as u8 {
+        if mac[MAC_ADDR_LEN - 1] == i {
+            locked_mac_table[i as usize] += val;
+        }
+    }
+}
+
+/// Get a default free mac address.
+fn get_default_mac_addr() -> Result<[u8; MAC_ADDR_LEN]> {
+    let mut mac = [0_u8; MAC_ADDR_LEN];
+    mac.copy_from_slice(&FIRST_DEFAULT_MAC);
+    let mut locked_mac_table = USED_MAC_TABLE.lock().unwrap();
+    for i in FIRST_DEFAULT_MAC[MAC_ADDR_LEN - 1]..MAX_MAC_ADDR_NUM as u8 {
+        if locked_mac_table[i as usize] == 0 {
+            mac[MAC_ADDR_LEN - 1] = i as u8;
+            locked_mac_table[i as usize] = 1;
+            return Ok(mac);
+        }
+    }
+    bail!("Failed to get a free mac address");
+}
+
 /// Check that tap flag supports multi queue feature.
 ///
 /// # Arguments
@@ -1327,6 +1370,11 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_HOST_TSO4
             | 1 << VIRTIO_NET_F_HOST_TSO6
             | 1 << VIRTIO_NET_F_HOST_UFO
+            | 1 << VIRTIO_NET_F_CTRL_RX
+            | 1 << VIRTIO_NET_F_CTRL_VLAN
+            | 1 << VIRTIO_NET_F_CTRL_RX_EXTRA
+            | 1 << VIRTIO_NET_F_CTRL_MAC_ADDR
+            | 1 << VIRTIO_NET_F_CTRL_VQ
             | 1 << VIRTIO_F_RING_EVENT_IDX;
 
         let queue_pairs = self.net_cfg.queues / 2;
@@ -1335,7 +1383,6 @@ impl VirtioDevice for Net {
                 .contains(&queue_pairs)
         {
             locked_state.device_features |= 1 << VIRTIO_NET_F_MQ;
-            locked_state.device_features |= 1 << VIRTIO_NET_F_CTRL_VQ;
             locked_state.config_space.max_virtqueue_pairs = queue_pairs;
         }
 
@@ -1372,12 +1419,22 @@ impl VirtioDevice for Net {
         if let Some(mac) = &self.net_cfg.mac {
             locked_state.device_features |=
                 build_device_config_space(&mut locked_state.config_space, mac);
+            mark_mac_table(&locked_state.config_space.mac, true);
+        } else if locked_state.config_space.mac == [0; MAC_ADDR_LEN] {
+            let mac =
+                get_default_mac_addr().with_context(|| "Failed to get a default mac address")?;
+            locked_state.config_space.mac.copy_from_slice(&mac);
+            locked_state.device_features |= 1 << VIRTIO_NET_F_MAC;
+        } else {
+            // For microvm which will call realize() twice for one virtio-net-device.
+            locked_state.device_features |= 1 << VIRTIO_NET_F_MAC;
         }
 
         Ok(())
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        mark_mac_table(&self.state.lock().unwrap().config_space.mac, false);
         MigrationManager::unregister_device_instance(
             VirtioNetState::descriptor(),
             &self.net_cfg.id,
@@ -1657,7 +1714,7 @@ mod tests {
         // test net realize method
         net.realize().unwrap();
         assert_eq!(net.device_type(), 1);
-        assert_eq!(net.queue_num(), 2);
+        assert_eq!(net.queue_num(), 3);
         assert_eq!(net.queue_size(), 256);
 
         // test read_config and write_config method

@@ -194,7 +194,13 @@ impl VirtioPciCommonConfig {
         self.device_status & (set | clr) == set
     }
 
-    fn get_mut_queue_config(&mut self) -> PciResult<&mut QueueConfig> {
+    fn get_mut_queue_config(&mut self, need_check: bool) -> PciResult<&mut QueueConfig> {
+        if !need_check {
+            return self
+                .queues_config
+                .get_mut(self.queue_select as usize)
+                .ok_or_else(|| anyhow!("pci-reg queue_select overflows"));
+        }
         if self.check_device_status(
             CONFIG_STATUS_FEATURES_OK,
             CONFIG_STATUS_DRIVER_OK | CONFIG_STATUS_FAILED,
@@ -380,37 +386,43 @@ impl VirtioPciCommonConfig {
                 }
             }
             COMMON_Q_SIZE_REG => self
-                .get_mut_queue_config()
+                .get_mut_queue_config(true)
                 .map(|config| config.size = value as u16)?,
             COMMON_Q_ENABLE_REG => {
                 if value != 1 {
                     error!("Driver set illegal value for queue_enable {}", value);
                     return Err(anyhow!(PciError::QueueEnable(value)));
                 }
-                self.get_mut_queue_config()
+                self.get_mut_queue_config(true)
                     .map(|config| config.ready = true)?;
             }
             COMMON_Q_MSIX_REG => {
                 let val = self.revise_queue_vector(value, virtio_pci_dev);
-                self.get_mut_queue_config()
+                // It should not check device status when detaching device which
+                // will set vector to INVALID_VECTOR_NUM.
+                let mut need_check = true;
+                if self.device_status == 0 {
+                    need_check = false;
+                }
+                self.get_mut_queue_config(need_check)
                     .map(|config| config.vector = val as u16)?;
             }
-            COMMON_Q_DESCLO_REG => self.get_mut_queue_config().map(|config| {
+            COMMON_Q_DESCLO_REG => self.get_mut_queue_config(true).map(|config| {
                 config.desc_table = GuestAddress(config.desc_table.0 | u64::from(value));
             })?,
-            COMMON_Q_DESCHI_REG => self.get_mut_queue_config().map(|config| {
+            COMMON_Q_DESCHI_REG => self.get_mut_queue_config(true).map(|config| {
                 config.desc_table = GuestAddress(config.desc_table.0 | (u64::from(value) << 32));
             })?,
-            COMMON_Q_AVAILLO_REG => self.get_mut_queue_config().map(|config| {
+            COMMON_Q_AVAILLO_REG => self.get_mut_queue_config(true).map(|config| {
                 config.avail_ring = GuestAddress(config.avail_ring.0 | u64::from(value));
             })?,
-            COMMON_Q_AVAILHI_REG => self.get_mut_queue_config().map(|config| {
+            COMMON_Q_AVAILHI_REG => self.get_mut_queue_config(true).map(|config| {
                 config.avail_ring = GuestAddress(config.avail_ring.0 | (u64::from(value) << 32));
             })?,
-            COMMON_Q_USEDLO_REG => self.get_mut_queue_config().map(|config| {
+            COMMON_Q_USEDLO_REG => self.get_mut_queue_config(true).map(|config| {
                 config.used_ring = GuestAddress(config.used_ring.0 | u64::from(value));
             })?,
-            COMMON_Q_USEDHI_REG => self.get_mut_queue_config().map(|config| {
+            COMMON_Q_USEDHI_REG => self.get_mut_queue_config(true).map(|config| {
                 config.used_ring = GuestAddress(config.used_ring.0 | (u64::from(value) << 32));
             })?,
             _ => {
