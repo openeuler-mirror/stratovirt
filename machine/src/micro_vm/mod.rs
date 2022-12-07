@@ -265,7 +265,10 @@ impl LightMachine {
     fn create_replaceable_devices(&mut self) -> Result<()> {
         let mut rpl_devs: Vec<VirtioMmioDevice> = Vec::new();
         for id in 0..MMIO_REPLACEABLE_BLK_NR {
-            let block = Arc::new(Mutex::new(Block::default()));
+            let block = Arc::new(Mutex::new(Block::new(
+                BlkDevConfig::default(),
+                self.get_drive_files(),
+            )));
             let virtio_mmio = VirtioMmioDevice::new(&self.sys_mem, block.clone());
             rpl_devs.push(virtio_mmio);
 
@@ -1139,6 +1142,7 @@ impl DeviceInterface for LightMachine {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
                 error!("{:?}", e);
+                // It's safe to unwrap as the path has been registered.
                 self.unregister_drive_file(&args.file.filename).unwrap();
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),

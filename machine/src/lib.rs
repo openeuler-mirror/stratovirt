@@ -1322,9 +1322,9 @@ pub trait MachineOps {
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();
         let vm_state = self.get_vm_state().deref().0.lock().unwrap();
-        if *vm_state == KvmVmState::Running {
+        if *vm_state == KvmVmState::Running && !drive_file.locked {
             if let Err(e) = lock_file(&drive_file.file, path, read_only) {
-                drive_files.remove(path);
+                VmConfig::remove_drive_file(&mut drive_files, path)?;
                 return Err(e);
             }
             drive_file.locked = true;
@@ -1333,12 +1333,10 @@ pub trait MachineOps {
     }
 
     /// Unregister a drive backend file.
-    fn unregister_drive_file(&self, path: &str) -> Result<DriveFile> {
-        self.get_drive_files()
-            .lock()
-            .unwrap()
-            .remove(path)
-            .with_context(|| "Failed to unregister drive file")
+    fn unregister_drive_file(&self, path: &str) -> Result<()> {
+        let files = self.get_drive_files();
+        let mut drive_files = files.lock().unwrap();
+        VmConfig::remove_drive_file(&mut drive_files, path)
     }
 
     /// Active drive backend files. i.e., Apply lock.
