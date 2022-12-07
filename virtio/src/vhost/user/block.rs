@@ -291,7 +291,7 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
-    /// activate device
+    /// Activate device.
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
@@ -310,15 +310,25 @@ impl VirtioDevice for Block {
         Ok(())
     }
 
+    /// Deactivate device.
     fn deactivate(&mut self) -> Result<()> {
         self.call_events.clear();
         self.clean_up()?;
         self.realize()
     }
 
+    /// Reset device.
     fn reset(&mut self) -> Result<()> {
         self.clean_up()?;
         self.realize()
+    }
+
+    /// Unrealize device.
+    fn unrealize(&mut self) -> Result<()> {
+        self.delete_event()?;
+        self.call_events.clear();
+        self.client = None;
+        Ok(())
     }
 
     /// Set guest notifiers for notifying the guest.
