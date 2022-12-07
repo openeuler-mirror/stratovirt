@@ -11,12 +11,15 @@
 // See the Mulan PSL v2 for more details.
 
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 
-use machine_manager::event_loop::EventLoop;
+use machine_manager::{event_loop::EventLoop, temp_cleaner::TempCleaner};
 use util::loop_context::{
     EventLoopManager, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -34,6 +37,8 @@ use anyhow::{Context, Result};
 pub struct VhostUserFs {
     /// Used to communicate with StratoVirt.
     server_handler: VhostUserServerHandler,
+    /// Used to determine whether the process should be terminated.
+    should_exit: Arc<AtomicBool>,
 }
 
 trait CreateEventNotifier {
@@ -49,6 +54,8 @@ impl CreateEventNotifier for VhostUserServerHandler {
         server_handler: Arc<Mutex<Self>>,
     ) -> Option<Vec<EventNotifier>> {
         let mut notifiers = Vec::new();
+        let should_exit = self.should_exit.clone();
+
         if let Err(e) = self.sock.domain.accept() {
             error!("Failed to accept the socket for vhost user server, {:?}", e);
             return None;
@@ -64,10 +71,10 @@ impl CreateEventNotifier for VhostUserServerHandler {
             }
 
             if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                panic!("Receive the event of HANG_UP from stratovirt");
-            } else {
-                None
+                should_exit.store(true, Ordering::Release);
             }
+
+            None
         });
 
         handlers.push(Arc::new(Mutex::new(handler)));
@@ -126,6 +133,8 @@ impl VhostUserFs {
     ///
     /// * `fs_config` - Configuration of the vhost-user filesystem device.
     pub fn new(fs_config: FsConfig) -> Result<Self> {
+        let should_exit = Arc::new(AtomicBool::new(false));
+
         if let Some(limit) = fs_config.rlimit_nofile {
             set_rlimit_nofile(limit)
                 .with_context(|| format!("Failed to set rlimit nofile {}", limit))?;
@@ -136,9 +145,14 @@ impl VhostUserFs {
             VirtioFs::new(fs_config).with_context(|| "Failed to create virtio fs")?,
         ));
 
-        let server_handler = VhostUserServerHandler::new(sock_path.as_str(), virtio_fs)
-            .with_context(|| "Failed to create vhost user server")?;
-        Ok(VhostUserFs { server_handler })
+        let server_handler =
+            VhostUserServerHandler::new(sock_path.as_str(), virtio_fs, should_exit.clone())
+                .with_context(|| "Failed to create vhost user server")?;
+
+        Ok(VhostUserFs {
+            server_handler,
+            should_exit,
+        })
     }
 
     /// Add events to epoll handler for the vhost-user filesystem device.
@@ -156,10 +170,11 @@ impl VhostUserFs {
 
 impl EventLoopManager for VhostUserFs {
     fn loop_should_exit(&self) -> bool {
-        false
+        self.should_exit.load(Ordering::Acquire)
     }
 
     fn loop_cleanup(&self) -> util::Result<()> {
+        TempCleaner::clean();
         Ok(())
     }
 }

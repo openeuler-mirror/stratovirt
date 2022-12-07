@@ -15,7 +15,7 @@ use machine_manager::temp_cleaner::TempCleaner;
 use std::mem::size_of;
 use std::os::unix::io::RawFd;
 use std::slice;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use util::unix::limit_permission;
 use virtio::vhost::user::{
     RegionMemInfo, VhostUserHdrFlag, VhostUserMemHdr, VhostUserMsgHdr, VhostUserMsgReq,
@@ -120,6 +120,8 @@ pub struct VhostUserServerHandler {
     pub sock: VhostUserSock,
     /// The backend used to save the data of requests from StratoVirt.
     backend: Arc<Mutex<dyn VhostUserReqHandler>>,
+    /// Used to determine whether the process should be terminated.
+    pub should_exit: Arc<AtomicBool>,
 }
 
 fn close_fds(fds: Vec<RawFd>) {
@@ -154,7 +156,11 @@ impl VhostUserServerHandler {
     ///
     /// * `path` - The path of unix socket file which communicates with StratoVirt.
     /// * `backend` - The trait of backend used to save the data of requests from StratoVirt.
-    pub fn new(path: &str, backend: Arc<Mutex<dyn VhostUserReqHandler>>) -> Result<Self> {
+    pub fn new(
+        path: &str,
+        backend: Arc<Mutex<dyn VhostUserReqHandler>>,
+        should_exit: Arc<AtomicBool>,
+    ) -> Result<Self> {
         let mut sock = VhostUserSock::new(path);
         sock.domain
             .bind(false)
@@ -162,7 +168,11 @@ impl VhostUserServerHandler {
         TempCleaner::add_path(path.to_string());
         limit_permission(path).with_context(|| format!("Failed to limit permission {}", path))?;
 
-        Ok(VhostUserServerHandler { sock, backend })
+        Ok(VhostUserServerHandler {
+            sock,
+            backend,
+            should_exit,
+        })
     }
 
     fn recv_hdr_and_fds(&mut self) -> Result<(VhostUserMsgHdr, Option<Vec<RawFd>>)> {
