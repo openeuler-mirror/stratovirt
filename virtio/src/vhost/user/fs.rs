@@ -190,8 +190,32 @@ impl VirtioDevice for Fs {
         }
         match &self.client {
             Some(client) => client.lock().unwrap().set_call_events(queue_evts),
-            None => return Err(anyhow!("Failed to get client for vhost-user net")),
+            None => return Err(anyhow!("Failed to get client for virtio fs")),
         }
         Ok(())
+    }
+
+    fn deactivate(&mut self) -> Result<()> {
+        self.call_events.clear();
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.avail_features = 0_u64;
+        self.acked_features = 0_u64;
+        self.config = VirtioFsConfig::default();
+
+        let client = match &self.client {
+            None => return Err(anyhow!("Failed to get client when reseting virtio fs")),
+            Some(client_) => client_,
+        };
+        client
+            .lock()
+            .unwrap()
+            .delete_event()
+            .with_context(|| "Failed to delete virtio fs event")?;
+        self.client = None;
+
+        self.realize()
     }
 }

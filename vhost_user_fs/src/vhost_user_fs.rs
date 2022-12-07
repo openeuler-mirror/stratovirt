@@ -49,12 +49,7 @@ impl CreateEventNotifier for VhostUserServerHandler {
         server_handler: Arc<Mutex<Self>>,
     ) -> Option<Vec<EventNotifier>> {
         let mut notifiers = Vec::new();
-        if self.sock.domain.is_accepted() {
-            if let Err(e) = self.sock.domain.server_connection_refuse() {
-                error!("Failed to refuse socket for vhost user server, {:?}", e);
-            }
-            return None;
-        } else if let Err(e) = self.sock.domain.accept() {
+        if let Err(e) = self.sock.domain.accept() {
             error!("Failed to accept the socket for vhost user server, {:?}", e);
             return None;
         }
