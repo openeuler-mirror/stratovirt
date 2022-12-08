@@ -734,9 +734,18 @@ impl NetIoHandler {
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
+        let mut rx_packets = 0;
         while let Some(tap) = self.tap.as_mut() {
             if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
                 self.rx.queue_full = true;
+                break;
+            }
+            rx_packets += 1;
+            if rx_packets > QUEUE_SIZE_NET {
+                self.rx
+                    .queue_evt
+                    .write(1)
+                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
                 break;
             }
             let elem = queue
@@ -844,13 +853,21 @@ impl NetIoHandler {
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
-
+        let mut tx_packets = 0;
         loop {
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net tx")?;
             if elem.desc_num == 0 {
+                break;
+            }
+            tx_packets += 1;
+            if tx_packets >= QUEUE_SIZE_NET {
+                self.tx
+                    .queue_evt
+                    .write(1)
+                    .with_context(|| "Failed to trigger tx queue event".to_string())?;
                 break;
             }
             let mut iovecs = Vec::new();
