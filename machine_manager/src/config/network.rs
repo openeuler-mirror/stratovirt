@@ -100,12 +100,6 @@ pub struct NetworkInterfaceConfig {
     pub socket_path: Option<String>,
 }
 
-impl NetworkInterfaceConfig {
-    pub fn set_mac(&mut self, mac_addr: String) {
-        self.mac = Some(mac_addr);
-    }
-}
-
 impl Default for NetworkInterfaceConfig {
     fn default() -> Self {
         NetworkInterfaceConfig {
