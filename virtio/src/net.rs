@@ -1228,19 +1228,16 @@ impl Net {
 /// * `device_config` - Virtio net configurations.
 /// * `mac` - Mac address configured by user.
 pub fn build_device_config_space(device_config: &mut VirtioNetConfig, mac: &str) -> u64 {
-    let mut config_features = 0_u64;
     let mut bytes = [0_u8; 6];
     for (i, s) in mac.split(':').collect::<Vec<&str>>().iter().enumerate() {
         bytes[i] = if let Ok(v) = u8::from_str_radix(s, 16) {
             v
         } else {
-            return config_features;
+            return 0_u64;
         };
     }
     device_config.mac.copy_from_slice(&bytes);
-    config_features |= 1 << VIRTIO_NET_F_MAC;
-
-    config_features
+    1 << VIRTIO_NET_F_MAC
 }
 
 /// Mark the mac table used or free.
