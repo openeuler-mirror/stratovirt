@@ -12,7 +12,7 @@
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -818,6 +818,29 @@ impl NetIoHandler {
         Ok(())
     }
 
+    fn send_packets(&self, tap_fd: libc::c_int, iovecs: &[libc::iovec]) -> i8 {
+        loop {
+            let size = unsafe {
+                libc::writev(
+                    tap_fd,
+                    iovecs.as_ptr() as *const libc::iovec,
+                    iovecs.len() as libc::c_int,
+                )
+            };
+            if size < 0 {
+                let e = std::io::Error::last_os_error();
+                match e.kind() {
+                    ErrorKind::Interrupted => continue,
+                    ErrorKind::WouldBlock => return -1_i8,
+                    // Ignore other errors which can not be handled.
+                    _ => error!("Failed to call writev for net handle_tx: {}", e),
+                }
+            }
+            break;
+        }
+        0_i8
+    }
+
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
@@ -845,21 +868,17 @@ impl NetIoHandler {
                     error!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
-            let mut read_len = 0;
-            if let Some(tap) = self.tap.as_mut() {
-                if !iovecs.is_empty() {
-                    read_len = unsafe {
-                        libc::writev(
-                            tap.as_raw_fd() as libc::c_int,
-                            iovecs.as_ptr() as *const libc::iovec,
-                            iovecs.len() as libc::c_int,
-                        )
-                    };
-                }
+            let tap_fd = if let Some(tap) = self.tap.as_mut() {
+                tap.as_raw_fd() as libc::c_int
+            } else {
+                -1_i32
             };
-            if read_len < 0 {
-                let e = std::io::Error::last_os_error();
-                bail!("Failed to call writev for net handle_tx: {}", e);
+            if tap_fd != -1 && !iovecs.is_empty() && self.send_packets(tap_fd, &iovecs) == -1 {
+                queue.vring.push_back();
+                self.tx.queue_evt.write(1).with_context(|| {
+                    "Failed to trigger tx queue event when writev blocked".to_string()
+                })?;
+                return Ok(());
             }
 
             queue
