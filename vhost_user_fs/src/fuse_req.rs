@@ -150,6 +150,9 @@ impl FuseReq {
             FUSE_LSEEK => {
                 do_fuse_lseek(sys_mem, fs, &mut self.reader, &mut self.writer, &in_header)
             }
+            FUSE_IOCTL => {
+                do_fuse_ioctl(sys_mem, fs, &mut self.reader, &mut self.writer, &in_header)
+            }
             _ => {
                 error!("The fuse msg {} is unsupported", in_header.opcode);
                 reply_fuse_msg(

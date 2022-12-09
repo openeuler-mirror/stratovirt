@@ -1739,3 +1739,19 @@ pub fn do_fuse_lseek(
         reply_fuse_msg(writer, sys_mem, in_header, ret, None, 0_usize)
     }
 }
+
+/// Process the fuse message of FUSE_IOCTL.
+/// Currently not supported, and ENOSYS is directly returned.
+/// Normally the VM should not use ioctl to modify files, but it can be useful
+/// in some cases. For example: to modify inode attrs, witch is required for per
+/// inode DAX. We set aside the ioctl interface, and to implement it in the future
+/// if needed.
+pub fn do_fuse_ioctl(
+    sys_mem: &Arc<AddressSpace>,
+    _fs: Arc<Mutex<FileSystem>>,
+    _reader: &mut FuseBuffer,
+    writer: &mut FuseBuffer,
+    in_header: &FuseInHeader,
+) -> u32 {
+    reply_fuse_msg(writer, sys_mem, in_header, libc::ENOSYS, None, 0_usize)
+}
