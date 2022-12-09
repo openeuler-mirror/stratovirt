@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-#[allow(dead_code)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 #[cfg(target_arch = "x86_64")]

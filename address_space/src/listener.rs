@@ -66,7 +66,6 @@ pub trait Listener: Send + Sync {
 }
 
 /// Records information that manage the slot resource and current usage.
-#[allow(dead_code)]
 #[derive(Default, Copy, Clone)]
 struct MemSlot {
     /// Index of a memory slot.
@@ -78,8 +77,6 @@ struct MemSlot {
     size: u64,
     /// Host address.
     host_addr: u64,
-    /// Flag.
-    flag: u32,
 }
 
 /// Kvm memory listener.

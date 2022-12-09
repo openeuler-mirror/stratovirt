@@ -377,14 +377,12 @@ impl AmlBuilder for AmlBuffer {
 
 /// Package contains an array of other objects.
 pub struct AmlPackage {
-    elem_count: u8,
     buf: Vec<u8>,
 }
 
 impl AmlPackage {
     pub fn new(elem_count: u8) -> AmlPackage {
         AmlPackage {
-            elem_count,
             buf: vec![elem_count],
         }
     }
@@ -407,14 +405,12 @@ impl AmlScopeBuilder for AmlPackage {
 
 /// Variable-sized Package.
 pub struct AmlVarPackage {
-    elem_count: u8,
     buf: Vec<u8>,
 }
 
 impl AmlVarPackage {
     pub fn new(elem_count: u8) -> AmlVarPackage {
         AmlVarPackage {
-            elem_count,
             buf: vec![elem_count],
         }
     }
@@ -533,14 +529,6 @@ pub enum AmlFieldUpdateRule {
 
 /// Field represents several bits in Operation Field.
 pub struct AmlField {
-    /// The name of corresponding OperationRegion.
-    name: String,
-    /// The access type of this Field.
-    access_type: AmlFieldAccessType,
-    /// Global lock is to be used or not when accessing this field.
-    lock_rule: AmlFieldLockRule,
-    /// Unmodified bits of a field are treated as Ones/Zeros/Preserve.
-    update_rule: AmlFieldUpdateRule,
     /// Field Unit list.
     buf: Vec<u8>,
 }
@@ -557,13 +545,7 @@ impl AmlField {
         bytes.extend(build_name_string(name));
         bytes.push(flag);
 
-        AmlField {
-            name: name.to_string(),
-            access_type: acc_ty,
-            lock_rule: lock_r,
-            update_rule: update_r,
-            buf: bytes,
-        }
+        AmlField { buf: bytes }
     }
 }
 
@@ -613,8 +595,6 @@ impl AmlBuilder for AmlFieldUnit {
 
 /// Open a named Scope, can refer any scope within the namespace.
 pub struct AmlScope {
-    /// The name of scope.
-    name: String,
     /// Contains objects created inside the scope, which are encodes to bytes.
     buf: Vec<u8>,
 }
@@ -622,7 +602,6 @@ pub struct AmlScope {
 impl AmlScope {
     pub fn new(name: &str) -> AmlScope {
         AmlScope {
-            name: name.to_string(),
             buf: build_name_string(name),
         }
     }
@@ -650,14 +629,12 @@ impl AmlScopeBuilder for AmlScope {
 
 /// Device object that represents a processor, a device, etc.
 pub struct AmlDevice {
-    name: String,
     buf: Vec<u8>,
 }
 
 impl AmlDevice {
     pub fn new(name: &str) -> AmlDevice {
         AmlDevice {
-            name: name.to_string(),
             buf: build_name_string(name),
         }
     }
@@ -680,12 +657,6 @@ impl AmlScopeBuilder for AmlDevice {
 
 /// Method definition.
 pub struct AmlMethod {
-    /// The name of this method.
-    name: String,
-    /// Count of Arguments. default value is zero.
-    args_count: u8,
-    /// Whether this method is Serialized or not.
-    serialized: bool,
     /// The body of this method, which has been converted to byte stream.
     buf: Vec<u8>,
 }
@@ -709,12 +680,7 @@ impl AmlMethod {
         let mut bytes = build_name_string(name);
         bytes.push(flag);
 
-        AmlMethod {
-            name: name.to_string(),
-            args_count,
-            serialized,
-            buf: bytes,
-        }
+        AmlMethod { buf: bytes }
     }
 }
 
@@ -1203,6 +1169,7 @@ pub struct AmlRelease {
     mutex: Vec<u8>,
 }
 
+#[cfg(test)]
 impl AmlRelease {
     fn new<T: AmlBuilder>(mtx: T) -> AmlRelease {
         AmlRelease {

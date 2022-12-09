@@ -22,7 +22,6 @@ use anyhow::Result;
 
 /// Type of requests sending from vhost user device to the userspace process.
 #[repr(u32)]
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VhostUserMsgReq {
     None = 0,
@@ -127,7 +126,6 @@ pub struct VhostUserMsgHdr {
     pub size: u32,
 }
 
-#[allow(dead_code)]
 impl VhostUserMsgHdr {
     /// Create a new instance of `VhostUserMsgHeader`.
     pub fn new(request: u32, flags: u32, size: u32) -> Self {

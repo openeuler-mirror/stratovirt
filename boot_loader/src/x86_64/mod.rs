@@ -54,7 +54,6 @@
 
 mod bootparam;
 mod direct_boot;
-#[allow(dead_code)]
 mod standard_boot;
 
 use std::path::PathBuf;

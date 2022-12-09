@@ -78,7 +78,6 @@ use virtio::ScsiCntlr::ScsiCntlrMap;
 pub enum LayoutEntryType {
     Flash = 0,
     GicDist,
-    GicCpu,
     GicIts,
     GicRedist,
     Uart,
@@ -87,7 +86,6 @@ pub enum LayoutEntryType {
     Mmio,
     PcieMmio,
     PciePio,
-    PcieEcam,
     Mem,
     HighGicRedist,
     HighPcieEcam,
@@ -98,7 +96,6 @@ pub enum LayoutEntryType {
 pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0, 0x0800_0000),              // Flash
     (0x0800_0000, 0x0001_0000),    // GicDist
-    (0x0801_0000, 0x0001_0000),    // GicCpu
     (0x0808_0000, 0x0002_0000),    // GicIts
     (0x080A_0000, 0x00F6_0000),    // GicRedist (max 123 redistributors)
     (0x0900_0000, 0x0000_1000),    // Uart
@@ -107,7 +104,6 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x1000_0000, 0x2EFF_0000),    // PcieMmio
     (0x3EFF_0000, 0x0001_0000),    // PciePio
-    (0x3F00_0000, 0x0100_0000),    // PcieEcam
     (0x4000_0000, 0x80_0000_0000), // Mem
     (512 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
     (513 << 30, 0x1000_0000),      // HighPcieEcam
