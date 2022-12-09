@@ -26,7 +26,7 @@ $ make build
 
 可以通过以下链接获取我们准备好的linux内核镜像和rootfs镜像：
 
-https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
+https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/
 
 启动标准机型的虚拟机需要指定遵循UEFI的edk2固件文件。
 
