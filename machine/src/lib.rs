@@ -1304,13 +1304,7 @@ pub trait MachineOps {
     fn fetch_drive_file(&self, path: &str) -> Result<File> {
         let files = self.get_drive_files();
         let drive_files = files.lock().unwrap();
-        match drive_files.get(path) {
-            Some(drive_file) => drive_file
-                .file
-                .try_clone()
-                .with_context(|| format!("Failed to clone drive backend file {}", path)),
-            None => Err(anyhow!("The file {} is not in drive backend", path)),
-        }
+        VmConfig::fetch_drive_file(&drive_files, path)
     }
 
     /// Register a new drive backend file.
