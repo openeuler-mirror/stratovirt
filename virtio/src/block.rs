@@ -1441,6 +1441,7 @@ mod tests {
         let mut block = Block::default();
         let file = TempFile::new().unwrap();
         block.blk_cfg.path_on_host = file.as_path().to_str().unwrap().to_string();
+        block.blk_cfg.direct = false;
 
         // config iothread and iops
         block.blk_cfg.iothread = Some(thread_name);
