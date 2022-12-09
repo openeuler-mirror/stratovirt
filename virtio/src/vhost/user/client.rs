@@ -50,7 +50,6 @@ struct ClientInternal {
     max_queue_num: u64,
 }
 
-#[allow(dead_code)]
 impl ClientInternal {
     fn new(sock: VhostUserSock, max_queue_num: u64) -> Self {
         ClientInternal {
@@ -193,7 +192,6 @@ struct VhostUserMemInfo {
     enabled: bool,
 }
 
-#[allow(dead_code)]
 impl VhostUserMemInfo {
     fn new() -> Self {
         VhostUserMemInfo {
@@ -329,7 +327,6 @@ pub struct VhostUserClient {
     reconnecting: bool,
 }
 
-#[allow(dead_code)]
 impl VhostUserClient {
     pub fn new(mem_space: &Arc<AddressSpace>, path: &str, max_queue_num: u64) -> Result<Self> {
         let mut sock = VhostUserSock::new(path);
@@ -497,23 +494,6 @@ impl VhostUserClient {
             .with_context(|| "Failed to wait ack msg for getting protocols features")?;
 
         Ok(features)
-    }
-
-    /// Send set protocol features request to vhost.
-    pub fn set_protocol_features(&self, features: u64) -> Result<()> {
-        let client = self.client.lock().unwrap();
-        let hdr = VhostUserMsgHdr::new(
-            VhostUserMsgReq::SetProtocolFeatures as u32,
-            0,
-            size_of::<u64>() as u32,
-        );
-        let payload_opt: Option<&[u8]> = None;
-        client
-            .sock
-            .send_msg(Some(&hdr), Some(&features), payload_opt, &[])
-            .with_context(|| "Failed to send msg for setting protocols features")?;
-
-        Ok(())
     }
 
     /// Get virtio blk config from vhost.

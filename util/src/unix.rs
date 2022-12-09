@@ -158,7 +158,6 @@ impl Clone for UnixSock {
     }
 }
 
-#[allow(dead_code)]
 impl UnixSock {
     pub fn new(path: &str) -> Self {
         UnixSock {

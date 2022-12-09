@@ -72,13 +72,8 @@ pub struct ArmCPUBootConfig {
     pub boot_pc: u64,
 }
 
-#[allow(dead_code)]
 #[derive(Default, Copy, Clone, Debug)]
-pub struct ArmCPUTopology {
-    threads: u8,
-    cores: u8,
-    clusters: u8,
-}
+pub struct ArmCPUTopology {}
 
 impl ArmCPUTopology {
     pub fn new() -> Self {

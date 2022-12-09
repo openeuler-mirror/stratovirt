@@ -36,7 +36,6 @@ mod rng;
 mod scsi;
 pub mod vhost;
 mod virtio_mmio;
-#[allow(dead_code)]
 mod virtio_pci;
 mod virtqueue;
 pub use anyhow::Result;
