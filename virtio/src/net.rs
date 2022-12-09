@@ -12,7 +12,7 @@
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -734,9 +734,18 @@ impl NetIoHandler {
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
+        let mut rx_packets = 0;
         while let Some(tap) = self.tap.as_mut() {
             if queue.vring.avail_ring_len(&self.mem_space)? == 0 {
                 self.rx.queue_full = true;
+                break;
+            }
+            rx_packets += 1;
+            if rx_packets > QUEUE_SIZE_NET {
+                self.rx
+                    .queue_evt
+                    .write(1)
+                    .with_context(|| "Failed to trigger rx queue event".to_string())?;
                 break;
             }
             let elem = queue
@@ -818,16 +827,47 @@ impl NetIoHandler {
         Ok(())
     }
 
+    fn send_packets(&self, tap_fd: libc::c_int, iovecs: &[libc::iovec]) -> i8 {
+        loop {
+            let size = unsafe {
+                libc::writev(
+                    tap_fd,
+                    iovecs.as_ptr() as *const libc::iovec,
+                    iovecs.len() as libc::c_int,
+                )
+            };
+            if size < 0 {
+                let e = std::io::Error::last_os_error();
+                match e.kind() {
+                    ErrorKind::Interrupted => continue,
+                    ErrorKind::WouldBlock => return -1_i8,
+                    // Ignore other errors which can not be handled.
+                    _ => error!("Failed to call writev for net handle_tx: {}", e),
+                }
+            }
+            break;
+        }
+        0_i8
+    }
+
     fn handle_tx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
-
+        let mut tx_packets = 0;
         loop {
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net tx")?;
             if elem.desc_num == 0 {
+                break;
+            }
+            tx_packets += 1;
+            if tx_packets >= QUEUE_SIZE_NET {
+                self.tx
+                    .queue_evt
+                    .write(1)
+                    .with_context(|| "Failed to trigger tx queue event".to_string())?;
                 break;
             }
             let mut iovecs = Vec::new();
@@ -845,21 +885,17 @@ impl NetIoHandler {
                     error!("Failed to get host address for {}", elem_iov.addr.0);
                 }
             }
-            let mut read_len = 0;
-            if let Some(tap) = self.tap.as_mut() {
-                if !iovecs.is_empty() {
-                    read_len = unsafe {
-                        libc::writev(
-                            tap.as_raw_fd() as libc::c_int,
-                            iovecs.as_ptr() as *const libc::iovec,
-                            iovecs.len() as libc::c_int,
-                        )
-                    };
-                }
+            let tap_fd = if let Some(tap) = self.tap.as_mut() {
+                tap.as_raw_fd() as libc::c_int
+            } else {
+                -1_i32
             };
-            if read_len < 0 {
-                let e = std::io::Error::last_os_error();
-                bail!("Failed to call writev for net handle_tx: {}", e);
+            if tap_fd != -1 && !iovecs.is_empty() && self.send_packets(tap_fd, &iovecs) == -1 {
+                queue.vring.push_back();
+                self.tx.queue_evt.write(1).with_context(|| {
+                    "Failed to trigger tx queue event when writev blocked".to_string()
+                })?;
+                return Ok(());
             }
 
             queue
@@ -1192,19 +1228,16 @@ impl Net {
 /// * `device_config` - Virtio net configurations.
 /// * `mac` - Mac address configured by user.
 pub fn build_device_config_space(device_config: &mut VirtioNetConfig, mac: &str) -> u64 {
-    let mut config_features = 0_u64;
     let mut bytes = [0_u8; 6];
     for (i, s) in mac.split(':').collect::<Vec<&str>>().iter().enumerate() {
         bytes[i] = if let Ok(v) = u8::from_str_radix(s, 16) {
             v
         } else {
-            return config_features;
+            return 0_u64;
         };
     }
     device_config.mac.copy_from_slice(&bytes);
-    config_features |= 1 << VIRTIO_NET_F_MAC;
-
-    config_features
+    1 << VIRTIO_NET_F_MAC
 }
 
 /// Mark the mac table used or free.
