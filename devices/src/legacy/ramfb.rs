@@ -29,6 +29,7 @@ const BYTES_PER_PIXELS: u32 = 8;
 const WIDTH_MAX: u32 = 16_000;
 const HEIGHT_MAX: u32 = 12_000;
 
+#[allow(dead_code)]
 #[repr(packed)]
 #[derive(ByteCode, Clone, Copy)]
 struct RamfbCfg {

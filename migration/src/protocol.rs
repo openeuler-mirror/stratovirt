@@ -349,18 +349,12 @@ fn cpu_model() -> [u8; 16] {
 pub struct MigrationHeader {
     /// Magic number for migration file/stream.
     magic_num: [u8; 16],
-    /// Current version of migration.
-    #[allow(dead_code)]
-    current_version: u32,
     /// Compatible version of migration.
     compat_version: u32,
     /// Arch identifier.
     arch: [u8; 8],
     /// Endianness of byte order.
     byte_order: EndianType,
-    /// The type of hypervisor.
-    #[allow(dead_code)]
-    hypervisor_type: [u8; 8],
     /// The version of hypervisor.
     hypervisor_version: u32,
     /// The type of CPU model.
@@ -380,11 +374,9 @@ impl Default for MigrationHeader {
     fn default() -> Self {
         MigrationHeader {
             magic_num: MAGIC_NUMBER,
-            current_version: CURRENT_VERSION,
             compat_version: COMPAT_VERSION,
             format: FileFormat::Device,
             byte_order: EndianType::Little,
-            hypervisor_type: [b'k', b'v', b'm', b'0', b'0', b'0', b'0', b'0'],
             hypervisor_version: Kvm::new().unwrap().get_api_version() as u32,
             #[cfg(target_arch = "x86_64")]
             cpu_model: cpu_model(),

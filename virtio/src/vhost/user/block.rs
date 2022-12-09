@@ -39,7 +39,6 @@ use crate::{
 /// Size of each virtqueue.
 const QUEUE_SIZE_BLK: u16 = 256;
 
-#[allow(dead_code)]
 pub struct Block {
     /// Configuration of the block device.
     blk_cfg: BlkDevConfig,
@@ -51,10 +50,6 @@ pub struct Block {
     client: Option<Arc<Mutex<VhostUserClient>>>,
     /// The notifier events from host.
     call_events: Vec<EventFd>,
-    /// Eventfd used to update the config space.
-    update_evt: EventFd,
-    /// Eventfd used to deactivate device.
-    deactivate_evt: EventFd,
 }
 
 impl Block {
@@ -62,8 +57,6 @@ impl Block {
         Block {
             blk_cfg: cfg.clone(),
             state: BlockState::default(),
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             mem_space: mem_space.clone(),
             client: None,
             call_events: Vec::<EventFd>::new(),

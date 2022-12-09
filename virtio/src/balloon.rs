@@ -71,12 +71,11 @@ struct GuestIovec {
 
 /// Balloon configuration, which would be used to transport data between `Guest` and `Host`.
 #[derive(Copy, Clone, Default)]
+#[allow(dead_code)]
 struct VirtioBalloonConfig {
     /// The target page numbers of balloon device.
-    #[allow(dead_code)]
     pub num_pages: u32,
     /// Number of pages we've actually got in balloon device.
-    #[allow(dead_code)]
     pub actual: u32,
 }
 

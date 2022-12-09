@@ -42,11 +42,8 @@ const PIO_OFFSET_MASK: u32 = 0xff;
 
 const CONFIG_BUS_MASK: u32 = 0xff;
 const CONFIG_DEVFN_MASK: u32 = 0xff;
-#[allow(dead_code)]
 const ECAM_BUS_SHIFT: u32 = 20;
-#[allow(dead_code)]
 const ECAM_DEVFN_SHIFT: u32 = 12;
-#[allow(dead_code)]
 const ECAM_OFFSET_MASK: u64 = 0xfff;
 
 #[derive(Clone)]
@@ -121,7 +118,6 @@ impl PciHost {
     /// # Arguments
     ///
     /// * `host_bridge` - Host brdige device.
-    #[allow(dead_code)]
     pub fn build_mmconfig_ops(host_bridge: Arc<Mutex<Self>>) -> RegionOps {
         let cloned_hb = host_bridge.clone();
         let read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
@@ -141,7 +137,6 @@ impl PciHost {
     /// # Arguments
     ///
     /// * `host_bridge` - Host brdige device.
-    #[allow(dead_code)]
     #[cfg(target_arch = "x86_64")]
     pub fn build_pio_addr_ops(host_bridge: Arc<Mutex<Self>>) -> RegionOps {
         let cloned_hb = host_bridge.clone();
@@ -171,7 +166,6 @@ impl PciHost {
     /// # Arguments
     ///
     /// * `host_bridge` - Host brdige device.
-    #[allow(dead_code)]
     #[cfg(target_arch = "x86_64")]
     pub fn build_pio_data_ops(host_bridge: Arc<Mutex<Self>>) -> RegionOps {
         let cloned_hb = host_bridge.clone();

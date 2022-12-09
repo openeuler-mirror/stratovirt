@@ -85,7 +85,6 @@ impl RootPort {
     /// * `devfn` - Device number << 3 | Function number.
     /// * `port_num` - Root port number.
     /// * `parent_bus` - Weak reference to the parent bus.
-    #[allow(dead_code)]
     pub fn new(
         name: String,
         devfn: u8,

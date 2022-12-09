@@ -24,8 +24,6 @@ use util::num_ops::{deposit_u32, extract_u32, read_data_u32, write_data_u32};
 pub struct PFlash {
     /// Has backend file or not.
     has_backend: bool,
-    /// Number of blocks.
-    blk_num: u32,
     /// Length of block.
     block_len: u32,
     /// The width of PFlash array for vm.
@@ -180,7 +178,6 @@ impl PFlash {
             bank_width,
             // device id for Intel PFlash.
             ident: [0x89, 0x18, 0x00, 0x00],
-            blk_num: blocks_per_device,
             device_width,
             max_device_width: device_width,
             write_cycle: 0,

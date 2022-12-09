@@ -11,12 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 mod acpi_device;
-#[allow(dead_code)]
 pub mod acpi_table;
-#[allow(dead_code)]
 pub(crate) mod aml_compiler;
 pub mod error;
-#[allow(dead_code)]
 mod table_loader;
 
 pub use acpi_device::{AcpiPMTimer, AcpiPmCtrl, AcpiPmEvent};

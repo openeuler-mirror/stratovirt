@@ -27,16 +27,11 @@ use util::time::{mktime64, NANOSECONDS_PER_SECOND};
 
 /// IO port of RTC device to select Register to read/write.
 pub const RTC_PORT_INDEX: u64 = 0x70;
-/// IO port of RTC device to read/write data from selected register.
-pub const RTC_PORT_DATA: u64 = 0x71;
 
 /// Index of register of time in RTC static RAM.
 const RTC_SECONDS: u8 = 0x00;
-const RTC_SECONDS_ALARM: u8 = 0x01;
 const RTC_MINUTES: u8 = 0x02;
-const RTC_MINUTES_ALARM: u8 = 0x03;
 const RTC_HOURS: u8 = 0x04;
-const RTC_HOURS_ALARM: u8 = 0x05;
 const RTC_DAY_OF_WEEK: u8 = 0x06;
 const RTC_DAY_OF_MONTH: u8 = 0x07;
 const RTC_MONTH: u8 = 0x08;

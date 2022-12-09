@@ -27,19 +27,14 @@
 
 mod chardev;
 pub mod error;
-#[allow(dead_code)]
 mod fwcfg;
-#[allow(dead_code)]
 mod pflash;
-#[allow(dead_code)]
 #[cfg(target_arch = "aarch64")]
 mod pl011;
 #[cfg(target_arch = "aarch64")]
 mod pl031;
-#[allow(dead_code)]
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), target_arch = "aarch64"))]
 mod ramfb;
-#[allow(dead_code)]
 #[cfg(target_arch = "x86_64")]
 mod rtc;
 mod serial;
