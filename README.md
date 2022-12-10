@@ -35,7 +35,7 @@ To run StratoVirt quickly, requires
 
 You can get kernel and rootfs image from the following link:
 
-https://repo.openeuler.org/openEuler-21.03/stratovirt_img/
+https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/
 
 For standard VM, firmware file of EDK2 which follows UEFI is required.
 
