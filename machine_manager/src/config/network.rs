@@ -420,6 +420,46 @@ impl VmConfig {
         }
         Ok(())
     }
+    /// Add 'net devices' to `VmConfig devices`.
+    pub fn add_net_device_config(&mut self, args: &qmp_schema::DeviceAddArgument) {
+        let mut device_info = args.driver.clone();
+
+        device_info = format!("{},id={}", device_info, args.id);
+
+        if let Some(netdev) = &args.netdev {
+            device_info = format!("{},netdev={}", device_info, netdev);
+        }
+
+        if let Some(mac) = &args.mac {
+            device_info = format!("{},mac={}", device_info, mac);
+        }
+
+        if let Some(addr) = &args.addr {
+            device_info = format!("{},addr={}", device_info, addr);
+        }
+
+        if let Some(bus) = &args.bus {
+            device_info = format!("{},bus={}", device_info, bus);
+        }
+
+        if args.multifunction.is_some() {
+            if args.multifunction.unwrap() {
+                device_info = format!("{},multifunction=on", device_info);
+            } else {
+                device_info = format!("{},multifunction=off", device_info);
+            }
+        }
+
+        if let Some(iothread) = &args.iothread {
+            device_info = format!("{},iothread={}", device_info, iothread);
+        }
+
+        if let Some(mq) = &args.mq {
+            device_info = format!("{},mq={}", device_info, mq);
+        }
+
+        self.devices.push((args.driver.clone(), device_info));
+    }
 }
 
 fn check_mac_address(mac: &str) -> bool {

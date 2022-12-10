@@ -116,7 +116,7 @@ pub struct StdMachine {
     /// VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
     /// All configuration information of virtual machine.
-    vm_config: Mutex<VmConfig>,
+    vm_config: Arc<Mutex<VmConfig>>,
     /// List of guest NUMA nodes information.
     numa_nodes: Option<NumaNodes>,
     /// List contains the boot order of boot devices.
@@ -175,7 +175,7 @@ impl StdMachine {
             power_button: EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
                 anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
             })?,
-            vm_config: Mutex::new(vm_config.clone()),
+            vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
             fwcfg_dev: None,
@@ -479,7 +479,7 @@ impl MachineOps for StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
 
-        MigrationManager::register_vm_config(vm_config);
+        MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());
         MigrationManager::register_kvm_instance(
             vm_state::KvmDeviceState::descriptor(),
@@ -560,8 +560,8 @@ impl MachineOps for StdMachine {
         &self.sys_mem
     }
 
-    fn get_vm_config(&self) -> &Mutex<VmConfig> {
-        &self.vm_config
+    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
+        self.vm_config.clone()
     }
 
     fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {

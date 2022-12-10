@@ -298,7 +298,7 @@ pub trait MachineOps {
 
     fn get_sys_mem(&mut self) -> &Arc<AddressSpace>;
 
-    fn get_vm_config(&self) -> &Mutex<VmConfig>;
+    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>>;
 
     fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)>;
 

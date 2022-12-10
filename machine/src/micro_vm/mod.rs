@@ -180,7 +180,7 @@ pub struct LightMachine {
     // VM power button, handle VM `Shutdown` event.
     power_button: EventFd,
     // All configuration information of virtual machine.
-    vm_config: Mutex<VmConfig>,
+    vm_config: Arc<Mutex<VmConfig>>,
     // Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
@@ -238,7 +238,7 @@ impl LightMachine {
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
             power_button,
-            vm_config: Mutex::new(vm_config.clone()),
+            vm_config: Arc::new(Mutex::new(vm_config.clone())),
             drive_files: Arc::new(Mutex::new(vm_config.init_drive_files()?)),
         })
     }
@@ -617,8 +617,8 @@ impl MachineOps for LightMachine {
         &self.sys_mem
     }
 
-    fn get_vm_config(&self) -> &Mutex<VmConfig> {
-        &self.vm_config
+    fn get_vm_config(&self) -> Arc<Mutex<VmConfig>> {
+        self.vm_config.clone()
     }
 
     fn get_vm_state(&self) -> &Arc<(Mutex<KvmVmState>, Condvar)> {

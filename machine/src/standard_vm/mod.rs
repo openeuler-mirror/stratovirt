@@ -746,9 +746,10 @@ impl StdMachine {
         } else {
             bail!("Drive not set");
         };
-
-        let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
-        let blk = if let Some(conf) = self.get_vm_config().lock().unwrap().drives.get(drive) {
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
+        let blk = if let Some(conf) = locked_vmconfig.drives.get(drive) {
             let dev = BlkDevConfig {
                 id: args.id.clone(),
                 path_on_host: conf.path_on_host.clone(),
@@ -770,6 +771,8 @@ impl StdMachine {
         } else {
             bail!("Drive not found");
         };
+        locked_vmconfig.add_blk_device_config(args);
+        drop(locked_vmconfig);
 
         if let Some(bootindex) = args.boot_index {
             self.check_bootindex(bootindex)
@@ -878,13 +881,13 @@ impl StdMachine {
         } else {
             bail!("Netdev not set");
         };
-
-        let vm_config = self.get_vm_config().lock().unwrap();
-        let dev = if let Some(conf) = vm_config.netdevs.get(netdev) {
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        let dev = if let Some(conf) = locked_vmconfig.netdevs.get(netdev) {
             let mut socket_path: Option<String> = None;
             if let Some(chardev) = &conf.chardev {
                 socket_path = self
-                    .get_socket_path(&vm_config, (&chardev).to_string())
+                    .get_socket_path(&locked_vmconfig, (&chardev).to_string())
                     .with_context(|| "Failed to get socket path")?;
             }
             let dev = NetworkInterfaceConfig {
@@ -904,7 +907,8 @@ impl StdMachine {
         } else {
             bail!("Netdev not found");
         };
-        drop(vm_config);
+        locked_vmconfig.add_net_device_config(args);
+        drop(locked_vmconfig);
 
         if dev.vhost_type.is_some() {
             let mut need_irqfd = false;
@@ -1171,6 +1175,10 @@ impl DeviceInterface for StdMachine {
                     let dev_id = locked_dev.name();
                     drop(locked_pci_host);
                     self.del_bootindex_devices(&dev_id);
+                    let vm_config = self.get_vm_config();
+                    let mut locked_config = vm_config.lock().unwrap();
+                    locked_config.del_device_by_id(device_id);
+                    drop(locked_config);
                     Response::create_empty_response()
                 }
                 Err(e) => Response::create_error_response(
