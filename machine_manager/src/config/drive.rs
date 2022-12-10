@@ -24,7 +24,7 @@ use crate::config::{
     get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH,
     MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
-
+use crate::qmp::qmp_schema;
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
@@ -494,6 +494,53 @@ impl VmConfig {
         Ok(())
     }
 
+    /// Add 'pci blk devices' to `VmConfig devices`.
+    pub fn add_blk_device_config(&mut self, args: &qmp_schema::DeviceAddArgument) {
+        let mut device_info = args.driver.clone();
+
+        device_info = format!("{},id={}", device_info, args.id);
+
+        if let Some(drive) = &args.drive {
+            device_info = format!("{},drive={}", device_info, drive);
+        }
+
+        if let Some(serial_num) = &args.serial_num {
+            device_info = format!("{},serial={}", device_info, serial_num);
+        }
+
+        if let Some(addr) = &args.addr {
+            device_info = format!("{},addr={}", device_info, addr);
+        }
+        if let Some(bus) = &args.bus {
+            device_info = format!("{},bus={}", device_info, bus);
+        }
+
+        if args.multifunction.is_some() {
+            if args.multifunction.unwrap() {
+                device_info = format!("{},multifunction=on", device_info);
+            } else {
+                device_info = format!("{},multifunction=off", device_info);
+            }
+        }
+
+        if let Some(iothread) = &args.iothread {
+            device_info = format!("{},iothread={}", device_info, iothread);
+        }
+
+        if let Some(mq) = &args.mq {
+            device_info = format!("{},mq={}", device_info, mq);
+        }
+
+        if let Some(queues) = &args.queues {
+            device_info = format!("{},num-queues={}", device_info, queues);
+        }
+
+        if let Some(boot_index) = &args.boot_index {
+            device_info = format!("{},bootindex={}", device_info, boot_index);
+        }
+
+        self.devices.push((args.driver.clone(), device_info));
+    }
     /// Delete drive config in vm config by id.
     ///
     /// # Arguments

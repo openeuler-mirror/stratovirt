@@ -113,7 +113,7 @@ impl MigrationManager {
         } else {
             Response::send_msg(fd, TransStatus::Error)?;
             return Err(anyhow!(MigrationError::MigrationStatusErr(
-                request.status.to_string(),
+                (request.status as u16).to_string(),
                 TransStatus::Active.to_string(),
             )));
         }
@@ -127,7 +127,7 @@ impl MigrationManager {
         } else {
             Response::send_msg(fd, TransStatus::Error)?;
             return Err(anyhow!(MigrationError::MigrationStatusErr(
-                request.status.to_string(),
+                (request.status as u16).to_string(),
                 TransStatus::VmConfig.to_string(),
             )));
         }
@@ -165,7 +165,14 @@ impl MigrationManager {
     where
         T: Write + Read,
     {
-        let vm_config = &MIGRATION_MANAGER.vmm.read().unwrap().config;
+        let vm_config = &MIGRATION_MANAGER
+            .vmm
+            .read()
+            .unwrap()
+            .config
+            .lock()
+            .unwrap()
+            .clone();
         let config_data = serde_json::to_vec(vm_config)?;
         Request::send_msg(fd, TransStatus::VmConfig, config_data.len() as u64)?;
         fd.write_all(&config_data)?;
@@ -188,7 +195,14 @@ impl MigrationManager {
         fd.read_exact(&mut data)?;
 
         let src_config: &VmConfig = &serde_json::from_slice(&data)?;
-        let dest_config: &VmConfig = &MIGRATION_MANAGER.vmm.read().unwrap().config;
+        let dest_config: &VmConfig = &MIGRATION_MANAGER
+            .vmm
+            .read()
+            .unwrap()
+            .config
+            .lock()
+            .unwrap()
+            .clone();
         // Check vCPU number.
         Self::check_vcpu(src_config, dest_config)?;
         Self::check_memory(src_config, dest_config)?;
@@ -511,7 +525,7 @@ impl MigrationManager {
             Response::send_msg(fd, TransStatus::Ok)?;
         } else {
             return Err(anyhow!(MigrationError::MigrationStatusErr(
-                request.status.to_string(),
+                (request.status as u16).to_string(),
                 TransStatus::Complete.to_string(),
             )));
         }

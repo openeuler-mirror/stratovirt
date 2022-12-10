@@ -160,7 +160,7 @@ impl ByteCode for Instance {}
 #[derive(Default)]
 pub struct Vmm {
     /// Vm config
-    pub config: VmConfig,
+    pub config: Arc<Mutex<VmConfig>>,
     /// Trait to represent a Vm.
     pub vm: Option<Arc<Mutex<dyn MachineLifecycle + Send + Sync>>>,
     /// Trait to represent CPU devices.
@@ -231,8 +231,8 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `config` - The configuration from virtual machine.
-    pub fn register_vm_config(config: &mut VmConfig) {
-        MIGRATION_MANAGER.vmm.write().unwrap().config = config.clone();
+    pub fn register_vm_config(config: Arc<Mutex<VmConfig>>) {
+        MIGRATION_MANAGER.vmm.write().unwrap().config = config;
     }
 
     /// Register vm instance to vmm.
