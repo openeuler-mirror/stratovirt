@@ -459,10 +459,12 @@ impl EventLoopContext {
             }
 
             expired_nr += 1;
-            (timer.func)();
         }
 
-        self.timers.drain(0..expired_nr);
+        let expired_timers: Vec<Timer> = self.timers.drain(0..expired_nr).collect();
+        for timer in expired_timers {
+            (timer.func)();
+        }
     }
 
     fn epoll_wait_manager(&mut self, time_out: i32) -> Result<bool> {
