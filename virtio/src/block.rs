@@ -306,13 +306,19 @@ impl Request {
             req = req_raw.next.as_ref().as_ref();
         }
 
-        match self.out_header.request_type {
+        let request_type = self.out_header.request_type;
+        if request_type == VIRTIO_BLK_T_IN || request_type == VIRTIO_BLK_T_GET_ID {
+            // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
+            for iov in aiocb.iovec.iter() {
+                // Mark vmm dirty page manually if live migration is active.
+                MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
+            }
+        }
+
+        match request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
                 if aio_type.is_some() {
-                    for iov in aiocb.iovec.iter() {
-                        MigrationManager::mark_dirty_log(iov.iov_base, iov.iov_len);
-                    }
                     (*aio)
                         .as_mut()
                         .rw_aio(aiocb, SECTOR_SIZE, direct)

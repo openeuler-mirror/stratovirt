@@ -705,6 +705,10 @@ pub trait Migratable {
     /// * `addr` - Start address of dirty memory.
     /// * `len` - Length of dirty memory.
     fn mark_dirty_log(addr: u64, len: u64) {
+        if !MigrationManager::is_active() {
+            return;
+        }
+
         let bitmaps = MIGRATION_MANAGER.vmm_bitmaps.write().unwrap();
         for (_, map) in bitmaps.iter() {
             if (addr >= map.hva) && ((addr + len) <= (map.hva + map.len)) {
