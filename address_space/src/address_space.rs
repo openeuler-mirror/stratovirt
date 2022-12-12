@@ -10,18 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+
+use migration::{migration::Migratable, MigrationManager};
 use util::byte_code::ByteCode;
 
 use crate::{
     AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener, ListenerReqType, Region,
     RegionIoEventFd, RegionType,
 };
-use anyhow::{anyhow, Context, Result};
 
 /// Contains an array of `FlatRange`.
 #[derive(Default, Clone, Debug)]
@@ -491,6 +493,9 @@ impl AddressSpace {
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
     pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
+        // Mark vmm dirty page manually if live migration is active.
+        MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
+
         let mut dst = unsafe {
             std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
         };
