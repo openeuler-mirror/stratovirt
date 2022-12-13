@@ -498,6 +498,8 @@ pub struct device_add {
     pub mac: Option<String>,
     #[serde(rename = "netdev")]
     pub netdev: Option<String>,
+    #[serde(rename = "chardev")]
+    pub chardev: Option<String>,
     #[serde(rename = "disable-modern")]
     pub disable_modern: Option<String>,
     #[serde(rename = "mq")]

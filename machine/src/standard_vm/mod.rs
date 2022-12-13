@@ -841,6 +841,43 @@ impl StdMachine {
         Ok(())
     }
 
+    fn plug_vhost_user_blk_pci(
+        &mut self,
+        pci_bdf: &PciBdf,
+        args: &qmp_schema::DeviceAddArgument,
+    ) -> Result<()> {
+        let multifunction = args.multifunction.unwrap_or(false);
+        let vm_config = self.get_vm_config().lock().unwrap();
+        let chardev = if let Some(dev) = &args.chardev {
+            dev
+        } else {
+            bail!("Chardev not set");
+        };
+        let socket_path = self
+            .get_socket_path(&vm_config, chardev.to_string())
+            .with_context(|| "Failed to get socket path")?;
+        let nr_cpus = vm_config.machine_config.nr_cpus;
+        let dev = BlkDevConfig {
+            id: args.id.clone(),
+            queues: args.queues.unwrap_or_else(|| {
+                VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
+            }),
+            boot_index: args.boot_index,
+            chardev: Some(chardev.to_string()),
+            socket_path,
+            ..BlkDevConfig::default()
+        };
+
+        dev.check()?;
+        drop(vm_config);
+
+        let blk = Arc::new(Mutex::new(VhostUser::Block::new(&dev, self.get_sys_mem())));
+        self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction, true)
+            .with_context(|| "Failed to add vhost user blk pci device")?;
+
+        Ok(())
+    }
+
     fn get_socket_path(&self, vm_config: &VmConfig, chardev: String) -> Result<Option<String>> {
         let char_dev = if let Some(char_dev) = vm_config.chardev.get(&chardev) {
             char_dev
@@ -1101,7 +1138,16 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-
+            "vhost-user-blk-pci" => {
+                if let Err(e) = self.plug_vhost_user_blk_pci(&pci_bdf, args.as_ref()) {
+                    error!("{:?}", e);
+                    let err_str = format!("Failed to add vhost user blk pci: {}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
             "virtio-net-pci" => {
                 if let Err(e) = self.plug_virtio_pci_net(&pci_bdf, args.as_ref()) {
                     error!("{:?}", e);
