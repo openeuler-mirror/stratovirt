@@ -15,6 +15,7 @@ mod split;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Result};
 use std::sync::Arc;
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::VirtioError;
 pub use split::*;
@@ -202,5 +203,32 @@ impl Queue {
     /// * `sys_mem` - Address space to which the vring belongs.
     pub fn is_valid(&self, sys_mem: &Arc<AddressSpace>) -> bool {
         self.vring.is_valid(sys_mem)
+    }
+}
+
+/// Virt Queue Notify EventFds
+pub struct NotifyEventFds {
+    pub events: Vec<EventFd>,
+}
+
+impl NotifyEventFds {
+    pub fn new(queue_num: usize) -> Self {
+        let mut events = Vec::new();
+        for _i in 0..queue_num {
+            events.push(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        }
+
+        NotifyEventFds { events }
+    }
+}
+
+impl Clone for NotifyEventFds {
+    fn clone(&self) -> NotifyEventFds {
+        let mut queue_evts = Vec::<EventFd>::new();
+        for fd in self.events.iter() {
+            let cloned_evt_fd = fd.try_clone().unwrap();
+            queue_evts.push(cloned_evt_fd);
+        }
+        NotifyEventFds { events: queue_evts }
     }
 }
