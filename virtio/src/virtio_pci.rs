@@ -40,8 +40,8 @@ use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    report_virtio_error, virtio_has_feature, Queue, QueueConfig, VirtioDevice, VirtioInterrupt,
-    VirtioInterruptType,
+    report_virtio_error, virtio_has_feature, NotifyEventFds, Queue, QueueConfig, VirtioDevice,
+    VirtioInterrupt, VirtioInterruptType,
 };
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
@@ -537,32 +537,6 @@ impl VirtioPciNotifyCap {
     }
 }
 
-struct NotifyEventFds {
-    events: Vec<EventFd>,
-}
-
-impl NotifyEventFds {
-    fn new(queue_num: usize) -> Self {
-        let mut events = Vec::new();
-        for _i in 0..queue_num {
-            events.push(EventFd::new(libc::EFD_NONBLOCK).unwrap());
-        }
-
-        NotifyEventFds { events }
-    }
-}
-
-impl Clone for NotifyEventFds {
-    fn clone(&self) -> NotifyEventFds {
-        let mut queue_evts = Vec::<EventFd>::new();
-        for fd in self.events.iter() {
-            let cloned_evt_fd = fd.try_clone().unwrap();
-            queue_evts.push(cloned_evt_fd);
-        }
-        NotifyEventFds { events: queue_evts }
-    }
-}
-
 /// The state of virtio-pci device.
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
@@ -619,7 +593,7 @@ pub struct VirtioPciDevice {
     common_config: Arc<Mutex<VirtioPciCommonConfig>>,
     /// Primary Bus
     parent_bus: Weak<Mutex<PciBus>>,
-    /// Eventfds used for notifying the guest.
+    /// Eventfds used for guest notify the Device.
     notify_eventfds: NotifyEventFds,
     /// The function for interrupt triggering
     interrupt_cb: Option<Arc<VirtioInterrupt>>,

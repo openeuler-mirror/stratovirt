@@ -29,7 +29,7 @@ use super::{
     VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
-use crate::VirtioError;
+use crate::{NotifyEventFds, VirtioError};
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -960,7 +960,7 @@ pub struct Block {
     /// Eventfd for config space update.
     update_evt: EventFd,
     /// Eventfd for device deactivate.
-    deactivate_evt: EventFd,
+    deactivate_evts: NotifyEventFds,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
@@ -975,7 +975,7 @@ impl Default for Block {
             interrupt_cb: None,
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: NotifyEventFds::new(1),
             drive_files: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -994,7 +994,7 @@ impl Block {
             interrupt_cb: None,
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: NotifyEventFds::new(0),
             drive_files,
         }
     }
@@ -1135,11 +1135,13 @@ impl VirtioDevice for Block {
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
         let mut senders = Vec::new();
+        self.deactivate_evts.events.clear();
 
         for queue in queues.iter() {
             let (sender, receiver) = channel();
             senders.push(sender);
 
+            let eventfd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
             let mut handler = BlockIoHandler {
                 queue: queue.clone(),
                 queue_evt: queue_evts.remove(0),
@@ -1153,12 +1155,13 @@ impl VirtioDevice for Block {
                 driver_features: self.state.driver_features,
                 receiver,
                 update_evt: self.update_evt.try_clone().unwrap(),
-                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
+                deactivate_evt: eventfd.try_clone().unwrap(),
                 interrupt_cb: interrupt_cb.clone(),
                 iothread: self.blk_cfg.iothread.clone(),
                 leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
             };
 
+            self.deactivate_evts.events.push(eventfd);
             handler.aio = Some(handler.build_aio(self.blk_cfg.aio.as_ref())?);
 
             EventLoop::update_event(
@@ -1173,9 +1176,11 @@ impl VirtioDevice for Block {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        for evt in &self.deactivate_evts.events {
+            evt.write(1)
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+        }
+        Ok(())
     }
 
     fn update_config(&mut self, dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
