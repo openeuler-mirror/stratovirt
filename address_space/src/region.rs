@@ -10,18 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use anyhow::{anyhow, bail, Context, Result};
+use log::{debug, warn};
+use std::fmt;
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
+
+use migration::{migration::Migratable, MigrationManager};
 
 use crate::address_space::FlatView;
 use crate::{
     AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress, HostMemMapping,
     RegionOps,
 };
-use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, warn};
-use std::fmt;
-use std::fmt::Debug;
+
 /// Types of Region.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -620,6 +623,9 @@ impl Region {
         match self.region_type {
             RegionType::Ram | RegionType::RamDevice => {
                 let host_addr = self.mem_mapping.as_ref().unwrap().host_address();
+                // Mark vmm dirty page manually if live migration is active.
+                MigrationManager::mark_dirty_log(host_addr + offset, count);
+
                 let slice = unsafe {
                     std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, count as usize)
                 };
