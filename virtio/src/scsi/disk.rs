@@ -49,6 +49,14 @@ const SECTOR_SHIFT: u8 = 9;
 const DUMMY_IMG_SIZE: u64 = 0;
 pub const DEFAULT_SECTOR_SIZE: u32 = 1_u32 << SECTOR_SHIFT;
 
+/// Scsi disk's block size is 512 Bytes.
+pub const SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT: u32 = 9;
+pub const SCSI_DISK_DEFAULT_BLOCK_SIZE: u32 = 1 << SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT;
+
+/// Scsi media device's block size is 2048 Bytes.
+pub const SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT: u32 = 11;
+pub const SCSI_CDROM_DEFAULT_BLOCK_SIZE: u32 = 1 << SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT;
+
 #[derive(Clone, Default)]
 pub struct ScsiDevState {
     /// Features which the scsi device supports.
@@ -88,6 +96,8 @@ pub struct ScsiDevice {
     pub disk_image: Option<Arc<File>>,
     /// Number of sectors of the image file.
     pub disk_sectors: u64,
+    /// Scsi Device block size.
+    pub block_size: u32,
     /// Scsi device type.
     pub scsi_type: u32,
     /// Scsi Bus attached to.
@@ -103,6 +113,7 @@ impl Default for ScsiDevice {
             state: Default::default(),
             disk_image: None,
             disk_sectors: 0,
+            block_size: SCSI_DISK_DEFAULT_BLOCK_SIZE,
             scsi_type: SCSI_TYPE_DISK,
             parent_bus: Weak::new(),
             drive_files: Arc::new(Mutex::new(HashMap::new())),
@@ -121,6 +132,7 @@ impl ScsiDevice {
             state: ScsiDevState::new(),
             disk_image: None,
             disk_sectors: 0,
+            block_size: 0,
             scsi_type,
             parent_bus: Weak::new(),
             drive_files,
@@ -130,7 +142,12 @@ impl ScsiDevice {
     pub fn realize(&mut self) -> Result<()> {
         match self.scsi_type {
             SCSI_TYPE_DISK => {
+                self.block_size = SCSI_DISK_DEFAULT_BLOCK_SIZE;
                 self.state.product = "STRA HARDDISK".to_string();
+            }
+            SCSI_TYPE_ROM => {
+                self.block_size = SCSI_CDROM_DEFAULT_BLOCK_SIZE;
+                self.state.product = "STRA CDROM".to_string();
             }
             _ => {
                 bail!("Scsi type {} does not support now", self.scsi_type);

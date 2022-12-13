@@ -85,7 +85,7 @@ use virtio::{
     VirtioMmioState, VirtioNetState, VirtioPciDevice,
 };
 use ScsiCntlr::ScsiCntlrMap;
-use ScsiDisk::SCSI_TYPE_DISK;
+use ScsiDisk::{SCSI_TYPE_DISK, SCSI_TYPE_ROM};
 
 pub trait MachineOps {
     /// Calculate the ranges of memory according to architecture.
@@ -1182,6 +1182,9 @@ pub trait MachineOps {
                 }
                 "scsi-hd" => {
                     self.add_scsi_device(vm_config, cfg_args, SCSI_TYPE_DISK)?;
+                }
+                "scsi-cd" => {
+                    self.add_scsi_device(vm_config, cfg_args, SCSI_TYPE_ROM)?;
                 }
                 "virtio-net-device" => {
                     self.add_virtio_mmio_net(vm_config, cfg_args)?;
