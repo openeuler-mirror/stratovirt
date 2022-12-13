@@ -847,16 +847,17 @@ impl StdMachine {
         args: &qmp_schema::DeviceAddArgument,
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
-        let vm_config = self.get_vm_config().lock().unwrap();
+        let vm_config = self.get_vm_config();
+        let locked_vmconfig = vm_config.lock().unwrap();
         let chardev = if let Some(dev) = &args.chardev {
             dev
         } else {
             bail!("Chardev not set");
         };
         let socket_path = self
-            .get_socket_path(&vm_config, chardev.to_string())
+            .get_socket_path(&locked_vmconfig, chardev.to_string())
             .with_context(|| "Failed to get socket path")?;
-        let nr_cpus = vm_config.machine_config.nr_cpus;
+        let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
         let dev = BlkDevConfig {
             id: args.id.clone(),
             queues: args.queues.unwrap_or_else(|| {
@@ -869,7 +870,7 @@ impl StdMachine {
         };
 
         dev.check()?;
-        drop(vm_config);
+        drop(locked_vmconfig);
 
         let blk = Arc::new(Mutex::new(VhostUser::Block::new(&dev, self.get_sys_mem())));
         self.add_virtio_pci_device(&args.id, pci_bdf, blk, multifunction, true)
