@@ -45,7 +45,10 @@ use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
     event_loop::EventLoop,
 };
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
+    StateTransfer,
+};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::loop_context::{
@@ -769,6 +772,12 @@ impl NetIoHandler {
                 } else {
                     bail!("Failed to get host address for {}", elem_iov.addr.0);
                 }
+            }
+
+            // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
+            for iov in iovecs.iter() {
+                // Mark vmm dirty page manually if live migration is active.
+                MigrationManager::mark_dirty_log(iov.iov_base as u64, iov.iov_len as u64);
             }
 
             // Read the data from the tap device.
