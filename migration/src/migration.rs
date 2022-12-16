@@ -595,7 +595,7 @@ impl DirtyBitmap {
     /// * `gpa` - Guest physical address of memory slot.
     /// * `hva` - Host virtual address of memory slot.
     /// * `len` - Length of memory slot.
-    pub fn new(gpa: u64, hva: u64, len: u64) -> Self {
+    fn new(gpa: u64, hva: u64, len: u64) -> Self {
         let page_size = host_page_size();
 
         let mut num_pages = len / page_size;
@@ -621,7 +621,7 @@ impl DirtyBitmap {
     ///
     /// * `addr` - Guest physical address of memory.
     /// * `len` - Length of memory slot.
-    pub fn mark_bitmap(&self, addr: u64, len: u64) {
+    fn mark_bitmap(&self, addr: u64, len: u64) {
         // Just return if len is 0.
         if len == 0 {
             return;
@@ -629,8 +629,8 @@ impl DirtyBitmap {
 
         let offset = addr - self.gpa;
         let first_bit = offset / self.page_size;
-        let last_bit = (offset + len) / self.page_size;
-        for n in first_bit..last_bit {
+        let last_bit = (offset + len - 1) / self.page_size;
+        for n in first_bit..=last_bit {
             // Ignore bit that is out of range.
             if n >= self.len {
                 break;
@@ -640,7 +640,7 @@ impl DirtyBitmap {
     }
 
     /// Get and clear dirty bitmap for vmm.
-    pub fn get_and_clear_dirty(&self) -> Vec<u64> {
+    fn get_and_clear_dirty(&self) -> Vec<u64> {
         self.map
             .iter()
             .map(|m| m.fetch_and(0, Ordering::SeqCst))
