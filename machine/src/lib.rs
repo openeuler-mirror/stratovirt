@@ -463,17 +463,26 @@ pub trait MachineOps {
         let dev_cfg = parse_fs(vm_config, cfg_args)?;
         let id_clone = dev_cfg.id.clone();
         let sys_mem = self.get_sys_mem().clone();
-        let device = Arc::new(Mutex::new(vhost::user::Fs::new(dev_cfg, sys_mem.clone())));
 
         if !vm_config.machine_config.mem_config.mem_share {
             bail!("When configuring the vhost-user-fs-device or vhost-user-fs-pci device, the memory must be shared.");
         }
 
         if cfg_args.contains("vhost-user-fs-device") {
-            let device = VirtioMmioDevice::new(&sys_mem, device);
-            self.realize_virtio_mmio_device(device)
+            let device = Arc::new(Mutex::new(vhost::user::Fs::new(
+                dev_cfg,
+                sys_mem.clone(),
+                false,
+            )));
+            let virtio_mmio_device = VirtioMmioDevice::new(&sys_mem, device);
+            self.realize_virtio_mmio_device(virtio_mmio_device)
                 .with_context(|| "Failed to add vhost user fs device")?;
         } else if cfg_args.contains("vhost-user-fs-pci") {
+            let device = Arc::new(Mutex::new(vhost::user::Fs::new(
+                dev_cfg,
+                sys_mem.clone(),
+                true,
+            )));
             let bdf = get_pci_bdf(cfg_args)?;
             let multi_func = get_multi_function(cfg_args)?;
             let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
