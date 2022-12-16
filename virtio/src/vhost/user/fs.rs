@@ -20,9 +20,11 @@ const VIRTIO_FS_QUEUE_SIZE: u16 = 128;
 use crate::VirtioError;
 use std::cmp;
 use std::io::Write;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
-use vmm_sys_util::eventfd::EventFd;
+use log::error;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::AddressSpace;
 use machine_manager::{
@@ -30,13 +32,13 @@ use machine_manager::{
     event_loop::EventLoop,
 };
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
 use util::num_ops::read_u32;
 
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
-use super::super::VhostOps;
+use super::super::{VhostNotify, VhostOps};
 use super::VhostUserClient;
-use crate::VirtioInterrupt;
+use crate::{VirtioInterrupt, VirtioInterruptType};
 use anyhow::{anyhow, Context, Result};
 
 #[derive(Copy, Clone)]
@@ -57,6 +59,53 @@ impl Default for VirtioFsConfig {
 
 impl ByteCode for VirtioFsConfig {}
 
+struct VhostUserFsHandler {
+    interrup_cb: Arc<VirtioInterrupt>,
+    host_notifies: Vec<VhostNotify>,
+}
+
+impl EventNotifierHelper for VhostUserFsHandler {
+    fn internal_notifiers(vhost_user_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+        let vhost_user = vhost_user_handler.clone();
+
+        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Box::new(move |_, fd: RawFd| {
+                read_fd(fd);
+
+                let locked_vhost_user = vhost_user.lock().unwrap();
+
+                for host_notify in locked_vhost_user.host_notifies.iter() {
+                    if let Err(e) = (locked_vhost_user.interrup_cb)(
+                        &VirtioInterruptType::Vring,
+                        Some(&host_notify.queue.lock().unwrap()),
+                        false,
+                    ) {
+                        error!(
+                            "Failed to trigger interrupt for vhost user device, error is {:?}",
+                            e
+                        );
+                    }
+                }
+
+                None as Option<Vec<EventNotifier>>
+            });
+        let h = Arc::new(Mutex::new(handler));
+
+        for host_notify in vhost_user_handler.lock().unwrap().host_notifies.iter() {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::AddShared,
+                host_notify.notify_evt.as_raw_fd(),
+                None,
+                EventSet::IN,
+                vec![h.clone()],
+            ));
+        }
+
+        notifiers
+    }
+}
+
 pub struct Fs {
     fs_cfg: FsConfig,
     config: VirtioFsConfig,
@@ -66,10 +115,18 @@ pub struct Fs {
     mem_space: Arc<AddressSpace>,
     /// The notifier events from host.
     call_events: Vec<EventFd>,
+    enable_irqfd: bool,
 }
 
 impl Fs {
-    pub fn new(fs_cfg: FsConfig, mem_space: Arc<AddressSpace>) -> Self {
+    /// The construct function of the Fs device.
+    ///
+    /// # Arguments
+    ///
+    /// `fs_cfg` - The config of this Fs device.
+    /// `mem_space` - The address space of this Fs device.
+    /// `enable_irqfd` - Whether irqfd is enabled on this Fs device.
+    pub fn new(fs_cfg: FsConfig, mem_space: Arc<AddressSpace>, enable_irqfd: bool) -> Self {
         Fs {
             fs_cfg,
             config: VirtioFsConfig::default(),
@@ -78,6 +135,7 @@ impl Fs {
             acked_features: 0_u64,
             mem_space,
             call_events: Vec::<EventFd>::new(),
+            enable_irqfd,
         }
     }
 }
@@ -167,10 +225,11 @@ impl VirtioDevice for Fs {
     fn activate(
         &mut self,
         _mem_space: Arc<AddressSpace>,
-        _interrup_cb: Arc<VirtioInterrupt>,
+        interrup_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
         queue_evts: Vec<EventFd>,
     ) -> Result<()> {
+        let mut host_notifies = Vec::new();
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
             None => return Err(anyhow!("Failed to get client for virtio fs")),
@@ -179,6 +238,27 @@ impl VirtioDevice for Fs {
         client.set_queues(queues);
         client.set_queue_evts(&queue_evts);
         client.activate_vhost_user()?;
+
+        if !self.enable_irqfd {
+            for (queue_index, queue_mutex) in queues.iter().enumerate() {
+                let host_notify = VhostNotify {
+                    notify_evt: self.call_events[queue_index].try_clone().unwrap(),
+                    queue: queue_mutex.clone(),
+                };
+                host_notifies.push(host_notify);
+            }
+
+            let handler = VhostUserFsHandler {
+                interrup_cb,
+                host_notifies,
+            };
+
+            EventLoop::update_event(
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+                None,
+            )?;
+        }
+
         Ok(())
     }
 
