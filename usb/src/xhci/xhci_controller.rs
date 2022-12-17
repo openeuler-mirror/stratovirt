@@ -840,10 +840,8 @@ impl XhciDevice {
         let mut p = UsbPacket::default();
         let mut locked_dev = dev.lock().unwrap();
         let usb_dev = locked_dev.get_mut_usb_device();
-        let locked_usb = usb_dev.lock().unwrap();
-        let ep = Arc::downgrade(&locked_usb.get_endpoint(USB_TOKEN_OUT as u32, 0));
+        let ep = Arc::downgrade(&usb_dev.get_endpoint(USB_TOKEN_OUT as u32, 0));
         p.init(USB_TOKEN_OUT as u32, ep);
-        drop(locked_usb);
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_OUT_REQUEST,
             request: USB_REQUEST_SET_ADDRESS,
@@ -1450,8 +1448,7 @@ impl XhciDevice {
             USB_TOKEN_OUT
         };
         let usb_dev = locked_dev.get_mut_usb_device();
-        let locked_usb = usb_dev.lock().unwrap();
-        let ep = locked_usb.get_endpoint(pid as u32, epid >> 1);
+        let ep = usb_dev.get_endpoint(pid as u32, epid >> 1);
         Ok(ep)
     }
 

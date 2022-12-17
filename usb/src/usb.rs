@@ -110,13 +110,12 @@ impl UsbEndpoint {
 pub fn usb_endpoint_init(dev: &Arc<Mutex<dyn UsbDeviceOps>>) {
     let mut locked_dev = dev.lock().unwrap();
     let usb_dev = locked_dev.get_mut_usb_device();
-    let mut locked_dev = usb_dev.lock().unwrap();
-    locked_dev.reset_usb_endpoint();
-    let mut ep_ctl = locked_dev.ep_ctl.lock().unwrap();
+    usb_dev.reset_usb_endpoint();
+    let mut ep_ctl = usb_dev.ep_ctl.lock().unwrap();
     ep_ctl.dev = Some(Arc::downgrade(dev));
     for i in 0..USB_MAX_ENDPOINTS {
-        let mut ep_in = locked_dev.ep_in[i as usize].lock().unwrap();
-        let mut ep_out = locked_dev.ep_out[i as usize].lock().unwrap();
+        let mut ep_in = usb_dev.ep_in[i as usize].lock().unwrap();
+        let mut ep_out = usb_dev.ep_out[i as usize].lock().unwrap();
         ep_in.dev = Some(Arc::downgrade(dev));
         ep_out.dev = Some(Arc::downgrade(dev));
     }
@@ -441,12 +440,8 @@ pub trait UsbDeviceOps: Send + Sync {
     /// Handle the attach ops when attach device to controller.
     fn handle_attach(&mut self) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
-        let mut locked_dev = usb_dev.lock().unwrap();
-        locked_dev.state = UsbDeviceState::Attached;
-        drop(locked_dev);
-        let usb_dev = self.get_mut_usb_device();
-        let mut locked_dev = usb_dev.lock().unwrap();
-        locked_dev.set_default_descriptor()?;
+        usb_dev.state = UsbDeviceState::Attached;
+        usb_dev.set_default_descriptor()?;
         Ok(())
     }
 
@@ -466,8 +461,7 @@ pub trait UsbDeviceOps: Send + Sync {
     /// Set the attached USB port.
     fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>) {
         let usb_dev = self.get_mut_usb_device();
-        let mut locked_dev = usb_dev.lock().unwrap();
-        locked_dev.port = port;
+        usb_dev.port = port;
     }
 
     /// Handle usb packet, used for controller to deliever packet to device.
@@ -494,16 +488,15 @@ pub trait UsbDeviceOps: Send + Sync {
     fn device_id(&self) -> String;
 
     /// Get the UsbDevice.
-    fn get_usb_device(&self) -> Arc<Mutex<UsbDevice>>;
+    fn get_usb_device(&self) -> &UsbDevice;
 
     /// Get the mut UsbDevice.
-    fn get_mut_usb_device(&mut self) -> Arc<Mutex<UsbDevice>>;
+    fn get_mut_usb_device(&mut self) -> &mut UsbDevice;
 
     /// Get the device speed.
     fn speed(&self) -> u32 {
         let usb_dev = self.get_usb_device();
-        let locked_dev = usb_dev.lock().unwrap();
-        locked_dev.speed
+        usb_dev.speed
     }
 
     fn process_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
@@ -545,7 +538,6 @@ pub trait UsbDeviceOps: Send + Sync {
 
     fn do_parameter(&mut self, p: &mut UsbPacket) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
-        let mut locked_dev = usb_dev.lock().unwrap();
         let device_req = UsbDeviceRequest {
             request_type: p.parameter as u8,
             request: (p.parameter >> 8) as u8,
@@ -553,17 +545,15 @@ pub trait UsbDeviceOps: Send + Sync {
             index: (p.parameter >> 32) as u16,
             length: (p.parameter >> 48) as u16,
         };
-        if device_req.length as usize > locked_dev.data_buf.len() {
+        if device_req.length as usize > usb_dev.data_buf.len() {
             p.status = UsbPacketStatus::Stall;
             bail!("data buffer small len {}", device_req.length);
         }
         if p.pid as u8 == USB_TOKEN_OUT {
-            usb_packet_transfer(p, &mut locked_dev.data_buf, device_req.length as usize);
+            usb_packet_transfer(p, &mut usb_dev.data_buf, device_req.length as usize);
         }
-        // Drop locked for handle_control use it.
-        drop(locked_dev);
         self.handle_control(p, &device_req);
-        let mut locked_dev = usb_dev.lock().unwrap();
+        let usb_dev = self.get_mut_usb_device();
         if p.status == UsbPacketStatus::Async {
             return Ok(());
         }
@@ -573,7 +563,7 @@ pub trait UsbDeviceOps: Send + Sync {
         }
         if p.pid as u8 == USB_TOKEN_IN {
             p.actual_length = 0;
-            usb_packet_transfer(p, &mut locked_dev.data_buf, len as usize);
+            usb_packet_transfer(p, &mut usb_dev.data_buf, len as usize);
         }
         Ok(())
     }
@@ -592,17 +582,15 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     let mut locked_xhci = xhci.lock().unwrap();
     let locked_dev = dev.lock().unwrap();
     let usb_dev = locked_dev.get_usb_device();
-    drop(locked_dev);
-    let locked_usb_dev = usb_dev.lock().unwrap();
-    let usb_port = if let Some(port) = &locked_usb_dev.port {
+    let usb_port = if let Some(port) = &usb_dev.port {
         port.upgrade().unwrap()
     } else {
         bail!("No usb port found");
     };
-    let slot_id = locked_usb_dev.addr;
-    let wakeup =
-        locked_usb_dev.remote_wakeup & USB_DEVICE_REMOTE_WAKEUP == USB_DEVICE_REMOTE_WAKEUP;
-    drop(locked_usb_dev);
+    let slot_id = usb_dev.addr;
+    let wakeup = usb_dev.remote_wakeup & USB_DEVICE_REMOTE_WAKEUP == USB_DEVICE_REMOTE_WAKEUP;
+    // Drop the lock, lookup port need it.
+    drop(locked_dev);
     let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
         xhci_port
     } else {
