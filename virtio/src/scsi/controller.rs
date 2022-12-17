@@ -458,9 +458,6 @@ pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
     _sense_size: u32,
     mode: ScsiXferMode,
     interrupt_cb: Arc<VirtioInterrupt>,
-    /// Virtio device should report virtio error when fatal errors occur.
-    /// And then, deactivate eventfd is used to disable virtio queues.
-    deactivate_evt: EventFd,
     driver_features: u64,
     /// resp GPA.
     resp_addr: GuestAddress,
@@ -474,7 +471,6 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
         mem_space: &Arc<AddressSpace>,
         queue: Arc<Mutex<Queue>>,
         interrupt_cb: Arc<VirtioInterrupt>,
-        deactivate_evt: EventFd,
         driver_features: u64,
         elem: &Element,
     ) -> Result<Self> {
@@ -512,7 +508,6 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
             _sense_size: VIRTIO_SCSI_SENSE_DEFAULT_SIZE as u32,
             mode: ScsiXferMode::ScsiXferNone,
             interrupt_cb,
-            deactivate_evt,
             driver_features,
             resp_addr: in_iov_elem.addr,
             req: scsi_req,
@@ -663,7 +658,6 @@ impl ScsiCtrlHandler {
                             &self.mem_space,
                             self.queue.clone(),
                             self.interrupt_cb.clone(),
-                            self.deactivate_evt.try_clone().unwrap(),
                             self.driver_features,
                             &elem,
                         )?;
@@ -679,7 +673,6 @@ impl ScsiCtrlHandler {
                             &self.mem_space,
                             self.queue.clone(),
                             self.interrupt_cb.clone(),
-                            self.deactivate_evt.try_clone().unwrap(),
                             self.driver_features,
                             &elem,
                         )?;
@@ -865,9 +858,15 @@ impl EventNotifierHelper for ScsiCmdHandler {
             let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
 
-                if let Some(aio) = &mut h_clone.lock().unwrap().aio {
+                let mut h_lock = h_clone.lock().unwrap();
+                if let Some(aio) = &mut h_lock.aio {
                     if let Err(ref e) = aio.handle() {
                         error!("Failed to handle aio, {:?}", e);
+                        report_virtio_error(
+                            h_lock.interrupt_cb.clone(),
+                            h_lock.driver_features,
+                            Some(&h_lock.deactivate_evt),
+                        );
                     }
                 }
                 None
@@ -913,7 +912,6 @@ impl ScsiCmdHandler {
                 &self.mem_space,
                 self.queue.clone(),
                 self.interrupt_cb.clone(),
-                self.deactivate_evt.try_clone().unwrap(),
                 self.driver_features,
                 &elem,
             )?;
@@ -999,15 +997,7 @@ impl ScsiCmdHandler {
             virtio_scsi_req.resp.status = GOOD;
             virtio_scsi_req.resp.resid = 0;
             virtio_scsi_req.resp.sense_len = 0;
-            let result = virtio_scsi_req.complete(&complete_cb.mem_space);
-            if result.is_err() {
-                let deactivate_evt = &virtio_scsi_req.deactivate_evt;
-                report_virtio_error(
-                    virtio_scsi_req.interrupt_cb.clone(),
-                    virtio_scsi_req.driver_features,
-                    Some(deactivate_evt),
-                );
-            }
+            virtio_scsi_req.complete(&complete_cb.mem_space)
         }) as AioCompleteFunc<ScsiCompleteCb>);
 
         Ok(Box::new(Aio::new(complete_fun, None)?))

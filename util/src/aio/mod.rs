@@ -56,7 +56,7 @@ trait AioContext {
     fn get_events(&mut self) -> &[IoEvent];
 }
 
-pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) + Sync + Send>;
+pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) -> Result<()> + Sync + Send>;
 
 pub struct AioCb<T: Clone> {
     pub last_aio: bool,
@@ -140,7 +140,7 @@ impl<T: Clone + 'static> Aio<T> {
                     -1
                 };
 
-                (self.complete_func)(&(*node).value, res);
+                (self.complete_func)(&(*node).value, res)?;
                 self.aio_in_flight.unlink(&(*node));
                 // Construct Box to free mem automatically.
                 drop(Box::from_raw(node));
@@ -148,11 +148,11 @@ impl<T: Clone + 'static> Aio<T> {
         }
         // Drop reference of 'ctx', so below 'process_list' can work.
         drop(ctx);
-        self.process_list();
+        self.process_list()?;
         Ok(done)
     }
 
-    fn process_list(&mut self) {
+    fn process_list(&mut self) -> Result<()> {
         while self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
             let mut iocbs = Vec::new();
 
@@ -194,7 +194,7 @@ impl<T: Clone + 'static> Aio<T> {
             if is_err {
                 // Fail one request, retry the rest.
                 if let Some(node) = self.aio_in_queue.pop_tail() {
-                    (self.complete_func)(&(node).value, -1);
+                    (self.complete_func)(&(node).value, -1)?;
                 }
             } else if nr == 0 {
                 // If can't submit any request, break the loop
@@ -202,6 +202,7 @@ impl<T: Clone + 'static> Aio<T> {
                 break;
             }
         }
+        Ok(())
     }
 
     pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64, direct: bool) -> Result<()> {
@@ -215,8 +216,7 @@ impl<T: Clone + 'static> Aio<T> {
                         },
                         |_| 0,
                     );
-                    (self.complete_func)(&cb, res);
-                    return Ok(());
+                    return (self.complete_func)(&cb, res);
                 }
             }
         }
@@ -238,7 +238,7 @@ impl<T: Clone + 'static> Aio<T> {
 
         self.aio_in_queue.add_head(node);
         if last_aio || self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
-            self.process_list();
+            self.process_list()?;
         }
 
         Ok(())
@@ -280,9 +280,7 @@ impl<T: Clone + 'static> Aio<T> {
             }
             _ => -1,
         };
-        (self.complete_func)(&cb, ret);
-
-        Ok(())
+        (self.complete_func)(&cb, ret)
     }
 
     fn handle_misaligned_rw(&mut self, cb: &AioCb<T>) -> Result<()> {
@@ -362,8 +360,7 @@ impl<T: Clone + 'static> Aio<T> {
             error!("Failed to do sync flush, {:?}", e);
             -1
         });
-        (self.complete_func)(&cb, ret);
-        Ok(())
+        (self.complete_func)(&cb, ret)
     }
 }
 
