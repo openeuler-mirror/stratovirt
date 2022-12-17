@@ -142,15 +142,10 @@ impl UsbTablet {
         let cloned_tablet = tablet.clone();
         usb_endpoint_init(&(tablet as Arc<Mutex<dyn UsbDeviceOps>>));
         let mut locked_tablet = cloned_tablet.lock().unwrap();
-        locked_tablet.init_hid()?;
+        locked_tablet.usb_device.usb_desc = Some(DESC_TABLET.clone());
+        locked_tablet.usb_device.init_descriptor()?;
         drop(locked_tablet);
         Ok(cloned_tablet)
-    }
-
-    fn init_hid(&mut self) -> Result<()> {
-        self.usb_device.usb_desc = Some(DESC_TABLET.clone());
-        self.usb_device.init_descriptor()?;
-        Ok(())
     }
 }
 
@@ -263,7 +258,7 @@ impl UsbDeviceOps for UsbTablet {
     }
 
     fn get_wakeup_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>> {
-        let ep = self.usb_device.get_endpoint(USB_TOKEN_IN as u32, 1);
+        let ep = self.usb_device.get_endpoint(true, 1);
         Some(Arc::downgrade(&ep))
     }
 }

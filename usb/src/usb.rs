@@ -74,34 +74,19 @@ pub struct UsbDeviceRequest {
 /// The data transmission channel.
 #[derive(Default)]
 pub struct UsbEndpoint {
-    pub nr: u8,
-    pub pid: u8,
-    pub usb_type: u8,
-    pub ifnum: u8,
-    pub max_packet_size: u32,
+    pub ep_number: u8,
+    pub in_direction: bool,
+    pub ep_type: u8,
     pub dev: Option<Weak<Mutex<dyn UsbDeviceOps>>>,
 }
 
 impl UsbEndpoint {
-    pub fn new(nr: u8, pid: u8, usb_type: u8, ifnum: u8, max_packet_size: u32) -> Self {
+    pub fn new(ep_number: u8, in_direction: bool, ep_type: u8) -> Self {
         Self {
-            nr,
-            pid,
-            usb_type,
-            ifnum,
-            max_packet_size,
+            ep_number,
+            in_direction,
+            ep_type,
             dev: None,
-        }
-    }
-
-    pub fn get_ep_id(&self) -> u8 {
-        if self.nr == 0 {
-            // Control endpoint
-            1
-        } else if self.pid == USB_TOKEN_IN {
-            self.nr * 2 + 1
-        } else {
-            self.nr * 2
         }
     }
 }
@@ -243,10 +228,8 @@ impl UsbDevice {
             addr: 0,
             ep_ctl: Arc::new(Mutex::new(UsbEndpoint::new(
                 0,
-                0,
+                false,
                 USB_ENDPOINT_ATTR_CONTROL,
-                0,
-                64,
             ))),
             ep_in: Vec::new(),
             ep_out: Vec::new(),
@@ -267,27 +250,23 @@ impl UsbDevice {
         for i in 0..USB_MAX_ENDPOINTS as u8 {
             dev.ep_in.push(Arc::new(Mutex::new(UsbEndpoint::new(
                 i + 1,
-                USB_TOKEN_IN,
+                true,
                 USB_ENDPOINT_ATTR_INVALID,
-                USB_INTERFACE_INVALID,
-                0,
             ))));
             dev.ep_out.push(Arc::new(Mutex::new(UsbEndpoint::new(
                 i + 1,
-                USB_TOKEN_OUT,
+                false,
                 USB_ENDPOINT_ATTR_INVALID,
-                USB_INTERFACE_INVALID,
-                0,
             ))));
         }
         dev
     }
 
-    pub fn get_endpoint(&self, pid: u32, ep: u32) -> Arc<Mutex<UsbEndpoint>> {
+    pub fn get_endpoint(&self, in_direction: bool, ep: u8) -> Arc<Mutex<UsbEndpoint>> {
         if ep == 0 {
             return self.ep_ctl.clone();
         }
-        if pid as u8 == USB_TOKEN_IN {
+        if in_direction {
             self.ep_in[(ep - 1) as usize].clone()
         } else {
             self.ep_out[(ep - 1) as usize].clone()
@@ -296,23 +275,17 @@ impl UsbDevice {
 
     pub fn reset_usb_endpoint(&mut self) {
         let mut ep_ctl = self.ep_ctl.lock().unwrap();
-        ep_ctl.nr = 0;
-        ep_ctl.usb_type = USB_ENDPOINT_ATTR_CONTROL;
-        ep_ctl.ifnum = 0;
-        ep_ctl.max_packet_size = 64;
+        ep_ctl.ep_number = 0;
+        ep_ctl.ep_type = USB_ENDPOINT_ATTR_CONTROL;
         for i in 0..USB_MAX_ENDPOINTS {
             let mut ep_in = self.ep_in[i as usize].lock().unwrap();
             let mut ep_out = self.ep_out[i as usize].lock().unwrap();
-            ep_in.nr = (i + 1) as u8;
-            ep_out.nr = (i + 1) as u8;
-            ep_in.pid = USB_TOKEN_IN;
-            ep_out.pid = USB_TOKEN_OUT;
-            ep_in.usb_type = USB_ENDPOINT_ATTR_INVALID;
-            ep_out.usb_type = USB_ENDPOINT_ATTR_INVALID;
-            ep_in.ifnum = USB_INTERFACE_INVALID;
-            ep_out.ifnum = USB_INTERFACE_INVALID;
-            ep_in.max_packet_size = 0;
-            ep_out.max_packet_size = 0;
+            ep_in.ep_number = (i + 1) as u8;
+            ep_out.ep_number = (i + 1) as u8;
+            ep_in.in_direction = true;
+            ep_out.in_direction = false;
+            ep_in.ep_type = USB_ENDPOINT_ATTR_INVALID;
+            ep_out.ep_type = USB_ENDPOINT_ATTR_INVALID;
         }
     }
 
@@ -508,10 +481,10 @@ pub trait UsbDeviceOps: Send + Sync {
             bail!("Failed to find ep");
         };
         let locked_ep = ep.lock().unwrap();
-        let nr = locked_ep.nr;
-        debug!("process_packet nr {}", nr);
+        let ep_nr = locked_ep.ep_number;
+        debug!("process_packet nr {}", ep_nr);
         drop(locked_ep);
-        if nr == 0 {
+        if ep_nr == 0 {
             if packet.parameter != 0 {
                 return self.do_parameter(packet);
             }

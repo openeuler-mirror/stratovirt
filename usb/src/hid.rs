@@ -531,7 +531,7 @@ impl Hid {
         if let Some(ep) = &p.ep {
             let ep = ep.upgrade().unwrap();
             let locked_ep = ep.lock().unwrap();
-            if locked_ep.nr == 1 {
+            if locked_ep.ep_number == 1 {
                 if self.num == 0 {
                     debug!("No data in usb device.");
                     p.status = UsbPacketStatus::Nak;
@@ -552,7 +552,7 @@ impl Hid {
                 let len = buf.len();
                 usb_packet_transfer(p, &mut buf, len);
             } else {
-                error!("Unhandled endpoint {}", locked_ep.nr);
+                error!("Unhandled endpoint {}", locked_ep.ep_number);
                 p.status = UsbPacketStatus::Stall;
             }
         } else {
