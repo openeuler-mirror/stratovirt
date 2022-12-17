@@ -976,21 +976,7 @@ impl ScsiCmdHandler {
                     Arc::new(Mutex::new(scsi_req.clone())),
                 );
                 if let Some(ref mut aio) = self.aio {
-                    if let Err(ref e) =
-                        scsi_req.execute(aio, &disk_img, direct, aio_type, true, scsicompletecb)
-                    {
-                        // If read/write operation by rw_sync or flush operation fails, this request will not
-                        // call complete_func(). So we should process this error here. Otherwise, stratovirt
-                        // will not add used index and notify guest, and then guest will be stuck.
-                        error!(
-                            "Failed to execute scsi device non emulation request, {:?}",
-                            e
-                        );
-                        let mut cmd_lock = cmd_h.lock().unwrap();
-                        cmd_lock.resp.response = VIRTIO_SCSI_S_FAILURE;
-                        cmd_lock.complete(&self.mem_space)?;
-                        drop(cmd_lock);
-                    }
+                    scsi_req.execute(aio, &disk_img, direct, aio_type, true, scsicompletecb)?;
                 }
             }
         }

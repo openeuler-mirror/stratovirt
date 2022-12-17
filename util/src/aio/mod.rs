@@ -25,7 +25,7 @@ use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 pub use libaio::*;
 pub use raw::*;
 use uring::IoUringContext;
@@ -208,7 +208,15 @@ impl<T: Clone + 'static> Aio<T> {
         if direct {
             for iov in cb.iovec.iter() {
                 if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
-                    return self.handle_misaligned_rw(cb);
+                    let res = self.handle_misaligned_rw(&cb).map_or_else(
+                        |e| {
+                            error!("{:?}", e);
+                            -1
+                        },
+                        |_| 0,
+                    );
+                    (self.complete_func)(&cb, res);
+                    return Ok(());
                 }
             }
         }
@@ -242,7 +250,14 @@ impl<T: Clone + 'static> Aio<T> {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
-                    r = raw_read(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)?;
+                    r = raw_read(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to do sync read, {:?}", e);
+                            -1
+                        });
+                    if r < 0 {
+                        break;
+                    }
                     off += iov.iov_len as usize;
                 }
                 r
@@ -251,7 +266,14 @@ impl<T: Clone + 'static> Aio<T> {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
-                    r = raw_write(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)?;
+                    r = raw_write(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to do sync write, {:?}", e);
+                            -1
+                        });
+                    if r < 0 {
+                        break;
+                    }
                     off += iov.iov_len as usize;
                 }
                 r
@@ -263,11 +285,9 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    fn handle_misaligned_rw(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn handle_misaligned_rw(&mut self, cb: &AioCb<T>) -> Result<()> {
         // Safe because we only get the host page size.
         let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-        let mut ret = -1;
-
         match cb.opcode {
             IoCmd::Preadv => {
                 // Safe because we allocate aligned memory and free it later.
@@ -277,7 +297,7 @@ impl<T: Clone + 'static> Aio<T> {
                 if aligned_buffer.is_null() {
                     bail!("Failed to alloc memory for misaligned read");
                 }
-                ret = raw_read(
+                raw_read(
                     cb.file_fd,
                     aligned_buffer as u64,
                     cb.nbytes as usize,
@@ -286,21 +306,21 @@ impl<T: Clone + 'static> Aio<T> {
                 .map_err(|e| {
                     // Safe because the memory is allocated by us and will not be used anymore.
                     unsafe { libc::free(aligned_buffer) };
-                    e
+                    anyhow!("Failed to do raw read for misaligned read, {:?}", e)
                 })?;
 
                 let src = unsafe {
                     std::slice::from_raw_parts(aligned_buffer as *const u8, cb.nbytes as usize)
                 };
-                iov_from_buf_direct(&cb.iovec, src).and_then(|v| {
+                let res = iov_from_buf_direct(&cb.iovec, src).and_then(|v| {
                     if v == cb.nbytes as usize {
                         Ok(())
                     } else {
-                        unsafe { libc::free(aligned_buffer) };
-                        bail!("Failed to copy buff to iovs")
+                        Err(anyhow!("Failed to copy iovs to buff for misaligned read"))
                     }
-                })?;
+                });
                 unsafe { libc::free(aligned_buffer) };
+                res
             }
             IoCmd::Pwritev => {
                 let aligned_buffer =
@@ -311,36 +331,37 @@ impl<T: Clone + 'static> Aio<T> {
                 let dst = unsafe {
                     std::slice::from_raw_parts_mut(aligned_buffer as *mut u8, cb.nbytes as usize)
                 };
-                iov_to_buf_direct(&cb.iovec, dst).and_then(|v| {
+                if let Err(e) = iov_to_buf_direct(&cb.iovec, dst).and_then(|v| {
                     if v == cb.nbytes as usize {
                         Ok(())
                     } else {
-                        unsafe { libc::free(aligned_buffer) };
-                        bail!("Failed to copy iovs to buff")
+                        Err(anyhow!("Failed to copy iovs to buff for misaligned write"))
                     }
-                })?;
+                }) {
+                    unsafe { libc::free(aligned_buffer) };
+                    return Err(e);
+                }
 
-                ret = raw_write(
+                let res = raw_write(
                     cb.file_fd,
                     aligned_buffer as u64,
                     cb.nbytes as usize,
                     cb.offset,
                 )
-                .map_err(|e| {
-                    unsafe { libc::free(aligned_buffer) };
-                    e
-                })?;
+                .map(|_| {})
+                .map_err(|e| anyhow!("Failed to do raw write for misaligned write, {:?}", e));
                 unsafe { libc::free(aligned_buffer) };
+                res
             }
-            _ => {}
-        };
-        (self.complete_func)(&cb, ret);
-
-        Ok(())
+            _ => bail!("Failed to do misaligned rw: unknown cmd type"),
+        }
     }
 
     pub fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
-        let ret = raw_datasync(cb.file_fd)?;
+        let ret = raw_datasync(cb.file_fd).unwrap_or_else(|e| {
+            error!("Failed to do sync flush, {:?}", e);
+            -1
+        });
         (self.complete_func)(&cb, ret);
         Ok(())
     }

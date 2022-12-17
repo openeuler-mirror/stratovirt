@@ -356,8 +356,14 @@ impl Request {
             VIRTIO_BLK_T_GET_ID => {
                 let serial = serial_num.clone().unwrap_or_else(|| String::from(""));
                 let serial_vec = get_serial_num_config(&serial);
-                iov_from_buf_direct(&self.iovec, &serial_vec)?;
-                aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_OK);
+                let status = iov_from_buf_direct(&self.iovec, &serial_vec).map_or_else(
+                    |e| {
+                        error!("Failed to process block request for getting id, {:?}", e);
+                        VIRTIO_BLK_S_IOERR
+                    },
+                    |_| VIRTIO_BLK_S_OK,
+                );
+                aiocb.iocompletecb.complete_request(status);
             }
             _ => bail!(
                 "The type {} of block request is not supported",
@@ -555,18 +561,15 @@ impl BlockIoHandler {
                 self.driver_features,
             );
             if let Some(disk_img) = self.disk_image.as_ref() {
-                if let Err(ref e) = req_rc.execute(
+                req_rc.execute(
                     self.aio.as_mut().unwrap(),
                     disk_img,
                     &self.serial_num,
                     self.direct,
                     &self.aio_type,
                     req_index == last_aio_req_index,
-                    aiocompletecb.clone(),
-                ) {
-                    error!("Failed to execute block request, {:?}", e);
-                    aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
-                }
+                    aiocompletecb,
+                )?;
             } else {
                 warn!("Failed to execute block request, disk_img not specified");
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
