@@ -122,18 +122,18 @@ impl AioCompleteCb {
         }
     }
 
-    fn complete_request(&self, status: u8) {
+    fn complete_request(&self, status: u8) -> Result<()> {
         let mut req = Some(self.req.as_ref());
         while let Some(req_raw) = req {
-            self.complete_one_request(req_raw, status);
+            self.complete_one_request(req_raw, status)?;
             req = req_raw.next.as_ref().as_ref();
         }
+        Ok(())
     }
 
-    fn complete_one_request(&self, req: &Request, status: u8) {
+    fn complete_one_request(&self, req: &Request, status: u8) -> Result<()> {
         if let Err(ref e) = self.mem_space.write_object(&status, req.in_header) {
-            error!("Failed to write the status (aio completion) {:?}", e);
-            return;
+            bail!("Failed to write the status (blk io completion) {:?}", e);
         }
 
         let mut queue_lock = self.queue.lock().unwrap();
@@ -141,11 +141,12 @@ impl AioCompleteCb {
             .vring
             .add_used(&self.mem_space, req.desc_index, req.in_len)
         {
-            error!(
-                "Failed to add used ring(aio completion), index {}, len {} {:?}",
-                req.desc_index, req.in_len, e,
+            bail!(
+                "Failed to add used ring(blk io completion), index {}, len {} {:?}",
+                req.desc_index,
+                req.in_len,
+                e,
             );
-            return;
         }
 
         if queue_lock
@@ -157,14 +158,14 @@ impl AioCompleteCb {
                 Some(&queue_lock),
                 false,
             ) {
-                error!(
-                    "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
+                bail!(
+                    "Failed to trigger interrupt(blk io completion), error is {:?}",
                     e
                 );
-                return;
             }
             self.trace_send_interrupt("Block".to_string());
         }
+        Ok(())
     }
 }
 
@@ -363,12 +364,10 @@ impl Request {
                     },
                     |_| VIRTIO_BLK_S_OK,
                 );
-                aiocb.iocompletecb.complete_request(status);
+                aiocb.iocompletecb.complete_request(status)?;
             }
-            _ => bail!(
-                "The type {} of block request is not supported",
-                self.out_header.request_type
-            ),
+            // The illegal request type has been handled in method new().
+            _ => {}
         };
         Ok(())
     }
@@ -535,7 +534,7 @@ impl BlockIoHandler {
                 );
                 // unlock queue, because it will be hold below.
                 drop(queue);
-                aiocompletecb.complete_request(status);
+                aiocompletecb.complete_request(status)?;
                 continue;
             }
             // Avoid bogus guest stuck IO thread.
@@ -572,7 +571,7 @@ impl BlockIoHandler {
                 )?;
             } else {
                 warn!("Failed to execute block request, disk_img not specified");
-                aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
+                aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR)?;
             }
         }
 
@@ -663,10 +662,25 @@ impl BlockIoHandler {
                 }
             }
 
-            complete_cb.complete_request(status);
+            complete_cb.complete_request(status)
         }) as AioCompleteFunc<AioCompleteCb>);
 
         Ok(Box::new(Aio::new(complete_func, engine)?))
+    }
+
+    fn aio_complete_handler(&mut self) -> Result<bool> {
+        if let Some(aio) = self.aio.as_mut() {
+            let result = aio.handle();
+            if result.is_err() {
+                report_virtio_error(
+                    self.interrupt_cb.clone(),
+                    self.driver_features,
+                    Some(&self.deactivate_evt),
+                );
+            }
+            return result;
+        }
+        Ok(false)
     }
 
     fn update_evt_handler(&mut self) {
@@ -837,21 +851,20 @@ impl EventNotifierHelper for BlockIoHandler {
             let h_clone = handler.clone();
             let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
-
-                if let Some(aio) = &mut h_clone.lock().unwrap().aio {
-                    if let Err(ref e) = aio.handle() {
-                        error!("Failed to handle aio, {:?}", e);
-                    }
+                if let Err(ref e) = h_clone.lock().unwrap().aio_complete_handler() {
+                    error!("Failed to handle aio {:?}", e);
                 }
                 None
             });
 
             let h_clone = handler.clone();
             let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
-                let mut done = false;
-                if let Some(aio) = &mut h_clone.lock().unwrap().aio {
-                    done = aio.handle().with_context(|| "Failed to handle aio").ok()?;
-                }
+                let done = h_clone
+                    .lock()
+                    .unwrap()
+                    .aio_complete_handler()
+                    .with_context(|| "Failed to handle aio")
+                    .ok()?;
                 if done {
                     Some(Vec::new())
                 } else {
