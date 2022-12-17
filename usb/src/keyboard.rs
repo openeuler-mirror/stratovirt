@@ -136,15 +136,10 @@ impl UsbKeyboard {
         let cloned_kbd = kbd.clone();
         usb_endpoint_init(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>));
         let mut locked_kbd = cloned_kbd.lock().unwrap();
-        locked_kbd.init_hid()?;
+        locked_kbd.usb_device.usb_desc = Some(DESC_KEYBOARD.clone());
+        locked_kbd.usb_device.init_descriptor()?;
         drop(locked_kbd);
         Ok(cloned_kbd)
-    }
-
-    fn init_hid(&mut self) -> Result<()> {
-        self.usb_device.usb_desc = Some(DESC_KEYBOARD.clone());
-        self.usb_device.init_descriptor()?;
-        Ok(())
     }
 }
 
@@ -222,7 +217,7 @@ impl UsbDeviceOps for UsbKeyboard {
     }
 
     fn get_wakeup_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>> {
-        let ep = self.usb_device.get_endpoint(USB_TOKEN_IN as u32, 1);
+        let ep = self.usb_device.get_endpoint(true, 1);
         Some(Arc::downgrade(&ep))
     }
 }
