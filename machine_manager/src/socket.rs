@@ -359,7 +359,7 @@ impl SocketRWHandler {
     /// Get inner buf as a `String`.
     pub fn get_buf_string(&mut self) -> Result<String> {
         if self.buf.len() > MAX_SOCKET_MSG_LENGTH {
-            bail!("The socket messege is too long.");
+            bail!("The socket message is too long.");
         }
 
         Ok(String::from_utf8_lossy(&self.buf).trim().to_string())
