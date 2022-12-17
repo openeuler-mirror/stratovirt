@@ -152,51 +152,22 @@ impl UsbTablet {
 // Used for VNC to send pointer event.
 pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: i32, y: i32) -> Result<()> {
     let mut locked_tablet = tablet.lock().unwrap();
+    if locked_tablet.hid.num == QUEUE_LENGTH - 1 {
+        debug!("Pointer queue is full!");
+        // Return ok to ignore the request.
+        return Ok(());
+    }
     let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
     let mut evt = &mut locked_tablet.hid.pointer.queue[index];
     if button == INPUT_BUTTON_WHEEL_UP {
         evt.pos_z += 1;
     } else if button == INPUT_BUTTON_WHEEL_DOWN {
-        evt.pos_z -= 1
+        evt.pos_z -= 1;
     }
     evt.button_state = button;
     evt.pos_x = x;
     evt.pos_y = y;
-    Ok(())
-}
-/// Used for VNC to sync pointer event.
-pub fn pointer_sync(tablet: &Arc<Mutex<UsbTablet>>) -> Result<()> {
-    let mut locked_tablet = tablet.lock().unwrap();
-    if locked_tablet.hid.num == QUEUE_LENGTH - 1 {
-        debug!("Pointer queue is full!");
-        return Ok(());
-    }
-    let cur_index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
-    let pre_index = if cur_index == 0 {
-        QUEUE_MASK as usize
-    } else {
-        (((cur_index as u32) - 1) % QUEUE_MASK) as usize
-    };
-    let nxt_index = (cur_index + 1) % QUEUE_MASK as usize;
-    let prev = locked_tablet.hid.pointer.queue[pre_index];
-    let curr = locked_tablet.hid.pointer.queue[cur_index];
-    let mut comp = false;
-    if locked_tablet.hid.num > 0 && curr.button_state == prev.button_state {
-        comp = true;
-    }
-    if comp {
-        locked_tablet.hid.pointer.queue[pre_index].pos_x = curr.pos_x;
-        locked_tablet.hid.pointer.queue[pre_index].pos_y = curr.pos_y;
-        locked_tablet.hid.pointer.queue[pre_index].pos_z += curr.pos_z;
-        locked_tablet.hid.pointer.queue[cur_index].pos_z = 0;
-        return Ok(());
-    } else {
-        locked_tablet.hid.pointer.queue[nxt_index].pos_x = curr.pos_x;
-        locked_tablet.hid.pointer.queue[nxt_index].pos_y = curr.pos_y;
-        locked_tablet.hid.pointer.queue[nxt_index].pos_z = 0;
-        locked_tablet.hid.pointer.queue[nxt_index].button_state = curr.button_state;
-        locked_tablet.hid.num += 1;
-    }
+    locked_tablet.hid.num += 1;
     drop(locked_tablet);
     let clone_tablet = tablet.clone();
     notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDeviceOps>>))

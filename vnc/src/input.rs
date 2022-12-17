@@ -15,11 +15,7 @@ use crate::{
     pixman::{get_image_height, get_image_width},
 };
 use log::error;
-use usb::{
-    keyboard::keyboard_event,
-    tablet::{pointer_event, pointer_sync},
-    INPUT,
-};
+use usb::{keyboard::keyboard_event, tablet::pointer_event, INPUT};
 // Logical window size for mouse.
 const ABS_MAX: u64 = 0x7fff;
 // Up flag.
@@ -98,9 +94,6 @@ impl ClientIoHandler {
         if let Some(tablet) = &locked_input.tablet {
             if let Err(e) = pointer_event(tablet, button_mask as u32, x as i32, y as i32) {
                 error!("Point event error: {}", e);
-            }
-            if let Err(e) = pointer_sync(tablet) {
-                error!("Point event sync error: {}", e);
             }
         }
 
