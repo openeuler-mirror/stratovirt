@@ -12,13 +12,14 @@
 
 use crate::{
     auth::AuthState,
+    console::DisplayMouse,
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     round_up_div,
-    server::{vnc_refresh_notify, VncServer},
+    server::VncServer,
     utils::BuffPool,
     vnc::{
-        framebuffer_upadate, set_area_dirty, write_pixel, DisplayMouse, BIT_PER_BYTE,
-        DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_OUTPUT_LIMIT,
+        framebuffer_upadate, set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
+        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_OUTPUT_LIMIT,
         OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
     },
     VncError,
@@ -892,8 +893,6 @@ impl ClientIoHandler {
             );
         }
         drop(locked_state);
-        let server = self.server.clone();
-        vnc_refresh_notify(&server);
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
