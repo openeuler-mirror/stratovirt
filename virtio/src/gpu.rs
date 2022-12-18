@@ -26,6 +26,7 @@ use std::cmp;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{ptr, vec};
 use util::byte_code::ByteCode;
@@ -43,13 +44,11 @@ use util::pixman::{
 };
 use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
-use vnc::pixman::{
-    pixman_glyph_from_vgafont, pixman_glyph_render, unref_pixman_image, QemuColorNames,
-    COLOR_TABLE_RGB,
+use vnc::console::{
+    console_init, display_cursor_define, display_graphic_update, display_replace_surface,
+    DisplayMouse, DisplaySurface, HardWareOperations,
 };
-use vnc::vnc::{
-    vnc_display_cursor, vnc_display_switch, vnc_display_update, DisplayMouse, DisplaySurface,
-};
+
 /// Number of virtqueues.
 const QUEUE_NUM_GPU: usize = 2;
 /// Size of each virtqueue.
@@ -337,6 +336,10 @@ pub struct VirtioGpuResourceDetachBacking {
 
 impl ByteCode for VirtioGpuResourceDetachBacking {}
 
+#[derive(Default)]
+pub struct GpuOpts {}
+impl HardWareOperations for GpuOpts {}
+
 #[allow(unused)]
 #[derive(Default, Clone)]
 pub struct VirtioGpuRequest {
@@ -461,6 +464,7 @@ impl ByteCode for VirtioGpuUpdateCursor {}
 
 #[derive(Default)]
 struct GpuScanout {
+    con_id: Option<usize>,
     surface: Option<DisplaySurface>,
     mouse: Option<DisplayMouse>,
     width: u32,
@@ -514,34 +518,6 @@ struct GpuIoHandler {
     used_hostmem: u64,
 }
 
-fn display_define_mouse(mouse: &mut Option<DisplayMouse>) {
-    if let Some(mouse) = mouse {
-        vnc_display_cursor(mouse);
-    }
-}
-
-fn display_replace_surface(surface: Option<DisplaySurface>) {
-    match surface {
-        Some(surface) => {
-            vnc_display_switch(&surface);
-        }
-        None => unsafe {
-            match MSG_SURFACE {
-                Some(surface) => {
-                    vnc_display_switch(&surface);
-                }
-                None => {
-                    error!("Default msg surface is none, check is needed")
-                }
-            }
-        },
-    }
-}
-
-fn display_update(x: i32, y: i32, w: i32, h: i32) {
-    vnc_display_update(x, y, w, h);
-}
-
 fn create_surface(
     scanout: &mut GpuScanout,
     info_set_scanout: VirtioGpuSetScanout,
@@ -571,56 +547,11 @@ fn create_surface(
             // update surface in scanout.
             scanout.surface = Some(surface);
             pixman_image_unref(rect);
-            display_replace_surface(scanout.surface);
+            display_replace_surface(scanout.con_id, scanout.surface);
         }
     };
     surface
 }
-
-const FONT_HEIGHT: i32 = 16;
-const FONT_WIDTH: i32 = 8;
-const MSG_SURFACE_HEIGHT: i32 = 480;
-const MSG_SURFACE_WIDTH: i32 = 640;
-
-fn create_msg_surface() -> Option<DisplaySurface> {
-    let mut surface = DisplaySurface::default();
-    unsafe {
-        surface.format = pixman_format_code_t::PIXMAN_x8r8g8b8;
-        surface.image = pixman_image_create_bits(
-            surface.format,
-            MSG_SURFACE_WIDTH,
-            MSG_SURFACE_HEIGHT,
-            ptr::null_mut(),
-            MSG_SURFACE_WIDTH * 4,
-        );
-        if surface.image.is_null() {
-            error!("create default surface failed!");
-            return None;
-        }
-    }
-    let msg = String::from("Display is not active now");
-    let fg = COLOR_TABLE_RGB[0][QemuColorNames::QemuColorWhite as usize];
-    let bg = COLOR_TABLE_RGB[0][QemuColorNames::QemuColorBlack as usize];
-    let x = (MSG_SURFACE_WIDTH / FONT_WIDTH - msg.len() as i32) / 2;
-    let y = (MSG_SURFACE_HEIGHT / FONT_HEIGHT - 1) / 2;
-
-    for (index, ch) in msg.chars().enumerate() {
-        let glyph = pixman_glyph_from_vgafont(FONT_HEIGHT, ch as u32);
-        pixman_glyph_render(
-            glyph,
-            surface.image,
-            &fg,
-            &bg,
-            (x + index as i32, y),
-            FONT_WIDTH,
-            FONT_HEIGHT,
-        );
-        unref_pixman_image(glyph);
-    }
-    Some(surface)
-}
-
-static mut MSG_SURFACE: Option<DisplaySurface> = None;
 
 impl GpuIoHandler {
     fn gpu_get_pixman_format(&mut self, format: u32) -> Result<pixman_format_code_t> {
@@ -711,7 +642,9 @@ impl GpuIoHandler {
                     }
                 }
             }
-            display_define_mouse(&mut scanout.mouse);
+            if let Some(mouse) = &mut scanout.mouse {
+                display_cursor_define(scanout.con_id, mouse);
+            }
             scanout.cursor = info_cursor;
         } else {
             bail!("Wrong header type for cursor queue");
@@ -955,7 +888,7 @@ impl GpuIoHandler {
                         if scanout.resource_id != 0 {
                             // disable the scanout.
                             res.scanouts_bitmask &= !(1 << i);
-                            display_replace_surface(None);
+                            display_replace_surface(scanout.con_id, None);
                             scanout.clear();
                         }
                     }
@@ -1040,7 +973,7 @@ impl GpuIoHandler {
                 let res = &mut self.resources_list[res_index];
                 res.scanouts_bitmask &= !(1 << info_set_scanout.scanout_id);
             }
-            display_replace_surface(None);
+            display_replace_surface(scanout.con_id, None);
             scanout.clear();
             return self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req);
         }
@@ -1238,7 +1171,8 @@ impl GpuIoHandler {
                             -(scanout.y as i32),
                         );
                         let extents = pixman_region_extents(final_reg_ptr);
-                        display_update(
+                        display_graphic_update(
+                            scanout.con_id,
                             (*extents).x1 as i32,
                             (*extents).y1 as i32,
                             ((*extents).x2 - (*extents).x1) as i32,
@@ -1779,6 +1713,7 @@ impl VirtioDevice for Gpu {
         self.state.base_conf.flags &= !(1 << VIRTIO_GPU_FLAG_VIRGL_ENABLED);
         self.state.config.num_scanouts = self.state.base_conf.max_outputs;
         self.state.config.reserved = 0;
+
         Ok(())
     }
 
@@ -1859,16 +1794,13 @@ impl VirtioDevice for Gpu {
                 queues.len()
             )));
         }
-
-        unsafe {
-            MSG_SURFACE = create_msg_surface();
-        }
-
         self.interrupt_cb = Some(interrupt_cb.clone());
         let req_states = [VirtioGpuReqState::default(); VIRTIO_GPU_MAX_SCANOUTS];
         let mut scanouts = vec![];
         for _i in 0..VIRTIO_GPU_MAX_SCANOUTS {
-            let scanout = GpuScanout::default();
+            let mut scanout = GpuScanout::default();
+            let gpu_opts = Rc::new(GpuOpts::default());
+            scanout.con_id = console_init(gpu_opts);
             scanouts.push(scanout);
         }
 
