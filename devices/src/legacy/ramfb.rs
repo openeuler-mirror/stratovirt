@@ -19,11 +19,15 @@ use drm_fourcc::DrmFourcc;
 use log::error;
 use migration_derive::ByteCode;
 use std::mem::size_of;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use util::byte_code::ByteCode;
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
-use vnc::vnc::{vnc_display_switch, vnc_loop_update_display, DisplaySurface};
+use vnc::console::{
+    console_init, display_graphic_update, display_replace_surface, get_console_by_id,
+    DisplaySurface, HardWareOperations,
+};
 
 const BYTES_PER_PIXELS: u32 = 8;
 const WIDTH_MAX: u32 = 16_000;
@@ -184,8 +188,20 @@ impl FwCfgWriteCallback for RamfbState {
 
         self.create_display_surface(width, height, format, stride, addr);
 
-        vnc_display_switch(&self.surface.unwrap());
-        vnc_loop_update_display(0, 0, width as i32, height as i32);
+        let ramfb_opts = Rc::new(RamfbInterface::default());
+        let con_id = console_init(ramfb_opts);
+        display_replace_surface(con_id, self.surface);
+    }
+}
+
+#[derive(Default)]
+pub struct RamfbInterface {}
+impl HardWareOperations for RamfbInterface {
+    fn hw_update(&self, con_id: Option<usize>) {
+        let con = get_console_by_id(con_id);
+        if let Some(c) = con {
+            display_graphic_update(con_id, 0, 0, c.width, c.height);
+        }
     }
 }
 
