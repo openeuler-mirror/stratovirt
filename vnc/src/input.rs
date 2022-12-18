@@ -13,9 +13,12 @@
 use crate::{
     client::ClientIoHandler,
     pixman::{get_image_height, get_image_width},
+    vnc::BIT_PER_BYTE,
 };
 use log::error;
 use usb::{keyboard::keyboard_event, tablet::pointer_event, INPUT};
+use util::bitmap::Bitmap;
+
 // Logical window size for mouse.
 const ABS_MAX: u64 = 0x7fff;
 // Up flag.
@@ -33,6 +36,39 @@ const ASCII_A: i32 = 65;
 const ASCII_Z: i32 = 90;
 const UPPERCASE_TO_LOWERCASE: i32 = 32;
 
+// Keyboard Modifier State
+pub enum KeyboardModifier {
+    KeyModNone = 0,
+    KeyModShift = 1,
+    KeyModCtrl = 2,
+    KeyModAlt = 3,
+    KeyModAltgr = 4,
+    KeyModNumlock = 5,
+    KeyModCapslock = 6,
+    KeyModMax = 7,
+}
+
+/// Record the keyboard status,
+/// Including the press information of keys,
+/// and some status information.
+pub struct KeyBoardState {
+    /// Keyboard state.
+    pub keystate: Bitmap<u8>,
+    /// Key Modifier states.
+    pub keymods: Bitmap<u8>,
+}
+
+impl KeyBoardState {
+    pub fn new(key_num: usize) -> Self {
+        Self {
+            keystate: Bitmap::new(key_num / (BIT_PER_BYTE as usize) + 1),
+            keymods: Bitmap::new(
+                KeyboardModifier::KeyModMax as usize / (BIT_PER_BYTE as usize) + 1,
+            ),
+        }
+    }
+}
+
 impl ClientIoHandler {
     /// Keyboard event.
     pub fn key_envent(&mut self) {
@@ -49,13 +85,7 @@ impl ClientIoHandler {
             keysym += UPPERCASE_TO_LOWERCASE;
         }
 
-        let keycode: u16 = match self
-            .server
-            .keysym2keycode
-            .lock()
-            .unwrap()
-            .get(&(keysym as u16))
-        {
+        let keycode: u16 = match self.server.keysym2keycode.get(&(keysym as u16)) {
             Some(k) => *k,
             None => 0,
         };
