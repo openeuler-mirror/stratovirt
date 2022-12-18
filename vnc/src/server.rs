@@ -37,7 +37,7 @@ use machine_manager::{
 use std::{
     cmp,
     collections::HashMap,
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     os::unix::prelude::{AsRawFd, RawFd},
     ptr,
     sync::{Arc, Mutex},
@@ -57,7 +57,7 @@ const CONNECTION_LIMIT: usize = 1;
 /// Information of VncServer.
 pub struct VncServer {
     /// Client io handler.
-    pub client_handlers: Arc<Mutex<HashMap<String, Arc<Mutex<ClientIoHandler>>>>>,
+    pub client_handlers: Arc<Mutex<HashMap<String, Arc<ClientState>>>>,
     /// Security Type for connection.
     pub security_type: Arc<Mutex<SecurityType>>,
     /// keyboard status.
@@ -71,7 +71,7 @@ pub struct VncServer {
     /// Display Change Listener.
     pub display_listener: Arc<Mutex<DisplayChangeListener>>,
     /// Connection limit.
-    conn_limits: usize,
+    pub conn_limits: usize,
 }
 
 unsafe impl Send for VncServer {}
@@ -504,8 +504,7 @@ impl VncSurface {
 fn set_dirty_for_each_clients(x: usize, y: usize) {
     let server = VNC_SERVERS.lock().unwrap()[0].clone();
     let mut locked_handlers = server.client_handlers.lock().unwrap();
-    for client_io in locked_handlers.values_mut() {
-        let client = client_io.lock().unwrap().client.clone();
+    for client in locked_handlers.values_mut() {
         client
             .dirty_bitmap
             .lock()
@@ -526,35 +525,27 @@ pub fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<()> {
-    if server.client_handlers.lock().unwrap().len() >= server.conn_limits {
-        stream.shutdown(Shutdown::Both).unwrap();
-        return Err(anyhow!(VncError::MakeConnectionFailed(String::from(
-            "Total connection is exceeding to limit."
-        ))));
-    }
+    info!("New Connection: {:?}", stream);
     stream
         .set_nonblocking(true)
         .expect("set nonblocking failed");
-    info!("New Connection: {:?}", stream);
 
     // Register event notifier for vnc client.
-    let client = Arc::new(ClientState::default());
+    let client = Arc::new(ClientState::new(addr.to_string()));
     let client_io = Arc::new(Mutex::new(ClientIoHandler::new(
         stream,
-        client,
+        client.clone(),
         server.clone(),
-        addr.to_string(),
     )));
     client_io
         .lock()
         .unwrap()
         .write_msg("RFB 003.008\n".to_string().as_bytes());
-
     server
         .client_handlers
         .lock()
         .unwrap()
-        .insert(addr.to_string(), client_io.clone());
+        .insert(addr.to_string(), client);
 
     EventLoop::update_event(EventNotifierHelper::internal_notifiers(client_io), None)?;
 
