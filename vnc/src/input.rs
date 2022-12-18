@@ -12,9 +12,11 @@
 
 use crate::{
     client::ClientIoHandler,
+    console::console_select,
     pixman::{get_image_height, get_image_width},
     vnc::BIT_PER_BYTE,
 };
+use anyhow::Result;
 use log::error;
 use usb::{keyboard::keyboard_event, tablet::pointer_event, INPUT};
 use util::bitmap::Bitmap;
@@ -35,6 +37,18 @@ const INPUT_POINT_RIGHT: u8 = 0x04;
 const ASCII_A: i32 = 65;
 const ASCII_Z: i32 = 90;
 const UPPERCASE_TO_LOWERCASE: i32 = 32;
+
+// Keycode.
+const KEYCODE_1: u16 = 2;
+const KEYCODE_9: u16 = 10;
+const KEYCODE_CTRL: u16 = 29;
+const KEYCODE_SHIFT: u16 = 42;
+const KEYCODE_SHIFT_R: u16 = 54;
+const KEYCODE_ALT: u16 = 56;
+const KEYCODE_CAPS_LOCK: u16 = 58;
+const KEYCODE_NUM_LOCK: u16 = 69;
+const KEYCODE_CTRL_R: u16 = 157;
+const KEYCODE_ALT_R: u16 = 184;
 
 // Keyboard Modifier State
 pub enum KeyboardModifier {
@@ -67,6 +81,101 @@ impl KeyBoardState {
             ),
         }
     }
+
+    /// Get the corresponding keyboard modifier.
+    fn keyboard_modifier_get(&self, key_mod: KeyboardModifier) -> bool {
+        match self.keymods.contain(key_mod as usize) {
+            Ok(res) => res,
+            Err(_e) => false,
+        }
+    }
+
+    /// Reset all keyboard modifier state.
+    fn keyboard_state_reset(&mut self) {
+        self.keymods.clear_all();
+    }
+
+    /// Record the press and up state in the keyboard.
+    fn keyboard_state_update(&mut self, keycode: u16, down: bool) -> Result<()> {
+        // Key is not pressed and the incoming key action is up.
+        if !down && !self.keystate.contain(keycode as usize)? {
+            return Ok(());
+        }
+
+        // Update Keyboard key modifier state.
+        if down {
+            self.keystate.set(keycode as usize)?;
+        } else {
+            self.keystate.clear(keycode as usize)?;
+        }
+
+        // Update Keyboard modifier state.
+        match keycode {
+            KEYCODE_SHIFT | KEYCODE_SHIFT_R => {
+                self.keyboard_modstate_update(
+                    KEYCODE_SHIFT,
+                    KEYCODE_SHIFT,
+                    KeyboardModifier::KeyModShift,
+                )?;
+            }
+            KEYCODE_CTRL | KEYCODE_CTRL_R => {
+                self.keyboard_modstate_update(
+                    KEYCODE_CTRL,
+                    KEYCODE_CTRL_R,
+                    KeyboardModifier::KeyModCtrl,
+                )?;
+            }
+            KEYCODE_ALT => {
+                self.keyboard_modstate_update(
+                    KEYCODE_ALT,
+                    KEYCODE_ALT,
+                    KeyboardModifier::KeyModAlt,
+                )?;
+            }
+            KEYCODE_ALT_R => {
+                self.keyboard_modstate_update(
+                    KEYCODE_ALT_R,
+                    KEYCODE_ALT_R,
+                    KeyboardModifier::KeyModAltgr,
+                )?;
+            }
+            KEYCODE_CAPS_LOCK => {
+                if down {
+                    self.keymods
+                        .change(KeyboardModifier::KeyModCapslock as usize)?;
+                }
+            }
+            KEYCODE_NUM_LOCK => {
+                if down {
+                    self.keymods
+                        .change(KeyboardModifier::KeyModNumlock as usize)?;
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// If one of the keys keycode_1 and keycode_2 is pressed,
+    /// Then the corresponding keyboard modifier state will be set.
+    /// Otherwise, it will be clear.
+    fn keyboard_modstate_update(
+        &mut self,
+        keycode_1: u16,
+        keycode_2: u16,
+        mod_state: KeyboardModifier,
+    ) -> Result<()> {
+        let mut res = self.keystate.contain(keycode_1 as usize)?;
+        res |= self.keystate.contain(keycode_2 as usize)?;
+
+        if res {
+            self.keymods.set(mod_state as usize)?;
+        } else {
+            self.keymods.clear(mod_state as usize)?;
+        }
+        Ok(())
+    }
 }
 
 impl ClientIoHandler {
@@ -77,19 +186,41 @@ impl ClientIoHandler {
             return;
         }
         let buf = self.read_incoming_msg();
-        let down = buf[1] as u8;
+        let down: bool = buf[1] != 0;
         let mut keysym = i32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let server = self.server.clone();
 
         // Uppercase -> Lowercase.
         if (ASCII_A..=ASCII_Z).contains(&keysym) {
             keysym += UPPERCASE_TO_LOWERCASE;
         }
+        let mut locked_kbd_state = server.keyboard_state.lock().unwrap();
+        let dcl_id = self.server.display_listener.lock().unwrap().dcl_id;
 
-        let keycode: u16 = match self.server.keysym2keycode.get(&(keysym as u16)) {
+        let keycode: u16 = match server.keysym2keycode.get(&(keysym as u16)) {
             Some(k) => *k,
             None => 0,
         };
-        self.do_key_event(down, keycode);
+
+        // Ctr + Alt + Num(1~9)
+        // Switch to the corresponding display device.
+        if (KEYCODE_1..KEYCODE_9 + 1).contains(&keycode)
+            && down
+            && dcl_id.is_some()
+            && locked_kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
+            && locked_kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
+        {
+            locked_kbd_state.keyboard_state_reset();
+            console_select(Some((keycode - KEYCODE_1) as usize));
+        }
+
+        if let Err(e) = locked_kbd_state.keyboard_state_update(keycode, down) {
+            error!("{:?}", e);
+            return;
+        }
+        drop(locked_kbd_state);
+        do_key_event(keycode, down);
+
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
@@ -130,33 +261,6 @@ impl ClientIoHandler {
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
-    /// Do keyboard event.
-    ///
-    /// # Arguments
-    ///
-    /// * `down` - press keyboard down or up.
-    /// * `keycode` - keycode.
-    pub fn do_key_event(&mut self, down: u8, keycode: u16) {
-        let mut scancode = Vec::new();
-        let mut keycode = keycode;
-        if keycode & SCANCODE_GREY != 0 {
-            scancode.push(SCANCODE_EMUL0 as u32);
-            keycode &= !SCANCODE_GREY;
-        }
-
-        if down == 0 {
-            keycode |= SCANCODE_UP;
-        }
-        scancode.push(keycode as u32);
-        // Send key event.
-        let locked_input = INPUT.lock().unwrap();
-        if let Some(keyboard) = &locked_input.keyboard {
-            if let Err(e) = keyboard_event(keyboard, scancode.as_slice()) {
-                error!("Key event error: {}", e);
-            }
-        }
-    }
-
     /// Client cut text.
     pub fn client_cut_event(&mut self) {
         let buf = self.read_incoming_msg();
@@ -174,5 +278,32 @@ impl ClientIoHandler {
         }
 
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
+    }
+}
+
+/// Do keyboard event.
+///
+/// # Arguments
+///
+/// * `down` - press keyboard down or up.
+/// * `keycode` - keycode.
+fn do_key_event(keycode: u16, down: bool) {
+    let mut scancode = Vec::new();
+    let mut keycode = keycode;
+    if keycode & SCANCODE_GREY != 0 {
+        scancode.push(SCANCODE_EMUL0 as u32);
+        keycode &= !SCANCODE_GREY;
+    }
+
+    if !down {
+        keycode |= SCANCODE_UP;
+    }
+    scancode.push(keycode as u32);
+    // Send key event.
+    let locked_input = INPUT.lock().unwrap();
+    if let Some(keyboard) = &locked_input.keyboard {
+        if let Err(e) = keyboard_event(keyboard, scancode.as_slice()) {
+            error!("Key event error: {}", e);
+        }
     }
 }

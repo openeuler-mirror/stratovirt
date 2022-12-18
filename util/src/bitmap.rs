@@ -196,6 +196,33 @@ impl<T: BitOps> Bitmap<T> {
         Ok(())
     }
 
+    /// Change the bit of bitmap.
+    ///
+    /// # Arguments
+    ///
+    /// * `num` - the input number
+    /// # Example
+    ///
+    /// ```rust
+    /// use util::bitmap::Bitmap;
+    /// let mut bitmap = Bitmap::<u16>::new(1);
+    /// assert!(bitmap.change(15).is_ok());
+    /// assert_eq!(bitmap.contain(15).unwrap(), true);
+    /// assert!(bitmap.change(15).is_ok());
+    /// assert_eq!(bitmap.contain(15).unwrap(), false);
+    /// ```
+    pub fn change(&mut self, num: usize) -> Result<()> {
+        let index = self.bit_index(num);
+        if index >= self.size() {
+            return Err(anyhow!(UtilError::OutOfBound(
+                index as u64,
+                self.vol() as u64
+            )));
+        }
+        self.data[index] = T::bit_xor(self.data[index], T::one().rhs(self.bit_pos(num)));
+        Ok(())
+    }
+
     /// Query bitmap if contains input number or not.
     ///
     /// # Arguments
@@ -406,8 +433,12 @@ mod tests {
         let mut bitmap = Bitmap::<u16>::new(1);
         assert!(bitmap.set(15).is_ok());
         assert!(bitmap.set(16).is_err());
+        assert_eq!(bitmap.contain(15).unwrap(), true);
         assert_eq!(bitmap.count_front_bits(16).unwrap(), 1);
         assert_eq!(bitmap.count_front_bits(15).unwrap(), 0);
+        assert!(bitmap.change(15).is_ok());
+        assert!(bitmap.change(16).is_err());
+        assert_eq!(bitmap.contain(15).unwrap(), false);
     }
 
     #[test]
