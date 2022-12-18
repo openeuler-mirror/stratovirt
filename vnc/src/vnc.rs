@@ -108,19 +108,18 @@ impl DisplayChangeListenerOperations for VncInterface {
         update_server_surface(&server);
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
-        for client_io in locked_handlers.values_mut() {
-            let client = client_io.lock().unwrap().client.clone();
+        for client in locked_handlers.values_mut() {
             let width = vnc_width(guest_width);
             let height = vnc_height(guest_height);
             let mut buf: Vec<u8> = Vec::new();
             // Set Color depth.
-            set_color_depth(&client, &mut buf);
+            set_color_depth(client, &mut buf);
             // Desktop_resize.
-            desktop_resize(&client, &server, &mut buf);
+            desktop_resize(client, &server, &mut buf);
             // Cursor define.
-            display_cursor_define(&client, &server, &mut buf);
-            vnc_write(&client, buf);
-            vnc_flush_notify(&client);
+            display_cursor_define(client, &server, &mut buf);
+            vnc_write(client, buf);
+            vnc_flush_notify(client);
             client.dirty_bitmap.lock().unwrap().clear_all();
             set_area_dirty(
                 &mut client.dirty_bitmap.lock().unwrap(),
@@ -131,7 +130,7 @@ impl DisplayChangeListenerOperations for VncInterface {
                 guest_width,
                 guest_height,
             );
-            vnc_update_output_throttle(&client);
+            vnc_update_output_throttle(client);
         }
     }
 
@@ -164,9 +163,8 @@ impl DisplayChangeListenerOperations for VncInterface {
 
         let mut _rects: i32 = 0;
         let mut locked_handlers = server.client_handlers.lock().unwrap();
-        for client_io in locked_handlers.values_mut() {
-            let client = client_io.lock().unwrap().client.clone();
-            _rects += get_rects(&client, &server, dirty_num);
+        for client in locked_handlers.values_mut() {
+            _rects += get_rects(client, &server, dirty_num);
         }
     }
 
@@ -229,12 +227,11 @@ impl DisplayChangeListenerOperations for VncInterface {
 
         let mut locked_handler = server.client_handlers.lock().unwrap();
         // Send the framebuff for each client.
-        for client_io in locked_handler.values_mut() {
-            let client = client_io.lock().unwrap().client.clone();
+        for client in locked_handler.values_mut() {
             let mut buf: Vec<u8> = Vec::new();
-            display_cursor_define(&client, &server, &mut buf);
-            vnc_write(&client, buf);
-            vnc_flush_notify(&client);
+            display_cursor_define(client, &server, &mut buf);
+            vnc_write(client, buf);
+            vnc_flush_notify(client);
         }
     }
 }
