@@ -19,7 +19,7 @@ use std::cmp;
 use std::io::Write;
 use std::marker::{Send, Sync};
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
@@ -87,7 +87,7 @@ impl<T: Clone> AioCb<T> {
 }
 
 pub struct Aio<T: Clone + 'static> {
-    ctx: Arc<Mutex<dyn AioContext>>,
+    ctx: Box<dyn AioContext>,
     pub fd: EventFd,
     pub aio_in_queue: CbList<T>,
     pub aio_in_flight: CbList<T>,
@@ -105,14 +105,10 @@ impl<T: Clone + 'static> Aio<T> {
             AIO_NATIVE
         };
 
-        let ctx: Arc<Mutex<dyn AioContext>> = if aio == AIO_IOURING {
-            Arc::new(Mutex::new(IoUringContext::new(
-                max_events as u32,
-                &fd,
-                func.clone(),
-            )?))
+        let ctx: Box<dyn AioContext> = if aio == AIO_IOURING {
+            Box::new(IoUringContext::new(max_events as u32, &fd, func.clone())?)
         } else {
-            Arc::new(Mutex::new(LibaioContext::new(max_events as i32)?))
+            Box::new(LibaioContext::new(max_events as i32)?)
         };
 
         Ok(Aio {
@@ -127,9 +123,8 @@ impl<T: Clone + 'static> Aio<T> {
 
     pub fn handle(&mut self) -> Result<bool> {
         let mut done = false;
-        let mut ctx = self.ctx.lock().unwrap();
 
-        for evt in ctx.get_events() {
+        for evt in self.ctx.get_events() {
             unsafe {
                 let node = evt.data as *mut CbNode<T>;
                 let res = if (evt.res2 == 0) && (evt.res == (*node).value.nbytes as i64) {
@@ -146,8 +141,6 @@ impl<T: Clone + 'static> Aio<T> {
                 drop(Box::from_raw(node));
             }
         }
-        // Drop reference of 'ctx', so below 'process_list' can work.
-        drop(ctx);
         self.process_list()?;
         Ok(done)
     }
@@ -170,8 +163,6 @@ impl<T: Clone + 'static> Aio<T> {
             // The iocbs must not be empty.
             let (nr, is_err) = match self
                 .ctx
-                .lock()
-                .unwrap()
                 .submit(iocbs.len() as i64, &mut iocbs)
                 .map_err(|e| {
                     error!("{}", e);
