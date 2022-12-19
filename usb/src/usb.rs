@@ -38,16 +38,6 @@ pub enum UsbPacketStatus {
     Async,
 }
 
-/// USB packet setup state.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum SetupState {
-    Idle,
-    Setup,
-    Data,
-    Ack,
-    Parameter,
-}
-
 /// USB request used to transfer to USB device.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -117,17 +107,6 @@ impl UsbPort {
 pub struct UsbDescString {
     pub index: u32,
     pub str: String,
-}
-
-/// USB packet state.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum UsbPacketState {
-    Undefined = 0,
-    Setup,
-    Queued,
-    Async,
-    Complete,
-    Canceled,
 }
 
 // USB descriptor
@@ -424,15 +403,24 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Handle usb packet, used for controller to deliever packet to device.
     fn handle_packet(&mut self, packet: &mut UsbPacket) {
-        if packet.state != UsbPacketState::Setup {
-            error!("The packet state is not Setup");
+        packet.status = UsbPacketStatus::Success;
+        let ep = if let Some(ep) = &packet.ep {
+            ep
+        } else {
+            error!("Failed to find ep");
+            packet.status = UsbPacketStatus::NoDev;
             return;
-        }
-        if let Err(e) = self.process_packet(packet) {
-            error!("Failed to process packet: {}", e);
-        }
-        if packet.status != UsbPacketStatus::Nak {
-            packet.state = UsbPacketState::Complete;
+        };
+        let locked_ep = ep.lock().unwrap();
+        let ep_nr = locked_ep.ep_number;
+        debug!("handle packet endpointer number {}", ep_nr);
+        drop(locked_ep);
+        if ep_nr == 0 {
+            if let Err(e) = self.do_parameter(packet) {
+                error!("Failed to handle control packet {}", e);
+            }
+        } else {
+            self.handle_data(packet);
         }
     }
 
@@ -455,26 +443,6 @@ pub trait UsbDeviceOps: Send + Sync {
     fn speed(&self) -> u32 {
         let usb_dev = self.get_usb_device();
         usb_dev.speed
-    }
-
-    fn process_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
-        packet.status = UsbPacketStatus::Success;
-        let ep = if let Some(ep) = &packet.ep {
-            ep
-        } else {
-            packet.status = UsbPacketStatus::NoDev;
-            bail!("Failed to find ep");
-        };
-        let locked_ep = ep.lock().unwrap();
-        let ep_nr = locked_ep.ep_number;
-        debug!("process_packet nr {}", ep_nr);
-        drop(locked_ep);
-        if ep_nr == 0 {
-            self.do_parameter(packet)?;
-        } else {
-            self.handle_data(packet);
-        }
-        Ok(())
     }
 
     fn do_parameter(&mut self, p: &mut UsbPacket) -> Result<()> {
@@ -583,15 +551,14 @@ pub struct UsbPacket {
     pub status: UsbPacketStatus,
     /// Actually transfer length.
     pub actual_length: u32,
-    pub state: UsbPacketState,
 }
 
 impl std::fmt::Display for UsbPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "pid {} param {} status {:?} actual_length {}, state {:?}",
-            self.pid, self.parameter, self.status, self.actual_length, self.state
+            "pid {} param {} status {:?} actual_length {}",
+            self.pid, self.parameter, self.status, self.actual_length
         )
     }
 }
@@ -603,7 +570,6 @@ impl UsbPacket {
         self.status = UsbPacketStatus::Success;
         self.actual_length = 0;
         self.parameter = 0;
-        self.state = UsbPacketState::Setup;
     }
 }
 
@@ -616,7 +582,6 @@ impl Default for UsbPacket {
             parameter: 0,
             status: UsbPacketStatus::NoDev,
             actual_length: 0,
-            state: UsbPacketState::Undefined,
         }
     }
 }
