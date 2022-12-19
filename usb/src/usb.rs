@@ -19,7 +19,7 @@ use crate::descriptor::{
 };
 use crate::xhci::xhci_controller::XhciDevice;
 use anyhow::{bail, Result};
-use log::{debug, error, warn};
+use log::{debug, error};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;
@@ -470,24 +470,7 @@ pub trait UsbDeviceOps: Send + Sync {
         debug!("process_packet nr {}", ep_nr);
         drop(locked_ep);
         if ep_nr == 0 {
-            if packet.parameter != 0 {
-                return self.do_parameter(packet);
-            }
-            match packet.pid as u8 {
-                USB_TOKEN_SETUP => {
-                    warn!("process_packet USB_TOKEN_SETUP not implemented");
-                }
-                USB_TOKEN_IN => {
-                    warn!("process_packet USB_TOKEN_IN not implemented");
-                }
-                USB_TOKEN_OUT => {
-                    warn!("process_packet USB_TOKEN_OUT not implemented");
-                }
-                _ => {
-                    warn!("Unknown pid {}", packet.pid);
-                    packet.status = UsbPacketStatus::Stall;
-                }
-            }
+            self.do_parameter(packet)?;
         } else {
             self.handle_data(packet);
         }
