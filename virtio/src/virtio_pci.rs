@@ -161,8 +161,8 @@ struct VirtioPciCommonConfig {
     config_generation: u8,
     /// Queue selector.
     queue_select: u16,
-    /// The configuration vector for MSI-X.
-    msix_config: Arc<AtomicU16>,
+    /// The MSI-X vector for config change notification.
+    msix_config: u16,
     /// The configuration of queues.
     queues_config: Vec<QueueConfig>,
     /// The type of queue, split-vring or packed-vring.
@@ -183,7 +183,7 @@ impl VirtioPciCommonConfig {
             device_status: 0,
             config_generation: 0,
             queue_select: 0,
-            msix_config: Arc::new(AtomicU16::new(INVALID_VECTOR_NUM)),
+            msix_config: INVALID_VECTOR_NUM,
             queues_config,
             queue_type: QUEUE_TYPE_SPLIT_VRING,
         }
@@ -196,7 +196,7 @@ impl VirtioPciCommonConfig {
         self.device_status = 0;
         self.config_generation = 0;
         self.queue_select = 0;
-        self.msix_config.store(INVALID_VECTOR_NUM, Ordering::SeqCst);
+        self.msix_config = INVALID_VECTOR_NUM;
         self.queue_type = QUEUE_TYPE_SPLIT_VRING;
         self.queues_config.iter_mut().for_each(|q| q.reset());
     }
@@ -278,7 +278,7 @@ impl VirtioPciCommonConfig {
                     0
                 }
             }
-            COMMON_MSIX_REG => self.msix_config.load(Ordering::SeqCst) as u32,
+            COMMON_MSIX_REG => self.msix_config as u32,
             COMMON_NUMQ_REG => self.queues_config.len() as u32,
             COMMON_STATUS_REG => self.device_status,
             COMMON_CFGGENERATION_REG => self.config_generation as u32,
@@ -368,7 +368,7 @@ impl VirtioPciCommonConfig {
             }
             COMMON_MSIX_REG => {
                 let val = self.revise_queue_vector(value, virtio_pci_dev);
-                self.msix_config.store(val as u16, Ordering::SeqCst);
+                self.msix_config = val as u16;
                 self.interrupt_status.store(0_u32, Ordering::SeqCst);
             }
             COMMON_STATUS_REG => {
@@ -667,7 +667,7 @@ impl VirtioPciDevice {
                             Ordering::SeqCst,
                         );
                         locked_common_cfg.config_generation += 1;
-                        locked_common_cfg.msix_config.load(Ordering::SeqCst)
+                        locked_common_cfg.msix_config
                     }
                     VirtioInterruptType::Vring => {
                         queue.map_or(0, |q| q.vring.get_queue_config().vector)
@@ -1341,7 +1341,7 @@ impl StateTransfer for VirtioPciDevice {
         {
             let common_config = self.common_config.lock().unwrap();
             state.interrupt_status = common_config.interrupt_status.load(Ordering::SeqCst);
-            state.msix_config = common_config.msix_config.load(Ordering::SeqCst);
+            state.msix_config = common_config.msix_config;
             state.features_select = common_config.features_select;
             state.acked_features_select = common_config.acked_features_select;
             state.device_status = common_config.device_status;
@@ -1385,9 +1385,7 @@ impl StateTransfer for VirtioPciDevice {
             common_config
                 .interrupt_status
                 .store(pci_state.interrupt_status, Ordering::SeqCst);
-            common_config
-                .msix_config
-                .store(pci_state.msix_config, Ordering::SeqCst);
+            common_config.msix_config = pci_state.msix_config;
             common_config.features_select = pci_state.features_select;
             common_config.acked_features_select = pci_state.acked_features_select;
             common_config.device_status = pci_state.device_status;
