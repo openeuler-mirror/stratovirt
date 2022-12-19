@@ -1484,6 +1484,9 @@ impl XhciDevice {
                 self.report_transfer_error(xfer)?;
             }
         }
+        // Set the endpoint state to halted if an error occurs in the packet.
+        let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
+        epctx.set_state(&self.mem_space, EP_HALTED)?;
         Ok(())
     }
 
