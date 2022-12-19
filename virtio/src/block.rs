@@ -44,9 +44,7 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::{
-    iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
-};
+use util::aio::{iov_from_buf_direct, raw_datasync, Aio, AioCb, IoCmd, Iovec, AIO_NATIVE};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
@@ -641,31 +639,31 @@ impl BlockIoHandler {
         result
     }
 
-    fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
-        let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
-            let mut status = if ret < 0 {
-                VIRTIO_BLK_S_IOERR
-            } else {
-                VIRTIO_BLK_S_OK
-            };
+    fn complete_func(aiocb: &AioCb<AioCompleteCb>, ret: i64) -> Result<()> {
+        let mut status = if ret < 0 {
+            VIRTIO_BLK_S_IOERR
+        } else {
+            VIRTIO_BLK_S_OK
+        };
 
-            let complete_cb = &aiocb.iocompletecb;
-            // When driver does not accept FLUSH feature, the device must be of
-            // writethrough cache type, so flush data before updating used ring.
-            if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
-                && aiocb.opcode == IoCmd::Pwritev
-                && ret >= 0
-            {
-                if let Err(ref e) = raw_datasync(aiocb.file_fd) {
-                    error!("Failed to flush data before send response to guest {:?}", e);
-                    status = VIRTIO_BLK_S_IOERR;
-                }
+        let complete_cb = &aiocb.iocompletecb;
+        // When driver does not accept FLUSH feature, the device must be of
+        // writethrough cache type, so flush data before updating used ring.
+        if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
+            && aiocb.opcode == IoCmd::Pwritev
+            && ret >= 0
+        {
+            if let Err(ref e) = raw_datasync(aiocb.file_fd) {
+                error!("Failed to flush data before send response to guest {:?}", e);
+                status = VIRTIO_BLK_S_IOERR;
             }
+        }
 
-            complete_cb.complete_request(status)
-        }) as AioCompleteFunc<AioCompleteCb>);
+        complete_cb.complete_request(status)
+    }
 
-        Ok(Box::new(Aio::new(complete_func, engine)?))
+    fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
+        Ok(Box::new(Aio::new(Arc::new(Self::complete_func), engine)?))
     }
 
     fn aio_complete_handler(&mut self) -> Result<bool> {

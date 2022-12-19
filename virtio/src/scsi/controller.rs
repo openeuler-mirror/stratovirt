@@ -35,7 +35,7 @@ use machine_manager::{
     config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
 };
-use util::aio::{Aio, AioCb, AioCompleteFunc, Iovec};
+use util::aio::{Aio, AioCb, Iovec};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -982,25 +982,25 @@ impl ScsiCmdHandler {
         Ok(())
     }
 
+    fn complete_func(aiocb: &AioCb<ScsiCompleteCb>, ret: i64) -> Result<()> {
+        let complete_cb = &aiocb.iocompletecb;
+        let request = &aiocb.iocompletecb.req.lock().unwrap();
+        let mut virtio_scsi_req = request.virtioscsireq.lock().unwrap();
+
+        virtio_scsi_req.resp.response = if ret < 0 {
+            VIRTIO_SCSI_S_FAILURE
+        } else {
+            VIRTIO_SCSI_S_OK
+        };
+
+        virtio_scsi_req.resp.status = GOOD;
+        virtio_scsi_req.resp.resid = 0;
+        virtio_scsi_req.resp.sense_len = 0;
+        virtio_scsi_req.complete(&complete_cb.mem_space)
+    }
+
     fn build_aio(&self) -> Result<Box<Aio<ScsiCompleteCb>>> {
-        let complete_fun = Arc::new(Box::new(move |aiocb: &AioCb<ScsiCompleteCb>, ret: i64| {
-            let complete_cb = &aiocb.iocompletecb;
-            let request = &aiocb.iocompletecb.req.lock().unwrap();
-            let mut virtio_scsi_req = request.virtioscsireq.lock().unwrap();
-
-            virtio_scsi_req.resp.response = if ret < 0 {
-                VIRTIO_SCSI_S_FAILURE
-            } else {
-                VIRTIO_SCSI_S_OK
-            };
-
-            virtio_scsi_req.resp.status = GOOD;
-            virtio_scsi_req.resp.resid = 0;
-            virtio_scsi_req.resp.sense_len = 0;
-            virtio_scsi_req.complete(&complete_cb.mem_space)
-        }) as AioCompleteFunc<ScsiCompleteCb>);
-
-        Ok(Box::new(Aio::new(complete_fun, None)?))
+        Ok(Box::new(Aio::new(Arc::new(Self::complete_func), None)?))
     }
 
     fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {

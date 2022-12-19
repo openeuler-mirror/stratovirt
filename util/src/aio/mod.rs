@@ -17,7 +17,6 @@ mod uring;
 use std::clone::Clone;
 use std::cmp;
 use std::io::Write;
-use std::marker::{Send, Sync};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 
@@ -56,7 +55,7 @@ trait AioContext {
     fn get_events(&mut self) -> &[IoEvent];
 }
 
-pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) -> Result<()> + Sync + Send>;
+pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
 
 pub struct AioCb<T: Clone> {
     pub last_aio: bool,
