@@ -355,27 +355,19 @@ impl Hid {
     }
 
     fn pointer_poll(&mut self) -> Vec<u8> {
-        let index = if self.num > 0 {
-            self.head
-        } else if self.head > 0 {
-            self.head - 1
-        } else {
-            QUEUE_LENGTH - 1
-        };
+        let index = self.head;
         if self.num != 0 {
             self.increase_head();
             self.num -= 1;
         }
         let evt = &mut self.pointer.queue[(index & QUEUE_MASK) as usize];
-        let z = evt.pos_z;
-        evt.pos_z = 0;
         vec![
             evt.button_state as u8,
             evt.pos_x as u8,
             (evt.pos_x >> 8) as u8,
             evt.pos_y as u8,
             (evt.pos_y >> 8) as u8,
-            z as u8,
+            evt.pos_z as u8,
         ]
     }
 
