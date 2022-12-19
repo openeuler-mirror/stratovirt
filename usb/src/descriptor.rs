@@ -333,32 +333,15 @@ impl UsbDescriptorOps for UsbDevice {
                 bail!("No interface descriptor found.");
             };
             for e in 0..iface.interface_desc.bNumEndpoints {
-                let pid = if iface.eps[e as usize].endpoint_desc.bEndpointAddress
+                let in_direction = iface.eps[e as usize].endpoint_desc.bEndpointAddress
                     & USB_DIRECTION_DEVICE_TO_HOST
-                    == USB_DIRECTION_DEVICE_TO_HOST
-                {
-                    USB_TOKEN_IN
-                } else {
-                    USB_TOKEN_OUT
-                };
-
-                let ep = iface.eps[e as usize].endpoint_desc.bEndpointAddress & 0x0f;
-                let usb_ep = self.get_endpoint(pid as u32, ep as u32);
+                    == USB_DIRECTION_DEVICE_TO_HOST;
+                let ep = iface.eps[e as usize].endpoint_desc.bEndpointAddress
+                    & USB_ENDPOINT_ADDRESS_NUMBER_MASK;
+                let usb_ep = self.get_endpoint(in_direction, ep as u8);
                 let mut locked_usb_ep = usb_ep.lock().unwrap();
-                let usb_type = iface.eps[e as usize].endpoint_desc.bmAttributes & 0x03;
-                locked_usb_ep.usb_type = usb_type;
-                locked_usb_ep.ifnum = iface.interface_desc.bInterfaceNumber;
-                let raw = iface.eps[e as usize].endpoint_desc.wMaxPacketSize;
-                let size = raw & 0x7ff;
-                let v = (size >> 11) & 3;
-                let microframes = if v == 1 {
-                    2
-                } else if v == 2 {
-                    3
-                } else {
-                    1
-                };
-                locked_usb_ep.max_packet_size = size as u32 * microframes;
+                locked_usb_ep.ep_type = iface.eps[e as usize].endpoint_desc.bmAttributes
+                    & USB_ENDPOINT_ATTR_TRANSFER_TYPE_MASK;
             }
         }
         Ok(())

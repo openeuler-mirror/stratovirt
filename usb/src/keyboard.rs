@@ -113,8 +113,8 @@ static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
 /// USB keyboard device.
 pub struct UsbKeyboard {
     id: String,
-    device: Arc<Mutex<UsbDevice>>,
-    hid: Arc<Mutex<Hid>>,
+    usb_device: UsbDevice,
+    hid: Hid,
     /// USB controller used to notify controller to transfer data.
     ctrl: Option<Weak<Mutex<XhciDevice>>>,
 }
@@ -123,49 +123,39 @@ impl UsbKeyboard {
     pub fn new(id: String) -> Self {
         Self {
             id,
-            device: Arc::new(Mutex::new(UsbDevice::new())),
-            hid: Arc::new(Mutex::new(Hid::new(HidType::Keyboard))),
+            usb_device: UsbDevice::new(),
+            hid: Hid::new(HidType::Keyboard),
             ctrl: None,
         }
     }
 
-    pub fn realize(self) -> Result<Arc<Mutex<Self>>> {
-        let mut locked_usb = self.device.lock().unwrap();
-        locked_usb.product_desc = String::from("StratoVirt USB keyboard");
-        locked_usb.strings = Vec::new();
-        drop(locked_usb);
+    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        self.usb_device.product_desc = String::from("StratoVirt USB keyboard");
+        self.usb_device.strings = Vec::new();
         let kbd = Arc::new(Mutex::new(self));
         let cloned_kbd = kbd.clone();
         usb_endpoint_init(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>));
         let mut locked_kbd = cloned_kbd.lock().unwrap();
-        locked_kbd.init_hid()?;
+        locked_kbd.usb_device.usb_desc = Some(DESC_KEYBOARD.clone());
+        locked_kbd.usb_device.init_descriptor()?;
         drop(locked_kbd);
         Ok(cloned_kbd)
-    }
-
-    fn init_hid(&mut self) -> Result<()> {
-        let mut locked_usb = self.device.lock().unwrap();
-        locked_usb.usb_desc = Some(DESC_KEYBOARD.clone());
-        locked_usb.init_descriptor()?;
-        Ok(())
     }
 }
 
 // Used for VNC to send keyboard event.
 pub fn keyboard_event(kbd: &Arc<Mutex<UsbKeyboard>>, scan_codes: &[u32]) -> Result<()> {
-    let locked_kbd = kbd.lock().unwrap();
-    let mut locked_hid = locked_kbd.hid.lock().unwrap();
-    if scan_codes.len() as u32 + locked_hid.num > QUEUE_LENGTH {
+    let mut locked_kbd = kbd.lock().unwrap();
+    if scan_codes.len() as u32 + locked_kbd.hid.num > QUEUE_LENGTH {
         debug!("Keyboard queue is full!");
         // Return ok to ignore the request.
         return Ok(());
     }
     for code in scan_codes {
-        let index = ((locked_hid.head + locked_hid.num) & QUEUE_MASK) as usize;
-        locked_hid.num += 1;
-        locked_hid.keyboard.keycodes[index] = *code;
+        let index = ((locked_kbd.hid.head + locked_kbd.hid.num) & QUEUE_MASK) as usize;
+        locked_kbd.hid.num += 1;
+        locked_kbd.hid.keyboard.keycodes[index] = *code;
     }
-    drop(locked_hid);
     drop(locked_kbd);
     let clone_kbd = kbd.clone();
     notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDeviceOps>>))
@@ -174,18 +164,18 @@ pub fn keyboard_event(kbd: &Arc<Mutex<UsbKeyboard>>, scan_codes: &[u32]) -> Resu
 impl UsbDeviceOps for UsbKeyboard {
     fn reset(&mut self) {
         info!("Keyboard device reset");
-        let mut locked_usb = self.device.lock().unwrap();
-        locked_usb.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
-        locked_usb.addr = 0;
-        locked_usb.state = UsbDeviceState::Default;
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.reset();
+        self.usb_device.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
+        self.usb_device.addr = 0;
+        self.usb_device.state = UsbDeviceState::Default;
+        self.hid.reset();
     }
 
     fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
         debug!("handle_control request {:?}", device_req);
-        let mut locked_dev = self.device.lock().unwrap();
-        match locked_dev.handle_control_for_descriptor(packet, device_req) {
+        match self
+            .usb_device
+            .handle_control_for_descriptor(packet, device_req)
+        {
             Ok(handled) => {
                 if handled {
                     debug!("Keyboard control handled by descriptor, return directly.");
@@ -198,25 +188,24 @@ impl UsbDeviceOps for UsbKeyboard {
                 return;
             }
         }
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.handle_control_packet(packet, device_req, &mut locked_dev.data_buf);
+        self.hid
+            .handle_control_packet(packet, device_req, &mut self.usb_device.data_buf);
     }
 
     fn handle_data(&mut self, p: &mut UsbPacket) {
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.handle_data_packet(p);
+        self.hid.handle_data_packet(p);
     }
 
     fn device_id(&self) -> String {
         self.id.clone()
     }
 
-    fn get_usb_device(&self) -> Arc<Mutex<UsbDevice>> {
-        self.device.clone()
+    fn get_usb_device(&self) -> &UsbDevice {
+        &self.usb_device
     }
 
-    fn get_mut_usb_device(&mut self) -> Arc<Mutex<UsbDevice>> {
-        self.device.clone()
+    fn get_mut_usb_device(&mut self) -> &mut UsbDevice {
+        &mut self.usb_device
     }
 
     fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>) {
@@ -228,11 +217,7 @@ impl UsbDeviceOps for UsbKeyboard {
     }
 
     fn get_wakeup_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>> {
-        let ep = self
-            .device
-            .lock()
-            .unwrap()
-            .get_endpoint(USB_TOKEN_IN as u32, 1);
+        let ep = self.usb_device.get_endpoint(true, 1);
         Some(Arc::downgrade(&ep))
     }
 }

@@ -214,8 +214,9 @@ pub const USB_ENDPOINT_ATTR_CONTROL: u8 = 0;
 pub const USB_ENDPOINT_ATTR_ISOC: u8 = 1;
 pub const USB_ENDPOINT_ATTR_BULK: u8 = 2;
 pub const USB_ENDPOINT_ATTR_INT: u8 = 3;
+pub const USB_ENDPOINT_ATTR_TRANSFER_TYPE_MASK: u8 = 0x3;
 pub const USB_ENDPOINT_ATTR_INVALID: u8 = 255;
-pub const USB_INTERFACE_INVALID: u8 = 255;
+pub const USB_ENDPOINT_ADDRESS_NUMBER_MASK: u8 = 0xf;
 
 ///  See the spec section 9.6.3 Configuration. Standard Configuration Descriptor.
 pub const USB_CONFIGURATION_ATTR_ONE: u8 = 1 << 7;

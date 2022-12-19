@@ -840,10 +840,8 @@ impl XhciDevice {
         let mut p = UsbPacket::default();
         let mut locked_dev = dev.lock().unwrap();
         let usb_dev = locked_dev.get_mut_usb_device();
-        let locked_usb = usb_dev.lock().unwrap();
-        let ep = Arc::downgrade(&locked_usb.get_endpoint(USB_TOKEN_OUT as u32, 0));
+        let ep = Arc::downgrade(&usb_dev.get_endpoint(false, 0));
         p.init(USB_TOKEN_OUT as u32, ep);
-        drop(locked_usb);
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_OUT_REQUEST,
             request: USB_REQUEST_SET_ADDRESS,
@@ -1444,14 +1442,9 @@ impl XhciDevice {
             bail!("No device found in USB port.");
         };
         let mut locked_dev = dev.lock().unwrap();
-        let pid = if epid & 1 == 1 {
-            USB_TOKEN_IN
-        } else {
-            USB_TOKEN_OUT
-        };
         let usb_dev = locked_dev.get_mut_usb_device();
-        let locked_usb = usb_dev.lock().unwrap();
-        let ep = locked_usb.get_endpoint(pid as u32, epid >> 1);
+        let (in_direction, ep_number) = endpoint_id_to_number(epid as u8);
+        let ep = usb_dev.get_endpoint(in_direction, ep_number);
         Ok(ep)
     }
 
@@ -1648,7 +1641,7 @@ impl XhciDevice {
     /// Used for device to wakeup endpoint
     pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &Arc<Mutex<UsbEndpoint>>) -> Result<()> {
         let locked_ep = ep.lock().unwrap();
-        let ep_id = locked_ep.get_ep_id();
+        let ep_id = endpoint_number_to_id(locked_ep.in_direction, locked_ep.ep_number);
         // Kick endpoint may hold the lock, drop it.
         drop(locked_ep);
         self.kick_endpoint(slot_id as u32, ep_id as u32)?;
@@ -1836,4 +1829,23 @@ fn dma_write_u32(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &[u32]
 
 fn addr64_from_u32(low: u32, high: u32) -> u64 {
     (((high << 16) as u64) << 16) | low as u64
+}
+
+// | ep id | < = > | ep direction | ep number |
+// |     1 |       |              |         0 |
+// |     2 |       |          OUT |         1 |
+// |     3 |       |           IN |         1 |
+fn endpoint_id_to_number(ep_id: u8) -> (bool, u8) {
+    (ep_id & 1 == 1, ep_id >> 1)
+}
+
+fn endpoint_number_to_id(in_direction: bool, ep_number: u8) -> u8 {
+    if ep_number == 0 {
+        // Control endpoint.
+        1
+    } else if in_direction {
+        ep_number * 2 + 1
+    } else {
+        ep_number * 2
+    }
 }

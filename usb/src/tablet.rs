@@ -119,8 +119,8 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
 /// USB tablet device.
 pub struct UsbTablet {
     id: String,
-    device: Arc<Mutex<UsbDevice>>,
-    hid: Arc<Mutex<Hid>>,
+    usb_device: UsbDevice,
+    hid: Hid,
     /// USB controller used to notify controller to transfer data.
     ctrl: Option<Weak<Mutex<XhciDevice>>>,
 }
@@ -129,85 +129,45 @@ impl UsbTablet {
     pub fn new(id: String) -> Self {
         Self {
             id,
-            device: Arc::new(Mutex::new(UsbDevice::new())),
-            hid: Arc::new(Mutex::new(Hid::new(HidType::Tablet))),
+            usb_device: UsbDevice::new(),
+            hid: Hid::new(HidType::Tablet),
             ctrl: None,
         }
     }
 
-    pub fn realize(self) -> Result<Arc<Mutex<Self>>> {
-        let mut locked_usb = self.device.lock().unwrap();
-        locked_usb.product_desc = String::from("StratoVirt USB Tablet");
-        locked_usb.strings = Vec::new();
-        drop(locked_usb);
+    pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        self.usb_device.product_desc = String::from("StratoVirt USB Tablet");
+        self.usb_device.strings = Vec::new();
         let tablet = Arc::new(Mutex::new(self));
         let cloned_tablet = tablet.clone();
         usb_endpoint_init(&(tablet as Arc<Mutex<dyn UsbDeviceOps>>));
         let mut locked_tablet = cloned_tablet.lock().unwrap();
-        locked_tablet.init_hid()?;
+        locked_tablet.usb_device.usb_desc = Some(DESC_TABLET.clone());
+        locked_tablet.usb_device.init_descriptor()?;
         drop(locked_tablet);
         Ok(cloned_tablet)
-    }
-
-    fn init_hid(&mut self) -> Result<()> {
-        let mut locked_usb = self.device.lock().unwrap();
-        locked_usb.usb_desc = Some(DESC_TABLET.clone());
-        locked_usb.init_descriptor()?;
-        Ok(())
     }
 }
 
 // Used for VNC to send pointer event.
 pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: i32, y: i32) -> Result<()> {
-    let locked_tablet = tablet.lock().unwrap();
-    let mut hid = locked_tablet.hid.lock().unwrap();
-    let index = ((hid.head + hid.num) & QUEUE_MASK) as usize;
-    let mut evt = &mut hid.pointer.queue[index];
+    let mut locked_tablet = tablet.lock().unwrap();
+    if locked_tablet.hid.num == QUEUE_LENGTH - 1 {
+        debug!("Pointer queue is full!");
+        // Return ok to ignore the request.
+        return Ok(());
+    }
+    let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
+    let mut evt = &mut locked_tablet.hid.pointer.queue[index];
     if button == INPUT_BUTTON_WHEEL_UP {
         evt.pos_z += 1;
     } else if button == INPUT_BUTTON_WHEEL_DOWN {
-        evt.pos_z -= 1
+        evt.pos_z -= 1;
     }
     evt.button_state = button;
     evt.pos_x = x;
     evt.pos_y = y;
-    Ok(())
-}
-/// Used for VNC to sync pointer event.
-pub fn pointer_sync(tablet: &Arc<Mutex<UsbTablet>>) -> Result<()> {
-    let locked_tablet = tablet.lock().unwrap();
-    let mut locked_hid = locked_tablet.hid.lock().unwrap();
-    if locked_hid.num == QUEUE_LENGTH - 1 {
-        debug!("Pointer queue is full!");
-        return Ok(());
-    }
-    let cur_index = ((locked_hid.head + locked_hid.num) & QUEUE_MASK) as usize;
-    let pre_index = if cur_index == 0 {
-        QUEUE_MASK as usize
-    } else {
-        (((cur_index as u32) - 1) % QUEUE_MASK) as usize
-    };
-    let nxt_index = (cur_index + 1) % QUEUE_MASK as usize;
-    let prev = locked_hid.pointer.queue[pre_index];
-    let curr = locked_hid.pointer.queue[cur_index];
-    let mut comp = false;
-    if locked_hid.num > 0 && curr.button_state == prev.button_state {
-        comp = true;
-    }
-    if comp {
-        locked_hid.pointer.queue[pre_index].pos_x = curr.pos_x;
-        locked_hid.pointer.queue[pre_index].pos_y = curr.pos_y;
-        locked_hid.pointer.queue[pre_index].pos_z += curr.pos_z;
-        locked_hid.pointer.queue[cur_index].pos_z = 0;
-        return Ok(());
-    } else {
-        locked_hid.pointer.queue[nxt_index].pos_x = curr.pos_x;
-        locked_hid.pointer.queue[nxt_index].pos_y = curr.pos_y;
-        locked_hid.pointer.queue[nxt_index].pos_z = 0;
-        locked_hid.pointer.queue[nxt_index].button_state = curr.button_state;
-        locked_hid.num += 1;
-    }
-    drop(locked_hid);
+    locked_tablet.hid.num += 1;
     drop(locked_tablet);
     let clone_tablet = tablet.clone();
     notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDeviceOps>>))
@@ -216,18 +176,18 @@ pub fn pointer_sync(tablet: &Arc<Mutex<UsbTablet>>) -> Result<()> {
 impl UsbDeviceOps for UsbTablet {
     fn reset(&mut self) {
         info!("Tablet device reset");
-        let mut locked_usb = self.device.lock().unwrap();
-        locked_usb.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
-        locked_usb.addr = 0;
-        locked_usb.state = UsbDeviceState::Default;
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.reset();
+        self.usb_device.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
+        self.usb_device.addr = 0;
+        self.usb_device.state = UsbDeviceState::Default;
+        self.hid.reset();
     }
 
     fn handle_control(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
         debug!("handle_control request {:?}", device_req);
-        let mut locked_dev = self.device.lock().unwrap();
-        match locked_dev.handle_control_for_descriptor(packet, device_req) {
+        match self
+            .usb_device
+            .handle_control_for_descriptor(packet, device_req)
+        {
             Ok(handled) => {
                 if handled {
                     debug!("Tablet control handled by descriptor, return directly.");
@@ -240,25 +200,24 @@ impl UsbDeviceOps for UsbTablet {
                 return;
             }
         }
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.handle_control_packet(packet, device_req, &mut locked_dev.data_buf);
+        self.hid
+            .handle_control_packet(packet, device_req, &mut self.usb_device.data_buf);
     }
 
     fn handle_data(&mut self, p: &mut UsbPacket) {
-        let mut locked_hid = self.hid.lock().unwrap();
-        locked_hid.handle_data_packet(p);
+        self.hid.handle_data_packet(p);
     }
 
     fn device_id(&self) -> String {
         self.id.clone()
     }
 
-    fn get_usb_device(&self) -> Arc<Mutex<UsbDevice>> {
-        self.device.clone()
+    fn get_usb_device(&self) -> &UsbDevice {
+        &self.usb_device
     }
 
-    fn get_mut_usb_device(&mut self) -> Arc<Mutex<UsbDevice>> {
-        self.device.clone()
+    fn get_mut_usb_device(&mut self) -> &mut UsbDevice {
+        &mut self.usb_device
     }
 
     fn set_controller(&mut self, ctrl: Weak<Mutex<XhciDevice>>) {
@@ -270,11 +229,7 @@ impl UsbDeviceOps for UsbTablet {
     }
 
     fn get_wakeup_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>> {
-        let ep = self
-            .device
-            .lock()
-            .unwrap()
-            .get_endpoint(USB_TOKEN_IN as u32, 1);
+        let ep = self.usb_device.get_endpoint(true, 1);
         Some(Arc::downgrade(&ep))
     }
 }
