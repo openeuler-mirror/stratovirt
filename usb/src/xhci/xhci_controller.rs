@@ -256,7 +256,7 @@ pub struct XhciSlot {
     pub addressed: bool,
     pub intr_target: u16,
     pub slot_ctx_addr: u64,
-    pub usb_port: Option<Weak<Mutex<UsbPort>>>,
+    pub usb_port: Option<Arc<Mutex<UsbPort>>>,
     pub endpoints: Vec<XhciEpContext>,
 }
 
@@ -465,7 +465,7 @@ impl XhciDevice {
             let mut locked_port = locked_xhci.ports[i as usize].lock().unwrap();
             locked_port.name = format!("{}-usb2-{}", locked_port.name, i);
             locked_port.speed_mask = USB_SPEED_LOW | USB_SPEED_HIGH | USB_SPEED_FULL;
-            locked_port.usb_port = Some(Arc::downgrade(&usb_port));
+            locked_port.usb_port = Some(usb_port);
         }
         for i in 0..locked_xhci.numports_3 {
             let idx = i + locked_xhci.numports_2;
@@ -475,7 +475,7 @@ impl XhciDevice {
             let mut locked_port = locked_xhci.ports[idx as usize].lock().unwrap();
             locked_port.name = format!("{}-usb3-{}", locked_port.name, idx);
             locked_port.speed_mask = USB_SPEED_SUPER;
-            locked_port.usb_port = Some(Arc::downgrade(&usb_port));
+            locked_port.usb_port = Some(usb_port);
         }
         xhci
     }
@@ -527,8 +527,8 @@ impl XhciDevice {
     pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<XhciPort>>, warm_reset: bool) -> Result<()> {
         let mut locked_port = xhci_port.lock().unwrap();
         if let Some(usb_port) = locked_port.usb_port.as_ref() {
-            let upg_usb_port = usb_port.upgrade().unwrap();
-            let locked_usb_port = upg_usb_port.lock().unwrap();
+            let clone_usb_port = usb_port.clone();
+            let locked_usb_port = clone_usb_port.lock().unwrap();
             let usb_dev = if let Some(dev) = locked_usb_port.dev.as_ref() {
                 dev
             } else {
@@ -578,8 +578,8 @@ impl XhciDevice {
         locked_port.portsc = PORTSC_PP;
         let mut pls = PLS_RX_DETECT;
         if let Some(usb_port) = &locked_port.usb_port {
-            let usb_port = usb_port.upgrade().unwrap();
-            let locked_usb_port = usb_port.lock().unwrap();
+            let clone_usb_port = usb_port.clone();
+            let locked_usb_port = clone_usb_port.lock().unwrap();
             if let Some(dev) = &locked_usb_port.dev {
                 let speed = dev.lock().unwrap().speed();
                 locked_port.portsc |= PORTSC_CCS;
@@ -792,7 +792,7 @@ impl XhciDevice {
         let ctx_addr = self.get_device_context_addr(slot_id);
         let mut octx = 0;
         dma_read_u64(&self.mem_space, GuestAddress(ctx_addr), &mut octx)?;
-        self.slots[(slot_id - 1) as usize].usb_port = Some(Arc::downgrade(&usb_port));
+        self.slots[(slot_id - 1) as usize].usb_port = Some(usb_port.clone());
         self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
         self.slots[(slot_id - 1) as usize].intr_target =
             ((slot_ctx.tt_info >> TRB_INTR_SHIFT) & TRB_INTR_MASK) as u16;
@@ -840,7 +840,7 @@ impl XhciDevice {
         let mut p = UsbPacket::default();
         let mut locked_dev = dev.lock().unwrap();
         let usb_dev = locked_dev.get_mut_usb_device();
-        let ep = Arc::downgrade(&usb_dev.get_endpoint(false, 0));
+        let ep = usb_dev.get_endpoint(false, 0);
         p.init(USB_TOKEN_OUT as u32, ep);
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_OUT_REQUEST,
@@ -1120,7 +1120,7 @@ impl XhciDevice {
         let slot = &mut self.slots[(slot_id - 1) as usize];
         let epctx = &mut slot.endpoints[(ep_id - 1) as usize];
         if let Some(port) = &slot.usb_port {
-            if port.upgrade().unwrap().lock().unwrap().dev.is_some() {
+            if port.lock().unwrap().dev.is_some() {
                 epctx.set_state(&self.mem_space, EP_STOPPED)?;
             } else {
                 error!("Failed to found usb device");
@@ -1288,7 +1288,6 @@ impl XhciDevice {
 
     fn device_handle_packet(&mut self, packet: &mut UsbPacket) {
         if let Some(ep) = &packet.ep {
-            let ep = ep.upgrade().unwrap();
             let locked_ep = ep.lock().unwrap();
             let dev = if let Some(usb_dev) = &locked_ep.dev {
                 usb_dev.upgrade().unwrap()
@@ -1386,8 +1385,7 @@ impl XhciDevice {
         let ep = if let Some(ep) = &xfer.packet.ep {
             ep.clone()
         } else {
-            let ep = self.get_usb_ep(xfer.slotid, xfer.epid)?;
-            Arc::downgrade(&ep)
+            self.get_usb_ep(xfer.slotid, xfer.epid)?
         };
         let dir = if xfer.in_xfer {
             USB_TOKEN_IN
@@ -1431,7 +1429,7 @@ impl XhciDevice {
 
     fn get_usb_ep(&self, slotid: u32, epid: u32) -> Result<Arc<Mutex<UsbEndpoint>>> {
         let port = if let Some(port) = &self.slots[(slotid - 1) as usize].usb_port {
-            port.upgrade().unwrap()
+            port
         } else {
             bail!("USB port not found slotid {} epid {}", slotid, epid);
         };
