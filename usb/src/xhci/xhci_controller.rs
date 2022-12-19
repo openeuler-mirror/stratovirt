@@ -192,16 +192,19 @@ impl XhciEpContext {
         Ok(())
     }
 
-    /// Update the dequeue pointer in memory.
-    fn update_dequeue(&mut self, mem: &Arc<AddressSpace>, dequeue: u64) -> Result<()> {
+    /// Update the dequeue pointer in endpoint context.
+    /// If dequeue is None, only flush the dequeue pointer to memory.
+    fn update_dequeue(&mut self, mem: &Arc<AddressSpace>, dequeue: Option<u64>) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
         dma_read_u32(
             mem,
             GuestAddress(self.output_ctx_addr),
             ep_ctx.as_mut_dwords(),
         )?;
-        self.ring.init(dequeue & EP_CTX_TR_DEQUEUE_POINTER_MASK);
-        self.ring.ccs = (dequeue & EP_CTX_DCS) == EP_CTX_DCS;
+        if let Some(dequeue) = dequeue {
+            self.ring.init(dequeue & EP_CTX_TR_DEQUEUE_POINTER_MASK);
+            self.ring.ccs = (dequeue & EP_CTX_DCS) == EP_CTX_DCS;
+        }
         ep_ctx.deq_lo = self.ring.dequeue as u32 | self.ring.ccs as u32;
         ep_ctx.deq_hi = (self.ring.dequeue >> 32) as u32;
         dma_write_u32(mem, GuestAddress(self.output_ctx_addr), ep_ctx.as_dwords())?;
@@ -1159,7 +1162,7 @@ impl XhciDevice {
             );
             return Ok(TRBCCode::ContextStateError);
         }
-        epctx.update_dequeue(&self.mem_space, trb.parameter)?;
+        epctx.update_dequeue(&self.mem_space, Some(trb.parameter))?;
         Ok(TRBCCode::Success)
     }
 
@@ -1215,7 +1218,7 @@ impl XhciDevice {
             self.endpoint_do_transfer(&mut xfer)?;
             let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
             if xfer.is_completed() {
-                epctx.set_state(&self.mem_space, epctx.state)?;
+                epctx.update_dequeue(&self.mem_space, None)?;
                 epctx.flush_transfer();
             } else {
                 epctx.transfers.push_back(xfer.clone());
@@ -1279,7 +1282,7 @@ impl XhciDevice {
         self.complete_packet(xfer)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if xfer.is_completed() {
-            epctx.set_state(&self.mem_space, epctx.state)?;
+            epctx.update_dequeue(&self.mem_space, None)?;
             epctx.flush_transfer();
         }
         epctx.retry = None;
@@ -1484,6 +1487,9 @@ impl XhciDevice {
                 self.report_transfer_error(xfer)?;
             }
         }
+        // Set the endpoint state to halted if an error occurs in the packet.
+        let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
+        epctx.set_state(&self.mem_space, EP_HALTED)?;
         Ok(())
     }
 
@@ -1547,7 +1553,9 @@ impl XhciDevice {
         Ok(())
     }
 
-    fn report_transfer_error(&mut self, xfer: &XhciTransfer) -> Result<()> {
+    fn report_transfer_error(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
+        // An error occurs in the transfer. The transfer is set to the completed and will not be retried.
+        xfer.set_comleted(true);
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
         evt.slot_id = xfer.slotid as u8;
         evt.ep_id = xfer.epid as u8;
