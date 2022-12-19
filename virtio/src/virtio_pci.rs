@@ -13,7 +13,7 @@
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
@@ -154,7 +154,7 @@ struct VirtioPciCommonConfig {
     /// Device (host) feature-setting selector.
     acked_features_select: u32,
     /// Interrupt status.
-    interrupt_status: Arc<AtomicU32>,
+    interrupt_status: u32,
     /// Device status.
     device_status: u32,
     /// Configuration atomicity value.
@@ -179,7 +179,7 @@ impl VirtioPciCommonConfig {
         VirtioPciCommonConfig {
             features_select: 0,
             acked_features_select: 0,
-            interrupt_status: Arc::new(AtomicU32::new(0)),
+            interrupt_status: 0,
             device_status: 0,
             config_generation: 0,
             queue_select: 0,
@@ -192,7 +192,7 @@ impl VirtioPciCommonConfig {
     fn reset(&mut self) {
         self.features_select = 0;
         self.acked_features_select = 0;
-        self.interrupt_status.store(0_u32, Ordering::SeqCst);
+        self.interrupt_status = 0;
         self.device_status = 0;
         self.config_generation = 0;
         self.queue_select = 0;
@@ -369,7 +369,7 @@ impl VirtioPciCommonConfig {
             COMMON_MSIX_REG => {
                 let val = self.revise_queue_vector(value, virtio_pci_dev);
                 self.msix_config = val as u16;
-                self.interrupt_status.store(0_u32, Ordering::SeqCst);
+                self.interrupt_status = 0;
             }
             COMMON_STATUS_REG => {
                 if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
@@ -662,10 +662,8 @@ impl VirtioPciDevice {
                         }
                         // Use (CONFIG | VRING) instead of CONFIG, it can be used to solve the
                         // IO stuck problem by change the device configure.
-                        locked_common_cfg.interrupt_status.fetch_or(
-                            VIRTIO_MMIO_INT_CONFIG | VIRTIO_MMIO_INT_VRING,
-                            Ordering::SeqCst,
-                        );
+                        locked_common_cfg.interrupt_status |=
+                            VIRTIO_MMIO_INT_CONFIG | VIRTIO_MMIO_INT_VRING;
                         locked_common_cfg.config_generation += 1;
                         locked_common_cfg.msix_config
                     }
@@ -943,11 +941,9 @@ impl VirtioPciDevice {
         let cloned_common_cfg = self.common_config.clone();
         let isr_read = move |data: &mut [u8], _: GuestAddress, _: u64| -> bool {
             if let Some(val) = data.get_mut(0) {
-                *val = cloned_common_cfg
-                    .lock()
-                    .unwrap()
-                    .interrupt_status
-                    .swap(0, Ordering::SeqCst) as u8;
+                let mut common_cfg_lock = cloned_common_cfg.lock().unwrap();
+                *val = common_cfg_lock.interrupt_status as u8;
+                common_cfg_lock.interrupt_status = 0;
             }
             true
         };
@@ -1340,7 +1336,7 @@ impl StateTransfer for VirtioPciDevice {
         // Save virtio pci common config state.
         {
             let common_config = self.common_config.lock().unwrap();
-            state.interrupt_status = common_config.interrupt_status.load(Ordering::SeqCst);
+            state.interrupt_status = common_config.interrupt_status;
             state.msix_config = common_config.msix_config;
             state.features_select = common_config.features_select;
             state.acked_features_select = common_config.acked_features_select;
@@ -1382,9 +1378,7 @@ impl StateTransfer for VirtioPciDevice {
         // Set virtio pci common config state.
         {
             let mut common_config = self.common_config.lock().unwrap();
-            common_config
-                .interrupt_status
-                .store(pci_state.interrupt_status, Ordering::SeqCst);
+            common_config.interrupt_status = pci_state.interrupt_status;
             common_config.msix_config = pci_state.msix_config;
             common_config.features_select = pci_state.features_select;
             common_config.acked_features_select = pci_state.acked_features_select;
