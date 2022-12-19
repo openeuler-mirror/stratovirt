@@ -269,29 +269,11 @@ impl Request {
         Ok(request)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn execute(
         &self,
-        aio: &mut Box<Aio<AioCompleteCb>>,
-        disk: &File,
-        serial_num: &Option<String>,
-        direct: bool,
-        aio_type: &Option<String>,
-        last_aio: bool,
-        iocompletecb: AioCompleteCb,
+        iohandler: &mut BlockIoHandler,
+        mut aiocb: AioCb<AioCompleteCb>,
     ) -> Result<()> {
-        let mut aiocb = AioCb {
-            last_aio,
-            file_fd: disk.as_raw_fd(),
-            opcode: IoCmd::Noop,
-            iovec: Vec::new(),
-            offset: (self.out_header.sector << SECTOR_SHIFT) as usize,
-            nbytes: 0,
-            process: true,
-            iocb: None,
-            iocompletecb,
-        };
-
         let mut req = Some(self);
         while let Some(req_raw) = req {
             for iov in req_raw.iovec.iter() {
@@ -314,18 +296,19 @@ impl Request {
             }
         }
 
+        let aio = iohandler.aio.as_mut().unwrap();
+        let serial_num = &iohandler.serial_num;
+        let aio_type = &iohandler.aio_type;
+        let direct = iohandler.direct;
         match request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
                 if aio_type.is_some() {
-                    (*aio)
-                        .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE, direct)
-                        .with_context(|| {
-                            "Failed to process block request for reading asynchronously"
-                        })?;
+                    aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
+                        "Failed to process block request for reading asynchronously"
+                    })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
+                    aio.rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for reading synchronously"
                     })?;
                 }
@@ -333,23 +316,18 @@ impl Request {
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::Pwritev;
                 if aio_type.is_some() {
-                    (*aio)
-                        .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE, direct)
-                        .with_context(|| {
-                            "Failed to process block request for writing asynchronously"
-                        })?;
+                    aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
+                        "Failed to process block request for writing asynchronously"
+                    })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
+                    aio.rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for writing synchronously"
                     })?;
                 }
             }
             VIRTIO_BLK_T_FLUSH => {
                 aiocb.opcode = IoCmd::Fdsync;
-                (*aio)
-                    .as_mut()
-                    .flush_sync(aiocb)
+                aio.flush_sync(aiocb)
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
@@ -558,15 +536,18 @@ impl BlockIoHandler {
                 self.driver_features,
             );
             if let Some(disk_img) = self.disk_image.as_ref() {
-                req_rc.execute(
-                    self.aio.as_mut().unwrap(),
-                    disk_img,
-                    &self.serial_num,
-                    self.direct,
-                    &self.aio_type,
-                    req_index == last_aio_req_index,
-                    aiocompletecb,
-                )?;
+                let aiocb = AioCb {
+                    last_aio: req_index == last_aio_req_index,
+                    file_fd: disk_img.as_raw_fd(),
+                    opcode: IoCmd::Noop,
+                    iovec: Vec::new(),
+                    offset: (req_rc.out_header.sector << SECTOR_SHIFT) as usize,
+                    nbytes: 0,
+                    process: true,
+                    iocb: None,
+                    iocompletecb: aiocompletecb,
+                };
+                req_rc.execute(self, aiocb)?;
             } else {
                 warn!("Failed to execute block request, disk_img not specified");
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR)?;
