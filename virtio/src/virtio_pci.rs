@@ -688,17 +688,11 @@ impl VirtioPciDevice {
 
     fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         let mut ret = Vec::new();
-        for (index, eventfd) in self.notify_eventfds.events.iter().enumerate() {
+        let eventfds = self.notify_eventfds.clone();
+        for (index, eventfd) in eventfds.events.into_iter().enumerate() {
             let addr = index as u64 * u64::from(VIRTIO_PCI_CAP_NOTIFY_OFF_MULTIPLIER);
-            let eventfd_clone = match eventfd.try_clone() {
-                Err(e) => {
-                    error!("Failed to clone ioeventfd, error is {}", e);
-                    continue;
-                }
-                Ok(fd) => fd,
-            };
             ret.push(RegionIoEventFd {
-                fd: eventfd_clone,
+                fd: eventfd,
                 addr_range: AddressRange::from((addr, 2u64)),
                 data_match: false,
                 data: index as u64,
