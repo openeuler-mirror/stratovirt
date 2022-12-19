@@ -236,7 +236,7 @@ pub struct XhciPort {
     pub portsc: u32,
     /// Port ID
     pub port_idx: u8,
-    pub usb_port: Option<Weak<Mutex<UsbPort>>>,
+    pub usb_port: Option<Arc<Mutex<UsbPort>>>,
     pub speed_mask: u32,
     pub name: String,
 }

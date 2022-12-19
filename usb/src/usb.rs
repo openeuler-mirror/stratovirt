@@ -475,7 +475,7 @@ pub trait UsbDeviceOps: Send + Sync {
     fn process_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
         packet.status = UsbPacketStatus::Success;
         let ep = if let Some(ep) = &packet.ep {
-            ep.upgrade().unwrap()
+            ep
         } else {
             packet.status = UsbPacketStatus::NoDev;
             bail!("Failed to find ep");
@@ -617,7 +617,7 @@ impl Iovec {
 pub struct UsbPacket {
     /// USB packet id.
     pub pid: u32,
-    pub ep: Option<Weak<Mutex<UsbEndpoint>>>,
+    pub ep: Option<Arc<Mutex<UsbEndpoint>>>,
     pub iovecs: Vec<Iovec>,
     /// control transfer parameter.
     pub parameter: u64,
@@ -639,7 +639,7 @@ impl std::fmt::Display for UsbPacket {
 }
 
 impl UsbPacket {
-    pub fn init(&mut self, pid: u32, ep: Weak<Mutex<UsbEndpoint>>) {
+    pub fn init(&mut self, pid: u32, ep: Arc<Mutex<UsbEndpoint>>) {
         self.pid = pid;
         self.ep = Some(ep);
         self.status = UsbPacketStatus::Success;

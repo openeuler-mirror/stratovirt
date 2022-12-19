@@ -528,9 +528,9 @@ impl Hid {
 
     fn handle_token_in(&mut self, p: &mut UsbPacket) {
         let mut buf = Vec::new();
-        if let Some(ep) = &p.ep {
-            let ep = ep.upgrade().unwrap();
-            let locked_ep = ep.lock().unwrap();
+        if let Some(ep) = p.ep.as_ref() {
+            let clone_ep = ep.clone();
+            let locked_ep = clone_ep.lock().unwrap();
             if locked_ep.ep_number == 1 {
                 if self.num == 0 {
                     debug!("No data in usb device.");
