@@ -414,7 +414,7 @@ pub trait UsbDeviceOps: Send + Sync {
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>>;
 
     /// Get the endpoint to wakeup.
-    fn get_wakeup_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>>;
+    fn get_wakeup_endpoint(&self) -> Arc<Mutex<UsbEndpoint>>;
 
     /// Set the attached USB port.
     fn set_usb_port(&mut self, port: Option<Weak<Mutex<UsbPort>>>) {
@@ -535,10 +535,6 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     } else {
         bail!("USB controller not found");
     };
-    drop(locked_dev);
-    // Lock controller before device to avoid dead lock.
-    let mut locked_xhci = xhci.lock().unwrap();
-    let locked_dev = dev.lock().unwrap();
     let usb_dev = locked_dev.get_usb_device();
     let usb_port = if let Some(port) = &usb_dev.port {
         port.upgrade().unwrap()
@@ -547,8 +543,10 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     };
     let slot_id = usb_dev.addr;
     let wakeup = usb_dev.remote_wakeup & USB_DEVICE_REMOTE_WAKEUP == USB_DEVICE_REMOTE_WAKEUP;
-    // Drop the lock, lookup port need it.
+    let ep = locked_dev.get_wakeup_endpoint();
+    // Drop the small lock.
     drop(locked_dev);
+    let mut locked_xhci = xhci.lock().unwrap();
     let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
         xhci_port
     } else {
@@ -567,14 +565,6 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
             locked_xhci.port_notify(&xhci_port, PORTSC_PLC)?;
         }
     }
-    let locked_dev = dev.lock().unwrap();
-    let intr = if let Some(intr) = locked_dev.get_wakeup_endpoint() {
-        intr
-    } else {
-        bail!("No interrupter found");
-    };
-    drop(locked_dev);
-    let ep = intr.upgrade().unwrap();
     if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep) {
         error!("Failed to wakeup endpoint {}", e);
     }
