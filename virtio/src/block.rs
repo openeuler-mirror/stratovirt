@@ -721,14 +721,19 @@ impl BlockIoHandler {
     }
 }
 
-fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
-    EventNotifier::new(
+fn build_event_notifier(
+    fd: RawFd,
+    handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+) -> EventNotifier {
+    let mut notifier = EventNotifier::new(
         NotifierOperation::AddShared,
         fd,
         None,
         EventSet::IN,
-        vec![Arc::new(Mutex::new(handler))],
-    )
+        handlers,
+    );
+    notifier.io_poll = notifier.handlers.len() == 2;
+    notifier
 }
 
 impl EventNotifierHelper for BlockIoHandler {
@@ -743,7 +748,10 @@ impl EventNotifierHelper for BlockIoHandler {
             h_clone.lock().unwrap().update_evt_handler();
             None
         });
-        notifiers.push(build_event_notifier(handler_raw.update_evt.as_raw_fd(), h));
+        notifiers.push(build_event_notifier(
+            handler_raw.update_evt.as_raw_fd(),
+            vec![Arc::new(Mutex::new(h))],
+        ));
 
         // Register event notifier for deactivate_evt.
         let h_clone = handler.clone();
@@ -753,20 +761,18 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.deactivate_evt.as_raw_fd(),
-            h,
+            vec![Arc::new(Mutex::new(h))],
         ));
 
         // Register event notifier for queue_evt.
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
                 error!("Failed to handle block IO {:?}", e);
             }
             None
         });
-
         let h_clone = handler.clone();
         let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
             let done = h_clone
@@ -781,37 +787,31 @@ impl EventNotifierHelper for BlockIoHandler {
                 None
             }
         });
-
-        let mut e = EventNotifier::new(
-            NotifierOperation::AddShared,
+        notifiers.push(build_event_notifier(
             handler_raw.queue_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
             vec![
                 Arc::new(Mutex::new(h)),
                 Arc::new(Mutex::new(handler_iopoll)),
             ],
-        );
-        e.io_poll = true;
-
-        notifiers.push(e);
+        ));
 
         // Register timer event notifier for IO limits
         if let Some(lb) = handler_raw.leak_bucket.as_ref() {
             let h_clone = handler.clone();
             let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
-
                 if let Some(lb) = h_clone.lock().unwrap().leak_bucket.as_mut() {
                     lb.clear_timer();
                 }
-
                 if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
                     error!("Failed to handle block IO {:?}", e);
                 }
                 None
             });
-            notifiers.push(build_event_notifier(lb.as_raw_fd(), h));
+            notifiers.push(build_event_notifier(
+                lb.as_raw_fd(),
+                vec![Arc::new(Mutex::new(h))],
+            ));
         }
 
         // Register event notifier for aio.
@@ -823,7 +823,6 @@ impl EventNotifierHelper for BlockIoHandler {
             }
             None
         });
-
         let h_clone = handler.clone();
         let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
             let done = h_clone
@@ -838,19 +837,13 @@ impl EventNotifierHelper for BlockIoHandler {
                 None
             }
         });
-
-        let mut e = EventNotifier::new(
-            NotifierOperation::AddShared,
+        notifiers.push(build_event_notifier(
             handler_raw.aio.fd.as_raw_fd(),
-            None,
-            EventSet::IN,
             vec![
                 Arc::new(Mutex::new(h)),
                 Arc::new(Mutex::new(handler_iopoll)),
             ],
-        );
-        e.io_poll = true;
-        notifiers.push(e);
+        ));
 
         notifiers
     }
