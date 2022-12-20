@@ -325,9 +325,11 @@ impl SplitVringDesc {
                 } else {
                     bail!("Found two indirect descriptor elem in one request");
                 }
-                desc_table_host = match sys_mem.get_host_address(desc.addr) {
-                    Some(addr) => addr,
-                    None => bail!("Failed to get descriptor table entry host address"),
+                desc_table_host = sys_mem
+                    .get_host_address_from_cache(desc.addr, cache)
+                    .unwrap_or(0);
+                if desc_table_host == 0 {
+                    bail!("Failed to get descriptor table entry host address");
                 };
                 queue_size = desc.get_desc_num();
                 desc = Self::next_desc(sys_mem, desc_table_host, queue_size, 0, cache)?;
@@ -876,22 +878,8 @@ impl VringOps for SplitVring {
         Ok((avail_idx - self.next_avail).0)
     }
 
-    fn get_host_address_from_cache(
-        &self,
-        addr: GuestAddress,
-        mem_space: &Arc<AddressSpace>,
-    ) -> u64 {
-        let host_addr;
-        if let Some(cache) = self.cache {
-            if addr.0 >= cache.start && addr.0 < cache.end {
-                host_addr = cache.host_base + addr.0 - cache.start;
-            } else {
-                host_addr = mem_space.get_host_address(addr).unwrap_or(0);
-            }
-        } else {
-            host_addr = mem_space.get_host_address(addr).unwrap_or(0);
-        }
-        host_addr
+    fn get_cache(&self) -> &Option<RegionCache> {
+        &self.cache
     }
 }
 

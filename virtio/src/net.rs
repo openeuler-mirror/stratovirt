@@ -21,18 +21,18 @@ use std::{cmp, fs, mem};
 
 use super::{
     Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr, VirtioTrace,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET,
-    VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX,
-    VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
-    VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
-    VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
-    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
-    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
-    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
-    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
-    VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
+    VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
+    VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST, VIRTIO_NET_CTRL_RX_NOMULTI,
+    VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC, VIRTIO_NET_CTRL_VLAN,
+    VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM,
+    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX, VIRTIO_NET_F_CTRL_RX_EXTRA,
+    VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN,
+    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
+    VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
 use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
@@ -760,9 +760,10 @@ impl NetIoHandler {
             }
             let mut iovecs = Vec::new();
             for elem_iov in elem.in_iovec.iter() {
-                let host_addr = queue
-                    .vring
-                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                let host_addr = self
+                    .mem_space
+                    .get_host_address_from_cache(elem_iov.addr, queue.vring.get_cache())
+                    .unwrap_or(0);
                 if host_addr != 0 {
                     let iovec = libc::iovec {
                         iov_base: host_addr as *mut libc::c_void,
@@ -881,9 +882,10 @@ impl NetIoHandler {
             }
             let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
-                let host_addr = queue
-                    .vring
-                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                let host_addr = self
+                    .mem_space
+                    .get_host_address_from_cache(elem_iov.addr, queue.vring.get_cache())
+                    .unwrap_or(0);
                 if host_addr != 0 {
                     let iovec = libc::iovec {
                         iov_base: host_addr as *mut libc::c_void,
@@ -1417,6 +1419,7 @@ impl VirtioDevice for Net {
             | 1 << VIRTIO_NET_F_CTRL_RX_EXTRA
             | 1 << VIRTIO_NET_F_CTRL_MAC_ADDR
             | 1 << VIRTIO_NET_F_CTRL_VQ
+            | 1 << VIRTIO_F_RING_INDIRECT_DESC
             | 1 << VIRTIO_F_RING_EVENT_IDX;
 
         let queue_pairs = self.net_cfg.queues / 2;

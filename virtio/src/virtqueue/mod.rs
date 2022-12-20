@@ -12,7 +12,7 @@
 
 mod split;
 
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressSpace, GuestAddress, RegionCache};
 use anyhow::{anyhow, bail, Result};
 use std::sync::Arc;
 use vmm_sys_util::eventfd::EventFd;
@@ -163,8 +163,8 @@ pub trait VringOps {
     /// The number of descriptor chains in the available ring.
     fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
 
-    fn get_host_address_from_cache(&self, addr: GuestAddress, mem_space: &Arc<AddressSpace>)
-        -> u64;
+    /// Get the region cache information of the SplitVring.
+    fn get_cache(&self) -> &Option<RegionCache>;
 }
 
 /// Virtio queue.
