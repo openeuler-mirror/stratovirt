@@ -12,13 +12,14 @@
 
 use crate::{
     auth::AuthState,
+    console::DisplayMouse,
     pixman::{bytes_per_pixel, get_image_height, get_image_width, PixelFormat},
     round_up_div,
-    server::{vnc_refresh_notify, VncServer},
+    server::VncServer,
     utils::BuffPool,
     vnc::{
-        framebuffer_upadate, set_area_dirty, write_pixel, DisplayMouse, BIT_PER_BYTE,
-        DIRTY_PIXELS_NUM, DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_OUTPUT_LIMIT,
+        framebuffer_upadate, set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
+        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_OUTPUT_LIMIT,
         OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
     },
     VncError,
@@ -257,6 +258,10 @@ impl ConnState {
 
 /// Struct to record the state with the vnc client.
 pub struct ClientState {
+    /// Tcp listening address.
+    pub addr: String,
+    /// Disconnect event fd.
+    pub disconn_evt: Arc<Mutex<EventFd>>,
     /// Write event fd.
     write_fd: Arc<Mutex<EventFd>>,
     /// TcpStream receive buffer.
@@ -271,9 +276,11 @@ pub struct ClientState {
     pub dirty_bitmap: Arc<Mutex<Bitmap<u64>>>,
 }
 
-impl Default for ClientState {
-    fn default() -> Self {
+impl ClientState {
+    pub fn new(addr: String) -> Self {
         ClientState {
+            addr,
+            disconn_evt: Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
             write_fd: Arc::new(Mutex::new(EventFd::new(libc::EFD_NONBLOCK).unwrap())),
             in_buffer: Arc::new(Mutex::new(BuffPool::new())),
             out_buffer: Arc::new(Mutex::new(BuffPool::new())),
@@ -301,19 +308,10 @@ pub struct ClientIoHandler {
     pub client: Arc<ClientState>,
     /// Configure for vnc server.
     pub server: Arc<VncServer>,
-    /// Disconnect event fd.
-    pub disconn_evt: EventFd,
-    /// Tcp listening address.
-    pub addr: String,
 }
 
 impl ClientIoHandler {
-    pub fn new(
-        stream: TcpStream,
-        client: Arc<ClientState>,
-        server: Arc<VncServer>,
-        addr: String,
-    ) -> Self {
+    pub fn new(stream: TcpStream, client: Arc<ClientState>, server: Arc<VncServer>) -> Self {
         ClientIoHandler {
             stream,
             tls_conn: None,
@@ -321,8 +319,6 @@ impl ClientIoHandler {
             expect: 12,
             client,
             server,
-            disconn_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            addr,
         }
     }
 }
@@ -567,8 +563,25 @@ impl ClientIoHandler {
     /// Initialize the connection of vnc client.
     pub fn handle_client_init(&mut self) -> Result<()> {
         let mut buf = Vec::new();
-        // Send server framebuffer info.
+        // If the total number of connection exceeds the limit,
+        // then the old client will be disconnected.
+        let server = self.server.clone();
         let client = self.client.clone();
+        let addr = client.addr.clone();
+        let mut locked_clients = server.client_handlers.lock().unwrap();
+        let mut len = locked_clients.len() as i32;
+        for client in locked_clients.values_mut() {
+            if len <= server.conn_limits as i32 {
+                break;
+            }
+            if client.addr != addr {
+                client.disconn_evt.lock().unwrap().write(1).unwrap();
+                len -= 1;
+            }
+        }
+        drop(locked_clients);
+
+        // Send server framebuffer info.
         let locked_surface = self.server.vnc_surface.lock().unwrap();
         let mut locked_dpm = client.client_dpm.lock().unwrap();
         let width = get_image_width(locked_surface.server_image);
@@ -892,8 +905,6 @@ impl ClientIoHandler {
             );
         }
         drop(locked_state);
-        let server = self.server.clone();
-        vnc_refresh_notify(&server);
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
     }
 
@@ -959,7 +970,7 @@ impl ClientIoHandler {
             ),
             EventNotifier::new(
                 NotifierOperation::Delete,
-                self.disconn_evt.as_raw_fd(),
+                self.client.disconn_evt.lock().unwrap().as_raw_fd(),
                 None,
                 EventSet::IN,
                 Vec::new(),
@@ -980,26 +991,21 @@ impl EventNotifierHelper for ClientIoHandler {
         let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
             Box::new(move |event, _fd: RawFd| {
                 let mut locked_client_io = client_io.lock().unwrap();
+                let client = locked_client_io.client.clone();
                 if event & EventSet::ERROR == EventSet::ERROR
                     || event & EventSet::HANG_UP == EventSet::HANG_UP
                     || event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP
                 {
-                    locked_client_io.client.conn_state.lock().unwrap().dis_conn = true;
+                    client.conn_state.lock().unwrap().dis_conn = true;
                 } else if event & EventSet::IN == EventSet::IN {
                     if let Err(_e) = locked_client_io.client_handle_read() {
-                        locked_client_io.client.conn_state.lock().unwrap().dis_conn = true;
+                        client.conn_state.lock().unwrap().dis_conn = true;
                     }
                 }
 
                 // Do disconnection event.
-                if locked_client_io
-                    .client
-                    .conn_state
-                    .lock()
-                    .unwrap()
-                    .is_disconnect()
-                {
-                    locked_client_io.disconn_evt.write(1).unwrap();
+                if client.conn_state.lock().unwrap().is_disconnect() {
+                    client.disconn_evt.lock().unwrap().write(1).unwrap();
                 }
                 drop(locked_client_io);
 
@@ -1021,11 +1027,12 @@ impl EventNotifierHelper for ClientIoHandler {
             Box::new(move |_event, fd| {
                 read_fd(fd);
                 let mut locked_client_io = client_io.lock().unwrap();
+                let client = locked_client_io.client.clone();
                 locked_client_io.client_handle_write();
 
                 // do disconnection event.
-                if locked_client_io.client.conn_state.lock().unwrap().dis_conn {
-                    locked_client_io.disconn_evt.write(1).unwrap();
+                if client.conn_state.lock().unwrap().dis_conn {
+                    client.disconn_evt.lock().unwrap().write(1).unwrap();
                 }
                 drop(locked_client_io);
 
@@ -1046,7 +1053,8 @@ impl EventNotifierHelper for ClientIoHandler {
                 read_fd(fd);
                 // Drop client info from vnc server.
                 let mut locked_client_io = client_io.lock().unwrap();
-                let addr = locked_client_io.addr.clone();
+                let client = locked_client_io.client.clone();
+                let addr = client.addr.clone();
                 let server = locked_client_io.server.clone();
                 let notifiers = locked_client_io.disconn_evt_handler();
                 // Shutdown stream.
@@ -1059,9 +1067,10 @@ impl EventNotifierHelper for ClientIoHandler {
                 Some(notifiers)
             });
 
+        let client = client_io_handler.lock().unwrap().client.clone();
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            client_io_handler.lock().unwrap().disconn_evt.as_raw_fd(),
+            client.disconn_evt.lock().unwrap().as_raw_fd(),
             None,
             EventSet::IN,
             vec![Arc::new(Mutex::new(handler))],

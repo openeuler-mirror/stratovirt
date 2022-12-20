@@ -16,6 +16,7 @@ pub use error::VncError;
 
 pub mod auth;
 pub mod client;
+pub mod console;
 mod data;
 pub mod encoding;
 pub mod input;
