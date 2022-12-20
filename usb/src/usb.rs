@@ -89,8 +89,8 @@ pub fn usb_endpoint_init(dev: &Arc<Mutex<dyn UsbDeviceOps>>) {
 pub struct UsbPort {
     pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
     pub speed_mask: u32,
-    pub path: String,
     pub index: u8,
+    pub used: bool,
 }
 
 impl UsbPort {
@@ -98,8 +98,8 @@ impl UsbPort {
         Self {
             dev: None,
             speed_mask: 0,
-            path: String::new(),
             index,
+            used: false,
         }
     }
 }

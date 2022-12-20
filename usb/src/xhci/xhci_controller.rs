@@ -23,7 +23,6 @@ use log::{debug, error, info, warn};
 use machine_manager::config::XhciConfig;
 use util::num_ops::{read_u32, write_u64_low};
 
-use crate::bus::UsbBus;
 use crate::config::*;
 use crate::usb::{
     Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus, UsbPort,
@@ -415,7 +414,6 @@ pub struct XhciDevice {
     pub intrs: Vec<XhciInterrupter>,
     pub cmd_ring: XhciRing,
     mem_space: Arc<AddressSpace>,
-    pub bus: Arc<Mutex<UsbBus>>,
     pub ctrl_ops: Option<Weak<Mutex<dyn XhciOps>>>,
 }
 
@@ -446,7 +444,6 @@ impl XhciDevice {
             intrs: vec![XhciInterrupter::new(mem_space); MAX_INTRS as usize],
             cmd_ring: XhciRing::new(mem_space),
             mem_space: mem_space.clone(),
-            bus: Arc::new(Mutex::new(UsbBus::new())),
         };
         let xhci = Arc::new(Mutex::new(xhci));
         let clone_xhci = xhci.clone();
@@ -462,7 +459,6 @@ impl XhciDevice {
         for i in 0..locked_xhci.numports_2 {
             let usb_port = Arc::new(Mutex::new(UsbPort::new(i)));
             locked_xhci.usb_ports.push(usb_port.clone());
-            locked_xhci.bus.lock().unwrap().register_usb_port(&usb_port);
             let mut locked_port = locked_xhci.ports[i as usize].lock().unwrap();
             locked_port.name = format!("{}-usb2-{}", locked_port.name, i);
             locked_port.speed_mask = USB_SPEED_LOW | USB_SPEED_HIGH | USB_SPEED_FULL;
@@ -472,7 +468,6 @@ impl XhciDevice {
             let idx = i + locked_xhci.numports_2;
             let usb_port = Arc::new(Mutex::new(UsbPort::new(idx)));
             locked_xhci.usb_ports.push(usb_port.clone());
-            locked_xhci.bus.lock().unwrap().register_usb_port(&usb_port);
             let mut locked_port = locked_xhci.ports[idx as usize].lock().unwrap();
             locked_port.name = format!("{}-usb3-{}", locked_port.name, idx);
             locked_port.speed_mask = USB_SPEED_SUPER;
@@ -626,24 +621,18 @@ impl XhciDevice {
     }
 
     fn lookup_usb_port(&mut self, slot_ctx: &XhciSlotCtx) -> Option<Arc<Mutex<UsbPort>>> {
-        let mut path = String::new();
-        let mut port = (slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff) as u8;
+        let port = (slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff) as u8;
         if port < 1 || port > self.ports.len() as u8 {
             error!("Invalid port: {}", port);
             return None;
         }
         let usb_port = &self.usb_ports[(port - 1) as usize];
-        port = usb_port.lock().unwrap().index + 1;
-        path += &format!("{}", port);
-        for i in 0..5 {
-            port = ((slot_ctx.dev_info >> (4 * i)) & 0x0f) as u8;
-            if port == 0 {
-                break;
-            }
-            path += &format!(".{}", port);
+        let locked_port = usb_port.lock().unwrap();
+        if locked_port.used {
+            Some(usb_port.clone())
+        } else {
+            None
         }
-        let locked_bus = self.bus.lock().unwrap();
-        locked_bus.find_usb_port(path)
     }
 
     /// Control plane
@@ -1765,6 +1754,24 @@ impl XhciDevice {
                 .unwrap()
                 .update_intr(v, self.intrs[0].iman & IMAN_IE == IMAN_IE);
         }
+    }
+
+    /// Assign USB port and attach the device.
+    pub fn assign_usb_port(
+        &mut self,
+        dev: &Arc<Mutex<dyn UsbDeviceOps>>,
+    ) -> Option<Arc<Mutex<UsbPort>>> {
+        for port in &self.usb_ports {
+            let mut locked_port = port.lock().unwrap();
+            if !locked_port.used {
+                locked_port.used = true;
+                locked_port.dev = Some(dev.clone());
+                let mut locked_dev = dev.lock().unwrap();
+                locked_dev.set_usb_port(Some(Arc::downgrade(port)));
+                return Some(port.clone());
+            }
+        }
+        None
     }
 }
 

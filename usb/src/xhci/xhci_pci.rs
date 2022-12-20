@@ -289,7 +289,11 @@ impl XhciOps for XhciPciDevice {
 impl BusDeviceOps for XhciPciDevice {
     fn attach_device(&mut self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
         let mut locked_xhci = self.xhci.lock().unwrap();
-        let usb_port = locked_xhci.bus.lock().unwrap().assign_usb_port(dev)?;
+        let usb_port = if let Some(usb_port) = locked_xhci.assign_usb_port(dev) {
+            usb_port
+        } else {
+            bail!("No available USB port.");
+        };
         let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
             xhci_port
         } else {
