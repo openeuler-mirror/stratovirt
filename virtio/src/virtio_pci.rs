@@ -386,9 +386,21 @@ impl VirtioPciCommonConfig {
                     return Ok(());
                 }
 
+                let old_status = self.device_status;
                 self.device_status = value;
-                if self.device_status == 0 {
+                if self.check_device_status(
+                    CONFIG_STATUS_ACKNOWLEDGE
+                        | CONFIG_STATUS_DRIVER
+                        | CONFIG_STATUS_DRIVER_OK
+                        | CONFIG_STATUS_FEATURES_OK,
+                    CONFIG_STATUS_FAILED,
+                ) {
+                    // FIXME: handle activation failure.
+                    virtio_pci_dev.activate_device(self);
+                } else if old_status != 0 && self.device_status == 0 {
                     self.reset();
+                    // FIXME: handle deactivation failure.
+                    virtio_pci_dev.deactivate_device();
                 }
             }
             COMMON_Q_SELECT_REG => {
@@ -715,6 +727,105 @@ impl VirtioPciDevice {
         Ok(write_start)
     }
 
+    fn activate_device(&self, common_cfg_lock: &mut VirtioPciCommonConfig) -> bool {
+        if self.device_activated.load(Ordering::Acquire) {
+            return true;
+        }
+
+        let queue_type = common_cfg_lock.queue_type;
+        let queues_config = &mut common_cfg_lock.queues_config;
+        let mut locked_queues = self.queues.lock().unwrap();
+        for q_config in queues_config.iter_mut() {
+            if !q_config.ready {
+                warn!("queue is not ready, please check your init process");
+            } else {
+                q_config.addr_cache.desc_table_host = self
+                    .sys_mem
+                    .get_host_address(q_config.desc_table)
+                    .unwrap_or(0);
+                q_config.addr_cache.avail_ring_host = self
+                    .sys_mem
+                    .get_host_address(q_config.avail_ring)
+                    .unwrap_or(0);
+                q_config.addr_cache.used_ring_host = self
+                    .sys_mem
+                    .get_host_address(q_config.used_ring)
+                    .unwrap_or(0);
+            }
+            let queue = Queue::new(*q_config, queue_type).unwrap();
+            if q_config.ready && !queue.is_valid(&self.sys_mem) {
+                error!("Failed to activate device: Invalid queue");
+                return false;
+            }
+            let arc_queue = Arc::new(Mutex::new(queue));
+            locked_queues.push(arc_queue.clone());
+        }
+
+        let mut queue_num = self.device.lock().unwrap().queue_num();
+        // No need to create call event for control queue.
+        // It will be polled in StratoVirt when activating the device.
+        if self.device.lock().unwrap().has_control_queue() && queue_num % 2 != 0 {
+            queue_num -= 1;
+        }
+        let call_evts = NotifyEventFds::new(queue_num);
+        let queue_evts = (*self.notify_eventfds).clone().events;
+        if let Some(cb) = self.interrupt_cb.clone() {
+            if self.need_irqfd {
+                if let Err(e) = self
+                    .device
+                    .lock()
+                    .unwrap()
+                    .set_guest_notifiers(&call_evts.events)
+                {
+                    error!("Failed to set guest notifiers, error is {:?}", e);
+                    return false;
+                }
+            }
+            if let Err(e) = self.device.lock().unwrap().activate(
+                self.sys_mem.clone(),
+                cb,
+                &locked_queues,
+                queue_evts,
+            ) {
+                error!("Failed to activate device, error is {:?}", e);
+                return false;
+            }
+        } else {
+            error!("Failed to activate device: No interrupt callback");
+            return false;
+        }
+        drop(locked_queues);
+        self.device_activated.store(true, Ordering::Release);
+
+        update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
+
+        if self.need_irqfd
+            && !virtio_pci_register_irqfd(self, &self.gsi_msi_routes, &call_evts.events)
+        {
+            return false;
+        }
+        true
+    }
+
+    fn deactivate_device(&self) -> bool {
+        if self.need_irqfd {
+            virtio_pci_unregister_irqfd(self.gsi_msi_routes.clone());
+        }
+
+        self.queues.lock().unwrap().clear();
+        if self.device_activated.load(Ordering::Acquire) {
+            self.device_activated.store(false, Ordering::Release);
+            let cloned_msix = self.config.msix.as_ref().unwrap().clone();
+            cloned_msix.lock().unwrap().reset();
+            if let Err(e) = self.device.lock().unwrap().deactivate() {
+                error!("Failed to deactivate virtio device, error is {:?}", e);
+                return false;
+            }
+        }
+        update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
+        true
+    }
+
     fn build_common_cfg_ops(&mut self) -> RegionOps {
         let cloned_virtio_dev = self.device.clone();
         let cloned_common_cfg = self.common_config.clone();
@@ -738,18 +849,11 @@ impl VirtioPciDevice {
         };
 
         let cloned_pci_device = self.clone();
-        let cloned_mem_space = self.sys_mem.clone();
-        let cloned_gsi_routes = self.gsi_msi_routes.clone();
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
             let mut value = 0;
             if !read_data_u32(data, &mut value) {
                 return false;
             }
-            let old_dev_status = cloned_pci_device
-                .common_config
-                .lock()
-                .unwrap()
-                .device_status;
 
             // In report_virtio_error(), it will lock cloned_pci_device.common_config.
             // So, avoid deadlock by getting the returned value firstly.
@@ -781,138 +885,6 @@ impl VirtioPciDevice {
                 }
                 return false;
             }
-
-            if !cloned_pci_device.device_activated.load(Ordering::Acquire)
-                && cloned_pci_device
-                    .common_config
-                    .lock()
-                    .unwrap()
-                    .check_device_status(
-                        CONFIG_STATUS_ACKNOWLEDGE
-                            | CONFIG_STATUS_DRIVER
-                            | CONFIG_STATUS_DRIVER_OK
-                            | CONFIG_STATUS_FEATURES_OK,
-                        CONFIG_STATUS_FAILED,
-                    )
-            {
-                let queue_type = cloned_pci_device.common_config.lock().unwrap().queue_type;
-                let queues_config = &mut cloned_pci_device
-                    .common_config
-                    .lock()
-                    .unwrap()
-                    .queues_config;
-                let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
-                for q_config in queues_config.iter_mut() {
-                    if !q_config.ready {
-                        warn!("queue is not ready, please check your init process");
-                    } else {
-                        q_config.addr_cache.desc_table_host = cloned_mem_space
-                            .get_host_address(q_config.desc_table)
-                            .unwrap_or(0);
-                        q_config.addr_cache.avail_ring_host = cloned_mem_space
-                            .get_host_address(q_config.avail_ring)
-                            .unwrap_or(0);
-                        q_config.addr_cache.used_ring_host = cloned_mem_space
-                            .get_host_address(q_config.used_ring)
-                            .unwrap_or(0);
-                    }
-                    let queue = Queue::new(*q_config, queue_type).unwrap();
-                    if q_config.ready && !queue.is_valid(&cloned_pci_device.sys_mem) {
-                        error!("Failed to activate device: Invalid queue");
-                        return false;
-                    }
-                    let arc_queue = Arc::new(Mutex::new(queue));
-                    locked_queues.push(arc_queue.clone());
-                }
-
-                let mut queue_num = cloned_pci_device.device.lock().unwrap().queue_num();
-                // No need to create call event for control queue.
-                // It will be polled in StratoVirt when activating the device.
-                if cloned_pci_device.device.lock().unwrap().has_control_queue()
-                    && queue_num % 2 != 0
-                {
-                    queue_num -= 1;
-                }
-                let call_evts = NotifyEventFds::new(queue_num);
-                let queue_evts = (*cloned_pci_device.notify_eventfds).clone().events;
-                if let Some(cb) = cloned_pci_device.interrupt_cb.clone() {
-                    if cloned_pci_device.need_irqfd {
-                        if let Err(e) = cloned_pci_device
-                            .device
-                            .lock()
-                            .unwrap()
-                            .set_guest_notifiers(&call_evts.events)
-                        {
-                            error!("Failed to set guest notifiers, error is {:?}", e);
-                            return false;
-                        }
-                    }
-                    if let Err(e) = cloned_pci_device.device.lock().unwrap().activate(
-                        cloned_pci_device.sys_mem.clone(),
-                        cb,
-                        &locked_queues,
-                        queue_evts,
-                    ) {
-                        error!("Failed to activate device, error is {:?}", e);
-                        return false;
-                    }
-                } else {
-                    error!("Failed to activate device: No interrupt callback");
-                    return false;
-                }
-                drop(locked_queues);
-                cloned_pci_device
-                    .device_activated
-                    .store(true, Ordering::Release);
-
-                update_dev_id(
-                    &cloned_pci_device.parent_bus,
-                    cloned_pci_device.devfn,
-                    &cloned_pci_device.dev_id,
-                );
-
-                if cloned_pci_device.need_irqfd
-                    && !virtio_pci_register_irqfd(
-                        &cloned_pci_device,
-                        &cloned_gsi_routes,
-                        &call_evts.events,
-                    )
-                {
-                    return false;
-                }
-            }
-
-            if old_dev_status != 0
-                && cloned_pci_device
-                    .common_config
-                    .lock()
-                    .unwrap()
-                    .device_status
-                    == 0
-            {
-                if cloned_pci_device.need_irqfd {
-                    virtio_pci_unregister_irqfd(cloned_gsi_routes.clone());
-                }
-
-                cloned_pci_device.queues.lock().unwrap().clear();
-                if cloned_pci_device.device_activated.load(Ordering::Acquire) {
-                    cloned_pci_device
-                        .device_activated
-                        .store(false, Ordering::Release);
-                    let cloned_msix = cloned_pci_device.config.msix.as_ref().unwrap().clone();
-                    cloned_msix.lock().unwrap().reset();
-                    if let Err(e) = cloned_pci_device.device.lock().unwrap().deactivate() {
-                        error!("Failed to deactivate virtio device, error is {:?}", e);
-                        return false;
-                    }
-                }
-                update_dev_id(
-                    &cloned_pci_device.parent_bus,
-                    cloned_pci_device.devfn,
-                    &cloned_pci_device.dev_id,
-                );
-            }
-
             true
         };
 
