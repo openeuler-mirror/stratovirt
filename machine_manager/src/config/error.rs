@@ -56,8 +56,8 @@ pub enum ConfigError {
     NoMetadata(String, String),
     #[error("Input value {0} is unaligned with {1} for {2}.")]
     Unaligned(String, u64, u64),
-    #[error("PFlash unit id given {0} should not be more than {1}")]
-    UnitIdError(usize, usize),
+    #[error("{0} given {1} should not be more than {2}")]
+    UnitIdError(String, usize, usize),
     #[error("Directory {0} does not exist")]
     DirNotExist(String),
 }

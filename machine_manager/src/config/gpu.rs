@@ -53,12 +53,10 @@ impl ConfigCheck for GpuConfig {
         }
 
         if self.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 {
-            return Err(anyhow!(ConfigError::IllegalValue(
+            return Err(anyhow!(ConfigError::UnitIdError(
                 "max_outputs".to_string(),
-                0,
-                false,
-                VIRTIO_GPU_MAX_SCANOUTS as u64,
-                true,
+                self.max_outputs as usize,
+                VIRTIO_GPU_MAX_SCANOUTS,
             )));
         }
 
