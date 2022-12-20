@@ -24,10 +24,8 @@ use machine_manager::config::XhciConfig;
 use util::num_ops::{read_u32, write_u64_low};
 
 use crate::config::*;
-use crate::usb::{
-    Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus, UsbPort,
-};
-use crate::xhci::xhci_regs::{XchiOperReg, XhciInterrupter, XhciPort};
+use crate::usb::{Iovec, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
+use crate::xhci::xhci_regs::{XchiOperReg, XhciInterrupter};
 use crate::xhci::xhci_ring::{
     TRBCCode, TRBType, XhciEventRingSeg, XhciRing, XhciTRB, TRB_EV_ED, TRB_SIZE, TRB_TR_IDT,
     TRB_TR_IOC, TRB_TR_ISP, TRB_TYPE_SHIFT,
@@ -299,6 +297,42 @@ impl XhciSlot {
     }
 }
 
+/// USB port which can attached device.
+pub struct UsbPort {
+    pub xhci: Weak<Mutex<XhciDevice>>,
+    /// Port Status and Control
+    pub portsc: u32,
+    /// Port ID
+    pub port_id: u8,
+    pub speed_mask: u32,
+    pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
+    pub used: bool,
+}
+
+impl UsbPort {
+    pub fn new(xhci: &Weak<Mutex<XhciDevice>>, i: u8) -> Self {
+        Self {
+            xhci: xhci.clone(),
+            portsc: 0,
+            port_id: i,
+            speed_mask: 0,
+            dev: None,
+            used: false,
+        }
+    }
+
+    /// Get port link state from port status and control register.
+    pub fn get_port_link_state(&self) -> u32 {
+        self.portsc >> PORTSC_PLS_SHIFT & PORTSC_PLS_MASK
+    }
+
+    /// Set port link state in port status and control register.
+    pub fn set_port_link_state(&mut self, pls: u32) {
+        self.portsc &= !(PORTSC_PLS_MASK << PORTSC_PLS_SHIFT);
+        self.portsc |= (pls & PORTSC_PLS_MASK) << PORTSC_PLS_SHIFT;
+    }
+}
+
 /// Event usually send to drivers.
 #[derive(Debug)]
 pub struct XhciEvent {
@@ -409,7 +443,6 @@ pub struct XhciDevice {
     pub numports_3: u8,
     pub oper: XchiOperReg,
     pub usb_ports: Vec<Arc<Mutex<UsbPort>>>,
-    pub ports: Vec<Arc<Mutex<XhciPort>>>,
     pub slots: Vec<XhciSlot>,
     pub intrs: Vec<XhciInterrupter>,
     pub cmd_ring: XhciRing,
@@ -439,7 +472,6 @@ impl XhciDevice {
             usb_ports: Vec::new(),
             numports_3: p3,
             numports_2: p2,
-            ports: Vec::new(),
             slots: vec![XhciSlot::new(mem_space); MAX_SLOTS as usize],
             intrs: vec![XhciInterrupter::new(mem_space); MAX_INTRS as usize],
             cmd_ring: XhciRing::new(mem_space),
@@ -449,29 +481,21 @@ impl XhciDevice {
         let clone_xhci = xhci.clone();
         let mut locked_xhci = clone_xhci.lock().unwrap();
         locked_xhci.oper.usb_status = USB_STS_HCH;
-        for i in 0..(p2 + p3) {
-            locked_xhci.ports.push(Arc::new(Mutex::new(XhciPort::new(
-                &Arc::downgrade(&clone_xhci),
-                format!("xhci-port-{}", i),
-                i + 1,
-            ))));
-        }
         for i in 0..locked_xhci.numports_2 {
-            let usb_port = Arc::new(Mutex::new(UsbPort::new(i)));
+            let usb_port = Arc::new(Mutex::new(UsbPort::new(
+                &Arc::downgrade(&clone_xhci),
+                i + 1,
+            )));
             locked_xhci.usb_ports.push(usb_port.clone());
-            let mut locked_port = locked_xhci.ports[i as usize].lock().unwrap();
-            locked_port.name = format!("{}-usb2-{}", locked_port.name, i);
+            let mut locked_port = usb_port.lock().unwrap();
             locked_port.speed_mask = USB_SPEED_LOW | USB_SPEED_HIGH | USB_SPEED_FULL;
-            locked_port.usb_port = Some(usb_port);
         }
         for i in 0..locked_xhci.numports_3 {
-            let idx = i + locked_xhci.numports_2;
-            let usb_port = Arc::new(Mutex::new(UsbPort::new(idx)));
+            let idx = i + locked_xhci.numports_2 + 1;
+            let usb_port = Arc::new(Mutex::new(UsbPort::new(&Arc::downgrade(&clone_xhci), idx)));
             locked_xhci.usb_ports.push(usb_port.clone());
-            let mut locked_port = locked_xhci.ports[idx as usize].lock().unwrap();
-            locked_port.name = format!("{}-usb3-{}", locked_port.name, idx);
+            let mut locked_port = usb_port.lock().unwrap();
             locked_port.speed_mask = USB_SPEED_SUPER;
-            locked_port.usb_port = Some(usb_port);
         }
         xhci
     }
@@ -502,8 +526,8 @@ impl XhciDevice {
                 error!("Failed to disable slot {:?}", e);
             }
         }
-        for i in 0..self.ports.len() {
-            let port = self.ports[i].clone();
+        for i in 0..self.usb_ports.len() {
+            let port = self.usb_ports[i].clone();
             if let Err(e) = self.port_update(&port) {
                 error!("Failed to update port: {:?}", e);
             }
@@ -513,47 +537,37 @@ impl XhciDevice {
         }
     }
 
-    /// Find xhci port by usb port.
-    pub fn lookup_xhci_port(&self, dev: &Arc<Mutex<UsbPort>>) -> Option<Arc<Mutex<XhciPort>>> {
-        let index = dev.lock().unwrap().index;
-        Some(self.ports[index as usize].clone())
-    }
-
     /// Reset xhci port.
-    pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<XhciPort>>, warm_reset: bool) -> Result<()> {
+    pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<UsbPort>>, warm_reset: bool) -> Result<()> {
         let mut locked_port = xhci_port.lock().unwrap();
-        if let Some(usb_port) = locked_port.usb_port.as_ref() {
-            let clone_usb_port = usb_port.clone();
-            let locked_usb_port = clone_usb_port.lock().unwrap();
-            let usb_dev = if let Some(dev) = locked_usb_port.dev.as_ref() {
-                dev
-            } else {
-                // No device, no need to reset.
-                return Ok(());
-            };
-            usb_dev.lock().unwrap().reset();
-            let speed = usb_dev.lock().unwrap().speed();
-            if speed == USB_SPEED_SUPER && warm_reset {
-                locked_port.portsc |= PORTSC_WRC;
-            }
-            match speed {
-                USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
-                    locked_port.set_port_link_state(PLS_U0);
-                    locked_port.portsc |= PORTSC_PED;
-                }
-                _ => {
-                    error!("Invalid speed {}", speed);
-                }
-            }
-            locked_port.portsc &= !PORTSC_PR;
-            drop(locked_port);
-            self.port_notify(xhci_port, PORTSC_PRC)?;
+        let usb_dev = if let Some(dev) = locked_port.dev.as_ref() {
+            dev
+        } else {
+            // No device, no need to reset.
+            return Ok(());
+        };
+        usb_dev.lock().unwrap().reset();
+        let speed = usb_dev.lock().unwrap().speed();
+        if speed == USB_SPEED_SUPER && warm_reset {
+            locked_port.portsc |= PORTSC_WRC;
         }
+        match speed {
+            USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
+                locked_port.set_port_link_state(PLS_U0);
+                locked_port.portsc |= PORTSC_PED;
+            }
+            _ => {
+                error!("Invalid speed {}", speed);
+            }
+        }
+        locked_port.portsc &= !PORTSC_PR;
+        drop(locked_port);
+        self.port_notify(xhci_port, PORTSC_PRC)?;
         Ok(())
     }
 
     /// Send PortStatusChange event to notify drivers.
-    pub fn port_notify(&mut self, port: &Arc<Mutex<XhciPort>>, flag: u32) -> Result<()> {
+    pub fn port_notify(&mut self, port: &Arc<Mutex<UsbPort>>, flag: u32) -> Result<()> {
         let mut locked_port = port.lock().unwrap();
         if locked_port.portsc & flag == flag {
             return Ok(());
@@ -563,36 +577,32 @@ impl XhciDevice {
             return Ok(());
         }
         let mut evt = XhciEvent::new(TRBType::ErPortStatusChange, TRBCCode::Success);
-        evt.ptr = ((locked_port.port_idx as u32) << PORT_EVENT_ID_SHIFT) as u64;
+        evt.ptr = ((locked_port.port_id as u32) << PORT_EVENT_ID_SHIFT) as u64;
         self.send_event(&evt, 0)?;
         Ok(())
     }
 
     /// Update the xhci port status and then notify the driver.
-    pub fn port_update(&mut self, port: &Arc<Mutex<XhciPort>>) -> Result<()> {
+    pub fn port_update(&mut self, port: &Arc<Mutex<UsbPort>>) -> Result<()> {
         let mut locked_port = port.lock().unwrap();
         locked_port.portsc = PORTSC_PP;
         let mut pls = PLS_RX_DETECT;
-        if let Some(usb_port) = &locked_port.usb_port {
-            let clone_usb_port = usb_port.clone();
-            let locked_usb_port = clone_usb_port.lock().unwrap();
-            if let Some(dev) = &locked_usb_port.dev {
-                let speed = dev.lock().unwrap().speed();
-                locked_port.portsc |= PORTSC_CCS;
-                if speed == USB_SPEED_SUPER {
-                    locked_port.portsc |= PORTSC_SPEED_SUPER;
-                    locked_port.portsc |= PORTSC_PED;
-                    pls = PLS_U0;
-                } else if speed == USB_SPEED_FULL {
-                    locked_port.portsc |= PORTSC_SPEED_FULL;
-                    pls = PLS_POLLING;
-                } else if speed == USB_SPEED_HIGH {
-                    locked_port.portsc |= PORTSC_SPEED_HIGH;
-                    pls = PLS_POLLING;
-                } else if speed == USB_SPEED_LOW {
-                    locked_port.portsc |= PORTSC_SPEED_LOW;
-                    pls = PLS_POLLING;
-                }
+        if let Some(dev) = &locked_port.dev {
+            let speed = dev.lock().unwrap().speed();
+            locked_port.portsc |= PORTSC_CCS;
+            if speed == USB_SPEED_SUPER {
+                locked_port.portsc |= PORTSC_SPEED_SUPER;
+                locked_port.portsc |= PORTSC_PED;
+                pls = PLS_U0;
+            } else if speed == USB_SPEED_FULL {
+                locked_port.portsc |= PORTSC_SPEED_FULL;
+                pls = PLS_POLLING;
+            } else if speed == USB_SPEED_HIGH {
+                locked_port.portsc |= PORTSC_SPEED_HIGH;
+                pls = PLS_POLLING;
+            } else if speed == USB_SPEED_LOW {
+                locked_port.portsc |= PORTSC_SPEED_LOW;
+                pls = PLS_POLLING;
             }
         }
         locked_port.set_port_link_state(pls);
@@ -622,7 +632,7 @@ impl XhciDevice {
 
     fn lookup_usb_port(&mut self, slot_ctx: &XhciSlotCtx) -> Option<Arc<Mutex<UsbPort>>> {
         let port = (slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff) as u8;
-        if port < 1 || port > self.ports.len() as u8 {
+        if port < 1 || port > self.usb_ports.len() as u8 {
             error!("Invalid port: {}", port);
             return None;
         }

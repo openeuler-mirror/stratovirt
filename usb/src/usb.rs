@@ -13,14 +13,15 @@
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::{bail, Result};
+use log::{debug, error};
+
 use crate::config::*;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
     UsbInterfaceDescriptor,
 };
-use crate::xhci::xhci_controller::XhciDevice;
-use anyhow::{bail, Result};
-use log::{debug, error};
+use crate::xhci::xhci_controller::{UsbPort, XhciDevice};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;
@@ -82,25 +83,6 @@ pub fn usb_endpoint_init(dev: &Arc<Mutex<dyn UsbDeviceOps>>) {
         let mut ep_out = usb_dev.ep_out[i as usize].lock().unwrap();
         ep_in.dev = Some(Arc::downgrade(dev));
         ep_out.dev = Some(Arc::downgrade(dev));
-    }
-}
-
-/// USB port which can attached device.
-pub struct UsbPort {
-    pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
-    pub speed_mask: u32,
-    pub index: u8,
-    pub used: bool,
-}
-
-impl UsbPort {
-    pub fn new(index: u8) -> Self {
-        Self {
-            dev: None,
-            speed_mask: 0,
-            index,
-            used: false,
-        }
     }
 }
 
@@ -499,13 +481,8 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     // Drop the small lock.
     drop(locked_dev);
     let mut locked_xhci = xhci.lock().unwrap();
-    let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
-        xhci_port
-    } else {
-        bail!("No xhci port found");
-    };
     if wakeup {
-        let mut locked_port = xhci_port.lock().unwrap();
+        let mut locked_port = usb_port.lock().unwrap();
         let port_status = locked_port.get_port_link_state();
         if port_status == PLS_U3 {
             locked_port.set_port_link_state(PLS_RESUME);
@@ -514,7 +491,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
                 locked_port.portsc, port_status
             );
             drop(locked_port);
-            locked_xhci.port_notify(&xhci_port, PORTSC_PLC)?;
+            locked_xhci.port_notify(&usb_port, PORTSC_PLC)?;
         }
     }
     if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep) {
