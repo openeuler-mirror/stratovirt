@@ -26,8 +26,8 @@ use crate::hid::{
 };
 use crate::usb::{
     notify_controller, usb_endpoint_init, UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint,
-    UsbDescIface, UsbDescOther, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbDeviceState,
-    UsbEndpoint, UsbPacket, UsbPacketStatus,
+    UsbDescIface, UsbDescOther, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
+    UsbPacketStatus,
 };
 use crate::xhci::xhci_controller::XhciDevice;
 use anyhow::Result;
@@ -166,7 +166,6 @@ impl UsbDeviceOps for UsbKeyboard {
         info!("Keyboard device reset");
         self.usb_device.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
         self.usb_device.addr = 0;
-        self.usb_device.state = UsbDeviceState::Default;
         self.hid.reset();
     }
 

@@ -257,7 +257,6 @@ impl From<u32> for EpType {
 pub struct XhciSlot {
     pub enabled: bool,
     pub addressed: bool,
-    pub intr_target: u16,
     pub slot_ctx_addr: u64,
     pub usb_port: Option<Arc<Mutex<UsbPort>>>,
     pub endpoints: Vec<XhciEpContext>,
@@ -268,7 +267,6 @@ impl XhciSlot {
         XhciSlot {
             enabled: false,
             addressed: false,
-            intr_target: 0,
             slot_ctx_addr: 0,
             usb_port: None,
             endpoints: vec![XhciEpContext::new(mem); MAX_ENDPOINTS as usize],
@@ -758,7 +756,6 @@ impl XhciDevice {
         self.slots[(slot_id - 1) as usize].enabled = false;
         self.slots[(slot_id - 1) as usize].addressed = false;
         self.slots[(slot_id - 1) as usize].usb_port = None;
-        self.slots[(slot_id - 1) as usize].intr_target = 0;
         Ok(TRBCCode::Success)
     }
 
@@ -797,8 +794,6 @@ impl XhciDevice {
         dma_read_u64(&self.mem_space, GuestAddress(ctx_addr), &mut octx)?;
         self.slots[(slot_id - 1) as usize].usb_port = Some(usb_port.clone());
         self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
-        self.slots[(slot_id - 1) as usize].intr_target =
-            ((slot_ctx.tt_info >> TRB_INTR_SHIFT) & TRB_INTR_MASK) as u16;
         dev.lock().unwrap().reset();
         if bsr {
             slot_ctx.dev_state = SLOT_DEFAULT << SLOT_STATE_SHIFT;
