@@ -594,7 +594,7 @@ pub struct VirtioPciDevice {
     /// Primary Bus
     parent_bus: Weak<Mutex<PciBus>>,
     /// Eventfds used for guest notify the Device.
-    notify_eventfds: NotifyEventFds,
+    notify_eventfds: Arc<NotifyEventFds>,
     /// The function for interrupt triggering
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Virtio queues. The vector and Queue will be shared acrossing thread, so all with Arc<Mutex<..>> wrapper.
@@ -632,7 +632,7 @@ impl VirtioPciDevice {
                 queue_size, queue_num,
             ))),
             parent_bus,
-            notify_eventfds: NotifyEventFds::new(queue_num),
+            notify_eventfds: Arc::new(NotifyEventFds::new(queue_num)),
             interrupt_cb: None,
             queues: Arc::new(Mutex::new(Vec::with_capacity(queue_num))),
             multi_func,
@@ -688,7 +688,7 @@ impl VirtioPciDevice {
 
     fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
         let mut ret = Vec::new();
-        let eventfds = self.notify_eventfds.clone();
+        let eventfds = (*self.notify_eventfds).clone();
         for (index, eventfd) in eventfds.events.into_iter().enumerate() {
             let addr = index as u64 * u64::from(VIRTIO_PCI_CAP_NOTIFY_OFF_MULTIPLIER);
             ret.push(RegionIoEventFd {
@@ -834,7 +834,7 @@ impl VirtioPciDevice {
                     queue_num -= 1;
                 }
                 let call_evts = NotifyEventFds::new(queue_num);
-                let queue_evts = cloned_pci_device.notify_eventfds.clone().events;
+                let queue_evts = (*cloned_pci_device.notify_eventfds).clone().events;
                 if let Some(cb) = cloned_pci_device.interrupt_cb.clone() {
                     if cloned_pci_device.need_irqfd {
                         if let Err(e) = cloned_pci_device
@@ -1431,7 +1431,7 @@ impl MigrationHook for VirtioPciDevice {
                 bail!("Failed to update bar, error is {:?}", e);
             }
 
-            let queue_evts = self.notify_eventfds.clone().events;
+            let queue_evts = (*self.notify_eventfds).clone().events;
             if let Some(cb) = self.interrupt_cb.clone() {
                 if let Err(e) = self.device.lock().unwrap().activate(
                     self.sys_mem.clone(),
