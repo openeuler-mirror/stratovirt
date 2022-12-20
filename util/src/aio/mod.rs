@@ -17,15 +17,14 @@ mod uring;
 use std::clone::Clone;
 use std::cmp;
 use std::io::Write;
-use std::marker::{Send, Sync};
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 pub use libaio::*;
 pub use raw::*;
 use uring::IoUringContext;
@@ -56,7 +55,7 @@ trait AioContext {
     fn get_events(&mut self) -> &[IoEvent];
 }
 
-pub type AioCompleteFunc<T> = Box<dyn Fn(&AioCb<T>, i64) + Sync + Send>;
+pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
 
 pub struct AioCb<T: Clone> {
     pub last_aio: bool,
@@ -87,7 +86,7 @@ impl<T: Clone> AioCb<T> {
 }
 
 pub struct Aio<T: Clone + 'static> {
-    ctx: Arc<Mutex<dyn AioContext>>,
+    ctx: Box<dyn AioContext>,
     pub fd: EventFd,
     pub aio_in_queue: CbList<T>,
     pub aio_in_flight: CbList<T>,
@@ -105,14 +104,10 @@ impl<T: Clone + 'static> Aio<T> {
             AIO_NATIVE
         };
 
-        let ctx: Arc<Mutex<dyn AioContext>> = if aio == AIO_IOURING {
-            Arc::new(Mutex::new(IoUringContext::new(
-                max_events as u32,
-                &fd,
-                func.clone(),
-            )?))
+        let ctx: Box<dyn AioContext> = if aio == AIO_IOURING {
+            Box::new(IoUringContext::new(max_events as u32, &fd, func.clone())?)
         } else {
-            Arc::new(Mutex::new(LibaioContext::new(max_events as i32)?))
+            Box::new(LibaioContext::new(max_events as i32)?)
         };
 
         Ok(Aio {
@@ -127,9 +122,8 @@ impl<T: Clone + 'static> Aio<T> {
 
     pub fn handle(&mut self) -> Result<bool> {
         let mut done = false;
-        let mut ctx = self.ctx.lock().unwrap();
 
-        for evt in ctx.get_events() {
+        for evt in self.ctx.get_events() {
             unsafe {
                 let node = evt.data as *mut CbNode<T>;
                 let res = if (evt.res2 == 0) && (evt.res == (*node).value.nbytes as i64) {
@@ -140,19 +134,17 @@ impl<T: Clone + 'static> Aio<T> {
                     -1
                 };
 
-                (self.complete_func)(&(*node).value, res);
+                (self.complete_func)(&(*node).value, res)?;
                 self.aio_in_flight.unlink(&(*node));
                 // Construct Box to free mem automatically.
                 drop(Box::from_raw(node));
             }
         }
-        // Drop reference of 'ctx', so below 'process_list' can work.
-        drop(ctx);
-        self.process_list();
+        self.process_list()?;
         Ok(done)
     }
 
-    fn process_list(&mut self) {
+    fn process_list(&mut self) -> Result<()> {
         while self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
             let mut iocbs = Vec::new();
 
@@ -170,8 +162,6 @@ impl<T: Clone + 'static> Aio<T> {
             // The iocbs must not be empty.
             let (nr, is_err) = match self
                 .ctx
-                .lock()
-                .unwrap()
                 .submit(iocbs.len() as i64, &mut iocbs)
                 .map_err(|e| {
                     error!("{}", e);
@@ -194,7 +184,7 @@ impl<T: Clone + 'static> Aio<T> {
             if is_err {
                 // Fail one request, retry the rest.
                 if let Some(node) = self.aio_in_queue.pop_tail() {
-                    (self.complete_func)(&(node).value, -1);
+                    (self.complete_func)(&(node).value, -1)?;
                 }
             } else if nr == 0 {
                 // If can't submit any request, break the loop
@@ -202,13 +192,21 @@ impl<T: Clone + 'static> Aio<T> {
                 break;
             }
         }
+        Ok(())
     }
 
     pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64, direct: bool) -> Result<()> {
         if direct {
             for iov in cb.iovec.iter() {
                 if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
-                    return self.handle_misaligned_rw(cb);
+                    let res = self.handle_misaligned_rw(&cb).map_or_else(
+                        |e| {
+                            error!("{:?}", e);
+                            -1
+                        },
+                        |_| 0,
+                    );
+                    return (self.complete_func)(&cb, res);
                 }
             }
         }
@@ -230,7 +228,7 @@ impl<T: Clone + 'static> Aio<T> {
 
         self.aio_in_queue.add_head(node);
         if last_aio || self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
-            self.process_list();
+            self.process_list()?;
         }
 
         Ok(())
@@ -242,7 +240,14 @@ impl<T: Clone + 'static> Aio<T> {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
-                    r = raw_read(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)?;
+                    r = raw_read(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to do sync read, {:?}", e);
+                            -1
+                        });
+                    if r < 0 {
+                        break;
+                    }
                     off += iov.iov_len as usize;
                 }
                 r
@@ -251,23 +256,26 @@ impl<T: Clone + 'static> Aio<T> {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
-                    r = raw_write(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)?;
+                    r = raw_write(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to do sync write, {:?}", e);
+                            -1
+                        });
+                    if r < 0 {
+                        break;
+                    }
                     off += iov.iov_len as usize;
                 }
                 r
             }
             _ => -1,
         };
-        (self.complete_func)(&cb, ret);
-
-        Ok(())
+        (self.complete_func)(&cb, ret)
     }
 
-    fn handle_misaligned_rw(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn handle_misaligned_rw(&mut self, cb: &AioCb<T>) -> Result<()> {
         // Safe because we only get the host page size.
         let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-        let mut ret = -1;
-
         match cb.opcode {
             IoCmd::Preadv => {
                 // Safe because we allocate aligned memory and free it later.
@@ -277,7 +285,7 @@ impl<T: Clone + 'static> Aio<T> {
                 if aligned_buffer.is_null() {
                     bail!("Failed to alloc memory for misaligned read");
                 }
-                ret = raw_read(
+                raw_read(
                     cb.file_fd,
                     aligned_buffer as u64,
                     cb.nbytes as usize,
@@ -286,21 +294,21 @@ impl<T: Clone + 'static> Aio<T> {
                 .map_err(|e| {
                     // Safe because the memory is allocated by us and will not be used anymore.
                     unsafe { libc::free(aligned_buffer) };
-                    e
+                    anyhow!("Failed to do raw read for misaligned read, {:?}", e)
                 })?;
 
                 let src = unsafe {
                     std::slice::from_raw_parts(aligned_buffer as *const u8, cb.nbytes as usize)
                 };
-                iov_from_buf_direct(&cb.iovec, src).and_then(|v| {
+                let res = iov_from_buf_direct(&cb.iovec, src).and_then(|v| {
                     if v == cb.nbytes as usize {
                         Ok(())
                     } else {
-                        unsafe { libc::free(aligned_buffer) };
-                        bail!("Failed to copy buff to iovs")
+                        Err(anyhow!("Failed to copy iovs to buff for misaligned read"))
                     }
-                })?;
+                });
                 unsafe { libc::free(aligned_buffer) };
+                res
             }
             IoCmd::Pwritev => {
                 let aligned_buffer =
@@ -311,38 +319,38 @@ impl<T: Clone + 'static> Aio<T> {
                 let dst = unsafe {
                     std::slice::from_raw_parts_mut(aligned_buffer as *mut u8, cb.nbytes as usize)
                 };
-                iov_to_buf_direct(&cb.iovec, dst).and_then(|v| {
+                if let Err(e) = iov_to_buf_direct(&cb.iovec, dst).and_then(|v| {
                     if v == cb.nbytes as usize {
                         Ok(())
                     } else {
-                        unsafe { libc::free(aligned_buffer) };
-                        bail!("Failed to copy iovs to buff")
+                        Err(anyhow!("Failed to copy iovs to buff for misaligned write"))
                     }
-                })?;
+                }) {
+                    unsafe { libc::free(aligned_buffer) };
+                    return Err(e);
+                }
 
-                ret = raw_write(
+                let res = raw_write(
                     cb.file_fd,
                     aligned_buffer as u64,
                     cb.nbytes as usize,
                     cb.offset,
                 )
-                .map_err(|e| {
-                    unsafe { libc::free(aligned_buffer) };
-                    e
-                })?;
+                .map(|_| {})
+                .map_err(|e| anyhow!("Failed to do raw write for misaligned write, {:?}", e));
                 unsafe { libc::free(aligned_buffer) };
+                res
             }
-            _ => {}
-        };
-        (self.complete_func)(&cb, ret);
-
-        Ok(())
+            _ => bail!("Failed to do misaligned rw: unknown cmd type"),
+        }
     }
 
     pub fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
-        let ret = raw_datasync(cb.file_fd)?;
-        (self.complete_func)(&cb, ret);
-        Ok(())
+        let ret = raw_datasync(cb.file_fd).unwrap_or_else(|e| {
+            error!("Failed to do sync flush, {:?}", e);
+            -1
+        });
+        (self.complete_func)(&cb, ret)
     }
 }
 

@@ -44,9 +44,7 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::{
-    iov_from_buf_direct, raw_datasync, Aio, AioCb, AioCompleteFunc, IoCmd, Iovec, AIO_NATIVE,
-};
+use util::aio::{iov_from_buf_direct, raw_datasync, Aio, AioCb, IoCmd, Iovec, AIO_NATIVE};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
@@ -122,18 +120,18 @@ impl AioCompleteCb {
         }
     }
 
-    fn complete_request(&self, status: u8) {
+    fn complete_request(&self, status: u8) -> Result<()> {
         let mut req = Some(self.req.as_ref());
         while let Some(req_raw) = req {
-            self.complete_one_request(req_raw, status);
+            self.complete_one_request(req_raw, status)?;
             req = req_raw.next.as_ref().as_ref();
         }
+        Ok(())
     }
 
-    fn complete_one_request(&self, req: &Request, status: u8) {
+    fn complete_one_request(&self, req: &Request, status: u8) -> Result<()> {
         if let Err(ref e) = self.mem_space.write_object(&status, req.in_header) {
-            error!("Failed to write the status (aio completion) {:?}", e);
-            return;
+            bail!("Failed to write the status (blk io completion) {:?}", e);
         }
 
         let mut queue_lock = self.queue.lock().unwrap();
@@ -141,11 +139,12 @@ impl AioCompleteCb {
             .vring
             .add_used(&self.mem_space, req.desc_index, req.in_len)
         {
-            error!(
-                "Failed to add used ring(aio completion), index {}, len {} {:?}",
-                req.desc_index, req.in_len, e,
+            bail!(
+                "Failed to add used ring(blk io completion), index {}, len {} {:?}",
+                req.desc_index,
+                req.in_len,
+                e,
             );
-            return;
         }
 
         if queue_lock
@@ -157,14 +156,14 @@ impl AioCompleteCb {
                 Some(&queue_lock),
                 false,
             ) {
-                error!(
-                    "Failed to trigger interrupt(aio completion) for block device, error is {:?}",
+                bail!(
+                    "Failed to trigger interrupt(blk io completion), error is {:?}",
                     e
                 );
-                return;
             }
             self.trace_send_interrupt("Block".to_string());
         }
+        Ok(())
     }
 }
 
@@ -270,29 +269,11 @@ impl Request {
         Ok(request)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn execute(
         &self,
-        aio: &mut Box<Aio<AioCompleteCb>>,
-        disk: &File,
-        serial_num: &Option<String>,
-        direct: bool,
-        aio_type: &Option<String>,
-        last_aio: bool,
-        iocompletecb: AioCompleteCb,
+        iohandler: &mut BlockIoHandler,
+        mut aiocb: AioCb<AioCompleteCb>,
     ) -> Result<()> {
-        let mut aiocb = AioCb {
-            last_aio,
-            file_fd: disk.as_raw_fd(),
-            opcode: IoCmd::Noop,
-            iovec: Vec::new(),
-            offset: (self.out_header.sector << SECTOR_SHIFT) as usize,
-            nbytes: 0,
-            process: true,
-            iocb: None,
-            iocompletecb,
-        };
-
         let mut req = Some(self);
         while let Some(req_raw) = req {
             for iov in req_raw.iovec.iter() {
@@ -315,18 +296,19 @@ impl Request {
             }
         }
 
+        let aio = iohandler.aio.as_mut().unwrap();
+        let serial_num = &iohandler.serial_num;
+        let aio_type = &iohandler.aio_type;
+        let direct = iohandler.direct;
         match request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = IoCmd::Preadv;
                 if aio_type.is_some() {
-                    (*aio)
-                        .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE, direct)
-                        .with_context(|| {
-                            "Failed to process block request for reading asynchronously"
-                        })?;
+                    aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
+                        "Failed to process block request for reading asynchronously"
+                    })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
+                    aio.rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for reading synchronously"
                     })?;
                 }
@@ -334,35 +316,34 @@ impl Request {
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = IoCmd::Pwritev;
                 if aio_type.is_some() {
-                    (*aio)
-                        .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE, direct)
-                        .with_context(|| {
-                            "Failed to process block request for writing asynchronously"
-                        })?;
+                    aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
+                        "Failed to process block request for writing asynchronously"
+                    })?;
                 } else {
-                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
+                    aio.rw_sync(aiocb).with_context(|| {
                         "Failed to process block request for writing synchronously"
                     })?;
                 }
             }
             VIRTIO_BLK_T_FLUSH => {
                 aiocb.opcode = IoCmd::Fdsync;
-                (*aio)
-                    .as_mut()
-                    .flush_sync(aiocb)
+                aio.flush_sync(aiocb)
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
                 let serial = serial_num.clone().unwrap_or_else(|| String::from(""));
                 let serial_vec = get_serial_num_config(&serial);
-                iov_from_buf_direct(&self.iovec, &serial_vec)?;
-                aiocb.iocompletecb.complete_request(VIRTIO_BLK_S_OK);
+                let status = iov_from_buf_direct(&self.iovec, &serial_vec).map_or_else(
+                    |e| {
+                        error!("Failed to process block request for getting id, {:?}", e);
+                        VIRTIO_BLK_S_IOERR
+                    },
+                    |_| VIRTIO_BLK_S_OK,
+                );
+                aiocb.iocompletecb.complete_request(status)?;
             }
-            _ => bail!(
-                "The type {} of block request is not supported",
-                self.out_header.request_type
-            ),
+            // The illegal request type has been handled in method new().
+            _ => {}
         };
         Ok(())
     }
@@ -529,7 +510,7 @@ impl BlockIoHandler {
                 );
                 // unlock queue, because it will be hold below.
                 drop(queue);
-                aiocompletecb.complete_request(status);
+                aiocompletecb.complete_request(status)?;
                 continue;
             }
             // Avoid bogus guest stuck IO thread.
@@ -555,21 +536,21 @@ impl BlockIoHandler {
                 self.driver_features,
             );
             if let Some(disk_img) = self.disk_image.as_ref() {
-                if let Err(ref e) = req_rc.execute(
-                    self.aio.as_mut().unwrap(),
-                    disk_img,
-                    &self.serial_num,
-                    self.direct,
-                    &self.aio_type,
-                    req_index == last_aio_req_index,
-                    aiocompletecb.clone(),
-                ) {
-                    error!("Failed to execute block request, {:?}", e);
-                    aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
-                }
+                let aiocb = AioCb {
+                    last_aio: req_index == last_aio_req_index,
+                    file_fd: disk_img.as_raw_fd(),
+                    opcode: IoCmd::Noop,
+                    iovec: Vec::new(),
+                    offset: (req_rc.out_header.sector << SECTOR_SHIFT) as usize,
+                    nbytes: 0,
+                    process: true,
+                    iocb: None,
+                    iocompletecb: aiocompletecb,
+                };
+                req_rc.execute(self, aiocb)?;
             } else {
                 warn!("Failed to execute block request, disk_img not specified");
-                aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR);
+                aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR)?;
             }
         }
 
@@ -639,31 +620,46 @@ impl BlockIoHandler {
         result
     }
 
-    fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
-        let complete_func = Arc::new(Box::new(move |aiocb: &AioCb<AioCompleteCb>, ret: i64| {
-            let mut status = if ret < 0 {
-                VIRTIO_BLK_S_IOERR
-            } else {
-                VIRTIO_BLK_S_OK
-            };
+    fn complete_func(aiocb: &AioCb<AioCompleteCb>, ret: i64) -> Result<()> {
+        let mut status = if ret < 0 {
+            VIRTIO_BLK_S_IOERR
+        } else {
+            VIRTIO_BLK_S_OK
+        };
 
-            let complete_cb = &aiocb.iocompletecb;
-            // When driver does not accept FLUSH feature, the device must be of
-            // writethrough cache type, so flush data before updating used ring.
-            if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
-                && aiocb.opcode == IoCmd::Pwritev
-                && ret >= 0
-            {
-                if let Err(ref e) = raw_datasync(aiocb.file_fd) {
-                    error!("Failed to flush data before send response to guest {:?}", e);
-                    status = VIRTIO_BLK_S_IOERR;
-                }
+        let complete_cb = &aiocb.iocompletecb;
+        // When driver does not accept FLUSH feature, the device must be of
+        // writethrough cache type, so flush data before updating used ring.
+        if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
+            && aiocb.opcode == IoCmd::Pwritev
+            && ret >= 0
+        {
+            if let Err(ref e) = raw_datasync(aiocb.file_fd) {
+                error!("Failed to flush data before send response to guest {:?}", e);
+                status = VIRTIO_BLK_S_IOERR;
             }
+        }
 
-            complete_cb.complete_request(status);
-        }) as AioCompleteFunc<AioCompleteCb>);
+        complete_cb.complete_request(status)
+    }
 
-        Ok(Box::new(Aio::new(complete_func, engine)?))
+    fn build_aio(&self, engine: Option<&String>) -> Result<Box<Aio<AioCompleteCb>>> {
+        Ok(Box::new(Aio::new(Arc::new(Self::complete_func), engine)?))
+    }
+
+    fn aio_complete_handler(&mut self) -> Result<bool> {
+        if let Some(aio) = self.aio.as_mut() {
+            let result = aio.handle();
+            if result.is_err() {
+                report_virtio_error(
+                    self.interrupt_cb.clone(),
+                    self.driver_features,
+                    Some(&self.deactivate_evt),
+                );
+            }
+            return result;
+        }
+        Ok(false)
     }
 
     fn update_evt_handler(&mut self) {
@@ -834,21 +830,20 @@ impl EventNotifierHelper for BlockIoHandler {
             let h_clone = handler.clone();
             let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
-
-                if let Some(aio) = &mut h_clone.lock().unwrap().aio {
-                    if let Err(ref e) = aio.handle() {
-                        error!("Failed to handle aio, {:?}", e);
-                    }
+                if let Err(ref e) = h_clone.lock().unwrap().aio_complete_handler() {
+                    error!("Failed to handle aio {:?}", e);
                 }
                 None
             });
 
             let h_clone = handler.clone();
             let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
-                let mut done = false;
-                if let Some(aio) = &mut h_clone.lock().unwrap().aio {
-                    done = aio.handle().with_context(|| "Failed to handle aio").ok()?;
-                }
+                let done = h_clone
+                    .lock()
+                    .unwrap()
+                    .aio_complete_handler()
+                    .with_context(|| "Failed to handle aio")
+                    .ok()?;
                 if done {
                     Some(Vec::new())
                 } else {
