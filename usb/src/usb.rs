@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::config::*;
@@ -601,35 +602,148 @@ fn write_mem(hva: u64, buf: &[u8]) {
 
 /// Transfer packet from host to device or from device to host.
 pub fn usb_packet_transfer(packet: &mut UsbPacket, vec: &mut [u8], len: usize) {
+    let len = min(vec.len(), len);
     let to_host = packet.pid as u8 & USB_TOKEN_IN == USB_TOKEN_IN;
-
+    let mut copyed = 0;
     if to_host {
-        let mut copyed = 0;
-        let mut offset = 0;
         for iov in &packet.iovecs {
-            let cnt = std::cmp::min(iov.iov_len, len - copyed);
-            let tmp = &vec[offset..(offset + cnt)];
+            let cnt = min(iov.iov_len, len - copyed);
+            let tmp = &vec[copyed..(copyed + cnt)];
             write_mem(iov.iov_base, tmp);
             copyed += cnt;
-            offset += cnt;
             if len - copyed == 0 {
                 break;
             }
         }
     } else {
-        let mut copyed = 0;
-        let mut offset = 0;
         for iov in &packet.iovecs {
-            let cnt = std::cmp::min(iov.iov_len, len - copyed);
-            let tmp = &mut vec[offset..(offset + cnt)];
+            let cnt = min(iov.iov_len, len - copyed);
+            let tmp = &mut vec[copyed..(copyed + cnt)];
             read_mem(iov.iov_base, tmp);
             copyed += cnt;
-            offset += cnt;
             if len - copyed == 0 {
                 break;
             }
         }
     }
+    packet.actual_length = copyed as u32;
+}
 
-    packet.actual_length += len as u32;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_usb_packet_transfer_in() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+        packet.iovecs.push(Iovec::new(hva + 4, 2));
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(buf, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_in_over() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 4);
+        assert_eq!(buf, [1, 2, 3, 4, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_in_under() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 2);
+        assert_eq!(packet.actual_length, 2);
+        assert_eq!(buf, [1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_in_over_buffer() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 10));
+
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 10);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(buf, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+        packet.iovecs.push(Iovec::new(hva + 4, 2));
+
+        let mut data = [0_u8; 10];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(data, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out_over() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+        packet.iovecs.push(Iovec::new(hva + 4, 2));
+
+        let mut data = [0_u8; 10];
+        usb_packet_transfer(&mut packet, &mut data, 10);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(data, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out_under() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+
+        let mut data = [0_u8; 10];
+        usb_packet_transfer(&mut packet, &mut data, 2);
+        assert_eq!(packet.actual_length, 2);
+        assert_eq!(data, [1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out_over_buffer() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 6));
+
+        let mut data = [0_u8; 2];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 2);
+        assert_eq!(data, [1, 2]);
+    }
 }
