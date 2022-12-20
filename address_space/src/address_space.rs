@@ -362,6 +362,28 @@ impl AddressSpace {
         })
     }
 
+    /// Return the host address according to the given `GuestAddress` from cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Guest address.
+    /// * `cache` - The related region cache.
+    pub fn get_host_address_from_cache(
+        &self,
+        addr: GuestAddress,
+        cache: &Option<RegionCache>,
+    ) -> Option<u64> {
+        if cache.is_none() {
+            return self.get_host_address(addr);
+        }
+        let region_cache = cache.unwrap();
+        if addr.0 >= region_cache.start && addr.0 < region_cache.end {
+            Some(region_cache.host_base + addr.0 - region_cache.start)
+        } else {
+            self.get_host_address(addr)
+        }
+    }
+
     /// Check if the GuestAddress is in one of Ram region.
     ///
     /// # Arguments

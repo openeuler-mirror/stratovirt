@@ -760,9 +760,10 @@ impl NetIoHandler {
             }
             let mut iovecs = Vec::new();
             for elem_iov in elem.in_iovec.iter() {
-                let host_addr = queue
-                    .vring
-                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                let host_addr = self
+                    .mem_space
+                    .get_host_address_from_cache(elem_iov.addr, queue.vring.get_cache())
+                    .unwrap_or(0);
                 if host_addr != 0 {
                     let iovec = libc::iovec {
                         iov_base: host_addr as *mut libc::c_void,
@@ -881,9 +882,10 @@ impl NetIoHandler {
             }
             let mut iovecs = Vec::new();
             for elem_iov in elem.out_iovec.iter() {
-                let host_addr = queue
-                    .vring
-                    .get_host_address_from_cache(elem_iov.addr, &self.mem_space);
+                let host_addr = self
+                    .mem_space
+                    .get_host_address_from_cache(elem_iov.addr, queue.vring.get_cache())
+                    .unwrap_or(0);
                 if host_addr != 0 {
                     let iovec = libc::iovec {
                         iov_base: host_addr as *mut libc::c_void,
