@@ -48,18 +48,6 @@ pub enum SetupState {
     Parameter,
 }
 
-/// USB device state.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum UsbDeviceState {
-    Removed,
-    Attached,
-    Powered,
-    Default,
-    Address,
-    Configured,
-    Suspended,
-}
-
 /// USB request used to transfer to USB device.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -202,7 +190,6 @@ pub struct UsbDevice {
     pub speed_mask: u32,
     pub addr: u8,
     pub product_desc: String,
-    pub state: UsbDeviceState,
     pub data_buf: Vec<u8>,
     pub remote_wakeup: u32,
     pub ep_ctl: Arc<Mutex<UsbEndpoint>>,
@@ -241,7 +228,6 @@ impl UsbDevice {
             ninterfaces: 0,
             config: None,
             altsetting: vec![0; USB_MAX_INTERFACES as usize],
-            state: UsbDeviceState::Removed,
             data_buf: vec![0_u8; 4096],
             ifaces: vec![None; USB_MAX_INTERFACES as usize],
             remote_wakeup: 0,
@@ -413,7 +399,6 @@ pub trait UsbDeviceOps: Send + Sync {
     /// Handle the attach ops when attach device to controller.
     fn handle_attach(&mut self) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
-        usb_dev.state = UsbDeviceState::Attached;
         usb_dev.set_default_descriptor()?;
         Ok(())
     }

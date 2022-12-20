@@ -28,8 +28,7 @@ use crate::{
     },
     usb::{
         usb_endpoint_init, UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
-        UsbDescOther, UsbDevice, UsbDeviceOps, UsbDeviceState, UsbEndpoint, UsbPacket,
-        UsbPacketStatus,
+        UsbDescOther, UsbDevice, UsbDeviceOps, UsbEndpoint, UsbPacket, UsbPacketStatus,
     },
     xhci::xhci_controller::XhciDevice,
 };
@@ -178,7 +177,6 @@ impl UsbDeviceOps for UsbTablet {
         info!("Tablet device reset");
         self.usb_device.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
         self.usb_device.addr = 0;
-        self.usb_device.state = UsbDeviceState::Default;
         self.hid.reset();
     }
 
