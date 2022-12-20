@@ -12,7 +12,7 @@
 
 use crate::xhci::xhci_controller::dma_write_bytes;
 use crate::xhci::xhci_ring::XhciTRB;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 
 use address_space::{AddressSpace, GuestAddress, RegionOps};
 use byteorder::{ByteOrder, LittleEndian};
@@ -20,8 +20,7 @@ use log::{debug, error};
 use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
 use crate::config::*;
-use crate::usb::UsbPort;
-use crate::xhci::xhci_controller::{XhciDevice, XhciEvent};
+use crate::xhci::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
 use crate::xhci::xhci_ring::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
 use anyhow::Result;
 
@@ -226,42 +225,6 @@ impl XhciInterrupter {
         LittleEndian::write_u32(&mut buf[12..], trb.control);
         dma_write_bytes(&self.mem, GuestAddress(addr), &buf, TRB_SIZE as u64)?;
         Ok(())
-    }
-}
-
-/// XHCI port used to notify device.
-pub struct XhciPort {
-    xhci: Weak<Mutex<XhciDevice>>,
-    /// Port Status and Control
-    pub portsc: u32,
-    /// Port ID
-    pub port_idx: u8,
-    pub usb_port: Option<Arc<Mutex<UsbPort>>>,
-    pub speed_mask: u32,
-    pub name: String,
-}
-
-impl XhciPort {
-    pub fn new(xhci: &Weak<Mutex<XhciDevice>>, name: String, i: u8) -> Self {
-        Self {
-            xhci: xhci.clone(),
-            portsc: 0,
-            port_idx: i,
-            speed_mask: 0,
-            usb_port: None,
-            name,
-        }
-    }
-
-    /// Get port link state from port status and control register.
-    pub fn get_port_link_state(&self) -> u32 {
-        self.portsc >> PORTSC_PLS_SHIFT & PORTSC_PLS_MASK
-    }
-
-    /// Set port link state in port status and control register.
-    pub fn set_port_link_state(&mut self, pls: u32) {
-        self.portsc &= !(PORTSC_PLS_MASK << PORTSC_PLS_SHIFT);
-        self.portsc |= (pls & PORTSC_PLS_MASK) << PORTSC_PLS_SHIFT;
     }
 }
 
@@ -621,7 +584,7 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
 }
 
 /// Build port region ops.
-pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
+pub fn build_port_ops(xhci_port: &Arc<Mutex<UsbPort>>) -> RegionOps {
     let port = xhci_port.clone();
     let port_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
         debug!("port read {:x} {:x}", addr.0, offset);
@@ -670,7 +633,7 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<XhciPort>>) -> RegionOps {
     }
 }
 
-fn xhci_portsc_write(port: &Arc<Mutex<XhciPort>>, value: u32) -> Result<()> {
+fn xhci_portsc_write(port: &Arc<Mutex<UsbPort>>, value: u32) -> Result<()> {
     let locked_port = port.lock().unwrap();
     let xhci = locked_port.xhci.upgrade().unwrap();
     drop(locked_port);
@@ -709,7 +672,7 @@ fn xhci_portsc_write(port: &Arc<Mutex<XhciPort>>, value: u32) -> Result<()> {
     Ok(())
 }
 
-fn xhci_portsc_ls_write(port: &mut XhciPort, old_pls: u32, new_pls: u32) -> u32 {
+fn xhci_portsc_ls_write(port: &mut UsbPort, old_pls: u32, new_pls: u32) -> u32 {
     match new_pls {
         PLS_U0 => {
             if old_pls != PLS_U0 {

@@ -111,9 +111,9 @@ impl XhciPciDevice {
             || "Failed to register oper region.",
         )?;
 
-        let port_num = self.xhci.lock().unwrap().ports.len();
+        let port_num = self.xhci.lock().unwrap().usb_ports.len();
         for i in 0..port_num {
-            let port = &self.xhci.lock().unwrap().ports[i];
+            let port = &self.xhci.lock().unwrap().usb_ports[i];
             let port_region =
                 Region::init_io_region(XHCI_PCI_PORT_LENGTH as u64, build_port_ops(port));
             let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i as u32) as u64;
@@ -294,17 +294,11 @@ impl BusDeviceOps for XhciPciDevice {
         } else {
             bail!("No available USB port.");
         };
-        let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
-            xhci_port
-        } else {
-            bail!("No xhci port found");
-        };
-
-        locked_xhci.port_update(&xhci_port)?;
+        locked_xhci.port_update(&usb_port)?;
         let mut locked_dev = dev.lock().unwrap();
         debug!(
-            "Attach usb device: xhci port name {} device id {}",
-            xhci_port.lock().unwrap().name,
+            "Attach usb device: xhci port id {} device id {}",
+            usb_port.lock().unwrap().port_id,
             locked_dev.device_id()
         );
         locked_dev.handle_attach()?;
