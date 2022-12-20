@@ -228,8 +228,7 @@ impl UsbDeviceOps for UsbTablet {
         self.ctrl.clone()
     }
 
-    fn get_wakeup_endpoint(&self) -> Option<Weak<Mutex<UsbEndpoint>>> {
-        let ep = self.usb_device.get_endpoint(true, 1);
-        Some(Arc::downgrade(&ep))
+    fn get_wakeup_endpoint(&self) -> Arc<Mutex<UsbEndpoint>> {
+        self.usb_device.get_endpoint(true, 1)
     }
 }
