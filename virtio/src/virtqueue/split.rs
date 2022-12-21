@@ -13,6 +13,7 @@
 use std::cmp::min;
 use std::mem::size_of;
 use std::num::Wrapping;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::Arc;
 
@@ -79,11 +80,11 @@ pub struct QueueConfig {
     /// Interrupt vector index of the queue for msix
     pub vector: u16,
     /// The next index which can be popped in the available vring.
-    next_avail: u16,
+    next_avail: Wrapping<u16>,
     /// The next index which can be pushed in the used vring.
-    next_used: u16,
+    next_used: Wrapping<u16>,
     /// The index of last descriptor used which has triggered interrupt.
-    last_signal_used: u16,
+    last_signal_used: Wrapping<u16>,
 }
 
 impl QueueConfig {
@@ -104,9 +105,9 @@ impl QueueConfig {
             size: max_size,
             ready: false,
             vector: INVALID_VECTOR_NUM,
-            next_avail: 0,
-            next_used: 0,
-            last_signal_used: 0,
+            next_avail: Wrapping(0),
+            next_used: Wrapping(0),
+            last_signal_used: Wrapping(0),
         }
     }
 
@@ -375,41 +376,21 @@ impl ByteCode for SplitVringDesc {}
 pub struct SplitVring {
     /// Region cache information.
     cache: Option<RegionCache>,
-    /// Guest physical address of the descriptor table.
-    /// The table is composed of descriptors(SplitVringDesc).
-    desc_table: GuestAddress,
+    /// The configuration of virtqueue.
+    queue_config: QueueConfig,
+}
 
-    /// Guest physical address of the available ring.
-    /// The ring is composed of flags(u16), idx(u16), ring[size](u16) and used_event(u16).
-    avail_ring: GuestAddress,
+impl Deref for SplitVring {
+    type Target = QueueConfig;
+    fn deref(&self) -> &Self::Target {
+        &self.queue_config
+    }
+}
 
-    /// Guest physical address of the used ring.
-    /// The ring is composed of flags(u16), idx(u16), used_ring[size](UsedElem) and avail_event(u16).
-    used_ring: GuestAddress,
-
-    /// Host address cache.
-    addr_cache: VirtioAddrCache,
-
-    /// Indicate whether the queue configuration is finished.
-    ready: bool,
-
-    /// The maximal size in elements offered by the device.
-    max_size: u16,
-
-    /// The queue size set by frontend.
-    size: u16,
-
-    /// Interrupt vector index of the queue for msix
-    vector: u16,
-
-    /// The next index which can be popped in the available vring.
-    next_avail: Wrapping<u16>,
-
-    /// The next index which can be pushed in the used vring.
-    next_used: Wrapping<u16>,
-
-    /// The index of last descriptor used which has triggered interrupt.
-    last_signal_used: Wrapping<u16>,
+impl DerefMut for SplitVring {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.queue_config
+    }
 }
 
 impl SplitVring {
@@ -421,17 +402,7 @@ impl SplitVring {
     pub fn new(queue_config: QueueConfig) -> Self {
         SplitVring {
             cache: None,
-            desc_table: queue_config.desc_table,
-            avail_ring: queue_config.avail_ring,
-            used_ring: queue_config.used_ring,
-            addr_cache: queue_config.addr_cache,
-            ready: queue_config.ready,
-            max_size: queue_config.max_size,
-            size: queue_config.size,
-            vector: queue_config.vector,
-            next_avail: Wrapping(queue_config.next_avail),
-            next_used: Wrapping(queue_config.next_used),
-            last_signal_used: Wrapping(queue_config.last_signal_used),
+            queue_config,
         }
     }
 
@@ -856,19 +827,7 @@ impl VringOps for SplitVring {
     }
 
     fn get_queue_config(&self) -> QueueConfig {
-        QueueConfig {
-            desc_table: self.desc_table,
-            avail_ring: self.avail_ring,
-            used_ring: self.used_ring,
-            addr_cache: self.addr_cache,
-            ready: self.ready,
-            max_size: self.max_size,
-            size: self.size,
-            vector: self.vector,
-            next_avail: self.next_avail.0,
-            next_used: self.next_used.0,
-            last_signal_used: self.last_signal_used.0,
-        }
+        self.queue_config
     }
 
     /// The number of descriptor chains in the available ring.
