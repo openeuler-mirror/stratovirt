@@ -1547,6 +1547,9 @@ fn virtio_pci_register_irqfd(
         }
 
         let vector = queue_mutex.lock().unwrap().vring.get_queue_config().vector;
+        if vector == INVALID_VECTOR_NUM {
+            continue;
+        }
         let entry = locked_msix.get_message(vector as u16);
         let msix_vector = MsiVector {
             msg_addr_lo: entry.address_lo,
