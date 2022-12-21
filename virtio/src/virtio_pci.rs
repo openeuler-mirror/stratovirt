@@ -868,6 +868,7 @@ impl VirtioPciDevice {
                     error!("Failed to activate device: No interrupt callback");
                     return false;
                 }
+                drop(locked_queues);
                 cloned_pci_device
                     .device_activated
                     .store(true, Ordering::Release);
@@ -878,7 +879,6 @@ impl VirtioPciDevice {
                     &cloned_pci_device.dev_id,
                 );
 
-                drop(locked_queues);
                 if cloned_pci_device.need_irqfd
                     && !virtio_pci_register_irqfd(
                         &cloned_pci_device,
@@ -902,8 +902,7 @@ impl VirtioPciDevice {
                     virtio_pci_unregister_irqfd(cloned_gsi_routes.clone());
                 }
 
-                let mut locked_queues = cloned_pci_device.queues.lock().unwrap();
-                locked_queues.clear();
+                cloned_pci_device.queues.lock().unwrap().clear();
                 if cloned_pci_device.device_activated.load(Ordering::Acquire) {
                     cloned_pci_device
                         .device_activated
