@@ -85,6 +85,8 @@ pub struct QueueConfig {
     next_used: Wrapping<u16>,
     /// The index of last descriptor used which has triggered interrupt.
     last_signal_used: Wrapping<u16>,
+    /// The last_signal_used is valid or not.
+    signal_used_valid: bool,
 }
 
 impl QueueConfig {
@@ -108,6 +110,7 @@ impl QueueConfig {
             next_avail: Wrapping(0),
             next_used: Wrapping(0),
             last_signal_used: Wrapping(0),
+            signal_used_valid: false,
         }
     }
 
@@ -558,8 +561,10 @@ impl SplitVring {
             }
         };
 
+        let valid = self.signal_used_valid;
+        self.signal_used_valid = true;
         self.last_signal_used = new;
-        (new - used_event_idx - Wrapping(1)) < (new - old)
+        !valid || (new - used_event_idx - Wrapping(1)) < (new - old)
     }
 
     fn is_overlap(
@@ -782,21 +787,23 @@ impl VringOps for SplitVring {
         sys_mem
             .write_object_direct::<UsedElem>(&used_elem, used_elem_addr)
             .with_context(|| "Failed to write object for used element")?;
-
-        self.next_used += Wrapping(1);
-
+        // Make sure used element is filled before updating used idx.
         fence(Ordering::Release);
 
+        self.next_used += Wrapping(1);
         sys_mem
             .write_object_direct(
                 &(self.next_used.0 as u16),
                 self.addr_cache.used_ring_host + VRING_IDX_POSITION,
             )
             .with_context(|| "Failed to write next used idx")?;
-
         // Make sure used index is exposed before notifying guest.
         fence(Ordering::SeqCst);
 
+        // Do we wrap around?
+        if self.next_used == self.last_signal_used {
+            self.signal_used_valid = false;
+        }
         Ok(())
     }
 
@@ -827,7 +834,9 @@ impl VringOps for SplitVring {
     }
 
     fn get_queue_config(&self) -> QueueConfig {
-        self.queue_config
+        let mut config = self.queue_config;
+        config.signal_used_valid = false;
+        config
     }
 
     /// The number of descriptor chains in the available ring.
