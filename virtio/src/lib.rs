@@ -325,8 +325,7 @@ pub trait VirtioDevice: Send {
     /// # Arguments
     ///
     /// * `mem_space` - System mem.
-    /// * `interrupt_evt` - The eventfd used to send interrupt to guest.
-    /// * `interrupt_status` - The interrupt status present to guest.
+    /// * `interrupt_cb` - The callback used to send interrupt to guest.
     /// * `queues` - The virtio queues.
     /// * `queue_evts` - The notifier events from guest.
     fn activate(
