@@ -852,6 +852,7 @@ impl VirtioPciDevice {
                             .set_guest_notifiers(&call_evts.events)
                         {
                             error!("Failed to set guest notifiers, error is {:?}", e);
+                            return false;
                         }
                     }
                     if let Err(e) = cloned_pci_device.device.lock().unwrap().activate(
@@ -861,6 +862,7 @@ impl VirtioPciDevice {
                         queue_evts,
                     ) {
                         error!("Failed to activate device, error is {:?}", e);
+                        return false;
                     }
                 } else {
                     error!("Failed to activate device: No interrupt callback");
@@ -910,6 +912,7 @@ impl VirtioPciDevice {
                     cloned_msix.lock().unwrap().reset();
                     if let Err(e) = cloned_pci_device.device.lock().unwrap().deactivate() {
                         error!("Failed to deactivate virtio device, error is {:?}", e);
+                        return false;
                     }
                 }
                 update_dev_id(
