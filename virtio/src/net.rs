@@ -1116,8 +1116,14 @@ impl EventNotifierHelper for NetIoHandler {
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(ref e) = cloned_net_io.lock().unwrap().handle_tx() {
+            let mut locked_net_io = cloned_net_io.lock().unwrap();
+            if let Err(ref e) = locked_net_io.handle_tx() {
                 error!("Failed to handle tx(tx event) for net, {:?}", e);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    Some(&locked_net_io.deactivate_evt),
+                );
             }
             None
         });
@@ -1141,6 +1147,7 @@ impl EventNotifierHelper for NetIoHandler {
                         locked_net_io.driver_features,
                         Some(&locked_net_io.deactivate_evt),
                     );
+                    return None;
                 }
 
                 if let Some(tap) = locked_net_io.tap.as_ref() {
