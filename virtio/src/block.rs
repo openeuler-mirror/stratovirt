@@ -30,7 +30,7 @@ use super::{
     VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
-use crate::{NotifyEventFds, VirtioError};
+use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -957,9 +957,9 @@ pub struct Block {
     /// The sending half of Rust's channel to send the image file.
     senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
-    update_evt: EventFd,
+    update_evts: Vec<EventFd>,
     /// Eventfd for device deactivate.
-    deactivate_evts: NotifyEventFds,
+    deactivate_evts: Vec<EventFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
     /// Drive backend files.
@@ -975,8 +975,8 @@ impl Default for Block {
             state: BlockState::default(),
             interrupt_cb: None,
             senders: None,
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evts: NotifyEventFds::new(1),
+            update_evts: Vec::new(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             drive_files: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -995,8 +995,8 @@ impl Block {
             state: BlockState::default(),
             interrupt_cb: None,
             senders: None,
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evts: NotifyEventFds::new(0),
+            update_evts: Vec::new(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             drive_files,
         }
@@ -1138,13 +1138,13 @@ impl VirtioDevice for Block {
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
         let mut senders = Vec::new();
-        self.deactivate_evts.events.clear();
 
         for queue in queues.iter() {
             let (sender, receiver) = channel();
             senders.push(sender);
 
-            let eventfd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+            let update_evt = EventFd::new(libc::EFD_NONBLOCK)?;
+            let deactivate_evt = EventFd::new(libc::EFD_NONBLOCK)?;
             let engine = self.blk_cfg.aio.as_ref();
             let handler = BlockIoHandler {
                 queue: queue.clone(),
@@ -1158,19 +1158,20 @@ impl VirtioDevice for Block {
                 aio: Box::new(Aio::new(Arc::new(BlockIoHandler::complete_func), engine)?),
                 driver_features: self.state.driver_features,
                 receiver,
-                update_evt: self.update_evt.try_clone().unwrap(),
-                deactivate_evt: eventfd.try_clone().unwrap(),
+                update_evt: update_evt.try_clone()?,
+                deactivate_evt: deactivate_evt.try_clone()?,
                 device_broken: self.broken.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 iothread: self.blk_cfg.iothread.clone(),
                 leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
             };
-            self.deactivate_evts.events.push(eventfd);
 
             EventLoop::update_event(
                 EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
                 self.blk_cfg.iothread.as_ref(),
             )?;
+            self.update_evts.push(update_evt);
+            self.deactivate_evts.push(deactivate_evt);
         }
 
         self.senders = Some(senders);
@@ -1180,10 +1181,12 @@ impl VirtioDevice for Block {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        for evt in &self.deactivate_evts.events {
+        for evt in &self.deactivate_evts {
             evt.write(1)
                 .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
         }
+        self.deactivate_evts.clear();
+        self.update_evts.clear();
         Ok(())
     }
 
@@ -1215,9 +1218,11 @@ impl VirtioDevice for Block {
                     .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
             }
 
-            self.update_evt
-                .write(1)
-                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+            for update_evt in &self.update_evts {
+                update_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+            }
         }
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
