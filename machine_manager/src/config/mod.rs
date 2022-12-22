@@ -29,6 +29,7 @@ pub use sasl_auth::*;
 pub use scsi::*;
 pub use tls_creds::*;
 pub use usb::*;
+use util::AsAny;
 pub use vfio::*;
 pub use vnc::*;
 
@@ -55,8 +56,8 @@ mod vfio;
 pub mod vnc;
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::str::FromStr;
-use std::{any::Any, fs::File};
 
 use serde::{Deserialize, Serialize};
 
@@ -329,17 +330,6 @@ impl VmConfig {
 impl device_tree::CompileFDT for VmConfig {
     fn generate_fdt_node(&self, _fdt: &mut FdtBuilder) -> util::Result<()> {
         Ok(())
-    }
-}
-
-/// This trait is to cast trait object to struct.
-pub trait AsAny {
-    fn as_any(&self) -> &dyn Any;
-}
-
-impl<T: Any> AsAny for T {
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

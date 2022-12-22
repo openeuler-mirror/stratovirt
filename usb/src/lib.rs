@@ -14,7 +14,6 @@ pub mod error;
 pub use anyhow::Result;
 pub use error::UsbError;
 
-pub mod bus;
 pub mod config;
 mod descriptor;
 pub mod hid;
