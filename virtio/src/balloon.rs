@@ -12,7 +12,7 @@
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{
     cmp::{self, Reverse},
@@ -515,6 +515,8 @@ struct BalloonIoHandler {
     report_evt: Option<EventFd>,
     /// EventFd for device deactivate
     deactivate_evt: EventFd,
+    /// Device is broken or not.
+    device_broken: Arc<AtomicBool>,
     /// The interrupt call back function.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Balloon Memory information.
@@ -687,12 +689,15 @@ impl EventNotifierHelper for BalloonIoHandler {
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+            if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
             if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_INFLATE_EVENT) {
                 error!("Failed to inflate balloon: {:?}", e);
                 report_virtio_error(
                     locked_balloon_io.interrupt_cb.clone(),
                     locked_balloon_io.driver_features,
-                    Some(&locked_balloon_io.deactivate_evt),
+                    &locked_balloon_io.device_broken,
                 );
             };
             None
@@ -707,12 +712,15 @@ impl EventNotifierHelper for BalloonIoHandler {
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+            if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
             if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_DEFLATE_EVENT) {
                 error!("Failed to deflate balloon: {:?}", e);
                 report_virtio_error(
                     locked_balloon_io.interrupt_cb.clone(),
                     locked_balloon_io.driver_features,
-                    Some(&locked_balloon_io.deactivate_evt),
+                    &locked_balloon_io.device_broken,
                 );
             };
             None
@@ -728,12 +736,15 @@ impl EventNotifierHelper for BalloonIoHandler {
             let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
+                if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
+                    return None;
+                }
                 if let Err(e) = locked_balloon_io.reporting_evt_handler() {
                     error!("Failed to report free pages: {:?}", e);
                     report_virtio_error(
                         locked_balloon_io.interrupt_cb.clone(),
                         locked_balloon_io.driver_features,
-                        Some(&locked_balloon_io.deactivate_evt),
+                        &locked_balloon_io.device_broken,
                     );
                 }
                 None
@@ -756,10 +767,11 @@ impl EventNotifierHelper for BalloonIoHandler {
         let cloned_balloon_io = balloon_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            cloned_balloon_io
-                .lock()
-                .unwrap()
-                .send_balloon_changed_event();
+            let locked_balloon_io = cloned_balloon_io.lock().unwrap();
+            if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            locked_balloon_io.send_balloon_changed_event();
             None
         });
         notifiers.push(build_event_notifier(
@@ -796,6 +808,8 @@ pub struct Balloon {
     event_timer: Arc<Mutex<TimerFd>>,
     /// EventFd for device deactivate.
     deactivate_evt: EventFd,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Balloon {
@@ -823,6 +837,7 @@ impl Balloon {
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1056,6 +1071,7 @@ impl VirtioDevice for Balloon {
             report_queue,
             report_evt,
             deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
+            device_broken: self.broken.clone(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
@@ -1067,6 +1083,7 @@ impl VirtioDevice for Balloon {
             None,
         )
         .with_context(|| "Failed to register balloon event notifier to MainLoop")?;
+        self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
@@ -1341,6 +1358,7 @@ mod tests {
             report_queue: None,
             report_evt: None,
             deactivate_evt: event_deactivate.try_clone().unwrap(),
+            device_broken: bln.broken.clone(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),

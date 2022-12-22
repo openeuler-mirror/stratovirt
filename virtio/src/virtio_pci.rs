@@ -40,8 +40,8 @@ use util::offset_of;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    report_virtio_error, virtio_has_feature, NotifyEventFds, Queue, QueueConfig, VirtioDevice,
-    VirtioInterrupt, VirtioInterruptType,
+    virtio_has_feature, NotifyEventFds, Queue, QueueConfig, VirtioDevice, VirtioInterrupt,
+    VirtioInterruptType,
 };
 use crate::{
     CONFIG_STATUS_ACKNOWLEDGE, CONFIG_STATUS_DRIVER, CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_FAILED,
@@ -855,34 +855,16 @@ impl VirtioPciDevice {
                 return false;
             }
 
-            // In report_virtio_error(), it will lock cloned_pci_device.common_config.
-            // So, avoid deadlock by getting the returned value firstly.
-            let err = cloned_pci_device
+            if let Err(e) = cloned_pci_device
                 .common_config
                 .lock()
                 .unwrap()
-                .write_common_config(&cloned_pci_device, offset, value);
-            if let Err(e) = err {
+                .write_common_config(&cloned_pci_device, offset, value)
+            {
                 error!(
                     "Failed to write common config of virtio-pci device, error is {:?}",
                     e,
                 );
-                if let Some(cb) = cloned_pci_device.interrupt_cb.clone() {
-                    if let Some(PciError::QueueEnable(_)) = e.downcast_ref::<PciError>() {
-                        let features = (cloned_pci_device
-                            .device
-                            .lock()
-                            .unwrap()
-                            .get_driver_features(1) as u64)
-                            << 32;
-                        report_virtio_error(cb, features, None);
-                        if let Err(e) = cloned_pci_device.device.lock().unwrap().deactivate() {
-                            error!("Failed to deactivate virtio device, error is {:?}", e);
-                        }
-                    }
-                } else {
-                    error!("Failed to get interrupt callback");
-                }
                 return false;
             }
             true

@@ -13,6 +13,7 @@
 use std::cmp;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::error::VirtioError;
@@ -95,6 +96,8 @@ pub struct Net {
     mem_space: Arc<AddressSpace>,
     /// EventFd for device deactivate.
     deactivate_evt: EventFd,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Net {
@@ -109,6 +112,7 @@ impl Net {
             device_config: VirtioNetConfig::default(),
             mem_space: mem_space.clone(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -264,6 +268,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.driver_features,
                 deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
+                device_broken: self.broken.clone(),
             };
 
             EventLoop::update_event(
@@ -361,6 +366,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 host_notifies,
                 deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
+                device_broken: self.broken.clone(),
             };
 
             EventLoop::update_event(
@@ -368,6 +374,8 @@ impl VirtioDevice for Net {
                 None,
             )?;
         }
+        self.broken.store(false, Ordering::SeqCst);
+
         Ok(())
     }
 

@@ -13,6 +13,7 @@
 use crate::virtio_has_feature;
 use std::cmp;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -58,6 +59,8 @@ pub struct Net {
     call_events: Vec<EventFd>,
     /// EventFd for deactivate control Queue.
     de_ctrl_evt: EventFd,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Net {
@@ -71,6 +74,7 @@ impl Net {
             client: None,
             call_events: Vec::<EventFd>::new(),
             de_ctrl_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -247,6 +251,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.driver_features,
                 deactivate_evt: self.de_ctrl_evt.try_clone().unwrap(),
+                device_broken: self.broken.clone(),
             };
 
             EventLoop::update_event(
@@ -265,6 +270,7 @@ impl VirtioDevice for Net {
         client.set_queues(queues);
         client.set_queue_evts(&queue_evts);
         client.activate_vhost_user()?;
+        self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
