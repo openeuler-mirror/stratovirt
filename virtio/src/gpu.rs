@@ -45,8 +45,8 @@ use util::pixman::{
 use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 use vnc::console::{
-    console_init, display_cursor_define, display_graphic_update, display_replace_surface,
-    DisplayMouse, DisplaySurface, HardWareOperations,
+    console_close, console_init, display_cursor_define, display_graphic_update,
+    display_replace_surface, DisplayMouse, DisplaySurface, HardWareOperations,
 };
 
 /// Number of virtqueues.
@@ -1591,7 +1591,12 @@ impl EventNotifierHelper for GpuIoHandler {
         let gpu_handler_clone = gpu_handler.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            Some(gpu_handler_clone.lock().unwrap().deactivate_evt_handler())
+            // Deactivate console.
+            let mut locked_handler = gpu_handler_clone.lock().unwrap();
+            for scanout in &locked_handler.scanouts {
+                console_close(scanout.con_id);
+            }
+            Some(locked_handler.deactivate_evt_handler())
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
