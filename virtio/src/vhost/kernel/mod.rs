@@ -19,6 +19,7 @@ pub use vsock::{Vsock, VsockState};
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::{
@@ -458,6 +459,7 @@ pub struct VhostIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     host_notifies: Vec<VhostNotify>,
     deactivate_evt: EventFd,
+    device_broken: Arc<AtomicBool>,
 }
 
 impl VhostIoHandler {
@@ -495,6 +497,9 @@ impl EventNotifierHelper for VhostIoHandler {
                 read_fd(fd);
 
                 let locked_vhost_handler = vhost.lock().unwrap();
+                if locked_vhost_handler.device_broken.load(Ordering::SeqCst) {
+                    return None;
+                }
 
                 for host_notify in locked_vhost_handler.host_notifies.iter() {
                     if let Err(e) = (locked_vhost_handler.interrupt_cb)(

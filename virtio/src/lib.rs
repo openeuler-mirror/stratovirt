@@ -59,6 +59,7 @@ pub use virtio_pci::VirtioPciDevice;
 pub use virtqueue::*;
 
 use std::cmp;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -400,7 +401,7 @@ pub trait VirtioTrace {
 pub fn report_virtio_error(
     interrupt_cb: Arc<VirtioInterrupt>,
     features: u64,
-    deactivate_evt: Option<&EventFd>,
+    broken: &Arc<AtomicBool>,
 ) {
     if virtio_has_feature(features, VIRTIO_F_VERSION_1) {
         interrupt_cb(&VirtioInterruptType::Config, None, true).unwrap_or_else(|e| {
@@ -410,12 +411,8 @@ pub fn report_virtio_error(
             )
         });
     }
-    // The queue should not work when meeting virtio error.
-    // So, using deactivate evt to disable the queue.
-    if let Some(evt) = deactivate_evt {
-        evt.write(1)
-            .unwrap_or_else(|e| error!("Failed to deactivate event, error is {}", e));
-    }
+    // The device should not work when meeting virtio error.
+    broken.store(true, Ordering::SeqCst);
 }
 
 /// Read iovec to buf and return the readed number of bytes.

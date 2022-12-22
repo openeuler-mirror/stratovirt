@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -102,6 +103,8 @@ pub struct Vsock {
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// EventFd for device deactivate.
     deactivate_evt: EventFd,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl Vsock {
@@ -114,6 +117,7 @@ impl Vsock {
             event_queue: None,
             interrupt_cb: None,
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -315,12 +319,14 @@ impl VirtioDevice for Vsock {
             interrupt_cb,
             host_notifies,
             deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
+            device_broken: self.broken.clone(),
         };
 
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
         )?;
+        self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
