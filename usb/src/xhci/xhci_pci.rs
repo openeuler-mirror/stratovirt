@@ -24,7 +24,6 @@ use pci::config::{
 use pci::msix::update_dev_id;
 use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
 
-use crate::bus::{BusDeviceMap, BusDeviceOps};
 use crate::usb::UsbDeviceOps;
 use crate::xhci::xhci_controller::{XhciDevice, XhciOps, MAX_INTRS, MAX_SLOTS};
 use crate::xhci::xhci_regs::{
@@ -70,7 +69,6 @@ pub struct XhciPciDevice {
     name: String,
     parent_bus: Weak<Mutex<PciBus>>,
     mem_region: Region,
-    bus_device: BusDeviceMap,
 }
 
 impl XhciPciDevice {
@@ -79,7 +77,6 @@ impl XhciPciDevice {
         devfn: u8,
         parent_bus: Weak<Mutex<PciBus>>,
         mem_space: &Arc<AddressSpace>,
-        bus_device: BusDeviceMap,
     ) -> Self {
         Self {
             pci_config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
@@ -89,7 +86,6 @@ impl XhciPciDevice {
             name: config.id.to_string(),
             parent_bus,
             mem_region: Region::init_container_region(XHCI_PCI_CONFIG_LENGTH as u64),
-            bus_device,
         }
     }
 
@@ -142,6 +138,25 @@ impl XhciPciDevice {
                 .add_subregion(doorbell_region, XHCI_PCI_DOORBELL_OFFSET as u64),
             || "Failed to register doorbell region.",
         )?;
+        Ok(())
+    }
+
+    pub fn attach_device(&self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
+        let mut locked_xhci = self.xhci.lock().unwrap();
+        let usb_port = if let Some(usb_port) = locked_xhci.assign_usb_port(dev) {
+            usb_port
+        } else {
+            bail!("No available USB port.");
+        };
+        locked_xhci.port_update(&usb_port)?;
+        let mut locked_dev = dev.lock().unwrap();
+        debug!(
+            "Attach usb device: xhci port id {} device id {}",
+            usb_port.lock().unwrap().port_id,
+            locked_dev.device_id()
+        );
+        locked_dev.handle_attach()?;
+        locked_dev.set_controller(Arc::downgrade(&self.xhci));
         Ok(())
     }
 }
@@ -207,7 +222,6 @@ impl PciDevOps for XhciPciDevice {
 
         let devfn = self.devfn;
         let dev = Arc::new(Mutex::new(self));
-        let cloned_dev = dev.clone();
         // Register xhci-pci to xhci-device for notify.
         dev.lock().unwrap().xhci.lock().unwrap().ctrl_ops =
             Some(Arc::downgrade(&dev) as Weak<Mutex<dyn XhciOps>>);
@@ -216,7 +230,7 @@ impl PciDevOps for XhciPciDevice {
         let mut locked_pci_bus = pci_bus.lock().unwrap();
         let pci_device = locked_pci_bus.devices.get(&devfn);
         if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev.clone());
+            locked_pci_bus.devices.insert(devfn, dev);
         } else {
             bail!(
                 "Devfn {:?} has been used by {:?}",
@@ -224,10 +238,6 @@ impl PciDevOps for XhciPciDevice {
                 pci_device.unwrap().lock().unwrap().name()
             );
         }
-        // Register xhci to bus device.
-        let locked_dev = dev.lock().unwrap();
-        let mut locked_device = locked_dev.bus_device.lock().unwrap();
-        locked_device.insert(String::from("usb.0"), cloned_dev);
         Ok(())
     }
 
@@ -284,29 +294,4 @@ impl XhciOps for XhciPciDevice {
     }
 
     fn update_intr(&mut self, _n: u32, _enable: bool) {}
-}
-
-impl BusDeviceOps for XhciPciDevice {
-    fn attach_device(&mut self, dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
-        let mut locked_xhci = self.xhci.lock().unwrap();
-        let usb_port = if let Some(usb_port) = locked_xhci.assign_usb_port(dev) {
-            usb_port
-        } else {
-            bail!("No available USB port.");
-        };
-        locked_xhci.port_update(&usb_port)?;
-        let mut locked_dev = dev.lock().unwrap();
-        debug!(
-            "Attach usb device: xhci port id {} device id {}",
-            usb_port.lock().unwrap().port_id,
-            locked_dev.device_id()
-        );
-        locked_dev.handle_attach()?;
-        locked_dev.set_controller(Arc::downgrade(&self.xhci));
-        Ok(())
-    }
-
-    fn detach_device(&mut self, _dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
-        bail!("Detach usb device not implemented");
-    }
 }

@@ -24,6 +24,7 @@ pub use bus::PciBus;
 pub use host::PciHost;
 pub use msix::init_msix;
 pub use root_port::RootPort;
+use util::AsAny;
 
 use std::{
     mem::size_of,
@@ -118,7 +119,7 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
     ((header >> 20) & 0xffc) as usize
 }
 
-pub trait PciDevOps: Send {
+pub trait PciDevOps: Send + AsAny {
     /// Init writable bit mask.
     fn init_write_mask(&mut self) -> Result<()>;
 
