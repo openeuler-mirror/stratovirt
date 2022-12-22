@@ -38,7 +38,7 @@ use crate::{
     iov_discard_front, iov_to_buf, mem_to_buf, report_virtio_error, virtio_has_feature, ElemIovec,
     Element, VirtioError,
 };
-use address_space::AddressSpace;
+use address_space::{AddressSpace, RegionCache};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use machine_manager::{
@@ -734,6 +734,29 @@ impl NetIoHandler {
         size
     }
 
+    fn get_libc_iovecs(
+        mem_space: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        elem_iovecs: &[ElemIovec],
+    ) -> Result<Vec<libc::iovec>> {
+        let mut iovecs = Vec::new();
+        for elem_iov in elem_iovecs.iter() {
+            let host_addr = mem_space
+                .get_host_address_from_cache(elem_iov.addr, cache)
+                .unwrap_or(0);
+            if host_addr != 0 {
+                let iovec = libc::iovec {
+                    iov_base: host_addr as *mut libc::c_void,
+                    iov_len: elem_iov.len as libc::size_t,
+                };
+                iovecs.push(iovec);
+            } else {
+                bail!("Failed to get host address for {}", elem_iov.addr.0);
+            }
+        }
+        Ok(iovecs)
+    }
+
     fn handle_rx(&mut self) -> Result<()> {
         self.trace_request("Net".to_string(), "to rx".to_string());
         let mut queue = self.rx.queue.lock().unwrap();
@@ -758,22 +781,12 @@ impl NetIoHandler {
             if elem.desc_num == 0 {
                 break;
             }
-            let mut iovecs = Vec::new();
-            for elem_iov in elem.in_iovec.iter() {
-                let host_addr = self
-                    .mem_space
-                    .get_host_address_from_cache(elem_iov.addr, queue.vring.get_cache())
-                    .unwrap_or(0);
-                if host_addr != 0 {
-                    let iovec = libc::iovec {
-                        iov_base: host_addr as *mut libc::c_void,
-                        iov_len: elem_iov.len as libc::size_t,
-                    };
-                    iovecs.push(iovec);
-                } else {
-                    bail!("Failed to get host address for {}", elem_iov.addr.0);
-                }
-            }
+            let iovecs = NetIoHandler::get_libc_iovecs(
+                &self.mem_space,
+                queue.vring.get_cache(),
+                &elem.in_iovec,
+            )
+            .with_context(|| "Failed to get libc iovecs for net rx")?;
 
             // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
             for iov in iovecs.iter() {
@@ -880,22 +893,12 @@ impl NetIoHandler {
                     .with_context(|| "Failed to trigger tx queue event".to_string())?;
                 break;
             }
-            let mut iovecs = Vec::new();
-            for elem_iov in elem.out_iovec.iter() {
-                let host_addr = self
-                    .mem_space
-                    .get_host_address_from_cache(elem_iov.addr, queue.vring.get_cache())
-                    .unwrap_or(0);
-                if host_addr != 0 {
-                    let iovec = libc::iovec {
-                        iov_base: host_addr as *mut libc::c_void,
-                        iov_len: elem_iov.len as libc::size_t,
-                    };
-                    iovecs.push(iovec);
-                } else {
-                    error!("Failed to get host address for {}", elem_iov.addr.0);
-                }
-            }
+            let iovecs = NetIoHandler::get_libc_iovecs(
+                &self.mem_space,
+                queue.vring.get_cache(),
+                &elem.out_iovec,
+            )
+            .with_context(|| "Failed to get libc iovecs for net tx")?;
             let tap_fd = if let Some(tap) = self.tap.as_mut() {
                 tap.as_raw_fd() as libc::c_int
             } else {
@@ -1116,8 +1119,14 @@ impl EventNotifierHelper for NetIoHandler {
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(ref e) = cloned_net_io.lock().unwrap().handle_tx() {
+            let mut locked_net_io = cloned_net_io.lock().unwrap();
+            if let Err(ref e) = locked_net_io.handle_tx() {
                 error!("Failed to handle tx(tx event) for net, {:?}", e);
+                report_virtio_error(
+                    locked_net_io.interrupt_cb.clone(),
+                    locked_net_io.driver_features,
+                    Some(&locked_net_io.deactivate_evt),
+                );
             }
             None
         });
@@ -1141,6 +1150,7 @@ impl EventNotifierHelper for NetIoHandler {
                         locked_net_io.driver_features,
                         Some(&locked_net_io.deactivate_evt),
                     );
+                    return None;
                 }
 
                 if let Some(tap) = locked_net_io.tap.as_ref() {
