@@ -1447,82 +1447,53 @@ impl XhciDevice {
         match xfer.packet.status {
             v if v == UsbPacketStatus::NoDev || v == UsbPacketStatus::IoError => {
                 xfer.status = TRBCCode::UsbTransactionError;
-                self.submit_transfer(xfer)?;
             }
             UsbPacketStatus::Stall => {
                 xfer.status = TRBCCode::StallError;
-                self.submit_transfer(xfer)?;
             }
             UsbPacketStatus::Babble => {
                 xfer.status = TRBCCode::BabbleDetected;
-                self.submit_transfer(xfer)?;
             }
             _ => {
                 error!("Unhandle status {:?}", xfer.packet.status);
-                self.report_transfer_error(xfer)?;
             }
         }
+        self.report_transfer_error(xfer)?;
         // Set the endpoint state to halted if an error occurs in the packet.
         let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
         epctx.set_state(&self.mem_space, EP_HALTED)?;
         Ok(())
     }
 
-    /// Submit transfer TRBs.
+    /// Submit the succeed transfer TRBs.
     fn submit_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         // Event Data Transfer Length Accumulator
         let mut edtla = 0;
         let mut left = xfer.packet.actual_length;
-        let mut reported = false;
-        let mut short_pkt = false;
         for i in 0..xfer.td.len() {
             let trb = &xfer.td[i];
             let trb_type = trb.get_type();
             let mut chunk = trb.status & TRB_TR_LEN_MASK;
             match trb_type {
-                TRBType::TrSetup => {
-                    if chunk > 8 {
-                        chunk = 8;
-                    }
-                }
+                TRBType::TrSetup => {}
                 TRBType::TrData | TRBType::TrNormal | TRBType::TrIsoch => {
                     if chunk > left {
                         chunk = left;
-                        if xfer.status == TRBCCode::Success {
-                            short_pkt = true;
-                        }
+                        xfer.status = TRBCCode::ShortPacket;
                     }
                     left -= chunk;
                     edtla += chunk;
                 }
-                TRBType::TrStatus => {
-                    reported = false;
-                    short_pkt = false;
-                }
+                TRBType::TrStatus => {}
                 _ => {
                     debug!("Ignore the TRB, unhandled trb type {:?}", trb.get_type());
                 }
             }
-            if !reported
-                && ((trb.control & TRB_TR_IOC == TRB_TR_IOC)
-                    || (short_pkt && (trb.control & TRB_TR_ISP == TRB_TR_ISP))
-                    || (xfer.status != TRBCCode::Success && left == 0))
+            if (trb.control & TRB_TR_IOC == TRB_TR_IOC)
+                || (xfer.status == TRBCCode::ShortPacket
+                    && (trb.control & TRB_TR_ISP == TRB_TR_ISP))
             {
-                self.send_transfer_event(xfer, trb, chunk, short_pkt, &mut edtla)?;
-                reported = true;
-                if xfer.status != TRBCCode::Success {
-                    // Send unSuccess event succeed, return directly.
-                    warn!(
-                        "A warning is generated when the transfer is submitted, xfer status {:?}",
-                        xfer.status
-                    );
-                    return Ok(());
-                }
-            }
-            // Allow reporting events after IOC bit is set in setup TRB.
-            if trb_type == TRBType::TrSetup {
-                reported = false;
-                short_pkt = false;
+                self.send_transfer_event(xfer, trb, chunk, &mut edtla)?;
             }
         }
         Ok(())
@@ -1534,10 +1505,11 @@ impl XhciDevice {
         let mut evt = XhciEvent::new(TRBType::ErTransfer, TRBCCode::TrbError);
         evt.slot_id = xfer.slotid as u8;
         evt.ep_id = xfer.epid as u8;
+        evt.ccode = xfer.status;
         let mut idx = 0;
         // According to 4.10.1 Transfer TRBs, the TRB pointer field in a Transfer TRB not
         // only references the TRB that generated the event, but it also provides system software
-        // with thr latest value of the xHC Dequeue Pointer for the Transfer Ring.
+        // with the latest value of the xHC Dequeue Pointer for the Transfer Ring.
         if let Some(trb) = xfer.td.last() {
             evt.ptr = trb.addr;
             idx = (trb.status >> TRB_INTR_SHIFT) & TRB_INTR_MASK;
@@ -1550,7 +1522,6 @@ impl XhciDevice {
         xfer: &XhciTransfer,
         trb: &XhciTRB,
         transfered: u32,
-        short_pkt: bool,
         edtla: &mut u32,
     ) -> Result<()> {
         let trb_type = trb.get_type();
@@ -1560,11 +1531,7 @@ impl XhciDevice {
         evt.length = (trb.status & TRB_TR_LEN_MASK) - transfered;
         evt.flags = 0;
         evt.ptr = trb.addr;
-        evt.ccode = if short_pkt && xfer.status == TRBCCode::Success {
-            TRBCCode::ShortPacket
-        } else {
-            xfer.status
-        };
+        evt.ccode = xfer.status;
         if trb_type == TRBType::TrEvdata {
             evt.ptr = trb.parameter;
             evt.flags |= TRB_EV_ED;
