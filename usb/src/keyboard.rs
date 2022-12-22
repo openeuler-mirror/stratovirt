@@ -25,8 +25,8 @@ use crate::hid::{
     STR_PRODUCT_KEYBOARD, STR_SERIAL_KEYBOARD,
 };
 use crate::usb::{
-    notify_controller, usb_endpoint_init, UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint,
-    UsbDescIface, UsbDescOther, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
+    notify_controller, UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
+    UsbDescOther, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
 use crate::xhci::xhci_controller::XhciDevice;
@@ -131,15 +131,11 @@ impl UsbKeyboard {
 
     pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.usb_device.product_desc = String::from("StratoVirt USB keyboard");
-        self.usb_device.strings = Vec::new();
+        self.usb_device.reset_usb_endpoint();
+        self.usb_device.usb_desc = Some(DESC_KEYBOARD.clone());
+        self.usb_device.init_descriptor()?;
         let kbd = Arc::new(Mutex::new(self));
-        let cloned_kbd = kbd.clone();
-        usb_endpoint_init(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>));
-        let mut locked_kbd = cloned_kbd.lock().unwrap();
-        locked_kbd.usb_device.usb_desc = Some(DESC_KEYBOARD.clone());
-        locked_kbd.usb_device.init_descriptor()?;
-        drop(locked_kbd);
-        Ok(cloned_kbd)
+        Ok(kbd)
     }
 }
 
@@ -215,7 +211,7 @@ impl UsbDeviceOps for UsbKeyboard {
         self.ctrl.clone()
     }
 
-    fn get_wakeup_endpoint(&self) -> Arc<Mutex<UsbEndpoint>> {
+    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
         self.usb_device.get_endpoint(true, 1)
     }
 }

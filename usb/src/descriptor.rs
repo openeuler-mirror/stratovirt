@@ -332,15 +332,15 @@ impl UsbDescriptorOps for UsbDevice {
             } else {
                 bail!("No interface descriptor found.");
             };
+            let iface = iface.clone();
             for e in 0..iface.interface_desc.bNumEndpoints {
                 let in_direction = iface.eps[e as usize].endpoint_desc.bEndpointAddress
                     & USB_DIRECTION_DEVICE_TO_HOST
                     == USB_DIRECTION_DEVICE_TO_HOST;
                 let ep = iface.eps[e as usize].endpoint_desc.bEndpointAddress
                     & USB_ENDPOINT_ADDRESS_NUMBER_MASK;
-                let usb_ep = self.get_endpoint(in_direction, ep as u8);
-                let mut locked_usb_ep = usb_ep.lock().unwrap();
-                locked_usb_ep.ep_type = iface.eps[e as usize].endpoint_desc.bmAttributes
+                let mut usb_ep = self.get_mut_endpoint(in_direction, ep as u8);
+                usb_ep.ep_type = iface.eps[e as usize].endpoint_desc.bmAttributes
                     & USB_ENDPOINT_ATTR_TRANSFER_TYPE_MASK;
             }
         }
