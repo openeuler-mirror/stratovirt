@@ -456,6 +456,32 @@ pub fn console_init(dev_opts: Rc<dyn HardWareOperations>) -> Option<usize> {
     Some(con_id)
 }
 
+/// Close a console.
+pub fn console_close(con_id: Option<usize>) {
+    if con_id.is_none() {
+        return;
+    }
+
+    unsafe {
+        let len = CONSOLES.console_list.len();
+        let id = con_id.unwrap();
+        if id >= len {
+            return;
+        }
+        CONSOLES.console_list[id] = None;
+        if con_id != CONSOLES.activate_id {
+            return;
+        }
+        CONSOLES.activate_id = None;
+        for i in 0..len {
+            if CONSOLES.console_list[i].is_some() {
+                CONSOLES.activate_id = Some(i);
+                break;
+            }
+        }
+    }
+}
+
 /// Select the default display device.
 /// If con_id is none, then do nothing.
 pub fn console_select(con_id: Option<usize>) {
