@@ -235,7 +235,7 @@ impl AddressSpace {
                         }
                         old_idx += 1;
                         continue;
-                    } else if old_r.addr_range == new_r.addr_range && old_r == new_r {
+                    } else if old_r == new_r {
                         old_idx += 1;
                         new_idx += 1;
                         continue;
