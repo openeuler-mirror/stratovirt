@@ -166,7 +166,7 @@ impl Eq for FlatRange {}
 
 impl PartialEq for FlatRange {
     fn eq(&self, other: &Self) -> bool {
-        self.addr_range.base == other.addr_range.base
+        self.addr_range == other.addr_range
             && self.owner.region_type == other.owner.region_type
             && self.rom_dev_romd.unwrap_or(false) == other.rom_dev_romd.unwrap_or(false)
             && self.owner == other.owner
