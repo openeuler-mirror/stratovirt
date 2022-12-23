@@ -10,16 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
+
+use anyhow::{bail, Result};
+use log::{debug, error};
 
 use crate::config::*;
 use crate::descriptor::{
     UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
     UsbInterfaceDescriptor,
 };
-use crate::xhci::xhci_controller::XhciDevice;
-use anyhow::{bail, Result};
-use log::{debug, error, warn};
+use crate::xhci::xhci_controller::{UsbPort, XhciDevice};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
 const USB_MAX_INTERFACES: u32 = 16;
@@ -36,16 +38,6 @@ pub enum UsbPacketStatus {
     Babble,
     IoError,
     Async,
-}
-
-/// USB packet setup state.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum SetupState {
-    Idle,
-    Setup,
-    Data,
-    Ack,
-    Parameter,
 }
 
 /// USB request used to transfer to USB device.
@@ -94,40 +86,10 @@ pub fn usb_endpoint_init(dev: &Arc<Mutex<dyn UsbDeviceOps>>) {
     }
 }
 
-/// USB port which can attached device.
-pub struct UsbPort {
-    pub dev: Option<Arc<Mutex<dyn UsbDeviceOps>>>,
-    pub speed_mask: u32,
-    pub path: String,
-    pub index: u8,
-}
-
-impl UsbPort {
-    pub fn new(index: u8) -> Self {
-        Self {
-            dev: None,
-            speed_mask: 0,
-            path: String::new(),
-            index,
-        }
-    }
-}
-
 /// USB descriptor strings.
 pub struct UsbDescString {
     pub index: u32,
     pub str: String,
-}
-
-/// USB packet state.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum UsbPacketState {
-    Undefined = 0,
-    Setup,
-    Queued,
-    Async,
-    Complete,
-    Canceled,
 }
 
 // USB descriptor
@@ -424,15 +386,24 @@ pub trait UsbDeviceOps: Send + Sync {
 
     /// Handle usb packet, used for controller to deliever packet to device.
     fn handle_packet(&mut self, packet: &mut UsbPacket) {
-        if packet.state != UsbPacketState::Setup {
-            error!("The packet state is not Setup");
+        packet.status = UsbPacketStatus::Success;
+        let ep = if let Some(ep) = &packet.ep {
+            ep
+        } else {
+            error!("Failed to find ep");
+            packet.status = UsbPacketStatus::NoDev;
             return;
-        }
-        if let Err(e) = self.process_packet(packet) {
-            error!("Failed to process packet: {}", e);
-        }
-        if packet.status != UsbPacketStatus::Nak {
-            packet.state = UsbPacketState::Complete;
+        };
+        let locked_ep = ep.lock().unwrap();
+        let ep_nr = locked_ep.ep_number;
+        debug!("handle packet endpointer number {}", ep_nr);
+        drop(locked_ep);
+        if ep_nr == 0 {
+            if let Err(e) = self.do_parameter(packet) {
+                error!("Failed to handle control packet {}", e);
+            }
+        } else {
+            self.handle_data(packet);
         }
     }
 
@@ -455,43 +426,6 @@ pub trait UsbDeviceOps: Send + Sync {
     fn speed(&self) -> u32 {
         let usb_dev = self.get_usb_device();
         usb_dev.speed
-    }
-
-    fn process_packet(&mut self, packet: &mut UsbPacket) -> Result<()> {
-        packet.status = UsbPacketStatus::Success;
-        let ep = if let Some(ep) = &packet.ep {
-            ep
-        } else {
-            packet.status = UsbPacketStatus::NoDev;
-            bail!("Failed to find ep");
-        };
-        let locked_ep = ep.lock().unwrap();
-        let ep_nr = locked_ep.ep_number;
-        debug!("process_packet nr {}", ep_nr);
-        drop(locked_ep);
-        if ep_nr == 0 {
-            if packet.parameter != 0 {
-                return self.do_parameter(packet);
-            }
-            match packet.pid as u8 {
-                USB_TOKEN_SETUP => {
-                    warn!("process_packet USB_TOKEN_SETUP not implemented");
-                }
-                USB_TOKEN_IN => {
-                    warn!("process_packet USB_TOKEN_IN not implemented");
-                }
-                USB_TOKEN_OUT => {
-                    warn!("process_packet USB_TOKEN_OUT not implemented");
-                }
-                _ => {
-                    warn!("Unknown pid {}", packet.pid);
-                    packet.status = UsbPacketStatus::Stall;
-                }
-            }
-        } else {
-            self.handle_data(packet);
-        }
-        Ok(())
     }
 
     fn do_parameter(&mut self, p: &mut UsbPacket) -> Result<()> {
@@ -547,13 +481,8 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
     // Drop the small lock.
     drop(locked_dev);
     let mut locked_xhci = xhci.lock().unwrap();
-    let xhci_port = if let Some(xhci_port) = locked_xhci.lookup_xhci_port(&usb_port) {
-        xhci_port
-    } else {
-        bail!("No xhci port found");
-    };
     if wakeup {
-        let mut locked_port = xhci_port.lock().unwrap();
+        let mut locked_port = usb_port.lock().unwrap();
         let port_status = locked_port.get_port_link_state();
         if port_status == PLS_U3 {
             locked_port.set_port_link_state(PLS_RESUME);
@@ -562,7 +491,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDeviceOps>>) -> Result<()> {
                 locked_port.portsc, port_status
             );
             drop(locked_port);
-            locked_xhci.port_notify(&xhci_port, PORTSC_PLC)?;
+            locked_xhci.port_notify(&usb_port, PORTSC_PLC)?;
         }
     }
     if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, &ep) {
@@ -600,15 +529,14 @@ pub struct UsbPacket {
     pub status: UsbPacketStatus,
     /// Actually transfer length.
     pub actual_length: u32,
-    pub state: UsbPacketState,
 }
 
 impl std::fmt::Display for UsbPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "pid {} param {} status {:?} actual_length {}, state {:?}",
-            self.pid, self.parameter, self.status, self.actual_length, self.state
+            "pid {} param {} status {:?} actual_length {}",
+            self.pid, self.parameter, self.status, self.actual_length
         )
     }
 }
@@ -620,7 +548,6 @@ impl UsbPacket {
         self.status = UsbPacketStatus::Success;
         self.actual_length = 0;
         self.parameter = 0;
-        self.state = UsbPacketState::Setup;
     }
 }
 
@@ -633,7 +560,6 @@ impl Default for UsbPacket {
             parameter: 0,
             status: UsbPacketStatus::NoDev,
             actual_length: 0,
-            state: UsbPacketState::Undefined,
         }
     }
 }
@@ -653,35 +579,148 @@ fn write_mem(hva: u64, buf: &[u8]) {
 
 /// Transfer packet from host to device or from device to host.
 pub fn usb_packet_transfer(packet: &mut UsbPacket, vec: &mut [u8], len: usize) {
+    let len = min(vec.len(), len);
     let to_host = packet.pid as u8 & USB_TOKEN_IN == USB_TOKEN_IN;
-
+    let mut copyed = 0;
     if to_host {
-        let mut copyed = 0;
-        let mut offset = 0;
         for iov in &packet.iovecs {
-            let cnt = std::cmp::min(iov.iov_len, len - copyed);
-            let tmp = &vec[offset..(offset + cnt)];
+            let cnt = min(iov.iov_len, len - copyed);
+            let tmp = &vec[copyed..(copyed + cnt)];
             write_mem(iov.iov_base, tmp);
             copyed += cnt;
-            offset += cnt;
             if len - copyed == 0 {
                 break;
             }
         }
     } else {
-        let mut copyed = 0;
-        let mut offset = 0;
         for iov in &packet.iovecs {
-            let cnt = std::cmp::min(iov.iov_len, len - copyed);
-            let tmp = &mut vec[offset..(offset + cnt)];
+            let cnt = min(iov.iov_len, len - copyed);
+            let tmp = &mut vec[copyed..(copyed + cnt)];
             read_mem(iov.iov_base, tmp);
             copyed += cnt;
-            offset += cnt;
             if len - copyed == 0 {
                 break;
             }
         }
     }
+    packet.actual_length = copyed as u32;
+}
 
-    packet.actual_length += len as u32;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_usb_packet_transfer_in() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+        packet.iovecs.push(Iovec::new(hva + 4, 2));
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(buf, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_in_over() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 4);
+        assert_eq!(buf, [1, 2, 3, 4, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_in_under() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 2);
+        assert_eq!(packet.actual_length, 2);
+        assert_eq!(buf, [1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_in_over_buffer() {
+        let buf = [0_u8; 10];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_IN as u32;
+        packet.iovecs.push(Iovec::new(hva, 10));
+
+        let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
+        usb_packet_transfer(&mut packet, &mut data, 10);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(buf, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+        packet.iovecs.push(Iovec::new(hva + 4, 2));
+
+        let mut data = [0_u8; 10];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(data, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out_over() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+        packet.iovecs.push(Iovec::new(hva + 4, 2));
+
+        let mut data = [0_u8; 10];
+        usb_packet_transfer(&mut packet, &mut data, 10);
+        assert_eq!(packet.actual_length, 6);
+        assert_eq!(data, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out_under() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 4));
+
+        let mut data = [0_u8; 10];
+        usb_packet_transfer(&mut packet, &mut data, 2);
+        assert_eq!(packet.actual_length, 2);
+        assert_eq!(data, [1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_usb_packet_transfer_out_over_buffer() {
+        let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
+        let hva = buf.as_ptr() as u64;
+        let mut packet = UsbPacket::default();
+        packet.pid = USB_TOKEN_OUT as u32;
+        packet.iovecs.push(Iovec::new(hva, 6));
+
+        let mut data = [0_u8; 2];
+        usb_packet_transfer(&mut packet, &mut data, 6);
+        assert_eq!(packet.actual_length, 2);
+        assert_eq!(data, [1, 2]);
+    }
 }

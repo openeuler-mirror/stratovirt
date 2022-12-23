@@ -151,7 +151,7 @@ impl UsbTablet {
 // Used for VNC to send pointer event.
 pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: i32, y: i32) -> Result<()> {
     let mut locked_tablet = tablet.lock().unwrap();
-    if locked_tablet.hid.num == QUEUE_LENGTH - 1 {
+    if locked_tablet.hid.num >= QUEUE_LENGTH {
         debug!("Pointer queue is full!");
         // Return ok to ignore the request.
         return Ok(());
