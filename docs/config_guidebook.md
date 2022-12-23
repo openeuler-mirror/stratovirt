@@ -313,7 +313,7 @@ StratoVirt also supports vhost-user-blk-pci to get a higher performance in stora
 
 You can use it by adding a new device, one more property is supported by vhost-user-blk-pci device than virtio-blk-pci.
 
-* chardev: id for char device, that means you need to add a chardev first, and use its id to index char device.
+* chardev: id for char device, that means you need to add a chardev first, and use its id to find the character device.
 
 ```shell
 # vhost user blk pci device
@@ -342,18 +342,17 @@ $ make
 $ ./test/unit/unittest.sh
 
 # Setup spdk
-$ sudo HUGEMEM=2048 ./scripts/setup.sh
+$ HUGEMEM=2048 ./scripts/setup.sh
 # Mount huge pages, you need to add -mem-path=/dev/hugepages in stratovirt config
-$ sudo mount -t hugetlbfs hugetlbfs /dev/hugepages
-$ sudo sysctl vm.nr_hugepages=1024
+$ mount -t hugetlbfs hugetlbfs /dev/hugepages
+# Assign the number of the hugepage
+$ sysctl vm.nr_hugepages=1024
 # Start vhost, alloc 1024MB memory, default socket path is /var/tmp/spdk.sock, 0x3 means we use cpu cores 0 and 1 (cpumask 0x3)
-$ sudo build/bin/vhost --logflag vhost_blk -S /var/tmp -s 1024 -m 0x3 &
-# Attach nvme controller, you can find you nvme id by lspci command
-$ sudo ./scripts/rpc.py bdev_nvme_attach_controller -b Nvme0 -t pcie -a you-nvme-id
-# Create a bdev which size is 128MB, block size is 512B
-$ sudo ./scripts/rpc.py bdev_malloc_create 128 512 -b Malloc0
+$ build/bin/vhost --logflag vhost_blk -S /var/tmp -s 1024 -m 0x3 &
+# Create a malloc bdev which size is 128MB, block size is 512B
+$ ./scripts/rpc.py bdev_malloc_create 128 512 -b Malloc0
 # Create a vhost-blk device exposing Malloc0 bdev, the I/O polling will be pinned to the CPU 0 (cpumask 0x1).
-$ sudo ./scripts/rpc.py vhost_create_blk_controller --cpumask 0x1 spdk.sock Malloc0
+$ ./scripts/rpc.py vhost_create_blk_controller --cpumask 0x1 spdk.sock Malloc0
 ```
 A config template to start stratovirt with vhost-user-blk-pci as below:
 
