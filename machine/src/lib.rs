@@ -68,8 +68,8 @@ use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
 use usb::{
-    bus::BusDeviceMap, keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps,
-    xhci::xhci_pci::XhciPciDevice, INPUT,
+    keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps, xhci::xhci_pci::XhciPciDevice,
+    INPUT,
 };
 use util::{
     arg_parser,
@@ -305,12 +305,6 @@ pub trait MachineOps {
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
     fn get_migrate_info(&self) -> Incoming;
-
-    /// Get the bus device map. The map stores the mapping between bus name and bus device.
-    /// The bus device is the device which can attach other devices.
-    fn get_bus_device(&mut self) -> Option<&BusDeviceMap> {
-        None
-    }
 
     /// Get the Scsi Controller list. The map stores the mapping between scsi bus name and scsi controller.
     fn get_scsi_cntlr_list(&mut self) -> Option<&ScsiCntlrMap> {
@@ -1072,19 +1066,7 @@ pub trait MachineOps {
         let device_cfg = parse_xhci(cfg_args)?;
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
 
-        let bus_device = if let Some(bus_device) = self.get_bus_device() {
-            bus_device.clone()
-        } else {
-            bail!("No bus device found");
-        };
-
-        let pcidev = XhciPciDevice::new(
-            &device_cfg,
-            devfn,
-            parent_bus,
-            self.get_sys_mem(),
-            bus_device,
-        );
+        let pcidev = XhciPciDevice::new(&device_cfg, devfn, parent_bus, self.get_sys_mem());
 
         pcidev
             .realize()
@@ -1092,30 +1074,58 @@ pub trait MachineOps {
         Ok(())
     }
 
+    /// Get the corresponding device from the PCI bus based on the device name.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `name` - Device Name.
+    fn get_pci_dev_by_name(
+        &mut self,
+        vm_config: &mut VmConfig,
+        name: &str,
+    ) -> Option<Arc<Mutex<dyn PciDevOps>>> {
+        for dev in &vm_config.devices {
+            if dev.0.as_str() == name {
+                let cfg_args = dev.1.as_str();
+                let bdf = get_pci_bdf(cfg_args).ok()?;
+                let devfn = (bdf.addr.0 << 3) + bdf.addr.1;
+                let pci_host = self.get_pci_host().ok()?;
+                let root_bus = pci_host.lock().unwrap().root_bus.clone();
+                if let Some(pci_bus) = PciBus::find_bus_by_name(&root_bus, &bdf.bus) {
+                    return pci_bus.lock().unwrap().get_device(0, devfn);
+                } else {
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
     /// Add usb keyboard.
     ///
     /// # Arguments
     ///
     /// * `cfg_args` - Keyboard Configuration.
-    fn add_usb_keyboard(&mut self, cfg_args: &str) -> Result<()> {
+    fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_keyboard(cfg_args)?;
         let keyboard = UsbKeyboard::new(device_cfg.id);
         let kbd = keyboard
             .realize()
             .with_context(|| "Failed to realize usb keyboard device")?;
-        if let Some(bus_device) = self.get_bus_device() {
-            let locked_dev = bus_device.lock().unwrap();
-            if let Some(ctrl) = locked_dev.get("usb.0") {
-                let mut locked_ctrl = ctrl.lock().unwrap();
-                locked_ctrl
-                    .attach_device(&(kbd.clone() as Arc<Mutex<dyn UsbDeviceOps>>))
-                    .with_context(|| "Failed to attach keyboard device")?;
-            } else {
-                bail!("No usb controller found");
-            }
-        } else {
-            bail!("No bus device found");
+        let parent_dev_op = self.get_pci_dev_by_name(vm_config, "nec-usb-xhci");
+        if parent_dev_op.is_none() {
+            bail!("Can not find parent device from pci bus");
         }
+        let parent_dev = parent_dev_op.unwrap();
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
+        if xhci_pci.is_none() {
+            bail!("PciDevOps can not downcast to XhciPciDevice");
+        }
+        xhci_pci
+            .unwrap()
+            .attach_device(&(kbd.clone() as Arc<Mutex<dyn UsbDeviceOps>>))?;
         let mut locked_input = INPUT.lock().unwrap();
         locked_input.keyboard = Some(kbd);
         Ok(())
@@ -1126,25 +1136,25 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Tablet Configuration.
-    fn add_usb_tablet(&mut self, cfg_args: &str) -> Result<()> {
+    fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_tablet(cfg_args)?;
         let tablet = UsbTablet::new(device_cfg.id);
         let tbt = tablet
             .realize()
             .with_context(|| "Failed to realize usb tablet device")?;
-        if let Some(bus_device) = self.get_bus_device() {
-            let locked_dev = bus_device.lock().unwrap();
-            if let Some(ctrl) = locked_dev.get("usb.0") {
-                let mut locked_ctrl = ctrl.lock().unwrap();
-                locked_ctrl
-                    .attach_device(&(tbt.clone() as Arc<Mutex<dyn UsbDeviceOps>>))
-                    .with_context(|| "Failed to attach tablet device")?;
-            } else {
-                bail!("No usb controller found");
-            }
-        } else {
-            bail!("No bus device list found");
+        let parent_dev_op = self.get_pci_dev_by_name(vm_config, "nec-usb-xhci");
+        if parent_dev_op.is_none() {
+            bail!("Can not find parent device from pci bus");
         }
+        let parent_dev = parent_dev_op.unwrap();
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev.as_any().downcast_ref::<XhciPciDevice>();
+        if xhci_pci.is_none() {
+            bail!("PciDevOps can not downcast to XhciPciDevice");
+        }
+        xhci_pci
+            .unwrap()
+            .attach_device(&(tbt.clone() as Arc<Mutex<dyn UsbDeviceOps>>))?;
         let mut locked_input = INPUT.lock().unwrap();
         locked_input.tablet = Some(tbt);
         Ok(())
@@ -1232,10 +1242,10 @@ pub trait MachineOps {
                     self.add_usb_xhci(cfg_args)?;
                 }
                 "usb-kbd" => {
-                    self.add_usb_keyboard(cfg_args)?;
+                    self.add_usb_keyboard(vm_config, cfg_args)?;
                 }
                 "usb-tablet" => {
-                    self.add_usb_tablet(cfg_args)?;
+                    self.add_usb_tablet(vm_config, cfg_args)?;
                 }
                 #[cfg(not(target_env = "musl"))]
                 "virtio-gpu-pci" => {
