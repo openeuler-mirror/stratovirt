@@ -404,15 +404,17 @@ impl CPUInterface for CPU {
 
     fn destroy(&self) -> Result<()> {
         let (cpu_state, cvar) = &*self.state;
-        if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Stopping;
-        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Stopped {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Nothing;
+        let mut cpu_state = cpu_state.lock().unwrap();
+        if *cpu_state == CpuLifecycleState::Running {
+            *cpu_state = CpuLifecycleState::Stopping;
+        } else if *cpu_state == CpuLifecycleState::Stopped
+            || *cpu_state == CpuLifecycleState::Paused
+        {
+            *cpu_state = CpuLifecycleState::Nothing;
             return Ok(());
         }
 
         self.kick()?;
-        let mut cpu_state = cpu_state.lock().unwrap();
         cpu_state = cvar
             .wait_timeout(cpu_state, Duration::from_millis(32))
             .unwrap()
