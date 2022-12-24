@@ -48,9 +48,6 @@ pub enum VmEvent {
     ShutdownCauseInternalError,
 }
 
-unsafe impl Sync for VmEvent {}
-unsafe impl Send for VmEvent {}
-
 /// Trait to handle virtual machine lifecycle.
 ///
 /// # Notes

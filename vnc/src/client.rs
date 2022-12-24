@@ -193,7 +193,6 @@ impl Default for DisplayMode {
     }
 }
 
-unsafe impl Send for RectInfo {}
 pub struct RectInfo {
     /// Vnc client state.
     pub client: Arc<ClientState>,
