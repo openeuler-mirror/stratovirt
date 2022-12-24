@@ -661,7 +661,8 @@ impl BlockIoHandler {
                 self.direct = direct;
                 self.aio_type = aio_type;
             }
-            Err(_) => {
+            Err(e) => {
+                error!("Failed to receive config in updating handler {:?}", e);
                 self.disk_sectors = 0;
                 self.disk_image = None;
                 self.serial_num = None;
@@ -669,6 +670,20 @@ impl BlockIoHandler {
                 self.aio_type = Some(String::from(AIO_NATIVE));
             }
         };
+
+        if let Err(e) = (*self.interrupt_cb)(&VirtioInterruptType::Config, None, false) {
+            error!(
+                "{:?}. {:?}",
+                VirtioError::InterruptTrigger("block", VirtioInterruptType::Config),
+                e
+            );
+            report_virtio_error(
+                self.interrupt_cb.clone(),
+                self.driver_features,
+                &self.device_broken,
+            );
+            return;
+        }
 
         if let Err(ref e) = self.process_queue() {
             error!("Failed to handle block IO for updating handler {:?}", e);
@@ -1152,15 +1167,6 @@ impl VirtioDevice for Block {
                     .write(1)
                     .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
             }
-        }
-
-        if let Some(interrupt_cb) = &self.interrupt_cb {
-            interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
-                anyhow!(VirtioError::InterruptTrigger(
-                    "block",
-                    VirtioInterruptType::Config
-                ))
-            })?;
         }
 
         Ok(())

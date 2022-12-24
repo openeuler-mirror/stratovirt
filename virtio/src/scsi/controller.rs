@@ -35,7 +35,7 @@ use address_space::{AddressSpace, GuestAddress};
 use log::{debug, error, info};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{
-    config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
+    config::{ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
 };
 use util::aio::{Aio, AioCb, Iovec};
@@ -343,10 +343,6 @@ impl VirtioDevice for ScsiCntlr {
 
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(self.config.iothread.as_ref(), &mut self.deactivate_evts)
-    }
-
-    fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
-        Ok(())
     }
 }
 
