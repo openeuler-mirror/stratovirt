@@ -208,6 +208,7 @@ impl Request {
                 in_iov_elem.len
             );
         }
+        // Note: addr plus len has been checked not overflow in virtqueue.
         let in_header = GuestAddress(in_iov_elem.addr.0 + in_iov_elem.len as u64 - 1);
 
         let mut request = Request {
@@ -222,6 +223,8 @@ impl Request {
 
         // Count in_len before discard iovec.
         // We always write the last status byte, so count all in_iovs.
+        // Note: in_iov and out_iov total len is no more than 1<<32, and
+        // out_iov is more than 1, so in_len will not overflow.
         for in_iov in elem.in_iovec.iter() {
             request.in_len += in_iov.len;
         }
@@ -245,6 +248,7 @@ impl Request {
                             iov_len: u64::from(elem_iov.len),
                         };
                         request.iovec.push(iov);
+                        // Note: elem_iov total len is no more than 1<<32.
                         request.data_len += u64::from(elem_iov.len);
                     } else {
                         bail!("Map desc base {:?} failed", elem_iov.addr);
@@ -278,6 +282,8 @@ impl Request {
                     iov_len: iov.iov_len,
                 };
                 aiocb.iovec.push(iovec);
+                // Note: total len of each req is no more than 1<<32,
+                // and reqs count is no more than 1024.
                 aiocb.nbytes += iov.iov_len;
             }
             req = req_raw.next.as_ref().as_ref();
@@ -438,6 +444,7 @@ impl BlockIoHandler {
                         && merged_iovs + req_iovs <= MAX_NUM_MERGE_IOVS
                         && merged_bytes + req_bytes <= MAX_NUM_MERGE_BYTES
                         && req_ref.out_header.request_type == req.out_header.request_type
+                        // Note: sector plus sector_num has been checked not overflow.
                         && (req_ref.out_header.sector + req_ref.get_req_sector_num()
                             == req.out_header.sector)
                 }
