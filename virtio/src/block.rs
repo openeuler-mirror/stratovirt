@@ -889,6 +889,8 @@ pub struct BlockState {
     pub driver_features: u64,
     /// Config space of the block device.
     pub config_space: VirtioBlkConfig,
+    /// Device broken status.
+    broken: bool,
 }
 
 /// Block device structure.
@@ -1180,13 +1182,15 @@ unsafe impl Sync for Block {}
 
 impl StateTransfer for Block {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
-        Ok(self.state.as_bytes().to_vec())
+        let mut state = self.state;
+        state.broken = self.broken.load(Ordering::SeqCst);
+        Ok(state.as_bytes().to_vec())
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *BlockState::from_bytes(state)
             .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("BLOCK")))?;
-
+        self.broken.store(self.state.broken, Ordering::SeqCst);
         Ok(())
     }
 

@@ -84,6 +84,8 @@ pub struct VsockState {
     config_space: [u8; 8],
     /// Last avail idx in vsock backend queue.
     last_avail_idx: [u16; 2],
+    /// Device broken status.
+    broken: bool,
 }
 
 /// Vsock device structure.
@@ -344,6 +346,7 @@ impl StateTransfer for Vsock {
         })?;
         state.last_avail_idx[0] = self.backend.as_ref().unwrap().get_vring_base(0).unwrap();
         state.last_avail_idx[1] = self.backend.as_ref().unwrap().get_vring_base(1).unwrap();
+        state.broken = self.broken.load(Ordering::SeqCst);
         migration::Result::with_context(self.backend.as_ref().unwrap().set_running(true), || {
             "Failed to set vsock backend running"
         })?;
@@ -357,7 +360,7 @@ impl StateTransfer for Vsock {
     fn set_state_mut(&mut self, state: &[u8]) -> migration::Result<()> {
         self.state = *VsockState::from_bytes(state)
             .ok_or_else(|| anyhow!(migration::error::MigrationError::FromBytesError("VSOCK")))?;
-
+        self.broken.store(self.state.broken, Ordering::SeqCst);
         Ok(())
     }
 
