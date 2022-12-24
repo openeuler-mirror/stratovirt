@@ -18,6 +18,7 @@ use std::os::unix::io::RawFd;
 pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64> {
     let mut ret;
     loop {
+        // SAFETY: fd and buf is valid.
         ret = unsafe { pread(fd, buf as *mut c_void, size, offset as i64) as i64 };
         if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
             break;
@@ -33,6 +34,7 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64> 
 pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64> {
     let mut ret;
     loop {
+        // SAFETY: fd and buf is valid.
         ret = unsafe { pwrite(fd, buf as *mut c_void, size, offset as i64) as i64 };
         if !(ret < 0 && (errno::errno().0 == libc::EINTR || errno::errno().0 == libc::EAGAIN)) {
             break;
@@ -46,6 +48,7 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> Result<i64>
 }
 
 pub fn raw_datasync(fd: RawFd) -> Result<i64> {
+    // SAFETY: fd is valid.
     let ret = unsafe { i64::from(fdatasync(fd)) };
     if ret < 0 {
         bail!("Failed to fdatasync for {}, return {}.", fd, ret);

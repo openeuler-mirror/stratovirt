@@ -64,15 +64,15 @@ pub type NotifierCallback = dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>
 /// Epoll Event Notifier Entry.
 pub struct EventNotifier {
     /// Raw file descriptor
-    pub raw_fd: i32,
+    raw_fd: i32,
     /// Notifier operation
-    pub op: NotifierOperation,
+    op: NotifierOperation,
     /// Parked fd, temporarily removed from epoll
-    pub parked_fd: Option<i32>,
+    parked_fd: Option<i32>,
     /// The types of events for which we use this fd
-    pub event: EventSet,
+    event: EventSet,
     /// Event Handler List, one fd event may have many handlers
-    pub handlers: Vec<Rc<NotifierCallback>>,
+    handlers: Vec<Rc<NotifierCallback>>,
     /// Pre-polling handler
     pub handler_poll: Option<Box<NotifierCallback>>,
     /// Event status
@@ -511,7 +511,7 @@ impl EventLoopContext {
         };
 
         for i in 0..ev_count {
-            // It`s safe because elements in self.events_map never get released in other functions
+            // SAFETY: elements in self.events_map never get released in other functions
             let event = unsafe {
                 let event_ptr = self.ready_events[i].data() as *const EventNotifier;
                 &*event_ptr as &EventNotifier
@@ -548,6 +548,9 @@ impl Default for EventLoopContext {
 pub fn read_fd(fd: RawFd) -> u64 {
     let mut value: u64 = 0;
 
+    // SAFETY: this is called by notifier handler and notifier handler
+    // is executed with fd is is valid. The value is defined above thus
+    // valid too.
     let ret = unsafe {
         read(
             fd,
