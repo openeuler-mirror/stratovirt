@@ -430,7 +430,6 @@ dependencies = [
  "devices",
  "hypervisor",
  "kvm-bindings",
- "kvm-ioctls",
  "libc",
  "log",
  "machine_manager",

@@ -473,30 +473,10 @@ impl MachineOps for StdMachine {
             nr_cpus,
         )?;
 
-        let vcpu_fds = {
-            let mut fds = vec![];
-            for vcpu_id in 0..nr_cpus {
-                fds.push(Arc::new(
-                    KVM_FDS
-                        .load()
-                        .vm_fd
-                        .as_ref()
-                        .unwrap()
-                        .create_vcpu(vcpu_id as u64)?,
-                ));
-            }
-            fds
-        };
-
-        // Interrupt Controller Chip init
-        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
         locked_vm
             .init_pci_host()
             .with_context(|| anyhow!(StdErrorKind::InitPCIeHostErr))?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
-        locked_vm
-            .add_devices(vm_config)
-            .with_context(|| "Failed to add devices")?;
         #[cfg(not(target_env = "musl"))]
         vnc::vnc_init(&vm_config.vnc, &vm_config.object)
             .with_context(|| "Failed to init VNC server!")?;
@@ -521,10 +501,16 @@ impl MachineOps for StdMachine {
             vm.clone(),
             nr_cpus,
             &CPUTopology::new(),
-            &vcpu_fds,
             &boot_config,
             &cpu_config,
         )?);
+
+        // Interrupt Controller Chip init
+        locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
+
+        locked_vm
+            .add_devices(vm_config)
+            .with_context(|| "Failed to add devices")?;
 
         if let Some(boot_cfg) = boot_config {
             let mut fdt_helper = FdtBuilder::new();
