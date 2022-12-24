@@ -30,11 +30,6 @@ pub enum MicroVmError {
         source: std::io::Error,
     },
     #[error("Util")]
-    Kvm {
-        #[from]
-        source: kvm_ioctls::Error,
-    },
-    #[error("Util")]
     Nul {
         #[from]
         source: std::ffi::NulError,

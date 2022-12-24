@@ -60,11 +60,6 @@ pub enum MachineError {
         #[from]
         source: hypervisor::error::HypervisorError,
     },
-    #[error("KvmIoctl")]
-    KvmIoctl {
-        #[from]
-        source: kvm_ioctls::Error,
-    },
     #[error("Io")]
     Io {
         #[from]
