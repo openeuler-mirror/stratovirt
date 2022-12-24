@@ -191,7 +191,8 @@ pub struct EventLoopContext {
     timers: Arc<Mutex<Vec<Timer>>>,
 }
 
-unsafe impl Sync for EventLoopContext {}
+// SAFETY: The closure in EventNotifier and Timer doesn't impl Send, they're
+// not sent between threads actually.
 unsafe impl Send for EventLoopContext {}
 
 impl EventLoopContext {
