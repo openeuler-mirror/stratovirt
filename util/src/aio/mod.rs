@@ -124,6 +124,7 @@ impl<T: Clone + 'static> Aio<T> {
         let mut done = false;
 
         for evt in self.ctx.get_events() {
+            // SAFETY: evt.data is specified by submit and not dropped at other place.
             unsafe {
                 let node = evt.data as *mut CbNode<T>;
                 let res = if (evt.res2 == 0) && (evt.res == (*node).value.nbytes as i64) {
@@ -274,11 +275,11 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     fn handle_misaligned_rw(&mut self, cb: &AioCb<T>) -> Result<()> {
-        // Safe because we only get the host page size.
+        // SAFETY: only get the host page size.
         let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
         match cb.opcode {
             IoCmd::Preadv => {
-                // Safe because we allocate aligned memory and free it later.
+                // SAFETY: we allocate aligned memory and free it later.
                 // Alignment is set to host page size to decrease the count of allocated pages.
                 let aligned_buffer =
                     unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
@@ -292,11 +293,12 @@ impl<T: Clone + 'static> Aio<T> {
                     cb.offset,
                 )
                 .map_err(|e| {
-                    // Safe because the memory is allocated by us and will not be used anymore.
+                    // SAFETY: the memory is allocated by us and will not be used anymore.
                     unsafe { libc::free(aligned_buffer) };
                     anyhow!("Failed to do raw read for misaligned read, {:?}", e)
                 })?;
 
+                // SAFETY: the memory is allocated by us.
                 let src = unsafe {
                     std::slice::from_raw_parts(aligned_buffer as *const u8, cb.nbytes as usize)
                 };
@@ -307,15 +309,18 @@ impl<T: Clone + 'static> Aio<T> {
                         Err(anyhow!("Failed to copy iovs to buff for misaligned read"))
                     }
                 });
+                // SAFETY: the memory is allocated by us and will not be used anymore.
                 unsafe { libc::free(aligned_buffer) };
                 res
             }
             IoCmd::Pwritev => {
+                // SAFETY: we allocate aligned memory and free it later.
                 let aligned_buffer =
                     unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
                 if aligned_buffer.is_null() {
                     bail!("Failed to alloc memory for misaligned write");
                 }
+                // SAFETY: the memory is allocated by us.
                 let dst = unsafe {
                     std::slice::from_raw_parts_mut(aligned_buffer as *mut u8, cb.nbytes as usize)
                 };
@@ -326,6 +331,7 @@ impl<T: Clone + 'static> Aio<T> {
                         Err(anyhow!("Failed to copy iovs to buff for misaligned write"))
                     }
                 }) {
+                    // SAFETY: the memory is allocated by us and will not be used anymore.
                     unsafe { libc::free(aligned_buffer) };
                     return Err(e);
                 }
@@ -338,6 +344,7 @@ impl<T: Clone + 'static> Aio<T> {
                 )
                 .map(|_| {})
                 .map_err(|e| anyhow!("Failed to do raw write for misaligned write, {:?}", e));
+                // SAFETY: the memory is allocated by us and will not be used anymore.
                 unsafe { libc::free(aligned_buffer) };
                 res
             }
@@ -355,6 +362,7 @@ impl<T: Clone + 'static> Aio<T> {
 }
 
 fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
+    // SAFETY: all callers have valid hva address.
     let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
     (&mut slice)
         .write(buf)
@@ -379,6 +387,7 @@ pub fn iov_from_buf_direct(iovec: &[Iovec], buf: &[u8]) -> Result<usize> {
 }
 
 pub fn mem_to_buf(mut buf: &mut [u8], hva: u64) -> Result<()> {
+    // SAFETY: all callers have valid hva address.
     let slice = unsafe { std::slice::from_raw_parts(hva as *const u8, buf.len()) };
     buf.write(slice)
         .with_context(|| format!("Failed to read buf from hva:{})", hva))?;
