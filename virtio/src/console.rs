@@ -25,10 +25,8 @@ use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use devices::legacy::{Chardev, InputReceiver};
 use log::{debug, error};
-use machine_manager::{
-    config::{ChardevType, VirtioConsole},
-    event_loop::EventLoop,
-};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::{config::VirtioConsole, event_loop::EventLoop};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -73,7 +71,6 @@ struct ConsoleHandler {
     input_queue: Arc<Mutex<Queue>>,
     output_queue: Arc<Mutex<Queue>>,
     output_queue_evt: EventFd,
-    deactivate_evt: RawFd,
     mem_space: Arc<AddressSpace>,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
@@ -215,62 +212,6 @@ impl ConsoleHandler {
             }
         }
     }
-
-    fn deactivate_evt_handler(&self) -> Vec<EventNotifier> {
-        let locked_chardev = self.chardev.lock().unwrap();
-        let mut notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt,
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.output_queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-        match &locked_chardev.backend {
-            ChardevType::Stdio | ChardevType::Pty => {
-                if let Some(input) = locked_chardev.input.clone() {
-                    notifiers.push(EventNotifier::new(
-                        NotifierOperation::Delete,
-                        input.lock().unwrap().as_raw_fd(),
-                        None,
-                        EventSet::IN,
-                        Vec::new(),
-                    ));
-                }
-            }
-            ChardevType::Socket { .. } => match locked_chardev.stream_fd {
-                Some(stream_fd) => {
-                    notifiers.push(EventNotifier::new(
-                        NotifierOperation::Park,
-                        stream_fd,
-                        None,
-                        EventSet::IN | EventSet::HANG_UP,
-                        Vec::new(),
-                    ));
-                }
-                None => {
-                    let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
-                    notifiers.push(EventNotifier::new(
-                        NotifierOperation::Delete,
-                        listener_fd,
-                        None,
-                        EventSet::IN,
-                        Vec::new(),
-                    ));
-                }
-            },
-            _ => (),
-        }
-        notifiers
-    }
 }
 
 impl EventNotifierHelper for ConsoleHandler {
@@ -286,19 +227,6 @@ impl EventNotifierHelper for ConsoleHandler {
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             console_handler.lock().unwrap().output_queue_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            vec![handler],
-        ));
-
-        let cloned_cls = console_handler.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(cloned_cls.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::AddShared,
-            console_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
             vec![handler],
@@ -326,11 +254,9 @@ pub struct Console {
     /// Status of console device.
     state: VirtioConsoleState,
     /// EventFd for device deactivate.
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
-    /// Connectability status between guest and console.
-    console_connected: bool,
 }
 
 impl Console {
@@ -346,9 +272,8 @@ impl Console {
                 driver_features: 0_u64,
                 config_space: VirtioConsoleConfig::new(),
             },
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(console_cfg.chardev))),
-            console_connected: false,
         }
     }
 }
@@ -362,6 +287,11 @@ impl VirtioDevice for Console {
             .unwrap()
             .realize()
             .with_context(|| "Failed to realize chardev")?;
+        self.chardev.lock().unwrap().deactivated = true;
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(self.chardev.clone()),
+            None,
+        )?;
         Ok(())
     }
 
@@ -433,38 +363,25 @@ impl VirtioDevice for Console {
             mem_space,
             interrupt_cb,
             driver_features: self.state.driver_features,
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             chardev: self.chardev.clone(),
         };
 
         let dev = Arc::new(Mutex::new(handler));
-        EventLoop::update_event(EventNotifierHelper::internal_notifiers(dev.clone()), None)?;
-        let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_input_callback(&dev);
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
-            None,
-        )?;
-        self.console_connected = true;
+        let notifiers = EventNotifierHelper::internal_notifiers(dev.clone());
+        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+
+        self.chardev.lock().unwrap().set_input_callback(&dev);
+        self.chardev.lock().unwrap().deactivated = false;
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        if self.console_connected {
-            self.deactivate_evt
-                .write(1)
-                .with_context(|| anyhow!(VirtioError::EventFdWrite))
-        } else {
-            Ok(())
-        }
+        self.chardev.lock().unwrap().deactivated = true;
+        unregister_event_helper(None, &mut self.deactivate_evts)
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
-        self.console_connected = false;
-        Ok(())
+        self.deactivate()
     }
 }
 
