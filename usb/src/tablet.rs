@@ -12,41 +12,25 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::Result;
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
 use crate::config::*;
-use crate::descriptor::{UsbConfigDescriptor, UsbDeviceDescriptor, UsbEndpointDescriptor};
-use crate::descriptor::{UsbDescriptorOps, UsbInterfaceDescriptor};
-use crate::hid::QUEUE_MASK;
-use crate::hid::{HidType, QUEUE_LENGTH};
-use crate::usb::{notify_controller, UsbDeviceRequest};
-use crate::{
-    hid::{
-        Hid, DESC_STRINGS, STR_CONFIG_TABLET, STR_MANUFACTURER, STR_PRODUCT_TABLET,
-        STR_SERIAL_TABLET,
-    },
-    usb::{
-        UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
-        UsbDevice, UsbDeviceOps, UsbEndpoint, UsbPacket, UsbPacketStatus,
-    },
-    xhci::xhci_controller::XhciDevice,
+use crate::descriptor::{
+    UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
+    UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
-use anyhow::Result;
+use crate::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
+use crate::usb::{
+    notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
+    UsbPacketStatus,
+};
+use crate::xhci::xhci_controller::XhciDevice;
 
 const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
 const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
 
-/// USB Tablet Descriptor
-static DESC_TABLET: Lazy<Arc<UsbDesc>> = Lazy::new(|| {
-    let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
-    Arc::new(UsbDesc {
-        full_dev: Some(DESC_DEVICE_TABLET.clone()),
-        high_dev: None,
-        super_dev: None,
-        strings: s,
-    })
-});
 /// Tablet device descriptor
 static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
     Arc::new(UsbDescDevice {
@@ -56,9 +40,9 @@ static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             idVendor: 0x0627,
             idProduct: 0x0001,
             bcdDevice: 0,
-            iManufacturer: STR_MANUFACTURER,
-            iProduct: STR_PRODUCT_TABLET,
-            iSerialNumber: STR_SERIAL_TABLET,
+            iManufacturer: STR_MANUFACTURER_INDEX,
+            iProduct: STR_PRODUCT_TABLET_INDEX,
+            iSerialNumber: STR_SERIAL_TABLET_INDEX,
             bcdUSB: 0x0100,
             bDeviceClass: 0,
             bDeviceSubClass: 0,
@@ -66,19 +50,18 @@ static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bMaxPacketSize0: 8,
             bNumConfigurations: 1,
         },
-        confs: vec![Arc::new(UsbDescConfig {
+        configs: vec![Arc::new(UsbDescConfig {
             config_desc: UsbConfigDescriptor {
                 bLength: USB_DT_CONFIG_SIZE,
                 bDescriptorType: USB_DT_CONFIGURATION,
                 wTotalLength: 0,
                 bNumInterfaces: 1,
                 bConfigurationValue: 1,
-                iConfiguration: STR_CONFIG_TABLET,
+                iConfiguration: STR_CONFIG_TABLET_INDEX,
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_REMOTE_WAKEUP,
                 bMaxPower: 50,
             },
-            if_groups: Vec::new(),
-            ifs: vec![DESC_IFACE_TABLET.clone()],
+            interfaces: vec![DESC_IFACE_TABLET.clone()],
         })],
     })
 });
@@ -101,7 +84,7 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             /// HID descriptor
             data: vec![0x09, 0x21, 0x01, 0x0, 0x0, 0x01, 0x22, 74, 0x0],
         })],
-        eps: vec![Arc::new(UsbDescEndpoint {
+        endpoints: vec![Arc::new(UsbDescEndpoint {
             endpoint_desc: UsbEndpointDescriptor {
                 bLength: USB_DT_ENDPOINT_SIZE,
                 bDescriptorType: USB_DT_ENDPOINT,
@@ -115,6 +98,14 @@ static DESC_IFACE_TABLET: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
     })
 });
 
+/// String descriptor index
+const STR_MANUFACTURER_INDEX: u8 = 1;
+const STR_PRODUCT_TABLET_INDEX: u8 = 2;
+const STR_CONFIG_TABLET_INDEX: u8 = 3;
+const STR_SERIAL_TABLET_INDEX: u8 = 4;
+
+/// String descriptor
+const DESC_STRINGS: [&str; 5] = ["", "StratoVirt", "StratoVirt USB Tablet", "HID Tablet", "2"];
 /// USB tablet device.
 pub struct UsbTablet {
     id: String,
@@ -135,10 +126,11 @@ impl UsbTablet {
     }
 
     pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        self.usb_device.product_desc = String::from("StratoVirt USB Tablet");
         self.usb_device.reset_usb_endpoint();
-        self.usb_device.usb_desc = Some(DESC_TABLET.clone());
-        self.usb_device.init_descriptor()?;
+        self.usb_device.speed = USB_SPEED_FULL;
+        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        self.usb_device
+            .init_descriptor(DESC_DEVICE_TABLET.clone(), s)?;
         let tablet = Arc::new(Mutex::new(self));
         Ok(tablet)
     }
