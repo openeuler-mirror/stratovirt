@@ -292,6 +292,4 @@ impl XhciOps for XhciPciDevice {
         }
         false
     }
-
-    fn update_intr(&mut self, _n: u32, _enable: bool) {}
 }
