@@ -520,35 +520,28 @@ impl Hid {
 
     fn handle_token_in(&mut self, p: &mut UsbPacket) {
         let mut buf = Vec::new();
-        if let Some(ep) = p.ep.as_ref() {
-            let clone_ep = ep.clone();
-            let locked_ep = clone_ep.lock().unwrap();
-            if locked_ep.ep_number == 1 {
-                if self.num == 0 {
-                    debug!("No data in usb device.");
-                    p.status = UsbPacketStatus::Nak;
-                    return;
-                }
-                match self.kind {
-                    HidType::Keyboard => {
-                        buf = self.keyboard_poll();
-                    }
-                    HidType::Tablet => {
-                        buf = self.pointer_poll();
-                    }
-                    _ => {
-                        error!("Unsupported HID device");
-                        p.status = UsbPacketStatus::Stall;
-                    }
-                }
-                let len = buf.len();
-                usb_packet_transfer(p, &mut buf, len);
-            } else {
-                error!("Unhandled endpoint {}", locked_ep.ep_number);
-                p.status = UsbPacketStatus::Stall;
+        if p.ep_number == 1 {
+            if self.num == 0 {
+                debug!("No data in usb device.");
+                p.status = UsbPacketStatus::Nak;
+                return;
             }
+            match self.kind {
+                HidType::Keyboard => {
+                    buf = self.keyboard_poll();
+                }
+                HidType::Tablet => {
+                    buf = self.pointer_poll();
+                }
+                _ => {
+                    error!("Unsupported HID device");
+                    p.status = UsbPacketStatus::Stall;
+                }
+            }
+            let len = buf.len();
+            usb_packet_transfer(p, &mut buf, len);
         } else {
-            error!("USB endpoint not found {}", p);
+            error!("Unhandled endpoint {}", p.ep_number);
             p.status = UsbPacketStatus::Stall;
         }
     }

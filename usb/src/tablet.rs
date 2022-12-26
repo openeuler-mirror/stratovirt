@@ -27,8 +27,8 @@ use crate::{
         STR_SERIAL_TABLET,
     },
     usb::{
-        usb_endpoint_init, UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
-        UsbDescOther, UsbDevice, UsbDeviceOps, UsbEndpoint, UsbPacket, UsbPacketStatus,
+        UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
+        UsbDevice, UsbDeviceOps, UsbEndpoint, UsbPacket, UsbPacketStatus,
     },
     xhci::xhci_controller::XhciDevice,
 };
@@ -136,15 +136,11 @@ impl UsbTablet {
 
     pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.usb_device.product_desc = String::from("StratoVirt USB Tablet");
-        self.usb_device.strings = Vec::new();
+        self.usb_device.reset_usb_endpoint();
+        self.usb_device.usb_desc = Some(DESC_TABLET.clone());
+        self.usb_device.init_descriptor()?;
         let tablet = Arc::new(Mutex::new(self));
-        let cloned_tablet = tablet.clone();
-        usb_endpoint_init(&(tablet as Arc<Mutex<dyn UsbDeviceOps>>));
-        let mut locked_tablet = cloned_tablet.lock().unwrap();
-        locked_tablet.usb_device.usb_desc = Some(DESC_TABLET.clone());
-        locked_tablet.usb_device.init_descriptor()?;
-        drop(locked_tablet);
-        Ok(cloned_tablet)
+        Ok(tablet)
     }
 }
 
@@ -226,7 +222,7 @@ impl UsbDeviceOps for UsbTablet {
         self.ctrl.clone()
     }
 
-    fn get_wakeup_endpoint(&self) -> Arc<Mutex<UsbEndpoint>> {
+    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
         self.usb_device.get_endpoint(true, 1)
     }
 }
