@@ -17,6 +17,7 @@ pub mod hotplug;
 pub mod msix;
 
 mod bus;
+mod demo_dev;
 mod host;
 mod root_port;
 
