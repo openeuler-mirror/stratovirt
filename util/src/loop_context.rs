@@ -161,7 +161,7 @@ pub struct EventLoopContext {
     /// Temp events vector, store wait returned events.
     ready_events: Vec<EpollEvent>,
     /// Timer list
-    timers: Vec<Timer>,
+    timers: Arc<Mutex<Vec<Timer>>>,
 }
 
 unsafe impl Sync for EventLoopContext {}
@@ -176,7 +176,7 @@ impl EventLoopContext {
             events: Arc::new(RwLock::new(BTreeMap::new())),
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
-            timers: Vec::new(),
+            timers: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -416,28 +416,30 @@ impl EventLoopContext {
         let timer = Timer::new(func, nsec);
 
         // insert in order of expire_time
-        let mut index = self.timers.len();
-        for (i, t) in self.timers.iter().enumerate() {
+        let mut timers = self.timers.lock().unwrap();
+        let mut index = timers.len();
+        for (i, t) in timers.iter().enumerate() {
             if timer.expire_time < t.expire_time {
                 index = i;
                 break;
             }
         }
-        self.timers.insert(index, timer);
+        timers.insert(index, timer);
     }
 
     /// Get the expire_time of the soonest Timer, and then translate it to timeout.
     fn timers_min_timeout(&self) -> i32 {
-        if self.timers.is_empty() {
+        let timers = self.timers.lock().unwrap();
+        if timers.is_empty() {
             return -1;
         }
 
         let now = Instant::now();
-        if self.timers[0].expire_time <= now {
+        if timers[0].expire_time <= now {
             return 0;
         }
 
-        let timeout = (self.timers[0].expire_time - now).as_millis();
+        let timeout = (timers[0].expire_time - now).as_millis();
         if timeout >= i32::MAX as u128 {
             i32::MAX - 1
         } else {
@@ -450,7 +452,8 @@ impl EventLoopContext {
         let now = Instant::now();
         let mut expired_nr = 0;
 
-        for timer in &self.timers {
+        let mut timers = self.timers.lock().unwrap();
+        for timer in timers.iter() {
             if timer.expire_time > now {
                 break;
             }
@@ -458,7 +461,8 @@ impl EventLoopContext {
             expired_nr += 1;
         }
 
-        let expired_timers: Vec<Timer> = self.timers.drain(0..expired_nr).collect();
+        let expired_timers: Vec<Timer> = timers.drain(0..expired_nr).collect();
+        drop(timers);
         for timer in expired_timers {
             (timer.func)();
         }
