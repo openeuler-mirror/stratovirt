@@ -376,8 +376,6 @@ impl XhciEvent {
 /// Controller ops registered in XhciDevice. Such as PCI device send MSIX.
 pub trait XhciOps: Send + Sync {
     fn trigger_intr(&mut self, n: u32, level: bool) -> bool;
-
-    fn update_intr(&mut self, n: u32, enable: bool);
 }
 
 /// Input Control Context. See the spec 6.2.5 Input Control Context.
@@ -1681,33 +1679,15 @@ impl XhciDevice {
     }
 
     pub fn update_intr(&mut self, v: u32) {
-        let mut level = false;
-        if v == 0 {
-            if self.intrs[0].iman & IMAN_IP == IMAN_IP
-                && self.intrs[0].iman & IMAN_IE == IMAN_IE
-                && self.oper.usb_cmd & USB_CMD_INTE == USB_CMD_INTE
-            {
-                level = true;
-            }
+        if self.intrs[v as usize].iman & IMAN_IP == IMAN_IP
+            && self.intrs[v as usize].iman & IMAN_IE == IMAN_IE
+            && self.oper.usb_cmd & USB_CMD_INTE == USB_CMD_INTE
+        {
             if let Some(ops) = &self.ctrl_ops {
-                if ops
-                    .upgrade()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .trigger_intr(0, level)
-                {
-                    self.intrs[0].iman &= !IMAN_IP;
+                if ops.upgrade().unwrap().lock().unwrap().trigger_intr(v, true) {
+                    self.intrs[v as usize].iman &= !IMAN_IP;
                 }
             }
-        }
-
-        if let Some(ops) = &self.ctrl_ops {
-            ops.upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .update_intr(v, self.intrs[0].iman & IMAN_IE == IMAN_IE);
         }
     }
 
