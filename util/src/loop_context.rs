@@ -46,7 +46,7 @@ pub enum NotifierOperation {
     Resume = 32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum EventStatus {
     /// Event is currently monitored in epoll.
     Alive = 0,
@@ -70,10 +70,10 @@ pub struct EventNotifier {
     pub event: EventSet,
     /// Event Handler List, one fd event may have many handlers
     pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+    /// Pre-polling handler
+    pub handler_poll: Option<Box<NotifierCallback>>,
     /// Event status
     status: EventStatus,
-    /// The flag representing whether pre polling is required
-    pub io_poll: bool,
 }
 
 impl fmt::Debug for EventNotifier {
@@ -84,7 +84,7 @@ impl fmt::Debug for EventNotifier {
             .field("parked_fd", &self.parked_fd)
             .field("event", &self.event)
             .field("status", &self.status)
-            .field("io_poll", &self.io_poll)
+            .field("io_poll", &self.handler_poll.is_some())
             .finish()
     }
 }
@@ -104,8 +104,8 @@ impl EventNotifier {
             parked_fd,
             event,
             handlers,
+            handler_poll: None,
             status: EventStatus::Alive,
-            io_poll: false,
         }
     }
 }
@@ -386,21 +386,17 @@ impl EventLoopContext {
                 return Ok(false);
             }
         }
-        let timeout = self.timers_min_timeout();
 
+        let timeout = self.timers_min_timeout();
         if timeout == -1 {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
-                for (_fd, notifer) in self.events.read().unwrap().iter() {
-                    if notifer.io_poll {
-                        if let EventStatus::Alive = notifer.status {
-                            let handle = notifer.handlers[1].lock().unwrap();
-                            match handle(self.ready_events[1].event_set(), notifer.raw_fd) {
-                                None => {}
-                                Some(_) => {
-                                    break;
-                                }
-                            }
-                        }
+                for notifer in self.events.read().unwrap().values() {
+                    if notifer.status != EventStatus::Alive || notifer.handler_poll.is_none() {
+                        continue;
+                    }
+                    let handler_poll = notifer.handler_poll.as_ref().unwrap();
+                    if handler_poll(EventSet::empty(), notifer.raw_fd).is_some() {
+                        break;
                     }
                 }
             }
