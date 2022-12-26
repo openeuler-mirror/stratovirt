@@ -13,11 +13,10 @@
 use std::sync::{Arc, Mutex};
 
 use acpi::{
-    AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlByte, AmlCacheable, AmlCreateDWordField,
-    AmlDWord, AmlDWordDesc, AmlDevice, AmlEisaId, AmlElse, AmlEqual, AmlISARanges, AmlIf,
-    AmlInteger, AmlLNot, AmlLocal, AmlMethod, AmlName, AmlNameDecl, AmlOr, AmlPackage,
-    AmlReadAndWrite, AmlResTemplate, AmlReturn, AmlScopeBuilder, AmlStore, AmlToUuid, AmlWordDesc,
-    AmlZero,
+    AmlAddressSpaceDecode, AmlAnd, AmlArg, AmlBuilder, AmlCacheable, AmlCreateDWordField,
+    AmlDWordDesc, AmlDevice, AmlEisaId, AmlElse, AmlEqual, AmlISARanges, AmlIf, AmlInteger,
+    AmlLNot, AmlLocal, AmlMethod, AmlName, AmlNameDecl, AmlOr, AmlReadAndWrite, AmlResTemplate,
+    AmlReturn, AmlScopeBuilder, AmlStore, AmlToUuid, AmlWordDesc, AmlZero,
 };
 #[cfg(target_arch = "x86_64")]
 use acpi::{AmlIoDecode, AmlIoResource};
@@ -454,20 +453,6 @@ impl AmlBuilder for PciHost {
             pcie_mmio.1 as u32,
         ));
         pci_host_bridge.append_child(AmlNameDecl::new("_CRS", crs));
-
-        // Build and append pci-routing-table to PCI host bridge node.
-        let slot_num = 32_u8;
-        let mut prt_pkg = AmlPackage::new(slot_num);
-        let pci_irq_base = 16_u32;
-        (0..slot_num).for_each(|slot| {
-            let mut pkg = AmlPackage::new(4);
-            pkg.append_child(AmlDWord(((slot as u32) << 16) as u32 | 0xFFFF));
-            pkg.append_child(AmlByte(0));
-            pkg.append_child(AmlByte(0));
-            pkg.append_child(AmlDWord(pci_irq_base + (slot as u32 % 8)));
-            prt_pkg.append_child(pkg);
-        });
-        pci_host_bridge.append_child(AmlNameDecl::new("_PRT", prt_pkg));
 
         pci_host_bridge.aml_bytes()
     }
