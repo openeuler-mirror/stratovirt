@@ -249,7 +249,7 @@ impl StdMachine {
             .with_context(|| "Fail to register reset event in LPC")?;
         self.register_acpi_shutdown_event(&ich.shutdown_req, clone_vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
-        PciDevOps::realize(ich)?;
+        ich.realize()?;
         Ok(())
     }
 }
@@ -284,7 +284,7 @@ impl StdMachineOps for StdMachine {
             .with_context(|| "Failed to register CONFIG_DATA port in I/O space.")?;
 
         let mch = Mch::new(root_bus, mmconfig_region, mmconfig_region_ops);
-        PciDevOps::realize(mch)?;
+        mch.realize()?;
         Ok(())
     }
 
