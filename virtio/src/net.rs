@@ -54,7 +54,7 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::read_u32;
+use util::num_ops::{read_u32, str_to_usize};
 use util::tap::{
     Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
 };
@@ -1310,8 +1310,7 @@ fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
     let is_mq = queue_pair > 1;
     let ifr_flag = fs::read_to_string(tap_path)
         .with_context(|| "Failed to read content from tun_flags file")?;
-    let flags = u16::from_str_radix(ifr_flag.trim().trim_start_matches("0x"), 16)
-        .with_context(|| "Failed to parse tap ifr flag")?;
+    let flags = str_to_usize(ifr_flag)? as u16;
     if (flags & IFF_MULTI_QUEUE != 0) && !is_mq {
         bail!(format!(
             "Tap device supports mq, but command set queue pairs {}.",
