@@ -83,7 +83,9 @@ use sysbus::{SysBusDevType, SysRes};
 use syscall::syscall_whitelist;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::{loop_context::EventLoopManager, seccomp::BpfRule, set_termi_canon_mode};
+use util::{
+    loop_context::EventLoopManager, num_ops::str_to_usize, seccomp::BpfRule, set_termi_canon_mode,
+};
 use virtio::{
     create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VirtioDevice,
     VirtioMmioDevice, VirtioMmioState, VirtioNetState,
@@ -1053,10 +1055,16 @@ impl DeviceInterface for LightMachine {
         // get slot of bus by addr or lun
         let mut slot = 0;
         if let Some(addr) = args.addr {
-            let slot_str = addr.as_str().trim_start_matches("0x");
-
-            if let Ok(n) = usize::from_str_radix(slot_str, 16) {
-                slot = n;
+            if let Ok(num) = str_to_usize(addr) {
+                slot = num;
+            } else {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!(
+                        "Invalid addr for device {}",
+                        args.id
+                    )),
+                    None,
+                );
             }
         } else if let Some(lun) = args.lun {
             slot = lun + 1;

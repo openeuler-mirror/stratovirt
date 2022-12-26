@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::error::ConfigError;
 use super::{CmdParser, ConfigCheck, MAX_STRING_LENGTH};
 use crate::config::ExBool;
+use util::num_ops::str_to_usize;
 
 /// Basic information of pci devices such as bus number,
 /// slot number and function number.
@@ -81,17 +82,17 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
             addr_vec.len()
         );
     }
+
     let slot = addr_vec.first().unwrap();
-    let without_prefix = slot.trim_start_matches("0x");
-    let slot = u8::from_str_radix(without_prefix, 16)
-        .with_context(|| format!("Invalid slot num: {}", slot))?;
+    let slot =
+        str_to_usize(slot.to_string()).with_context(|| format!("Invalid slot num: {}", slot))?;
     if slot > 31 {
         bail!("Invalid slot num: {}", slot);
     }
+
     let func = if addr_vec.get(1).is_some() {
         let function = addr_vec.get(1).unwrap();
-        let without_prefix = function.trim_start_matches("0x");
-        u8::from_str_radix(without_prefix, 16)
+        str_to_usize(function.to_string())
             .with_context(|| format!("Invalid function num: {}", function))?
     } else {
         0
@@ -99,7 +100,8 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
     if func > 7 {
         bail!("Invalid function num: {}", func);
     }
-    Ok((slot, func))
+
+    Ok((slot as u8, func as u8))
 }
 
 pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
@@ -149,12 +151,13 @@ pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
     cmd_parser.parse(rootport_cfg)?;
 
     let mut root_port = RootPortConfig::default();
-    if let Some(port) = cmd_parser.get_value::<String>("port")? {
-        let without_prefix = port.trim_start_matches("0x");
-        root_port.port = u8::from_str_radix(without_prefix, 16).unwrap();
-    } else {
+    let port = cmd_parser.get_value::<String>("port")?;
+    if port.is_none() {
         return Err(anyhow!(ConfigError::FieldIsMissing("port", "rootport")));
     }
+    // Safety: as port is validated non-none at the previous line, it's safe to unwrap() it
+    root_port.port = str_to_usize(port.unwrap())? as u8;
+
     let _ = cmd_parser.get_value::<u8>("chassis")?;
 
     if let Some(id) = cmd_parser.get_value::<String>("id")? {
