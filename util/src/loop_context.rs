@@ -52,8 +52,6 @@ enum EventStatus {
     Alive = 0,
     /// Event is parked, temporarily not monitored.
     Parked = 1,
-    /// Event is removed.
-    Removed = 2,
 }
 
 pub type NotifierCallback = dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>;
@@ -191,9 +189,9 @@ impl EventLoopContext {
         gc.clear();
     }
 
-    fn add_event(&mut self, event: EventNotifier) -> Result<()> {
-        // If there is one same alive event monitored, update the handlers.
-        // If there is one same parked event, update the handlers but warn.
+    fn add_event(&mut self, mut event: EventNotifier) -> Result<()> {
+        // If there is one same alive event monitored, update the handlers and eventset.
+        // If there is one same parked event, update the handlers and eventset but warn.
         // If there is no event in the map, insert the event and park the related.
         let mut events_map = self.events.write().unwrap();
         if let Some(notifier) = events_map.get_mut(&event.raw_fd) {
@@ -201,24 +199,31 @@ impl EventLoopContext {
                 return Err(anyhow!(UtilError::BadNotifierOperation));
             }
 
-            let mut event = event;
+            if notifier.event != event.event {
+                self.epoll.ctl(
+                    ControlOperation::Modify,
+                    notifier.raw_fd,
+                    EpollEvent::new(notifier.event | event.event, &**notifier as *const _ as u64),
+                )?;
+                notifier.event |= event.event;
+            }
             notifier.handlers.append(&mut event.handlers);
-            if let EventStatus::Parked = notifier.status {
+            if notifier.status == EventStatus::Parked {
                 warn!("Parked event updated!");
             }
             return Ok(());
         }
 
-        let raw_fd = event.raw_fd;
-        events_map.insert(raw_fd, Box::new(event));
-        let event = events_map.get(&raw_fd).unwrap();
+        let event = Box::new(event);
         self.epoll.ctl(
             ControlOperation::Add,
             event.raw_fd,
-            EpollEvent::new(event.event, &**event as *const _ as u64),
+            EpollEvent::new(event.event, &*event as *const _ as u64),
         )?;
+        let parked_fd = event.parked_fd;
+        events_map.insert(event.raw_fd, event);
 
-        if let Some(parked_fd) = event.parked_fd {
+        if let Some(parked_fd) = parked_fd {
             if let Some(parked) = events_map.get_mut(&parked_fd) {
                 self.epoll
                     .ctl(ControlOperation::Delete, parked_fd, EpollEvent::default())?;
@@ -232,14 +237,13 @@ impl EventLoopContext {
     }
 
     fn rm_event(&mut self, event: &EventNotifier) -> Result<()> {
-        // If there is one same parked event, return Ok.
         // If there is no event in the map, return Error.
-        // If there is one same alive event monitored, put the event in gc and reactivate the parked event.
+        // Else put the event in gc and reactivate the parked event.
         let mut events_map = self.events.write().unwrap();
-        match events_map.get_mut(&event.raw_fd) {
+        match events_map.get(&event.raw_fd) {
             Some(notifier) => {
-                if let EventStatus::Alive = notifier.status {
-                    // No need to delete fd if status is Parked, it's done in park_event.
+                // No need to delete fd if status is Parked, it's done in park_event.
+                if notifier.status == EventStatus::Alive {
                     if let Err(error) = self.epoll.ctl(
                         ControlOperation::Delete,
                         notifier.raw_fd,
@@ -251,10 +255,11 @@ impl EventLoopContext {
                         }
                     }
                 }
+                let parked_fd = notifier.parked_fd;
+                let event = events_map.remove(&event.raw_fd).unwrap();
+                self.gc.write().unwrap().push(event);
 
-                notifier.status = EventStatus::Removed;
-
-                if let Some(parked_fd) = notifier.parked_fd {
+                if let Some(parked_fd) = parked_fd {
                     if let Some(parked) = events_map.get_mut(&parked_fd) {
                         self.epoll.ctl(
                             ControlOperation::Add,
@@ -266,9 +271,6 @@ impl EventLoopContext {
                         return Err(anyhow!(UtilError::NoParkedFd(parked_fd)));
                     }
                 }
-
-                let event = events_map.remove(&event.raw_fd).unwrap();
-                self.gc.write().unwrap().push(event);
             }
             _ => {
                 return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
@@ -279,12 +281,11 @@ impl EventLoopContext {
     }
 
     /// change the callback for event
-    fn modify_event(&mut self, event: EventNotifier) -> Result<()> {
+    fn modify_event(&mut self, mut event: EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
                 notifier.handlers.clear();
-                let mut event = event;
                 notifier.handlers.append(&mut event.handlers);
             }
             _ => {
@@ -535,13 +536,7 @@ mod test {
                 None => {
                     return None;
                 }
-                Some(notifier) => {
-                    if let EventStatus::Alive = notifier.status {
-                        Some(true)
-                    } else {
-                        Some(false)
-                    }
-                }
+                Some(notifier) => Some(EventStatus::Alive == notifier.status),
             }
         }
 
