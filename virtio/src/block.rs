@@ -726,6 +726,7 @@ impl BlockIoHandler {
 fn build_event_notifier(
     fd: RawFd,
     handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+    handler_poll: Option<Box<NotifierCallback>>,
 ) -> EventNotifier {
     let mut notifier = EventNotifier::new(
         NotifierOperation::AddShared,
@@ -734,7 +735,7 @@ fn build_event_notifier(
         EventSet::IN,
         handlers,
     );
-    notifier.io_poll = notifier.handlers.len() == 2;
+    notifier.handler_poll = handler_poll;
     notifier
 }
 
@@ -753,6 +754,7 @@ impl EventNotifierHelper for BlockIoHandler {
         notifiers.push(build_event_notifier(
             handler_raw.update_evt.as_raw_fd(),
             vec![Arc::new(Mutex::new(h))],
+            None,
         ));
 
         // Register event notifier for deactivate_evt.
@@ -764,6 +766,7 @@ impl EventNotifierHelper for BlockIoHandler {
         notifiers.push(build_event_notifier(
             handler_raw.deactivate_evt.as_raw_fd(),
             vec![Arc::new(Mutex::new(h))],
+            None,
         ));
 
         // Register event notifier for queue_evt.
@@ -791,10 +794,8 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.queue_evt.as_raw_fd(),
-            vec![
-                Arc::new(Mutex::new(h)),
-                Arc::new(Mutex::new(handler_iopoll)),
-            ],
+            vec![Arc::new(Mutex::new(h))],
+            Some(handler_iopoll),
         ));
 
         // Register timer event notifier for IO limits
@@ -813,6 +814,7 @@ impl EventNotifierHelper for BlockIoHandler {
             notifiers.push(build_event_notifier(
                 lb.as_raw_fd(),
                 vec![Arc::new(Mutex::new(h))],
+                None,
             ));
         }
 
@@ -841,10 +843,8 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.aio.fd.as_raw_fd(),
-            vec![
-                Arc::new(Mutex::new(h)),
-                Arc::new(Mutex::new(handler_iopoll)),
-            ],
+            vec![Arc::new(Mutex::new(h))],
+            Some(handler_iopoll),
         ));
 
         notifiers
