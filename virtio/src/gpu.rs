@@ -11,13 +11,13 @@
 // See the Mulan PSL v2 for more details.
 
 use super::{
-    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_GPU,
+    Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_GPU,
 };
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
-use log::error;
+use log::{error, warn};
 use machine_manager::config::{GpuConfig, VIRTIO_GPU_MAX_SCANOUTS};
 use machine_manager::event_loop::EventLoop;
 use migration::{DeviceStateDesc, FieldDesc};
@@ -1194,6 +1194,161 @@ impl GpuIoHandler {
         }
     }
 
+    fn gpu_cmd_transfer_to_host_2d_params_check(
+        &mut self,
+        info_transfer: &VirtioGpuTransferToHost2d,
+    ) -> u32 {
+        let res_idx = self
+            .resources_list
+            .iter()
+            .position(|x| x.resource_id == info_transfer.resource_id);
+
+        if res_idx.is_none() {
+            error!(
+                "The resource_id {} in transfer to host 2d request is not existed",
+                info_transfer.resource_id
+            );
+            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        }
+
+        let res = &self.resources_list[res_idx.unwrap()];
+        if res.iov.is_empty() {
+            error!(
+                "The resource_id {} in transfer to host 2d request don't have iov",
+                info_transfer.resource_id
+            );
+            return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
+        }
+
+        if info_transfer.rect.x_coord > res.width
+            || info_transfer.rect.y_coord > res.height
+            || info_transfer.rect.width > res.width
+            || info_transfer.rect.height > res.height
+            || info_transfer.rect.width + info_transfer.rect.x_coord > res.width
+            || info_transfer.rect.height + info_transfer.rect.y_coord > res.height
+        {
+            error!(
+                "The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {})",
+                res.resource_id,
+                res.width,
+                res.height,
+                info_transfer.offset,
+                info_transfer.rect.width,
+                info_transfer.rect.height,
+                info_transfer.rect.x_coord,
+                info_transfer.rect.y_coord,
+            );
+            return VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        }
+
+        0
+    }
+
+    fn gpu_cmd_transfer_to_host_2d_update_resource(
+        &mut self,
+        info_transfer: &VirtioGpuTransferToHost2d,
+    ) {
+        let res = self
+            .resources_list
+            .iter()
+            .find(|&x| x.resource_id == info_transfer.resource_id)
+            .unwrap();
+        let pixman_format;
+        let bpp;
+        let stride;
+        let data;
+        unsafe {
+            pixman_format = pixman_image_get_format(res.pixman_image);
+            bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+            stride = pixman_image_get_stride(res.pixman_image);
+            data = pixman_image_get_data(res.pixman_image);
+        }
+        let data_cast: *mut u8 = data.cast();
+        let mut dst_ofs: usize = (info_transfer.rect.y_coord * stride as u32
+            + info_transfer.rect.x_coord * bpp) as usize;
+        // It can be considered that PARTIAL or complete image data is stored in
+        // the res.iov[]. And info_transfer.offset is the offset from res.iov[0].base
+        // to the start position of the resource we really want to update.
+        let mut src_ofs: usize = info_transfer.offset as usize;
+        // current iov's offset
+        let mut iov_idx: usize = 0;
+        // current iov's offset
+        let mut iov_ofs: usize = 0;
+        let mut iov_len_sum: usize = 0;
+
+        // move to correct iov
+        loop {
+            if iov_len_sum == src_ofs || iov_idx >= res.iov.len() {
+                break;
+            }
+
+            if res.iov[iov_idx].iov_len as usize + iov_len_sum <= src_ofs {
+                iov_len_sum += res.iov[iov_idx].iov_len as usize;
+                iov_idx += 1;
+            } else {
+                iov_ofs = src_ofs - iov_len_sum;
+                break;
+            }
+        }
+
+        if iov_idx >= res.iov.len() {
+            warn!("data from guest is shorted than expected");
+            return;
+        }
+
+        // we divide regions into that need to be copied and can be skipped
+        let src_cpy_section: usize = (info_transfer.rect.width * bpp) as usize;
+        let src_expected: usize = info_transfer.offset as usize
+            + ((info_transfer.rect.height - 1) * stride as u32) as usize
+            + (info_transfer.rect.width * bpp) as usize;
+
+        loop {
+            if src_ofs >= src_expected || iov_idx >= res.iov.len() {
+                break;
+            }
+
+            let iov_left = res.iov[iov_idx].iov_len as usize - iov_ofs;
+
+            let pos = (src_ofs - info_transfer.offset as usize) % (stride as usize);
+            if pos >= src_cpy_section {
+                if pos + iov_left <= stride as usize {
+                    src_ofs += iov_left;
+                    dst_ofs += iov_left;
+                    iov_idx += 1;
+                    iov_ofs = 0;
+                } else {
+                    src_ofs += stride as usize - pos;
+                    dst_ofs += stride as usize - pos;
+                    iov_ofs += stride as usize - pos;
+                }
+            } else if pos + iov_left <= src_cpy_section {
+                unsafe {
+                    ptr::copy(
+                        (res.iov[iov_idx].iov_base as *const u8).add(iov_ofs),
+                        data_cast.add(dst_ofs),
+                        iov_left,
+                    );
+                }
+                src_ofs += iov_left;
+                dst_ofs += iov_left;
+                iov_idx += 1;
+                iov_ofs = 0;
+            } else {
+                // pos + iov_left > src_cpy_section
+                unsafe {
+                    ptr::copy(
+                        (res.iov[iov_idx].iov_base as *const u8).add(iov_ofs),
+                        data_cast.add(dst_ofs),
+                        src_cpy_section - pos,
+                    );
+                }
+                src_ofs += src_cpy_section - pos;
+                dst_ofs += src_cpy_section - pos;
+                iov_ofs += src_cpy_section - pos;
+            }
+        }
+    }
+
     fn gpu_cmd_transfer_to_host_2d(
         &mut self,
         need_interrupt: &mut bool,
@@ -1210,102 +1365,15 @@ impl GpuIoHandler {
                 ))
             })?;
 
-        if let Some(res_index) = self
-            .resources_list
-            .iter()
-            .position(|x| x.resource_id == info_transfer.resource_id)
-        {
-            let res = &self.resources_list[res_index];
-            if res.iov.is_empty() {
-                error!(
-                    "The resource_id {} in transfer to host 2d request don't have iov",
-                    info_transfer.resource_id
-                );
-                return self.gpu_response_nodata(
-                    need_interrupt,
-                    VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
-                    req,
-                );
-            }
-
-            if info_transfer.rect.x_coord > res.width
-                || info_transfer.rect.y_coord > res.height
-                || info_transfer.rect.width > res.width
-                || info_transfer.rect.height > res.height
-                || info_transfer.rect.width + info_transfer.rect.x_coord > res.width
-                || info_transfer.rect.height + info_transfer.rect.y_coord > res.height
-            {
-                error!(
-                    "The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {})",
-                    res.resource_id,
-                    res.width,
-                    res.height,
-                    info_transfer.offset,
-                    info_transfer.rect.width,
-                    info_transfer.rect.height,
-                    info_transfer.rect.x_coord,
-                    info_transfer.rect.y_coord,
-                );
-                return self.gpu_response_nodata(
-                    need_interrupt,
-                    VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
-                    req,
-                );
-            }
-
-            unsafe {
-                let pixman_format = pixman_image_get_format(res.pixman_image);
-                let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
-                let stride = pixman_image_get_stride(res.pixman_image);
-                let height = pixman_image_get_height(res.pixman_image);
-                let width = pixman_image_get_width(res.pixman_image);
-                let data = pixman_image_get_data(res.pixman_image);
-                let data_cast: *mut u8 = data.cast();
-
-                let mut iovec_buf = Vec::new();
-                for item in res.iov.iter() {
-                    let mut dst = Vec::new();
-                    let src = std::slice::from_raw_parts(
-                        item.iov_base as *const u8,
-                        item.iov_len as usize,
-                    );
-                    dst.resize(item.iov_len as usize, 0);
-                    dst[0..item.iov_len as usize].copy_from_slice(src);
-                    iovec_buf.append(&mut dst);
-                }
-
-                if info_transfer.offset != 0
-                    || info_transfer.rect.x_coord != 0
-                    || info_transfer.rect.y_coord != 0
-                    || info_transfer.rect.width != width as u32
-                {
-                    for h in 0..info_transfer.rect.height {
-                        let offset_iov = info_transfer.offset as u32 + stride as u32 * h;
-                        let offset_data = (info_transfer.rect.y_coord + h) * stride as u32
-                            + (info_transfer.rect.x_coord * bpp);
-                        ptr::copy(
-                            iovec_buf.as_ptr().offset(offset_iov as isize),
-                            data_cast.offset(offset_data as isize),
-                            info_transfer.rect.width as usize * bpp as usize,
-                        );
-                    }
-                } else {
-                    ptr::copy(
-                        iovec_buf.as_ptr(),
-                        data_cast,
-                        stride as usize * height as usize,
-                    );
-                }
-            }
-            self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
-        } else {
-            error!(
-                "The resource_id {} in transfer to host 2d request is not existed",
-                info_transfer.resource_id
-            );
-            self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
+        let errcode = self.gpu_cmd_transfer_to_host_2d_params_check(&info_transfer);
+        if errcode != 0 {
+            return self.gpu_response_nodata(need_interrupt, errcode, req);
         }
+
+        self.gpu_cmd_transfer_to_host_2d_update_resource(&info_transfer);
+        self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_OK_NODATA, req)
     }
+
     fn gpu_cmd_resource_attach_backing(
         &mut self,
         need_interrupt: &mut bool,
@@ -1432,6 +1500,7 @@ impl GpuIoHandler {
             self.gpu_response_nodata(need_interrupt, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID, req)
         }
     }
+
     fn process_control_queue(&mut self, mut req_queue: Vec<VirtioGpuRequest>) -> Result<()> {
         for req in req_queue.iter_mut() {
             let mut need_interrupt = true;
@@ -1472,17 +1541,22 @@ impl GpuIoHandler {
             }
 
             if need_interrupt {
-                (self.interrupt_cb)(
-                    &VirtioInterruptType::Vring,
-                    Some(&self.ctrl_queue.lock().unwrap()),
-                    false,
-                )
-                .with_context(|| {
-                    anyhow!(VirtioError::InterruptTrigger(
-                        "gpu",
-                        VirtioInterruptType::Vring
-                    ))
-                })?;
+                let mut queue_lock = self.ctrl_queue.lock().unwrap();
+                if queue_lock
+                    .vring
+                    .should_notify(&self.mem_space, self.driver_features)
+                {
+                    if let Err(e) = (*self.interrupt_cb.as_ref())(
+                        &VirtioInterruptType::Vring,
+                        Some(&queue_lock),
+                        false,
+                    ) {
+                        error!(
+                            "Failed to trigger interrupt(aio completion) for gpu device, error is {:?}",
+                            e
+                        );
+                    }
+                }
             }
         }
 
@@ -1687,6 +1761,7 @@ impl Default for Gpu {
 impl Gpu {
     pub fn new(gpu_conf: GpuConfig) -> Gpu {
         let mut state = GpuState::default();
+
         state.base_conf.xres = gpu_conf.xres;
         state.base_conf.yres = gpu_conf.yres;
         if gpu_conf.edid {
@@ -1694,6 +1769,9 @@ impl Gpu {
         }
         state.base_conf.max_outputs = gpu_conf.max_outputs;
         state.device_features = 1u64 << VIRTIO_F_VERSION_1;
+        state.device_features |= 1u64 << VIRTIO_F_RING_EVENT_IDX;
+        state.device_features |= 1u64 << VIRTIO_F_RING_INDIRECT_DESC;
+
         Self {
             gpu_conf,
             state,
