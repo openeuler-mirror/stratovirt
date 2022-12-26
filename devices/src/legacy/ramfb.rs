@@ -17,12 +17,10 @@ use address_space::{AddressSpace, GuestAddress};
 use anyhow::Context;
 use drm_fourcc::DrmFourcc;
 use log::error;
-use migration_derive::ByteCode;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
-use util::byte_code::ByteCode;
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 use vnc::console::{
     console_init, display_graphic_update, display_replace_surface, get_console_by_id,
@@ -33,36 +31,19 @@ const BYTES_PER_PIXELS: u32 = 8;
 const WIDTH_MAX: u32 = 16_000;
 const HEIGHT_MAX: u32 = 12_000;
 
-#[allow(dead_code)]
 #[repr(packed)]
-#[derive(ByteCode, Clone, Copy)]
 struct RamfbCfg {
-    addr: u64,
-    fourcc: u32,
-    flags: u32,
-    width: u32,
-    height: u32,
-    stride: u32,
-}
-
-impl RamfbCfg {
-    pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
-    }
-}
-
-impl AmlBuilder for RamfbCfg {
-    fn aml_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
-    }
+    _addr: u64,
+    _fourcc: u32,
+    _flags: u32,
+    _width: u32,
+    _height: u32,
+    _stride: u32,
 }
 
 #[derive(Clone)]
 pub struct RamfbState {
     pub surface: Option<DisplaySurface>,
-    cfg: RamfbCfg,
     sys_mem: Arc<AddressSpace>,
 }
 
@@ -73,7 +54,6 @@ impl RamfbState {
     pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
         Self {
             surface: None,
-            cfg: RamfbCfg::new(),
             sys_mem,
         }
     }
@@ -81,10 +61,11 @@ impl RamfbState {
     pub fn setup(&mut self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
         let mut locked_fw_cfg = fw_cfg.lock().unwrap();
         let ramfb_state_cb = self.clone();
+        let cfg: Vec<u8> = [0; size_of::<RamfbCfg>()].to_vec();
         locked_fw_cfg
             .add_file_callback_entry(
                 "etc/ramfb",
-                self.cfg.clone().aml_bytes(),
+                cfg,
                 None,
                 Some(Arc::new(Mutex::new(ramfb_state_cb))),
                 true,
@@ -137,7 +118,6 @@ impl RamfbState {
 
     fn reset_ramfb_state(&mut self) {
         self.surface = None;
-        self.cfg = RamfbCfg::new();
     }
 }
 
