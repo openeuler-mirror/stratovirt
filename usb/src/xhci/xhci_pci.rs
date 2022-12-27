@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use address_space::{AddressSpace, Region};
-use log::{debug, error};
+use log::debug;
 use machine_manager::config::XhciConfig;
 use pci::config::{
     PciConfig, RegionType, DEVICE_ID, MINMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
@@ -25,7 +25,7 @@ use pci::msix::update_dev_id;
 use pci::{init_msix, le_write_u16, PciBus, PciDevOps};
 
 use crate::usb::UsbDeviceOps;
-use crate::xhci::xhci_controller::{XhciDevice, XhciOps, MAX_INTRS, MAX_SLOTS};
+use crate::xhci::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
 use crate::xhci::xhci_regs::{
     build_cap_ops, build_doorbell_ops, build_oper_ops, build_port_ops, build_runtime_ops,
     XHCI_CAP_LENGTH, XHCI_OFF_DOORBELL, XHCI_OFF_RUNTIME,
@@ -221,10 +221,17 @@ impl PciDevOps for XhciPciDevice {
         )?;
 
         let devfn = self.devfn;
+        // It is safe to unwrap, because it is initialized in init_msix.
+        let cloned_msix = self.pci_config.msix.as_ref().unwrap().clone();
+        let cloned_dev_id = self.dev_id.clone();
+        // Registers the msix to the xhci device for interrupt notification.
+        self.xhci.lock().unwrap().send_interrupt_ops = Some(Box::new(move |n: u32| {
+            cloned_msix
+                .lock()
+                .unwrap()
+                .notify(n as u16, cloned_dev_id.load(Ordering::Acquire));
+        }));
         let dev = Arc::new(Mutex::new(self));
-        // Register xhci-pci to xhci-device for notify.
-        dev.lock().unwrap().xhci.lock().unwrap().ctrl_ops =
-            Some(Arc::downgrade(&dev) as Weak<Mutex<dyn XhciOps>>);
         // Attach to the PCI bus.
         let pci_bus = dev.lock().unwrap().parent_bus.upgrade().unwrap();
         let mut locked_pci_bus = pci_bus.lock().unwrap();
@@ -276,22 +283,4 @@ impl PciDevOps for XhciPciDevice {
         self.xhci.lock().unwrap().reset();
         Ok(())
     }
-}
-
-impl XhciOps for XhciPciDevice {
-    fn trigger_intr(&mut self, n: u32, trigger: bool) -> bool {
-        if let Some(msix) = self.pci_config.msix.as_mut() {
-            if trigger {
-                msix.lock()
-                    .unwrap()
-                    .notify(n as u16, self.dev_id.load(Ordering::Acquire));
-                return true;
-            }
-        } else {
-            error!("Failed to send interrupt: msix does not exist");
-        }
-        false
-    }
-
-    fn update_intr(&mut self, _n: u32, _enable: bool) {}
 }
