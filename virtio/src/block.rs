@@ -288,7 +288,9 @@ impl Request {
         }
 
         let request_type = self.out_header.request_type;
-        if request_type == VIRTIO_BLK_T_IN || request_type == VIRTIO_BLK_T_GET_ID {
+        if MigrationManager::is_active()
+            && (request_type == VIRTIO_BLK_T_IN || request_type == VIRTIO_BLK_T_GET_ID)
+        {
             // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
             for iov in aiocb.iovec.iter() {
                 // Mark vmm dirty page manually if live migration is active.
