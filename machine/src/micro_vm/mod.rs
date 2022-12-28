@@ -305,7 +305,7 @@ impl LightMachine {
                     used: false,
                 });
 
-            MigrationManager::register_device_instance(
+            MigrationManager::register_transport_instance(
                 VirtioMmioState::descriptor(),
                 VirtioMmioDevice::realize(
                     dev,

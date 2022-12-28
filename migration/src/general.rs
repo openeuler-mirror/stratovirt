@@ -217,8 +217,13 @@ pub trait Lifecycle {
         Ok(())
     }
 
-    /// Resume devices during migration.
+    /// Resume VM during migration.
     fn resume() -> Result<()> {
+        let locked_transports = &MIGRATION_MANAGER.vmm.read().unwrap().transports;
+        for (_, transport) in locked_transports.iter() {
+            transport.lock().unwrap().resume()?;
+        }
+
         let locked_devices = &MIGRATION_MANAGER.vmm.read().unwrap().devices;
         for (_, device) in locked_devices.iter() {
             device.lock().unwrap().resume()?;

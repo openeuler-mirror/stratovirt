@@ -179,6 +179,24 @@ impl MigrationManager {
         Self::save_desc_db(fd)?;
 
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        // Save transports state.
+        for (id, transport) in locked_vmm.transports.iter() {
+            transport
+                .lock()
+                .unwrap()
+                .save_device(*id, fd)
+                .with_context(|| "Failed to save transport state")?;
+        }
+
+        // Save devices state.
+        for (id, device) in locked_vmm.devices.iter() {
+            device
+                .lock()
+                .unwrap()
+                .save_device(*id, fd)
+                .with_context(|| "Failed to save device state")?;
+        }
+
         // Save CPUs state.
         for (id, cpu) in locked_vmm.cpus.iter() {
             cpu.save_device(*id, fd)
@@ -194,15 +212,6 @@ impl MigrationManager {
                 .unwrap()
                 .save_device(translate_id(KVM_SNAPSHOT_ID), fd)
                 .with_context(|| "Failed to save kvm state")?;
-        }
-
-        // Save devices state.
-        for (id, device) in locked_vmm.devices.iter() {
-            device
-                .lock()
-                .unwrap()
-                .save_device(*id, fd)
-                .with_context(|| "Failed to save device state")?;
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -236,6 +245,30 @@ impl MigrationManager {
         fd: &mut dyn Read,
     ) -> Result<()> {
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        // Restore transports state.
+        for _ in 0..locked_vmm.transports.len() {
+            let (transport_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            if let Some(transport) = locked_vmm.transports.get(&id) {
+                transport
+                    .lock()
+                    .unwrap()
+                    .restore_mut_device(&transport_data)
+                    .with_context(|| "Failed to restore transport state")?;
+            }
+        }
+
+        // Restore devices state.
+        for _ in 0..locked_vmm.devices.len() {
+            let (device_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            if let Some(device) = locked_vmm.devices.get(&id) {
+                device
+                    .lock()
+                    .unwrap()
+                    .restore_mut_device(&device_data)
+                    .with_context(|| "Failed to restore device state")?;
+            }
+        }
+
         // Restore CPUs state.
         for _ in 0..locked_vmm.cpus.len() {
             let (cpu_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
@@ -252,18 +285,6 @@ impl MigrationManager {
                 let (kvm_data, _) = Self::check_vm_state(fd, &snap_desc_db)?;
                 kvm.restore_device(&kvm_data)
                     .with_context(|| "Failed to restore kvm state")?;
-            }
-        }
-
-        // Restore devices state.
-        for _ in 0..locked_vmm.devices.len() {
-            let (device_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
-            if let Some(device) = locked_vmm.devices.get(&id) {
-                device
-                    .lock()
-                    .unwrap()
-                    .restore_mut_device(&device_data)
-                    .with_context(|| "Failed to restore device state")?;
             }
         }
 
