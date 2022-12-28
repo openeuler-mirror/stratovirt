@@ -1,3 +1,15 @@
+// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// StratoVirt is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan
+// PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//         http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
 /// DemoDev is a demo PCIe device, that has 2 bars, 1 for msix, 1 for data handling.
 /// 1. its functionality is to print heximal values that the guest writes,
 ///    and do nothing if the guest reads its device memory.
@@ -69,7 +81,6 @@ impl PciDevOps for DemoDev {
         self.config.init_common_write_clear_mask()
     }
 
-    /// Realize PCI/PCIe device.
     fn realize(mut self) -> Result<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
