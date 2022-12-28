@@ -788,10 +788,12 @@ impl NetIoHandler {
             )
             .with_context(|| "Failed to get libc iovecs for net rx")?;
 
-            // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
-            for iov in iovecs.iter() {
-                // Mark vmm dirty page manually if live migration is active.
-                MigrationManager::mark_dirty_log(iov.iov_base as u64, iov.iov_len as u64);
+            if MigrationManager::is_active() {
+                // FIXME: mark dirty page needs to be managed by `AddressSpace` crate.
+                for iov in iovecs.iter() {
+                    // Mark vmm dirty page manually if live migration is active.
+                    MigrationManager::mark_dirty_log(iov.iov_base as u64, iov.iov_len as u64);
+                }
             }
 
             // Read the data from the tap device.
