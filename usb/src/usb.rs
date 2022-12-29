@@ -17,14 +17,10 @@ use anyhow::{bail, Result};
 use log::{debug, error};
 
 use crate::config::*;
-use crate::descriptor::{
-    UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
-    UsbInterfaceDescriptor,
-};
+use crate::descriptor::{UsbDescriptor, UsbDescriptorOps};
 use crate::xhci::xhci_controller::{UsbPort, XhciDevice};
 
 const USB_MAX_ENDPOINTS: u32 = 15;
-const USB_MAX_INTERFACES: u32 = 16;
 /// USB max address.
 const USB_MAX_ADDRESS: u8 = 127;
 
@@ -69,86 +65,18 @@ impl UsbEndpoint {
     }
 }
 
-/// USB descriptor strings.
-pub struct UsbDescString {
-    pub index: u32,
-    pub str: String,
-}
-
-// USB descriptor
-pub struct UsbDesc {
-    pub full_dev: Option<Arc<UsbDescDevice>>,
-    pub high_dev: Option<Arc<UsbDescDevice>>,
-    pub super_dev: Option<Arc<UsbDescDevice>>,
-    pub strings: Vec<String>,
-}
-
-// USB device descriptor
-pub struct UsbDescDevice {
-    pub device_desc: UsbDeviceDescriptor,
-    pub confs: Vec<Arc<UsbDescConfig>>,
-}
-
-// USB config descriptor
-pub struct UsbDescConfig {
-    pub config_desc: UsbConfigDescriptor,
-    pub if_groups: Vec<Arc<UsbDescIfaceAssoc>>,
-    pub ifs: Vec<Arc<UsbDescIface>>,
-}
-
-// USB interface descriptor
-pub struct UsbDescIface {
-    pub interface_desc: UsbInterfaceDescriptor,
-    pub other_desc: Vec<Arc<UsbDescOther>>,
-    pub eps: Vec<Arc<UsbDescEndpoint>>,
-}
-
-/* conceptually an Interface Association Descriptor, and related interfaces */
-#[allow(non_snake_case)]
-#[repr(C)]
-pub struct UsbDescIfaceAssoc {
-    pub bFirstInterface: u8,
-    pub bInterfaceCount: u8,
-    pub bFunctionClass: u8,
-    pub bFunctionSubClass: u8,
-    pub bFunctionProtocol: u8,
-    pub iFunction: u8,
-    pub ifs: Vec<Arc<UsbDescIface>>,
-}
-
-// USB other descriptor
-pub struct UsbDescOther {
-    pub length: u8,
-    pub data: Vec<u8>,
-}
-
-// USB endpoint descriptor
-pub struct UsbDescEndpoint {
-    pub endpoint_desc: UsbEndpointDescriptor,
-    pub extra: Option<Arc<u8>>,
-}
-
 /// USB device common structure.
 pub struct UsbDevice {
     pub port: Option<Weak<Mutex<UsbPort>>>,
     pub speed: u32,
-    pub speed_mask: u32,
     pub addr: u8,
-    pub product_desc: String,
     pub data_buf: Vec<u8>,
     pub remote_wakeup: u32,
     pub ep_ctl: UsbEndpoint,
     pub ep_in: Vec<UsbEndpoint>,
     pub ep_out: Vec<UsbEndpoint>,
     /// USB descriptor
-    pub strings: Vec<UsbDescString>,
-    pub usb_desc: Option<Arc<UsbDesc>>,
-    pub device_desc: Option<Arc<UsbDescDevice>>,
-    pub configuration: u32,
-    pub ninterfaces: u32,
-    pub altsetting: Vec<u32>,
-    pub config: Option<Arc<UsbDescConfig>>,
-    pub ifaces: Vec<Option<Arc<UsbDescIface>>>,
+    pub descriptor: UsbDescriptor,
 }
 
 impl UsbDevice {
@@ -156,22 +84,13 @@ impl UsbDevice {
         let mut dev = UsbDevice {
             port: None,
             speed: 0,
-            speed_mask: 0,
             addr: 0,
             ep_ctl: UsbEndpoint::new(0, false, USB_ENDPOINT_ATTR_CONTROL),
             ep_in: Vec::new(),
             ep_out: Vec::new(),
-            product_desc: String::new(),
-            strings: Vec::new(),
-            usb_desc: None,
-            device_desc: None,
-            configuration: 0,
-            ninterfaces: 0,
-            config: None,
-            altsetting: vec![0; USB_MAX_INTERFACES as usize],
             data_buf: vec![0_u8; 4096],
-            ifaces: vec![None; USB_MAX_INTERFACES as usize],
             remote_wakeup: 0,
+            descriptor: UsbDescriptor::new(),
         };
 
         for i in 0..USB_MAX_ENDPOINTS as u8 {
@@ -246,7 +165,7 @@ impl UsbDevice {
                     packet.actual_length = len;
                 }
                 USB_REQUEST_GET_CONFIGURATION => {
-                    self.data_buf[0] = if let Some(conf) = &self.config {
+                    self.data_buf[0] = if let Some(conf) = &self.descriptor.configuration_selected {
                         conf.config_desc.bConfigurationValue
                     } else {
                         0
@@ -254,11 +173,20 @@ impl UsbDevice {
                     packet.actual_length = 1;
                 }
                 USB_REQUEST_GET_STATUS => {
-                    let conf = if let Some(conf) = &self.config {
+                    let conf = if let Some(conf) = &self.descriptor.configuration_selected {
                         conf.clone()
                     } else {
-                        let x = &self.device_desc.as_ref().unwrap().confs[0];
-                        x.clone()
+                        let desc = if let Some(desc) = self.descriptor.device_desc.as_ref() {
+                            desc
+                        } else {
+                            bail!("Device descriptor not found");
+                        };
+                        let conf = if let Some(conf) = desc.configs.get(0) {
+                            conf
+                        } else {
+                            bail!("Config descriptor not found");
+                        };
+                        conf.clone()
                     };
                     self.data_buf[0] = 0;
                     if conf.config_desc.bmAttributes & USB_CONFIGURATION_ATTR_SELF_POWER
@@ -305,8 +233,8 @@ impl UsbDevice {
             },
             USB_INTERFACE_IN_REQUEST => match device_req.request {
                 USB_REQUEST_GET_INTERFACE => {
-                    if index < self.ninterfaces {
-                        self.data_buf[0] = self.altsetting[index as usize] as u8;
+                    if index < self.descriptor.interface_number {
+                        self.data_buf[0] = self.descriptor.altsetting[index as usize] as u8;
                         packet.actual_length = 1;
                     }
                 }
@@ -342,7 +270,7 @@ pub trait UsbDeviceOps: Send + Sync {
     /// Handle the attach ops when attach device to controller.
     fn handle_attach(&mut self) -> Result<()> {
         let usb_dev = self.get_mut_usb_device();
-        usb_dev.set_default_descriptor()?;
+        usb_dev.set_config_descriptor(0)?;
         Ok(())
     }
 

@@ -12,36 +12,22 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::Result;
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 
 use crate::config::*;
 use crate::descriptor::{
-    UsbConfigDescriptor, UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor,
-    UsbInterfaceDescriptor,
+    UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
+    UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
-use crate::hid::{
-    Hid, HidType, DESC_STRINGS, QUEUE_LENGTH, QUEUE_MASK, STR_CONFIG_KEYBOARD, STR_MANUFACTURER,
-    STR_PRODUCT_KEYBOARD, STR_SERIAL_KEYBOARD,
-};
+use crate::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
 use crate::usb::{
-    notify_controller, UsbDesc, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
-    UsbDescOther, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
+    notify_controller, UsbDevice, UsbDeviceOps, UsbDeviceRequest, UsbEndpoint, UsbPacket,
     UsbPacketStatus,
 };
 use crate::xhci::xhci_controller::XhciDevice;
-use anyhow::Result;
 
-/// USB Keyboard Descriptor
-static DESC_KEYBOARD: Lazy<Arc<UsbDesc>> = Lazy::new(|| {
-    let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
-    Arc::new(UsbDesc {
-        full_dev: Some(DESC_DEVICE_KEYBOARD.clone()),
-        high_dev: None,
-        super_dev: None,
-        strings: s,
-    })
-});
 /// Keyboard device descriptor
 static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
     Arc::new(UsbDescDevice {
@@ -51,9 +37,9 @@ static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             idVendor: 0x0627,
             idProduct: 0x0001,
             bcdDevice: 0,
-            iManufacturer: STR_MANUFACTURER,
-            iProduct: STR_PRODUCT_KEYBOARD,
-            iSerialNumber: STR_SERIAL_KEYBOARD,
+            iManufacturer: STR_MANUFACTURER_INDEX,
+            iProduct: STR_PRODUCT_KEYBOARD_INDEX,
+            iSerialNumber: STR_SERIAL_KEYBOARD_INDEX,
             bcdUSB: 0x0100,
             bDeviceClass: 0,
             bDeviceSubClass: 0,
@@ -61,19 +47,18 @@ static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bMaxPacketSize0: 8,
             bNumConfigurations: 1,
         },
-        confs: vec![Arc::new(UsbDescConfig {
+        configs: vec![Arc::new(UsbDescConfig {
             config_desc: UsbConfigDescriptor {
                 bLength: USB_DT_CONFIG_SIZE,
                 bDescriptorType: USB_DT_CONFIGURATION,
                 wTotalLength: 0,
                 bNumInterfaces: 1,
                 bConfigurationValue: 1,
-                iConfiguration: STR_CONFIG_KEYBOARD,
+                iConfiguration: STR_CONFIG_KEYBOARD_INDEX,
                 bmAttributes: USB_CONFIGURATION_ATTR_ONE | USB_CONFIGURATION_ATTR_REMOTE_WAKEUP,
                 bMaxPower: 50,
             },
-            if_groups: Vec::new(),
-            ifs: vec![DESC_IFACE_KEYBOARD.clone()],
+            interfaces: vec![DESC_IFACE_KEYBOARD.clone()],
         })],
     })
 });
@@ -96,7 +81,7 @@ static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             /// HID descriptor
             data: vec![0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3f, 0],
         })],
-        eps: vec![Arc::new(UsbDescEndpoint {
+        endpoints: vec![Arc::new(UsbDescEndpoint {
             endpoint_desc: UsbEndpointDescriptor {
                 bLength: USB_DT_ENDPOINT_SIZE,
                 bDescriptorType: USB_DT_ENDPOINT,
@@ -109,6 +94,21 @@ static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
         })],
     })
 });
+
+/// String descriptor index
+const STR_MANUFACTURER_INDEX: u8 = 1;
+const STR_PRODUCT_KEYBOARD_INDEX: u8 = 2;
+const STR_CONFIG_KEYBOARD_INDEX: u8 = 3;
+const STR_SERIAL_KEYBOARD_INDEX: u8 = 4;
+
+/// String descriptor
+const DESC_STRINGS: [&str; 5] = [
+    "",
+    "StratoVirt",
+    "StratoVirt USB Keyboard",
+    "HID Keyboard",
+    "1",
+];
 
 /// USB keyboard device.
 pub struct UsbKeyboard {
@@ -130,10 +130,11 @@ impl UsbKeyboard {
     }
 
     pub fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        self.usb_device.product_desc = String::from("StratoVirt USB keyboard");
         self.usb_device.reset_usb_endpoint();
-        self.usb_device.usb_desc = Some(DESC_KEYBOARD.clone());
-        self.usb_device.init_descriptor()?;
+        self.usb_device.speed = USB_SPEED_FULL;
+        let s = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        self.usb_device
+            .init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
         let kbd = Arc::new(Mutex::new(self));
         Ok(kbd)
     }

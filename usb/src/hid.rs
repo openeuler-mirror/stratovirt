@@ -50,34 +50,6 @@ pub const QUEUE_LENGTH: u32 = 16;
 pub const QUEUE_MASK: u32 = QUEUE_LENGTH - 1;
 const HID_USAGE_ERROR_ROLLOVER: u8 = 0x1;
 
-/// String descriptor index
-pub const STR_MANUFACTURER: u8 = 1;
-pub const STR_PRODUCT_MOUSE: u8 = 2;
-pub const STR_PRODUCT_TABLET: u8 = 3;
-pub const STR_PRODUCT_KEYBOARD: u8 = 4;
-pub const STR_SERIAL_COMPAT: u8 = 5;
-pub const STR_CONFIG_MOUSE: u8 = 6;
-pub const STR_CONFIG_TABLET: u8 = 7;
-pub const STR_CONFIG_KEYBOARD: u8 = 8;
-pub const STR_SERIAL_MOUSE: u8 = 9;
-pub const STR_SERIAL_TABLET: u8 = 10;
-pub const STR_SERIAL_KEYBOARD: u8 = 11;
-
-/// String descriptor
-pub const DESC_STRINGS: [&str; 12] = [
-    "",
-    "StratoVirt",
-    "StratoVirt USB Mouse",
-    "StratoVirt USB Tablet",
-    "StratoVirt USB Keyboard",
-    "42",
-    "HID Mouse",
-    "HID Tablet",
-    "HID Keyboard",
-    "89126",
-    "28754",
-    "68284",
-];
 /// QKeyCode to HID code table
 const HID_CODE: [u8; 0x100] = [
     0x00, 0x29, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e, 0x2a, 0x2b,
