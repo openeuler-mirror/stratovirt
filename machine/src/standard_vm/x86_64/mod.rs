@@ -425,12 +425,6 @@ impl MachineOps for StdMachine {
 
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
         StdMachine::arch_init()?;
-        let kvm_fds = KVM_FDS.load();
-        let vm_fd = kvm_fds.vm_fd.as_ref().unwrap();
-        let mut vcpu_fds = vec![];
-        for cpu_id in 0..nr_cpus {
-            vcpu_fds.push(Arc::new(vm_fd.create_vcpu(cpu_id as u64)?));
-        }
 
         locked_vm
             .init_pci_host()
@@ -459,7 +453,6 @@ impl MachineOps for StdMachine {
             vm.clone(),
             nr_cpus,
             &topology,
-            &vcpu_fds,
             &boot_config,
         )?);
 

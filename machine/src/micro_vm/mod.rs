@@ -60,6 +60,7 @@ use devices::legacy::SERIAL_ADDR;
 use devices::legacy::{FwCfgOps, Serial};
 #[cfg(target_arch = "aarch64")]
 use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GIC_IRQ_MAX};
+#[cfg(target_arch = "x86_64")]
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
@@ -736,6 +737,13 @@ impl MachineOps for LightMachine {
         trace_sysbus(&locked_vm.sysbus);
         trace_vm_state(&locked_vm.vm_state);
 
+        let topology = CPUTopology::new().set_topology((
+            vm_config.machine_config.nr_threads,
+            vm_config.machine_config.nr_cores,
+            vm_config.machine_config.nr_dies,
+        ));
+        trace_cpu_topo(&topology);
+
         locked_vm.init_memory(
             &vm_config.machine_config.mem_config,
             #[cfg(target_arch = "x86_64")]
@@ -744,81 +752,83 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_cpus,
         )?;
 
+        let migrate_info = locked_vm.get_migrate_info();
+
         #[cfg(target_arch = "x86_64")]
         {
             locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
             LightMachine::arch_init()?;
-        }
-        let mut vcpu_fds = vec![];
-        for vcpu_id in 0..vm_config.machine_config.nr_cpus {
-            vcpu_fds.push(Arc::new(
-                KVM_FDS
-                    .load()
-                    .vm_fd
-                    .as_ref()
-                    .unwrap()
-                    .create_vcpu(vcpu_id as u64)?,
-            ));
-        }
-        #[cfg(target_arch = "aarch64")]
-        locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
-        // Add mmio devices
-        locked_vm
-            .create_replaceable_devices()
-            .with_context(|| "Failed to create replaceable devices.")?;
-        locked_vm.add_devices(vm_config)?;
-        trace_replaceable_info(&locked_vm.replaceable_info);
-
-        let migrate_info = locked_vm.get_migrate_info();
-        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(None)?)
-        } else {
-            None
-        };
-        let topology = CPUTopology::new().set_topology((
-            vm_config.machine_config.nr_threads,
-            vm_config.machine_config.nr_cores,
-            vm_config.machine_config.nr_dies,
-        ));
-        trace_cpu_topo(&topology);
-
-        #[cfg(target_arch = "aarch64")]
-        let cpu_config = if migrate_info.0 == MigrateMode::Unknown {
-            Some(locked_vm.load_cpu_features(vm_config)?)
-        } else {
-            None
-        };
-
-        // vCPUs init,and apply CPU features (for aarch64)
-        locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
-            vm.clone(),
-            vm_config.machine_config.nr_cpus,
-            &topology,
-            &vcpu_fds,
-            &boot_config,
-            #[cfg(target_arch = "aarch64")]
-            &cpu_config,
-        )?);
-
-        #[cfg(target_arch = "aarch64")]
-        if let Some(boot_cfg) = boot_config {
-            let mut fdt_helper = FdtBuilder::new();
+            // Add mmio devices
             locked_vm
-                .generate_fdt_node(&mut fdt_helper)
-                .with_context(|| anyhow!(MachineError::GenFdtErr))?;
-            let fdt_vec = fdt_helper.finish()?;
-            locked_vm
-                .sys_mem
-                .write(
-                    &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr as u64),
-                    fdt_vec.len() as u64,
+                .create_replaceable_devices()
+                .with_context(|| "Failed to create replaceable devices.")?;
+            locked_vm.add_devices(vm_config)?;
+            trace_replaceable_info(&locked_vm.replaceable_info);
+
+            let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+                Some(locked_vm.load_boot_source(None)?)
+            } else {
+                None
+            };
+
+            // vCPUs init
+            locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+                vm.clone(),
+                vm_config.machine_config.nr_cpus,
+                &topology,
+                &boot_config,
+            )?);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let (boot_config, cpu_config) = if migrate_info.0 == MigrateMode::Unknown {
+                (
+                    Some(locked_vm.load_boot_source(None)?),
+                    Some(locked_vm.load_cpu_features(vm_config)?),
                 )
-                .with_context(|| {
-                    anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
-                })?;
+            } else {
+                (None, None)
+            };
+
+            // vCPUs init,and apply CPU features (for aarch64)
+            locked_vm.cpus.extend(<Self as MachineOps>::init_vcpu(
+                vm.clone(),
+                vm_config.machine_config.nr_cpus,
+                &topology,
+                &boot_config,
+                &cpu_config,
+            )?);
+
+            locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+
+            // Add mmio devices
+            locked_vm
+                .create_replaceable_devices()
+                .with_context(|| "Failed to create replaceable devices.")?;
+            locked_vm.add_devices(vm_config)?;
+            trace_replaceable_info(&locked_vm.replaceable_info);
+
+            if let Some(boot_cfg) = boot_config {
+                let mut fdt_helper = FdtBuilder::new();
+                locked_vm
+                    .generate_fdt_node(&mut fdt_helper)
+                    .with_context(|| anyhow!(MachineError::GenFdtErr))?;
+                let fdt_vec = fdt_helper.finish()?;
+                locked_vm
+                    .sys_mem
+                    .write(
+                        &mut fdt_vec.as_slice(),
+                        GuestAddress(boot_cfg.fdt_addr as u64),
+                        fdt_vec.len() as u64,
+                    )
+                    .with_context(|| {
+                        anyhow!(MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))
+                    })?;
+            }
         }
+
         locked_vm
             .register_power_event(&locked_vm.power_button)
             .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
