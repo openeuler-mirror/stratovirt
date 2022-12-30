@@ -324,8 +324,10 @@ impl ClientIoHandler {
 }
 
 impl ClientIoHandler {
+    /// This function interacts with the client interface, it includs several
+    /// steps: Read the data stream from the fd, save the data in buffer,
+    /// and then process the data by io handle function.
     fn client_handle_read(&mut self) -> Result<(), anyhow::Error> {
-        // Read message from tcpstream.
         self.read_msg()?;
 
         let client = self.client.clone();
@@ -344,16 +346,38 @@ impl ClientIoHandler {
         Ok(())
     }
 
+    /// Write a chunk of data to client socket. If there is some
+    /// error in io channel, then return and break the connnection.
     fn client_handle_write(&mut self) {
         let client = self.client.clone();
         if client.conn_state.lock().unwrap().dis_conn {
             return;
         }
+
         let mut locked_buffer = client.out_buffer.lock().unwrap();
         while let Some(bytes) = locked_buffer.read_front_chunk() {
-            self.write_msg(bytes);
-            locked_buffer.remove_front_chunk();
+            let message_len = bytes.len();
+            let send_len: usize;
+            match self.write_msg(bytes) {
+                Ok(ret) => {
+                    send_len = ret;
+                }
+                Err(_e) => {
+                    self.client.conn_state.lock().unwrap().dis_conn = true;
+                    return;
+                }
+            }
+
+            locked_buffer.remove_front(send_len);
+            if send_len != message_len {
+                break;
+            }
         }
+
+        if !locked_buffer.is_empty() {
+            vnc_flush_notify(&client);
+        }
+
         drop(locked_buffer);
     }
 
@@ -440,7 +464,7 @@ impl ClientIoHandler {
 
     /// Write buf to stream
     /// Choose different channel according to whether or not to encrypt
-    pub fn write_msg(&mut self, buf: &[u8]) {
+    pub fn write_msg(&mut self, buf: &[u8]) -> Result<usize> {
         if self.tls_conn.is_none() {
             self.write_plain_msg(buf)
         } else {
@@ -449,14 +473,14 @@ impl ClientIoHandler {
     }
 
     // Send vencrypt message.
-    fn write_tls_msg(&mut self, buf: &[u8]) {
+    fn write_tls_msg(&mut self, buf: &[u8]) -> Result<usize> {
         let buf_size = buf.len();
         let mut offset = 0;
 
         let tc: &mut ServerConnection = match &mut self.tls_conn {
             Some(ts) => ts,
             None => {
-                return;
+                return Err(anyhow!(VncError::Disconnection));
             }
         };
 
@@ -465,42 +489,39 @@ impl ClientIoHandler {
             let tmp_buf = &buf[offset..next].to_vec();
             if let Err(e) = tc.writer().write_all(tmp_buf) {
                 error!("write msg error: {:?}", e);
-                return;
+                return Err(anyhow!(VncError::Disconnection));
             }
             if let Err(_e) = vnc_write_tls_message(tc, &mut self.stream) {
                 self.client.conn_state.lock().unwrap().dis_conn = true;
-                return;
+                return Err(anyhow!(VncError::Disconnection));
             }
             offset = next;
         }
+
+        Ok(buf_size)
     }
 
     /// Send plain txt.
-    fn write_plain_msg(&mut self, buf: &[u8]) {
+    fn write_plain_msg(&mut self, buf: &[u8]) -> Result<usize> {
         let buf_size = buf.len();
         let mut offset = 0;
-        loop {
+        while offset < buf_size {
             let tmp_buf = &buf[offset..];
             match self.stream.write(tmp_buf) {
                 Ok(ret) => {
                     offset += ret;
                 }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return Ok(offset);
+                }
                 Err(e) => {
-                    if e.kind() == std::io::ErrorKind::WouldBlock {
-                        self.stream.flush().unwrap();
-                        continue;
-                    } else {
-                        error!("write msg error: {:?}", e);
-                        self.client.conn_state.lock().unwrap().dis_conn = true;
-                        return;
-                    }
+                    error!("write msg error: {:?}", e);
+                    return Err(anyhow!(VncError::Disconnection));
                 }
             }
-            self.stream.flush().unwrap();
-            if offset >= buf_size {
-                break;
-            }
         }
+
+        Ok(buf_size)
     }
 
     /// Exchange RFB protocol version with client.
