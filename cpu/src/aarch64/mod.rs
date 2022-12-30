@@ -13,9 +13,11 @@
 pub mod caps;
 mod core_regs;
 
-use std::mem::forget;
-use std::os::unix::prelude::{AsRawFd, FromRawFd};
-use std::sync::{Arc, Mutex};
+use std::{
+    mem::forget,
+    os::unix::prelude::{AsRawFd, FromRawFd},
+    sync::{Arc, Mutex},
+};
 
 use hypervisor::kvm::KVM_FDS;
 use kvm_bindings::{
@@ -190,7 +192,6 @@ impl ArmCPUState {
             .get_one_reg(SYS_MPIDR_EL1)
             .with_context(|| "Failed to get mpidr")? as u64;
 
-        ArmCPUState::set_cpu_feature(vcpu_config, vcpu_fd)?;
         self.features = *vcpu_config;
 
         Ok(())
@@ -256,19 +257,18 @@ impl ArmCPUState {
             self.core_regs.regs.pc = boot_config.boot_pc;
         }
     }
+}
 
-    fn set_cpu_feature(features: &ArmCPUFeatures, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
-        if !features.pmu {
-            return Ok(());
-        }
-
+impl CPU {
+    /// Init PMU for ARM CPU
+    pub fn init_pmu(&self) -> Result<()> {
         let pmu_attr = kvm_device_attr {
             group: KVM_ARM_VCPU_PMU_V3_CTRL,
             attr: KVM_ARM_VCPU_PMU_V3_INIT as u64,
             addr: 0,
             flags: 0,
         };
-        let vcpu_device = unsafe { DeviceFd::from_raw_fd(vcpu_fd.as_raw_fd()) };
+        let vcpu_device = unsafe { DeviceFd::from_raw_fd(self.fd.as_raw_fd()) };
         vcpu_device
             .has_device_attr(&pmu_attr)
             .with_context(|| "Kernel does not support PMU for vCPU")?;
@@ -336,9 +336,10 @@ impl StateTransfer for CPU {
 
         self.fd.vcpu_init(&cpu_state.kvi)?;
 
-        //Init CPU features.
-        ArmCPUState::set_cpu_feature(&cpu_state.features, &self.fd)
-            .map_err(|_| migration::MigrationError::FromBytesError("failed to set features."))?;
+        if cpu_state.features.pmu {
+            self.init_pmu()
+                .map_err(|_| migration::MigrationError::FromBytesError("failed to init pmu."))?;
+        }
         Ok(())
     }
 
