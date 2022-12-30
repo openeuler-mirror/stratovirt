@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -143,6 +144,8 @@ pub struct ScsiCntlr {
     pub bus: Option<Arc<Mutex<ScsiBus>>>,
     /// Eventfd for Scsi Controller deactivates.
     deactivate_evt: EventFd,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
 }
 
 impl ScsiCntlr {
@@ -152,6 +155,7 @@ impl ScsiCntlr {
             state: ScsiCntlrState::default(),
             bus: None,
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            broken: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -279,6 +283,7 @@ impl VirtioDevice for ScsiCntlr {
             mem_space: mem_space.clone(),
             interrupt_cb: interrupt_cb.clone(),
             driver_features: self.state.driver_features,
+            device_broken: self.broken.clone(),
         };
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
@@ -294,6 +299,7 @@ impl VirtioDevice for ScsiCntlr {
             _mem_space: mem_space.clone(),
             _interrupt_cb: interrupt_cb.clone(),
             _driver_features: self.state.driver_features,
+            device_broken: self.broken.clone(),
         };
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler))),
@@ -312,6 +318,7 @@ impl VirtioDevice for ScsiCntlr {
                     mem_space: mem_space.clone(),
                     interrupt_cb: interrupt_cb.clone(),
                     driver_features: self.state.driver_features,
+                    device_broken: self.broken.clone(),
                 };
 
                 cmd_handler.aio = Some(cmd_handler.build_aio()?);
@@ -324,6 +331,7 @@ impl VirtioDevice for ScsiCntlr {
                 bail!("Scsi controller has no bus!");
             }
         }
+        self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
@@ -614,6 +622,8 @@ pub struct ScsiCtrlHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
+    /// Device is broken or not.
+    device_broken: Arc<AtomicBool>,
 }
 
 impl ScsiCtrlHandler {
@@ -623,7 +633,7 @@ impl ScsiCtrlHandler {
             report_virtio_error(
                 self.interrupt_cb.clone(),
                 self.driver_features,
-                Some(&self.deactivate_evt),
+                &self.device_broken,
             );
         }
 
@@ -715,9 +725,11 @@ impl EventNotifierHelper for ScsiCtrlHandler {
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            h_clone
-                .lock()
-                .unwrap()
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            h_lock
                 .handle_ctrl()
                 .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
             None
@@ -751,6 +763,8 @@ pub struct ScsiEventHandler {
     _interrupt_cb: Arc<VirtioInterrupt>,
     /// Bit mask of features negotiated by the backend and the frontend.
     _driver_features: u64,
+    /// Device is broken or not.
+    device_broken: Arc<AtomicBool>,
 }
 
 impl EventNotifierHelper for ScsiEventHandler {
@@ -759,9 +773,11 @@ impl EventNotifierHelper for ScsiEventHandler {
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            h_clone
-                .lock()
-                .unwrap()
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            h_lock
                 .handle_event()
                 .unwrap_or_else(|e| error!("Failed to handle event queue, err is {}", e));
             None
@@ -824,6 +840,8 @@ pub struct ScsiCmdHandler {
     driver_features: u64,
     /// Aio context.
     aio: Option<Box<Aio<ScsiCompleteCb>>>,
+    /// Device is broken or not.
+    device_broken: Arc<AtomicBool>,
 }
 
 impl EventNotifierHelper for ScsiCmdHandler {
@@ -832,9 +850,11 @@ impl EventNotifierHelper for ScsiCmdHandler {
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            h_clone
-                .lock()
-                .unwrap()
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            h_lock
                 .handle_cmd()
                 .unwrap_or_else(|e| error!("Failed to handle cmd queue, err is {}", e));
 
@@ -857,15 +877,18 @@ impl EventNotifierHelper for ScsiCmdHandler {
             let h_clone = handler.clone();
             let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
-
                 let mut h_lock = h_clone.lock().unwrap();
+                if h_lock.device_broken.load(Ordering::SeqCst) {
+                    return None;
+                }
+
                 if let Some(aio) = &mut h_lock.aio {
                     if let Err(ref e) = aio.handle() {
                         error!("Failed to handle aio, {:?}", e);
                         report_virtio_error(
                             h_lock.interrupt_cb.clone(),
                             h_lock.driver_features,
-                            Some(&h_lock.deactivate_evt),
+                            &h_lock.device_broken,
                         );
                     }
                 }
@@ -886,7 +909,7 @@ impl ScsiCmdHandler {
             report_virtio_error(
                 self.interrupt_cb.clone(),
                 self.driver_features,
-                Some(&self.deactivate_evt),
+                &self.device_broken,
             );
         }
 

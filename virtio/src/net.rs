@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::io::{ErrorKind, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fs, mem};
@@ -457,6 +458,8 @@ pub struct NetCtrlHandler {
     pub driver_features: u64,
     /// Deactivate event to delete net control handler.
     pub deactivate_evt: EventFd,
+    /// Device is broken or not.
+    pub device_broken: Arc<AtomicBool>,
 }
 
 #[repr(C, packed)]
@@ -623,12 +626,15 @@ impl EventNotifierHelper for NetCtrlHandler {
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
+            if locked_net_io.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
             locked_net_io.handle_ctrl().unwrap_or_else(|e| {
                 error!("Failed to handle ctrl queue, error is {}.", e);
                 report_virtio_error(
                     locked_net_io.interrupt_cb.clone(),
                     locked_net_io.driver_features,
-                    Some(&locked_net_io.deactivate_evt),
+                    &locked_net_io.device_broken,
                 );
             });
             None
@@ -697,6 +703,7 @@ struct NetIoHandler {
     receiver: Receiver<SenderConfig>,
     update_evt: EventFd,
     deactivate_evt: EventFd,
+    device_broken: Arc<AtomicBool>,
     is_listening: bool,
     ctrl_info: Arc<Mutex<CtrlInfo>>,
 }
@@ -1067,6 +1074,14 @@ impl EventNotifierHelper for NetIoHandler {
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
+            if cloned_net_io
+                .lock()
+                .unwrap()
+                .device_broken
+                .load(Ordering::SeqCst)
+            {
+                return None;
+            }
             Some(NetIoHandler::update_evt_handler(&cloned_net_io))
         });
         let mut notifiers = vec![build_event_notifier(
@@ -1092,8 +1107,11 @@ impl EventNotifierHelper for NetIoHandler {
         // Register event notifier for rx.
         let cloned_net_io = net_io.clone();
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            let mut locked_net_io = cloned_net_io.lock().unwrap();
             read_fd(fd);
+            let mut locked_net_io = cloned_net_io.lock().unwrap();
+            if locked_net_io.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
             if let Some(tap) = locked_net_io.tap.as_ref() {
                 if !locked_net_io.is_listening {
                     let notifier = vec![EventNotifier::new(
@@ -1122,12 +1140,15 @@ impl EventNotifierHelper for NetIoHandler {
         let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
+            if locked_net_io.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
             if let Err(ref e) = locked_net_io.handle_tx() {
                 error!("Failed to handle tx(tx event) for net, {:?}", e);
                 report_virtio_error(
                     locked_net_io.interrupt_cb.clone(),
                     locked_net_io.driver_features,
-                    Some(&locked_net_io.deactivate_evt),
+                    &locked_net_io.device_broken,
                 );
             }
             None
@@ -1145,12 +1166,15 @@ impl EventNotifierHelper for NetIoHandler {
         if let Some(tap) = locked_net_io.tap.as_ref() {
             let handler: Box<NotifierCallback> = Box::new(move |_, _| {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
+                if locked_net_io.device_broken.load(Ordering::SeqCst) {
+                    return None;
+                }
                 if let Err(ref e) = locked_net_io.handle_rx() {
                     error!("Failed to handle rx(tap event), {:?}", e);
                     report_virtio_error(
                         locked_net_io.interrupt_cb.clone(),
                         locked_net_io.driver_features,
-                        Some(&locked_net_io.deactivate_evt),
+                        &locked_net_io.device_broken,
                     );
                     return None;
                 }
@@ -1211,6 +1235,8 @@ pub struct Net {
     update_evt: EventFd,
     /// Eventfd for device deactivate.
     deactivate_evt: EventFd,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
     /// The information about control command.
     ctrl_info: Option<Arc<Mutex<CtrlInfo>>>,
 }
@@ -1224,6 +1250,7 @@ impl Default for Net {
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
         }
     }
@@ -1238,6 +1265,7 @@ impl Net {
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
             deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
         }
     }
@@ -1588,6 +1616,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.state.lock().unwrap().driver_features,
                 deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
+                device_broken: self.broken.clone(),
             };
 
             EventLoop::update_event(
@@ -1627,6 +1656,7 @@ impl VirtioDevice for Net {
                 receiver,
                 update_evt: self.update_evt.try_clone().unwrap(),
                 deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
+                device_broken: self.broken.clone(),
                 is_listening: true,
                 ctrl_info: ctrl_info.clone(),
             };
@@ -1640,6 +1670,7 @@ impl VirtioDevice for Net {
             )?;
         }
         self.senders = Some(senders);
+        self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }

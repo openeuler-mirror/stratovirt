@@ -17,6 +17,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -29,7 +30,7 @@ use super::{
     VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
     VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
-use crate::{NotifyEventFds, VirtioError};
+use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -408,6 +409,8 @@ struct BlockIoHandler {
     update_evt: EventFd,
     /// Eventfd for device deactivate.
     deactivate_evt: EventFd,
+    /// Device is broken or not.
+    device_broken: Arc<AtomicBool>,
     /// Callback to trigger an interrupt.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// thread name of io handler
@@ -616,7 +619,7 @@ impl BlockIoHandler {
             report_virtio_error(
                 self.interrupt_cb.clone(),
                 self.driver_features,
-                Some(&self.deactivate_evt),
+                &self.device_broken,
             );
         }
         result
@@ -650,7 +653,7 @@ impl BlockIoHandler {
             report_virtio_error(
                 self.interrupt_cb.clone(),
                 self.driver_features,
-                Some(&self.deactivate_evt),
+                &self.device_broken,
             );
             e
         })
@@ -726,6 +729,7 @@ impl BlockIoHandler {
 fn build_event_notifier(
     fd: RawFd,
     handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+    handler_poll: Option<Box<NotifierCallback>>,
 ) -> EventNotifier {
     let mut notifier = EventNotifier::new(
         NotifierOperation::AddShared,
@@ -734,7 +738,7 @@ fn build_event_notifier(
         EventSet::IN,
         handlers,
     );
-    notifier.io_poll = notifier.handlers.len() == 2;
+    notifier.handler_poll = handler_poll;
     notifier
 }
 
@@ -747,12 +751,17 @@ impl EventNotifierHelper for BlockIoHandler {
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            h_clone.lock().unwrap().update_evt_handler();
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            h_lock.update_evt_handler();
             None
         });
         notifiers.push(build_event_notifier(
             handler_raw.update_evt.as_raw_fd(),
             vec![Arc::new(Mutex::new(h))],
+            None,
         ));
 
         // Register event notifier for deactivate_evt.
@@ -764,22 +773,29 @@ impl EventNotifierHelper for BlockIoHandler {
         notifiers.push(build_event_notifier(
             handler_raw.deactivate_evt.as_raw_fd(),
             vec![Arc::new(Mutex::new(h))],
+            None,
         ));
 
         // Register event notifier for queue_evt.
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            if let Err(ref e) = h_lock.process_queue() {
                 error!("Failed to handle block IO {:?}", e);
             }
             None
         });
         let h_clone = handler.clone();
         let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
-            let done = h_clone
-                .lock()
-                .unwrap()
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            let done = h_lock
                 .process_queue()
                 .with_context(|| "Failed to handle block IO")
                 .ok()?;
@@ -791,10 +807,8 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.queue_evt.as_raw_fd(),
-            vec![
-                Arc::new(Mutex::new(h)),
-                Arc::new(Mutex::new(handler_iopoll)),
-            ],
+            vec![Arc::new(Mutex::new(h))],
+            Some(handler_iopoll),
         ));
 
         // Register timer event notifier for IO limits
@@ -802,10 +816,14 @@ impl EventNotifierHelper for BlockIoHandler {
             let h_clone = handler.clone();
             let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
                 read_fd(fd);
-                if let Some(lb) = h_clone.lock().unwrap().leak_bucket.as_mut() {
+                let mut h_lock = h_clone.lock().unwrap();
+                if h_lock.device_broken.load(Ordering::SeqCst) {
+                    return None;
+                }
+                if let Some(lb) = h_lock.leak_bucket.as_mut() {
                     lb.clear_timer();
                 }
-                if let Err(ref e) = h_clone.lock().unwrap().process_queue() {
+                if let Err(ref e) = h_lock.process_queue() {
                     error!("Failed to handle block IO {:?}", e);
                 }
                 None
@@ -813,6 +831,7 @@ impl EventNotifierHelper for BlockIoHandler {
             notifiers.push(build_event_notifier(
                 lb.as_raw_fd(),
                 vec![Arc::new(Mutex::new(h))],
+                None,
             ));
         }
 
@@ -820,16 +839,22 @@ impl EventNotifierHelper for BlockIoHandler {
         let h_clone = handler.clone();
         let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(ref e) = h_clone.lock().unwrap().aio_complete_handler() {
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            if let Err(ref e) = h_lock.aio_complete_handler() {
                 error!("Failed to handle aio {:?}", e);
             }
             None
         });
         let h_clone = handler.clone();
         let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
-            let done = h_clone
-                .lock()
-                .unwrap()
+            let mut h_lock = h_clone.lock().unwrap();
+            if h_lock.device_broken.load(Ordering::SeqCst) {
+                return None;
+            }
+            let done = h_lock
                 .aio_complete_handler()
                 .with_context(|| "Failed to handle aio")
                 .ok()?;
@@ -841,10 +866,8 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.aio.fd.as_raw_fd(),
-            vec![
-                Arc::new(Mutex::new(h)),
-                Arc::new(Mutex::new(handler_iopoll)),
-            ],
+            vec![Arc::new(Mutex::new(h))],
+            Some(handler_iopoll),
         ));
 
         notifiers
@@ -934,9 +957,11 @@ pub struct Block {
     /// The sending half of Rust's channel to send the image file.
     senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
-    update_evt: EventFd,
+    update_evts: Vec<EventFd>,
     /// Eventfd for device deactivate.
-    deactivate_evts: NotifyEventFds,
+    deactivate_evts: Vec<EventFd>,
+    /// Device is broken or not.
+    broken: Arc<AtomicBool>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
@@ -950,8 +975,9 @@ impl Default for Block {
             state: BlockState::default(),
             interrupt_cb: None,
             senders: None,
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evts: NotifyEventFds::new(1),
+            update_evts: Vec::new(),
+            deactivate_evts: Vec::new(),
+            broken: Arc::new(AtomicBool::new(false)),
             drive_files: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -969,8 +995,9 @@ impl Block {
             state: BlockState::default(),
             interrupt_cb: None,
             senders: None,
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evts: NotifyEventFds::new(0),
+            update_evts: Vec::new(),
+            deactivate_evts: Vec::new(),
+            broken: Arc::new(AtomicBool::new(false)),
             drive_files,
         }
     }
@@ -1111,13 +1138,13 @@ impl VirtioDevice for Block {
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
         let mut senders = Vec::new();
-        self.deactivate_evts.events.clear();
 
         for queue in queues.iter() {
             let (sender, receiver) = channel();
             senders.push(sender);
 
-            let eventfd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+            let update_evt = EventFd::new(libc::EFD_NONBLOCK)?;
+            let deactivate_evt = EventFd::new(libc::EFD_NONBLOCK)?;
             let engine = self.blk_cfg.aio.as_ref();
             let handler = BlockIoHandler {
                 queue: queue.clone(),
@@ -1131,30 +1158,35 @@ impl VirtioDevice for Block {
                 aio: Box::new(Aio::new(Arc::new(BlockIoHandler::complete_func), engine)?),
                 driver_features: self.state.driver_features,
                 receiver,
-                update_evt: self.update_evt.try_clone().unwrap(),
-                deactivate_evt: eventfd.try_clone().unwrap(),
+                update_evt: update_evt.try_clone()?,
+                deactivate_evt: deactivate_evt.try_clone()?,
+                device_broken: self.broken.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 iothread: self.blk_cfg.iothread.clone(),
                 leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
             };
-            self.deactivate_evts.events.push(eventfd);
 
             EventLoop::update_event(
                 EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
                 self.blk_cfg.iothread.as_ref(),
             )?;
+            self.update_evts.push(update_evt);
+            self.deactivate_evts.push(deactivate_evt);
         }
 
         self.senders = Some(senders);
+        self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        for evt in &self.deactivate_evts.events {
+        for evt in &self.deactivate_evts {
             evt.write(1)
                 .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
         }
+        self.deactivate_evts.clear();
+        self.update_evts.clear();
         Ok(())
     }
 
@@ -1186,9 +1218,11 @@ impl VirtioDevice for Block {
                     .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
             }
 
-            self.update_evt
-                .write(1)
-                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+            for update_evt in &self.update_evts {
+                update_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+            }
         }
 
         if let Some(interrupt_cb) = &self.interrupt_cb {
