@@ -281,6 +281,17 @@ impl StdMachine {
             self.build_pptt_clusters(pptt, socket_offset as u32, uid);
         }
     }
+
+    /// Must be called after the CPUs have been realized and GIC has been created.
+    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
+        let features = vcpu_cfg.unwrap_or_default();
+        if features.pmu {
+            for cpu in self.cpus.iter() {
+                cpu.init_pmu()?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl StdMachineOps for StdMachine {
@@ -507,6 +518,8 @@ impl MachineOps for StdMachine {
 
         // Interrupt Controller Chip init
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
+
+        locked_vm.cpu_post_init(&cpu_config)?;
 
         locked_vm
             .add_devices(vm_config)

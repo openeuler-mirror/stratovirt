@@ -461,6 +461,18 @@ impl LightMachine {
         }
         Ok(id.to_string())
     }
+
+    /// Must be called after the CPUs have been realized and GIC has been created.
+    #[cfg(target_arch = "aarch64")]
+    fn cpu_post_init(&self, vcpu_cfg: &Option<CPUFeatures>) -> Result<()> {
+        let features = vcpu_cfg.unwrap_or_default();
+        if features.pmu {
+            for cpu in self.cpus.iter() {
+                cpu.init_pmu()?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl MachineOps for LightMachine {
@@ -802,6 +814,8 @@ impl MachineOps for LightMachine {
             )?);
 
             locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
+
+            locked_vm.cpu_post_init(&cpu_config)?;
 
             // Add mmio devices
             locked_vm
