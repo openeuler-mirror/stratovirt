@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    client::{ClientIoHandler, APP_NAME},
+    client::{vnc_write, ClientIoHandler, APP_NAME},
     VncError,
 };
 use anyhow::{anyhow, Result};
@@ -206,6 +206,7 @@ impl ClientIoHandler {
         }
 
         let server = self.server.clone();
+        let client = self.client.clone();
         let mut locked_security = server.security_type.lock().unwrap();
         let err: c_int;
         let mut serverout: *const c_char = ptr::null_mut();
@@ -278,21 +279,24 @@ impl ClientIoHandler {
             if let Err(err) = self.sasl_check_ssf() {
                 // Reject auth: the strength of ssf is too weak.
                 auth_reject(&mut buf);
-                self.write_msg(&buf);
+                vnc_write(&client, buf);
+                self.flush();
                 return Err(err);
             }
 
             if let Err(err) = self.sasl_check_authz() {
                 // Reject auth: wrong sasl username.
                 auth_reject(&mut buf);
-                self.write_msg(&buf);
+                vnc_write(&client, buf);
+                self.flush();
                 return Err(err);
             }
             // Accpet auth.
             buf.append(&mut (0_u32).as_bytes().to_vec());
         }
 
-        self.write_msg(&buf);
+        vnc_write(&client, buf);
+        self.flush();
         self.update_event_handler(1, ClientIoHandler::handle_client_init);
         Ok(())
     }
@@ -415,6 +419,7 @@ impl ClientIoHandler {
         let suffix = CString::new("").unwrap();
         let mut mechlist: *const c_char = ptr::null_mut();
         let mut locked_security = self.server.security_type.lock().unwrap();
+        let client = self.client.clone();
         unsafe {
             err = sasl_listmech(
                 locked_security.saslconfig.sasl_conn,
@@ -440,7 +445,8 @@ impl ClientIoHandler {
         buf.append(&mut (len as u32).to_be_bytes().to_vec());
         buf.append(&mut locked_security.saslconfig.mech_list.as_bytes().to_vec());
         drop(locked_security);
-        self.write_msg(&buf);
+        vnc_write(&client, buf);
+        self.flush();
 
         Ok(())
     }
