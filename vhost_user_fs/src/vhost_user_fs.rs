@@ -10,11 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::unix::io::RawFd;
-use std::rc::Rc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+use std::{
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use log::error;
@@ -54,15 +55,14 @@ impl CreateEventNotifier for VhostUserServerHandler {
         &mut self,
         server_handler: Arc<Mutex<Self>>,
     ) -> Option<Vec<EventNotifier>> {
-        let mut notifiers = Vec::new();
-        let should_exit = self.should_exit.clone();
-
         if let Err(e) = self.sock.domain.accept() {
             error!("Failed to accept the socket for vhost user server, {:?}", e);
             return None;
         }
 
-        let mut handlers = Vec::new();
+        let mut notifiers = Vec::new();
+
+        let should_exit = self.should_exit.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
             if event == EventSet::IN {
                 let mut lock_server_handler = server_handler.lock().unwrap();
@@ -70,25 +70,20 @@ impl CreateEventNotifier for VhostUserServerHandler {
                     error!("Failed to handle request for vhost user server, {:?}", e);
                 }
             }
-
             if event & EventSet::HANG_UP == EventSet::HANG_UP {
                 should_exit.store(true, Ordering::Release);
             }
-
             None
         });
-
-        handlers.push(handler);
-
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             self.sock.domain.get_stream_raw_fd(),
             None,
             EventSet::IN | EventSet::HANG_UP,
-            handlers,
+            vec![handler],
         );
-
         notifiers.push(notifier);
+
         Some(notifiers)
     }
 }
@@ -96,18 +91,14 @@ impl CreateEventNotifier for VhostUserServerHandler {
 impl EventNotifierHelper for VhostUserServerHandler {
     fn internal_notifiers(server_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        let mut handlers = Vec::new();
+
         let server_handler_clone = server_handler.clone();
-        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Rc::new(move |_, _| {
-                server_handler_clone
-                    .lock()
-                    .unwrap()
-                    .create_event_notifier(server_handler_clone.clone())
-            });
-
-        handlers.push(handler);
-
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            server_handler_clone
+                .lock()
+                .unwrap()
+                .create_event_notifier(server_handler_clone.clone())
+        });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             server_handler
@@ -118,9 +109,8 @@ impl EventNotifierHelper for VhostUserServerHandler {
                 .get_listener_raw_fd(),
             None,
             EventSet::IN,
-            handlers,
+            vec![handler],
         );
-
         notifiers.push(notifier);
 
         notifiers

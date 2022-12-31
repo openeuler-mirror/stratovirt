@@ -227,7 +227,7 @@ fn get_notifier_handler(
             locked_chardev.output = Some(stream_arc);
 
             let cloned_chardev = chardev.clone();
-            let inner_handler = Rc::new(move |event, _| {
+            let inner_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
                 if event == EventSet::IN {
                     let locked_chardev = cloned_chardev.lock().unwrap();
                     let buff_size = locked_chardev.get_remain_space_size.as_ref().unwrap()();

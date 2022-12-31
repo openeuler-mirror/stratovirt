@@ -20,7 +20,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use anyhow::{bail, Result};
 use log::{error, info};
 use util::leak_bucket::LeakBucket;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use vmm_sys_util::epoll::EventSet;
 
 use crate::machine::MachineExternalInterface;
@@ -189,57 +191,53 @@ impl Socket {
         let shared_leak_bucket = leak_bucket.clone();
         let leak_bucket_fd = leak_bucket.lock().unwrap().as_raw_fd();
 
-        let mut handlers = Vec::new();
-        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Rc::new(move |event, _| {
-                if event == EventSet::IN {
-                    let socket_mutexed = shared_socket.lock().unwrap();
-                    let stream_fd = socket_mutexed.get_stream_fd();
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
+            if event == EventSet::IN {
+                let socket_mutexed = shared_socket.lock().unwrap();
+                let stream_fd = socket_mutexed.get_stream_fd();
 
-                    let performer = &socket_mutexed.performer.as_ref().unwrap();
-                    if let Err(e) = crate::qmp::handle_qmp(
+                let performer = &socket_mutexed.performer.as_ref().unwrap();
+                if let Err(e) = crate::qmp::handle_qmp(
+                    stream_fd,
+                    performer,
+                    &mut shared_leak_bucket.lock().unwrap(),
+                ) {
+                    error!("{:?}", e);
+                }
+            }
+            if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                let socket_mutexed = shared_socket.lock().unwrap();
+                let stream_fd = socket_mutexed.get_stream_fd();
+                let listener_fd = socket_mutexed.get_listener_fd();
+
+                QmpChannel::unbind();
+
+                Some(vec![
+                    EventNotifier::new(
+                        NotifierOperation::Delete,
                         stream_fd,
-                        performer,
-                        &mut shared_leak_bucket.lock().unwrap(),
-                    ) {
-                        error!("{:?}", e);
-                    }
-                }
-                if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    let socket_mutexed = shared_socket.lock().unwrap();
-                    let stream_fd = socket_mutexed.get_stream_fd();
-                    let listener_fd = socket_mutexed.get_listener_fd();
-
-                    QmpChannel::unbind();
-
-                    Some(vec![
-                        EventNotifier::new(
-                            NotifierOperation::Delete,
-                            stream_fd,
-                            Some(listener_fd),
-                            EventSet::IN | EventSet::HANG_UP,
-                            Vec::new(),
-                        ),
-                        EventNotifier::new(
-                            NotifierOperation::Delete,
-                            leak_bucket_fd,
-                            None,
-                            EventSet::IN,
-                            Vec::new(),
-                        ),
-                    ])
-                } else {
-                    None
-                }
-            });
-        handlers.push(handler);
-
+                        Some(listener_fd),
+                        EventSet::IN | EventSet::HANG_UP,
+                        Vec::new(),
+                    ),
+                    EventNotifier::new(
+                        NotifierOperation::Delete,
+                        leak_bucket_fd,
+                        None,
+                        EventSet::IN,
+                        Vec::new(),
+                    ),
+                ])
+            } else {
+                None
+            }
+        });
         let qmp_notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             self.get_stream_fd(),
             Some(self.get_listener_fd()),
             EventSet::IN | EventSet::HANG_UP,
-            handlers,
+            vec![handler],
         );
         notifiers.push(qmp_notifier);
 
@@ -265,20 +263,15 @@ impl EventNotifierHelper for Socket {
         let mut notifiers = Vec::new();
 
         let socket = shared_socket.clone();
-        let mut handlers = Vec::new();
-        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+        let handler: Rc<NotifierCallback> =
             Rc::new(move |_, _| Some(socket.lock().unwrap().create_event_notifier(socket.clone())));
-
-        handlers.push(handler);
-
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             shared_socket.lock().unwrap().get_listener_fd(),
             None,
             EventSet::IN,
-            handlers,
+            vec![handler],
         );
-
         notifiers.push(notifier);
 
         notifiers

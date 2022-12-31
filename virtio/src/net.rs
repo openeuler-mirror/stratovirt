@@ -622,6 +622,8 @@ impl NetCtrlHandler {
 
 impl EventNotifierHelper for NetCtrlHandler {
     fn internal_notifiers(net_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
         let locked_net_io = net_io.lock().unwrap();
         let cloned_net_io = net_io.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -640,10 +642,8 @@ impl EventNotifierHelper for NetCtrlHandler {
             });
             None
         });
-        let mut notifiers = Vec::new();
-        let ctrl_fd = locked_net_io.ctrl.queue_evt.as_raw_fd();
         notifiers.push(build_event_notifier(
-            ctrl_fd,
+            locked_net_io.ctrl.queue_evt.as_raw_fd(),
             Some(handler),
             NotifierOperation::AddShared,
             EventSet::IN,

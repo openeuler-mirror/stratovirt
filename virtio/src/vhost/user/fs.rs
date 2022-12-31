@@ -73,9 +73,7 @@ impl EventNotifierHelper for VhostUserFsHandler {
         let vhost_user = vhost_user_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             let locked_vhost_user = vhost_user.lock().unwrap();
-
             for host_notify in locked_vhost_user.host_notifies.iter() {
                 if let Err(e) = (locked_vhost_user.interrup_cb)(
                     &VirtioInterruptType::Vring,
@@ -88,7 +86,6 @@ impl EventNotifierHelper for VhostUserFsHandler {
                     );
                 }
             }
-
             None as Option<Vec<EventNotifier>>
         });
         for host_notify in vhost_user_handler.lock().unwrap().host_notifies.iter() {
