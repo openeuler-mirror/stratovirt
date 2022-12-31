@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::io::{ErrorKind, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -623,7 +624,7 @@ impl EventNotifierHelper for NetCtrlHandler {
     fn internal_notifiers(net_io: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let locked_net_io = net_io.lock().unwrap();
         let cloned_net_io = net_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
             if locked_net_io.device_broken.load(Ordering::SeqCst) {
@@ -650,7 +651,7 @@ impl EventNotifierHelper for NetCtrlHandler {
 
         // Register event notifier for deactivate_evt.
         let cloned_net_io = net_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(cloned_net_io.lock().unwrap().deactivate_evt_handler())
         });
@@ -1056,13 +1057,13 @@ fn get_net_header(iovec: &[libc::iovec], buf: &mut [u8]) -> Result<usize> {
 
 fn build_event_notifier(
     fd: RawFd,
-    handler: Option<Box<NotifierCallback>>,
+    handler: Option<Rc<NotifierCallback>>,
     op: NotifierOperation,
     event: EventSet,
 ) -> EventNotifier {
     let mut handlers = Vec::new();
     if let Some(h) = handler {
-        handlers.push(Arc::new(Mutex::new(h)));
+        handlers.push(h);
     }
     EventNotifier::new(op, fd, None, event, handlers)
 }
@@ -1072,7 +1073,7 @@ impl EventNotifierHelper for NetIoHandler {
         // Register event notifier for update_evt.
         let locked_net_io = net_io.lock().unwrap();
         let cloned_net_io = net_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             if cloned_net_io
                 .lock()
@@ -1093,7 +1094,7 @@ impl EventNotifierHelper for NetIoHandler {
 
         // Register event notifier for deactivate_evt.
         let cloned_net_io = net_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(cloned_net_io.lock().unwrap().deactivate_evt_handler())
         });
@@ -1106,7 +1107,7 @@ impl EventNotifierHelper for NetIoHandler {
 
         // Register event notifier for rx.
         let cloned_net_io = net_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
             if locked_net_io.device_broken.load(Ordering::SeqCst) {
@@ -1137,7 +1138,7 @@ impl EventNotifierHelper for NetIoHandler {
 
         // Register event notifier for tx.
         let cloned_net_io = net_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
             if locked_net_io.device_broken.load(Ordering::SeqCst) {
@@ -1164,7 +1165,7 @@ impl EventNotifierHelper for NetIoHandler {
         // Register event notifier for tap.
         let cloned_net_io = net_io.clone();
         if let Some(tap) = locked_net_io.tap.as_ref() {
-            let handler: Box<NotifierCallback> = Box::new(move |_, _| {
+            let handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
                 let mut locked_net_io = cloned_net_io.lock().unwrap();
                 if locked_net_io.device_broken.load(Ordering::SeqCst) {
                     return None;

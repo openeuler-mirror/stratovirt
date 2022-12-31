@@ -26,6 +26,7 @@ const VIRTIO_FS_VRING_NO_FD_MASK: usize = 0x1 << 8;
 use crate::cmdline::FsConfig;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use log::error;
@@ -126,7 +127,7 @@ impl EventNotifierHelper for FsIoHandler {
         let mut notifiers = Vec::new();
 
         let fs_handler_clone = fs_handler.clone();
-        let handler = Box::new(move |_, fd: RawFd| {
+        let handler = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
             if let Err(e) = fs_handler_clone.lock().unwrap().process_queue() {
@@ -141,7 +142,7 @@ impl EventNotifierHelper for FsIoHandler {
             fs_handler.lock().unwrap().kick_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers

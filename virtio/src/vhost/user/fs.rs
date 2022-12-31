@@ -21,6 +21,7 @@ use crate::VirtioError;
 use std::cmp;
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use log::error;
@@ -32,7 +33,9 @@ use machine_manager::{
     event_loop::EventLoop,
 };
 use util::byte_code::ByteCode;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use util::num_ops::read_u32;
 
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
@@ -68,37 +71,33 @@ impl EventNotifierHelper for VhostUserFsHandler {
     fn internal_notifiers(vhost_user_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
         let vhost_user = vhost_user_handler.clone();
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
 
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, fd: RawFd| {
-                read_fd(fd);
+            let locked_vhost_user = vhost_user.lock().unwrap();
 
-                let locked_vhost_user = vhost_user.lock().unwrap();
-
-                for host_notify in locked_vhost_user.host_notifies.iter() {
-                    if let Err(e) = (locked_vhost_user.interrup_cb)(
-                        &VirtioInterruptType::Vring,
-                        Some(&host_notify.queue.lock().unwrap()),
-                        false,
-                    ) {
-                        error!(
-                            "Failed to trigger interrupt for vhost user device, error is {:?}",
-                            e
-                        );
-                    }
+            for host_notify in locked_vhost_user.host_notifies.iter() {
+                if let Err(e) = (locked_vhost_user.interrup_cb)(
+                    &VirtioInterruptType::Vring,
+                    Some(&host_notify.queue.lock().unwrap()),
+                    false,
+                ) {
+                    error!(
+                        "Failed to trigger interrupt for vhost user device, error is {:?}",
+                        e
+                    );
                 }
+            }
 
-                None as Option<Vec<EventNotifier>>
-            });
-        let h = Arc::new(Mutex::new(handler));
-
+            None as Option<Vec<EventNotifier>>
+        });
         for host_notify in vhost_user_handler.lock().unwrap().host_notifies.iter() {
             notifiers.push(EventNotifier::new(
                 NotifierOperation::AddShared,
                 host_notify.notify_evt.as_raw_fd(),
                 None,
                 EventSet::IN,
-                vec![h.clone()],
+                vec![handler.clone()],
             ));
         }
 

@@ -23,6 +23,7 @@ use std::net::TcpListener;
 use std::ops::Deref;
 use std::os::unix::{io::AsRawFd, net::UnixListener};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
 use log::warn;
@@ -1304,11 +1305,10 @@ pub trait MachineOps {
     fn register_power_event(&self, power_button: &EventFd) -> Result<()> {
         let power_button = power_button.try_clone().unwrap();
         let button_fd = power_button.as_raw_fd();
-        let power_button_handler: Arc<Mutex<Box<NotifierCallback>>> =
-            Arc::new(Mutex::new(Box::new(move |_, _| {
-                let _ret = power_button.read().unwrap();
-                None
-            })));
+        let power_button_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = power_button.read().unwrap();
+            None
+        });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             button_fd,

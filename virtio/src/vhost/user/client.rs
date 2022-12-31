@@ -12,6 +12,7 @@
 
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 
@@ -128,8 +129,8 @@ impl EventNotifierHelper for VhostUserClient {
         let mut handlers = Vec::new();
 
         let cloned_client = client_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _| {
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |event, _| {
                 if event & EventSet::HANG_UP == EventSet::HANG_UP {
                     let mut locked_client = cloned_client.lock().unwrap();
                     if let Err(e) = locked_client.delete_event() {
@@ -145,7 +146,7 @@ impl EventNotifierHelper for VhostUserClient {
                     None
                 }
             });
-        handlers.push(Arc::new(Mutex::new(handler)));
+        handlers.push(handler);
 
         let locked_client = client_handler.lock().unwrap();
         notifiers.push(EventNotifier::new(
@@ -164,7 +165,7 @@ impl EventNotifierHelper for VhostUserClient {
 
         // Register event notifier for delete_evt.
         let cloned_client = client_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(cloned_client.lock().unwrap().delete_evt_handler())
         });
@@ -173,7 +174,7 @@ impl EventNotifierHelper for VhostUserClient {
             locked_client.delete_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers

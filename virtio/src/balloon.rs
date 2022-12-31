@@ -12,6 +12,7 @@
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{
@@ -668,13 +669,13 @@ impl BalloonIoHandler {
 ///
 /// * `fd` - Raw file descriptor.
 /// * `handler` - Handle function.
-fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
+fn build_event_notifier(fd: RawFd, handler: Rc<NotifierCallback>) -> EventNotifier {
     EventNotifier::new(
         NotifierOperation::AddShared,
         fd,
         None,
         EventSet::IN,
-        vec![Arc::new(Mutex::new(handler))],
+        vec![handler],
     )
 }
 
@@ -686,7 +687,7 @@ impl EventNotifierHelper for BalloonIoHandler {
 
         // register event notifier for inflate event.
         let cloned_balloon_io = balloon_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
             if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
@@ -709,7 +710,7 @@ impl EventNotifierHelper for BalloonIoHandler {
 
         // register event notifier for deflate event.
         let cloned_balloon_io = balloon_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
             if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
@@ -733,7 +734,7 @@ impl EventNotifierHelper for BalloonIoHandler {
         // register event notifier for free page reporting event.
         if let Some(report_evt) = locked_balloon_io.report_evt.as_ref() {
             let cloned_balloon_io = balloon_io.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut locked_balloon_io = cloned_balloon_io.lock().unwrap();
                 if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
@@ -754,7 +755,7 @@ impl EventNotifierHelper for BalloonIoHandler {
 
         // register event notifier for reset event.
         let cloned_balloon_io = balloon_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(cloned_balloon_io.lock().unwrap().deactivate_evt_handler())
         });
@@ -765,7 +766,7 @@ impl EventNotifierHelper for BalloonIoHandler {
 
         // register event notifier for timer event.
         let cloned_balloon_io = balloon_io.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let locked_balloon_io = cloned_balloon_io.lock().unwrap();
             if locked_balloon_io.device_broken.load(Ordering::SeqCst) {

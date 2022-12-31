@@ -728,7 +728,7 @@ impl BlockIoHandler {
 
 fn build_event_notifier(
     fd: RawFd,
-    handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+    handlers: Vec<Rc<NotifierCallback>>,
     handler_poll: Option<Box<NotifierCallback>>,
 ) -> EventNotifier {
     let mut notifier = EventNotifier::new(
@@ -749,7 +749,7 @@ impl EventNotifierHelper for BlockIoHandler {
 
         // Register event notifier for update_evt.
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -760,25 +760,25 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.update_evt.as_raw_fd(),
-            vec![Arc::new(Mutex::new(h))],
+            vec![h],
             None,
         ));
 
         // Register event notifier for deactivate_evt.
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(h_clone.lock().unwrap().deactivate_evt_handler())
         });
         notifiers.push(build_event_notifier(
             handler_raw.deactivate_evt.as_raw_fd(),
-            vec![Arc::new(Mutex::new(h))],
+            vec![h],
             None,
         ));
 
         // Register event notifier for queue_evt.
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -807,14 +807,14 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.queue_evt.as_raw_fd(),
-            vec![Arc::new(Mutex::new(h))],
+            vec![h],
             Some(handler_iopoll),
         ));
 
         // Register timer event notifier for IO limits
         if let Some(lb) = handler_raw.leak_bucket.as_ref() {
             let h_clone = handler.clone();
-            let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut h_lock = h_clone.lock().unwrap();
                 if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -828,16 +828,12 @@ impl EventNotifierHelper for BlockIoHandler {
                 }
                 None
             });
-            notifiers.push(build_event_notifier(
-                lb.as_raw_fd(),
-                vec![Arc::new(Mutex::new(h))],
-                None,
-            ));
+            notifiers.push(build_event_notifier(lb.as_raw_fd(), vec![h], None));
         }
 
         // Register event notifier for aio.
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -866,7 +862,7 @@ impl EventNotifierHelper for BlockIoHandler {
         });
         notifiers.push(build_event_notifier(
             handler_raw.aio.fd.as_raw_fd(),
-            vec![Arc::new(Mutex::new(h))],
+            vec![h],
             Some(handler_iopoll),
         ));
 

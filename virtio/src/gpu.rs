@@ -1663,7 +1663,7 @@ impl EventNotifierHelper for GpuIoHandler {
 
         // Register event notifier for deactivate_evt.
         let gpu_handler_clone = gpu_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             // Deactivate console.
             let mut locked_handler = gpu_handler_clone.lock().unwrap();
@@ -1677,12 +1677,12 @@ impl EventNotifierHelper for GpuIoHandler {
             gpu_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register event notifier for ctrl_queue_evt.
         let gpu_handler_clone = gpu_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             if let Err(e) = gpu_handler_clone.lock().unwrap().ctrl_queue_evt_handler() {
                 error!("Failed to process queue for virtio gpu, err: {:?}", e,);
@@ -1695,12 +1695,12 @@ impl EventNotifierHelper for GpuIoHandler {
             gpu_handler.lock().unwrap().ctrl_queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register event notifier for cursor_queue_evt.
         let gpu_handler_clone = gpu_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             if let Err(e) = gpu_handler_clone.lock().unwrap().cursor_queue_evt_handler() {
                 error!("Failed to process queue for virtio gpu, err: {:?}", e,);
@@ -1713,7 +1713,7 @@ impl EventNotifierHelper for GpuIoHandler {
             gpu_handler.lock().unwrap().cursor_queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers
