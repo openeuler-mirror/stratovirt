@@ -14,6 +14,7 @@ use serde::Deserialize;
 use std::io::{Error, ErrorKind, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{bail, Result};
@@ -189,8 +190,8 @@ impl Socket {
         let leak_bucket_fd = leak_bucket.lock().unwrap().as_raw_fd();
 
         let mut handlers = Vec::new();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _| {
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |event, _| {
                 if event == EventSet::IN {
                     let socket_mutexed = shared_socket.lock().unwrap();
                     let stream_fd = socket_mutexed.get_stream_fd();
@@ -231,7 +232,7 @@ impl Socket {
                     None
                 }
             });
-        handlers.push(Arc::new(Mutex::new(handler)));
+        handlers.push(handler);
 
         let qmp_notifier = EventNotifier::new(
             NotifierOperation::AddShared,
@@ -247,11 +248,11 @@ impl Socket {
             leak_bucket_fd,
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(Box::new(move |_, fd| {
+            vec![Rc::new(move |_, fd| {
                 read_fd(fd);
                 leak_bucket.lock().unwrap().clear_timer();
                 None
-            })))],
+            })],
         );
         notifiers.push(leak_bucket_notifier);
 
@@ -265,12 +266,10 @@ impl EventNotifierHelper for Socket {
 
         let socket = shared_socket.clone();
         let mut handlers = Vec::new();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, _| {
-                Some(socket.lock().unwrap().create_event_notifier(socket.clone()))
-            });
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |_, _| Some(socket.lock().unwrap().create_event_notifier(socket.clone())));
 
-        handlers.push(Arc::new(Mutex::new(handler)));
+        handlers.push(handler);
 
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,

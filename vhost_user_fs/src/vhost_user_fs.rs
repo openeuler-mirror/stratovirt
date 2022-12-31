@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::os::unix::io::RawFd;
+use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -62,7 +63,7 @@ impl CreateEventNotifier for VhostUserServerHandler {
         }
 
         let mut handlers = Vec::new();
-        let handler: Box<NotifierCallback> = Box::new(move |event, _| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
             if event == EventSet::IN {
                 let mut lock_server_handler = server_handler.lock().unwrap();
                 if let Err(e) = lock_server_handler.handle_request() {
@@ -77,7 +78,7 @@ impl CreateEventNotifier for VhostUserServerHandler {
             None
         });
 
-        handlers.push(Arc::new(Mutex::new(handler)));
+        handlers.push(handler);
 
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
@@ -97,15 +98,15 @@ impl EventNotifierHelper for VhostUserServerHandler {
         let mut notifiers = Vec::new();
         let mut handlers = Vec::new();
         let server_handler_clone = server_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_, _| {
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |_, _| {
                 server_handler_clone
                     .lock()
                     .unwrap()
                     .create_event_notifier(server_handler_clone.clone())
             });
 
-        handlers.push(Arc::new(Mutex::new(handler)));
+        handlers.push(handler);
 
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,

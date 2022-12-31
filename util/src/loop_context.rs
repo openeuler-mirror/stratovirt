@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::os::unix::io::RawFd;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -67,7 +68,7 @@ pub struct EventNotifier {
     /// The types of events for which we use this fd
     pub event: EventSet,
     /// Event Handler List, one fd event may have many handlers
-    pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+    pub handlers: Vec<Rc<NotifierCallback>>,
     /// Pre-polling handler
     pub handler_poll: Option<Box<NotifierCallback>>,
     /// Event status
@@ -94,7 +95,7 @@ impl EventNotifier {
         raw_fd: i32,
         parked_fd: Option<i32>,
         event: EventSet,
-        handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+        handlers: Vec<Rc<NotifierCallback>>,
     ) -> Self {
         EventNotifier {
             raw_fd,
@@ -484,8 +485,8 @@ impl EventLoopContext {
             if let EventStatus::Alive = event.status {
                 let mut notifiers = Vec::new();
                 for j in 0..event.handlers.len() {
-                    let handle = event.handlers[j].lock().unwrap();
-                    match handle(self.ready_events[i].event_set(), event.raw_fd) {
+                    let handler = &event.handlers[j];
+                    match handler(self.ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
                             notifiers.append(&mut notifier);
@@ -559,8 +560,8 @@ mod test {
         }
     }
 
-    fn generate_handler(related_fd: i32) -> Box<NotifierCallback> {
-        Box::new(move |_, _| {
+    fn generate_handler(related_fd: i32) -> Rc<NotifierCallback> {
+        Rc::new(move |_, _| {
             let mut notifiers = Vec::new();
             let event = EventNotifier::new(
                 NotifierOperation::AddShared,
@@ -583,13 +584,13 @@ mod test {
 
         let handler1 = generate_handler(fd1_related.as_raw_fd());
         let mut handlers = Vec::new();
-        handlers.push(Arc::new(Mutex::new(handler1)));
+        handlers.push(handler1);
         let event1 = EventNotifier::new(
             NotifierOperation::AddShared,
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            handlers.clone(),
+            handlers,
         );
 
         notifiers.push(event1);
@@ -664,7 +665,7 @@ mod test {
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            vec![Arc::new(Mutex::new(handler1))],
+            vec![handler1],
         );
 
         let event1_update = EventNotifier::new(
@@ -672,7 +673,7 @@ mod test {
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            vec![Arc::new(Mutex::new(handler1_update))],
+            vec![handler1_update],
         );
 
         notifiers.push(event1);

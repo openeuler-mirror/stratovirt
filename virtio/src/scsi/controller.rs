@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -347,13 +348,13 @@ impl VirtioDevice for ScsiCntlr {
     }
 }
 
-fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
+fn build_event_notifier(fd: RawFd, handler: Rc<NotifierCallback>) -> EventNotifier {
     EventNotifier::new(
         NotifierOperation::AddShared,
         fd,
         None,
         EventSet::IN,
-        vec![Arc::new(Mutex::new(handler))],
+        vec![handler],
     )
 }
 
@@ -723,7 +724,7 @@ impl EventNotifierHelper for ScsiCtrlHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -740,7 +741,7 @@ impl EventNotifierHelper for ScsiCtrlHandler {
         notifiers.push(build_event_notifier(ctrl_fd, h));
 
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(h_clone.lock().unwrap().deactivate_evt_handler())
         });
@@ -771,7 +772,7 @@ impl EventNotifierHelper for ScsiEventHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -788,7 +789,7 @@ impl EventNotifierHelper for ScsiEventHandler {
         notifiers.push(build_event_notifier(event_fd, h));
 
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(h_clone.lock().unwrap().deactivate_evt_handler())
         });
@@ -848,7 +849,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -866,7 +867,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
         notifiers.push(build_event_notifier(event_fd, h));
 
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(h_clone.lock().unwrap().deactivate_evt_handler())
         });
@@ -875,7 +876,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
         // Register event notifier for aio.
         if let Some(ref aio) = h_locked.aio {
             let h_clone = handler.clone();
-            let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut h_lock = h_clone.lock().unwrap();
                 if h_lock.device_broken.load(Ordering::SeqCst) {

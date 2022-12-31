@@ -14,6 +14,7 @@ use std::fs::File;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
@@ -183,7 +184,7 @@ impl EventNotifierHelper for RngHandler {
 
         // Register event notifier for queue_evt
         let rng_handler_clone = rng_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
             if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
@@ -197,12 +198,12 @@ impl EventNotifierHelper for RngHandler {
             rng_handler.lock().unwrap().queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register event notifier for deactivate_evt
         let rng_handler_clone = rng_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(rng_handler_clone.lock().unwrap().deactivate_evt_handler())
         });
@@ -211,13 +212,13 @@ impl EventNotifierHelper for RngHandler {
             rng_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register timer event notifier for the limit of request bytes per second
         if let Some(lb) = rng_handler.lock().unwrap().leak_bucket.as_ref() {
             let rng_handler_clone = rng_handler.clone();
-            let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
 
                 if let Some(leak_bucket) = rng_handler_clone.lock().unwrap().leak_bucket.as_mut() {
@@ -236,7 +237,7 @@ impl EventNotifierHelper for RngHandler {
                 lb.as_raw_fd(),
                 None,
                 EventSet::IN,
-                vec![Arc::new(Mutex::new(handler))],
+                vec![handler],
             ));
         }
 

@@ -40,6 +40,7 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     os::unix::prelude::{AsRawFd, RawFd},
     ptr,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 use util::{
@@ -116,8 +117,8 @@ impl EventNotifierHelper for VncConnHandler {
         let vnc_io_clone = vnc_io.clone();
         let server = vnc_io.lock().unwrap().server.clone();
         // Register event notifier for connection.
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_event, fd: RawFd| {
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |_event, fd: RawFd| {
                 read_fd(fd);
                 match vnc_io_clone.clone().lock().unwrap().listener.accept() {
                     Ok((stream, addr)) => {
@@ -138,7 +139,7 @@ impl EventNotifierHelper for VncConnHandler {
                 vnc_io.lock().unwrap().listener.as_raw_fd(),
                 None,
                 EventSet::IN,
-                vec![Arc::new(Mutex::new(handler))],
+                vec![handler],
             )),
         ];
         notifiers

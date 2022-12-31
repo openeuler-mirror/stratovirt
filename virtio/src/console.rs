@@ -12,6 +12,7 @@
 
 use std::io::Write;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{cmp, usize};
 
@@ -274,7 +275,7 @@ impl EventNotifierHelper for ConsoleHandler {
     fn internal_notifiers(console_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
         let cloned_cls = console_handler.clone();
-        let handler = Box::new(move |_, fd: RawFd| {
+        let handler = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             cloned_cls.lock().unwrap().output_handle();
             None as Option<Vec<EventNotifier>>
@@ -284,11 +285,11 @@ impl EventNotifierHelper for ConsoleHandler {
             console_handler.lock().unwrap().output_queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         let cloned_cls = console_handler.clone();
-        let handler = Box::new(move |_, fd: RawFd| {
+        let handler = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(cloned_cls.lock().unwrap().deactivate_evt_handler())
         });
@@ -297,7 +298,7 @@ impl EventNotifierHelper for ConsoleHandler {
             console_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers

@@ -33,6 +33,7 @@ use std::{
     io::{Read, Write},
     net::{Shutdown, TcpStream},
     os::unix::prelude::{AsRawFd, RawFd},
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 use util::{
@@ -988,8 +989,8 @@ impl EventNotifierHelper for ClientIoHandler {
 
         // Register event notifier for read.
         let client_io = client_io_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _fd: RawFd| {
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |event, _fd: RawFd| {
                 let mut locked_client_io = client_io.lock().unwrap();
                 let client = locked_client_io.client.clone();
                 if event & EventSet::ERROR == EventSet::ERROR
@@ -1017,14 +1018,14 @@ impl EventNotifierHelper for ClientIoHandler {
             client_io.lock().unwrap().stream.as_raw_fd(),
             None,
             EventSet::IN | EventSet::READ_HANG_UP,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register event notifier for write.
         let client_io = client_io_handler.clone();
         let client = client_io.lock().unwrap().client.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_event, fd| {
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |_event, fd| {
                 read_fd(fd);
                 let mut locked_client_io = client_io.lock().unwrap();
                 let client = locked_client_io.client.clone();
@@ -1043,13 +1044,13 @@ impl EventNotifierHelper for ClientIoHandler {
             client.write_fd.lock().unwrap().as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register event for disconnect.
         let client_io = client_io_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_event, fd| {
+        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
+            Rc::new(move |_event, fd| {
                 read_fd(fd);
                 // Drop client info from vnc server.
                 let mut locked_client_io = client_io.lock().unwrap();
@@ -1073,7 +1074,7 @@ impl EventNotifierHelper for ClientIoHandler {
             client.disconn_evt.lock().unwrap().as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers
