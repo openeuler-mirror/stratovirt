@@ -32,7 +32,9 @@ use machine_manager::{
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use util::num_ops::read_u32;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -274,11 +276,12 @@ impl ConsoleHandler {
 impl EventNotifierHelper for ConsoleHandler {
     fn internal_notifiers(console_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
+
         let cloned_cls = console_handler.clone();
-        let handler = Rc::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             cloned_cls.lock().unwrap().output_handle();
-            None as Option<Vec<EventNotifier>>
+            None
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
@@ -289,7 +292,7 @@ impl EventNotifierHelper for ConsoleHandler {
         ));
 
         let cloned_cls = console_handler.clone();
-        let handler = Rc::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             Some(cloned_cls.lock().unwrap().deactivate_evt_handler())
         });

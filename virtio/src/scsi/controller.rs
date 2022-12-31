@@ -722,6 +722,8 @@ impl ScsiCtrlHandler {
 
 impl EventNotifierHelper for ScsiCtrlHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -735,10 +737,7 @@ impl EventNotifierHelper for ScsiCtrlHandler {
                 .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
             None
         });
-
-        let mut notifiers = Vec::new();
-        let ctrl_fd = h_locked.queue_evt.as_raw_fd();
-        notifiers.push(build_event_notifier(ctrl_fd, h));
+        notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
 
         let h_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -770,6 +769,8 @@ pub struct ScsiEventHandler {
 
 impl EventNotifierHelper for ScsiEventHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -783,10 +784,7 @@ impl EventNotifierHelper for ScsiEventHandler {
                 .unwrap_or_else(|e| error!("Failed to handle event queue, err is {}", e));
             None
         });
-
-        let mut notifiers = Vec::new();
-        let event_fd = h_locked.queue_evt.as_raw_fd();
-        notifiers.push(build_event_notifier(event_fd, h));
+        notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
 
         let h_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -847,6 +845,8 @@ pub struct ScsiCmdHandler {
 
 impl EventNotifierHelper for ScsiCmdHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -861,10 +861,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
 
             None
         });
-
-        let mut notifiers = Vec::new();
-        let event_fd = h_locked.queue_evt.as_raw_fd();
-        notifiers.push(build_event_notifier(event_fd, h));
+        notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
 
         let h_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -882,7 +879,6 @@ impl EventNotifierHelper for ScsiCmdHandler {
                 if h_lock.device_broken.load(Ordering::SeqCst) {
                     return None;
                 }
-
                 if let Some(aio) = &mut h_lock.aio {
                     if let Err(ref e) = aio.handle() {
                         error!("Failed to handle aio, {:?}", e);
@@ -895,7 +891,6 @@ impl EventNotifierHelper for ScsiCmdHandler {
                 }
                 None
             });
-
             notifiers.push(build_event_notifier(aio.fd.as_raw_fd(), h));
         }
 

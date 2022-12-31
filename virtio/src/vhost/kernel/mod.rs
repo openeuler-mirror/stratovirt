@@ -495,12 +495,10 @@ impl EventNotifierHelper for VhostIoHandler {
         let vhost = vhost_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             let locked_vhost_handler = vhost.lock().unwrap();
             if locked_vhost_handler.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
-
             for host_notify in locked_vhost_handler.host_notifies.iter() {
                 if let Err(e) = (locked_vhost_handler.interrupt_cb)(
                     &VirtioInterruptType::Vring,
@@ -513,7 +511,6 @@ impl EventNotifierHelper for VhostIoHandler {
                     );
                 }
             }
-
             None as Option<Vec<EventNotifier>>
         });
         for host_notify in vhost_handler.lock().unwrap().host_notifies.iter() {

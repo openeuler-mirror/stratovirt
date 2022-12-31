@@ -45,7 +45,9 @@ use std::{
 };
 use util::{
     bitmap::Bitmap,
-    loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation},
+    loop_context::{
+        read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    },
     pixman::{
         pixman_format_bpp, pixman_format_code_t, pixman_image_composite, pixman_image_create_bits,
         pixman_image_t, pixman_op_t,
@@ -117,32 +119,27 @@ impl EventNotifierHelper for VncConnHandler {
         let vnc_io_clone = vnc_io.clone();
         let server = vnc_io.lock().unwrap().server.clone();
         // Register event notifier for connection.
-        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Rc::new(move |_event, fd: RawFd| {
-                read_fd(fd);
-                match vnc_io_clone.clone().lock().unwrap().listener.accept() {
-                    Ok((stream, addr)) => {
-                        if let Err(e) = handle_connection(&server, stream, addr) {
-                            error!("{:?}", e);
-                        }
-                    }
-                    Err(e) => {
-                        error!("Connect failed: {:?}", e);
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
+            read_fd(fd);
+            match vnc_io_clone.clone().lock().unwrap().listener.accept() {
+                Ok((stream, addr)) => {
+                    if let Err(e) = handle_connection(&server, stream, addr) {
+                        error!("{:?}", e);
                     }
                 }
-
-                None as Option<Vec<EventNotifier>>
-            });
-        let notifiers = vec![
-            (EventNotifier::new(
-                NotifierOperation::AddShared,
-                vnc_io.lock().unwrap().listener.as_raw_fd(),
-                None,
-                EventSet::IN,
-                vec![handler],
-            )),
-        ];
-        notifiers
+                Err(e) => {
+                    error!("Connect failed: {:?}", e);
+                }
+            }
+            None
+        });
+        vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            vnc_io.lock().unwrap().listener.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![handler],
+        )]
     }
 }
 

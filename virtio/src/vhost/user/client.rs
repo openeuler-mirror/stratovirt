@@ -126,28 +126,24 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
 impl EventNotifierHelper for VhostUserClient {
     fn internal_notifiers(client_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        let mut handlers = Vec::new();
 
         let cloned_client = client_handler.clone();
-        let handler: Rc<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Rc::new(move |event, _| {
-                if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    let mut locked_client = cloned_client.lock().unwrap();
-                    if let Err(e) = locked_client.delete_event() {
-                        error!("Failed to delete vhost-user client event, {:?}", e);
-                    }
-                    if !locked_client.reconnecting {
-                        locked_client.reconnecting = true;
-                        drop(locked_client);
-                        vhost_user_reconnect(&cloned_client);
-                    }
-                    None
-                } else {
-                    None
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
+            if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                let mut locked_client = cloned_client.lock().unwrap();
+                if let Err(e) = locked_client.delete_event() {
+                    error!("Failed to delete vhost-user client event, {:?}", e);
                 }
-            });
-        handlers.push(handler);
-
+                if !locked_client.reconnecting {
+                    locked_client.reconnecting = true;
+                    drop(locked_client);
+                    vhost_user_reconnect(&cloned_client);
+                }
+                None
+            } else {
+                None
+            }
+        });
         let locked_client = client_handler.lock().unwrap();
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
@@ -160,7 +156,7 @@ impl EventNotifierHelper for VhostUserClient {
                 .get_stream_raw_fd(),
             None,
             EventSet::HANG_UP,
-            handlers,
+            vec![handler],
         ));
 
         // Register event notifier for delete_evt.

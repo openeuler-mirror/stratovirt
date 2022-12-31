@@ -1687,7 +1687,6 @@ impl EventNotifierHelper for GpuIoHandler {
             if let Err(e) = gpu_handler_clone.lock().unwrap().ctrl_queue_evt_handler() {
                 error!("Failed to process queue for virtio gpu, err: {:?}", e,);
             }
-
             None
         });
         notifiers.push(EventNotifier::new(
@@ -1705,7 +1704,6 @@ impl EventNotifierHelper for GpuIoHandler {
             if let Err(e) = gpu_handler_clone.lock().unwrap().cursor_queue_evt_handler() {
                 error!("Failed to process queue for virtio gpu, err: {:?}", e,);
             }
-
             None
         });
         notifiers.push(EventNotifier::new(

@@ -186,11 +186,9 @@ impl EventNotifierHelper for RngHandler {
         let rng_handler_clone = rng_handler.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
                 error!("Failed to process queue for virtio rng, err: {:?}", e,);
             }
-
             None
         });
         notifiers.push(EventNotifier::new(
@@ -220,18 +218,14 @@ impl EventNotifierHelper for RngHandler {
             let rng_handler_clone = rng_handler.clone();
             let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
-
                 if let Some(leak_bucket) = rng_handler_clone.lock().unwrap().leak_bucket.as_mut() {
                     leak_bucket.clear_timer();
                 }
-
                 if let Err(ref e) = rng_handler_clone.lock().unwrap().process_queue() {
                     error!("Failed to process queue for virtio rng, err: {:?}", e,);
                 }
-
                 None
             });
-
             notifiers.push(EventNotifier::new(
                 NotifierOperation::AddShared,
                 lb.as_raw_fd(),
