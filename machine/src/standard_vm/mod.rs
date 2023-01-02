@@ -219,19 +219,14 @@ trait StdMachineOps: AcpiBuilder {
         shutdown_req: &EventFd,
         clone_vm: Arc<Mutex<StdMachine>>,
     ) -> MachineResult<()> {
+        use util::loop_context::gen_delete_notifiers;
+
         let shutdown_req = shutdown_req.try_clone().unwrap();
         let shutdown_req_fd = shutdown_req.as_raw_fd();
         let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = shutdown_req.read().unwrap();
             StdMachine::handle_shutdown_request(&clone_vm);
-            let notifiers = vec![EventNotifier::new(
-                NotifierOperation::Delete,
-                shutdown_req_fd,
-                None,
-                EventSet::IN,
-                Vec::new(),
-            )];
-            Some(notifiers)
+            Some(gen_delete_notifiers(&[shutdown_req_fd]))
         });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,

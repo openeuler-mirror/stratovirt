@@ -18,9 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use machine_manager::config::BlkDevConfig;
-use machine_manager::event_loop::EventLoop;
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -101,11 +99,7 @@ impl Block {
             "Failed to create the client which communicates with the server for vhost-user blk"
         })?;
         let client = Arc::new(Mutex::new(client));
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(client.clone()),
-            None,
-        )
-        .with_context(|| "Failed to update event for client sock")?;
+        VhostUserClient::add_event(&client)?;
         self.client = Some(client);
         Ok(())
     }

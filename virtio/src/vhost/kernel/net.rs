@@ -19,7 +19,8 @@ use std::sync::{Arc, Mutex};
 use crate::error::VirtioError;
 use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
-use machine_manager::{config::NetworkInterfaceConfig, event_loop::EventLoop};
+use machine_manager::config::NetworkInterfaceConfig;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_u32;
@@ -95,7 +96,7 @@ pub struct Net {
     /// System address space.
     mem_space: Arc<AddressSpace>,
     /// EventFd for device deactivate.
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
 }
@@ -111,7 +112,7 @@ impl Net {
             vhost_features: 0_u64,
             device_config: VirtioNetConfig::default(),
             mem_space: mem_space.clone(),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -267,13 +268,15 @@ impl VirtioDevice for Net {
                 mem_space,
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.driver_features,
-                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                 device_broken: self.broken.clone(),
             };
 
-            EventLoop::update_event(
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
+            let notifiers =
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
+            register_event_helper(
+                notifiers,
                 self.net_cfg.iothread.as_ref(),
+                &mut self.deactivate_evts,
             )?;
         }
 
@@ -365,13 +368,14 @@ impl VirtioDevice for Net {
             let handler = VhostIoHandler {
                 interrupt_cb: interrupt_cb.clone(),
                 host_notifies,
-                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                 device_broken: self.broken.clone(),
             };
 
-            EventLoop::update_event(
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
-                None,
+            let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+            register_event_helper(
+                notifiers,
+                self.net_cfg.iothread.as_ref(),
+                &mut self.deactivate_evts,
             )?;
         }
         self.broken.store(false, Ordering::SeqCst);
@@ -380,11 +384,7 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
-
-        Ok(())
+        unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)
     }
 
     fn reset(&mut self) -> Result<()> {

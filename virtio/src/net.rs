@@ -43,6 +43,7 @@ use crate::{
 use address_space::{AddressSpace, RegionCache};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{
     config::{ConfigCheck, NetworkInterfaceConfig},
     event_loop::EventLoop,
@@ -53,6 +54,7 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::loop_context::gen_delete_notifiers;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -457,8 +459,6 @@ pub struct NetCtrlHandler {
     pub interrupt_cb: Arc<VirtioInterrupt>,
     /// Bit mask of features negotiated by the backend and the frontend.
     pub driver_features: u64,
-    /// Deactivate event to delete net control handler.
-    pub deactivate_evt: EventFd,
     /// Device is broken or not.
     pub device_broken: Arc<AtomicBool>,
 }
@@ -597,27 +597,6 @@ impl NetCtrlHandler {
 
         Ok(())
     }
-
-    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.ctrl.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-
-        notifiers
-    }
 }
 
 impl EventNotifierHelper for NetCtrlHandler {
@@ -644,19 +623,6 @@ impl EventNotifierHelper for NetCtrlHandler {
         });
         notifiers.push(build_event_notifier(
             locked_net_io.ctrl.queue_evt.as_raw_fd(),
-            Some(handler),
-            NotifierOperation::AddShared,
-            EventSet::IN,
-        ));
-
-        // Register event notifier for deactivate_evt.
-        let cloned_net_io = net_io.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(cloned_net_io.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(build_event_notifier(
-            locked_net_io.deactivate_evt.as_raw_fd(),
             Some(handler),
             NotifierOperation::AddShared,
             EventSet::IN,
@@ -703,7 +669,6 @@ struct NetIoHandler {
     driver_features: u64,
     receiver: Receiver<SenderConfig>,
     update_evt: EventFd,
-    deactivate_evt: EventFd,
     device_broken: Arc<AtomicBool>,
     is_listening: bool,
     ctrl_info: Arc<Mutex<CtrlInfo>>,
@@ -960,82 +925,18 @@ impl NetIoHandler {
             locked_net_io.tap_fd = tap.as_raw_fd();
         }
 
-        let mut notifiers = vec![
-            build_event_notifier(
-                locked_net_io.update_evt.as_raw_fd(),
-                None,
-                NotifierOperation::Delete,
-                EventSet::IN,
-            ),
-            build_event_notifier(
-                locked_net_io.rx.queue_evt.as_raw_fd(),
-                None,
-                NotifierOperation::Delete,
-                EventSet::IN,
-            ),
-            build_event_notifier(
-                locked_net_io.tx.queue_evt.as_raw_fd(),
-                None,
-                NotifierOperation::Delete,
-                EventSet::IN,
-            ),
+        let mut notifiers_fds = vec![
+            locked_net_io.update_evt.as_raw_fd(),
+            locked_net_io.rx.queue_evt.as_raw_fd(),
+            locked_net_io.tx.queue_evt.as_raw_fd(),
         ];
         if old_tap_fd != -1 {
-            notifiers.push(build_event_notifier(
-                old_tap_fd,
-                None,
-                NotifierOperation::Delete,
-                EventSet::IN,
-            ));
+            notifiers_fds.push(old_tap_fd);
         }
+        let mut notifiers = gen_delete_notifiers(&notifiers_fds);
         drop(locked_net_io);
 
         notifiers.append(&mut EventNotifierHelper::internal_notifiers(net_io.clone()));
-        notifiers
-    }
-
-    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let mut notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.update_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.rx.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.tx.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-        if self.tap_fd != -1 {
-            notifiers.push(EventNotifier::new(
-                NotifierOperation::Delete,
-                self.tap_fd,
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ));
-            self.tap_fd = -1;
-        }
-
         notifiers
     }
 }
@@ -1091,19 +992,6 @@ impl EventNotifierHelper for NetIoHandler {
             NotifierOperation::AddShared,
             EventSet::IN,
         )];
-
-        // Register event notifier for deactivate_evt.
-        let cloned_net_io = net_io.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(cloned_net_io.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(build_event_notifier(
-            locked_net_io.deactivate_evt.as_raw_fd(),
-            Some(handler),
-            NotifierOperation::AddShared,
-            EventSet::IN,
-        ));
 
         // Register event notifier for rx.
         let cloned_net_io = net_io.clone();
@@ -1235,7 +1123,7 @@ pub struct Net {
     /// Eventfd for config space update.
     update_evt: EventFd,
     /// Eventfd for device deactivate.
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
     /// The information about control command.
@@ -1250,7 +1138,7 @@ impl Default for Net {
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
         }
@@ -1265,7 +1153,7 @@ impl Net {
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
             update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
         }
@@ -1616,13 +1504,15 @@ impl VirtioDevice for Net {
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.state.lock().unwrap().driver_features,
-                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                 device_broken: self.broken.clone(),
             };
 
-            EventLoop::update_event(
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
+            let notifiers =
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
+            register_event_helper(
+                notifiers,
                 self.net_cfg.iothread.as_ref(),
+                &mut self.deactivate_evts,
             )?;
         }
 
@@ -1656,7 +1546,6 @@ impl VirtioDevice for Net {
                 driver_features: self.state.lock().unwrap().driver_features,
                 receiver,
                 update_evt: self.update_evt.try_clone().unwrap(),
-                deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                 device_broken: self.broken.clone(),
                 is_listening: true,
                 ctrl_info: ctrl_info.clone(),
@@ -1665,9 +1554,11 @@ impl VirtioDevice for Net {
                 handler.tap_fd = tap.as_raw_fd();
             }
 
-            EventLoop::update_event(
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
+            let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+            register_event_helper(
+                notifiers,
                 self.net_cfg.iothread.as_ref(),
+                &mut self.deactivate_evts,
             )?;
         }
         self.senders = Some(senders);
@@ -1727,9 +1618,7 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)
     }
 
     fn reset(&mut self) -> Result<()> {

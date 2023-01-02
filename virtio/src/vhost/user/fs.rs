@@ -28,10 +28,8 @@ use log::error;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::AddressSpace;
-use machine_manager::{
-    config::{FsConfig, MAX_TAG_LENGTH},
-    event_loop::EventLoop,
-};
+use machine_manager::config::{FsConfig, MAX_TAG_LENGTH};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -111,6 +109,7 @@ pub struct Fs {
     mem_space: Arc<AddressSpace>,
     /// The notifier events from host.
     call_events: Vec<EventFd>,
+    deactivate_evts: Vec<RawFd>,
     enable_irqfd: bool,
 }
 
@@ -131,6 +130,7 @@ impl Fs {
             acked_features: 0_u64,
             mem_space,
             call_events: Vec::<EventFd>::new(),
+            deactivate_evts: Vec::new(),
             enable_irqfd,
         }
     }
@@ -148,12 +148,7 @@ impl VirtioDevice for Fs {
                 "Failed to create the client which communicates with the server for virtio fs"
             })?;
         let client = Arc::new(Mutex::new(client));
-
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(client.clone()),
-            None,
-        )
-        .with_context(|| "Failed to update event for client sock")?;
+        VhostUserClient::add_event(&client)?;
         self.avail_features = client
             .lock()
             .unwrap()
@@ -249,10 +244,8 @@ impl VirtioDevice for Fs {
                 host_notifies,
             };
 
-            EventLoop::update_event(
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
-                None,
-            )?;
+            let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+            register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
         }
 
         Ok(())
@@ -272,6 +265,7 @@ impl VirtioDevice for Fs {
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        unregister_event_helper(None, &mut self.deactivate_evts)?;
         self.call_events.clear();
         Ok(())
     }

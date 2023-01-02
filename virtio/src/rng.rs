@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{config::RngConfig, event_loop::EventLoop};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::aio::raw_read;
@@ -58,7 +59,6 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
 struct RngHandler {
     queue: Arc<Mutex<Queue>>,
     queue_evt: EventFd,
-    deactivate_evt: RawFd,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
@@ -146,36 +146,6 @@ impl RngHandler {
 
         Ok(())
     }
-
-    fn deactivate_evt_handler(&self) -> Vec<EventNotifier> {
-        let mut notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt,
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-        if let Some(lb) = self.leak_bucket.as_ref() {
-            notifiers.push(EventNotifier::new(
-                NotifierOperation::Delete,
-                lb.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ));
-        }
-
-        notifiers
-    }
 }
 
 impl EventNotifierHelper for RngHandler {
@@ -194,20 +164,6 @@ impl EventNotifierHelper for RngHandler {
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             rng_handler.lock().unwrap().queue_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            vec![handler],
-        ));
-
-        // Register event notifier for deactivate_evt
-        let rng_handler_clone = rng_handler.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(rng_handler_clone.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::AddShared,
-            rng_handler.lock().unwrap().deactivate_evt,
             None,
             EventSet::IN,
             vec![handler],
@@ -259,7 +215,7 @@ pub struct Rng {
     /// The state of Rng device.
     state: RngState,
     /// Eventfd for device deactivate
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
 }
 
 impl Rng {
@@ -271,7 +227,7 @@ impl Rng {
                 device_features: 0,
                 driver_features: 0,
             },
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
         }
     }
 
@@ -366,7 +322,6 @@ impl VirtioDevice for Rng {
         let handler = RngHandler {
             queue: queues[0].clone(),
             queue_evt: queue_evts.remove(0),
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             interrupt_cb,
             driver_features: self.state.driver_features,
             mem_space,
@@ -379,18 +334,14 @@ impl VirtioDevice for Rng {
             leak_bucket: self.rng_cfg.bytes_per_sec.map(LeakBucket::new),
         };
 
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
-            None,
-        )?;
+        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        unregister_event_helper(None, &mut self.deactivate_evts)
     }
 }
 
@@ -612,11 +563,9 @@ mod tests {
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
-        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: reset_event.as_raw_fd(),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
@@ -697,11 +646,9 @@ mod tests {
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
-        let reset_event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
             queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            deactivate_evt: reset_event.as_raw_fd(),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),

@@ -35,7 +35,8 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use machine_manager::event_loop::EventLoop;
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
 };
 
 use super::fs::FileSystem;
@@ -114,13 +115,7 @@ impl FsIoHandler {
     }
 
     fn delete_notifiers(&self) -> Vec<EventNotifier> {
-        vec![EventNotifier::new(
-            NotifierOperation::Delete,
-            self.kick_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            Vec::new(),
-        )]
+        gen_delete_notifiers(&[self.kick_evt.as_raw_fd()])
     }
 }
 
