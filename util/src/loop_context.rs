@@ -190,8 +190,13 @@ impl EventLoopContext {
     }
 
     fn clear_gc(&mut self) {
-        let mut gc = self.gc.write().unwrap();
-        gc.clear();
+        loop {
+            // Loop to avoid hold lock for long time.
+            let mut gc = self.gc.write().unwrap();
+            if gc.pop().is_none() {
+                break;
+            }
+        }
     }
 
     fn add_event(&mut self, mut event: EventNotifier) -> Result<()> {
