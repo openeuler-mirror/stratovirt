@@ -21,7 +21,8 @@ use anyhow::{bail, Result};
 use log::{error, info};
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
 };
 use vmm_sys_util::epoll::EventSet;
 
@@ -208,26 +209,9 @@ impl Socket {
             if event & EventSet::HANG_UP == EventSet::HANG_UP {
                 let socket_mutexed = shared_socket.lock().unwrap();
                 let stream_fd = socket_mutexed.get_stream_fd();
-                let listener_fd = socket_mutexed.get_listener_fd();
 
                 QmpChannel::unbind();
-
-                Some(vec![
-                    EventNotifier::new(
-                        NotifierOperation::Delete,
-                        stream_fd,
-                        Some(listener_fd),
-                        EventSet::IN | EventSet::HANG_UP,
-                        Vec::new(),
-                    ),
-                    EventNotifier::new(
-                        NotifierOperation::Delete,
-                        leak_bucket_fd,
-                        None,
-                        EventSet::IN,
-                        Vec::new(),
-                    ),
-                ])
+                Some(gen_delete_notifiers(&[stream_fd, leak_bucket_fd]))
             } else {
                 None
             }

@@ -13,11 +13,13 @@
 use crate::virtio_has_feature;
 use std::cmp;
 use std::io::Write;
+use std::os::unix::prelude::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::{config::NetworkInterfaceConfig, event_loop::EventLoop};
+use machine_manager::config::NetworkInterfaceConfig;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::read_u32;
@@ -58,7 +60,7 @@ pub struct Net {
     /// The notifier events from host.
     call_events: Vec<EventFd>,
     /// EventFd for deactivate control Queue.
-    de_ctrl_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
 }
@@ -73,7 +75,7 @@ impl Net {
             mem_space: mem_space.clone(),
             client: None,
             call_events: Vec::<EventFd>::new(),
-            de_ctrl_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -90,9 +92,7 @@ impl Net {
             None => return Err(anyhow!("Failed to get client when stoping event")),
         };
         if ((self.driver_features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && self.net_cfg.mq {
-            self.de_ctrl_evt
-                .write(1)
-                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+            unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
         }
 
         Ok(())
@@ -123,12 +123,7 @@ impl VirtioDevice for Net {
             "Failed to create the client which communicates with the server for vhost-user net"
         })?;
         let client = Arc::new(Mutex::new(client));
-
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(client.clone()),
-            None,
-        )
-        .with_context(|| "Failed to update event for client sock")?;
+        VhostUserClient::add_event(&client)?;
 
         self.device_features = client
             .lock()
@@ -250,13 +245,15 @@ impl VirtioDevice for Net {
                 mem_space,
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features: self.driver_features,
-                deactivate_evt: self.de_ctrl_evt.try_clone().unwrap(),
                 device_broken: self.broken.clone(),
             };
 
-            EventLoop::update_event(
-                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
+            let notifiers =
+                EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
+            register_event_helper(
+                notifiers,
                 self.net_cfg.iothread.as_ref(),
+                &mut self.deactivate_evts,
             )?;
         }
 

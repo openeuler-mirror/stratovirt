@@ -39,7 +39,8 @@ use std::{
 use util::{
     bitmap::Bitmap,
     loop_context::{
-        read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+        gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+        NotifierOperation,
     },
 };
 use vmm_sys_util::epoll::EventSet;
@@ -956,31 +957,12 @@ impl ClientIoHandler {
     }
 
     fn disconn_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.stream.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.client.write_fd.lock().unwrap().as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.client.disconn_evt.lock().unwrap().as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
+        let notifiers_fds = vec![
+            self.stream.as_raw_fd(),
+            self.client.write_fd.lock().unwrap().as_raw_fd(),
+            self.client.disconn_evt.lock().unwrap().as_raw_fd(),
         ];
-
-        notifiers
+        gen_delete_notifiers(&notifiers_fds)
     }
 }
 

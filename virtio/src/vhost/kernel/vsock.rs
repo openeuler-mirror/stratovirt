@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
-use machine_manager::{config::VsockConfig, event_loop::EventLoop};
+use machine_manager::config::VsockConfig;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -102,7 +103,7 @@ pub struct Vsock {
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// EventFd for device deactivate.
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
 }
@@ -116,7 +117,7 @@ impl Vsock {
             mem_space: mem_space.clone(),
             event_queue: None,
             interrupt_cb: None,
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -318,25 +319,18 @@ impl VirtioDevice for Vsock {
         let handler = VhostIoHandler {
             interrupt_cb,
             host_notifies,
-            deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             device_broken: self.broken.clone(),
         };
 
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
-            None,
-        )?;
+        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
         self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
-
-        Ok(())
+        unregister_event_helper(None, &mut self.deactivate_evts)
     }
 
     fn reset(&mut self) -> Result<()> {

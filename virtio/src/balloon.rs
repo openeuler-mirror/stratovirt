@@ -26,9 +26,9 @@ use address_space::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{
-    config::BalloonConfig, event, event_loop::EventLoop, qmp::qmp_schema::BalloonInfo,
-    qmp::QmpChannel,
+    config::BalloonConfig, event, qmp::qmp_schema::BalloonInfo, qmp::QmpChannel,
 };
 use util::{
     bitmap::Bitmap,
@@ -514,8 +514,6 @@ struct BalloonIoHandler {
     report_queue: Option<Arc<Mutex<Queue>>>,
     /// Reporting EventFd.
     report_evt: Option<EventFd>,
-    /// EventFd for device deactivate
-    deactivate_evt: EventFd,
     /// Device is broken or not.
     device_broken: Arc<AtomicBool>,
     /// The interrupt call back function.
@@ -626,41 +624,6 @@ impl BalloonIoHandler {
     fn get_balloon_memory_size(&self) -> u64 {
         (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
     }
-
-    fn deactivate_evt_handler(&self) -> Vec<EventNotifier> {
-        let notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.inf_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.def_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.event_timer.clone().lock().unwrap().as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-
-        notifiers
-    }
 }
 
 /// Create a new EventNotifier.
@@ -753,17 +716,6 @@ impl EventNotifierHelper for BalloonIoHandler {
             notifiers.push(build_event_notifier(report_evt.as_raw_fd(), handler));
         }
 
-        // register event notifier for reset event.
-        let cloned_balloon_io = balloon_io.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(cloned_balloon_io.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(build_event_notifier(
-            locked_balloon_io.deactivate_evt.as_raw_fd(),
-            handler,
-        ));
-
         // register event notifier for timer event.
         let cloned_balloon_io = balloon_io.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
@@ -808,7 +760,7 @@ pub struct Balloon {
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
     /// EventFd for device deactivate.
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
 }
@@ -837,7 +789,7 @@ impl Balloon {
             mem_info: Arc::new(Mutex::new(BlnMemInfo::new(mem_share))),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -1071,7 +1023,6 @@ impl VirtioDevice for Balloon {
             def_evt,
             report_queue,
             report_evt,
-            deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             device_broken: self.broken.clone(),
             interrupt_cb,
             mem_info: self.mem_info.clone(),
@@ -1079,20 +1030,16 @@ impl VirtioDevice for Balloon {
             balloon_actual: self.actual.clone(),
         };
 
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
-            None,
-        )
-        .with_context(|| "Failed to register balloon event notifier to MainLoop")?;
+        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
+        register_event_helper(notifiers, None, &mut self.deactivate_evts)
+            .with_context(|| "Failed to register balloon event notifier to MainLoop")?;
         self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        unregister_event_helper(None, &mut self.deactivate_evts)
     }
 
     fn update_config(
@@ -1235,7 +1182,6 @@ mod tests {
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
 
-        assert!(bln.deactivate().is_ok());
         assert!(bln.update_config(None).is_err());
     }
 
@@ -1347,7 +1293,6 @@ mod tests {
 
         let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let event_def = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let event_deactivate = EventFd::new(libc::EFD_NONBLOCK).unwrap();
 
         let mut handler = BalloonIoHandler {
             driver_features: bln.driver_features,
@@ -1358,7 +1303,6 @@ mod tests {
             def_evt: event_def,
             report_queue: None,
             report_evt: None,
-            deactivate_evt: event_deactivate.try_clone().unwrap(),
             device_broken: bln.broken.clone(),
             interrupt_cb: cb.clone(),
             mem_info: bln.mem_info.clone(),
@@ -1552,7 +1496,6 @@ mod tests {
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
 
-        assert!(bln.deactivate().is_ok());
         assert!(bln.update_config(None).is_err());
     }
 }

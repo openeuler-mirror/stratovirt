@@ -26,7 +26,9 @@ use machine_manager::{
     config::{ChardevConfig, ChardevType},
     temp_cleaner::TempCleaner,
 };
-use util::loop_context::{EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation};
+use util::loop_context::{
+    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
 use util::set_termi_raw_mode;
 use util::unix::limit_permission;
 use vmm_sys_util::epoll::EventSet;
@@ -246,13 +248,7 @@ fn get_notifier_handler(
                     cloned_chardev.lock().unwrap().input = None;
                     cloned_chardev.lock().unwrap().output = None;
                     cloned_chardev.lock().unwrap().stream_fd = None;
-                    Some(vec![EventNotifier::new(
-                        NotifierOperation::Delete,
-                        stream_fd,
-                        Some(listener_fd),
-                        EventSet::IN | EventSet::HANG_UP,
-                        Vec::new(),
-                    )])
+                    Some(gen_delete_notifiers(&[stream_fd]))
                 } else {
                     None
                 }

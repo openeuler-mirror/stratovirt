@@ -123,6 +123,28 @@ pub trait EventNotifierHelper {
     fn internal_notifiers(_: Arc<Mutex<Self>>) -> Vec<EventNotifier>;
 }
 
+pub fn get_notifiers_fds(notifiers: &[EventNotifier]) -> Vec<RawFd> {
+    let mut fds = Vec::with_capacity(notifiers.len());
+    for notifier in notifiers {
+        fds.push(notifier.raw_fd);
+    }
+    fds
+}
+
+pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
+    let mut notifiers = Vec::with_capacity(fds.len());
+    for fd in fds {
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Delete,
+            *fd,
+            None,
+            EventSet::IN,
+            Vec::new(),
+        ));
+    }
+    notifiers
+}
+
 /// EventLoop manager, advise continue running or stop running
 pub trait EventLoopManager: Send + Sync {
     fn loop_should_exit(&self) -> bool;

@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::os::unix::prelude::RawFd;
 use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
@@ -20,7 +21,9 @@ use crate::qmp::qmp_schema::IothreadInfo;
 
 use anyhow::bail;
 use log::info;
-use util::loop_context::{EventLoopContext, EventLoopManager, EventNotifier};
+use util::loop_context::{
+    gen_delete_notifiers, get_notifiers_fds, EventLoopContext, EventLoopManager, EventNotifier,
+};
 
 /// This struct used to manage all events occur during VM lifetime.
 /// # Notes
@@ -150,4 +153,24 @@ impl EventLoop {
             }
         }
     }
+}
+
+pub fn register_event_helper(
+    notifiers: Vec<EventNotifier>,
+    ctx_name: Option<&String>,
+    record_evts: &mut Vec<RawFd>,
+) -> util::Result<()> {
+    let mut notifiers_fds = get_notifiers_fds(&notifiers);
+    EventLoop::update_event(notifiers, ctx_name)?;
+    record_evts.append(&mut notifiers_fds);
+    Ok(())
+}
+
+pub fn unregister_event_helper(
+    ctx_name: Option<&String>,
+    record_evts: &mut Vec<RawFd>,
+) -> util::Result<()> {
+    EventLoop::update_event(gen_delete_notifiers(record_evts), ctx_name)?;
+    record_evts.clear();
+    Ok(())
 }

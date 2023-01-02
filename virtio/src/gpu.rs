@@ -19,7 +19,7 @@ use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use machine_manager::config::{GpuConfig, VIRTIO_GPU_MAX_SCANOUTS};
-use machine_manager::event_loop::EventLoop;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc};
 use migration_derive::{ByteCode, Desc};
 use std::cmp;
@@ -496,8 +496,6 @@ struct GpuIoHandler {
     ctrl_queue_evt: EventFd,
     /// Eventfd for cursor virtqueue.
     cursor_queue_evt: EventFd,
-    /// Eventfd for device deactivate.
-    deactivate_evt: RawFd,
     /// Callback to trigger an interrupt.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Bit mask of features negotiated by the backend and the frontend.
@@ -1628,57 +1626,19 @@ impl GpuIoHandler {
 
         Ok(())
     }
+}
 
-    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.ctrl_queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.cursor_queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt,
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-        notifiers
+impl Drop for GpuIoHandler {
+    fn drop(&mut self) {
+        for scanout in &self.scanouts {
+            console_close(scanout.con_id);
+        }
     }
 }
 
 impl EventNotifierHelper for GpuIoHandler {
     fn internal_notifiers(gpu_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-
-        // Register event notifier for deactivate_evt.
-        let gpu_handler_clone = gpu_handler.clone();
-        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            // Deactivate console.
-            let mut locked_handler = gpu_handler_clone.lock().unwrap();
-            for scanout in &locked_handler.scanouts {
-                console_close(scanout.con_id);
-            }
-            Some(locked_handler.deactivate_evt_handler())
-        });
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::AddShared,
-            gpu_handler.lock().unwrap().deactivate_evt,
-            None,
-            EventSet::IN,
-            vec![handler],
-        ));
 
         // Register event notifier for ctrl_queue_evt.
         let gpu_handler_clone = gpu_handler.clone();
@@ -1734,6 +1694,7 @@ pub struct GpuState {
 }
 
 /// GPU device structure.
+#[derive(Default)]
 pub struct Gpu {
     /// Configuration of the GPU device.
     gpu_conf: GpuConfig,
@@ -1742,18 +1703,7 @@ pub struct Gpu {
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Eventfd for device deactivate.
-    deactivate_evt: EventFd,
-}
-
-impl Default for Gpu {
-    fn default() -> Self {
-        Gpu {
-            gpu_conf: GpuConfig::default(),
-            state: GpuState::default(),
-            interrupt_cb: None,
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-        }
-    }
+    deactivate_evts: Vec<RawFd>,
 }
 
 impl Gpu {
@@ -1774,7 +1724,7 @@ impl Gpu {
             gpu_conf,
             state,
             interrupt_cb: None,
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
         }
     }
 }
@@ -1891,7 +1841,6 @@ impl VirtioDevice for Gpu {
             mem_space,
             ctrl_queue_evt: queue_evts.remove(0),
             cursor_queue_evt: queue_evts.remove(0),
-            deactivate_evt: self.deactivate_evt.as_raw_fd(),
             interrupt_cb,
             driver_features: self.state.driver_features,
             resources_list: Vec::new(),
@@ -1905,17 +1854,12 @@ impl VirtioDevice for Gpu {
         gpu_handler.req_states[0].width = self.state.base_conf.xres;
         gpu_handler.req_states[0].height = self.state.base_conf.yres;
 
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(gpu_handler))),
-            None,
-        )?;
-
+        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(gpu_handler)));
+        register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        unregister_event_helper(None, &mut self.deactivate_evts)
     }
 }
