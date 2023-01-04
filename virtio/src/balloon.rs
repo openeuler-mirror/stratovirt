@@ -858,7 +858,7 @@ impl Balloon {
             interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
                 anyhow!(VirtioError::InterruptTrigger(
                     "balloon",
-                    VirtioInterruptType::Vring
+                    VirtioInterruptType::Config
                 ))
             })
         } else {
