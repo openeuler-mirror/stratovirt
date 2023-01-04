@@ -36,6 +36,8 @@ const PCIEXBAR_LENGTH_128MB: u64 = 0x2;
 const PCIEXBAR_LENGTH_64MB: u64 = 0x4;
 const PCIEXBAR_128MB_ADDR_MASK: u64 = 1 << 26;
 const PCIEXBAR_64MB_ADDR_MASK: u64 = 1 << 25;
+// Bit 25:3 of PCIEXBAR is reserved.
+const PCIEXBAR_RESERVED_MASK: u64 = 0x3ff_fff8;
 
 /// Memory controller hub (Device 0:Function 0)
 pub struct Mch {
@@ -100,6 +102,15 @@ impl Mch {
         }
         Ok(())
     }
+
+    fn check_pciexbar_update(&self, old_pciexbar: u64) -> bool {
+        let cur_pciexbar: u64 = le_read_u64(&self.config.config, PCIEXBAR as usize).unwrap();
+
+        if (cur_pciexbar & !PCIEXBAR_RESERVED_MASK) == (old_pciexbar & !PCIEXBAR_RESERVED_MASK) {
+            return false;
+        }
+        true
+    }
 }
 
 impl PciDevOps for Mch {
@@ -144,8 +155,12 @@ impl PciDevOps for Mch {
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         let end = offset + data.len();
+        let old_pciexbar: u64 = le_read_u64(&self.config.config, PCIEXBAR as usize).unwrap();
         self.config.write(offset, data, 0, None, None);
-        if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8) {
+
+        if ranges_overlap(offset, end, PCIEXBAR as usize, PCIEXBAR as usize + 8)
+            && self.check_pciexbar_update(old_pciexbar)
+        {
             if let Err(e) = self.update_pciexbar_mapping() {
                 error!("{:?}", e);
             }
