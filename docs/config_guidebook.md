@@ -401,11 +401,12 @@ It has no effect when vhost is set.
   cause the same mac address between two virtio-net devices when one device has mac and the other hasn't.
 * mq: the optional mq attribute enable device multiple queue feature.
 
-Two more properties are supported for virtio pci net device.
+Three more properties are supported for virtio pci net device.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it. For virtio pci net device, it
 is a single function device, the function number should be set to zero.
+* queue-size: the optional virtqueue size for all the queues. (optional) Configuration range is [256, 4096] and queue size must be power of 2. Default queue size is 256.
 
 ```shell
 # virtio mmio net device
@@ -413,7 +414,7 @@ is a single function device, the function number should be set to zero.
 -device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<macaddr>]
 # virtio pci net device
 -netdev tap,id=<netdevid>,ifname=<host_dev_name>[,queues=<N>]
--device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}]
+-device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by

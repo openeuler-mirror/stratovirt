@@ -51,7 +51,7 @@ use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
     DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
-    MAX_VIRTIO_QUEUE,
+    DEFAULT_QUEUE_SIZE_NET, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -913,6 +913,7 @@ impl StdMachine {
         } else {
             bail!("Netdev not set");
         };
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_QUEUE_SIZE_NET);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
         let dev = if let Some(conf) = locked_vmconfig.netdevs.get(netdev) {
@@ -933,6 +934,7 @@ impl StdMachine {
                 queues: conf.queues,
                 mq: conf.queues > 2,
                 socket_path,
+                queue_size,
             };
             dev.check()?;
             dev

@@ -73,7 +73,10 @@ use machine_manager::machine::{
     MachineInterface, MachineLifecycle, MigrateInterface,
 };
 use machine_manager::{
-    config::{BootSource, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig},
+    config::{
+        BootSource, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig,
+        DEFAULT_QUEUE_SIZE_NET,
+    },
     qmp::{qmp_schema, QmpChannel, Response},
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
@@ -1206,6 +1209,7 @@ impl DeviceInterface for LightMachine {
             queues: 2,
             mq: false,
             socket_path: None,
+            queue_size: DEFAULT_QUEUE_SIZE_NET,
         };
 
         if let Some(fds) = args.fds {

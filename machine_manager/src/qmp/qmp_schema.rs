@@ -515,6 +515,8 @@ pub struct device_add {
     pub queues: Option<u16>,
     pub boot_index: Option<u8>,
     pub sysfsdev: Option<String>,
+    #[serde(rename = "queue-size")]
+    pub queue_size: Option<u16>,
 }
 
 pub type DeviceAddArgument = device_add;

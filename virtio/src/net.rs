@@ -65,8 +65,6 @@ use util::tap::{
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 /// Number of virtqueues(rx/tx/ctrl).
 const QUEUE_NUM_NET: usize = 3;
-/// Size of each virtqueue.
-const QUEUE_SIZE_NET: u16 = 256;
 /// The Mac Address length.
 pub const MAC_ADDR_LEN: usize = 6;
 /// The length of ethernet header.
@@ -667,6 +665,7 @@ struct NetIoHandler {
     device_broken: Arc<AtomicBool>,
     is_listening: bool,
     ctrl_info: Arc<Mutex<CtrlInfo>>,
+    queue_size: u16,
 }
 
 impl NetIoHandler {
@@ -735,7 +734,7 @@ impl NetIoHandler {
                 break;
             }
             rx_packets += 1;
-            if rx_packets > QUEUE_SIZE_NET {
+            if rx_packets > self.queue_size {
                 self.rx
                     .queue_evt
                     .write(1)
@@ -856,7 +855,7 @@ impl NetIoHandler {
                 break;
             }
             tx_packets += 1;
-            if tx_packets >= QUEUE_SIZE_NET {
+            if tx_packets >= self.queue_size {
                 self.tx
                     .queue_evt
                     .write(1)
@@ -1426,7 +1425,7 @@ impl VirtioDevice for Net {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_NET
+        self.net_cfg.queue_size
     }
 
     /// Get device features from host.
@@ -1543,6 +1542,7 @@ impl VirtioDevice for Net {
                 device_broken: self.broken.clone(),
                 is_listening: true,
                 ctrl_info: ctrl_info.clone(),
+                queue_size: self.queue_size(),
             };
             if let Some(tap) = &handler.tap {
                 handler.tap_fd = tap.as_raw_fd();
