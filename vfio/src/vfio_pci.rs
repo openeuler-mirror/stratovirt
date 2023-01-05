@@ -456,7 +456,7 @@ impl VfioPciDevice {
             table_size,
             table_size / 128,
             cap_offset as u16,
-            self.dev_id.load(Ordering::Acquire),
+            self.dev_id.clone(),
         )));
         self.pci_config.msix = Some(msix.clone());
 
