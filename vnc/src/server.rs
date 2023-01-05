@@ -13,6 +13,7 @@
 use crate::{
     auth::SaslAuth,
     auth::{AuthState, SaslConfig, SubAuthState},
+    client::vnc_write,
     client::{ClientIoHandler, ClientState},
     console::DisplayMouse,
     input::KeyBoardState,
@@ -535,10 +536,8 @@ pub fn handle_connection(
         client.clone(),
         server.clone(),
     )));
-    client_io
-        .lock()
-        .unwrap()
-        .write_msg("RFB 003.008\n".to_string().as_bytes());
+    vnc_write(&client, "RFB 003.008\n".as_bytes().to_vec());
+    client_io.lock().unwrap().flush();
     server
         .client_handlers
         .lock()
