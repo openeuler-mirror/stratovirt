@@ -168,7 +168,7 @@ pub struct CtrlInfo {
 }
 
 impl CtrlInfo {
-    fn new(state: Arc<Mutex<VirtioNetState>>) -> Self {
+    pub fn new(state: Arc<Mutex<VirtioNetState>>) -> Self {
         CtrlInfo {
             rx_mode: CtrlRxMode::default(),
             mac_info: CtrlMacInfo::default(),
@@ -432,14 +432,14 @@ pub struct CtrlVirtio {
     /// The eventfd used to notify the control queue event.
     queue_evt: EventFd,
     /// The information about control command.
-    ctrl_info: Option<Arc<Mutex<CtrlInfo>>>,
+    ctrl_info: Arc<Mutex<CtrlInfo>>,
 }
 
 impl CtrlVirtio {
     pub fn new(
         queue: Arc<Mutex<Queue>>,
         queue_evt: EventFd,
-        ctrl_info: Option<Arc<Mutex<CtrlInfo>>>,
+        ctrl_info: Arc<Mutex<CtrlInfo>>,
     ) -> Self {
         Self {
             queue,
@@ -498,13 +498,6 @@ impl NetCtrlHandler {
                 );
             }
 
-            // Get the control information first.
-            let ctrl_info = if let Some(ctrl_info) = &self.ctrl.ctrl_info {
-                ctrl_info
-            } else {
-                bail!("Control information is None");
-            };
-
             // Get the control request header.
             let mut ctrl_hdr = CtrlHdr::default();
             let mut data_iovec = get_buf_and_discard(
@@ -516,7 +509,9 @@ impl NetCtrlHandler {
 
             match ctrl_hdr.class {
                 VIRTIO_NET_CTRL_RX => {
-                    ack = ctrl_info
+                    ack = self
+                        .ctrl
+                        .ctrl_info
                         .lock()
                         .unwrap()
                         .handle_rx_mode(&self.mem_space, ctrl_hdr.cmd, &mut data_iovec)
@@ -526,14 +521,14 @@ impl NetCtrlHandler {
                         });
                 }
                 VIRTIO_NET_CTRL_MAC => {
-                    ack = ctrl_info.lock().unwrap().handle_mac(
+                    ack = self.ctrl.ctrl_info.lock().unwrap().handle_mac(
                         &self.mem_space,
                         ctrl_hdr.cmd,
                         &mut data_iovec,
                     );
                 }
                 VIRTIO_NET_CTRL_VLAN => {
-                    ack = ctrl_info.lock().unwrap().handle_vlan_table(
+                    ack = self.ctrl.ctrl_info.lock().unwrap().handle_vlan_table(
                         &self.mem_space,
                         ctrl_hdr.cmd,
                         &mut data_iovec,
@@ -1103,11 +1098,11 @@ impl EventNotifierHelper for NetIoHandler {
 #[desc_version(compat_version = "0.1.0")]
 pub struct VirtioNetState {
     /// Bit mask of features supported by the backend.
-    device_features: u64,
+    pub device_features: u64,
     /// Bit mask of features negotiated by the backend and the frontend.
-    driver_features: u64,
+    pub driver_features: u64,
     /// Virtio net configurations.
-    config_space: VirtioNetConfig,
+    pub config_space: VirtioNetConfig,
 }
 
 /// Network device structure.
@@ -1493,17 +1488,16 @@ impl VirtioDevice for Net {
         let queue_num = queues.len();
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
         self.ctrl_info = Some(ctrl_info.clone());
-        if (self.state.lock().unwrap().driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0)
-            && (queue_num % 2 != 0)
-        {
+        let driver_features = self.state.lock().unwrap().driver_features;
+        if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts.remove(queue_num - 1);
 
             let ctrl_handler = NetCtrlHandler {
-                ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, Some(ctrl_info.clone())),
+                ctrl: CtrlVirtio::new(ctrl_queue, ctrl_queue_evt, ctrl_info.clone()),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.lock().unwrap().driver_features,
+                driver_features,
                 device_broken: self.broken.clone(),
             };
 
@@ -1543,7 +1537,7 @@ impl VirtioDevice for Net {
                 tap_fd: -1,
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
-                driver_features: self.state.lock().unwrap().driver_features,
+                driver_features,
                 receiver,
                 update_evt: self.update_evt.try_clone().unwrap(),
                 device_broken: self.broken.clone(),
