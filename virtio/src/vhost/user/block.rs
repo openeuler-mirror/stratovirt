@@ -34,9 +34,6 @@ use crate::{
     VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
-/// Size of each virtqueue.
-const QUEUE_SIZE_BLK: u16 = 256;
-
 pub struct Block {
     /// Configuration of the block device.
     blk_cfg: BlkDevConfig,
@@ -220,7 +217,7 @@ impl VirtioDevice for Block {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_BLK
+        self.blk_cfg.queue_size
     }
 
     /// Get device features from host.

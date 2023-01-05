@@ -401,7 +401,8 @@ pub fn parse_vhost_user_blk_pci(
         .push("bus")
         .push("addr")
         .push("num-queues")
-        .push("chardev");
+        .push("chardev")
+        .push("queue-size");
 
     cmd_parser.parse(drive_config)?;
 
@@ -428,6 +429,10 @@ pub fn parse_vhost_user_blk_pci(
         blkdevcfg.queues = queues;
     } else if let Some(queues) = queues_auto {
         blkdevcfg.queues = queues;
+    }
+
+    if let Some(size) = cmd_parser.get_value::<u16>("queue-size")? {
+        blkdevcfg.queue_size = size;
     }
 
     if let Some(chardev) = &blkdevcfg.chardev {
