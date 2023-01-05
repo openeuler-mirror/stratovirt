@@ -50,8 +50,6 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 const SCSI_CTRL_QUEUE_NUM: usize = 1;
 const SCSI_EVENT_QUEUE_NUM: usize = 1;
 const SCSI_MIN_QUEUE_NUM: usize = 3;
-/// Size of each virtqueue.
-const QUEUE_SIZE_SCSI: u16 = 256;
 
 /// Default values of the cdb and sense data size configuration fields. Cannot change cdb size
 /// and sense data size Now.
@@ -212,7 +210,7 @@ impl VirtioDevice for ScsiCntlr {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_SCSI
+        self.config.queue_size
     }
 
     /// Get device features from host.

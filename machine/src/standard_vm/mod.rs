@@ -51,7 +51,7 @@ use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
     DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
-    DEFAULT_QUEUE_SIZE_BLK, DEFAULT_QUEUE_SIZE_NET, MAX_VIRTIO_QUEUE,
+    DEFAULT_QUEUE_SIZE_BLK, DEFAULT_QUEUE_SIZE_NET, DEFAULT_QUEUE_SIZE_SCSI, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -798,6 +798,7 @@ impl StdMachine {
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
         let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_QUEUE_SIZE_SCSI);
         let dev_cfg = ScsiCntlrConfig {
             id: args.id.clone(),
             iothread: args.iothread.clone(),
@@ -805,6 +806,7 @@ impl StdMachine {
                 VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
             }) as u32,
             boot_prefix: None,
+            queue_size,
         };
         dev_cfg.check()?;
 
