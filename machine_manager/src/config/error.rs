@@ -42,7 +42,7 @@ pub enum ConfigError {
     UnknownDeviceType(String),
     #[error("\'{0}\' is missing for \'{1}\' device.")]
     FieldIsMissing(&'static str, &'static str),
-    #[error("{0} must >{1} {2} and <{3} {4}.")]
+    #[error("{0} must >{} {1} and <{} {3}.", if *.2 {"="} else {""}, if *.4 {"="} else {""})]
     IllegalValue(String, u64, bool, u64, bool),
     #[error("Mac address is illegal.")]
     MacFormatError,
