@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE};
@@ -26,6 +26,13 @@ pub const VIRTIO_SCSI_MAX_LUN: u16 = 16383;
 /// So, max lun id supported is 255 (2^8 - 1).
 const SUPPORT_SCSI_MAX_LUN: u16 = 255;
 
+// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-scsi should be larger than 2.
+const MIN_QUEUE_SIZE_SCSI: u16 = 2;
+/// Default size of each virtqueue for virtio-scsi.
+pub const DEFAULT_QUEUE_SIZE_SCSI: u16 = 256;
+// Max size of each virtqueue for virtio-scsi.
+const MAX_QUEUE_SIZE_SCSI: u16 = 1024;
+
 #[derive(Debug, Clone)]
 pub struct ScsiCntlrConfig {
     /// Virtio-scsi-pci device id.
@@ -36,6 +43,8 @@ pub struct ScsiCntlrConfig {
     pub queues: u32,
     /// Boot path of this scsi controller. It's prefix of scsi device's boot path.
     pub boot_prefix: Option<String>,
+    /// Virtqueue size for all queues.
+    pub queue_size: u16,
 }
 
 impl Default for ScsiCntlrConfig {
@@ -46,6 +55,7 @@ impl Default for ScsiCntlrConfig {
             //At least 1 cmd queue.
             queues: 1,
             boot_prefix: None,
+            queue_size: DEFAULT_QUEUE_SIZE_SCSI,
         }
     }
 }
@@ -76,6 +86,20 @@ impl ConfigCheck for ScsiCntlrConfig {
             )));
         }
 
+        if self.queue_size <= MIN_QUEUE_SIZE_SCSI || self.queue_size > MAX_QUEUE_SIZE_SCSI {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "virtqueue size of scsi controller".to_string(),
+                MIN_QUEUE_SIZE_SCSI as u64,
+                false,
+                MAX_QUEUE_SIZE_SCSI as u64,
+                true
+            )));
+        }
+
+        if self.queue_size & (self.queue_size - 1) != 0 {
+            bail!("Virtqueue size should be power of 2!");
+        }
+
         Ok(())
     }
 }
@@ -92,7 +116,8 @@ pub fn parse_scsi_controller(
         .push("addr")
         .push("multifunction")
         .push("iothread")
-        .push("num-queues");
+        .push("num-queues")
+        .push("queue-size");
 
     cmd_parser.parse(drive_config)?;
 
@@ -117,6 +142,10 @@ pub fn parse_scsi_controller(
         cntlr_cfg.queues = queues;
     } else if let Some(queues) = queues_auto {
         cntlr_cfg.queues = queues as u32;
+    }
+
+    if let Some(size) = cmd_parser.get_value::<u16>("queue-size")? {
+        cntlr_cfg.queue_size = size;
     }
 
     cntlr_cfg.check()?;
