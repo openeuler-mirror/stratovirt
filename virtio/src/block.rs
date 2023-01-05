@@ -1203,7 +1203,7 @@ mod tests {
     use super::super::*;
     use super::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use machine_manager::config::{IothreadConfig, VmConfig, DEFAULT_QUEUE_SIZE_BLK};
+    use machine_manager::config::{IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::{thread, time::Duration};
     use vmm_sys_util::tempfile::TempFile;
@@ -1269,7 +1269,7 @@ mod tests {
 
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
         assert_eq!(block.queue_num(), QUEUE_NUM_BLK);
-        assert_eq!(block.queue_size(), DEFAULT_QUEUE_SIZE_BLK);
+        assert_eq!(block.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and
@@ -1422,17 +1422,17 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config = QueueConfig::new(DEFAULT_QUEUE_SIZE_BLK);
+        let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * DEFAULT_QUEUE_SIZE_BLK as u64);
+        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * DEFAULT_QUEUE_SIZE_BLK as u64);
+        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
-        queue_config.size = DEFAULT_QUEUE_SIZE_BLK;
+        queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
         let queues: Vec<Arc<Mutex<Queue>>> =

@@ -13,7 +13,9 @@
 use anyhow::{anyhow, bail, Result};
 
 use super::{error::ConfigError, pci_args_check};
-use crate::config::{CmdParser, ConfigCheck, VmConfig, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE};
+use crate::config::{
+    CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+};
 
 /// According to Virtio Spec.
 /// Max_channel should be 0.
@@ -28,8 +30,6 @@ const SUPPORT_SCSI_MAX_LUN: u16 = 255;
 
 // Seg_max = queue_size - 2. So, size of each virtqueue for virtio-scsi should be larger than 2.
 const MIN_QUEUE_SIZE_SCSI: u16 = 2;
-/// Default size of each virtqueue for virtio-scsi.
-pub const DEFAULT_QUEUE_SIZE_SCSI: u16 = 256;
 // Max size of each virtqueue for virtio-scsi.
 const MAX_QUEUE_SIZE_SCSI: u16 = 1024;
 
@@ -55,7 +55,7 @@ impl Default for ScsiCntlrConfig {
             //At least 1 cmd queue.
             queues: 1,
             boot_prefix: None,
-            queue_size: DEFAULT_QUEUE_SIZE_SCSI,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }

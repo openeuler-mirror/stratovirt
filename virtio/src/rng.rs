@@ -18,8 +18,11 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use machine_manager::{config::RngConfig, event_loop::EventLoop};
+use machine_manager::{
+    config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE},
+    event_loop::EventLoop,
+    event_loop::{register_event_helper, unregister_event_helper},
+};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use util::aio::raw_read;
 use util::byte_code::ByteCode;
@@ -42,7 +45,6 @@ use crate::error::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
 
 const QUEUE_NUM_RNG: usize = 1;
-const QUEUE_SIZE_RNG: u16 = 256;
 
 fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
     let mut size = 0_u32;
@@ -276,7 +278,7 @@ impl VirtioDevice for Rng {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_RNG
+        DEFAULT_VIRTQUEUE_SIZE
     }
 
     /// Get device features from host.
@@ -381,7 +383,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use machine_manager::config::RngConfig;
+    use machine_manager::config::{RngConfig, DEFAULT_VIRTQUEUE_SIZE};
     use vmm_sys_util::tempfile::TempFile;
 
     const VIRTQ_DESC_F_NEXT: u16 = 0x01;
@@ -431,7 +433,7 @@ mod tests {
         assert_eq!(rng.rng_cfg.bytes_per_sec, Some(64));
 
         assert_eq!(rng.queue_num(), QUEUE_NUM_RNG);
-        assert_eq!(rng.queue_size(), QUEUE_SIZE_RNG);
+        assert_eq!(rng.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
         assert_eq!(rng.device_type(), VIRTIO_TYPE_RNG);
     }
 
@@ -549,17 +551,17 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
+        let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_RNG as u64);
+        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_RNG as u64);
+        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
-        queue_config.size = QUEUE_SIZE_RNG;
+        queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();
@@ -632,17 +634,17 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config = QueueConfig::new(QUEUE_SIZE_RNG);
+        let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_RNG as u64);
+        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_RNG as u64);
+        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
-        queue_config.size = QUEUE_SIZE_RNG;
+        queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
         let file = TempFile::new().unwrap();

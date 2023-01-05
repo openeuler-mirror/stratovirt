@@ -16,14 +16,13 @@ use serde::{Deserialize, Serialize};
 use super::{error::ConfigError, pci_args_check};
 use crate::config::get_chardev_socket_path;
 use crate::config::{
-    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH,
+    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::{qmp_schema, QmpChannel};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
 
-/// Default virtqueue size of each virtqueue.
-pub const DEFAULT_QUEUE_SIZE_NET: u16 = 256;
 /// Max virtqueue size of each virtqueue.
 pub const MAX_QUEUE_SIZE_NET: u16 = 4096;
 
@@ -120,7 +119,7 @@ impl Default for NetworkInterfaceConfig {
             queues: 2,
             mq: false,
             socket_path: None,
-            queue_size: DEFAULT_QUEUE_SIZE_NET,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }
@@ -160,10 +159,10 @@ impl ConfigCheck for NetworkInterfaceConfig {
             )));
         }
 
-        if self.queue_size < DEFAULT_QUEUE_SIZE_NET || self.queue_size > MAX_QUEUE_SIZE_NET {
+        if self.queue_size < DEFAULT_VIRTQUEUE_SIZE || self.queue_size > MAX_QUEUE_SIZE_NET {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "queue size of net device".to_string(),
-                DEFAULT_QUEUE_SIZE_NET as u64,
+                DEFAULT_VIRTQUEUE_SIZE as u64,
                 true,
                 MAX_QUEUE_SIZE_NET as u64,
                 true
