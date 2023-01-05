@@ -12,6 +12,7 @@
 
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
 
@@ -19,9 +20,9 @@ use address_space::{
     AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
 };
 use log::{error, info, warn};
-use machine_manager::event_loop::EventLoop;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::time::NANOSECONDS_PER_SECOND;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
@@ -35,7 +36,6 @@ use super::message::{
 use super::sock::VhostUserSock;
 use crate::block::VirtioBlkConfig;
 use crate::VhostUser::message::VhostUserConfig;
-use crate::VirtioError;
 use anyhow::{anyhow, bail, Context, Result};
 
 /// Vhost supports multiple queue
@@ -88,7 +88,6 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     });
 
     info!("Try to reconnect vhost-user net.");
-    let cloned_client = client.clone();
     if let Err(_e) = client
         .lock()
         .unwrap()
@@ -109,9 +108,7 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
     }
 
     client.lock().unwrap().reconnecting = false;
-    if let Err(e) =
-        EventLoop::update_event(EventNotifierHelper::internal_notifiers(cloned_client), None)
-    {
+    if let Err(e) = VhostUserClient::add_event(client) {
         error!("Failed to update event for client sock, {:?}", e);
     }
 
@@ -125,28 +122,21 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
 impl EventNotifierHelper for VhostUserClient {
     fn internal_notifiers(client_handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        let mut handlers = Vec::new();
 
         let cloned_client = client_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _| {
-                if event & EventSet::HANG_UP == EventSet::HANG_UP {
-                    let mut locked_client = cloned_client.lock().unwrap();
-                    if let Err(e) = locked_client.delete_event() {
-                        error!("Failed to delete vhost-user client event, {:?}", e);
-                    }
-                    if !locked_client.reconnecting {
-                        locked_client.reconnecting = true;
-                        drop(locked_client);
-                        vhost_user_reconnect(&cloned_client);
-                    }
-                    None
-                } else {
-                    None
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, fd| {
+            if event & EventSet::HANG_UP == EventSet::HANG_UP {
+                let mut locked_client = cloned_client.lock().unwrap();
+                if !locked_client.reconnecting {
+                    locked_client.reconnecting = true;
+                    drop(locked_client);
+                    vhost_user_reconnect(&cloned_client);
                 }
-            });
-        handlers.push(Arc::new(Mutex::new(handler)));
-
+                Some(gen_delete_notifiers(&[fd]))
+            } else {
+                None
+            }
+        });
         let locked_client = client_handler.lock().unwrap();
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
@@ -159,21 +149,7 @@ impl EventNotifierHelper for VhostUserClient {
                 .get_stream_raw_fd(),
             None,
             EventSet::HANG_UP,
-            handlers,
-        ));
-
-        // Register event notifier for delete_evt.
-        let cloned_client = client_handler.clone();
-        let handler: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(cloned_client.lock().unwrap().delete_evt_handler())
-        });
-        notifiers.push(EventNotifier::new(
-            NotifierOperation::AddShared,
-            locked_client.delete_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers
@@ -319,7 +295,7 @@ impl Listener for VhostUserMemInfo {
 pub struct VhostUserClient {
     client: Arc<Mutex<ClientInternal>>,
     mem_info: VhostUserMemInfo,
-    delete_evt: EventFd,
+    delete_evts: Vec<RawFd>,
     queues: Vec<Arc<Mutex<Queue>>>,
     queue_evts: Vec<EventFd>,
     call_events: Vec<EventFd>,
@@ -343,11 +319,10 @@ impl VhostUserClient {
             .with_context(|| "Failed to register memory for vhost user client")?;
 
         let client = Arc::new(Mutex::new(ClientInternal::new(sock, max_queue_num)));
-        let delete_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         Ok(VhostUserClient {
             client,
             mem_info,
-            delete_evt,
+            delete_evts: Vec::new(),
             queues: Vec::new(),
             queue_evts: Vec::new(),
             call_events: Vec::new(),
@@ -451,31 +426,15 @@ impl VhostUserClient {
         Ok(())
     }
 
-    /// Delete the socket event in ClientInternal.
-    pub fn delete_event(&self) -> Result<()> {
-        self.delete_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
-        Ok(())
+    pub fn add_event(client: &Arc<Mutex<Self>>) -> Result<()> {
+        let notifiers = EventNotifierHelper::internal_notifiers(client.clone());
+        register_event_helper(notifiers, None, &mut client.lock().unwrap().delete_evts)
+            .with_context(|| "Failed to update event for client sock")
     }
 
-    fn delete_evt_handler(&mut self) -> Vec<EventNotifier> {
-        vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.client.lock().unwrap().sock.domain.get_stream_raw_fd(),
-                None,
-                EventSet::HANG_UP,
-                vec![],
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.delete_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                vec![],
-            ),
-        ]
+    /// Delete the socket event in ClientInternal.
+    pub fn delete_event(&mut self) -> Result<()> {
+        unregister_event_helper(None, &mut self.delete_evts)
     }
 
     /// Send get protocol features request to vhost.

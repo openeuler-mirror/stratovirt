@@ -33,11 +33,15 @@ use std::{
     io::{Read, Write},
     net::{Shutdown, TcpStream},
     os::unix::prelude::{AsRawFd, RawFd},
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 use util::{
     bitmap::Bitmap,
-    loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation},
+    loop_context::{
+        gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+        NotifierOperation,
+    },
 };
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -953,31 +957,12 @@ impl ClientIoHandler {
     }
 
     fn disconn_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.stream.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.client.write_fd.lock().unwrap().as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.client.disconn_evt.lock().unwrap().as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
+        let notifiers_fds = vec![
+            self.stream.as_raw_fd(),
+            self.client.write_fd.lock().unwrap().as_raw_fd(),
+            self.client.disconn_evt.lock().unwrap().as_raw_fd(),
         ];
-
-        notifiers
+        gen_delete_notifiers(&notifiers_fds)
     }
 }
 
@@ -988,92 +973,83 @@ impl EventNotifierHelper for ClientIoHandler {
 
         // Register event notifier for read.
         let client_io = client_io_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |event, _fd: RawFd| {
-                let mut locked_client_io = client_io.lock().unwrap();
-                let client = locked_client_io.client.clone();
-                if event & EventSet::ERROR == EventSet::ERROR
-                    || event & EventSet::HANG_UP == EventSet::HANG_UP
-                    || event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP
-                {
+        let handler: Rc<NotifierCallback> = Rc::new(move |event, _fd: RawFd| {
+            let mut locked_client_io = client_io.lock().unwrap();
+            let client = locked_client_io.client.clone();
+            if event & EventSet::ERROR == EventSet::ERROR
+                || event & EventSet::HANG_UP == EventSet::HANG_UP
+                || event & EventSet::READ_HANG_UP == EventSet::READ_HANG_UP
+            {
+                client.conn_state.lock().unwrap().dis_conn = true;
+            } else if event & EventSet::IN == EventSet::IN {
+                if let Err(_e) = locked_client_io.client_handle_read() {
                     client.conn_state.lock().unwrap().dis_conn = true;
-                } else if event & EventSet::IN == EventSet::IN {
-                    if let Err(_e) = locked_client_io.client_handle_read() {
-                        client.conn_state.lock().unwrap().dis_conn = true;
-                    }
                 }
-
-                // Do disconnection event.
-                if client.conn_state.lock().unwrap().is_disconnect() {
-                    client.disconn_evt.lock().unwrap().write(1).unwrap();
-                }
-                drop(locked_client_io);
-
-                None
-            });
+            }
+            // Do disconnection event.
+            if client.conn_state.lock().unwrap().is_disconnect() {
+                client.disconn_evt.lock().unwrap().write(1).unwrap();
+            }
+            drop(locked_client_io);
+            None
+        });
         let client_io = client_io_handler.clone();
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             client_io.lock().unwrap().stream.as_raw_fd(),
             None,
             EventSet::IN | EventSet::READ_HANG_UP,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register event notifier for write.
         let client_io = client_io_handler.clone();
         let client = client_io.lock().unwrap().client.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_event, fd| {
-                read_fd(fd);
-                let mut locked_client_io = client_io.lock().unwrap();
-                let client = locked_client_io.client.clone();
-                locked_client_io.client_handle_write();
-
-                // do disconnection event.
-                if client.conn_state.lock().unwrap().dis_conn {
-                    client.disconn_evt.lock().unwrap().write(1).unwrap();
-                }
-                drop(locked_client_io);
-
-                None
-            });
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd| {
+            read_fd(fd);
+            let mut locked_client_io = client_io.lock().unwrap();
+            let client = locked_client_io.client.clone();
+            locked_client_io.client_handle_write();
+            // do disconnection event.
+            if client.conn_state.lock().unwrap().dis_conn {
+                client.disconn_evt.lock().unwrap().write(1).unwrap();
+            }
+            drop(locked_client_io);
+            None
+        });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             client.write_fd.lock().unwrap().as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         // Register event for disconnect.
         let client_io = client_io_handler.clone();
-        let handler: Box<dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>> =
-            Box::new(move |_event, fd| {
-                read_fd(fd);
-                // Drop client info from vnc server.
-                let mut locked_client_io = client_io.lock().unwrap();
-                let client = locked_client_io.client.clone();
-                let addr = client.addr.clone();
-                let server = locked_client_io.server.clone();
-                let notifiers = locked_client_io.disconn_evt_handler();
-                // Shutdown stream.
-                if let Err(e) = locked_client_io.stream.shutdown(Shutdown::Both) {
-                    error!("Shutdown stream failed: {}", e);
-                }
-                drop(locked_client_io);
-                server.client_handlers.lock().unwrap().remove(&addr);
-
-                Some(notifiers)
-            });
-
+        let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd| {
+            read_fd(fd);
+            // Drop client info from vnc server.
+            let mut locked_client_io = client_io.lock().unwrap();
+            let client = locked_client_io.client.clone();
+            let addr = client.addr.clone();
+            let server = locked_client_io.server.clone();
+            let notifiers = locked_client_io.disconn_evt_handler();
+            // Shutdown stream.
+            if let Err(e) = locked_client_io.stream.shutdown(Shutdown::Both) {
+                error!("Shutdown stream failed: {}", e);
+            }
+            drop(locked_client_io);
+            server.client_handlers.lock().unwrap().remove(&addr);
+            Some(notifiers)
+        });
         let client = client_io_handler.lock().unwrap().client.clone();
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             client.disconn_evt.lock().unwrap().as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers

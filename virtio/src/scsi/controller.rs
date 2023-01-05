@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -32,6 +33,7 @@ use crate::ScsiBus::{
 use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use log::{debug, error, info};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{
     config::{ConfigCheck, ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
@@ -143,7 +145,7 @@ pub struct ScsiCntlr {
     /// Scsi bus.
     pub bus: Option<Arc<Mutex<ScsiBus>>>,
     /// Eventfd for Scsi Controller deactivates.
-    deactivate_evt: EventFd,
+    deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
     broken: Arc<AtomicBool>,
 }
@@ -154,7 +156,7 @@ impl ScsiCntlr {
             config,
             state: ScsiCntlrState::default(),
             bus: None,
-            deactivate_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -279,15 +281,16 @@ impl VirtioDevice for ScsiCntlr {
         let ctrl_handler = ScsiCtrlHandler {
             queue: ctrl_queue,
             queue_evt: ctrl_queue_evt,
-            deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             mem_space: mem_space.clone(),
             interrupt_cb: interrupt_cb.clone(),
             driver_features: self.state.driver_features,
             device_broken: self.broken.clone(),
         };
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler))),
+        let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(ctrl_handler)));
+        register_event_helper(
+            notifiers,
             self.config.iothread.as_ref(),
+            &mut self.deactivate_evts,
         )?;
 
         let event_queue = queues[1].clone();
@@ -295,15 +298,17 @@ impl VirtioDevice for ScsiCntlr {
         let event_handler = ScsiEventHandler {
             _queue: event_queue,
             queue_evt: event_queue_evt,
-            deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
             _mem_space: mem_space.clone(),
             _interrupt_cb: interrupt_cb.clone(),
             _driver_features: self.state.driver_features,
             device_broken: self.broken.clone(),
         };
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler))),
+        let notifiers =
+            EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(event_handler)));
+        register_event_helper(
+            notifiers,
             self.config.iothread.as_ref(),
+            &mut self.deactivate_evts,
         )?;
 
         let queues_num = queues.len();
@@ -314,7 +319,6 @@ impl VirtioDevice for ScsiCntlr {
                     scsibus: bus.clone(),
                     queue: cmd_queue.clone(),
                     queue_evt: queue_evts.remove(0),
-                    deactivate_evt: self.deactivate_evt.try_clone().unwrap(),
                     mem_space: mem_space.clone(),
                     interrupt_cb: interrupt_cb.clone(),
                     driver_features: self.state.driver_features,
@@ -323,9 +327,12 @@ impl VirtioDevice for ScsiCntlr {
 
                 cmd_handler.aio = Some(cmd_handler.build_aio()?);
 
-                EventLoop::update_event(
-                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(cmd_handler))),
+                let notifiers =
+                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(cmd_handler)));
+                register_event_helper(
+                    notifiers,
                     self.config.iothread.as_ref(),
+                    &mut self.deactivate_evts,
                 )?;
             } else {
                 bail!("Scsi controller has no bus!");
@@ -337,9 +344,7 @@ impl VirtioDevice for ScsiCntlr {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.deactivate_evt
-            .write(1)
-            .with_context(|| anyhow!(VirtioError::EventFdWrite))
+        unregister_event_helper(self.config.iothread.as_ref(), &mut self.deactivate_evts)
     }
 
     fn update_config(&mut self, _dev_config: Option<Arc<dyn ConfigCheck>>) -> Result<()> {
@@ -347,13 +352,13 @@ impl VirtioDevice for ScsiCntlr {
     }
 }
 
-fn build_event_notifier(fd: RawFd, handler: Box<NotifierCallback>) -> EventNotifier {
+fn build_event_notifier(fd: RawFd, handler: Rc<NotifierCallback>) -> EventNotifier {
     EventNotifier::new(
         NotifierOperation::AddShared,
         fd,
         None,
         EventSet::IN,
-        vec![Arc::new(Mutex::new(handler))],
+        vec![handler],
     )
 }
 
@@ -614,8 +619,6 @@ pub struct ScsiCtrlHandler {
     queue: Arc<Mutex<Queue>>,
     /// EventFd for the ctrl virtqueue.
     queue_evt: EventFd,
-    /// EventFd for deleting ctrl handler.
-    deactivate_evt: EventFd,
     /// The address space to which the scsi HBA belongs.
     mem_space: Arc<AddressSpace>,
     /// The interrupt callback function.
@@ -698,32 +701,15 @@ impl ScsiCtrlHandler {
 
         Ok(())
     }
-
-    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
-        vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ]
-    }
 }
 
 impl EventNotifierHelper for ScsiCtrlHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -734,17 +720,7 @@ impl EventNotifierHelper for ScsiCtrlHandler {
                 .unwrap_or_else(|e| error!("Failed to handle ctrl queue, error is {}.", e));
             None
         });
-
-        let mut notifiers = Vec::new();
-        let ctrl_fd = h_locked.queue_evt.as_raw_fd();
-        notifiers.push(build_event_notifier(ctrl_fd, h));
-
-        let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(h_clone.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(build_event_notifier(h_locked.deactivate_evt.as_raw_fd(), h));
+        notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
 
         notifiers
     }
@@ -755,8 +731,6 @@ pub struct ScsiEventHandler {
     _queue: Arc<Mutex<Queue>>,
     /// EventFd for the Event virtqueue.
     queue_evt: EventFd,
-    /// EventFd for deleting event handler.
-    deactivate_evt: EventFd,
     /// The address space to which the scsi HBA belongs.
     _mem_space: Arc<AddressSpace>,
     /// The interrupt callback function.
@@ -769,9 +743,11 @@ pub struct ScsiEventHandler {
 
 impl EventNotifierHelper for ScsiEventHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -782,17 +758,7 @@ impl EventNotifierHelper for ScsiEventHandler {
                 .unwrap_or_else(|e| error!("Failed to handle event queue, err is {}", e));
             None
         });
-
-        let mut notifiers = Vec::new();
-        let event_fd = h_locked.queue_evt.as_raw_fd();
-        notifiers.push(build_event_notifier(event_fd, h));
-
-        let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(h_clone.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(build_event_notifier(h_locked.deactivate_evt.as_raw_fd(), h));
+        notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
 
         notifiers
     }
@@ -801,25 +767,6 @@ impl EventNotifierHelper for ScsiEventHandler {
 impl ScsiEventHandler {
     fn handle_event(&mut self) -> Result<()> {
         Ok(())
-    }
-
-    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
-        vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ]
     }
 }
 
@@ -830,8 +777,6 @@ pub struct ScsiCmdHandler {
     queue: Arc<Mutex<Queue>>,
     /// EventFd for the Cmd virtqueue.
     queue_evt: EventFd,
-    /// EventFd for deleting cmd handler.
-    deactivate_evt: EventFd,
     /// The address space to which the scsi HBA belongs.
     mem_space: Arc<AddressSpace>,
     /// The interrupt callback function.
@@ -846,9 +791,11 @@ pub struct ScsiCmdHandler {
 
 impl EventNotifierHelper for ScsiCmdHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let mut notifiers = Vec::new();
+
         let h_locked = handler.lock().unwrap();
         let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+        let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst) {
@@ -860,28 +807,17 @@ impl EventNotifierHelper for ScsiCmdHandler {
 
             None
         });
-
-        let mut notifiers = Vec::new();
-        let event_fd = h_locked.queue_evt.as_raw_fd();
-        notifiers.push(build_event_notifier(event_fd, h));
-
-        let h_clone = handler.clone();
-        let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
-            read_fd(fd);
-            Some(h_clone.lock().unwrap().deactivate_evt_handler())
-        });
-        notifiers.push(build_event_notifier(h_locked.deactivate_evt.as_raw_fd(), h));
+        notifiers.push(build_event_notifier(h_locked.queue_evt.as_raw_fd(), h));
 
         // Register event notifier for aio.
         if let Some(ref aio) = h_locked.aio {
             let h_clone = handler.clone();
-            let h: Box<NotifierCallback> = Box::new(move |_, fd: RawFd| {
+            let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut h_lock = h_clone.lock().unwrap();
                 if h_lock.device_broken.load(Ordering::SeqCst) {
                     return None;
                 }
-
                 if let Some(aio) = &mut h_lock.aio {
                     if let Err(ref e) = aio.handle() {
                         error!("Failed to handle aio, {:?}", e);
@@ -894,7 +830,6 @@ impl EventNotifierHelper for ScsiCmdHandler {
                 }
                 None
             });
-
             notifiers.push(build_event_notifier(aio.fd.as_raw_fd(), h));
         }
 
@@ -1024,36 +959,6 @@ impl ScsiCmdHandler {
 
     fn build_aio(&self) -> Result<Box<Aio<ScsiCompleteCb>>> {
         Ok(Box::new(Aio::new(Arc::new(Self::complete_func), None)?))
-    }
-
-    fn deactivate_evt_handler(&mut self) -> Vec<EventNotifier> {
-        let mut notifiers = vec![
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.deactivate_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-            EventNotifier::new(
-                NotifierOperation::Delete,
-                self.queue_evt.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ),
-        ];
-        if let Some(aio) = &self.aio {
-            notifiers.push(EventNotifier::new(
-                NotifierOperation::Delete,
-                aio.fd.as_raw_fd(),
-                None,
-                EventSet::IN,
-                Vec::new(),
-            ));
-        }
-
-        notifiers
     }
 }
 

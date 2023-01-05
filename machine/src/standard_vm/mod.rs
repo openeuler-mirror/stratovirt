@@ -33,6 +33,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use super::Result as MachineResult;
@@ -192,15 +193,14 @@ trait StdMachineOps: AcpiBuilder {
     ) -> MachineResult<()> {
         let reset_req = reset_req.try_clone().unwrap();
         let reset_req_fd = reset_req.as_raw_fd();
-        let reset_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
-            Arc::new(Mutex::new(Box::new(move |_, _| {
-                let _ret = reset_req.read().unwrap();
-                if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
-                    error!("Fail to reboot standard VM, {:?}", e);
-                }
+        let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = reset_req.read().unwrap();
+            if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
+                error!("Fail to reboot standard VM, {:?}", e);
+            }
 
-                None
-            })));
+            None
+        });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             reset_req_fd,
@@ -219,21 +219,15 @@ trait StdMachineOps: AcpiBuilder {
         shutdown_req: &EventFd,
         clone_vm: Arc<Mutex<StdMachine>>,
     ) -> MachineResult<()> {
+        use util::loop_context::gen_delete_notifiers;
+
         let shutdown_req = shutdown_req.try_clone().unwrap();
         let shutdown_req_fd = shutdown_req.as_raw_fd();
-        let shutdown_req_handler: Arc<Mutex<Box<NotifierCallback>>> =
-            Arc::new(Mutex::new(Box::new(move |_, _| {
-                let _ret = shutdown_req.read().unwrap();
-                StdMachine::handle_shutdown_request(&clone_vm);
-                let notifiers = vec![EventNotifier::new(
-                    NotifierOperation::Delete,
-                    shutdown_req_fd,
-                    None,
-                    EventSet::IN,
-                    Vec::new(),
-                )];
-                Some(notifiers)
-            })));
+        let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
+            let _ret = shutdown_req.read().unwrap();
+            StdMachine::handle_shutdown_request(&clone_vm);
+            Some(gen_delete_notifiers(&[shutdown_req_fd]))
+        });
         let notifier = EventNotifier::new(
             NotifierOperation::AddShared,
             shutdown_req_fd,

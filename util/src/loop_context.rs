@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::os::unix::io::RawFd;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -52,8 +53,12 @@ enum EventStatus {
     Alive = 0,
     /// Event is parked, temporarily not monitored.
     Parked = 1,
+    /// Event is removed, thus not monitored.
+    Removed = 2,
 }
 
+// The NotifierCallback must NOT update notifier status of itself, otherwise causes
+// deadlock. Instead it should return notifiers and let caller to do so.
 pub type NotifierCallback = dyn Fn(EventSet, RawFd) -> Option<Vec<EventNotifier>>;
 
 /// Epoll Event Notifier Entry.
@@ -67,11 +72,11 @@ pub struct EventNotifier {
     /// The types of events for which we use this fd
     pub event: EventSet,
     /// Event Handler List, one fd event may have many handlers
-    pub handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+    pub handlers: Vec<Rc<NotifierCallback>>,
     /// Pre-polling handler
     pub handler_poll: Option<Box<NotifierCallback>>,
     /// Event status
-    status: EventStatus,
+    status: Arc<Mutex<EventStatus>>,
 }
 
 impl fmt::Debug for EventNotifier {
@@ -94,7 +99,7 @@ impl EventNotifier {
         raw_fd: i32,
         parked_fd: Option<i32>,
         event: EventSet,
-        handlers: Vec<Arc<Mutex<Box<NotifierCallback>>>>,
+        handlers: Vec<Rc<NotifierCallback>>,
     ) -> Self {
         EventNotifier {
             raw_fd,
@@ -103,7 +108,7 @@ impl EventNotifier {
             event,
             handlers,
             handler_poll: None,
-            status: EventStatus::Alive,
+            status: Arc::new(Mutex::new(EventStatus::Alive)),
         }
     }
 }
@@ -116,6 +121,28 @@ impl EventNotifier {
 /// easy to get notifiers, and add to epoll context.
 pub trait EventNotifierHelper {
     fn internal_notifiers(_: Arc<Mutex<Self>>) -> Vec<EventNotifier>;
+}
+
+pub fn get_notifiers_fds(notifiers: &[EventNotifier]) -> Vec<RawFd> {
+    let mut fds = Vec::with_capacity(notifiers.len());
+    for notifier in notifiers {
+        fds.push(notifier.raw_fd);
+    }
+    fds
+}
+
+pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
+    let mut notifiers = Vec::with_capacity(fds.len());
+    for fd in fds {
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Delete,
+            *fd,
+            None,
+            EventSet::IN,
+            Vec::new(),
+        ));
+    }
+    notifiers
 }
 
 /// EventLoop manager, advise continue running or stop running
@@ -185,8 +212,13 @@ impl EventLoopContext {
     }
 
     fn clear_gc(&mut self) {
-        let mut gc = self.gc.write().unwrap();
-        gc.clear();
+        loop {
+            // Loop to avoid hold lock for long time.
+            let mut gc = self.gc.write().unwrap();
+            if gc.pop().is_none() {
+                break;
+            }
+        }
     }
 
     fn add_event(&mut self, mut event: EventNotifier) -> Result<()> {
@@ -208,7 +240,7 @@ impl EventLoopContext {
                 notifier.event |= event.event;
             }
             notifier.handlers.append(&mut event.handlers);
-            if notifier.status == EventStatus::Parked {
+            if *notifier.status.lock().unwrap() == EventStatus::Parked {
                 warn!("Parked event updated!");
             }
             return Ok(());
@@ -227,7 +259,7 @@ impl EventLoopContext {
             if let Some(parked) = events_map.get_mut(&parked_fd) {
                 self.epoll
                     .ctl(ControlOperation::Delete, parked_fd, EpollEvent::default())?;
-                parked.status = EventStatus::Parked;
+                *parked.status.lock().unwrap() = EventStatus::Parked;
             } else {
                 return Err(anyhow!(UtilError::NoParkedFd(parked_fd)));
             }
@@ -243,7 +275,7 @@ impl EventLoopContext {
         match events_map.get(&event.raw_fd) {
             Some(notifier) => {
                 // No need to delete fd if status is Parked, it's done in park_event.
-                if notifier.status == EventStatus::Alive {
+                if *notifier.status.lock().unwrap() == EventStatus::Alive {
                     if let Err(error) = self.epoll.ctl(
                         ControlOperation::Delete,
                         notifier.raw_fd,
@@ -257,6 +289,7 @@ impl EventLoopContext {
                 }
                 let parked_fd = notifier.parked_fd;
                 let event = events_map.remove(&event.raw_fd).unwrap();
+                *event.status.lock().unwrap() = EventStatus::Removed;
                 self.gc.write().unwrap().push(event);
 
                 if let Some(parked_fd) = parked_fd {
@@ -266,7 +299,7 @@ impl EventLoopContext {
                             parked_fd,
                             EpollEvent::new(parked.event, &**parked as *const _ as u64),
                         )?;
-                        parked.status = EventStatus::Alive;
+                        *parked.status.lock().unwrap() = EventStatus::Alive;
                     } else {
                         return Err(anyhow!(UtilError::NoParkedFd(parked_fd)));
                     }
@@ -308,7 +341,7 @@ impl EventLoopContext {
                     .with_context(|| {
                         format!("Failed to park event, event fd:{}", notifier.raw_fd)
                     })?;
-                notifier.status = EventStatus::Parked;
+                *notifier.status.lock().unwrap() = EventStatus::Parked;
             }
             _ => {
                 return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
@@ -330,7 +363,7 @@ impl EventLoopContext {
                     .with_context(|| {
                         format!("Failed to resume event, event fd: {}", notifier.raw_fd)
                     })?;
-                notifier.status = EventStatus::Alive;
+                *notifier.status.lock().unwrap() = EventStatus::Alive;
             }
             _ => {
                 return Err(anyhow!(UtilError::NoRegisterFd(event.raw_fd)));
@@ -392,7 +425,8 @@ impl EventLoopContext {
         if timeout == -1 {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
                 for notifer in self.events.read().unwrap().values() {
-                    if notifer.status != EventStatus::Alive || notifer.handler_poll.is_none() {
+                    let status_locked = notifer.status.lock().unwrap();
+                    if *status_locked != EventStatus::Alive || notifer.handler_poll.is_none() {
                         continue;
                     }
                     let handler_poll = notifer.handler_poll.as_ref().unwrap();
@@ -481,19 +515,21 @@ impl EventLoopContext {
                 let event_ptr = self.ready_events[i].data() as *const EventNotifier;
                 &*event_ptr as &EventNotifier
             };
-            if let EventStatus::Alive = event.status {
-                let mut notifiers = Vec::new();
+            let mut notifiers = Vec::new();
+            let status_locked = event.status.lock().unwrap();
+            if *status_locked == EventStatus::Alive {
                 for j in 0..event.handlers.len() {
-                    let handle = event.handlers[j].lock().unwrap();
-                    match handle(self.ready_events[i].event_set(), event.raw_fd) {
+                    let handler = &event.handlers[j];
+                    match handler(self.ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
                             notifiers.append(&mut notifier);
                         }
                     }
                 }
-                self.update_events(notifiers)?;
             }
+            drop(status_locked);
+            self.update_events(notifiers)?;
         }
 
         self.run_timers();
@@ -540,7 +576,7 @@ mod test {
                 None => {
                     return None;
                 }
-                Some(notifier) => Some(EventStatus::Alive == notifier.status),
+                Some(notifier) => Some(*notifier.status.lock().unwrap() == EventStatus::Alive),
             }
         }
 
@@ -559,8 +595,8 @@ mod test {
         }
     }
 
-    fn generate_handler(related_fd: i32) -> Box<NotifierCallback> {
-        Box::new(move |_, _| {
+    fn generate_handler(related_fd: i32) -> Rc<NotifierCallback> {
+        Rc::new(move |_, _| {
             let mut notifiers = Vec::new();
             let event = EventNotifier::new(
                 NotifierOperation::AddShared,
@@ -583,13 +619,13 @@ mod test {
 
         let handler1 = generate_handler(fd1_related.as_raw_fd());
         let mut handlers = Vec::new();
-        handlers.push(Arc::new(Mutex::new(handler1)));
+        handlers.push(handler1);
         let event1 = EventNotifier::new(
             NotifierOperation::AddShared,
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            handlers.clone(),
+            handlers,
         );
 
         notifiers.push(event1);
@@ -664,7 +700,7 @@ mod test {
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            vec![Arc::new(Mutex::new(handler1))],
+            vec![handler1],
         );
 
         let event1_update = EventNotifier::new(
@@ -672,7 +708,7 @@ mod test {
             fd1.as_raw_fd(),
             None,
             EventSet::OUT,
-            vec![Arc::new(Mutex::new(handler1_update))],
+            vec![handler1_update],
         );
 
         notifiers.push(event1);

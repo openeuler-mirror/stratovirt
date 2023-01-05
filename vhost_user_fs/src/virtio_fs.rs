@@ -26,6 +26,7 @@ const VIRTIO_FS_VRING_NO_FD_MASK: usize = 0x1 << 8;
 use crate::cmdline::FsConfig;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use log::error;
@@ -33,7 +34,10 @@ use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use address_space::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use machine_manager::event_loop::EventLoop;
-use util::loop_context::{read_fd, EventNotifier, EventNotifierHelper, NotifierOperation};
+use util::loop_context::{
+    gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
+};
 
 use super::fs::FileSystem;
 use super::fuse_req::FuseReq;
@@ -111,13 +115,7 @@ impl FsIoHandler {
     }
 
     fn delete_notifiers(&self) -> Vec<EventNotifier> {
-        vec![EventNotifier::new(
-            NotifierOperation::Delete,
-            self.kick_evt.as_raw_fd(),
-            None,
-            EventSet::IN,
-            Vec::new(),
-        )]
+        gen_delete_notifiers(&[self.kick_evt.as_raw_fd()])
     }
 }
 
@@ -126,22 +124,19 @@ impl EventNotifierHelper for FsIoHandler {
         let mut notifiers = Vec::new();
 
         let fs_handler_clone = fs_handler.clone();
-        let handler = Box::new(move |_, fd: RawFd| {
+        let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-
             if let Err(e) = fs_handler_clone.lock().unwrap().process_queue() {
                 error!("Failed to process fuse msg, {:?}", e);
             }
-
             None
         });
-
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
             fs_handler.lock().unwrap().kick_evt.as_raw_fd(),
             None,
             EventSet::IN,
-            vec![Arc::new(Mutex::new(handler))],
+            vec![handler],
         ));
 
         notifiers
