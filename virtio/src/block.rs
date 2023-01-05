@@ -53,8 +53,6 @@ use util::offset_of;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
-/// Size of each virtqueue.
-const QUEUE_SIZE_BLK: u16 = 256;
 /// Used to compute the number of sectors.
 const SECTOR_SHIFT: u8 = 9;
 /// Size of a sector of the block device.
@@ -1009,7 +1007,7 @@ impl VirtioDevice for Block {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_BLK
+        self.blk_cfg.queue_size
     }
 
     /// Get device features from host.
@@ -1205,7 +1203,7 @@ mod tests {
     use super::super::*;
     use super::*;
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-    use machine_manager::config::{IothreadConfig, VmConfig};
+    use machine_manager::config::{IothreadConfig, VmConfig, DEFAULT_QUEUE_SIZE_BLK};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::{thread, time::Duration};
     use vmm_sys_util::tempfile::TempFile;
@@ -1271,7 +1269,7 @@ mod tests {
 
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
         assert_eq!(block.queue_num(), QUEUE_NUM_BLK);
-        assert_eq!(block.queue_size(), QUEUE_SIZE_BLK);
+        assert_eq!(block.queue_size(), DEFAULT_QUEUE_SIZE_BLK);
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and
@@ -1424,17 +1422,17 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config = QueueConfig::new(QUEUE_SIZE_BLK);
+        let mut queue_config = QueueConfig::new(DEFAULT_QUEUE_SIZE_BLK);
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * QUEUE_SIZE_BLK as u64);
+        queue_config.avail_ring = GuestAddress(16 * DEFAULT_QUEUE_SIZE_BLK as u64);
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * QUEUE_SIZE_BLK as u64);
+        queue_config.used_ring = GuestAddress(32 * DEFAULT_QUEUE_SIZE_BLK as u64);
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
-        queue_config.size = QUEUE_SIZE_BLK;
+        queue_config.size = DEFAULT_QUEUE_SIZE_BLK;
         queue_config.ready = true;
 
         let queues: Vec<Arc<Mutex<Queue>>> =

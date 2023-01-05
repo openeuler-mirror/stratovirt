@@ -51,7 +51,7 @@ use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
     DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
-    DEFAULT_QUEUE_SIZE_NET, MAX_VIRTIO_QUEUE,
+    DEFAULT_QUEUE_SIZE_BLK, DEFAULT_QUEUE_SIZE_NET, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -740,6 +740,7 @@ impl StdMachine {
         } else {
             bail!("Drive not set");
         };
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_QUEUE_SIZE_BLK);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
         let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
@@ -759,6 +760,7 @@ impl StdMachine {
                 chardev: None,
                 socket_path: None,
                 aio: conf.aio.clone(),
+                queue_size,
             };
             dev.check()?;
             dev

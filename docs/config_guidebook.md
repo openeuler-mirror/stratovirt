@@ -273,7 +273,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-10 properties are supported for virtio block device.
+twelve properties are supported for virtio block device.
 
 * id: unique device-id in StratoVirt.
 * file: the path of backend file on host.
@@ -290,11 +290,12 @@ The number ranges from 0 to 255, the smaller the number, the higher the priority
 It determines the order of bootable devices which firmware will use for booting the guest OS.
 * aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
 
-For virtio-blk-pci, three more properties are required.
+For virtio-blk-pci, four more properties are required.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
 * multifunction: whether to open multi-function for device. (optional) If not set, default is false.
+* queue-size: the optional virtqueue size for all the queues. (optional) Configuration range is (2, 1024] and queue size must be power of 2. Default queue size is 256.
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
@@ -305,7 +306,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 -device virtio-blk-device,drive=<drive_id>,id=<blkid>[,iothread=<iothread1>][,serial=<serial_num>]
 # virtio pci block device.
 -drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
--device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>]
+-device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
 
 ```
 
