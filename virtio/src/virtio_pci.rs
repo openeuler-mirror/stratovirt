@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::{max, min};
-use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -19,7 +18,6 @@ use std::sync::{Arc, Mutex, Weak};
 use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
 use anyhow::{anyhow, bail, Context};
 use byteorder::{ByteOrder, LittleEndian};
-use hypervisor::kvm::{MsiVector, KVM_FDS};
 use log::{error, warn};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
@@ -28,7 +26,7 @@ use pci::config::{
     REG_SIZE, REVISION_ID, STATUS, STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID,
     SUB_CLASS_CODE, VENDOR_ID,
 };
-use pci::msix::{update_dev_id, Message, MsixState, MsixUpdate};
+use pci::msix::{update_dev_id, MsixState};
 use pci::Result as PciResult;
 use pci::{
     config::PciConfig, init_msix, init_multifunction, le_write_u16, le_write_u32, ranges_overlap,
@@ -576,12 +574,6 @@ pub struct VirtioPciState {
     queue_num: usize,
 }
 
-struct GsiMsiRoute {
-    irq_fd: Option<EventFd>,
-    gsi: i32,
-    msg: Message,
-}
-
 /// Virtio-PCI device structure
 #[derive(Clone)]
 pub struct VirtioPciDevice {
@@ -615,8 +607,6 @@ pub struct VirtioPciDevice {
     multi_func: bool,
     /// If the device need to register irqfd to kvm.
     need_irqfd: bool,
-    /// Maintains a list of GSI with irqfds that are registered to kvm.
-    gsi_msi_routes: Arc<Mutex<HashMap<u16, GsiMsiRoute>>>,
 }
 
 impl VirtioPciDevice {
@@ -649,7 +639,6 @@ impl VirtioPciDevice {
             queues: Arc::new(Mutex::new(Vec::with_capacity(queue_num))),
             multi_func,
             need_irqfd: false,
-            gsi_msi_routes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -799,17 +788,26 @@ impl VirtioPciDevice {
 
         update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
 
-        if self.need_irqfd
-            && !virtio_pci_register_irqfd(self, &self.gsi_msi_routes, &call_evts.events)
-        {
+        if self.need_irqfd && !self.queues_register_irqfd(&call_evts.events) {
             return false;
         }
         true
     }
 
     fn deactivate_device(&self) -> bool {
-        if self.need_irqfd {
-            virtio_pci_unregister_irqfd(self.gsi_msi_routes.clone());
+        if self.need_irqfd
+            && self.config.msix.is_some()
+            && self
+                .config
+                .msix
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .unregister_irqfd()
+                .is_err()
+        {
+            return false;
         }
 
         self.queues.lock().unwrap().clear();
@@ -1014,6 +1012,39 @@ impl VirtioPciDevice {
         // to IPI B.
         min(queues_max as u16 - queues_fixed, nr_cpus as u16)
     }
+
+    fn queues_register_irqfd(&self, call_fds: &[EventFd]) -> bool {
+        let mut locked_msix = if let Some(msix) = &self.config.msix {
+            msix.lock().unwrap()
+        } else {
+            error!("Failed to get msix in virtio pci device configure");
+            return false;
+        };
+
+        let locked_queues = self.queues.lock().unwrap();
+        for (queue_index, queue_mutex) in locked_queues.iter().enumerate() {
+            if self.device.lock().unwrap().has_control_queue()
+                && queue_index + 1 == locked_queues.len()
+                && locked_queues.len() % 2 != 0
+            {
+                break;
+            }
+
+            let vector = queue_mutex.lock().unwrap().vring.get_queue_config().vector;
+            if vector == INVALID_VECTOR_NUM {
+                continue;
+            }
+
+            if locked_msix
+                .register_irqfd(vector, &call_fds[queue_index])
+                .is_err()
+            {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 impl PciDevOps for VirtioPciDevice {
@@ -1126,9 +1157,6 @@ impl PciDevOps for VirtioPciDevice {
             None,
         )?;
 
-        if let Some(ref msix) = self.config.msix {
-            msix.lock().unwrap().msix_update = Some(Arc::new(Mutex::new(self.clone())));
-        }
         self.assign_interrupt_cb();
 
         let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
@@ -1181,10 +1209,6 @@ impl PciDevOps for VirtioPciDevice {
 
         let bus = self.parent_bus.upgrade().unwrap();
         self.config.unregister_bars(&bus)?;
-
-        if let Some(ref msix) = self.config.msix {
-            msix.lock().unwrap().msix_update = None;
-        }
 
         MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name);
         MigrationManager::unregister_transport_instance(VirtioPciState::descriptor(), &self.name);
@@ -1402,171 +1426,6 @@ impl MigrationHook for VirtioPciDevice {
 
         Ok(())
     }
-}
-
-impl MsixUpdate for VirtioPciDevice {
-    fn update_irq_routing(&mut self, vector: u16, entry: &Message, is_masked: bool) {
-        if !self.need_irqfd {
-            return;
-        }
-
-        let mut locked_gsi_routes = self.gsi_msi_routes.lock().unwrap();
-        let route = if let Some(route) = locked_gsi_routes.get_mut(&vector) {
-            route
-        } else {
-            return;
-        };
-
-        update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
-        let msix_vector = MsiVector {
-            msg_addr_lo: entry.address_lo,
-            msg_addr_hi: entry.address_hi,
-            msg_data: entry.data,
-            masked: false,
-            #[cfg(target_arch = "aarch64")]
-            dev_id: self.dev_id.load(Ordering::Acquire) as u32,
-        };
-
-        if is_masked {
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .unregister_irqfd(route.irq_fd.as_ref().unwrap(), route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to unregister irq, error is {:?}", e));
-        } else {
-            let msg = &route.msg;
-            if msg.data != entry.data
-                || msg.address_lo != entry.address_lo
-                || msg.address_hi != entry.address_hi
-            {
-                KVM_FDS
-                    .load()
-                    .irq_route_table
-                    .lock()
-                    .unwrap()
-                    .update_msi_route(route.gsi as u32, msix_vector)
-                    .unwrap_or_else(|e| error!("Failed to update MSI-X route, error is {:?}", e));
-                KVM_FDS
-                    .load()
-                    .commit_irq_routing()
-                    .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {:?}", e));
-                route.msg = *entry;
-            }
-
-            KVM_FDS
-                .load()
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .register_irqfd(route.irq_fd.as_ref().unwrap(), route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to register irq, error is {:?}", e));
-        }
-    }
-}
-
-fn virtio_pci_register_irqfd(
-    pci_device: &VirtioPciDevice,
-    gsi_routes: &Arc<Mutex<HashMap<u16, GsiMsiRoute>>>,
-    call_fds: &[EventFd],
-) -> bool {
-    let locked_msix = if let Some(msix) = &pci_device.config.msix {
-        msix.lock().unwrap()
-    } else {
-        error!("Failed to get msix in virtio pci device configure");
-        return false;
-    };
-
-    let locked_queues = pci_device.queues.lock().unwrap();
-    let mut locked_gsi_routes = gsi_routes.lock().unwrap();
-    for (queue_index, queue_mutex) in locked_queues.iter().enumerate() {
-        if pci_device.device.lock().unwrap().has_control_queue()
-            && queue_index + 1 == locked_queues.len()
-            && locked_queues.len() % 2 != 0
-        {
-            break;
-        }
-
-        let vector = queue_mutex.lock().unwrap().vring.get_queue_config().vector;
-        if vector == INVALID_VECTOR_NUM {
-            continue;
-        }
-        let entry = locked_msix.get_message(vector as u16);
-        let msix_vector = MsiVector {
-            msg_addr_lo: entry.address_lo,
-            msg_addr_hi: entry.address_hi,
-            msg_data: entry.data,
-            masked: false,
-            #[cfg(target_arch = "aarch64")]
-            dev_id: pci_device.dev_id.load(Ordering::Acquire) as u32,
-        };
-
-        let gsi = match KVM_FDS
-            .load()
-            .irq_route_table
-            .lock()
-            .unwrap()
-            .allocate_gsi()
-        {
-            Ok(g) => g as i32,
-            Err(e) => {
-                error!("Failed to allocate gsi, error is {:?}", e);
-                return false;
-            }
-        };
-
-        KVM_FDS
-            .load()
-            .irq_route_table
-            .lock()
-            .unwrap()
-            .add_msi_route(gsi as u32, msix_vector)
-            .unwrap_or_else(|e| error!("Failed to add MSI-X route, error is {:?}", e));
-
-        KVM_FDS
-            .load()
-            .commit_irq_routing()
-            .unwrap_or_else(|e| error!("Failed to commit irq routing, error is {:?}", e));
-
-        KVM_FDS
-            .load()
-            .vm_fd
-            .as_ref()
-            .unwrap()
-            .register_irqfd(&call_fds[queue_index], gsi as u32)
-            .unwrap_or_else(|e| error!("Failed to register irq, error is {:?}", e));
-
-        let gsi_route = GsiMsiRoute {
-            irq_fd: Some(call_fds[queue_index].try_clone().unwrap()),
-            gsi,
-            msg: entry,
-        };
-        locked_gsi_routes.insert(vector as u16, gsi_route);
-    }
-
-    true
-}
-
-fn virtio_pci_unregister_irqfd(gsi_routes: Arc<Mutex<HashMap<u16, GsiMsiRoute>>>) {
-    let mut locked_gsi_routes = gsi_routes.lock().unwrap();
-    for (_, route) in locked_gsi_routes.iter() {
-        if let Some(fd) = &route.irq_fd.as_ref() {
-            KVM_FDS
-                .load()
-                .unregister_irqfd(fd, route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to unregister irq, error is {:?}", e));
-
-            KVM_FDS
-                .load()
-                .irq_route_table
-                .lock()
-                .unwrap()
-                .release_gsi(route.gsi as u32)
-                .unwrap_or_else(|e| error!("Failed to release gsi, error is {:?}", e));
-        }
-    }
-    locked_gsi_routes.clear();
 }
 
 #[cfg(test)]
