@@ -852,6 +852,7 @@ impl StdMachine {
         } else {
             bail!("Chardev not set");
         };
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_QUEUE_SIZE_BLK);
         let socket_path = self
             .get_socket_path(&locked_vmconfig, chardev.to_string())
             .with_context(|| "Failed to get socket path")?;
@@ -864,6 +865,7 @@ impl StdMachine {
             boot_index: args.boot_index,
             chardev: Some(chardev.to_string()),
             socket_path,
+            queue_size,
             ..BlkDevConfig::default()
         };
 

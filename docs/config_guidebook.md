@@ -319,7 +319,7 @@ You can use it by adding a new device, one more property is supported by vhost-u
 ```shell
 # vhost user blk pci device
 -chardev socket,id=<chardevid>,path=<socket_path>
--device vhost-user-blk-pci,id=<blk_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,num-queues=<N>][,bootindex=<N>]
+-device vhost-user-blk-pci,id=<blk_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
 ```
 
 Note: More features to be supported.
