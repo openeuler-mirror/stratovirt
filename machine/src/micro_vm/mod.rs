@@ -68,7 +68,7 @@ use machine_manager::{
     config::{
         parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DriveFile,
         Incoming, MigrateMode, NetworkInterfaceConfig, SerialConfig, VmConfig,
-        DEFAULT_QUEUE_SIZE_BLK, DEFAULT_QUEUE_SIZE_NET,
+        DEFAULT_VIRTQUEUE_SIZE,
     },
     event,
     machine::{
@@ -1158,7 +1158,7 @@ impl DeviceInterface for LightMachine {
             } else {
                 None
             },
-            queue_size: DEFAULT_QUEUE_SIZE_BLK,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
         if let Err(e) = config.check() {
             error!("{:?}", e);
@@ -1208,7 +1208,7 @@ impl DeviceInterface for LightMachine {
             queues: 2,
             mq: false,
             socket_path: None,
-            queue_size: DEFAULT_QUEUE_SIZE_NET,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
 
         if let Some(fds) = args.fds {

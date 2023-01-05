@@ -409,7 +409,7 @@ impl VirtioDevice for Net {
 mod tests {
     use super::*;
     use address_space::*;
-    use machine_manager::config::DEFAULT_QUEUE_SIZE_NET;
+    use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
     use std::fs::File;
 
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
@@ -452,7 +452,7 @@ mod tests {
             queues: 2,
             mq: false,
             socket_path: None,
-            queue_size: DEFAULT_QUEUE_SIZE_NET,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
         let conf = vec![net1];
         let confs = Some(conf);
@@ -474,7 +474,7 @@ mod tests {
             queues: 2,
             mq: false,
             socket_path: None,
-            queue_size: DEFAULT_QUEUE_SIZE_NET,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
         let conf = vec![net1];
         let confs = Some(conf);

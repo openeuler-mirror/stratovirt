@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use address_space::AddressSpace;
 use byteorder::{ByteOrder, LittleEndian};
-use machine_manager::config::VsockConfig;
+use machine_manager::config::{VsockConfig, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
@@ -37,8 +37,6 @@ use super::{VhostBackend, VhostIoHandler, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK
 
 /// Number of virtqueues.
 const QUEUE_NUM_VSOCK: usize = 3;
-/// Size of each virtqueue.
-const QUEUE_SIZE_VSOCK: u16 = 256;
 /// Backend vhost-vsock device path.
 const VHOST_PATH: &str = "/dev/vhost-vsock";
 /// Event transport reset
@@ -194,7 +192,7 @@ impl VirtioDevice for Vsock {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_VSOCK
+        DEFAULT_VIRTQUEUE_SIZE
     }
 
     /// Get device features from host.
@@ -417,7 +415,7 @@ mod tests {
 
         assert_eq!(vsock.device_type(), VIRTIO_TYPE_VSOCK);
         assert_eq!(vsock.queue_num(), QUEUE_NUM_VSOCK);
-        assert_eq!(vsock.queue_size(), QUEUE_SIZE_VSOCK);
+        assert_eq!(vsock.queue_size(), DEFAULT_VIRTQUEUE_SIZE);
 
         // test vsock get_device_features
         vsock.state.device_features = 0x0123_4567_89ab_cdef;

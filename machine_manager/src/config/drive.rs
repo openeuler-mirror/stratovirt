@@ -21,8 +21,8 @@ use util::aio::{AIO_IOURING, AIO_NATIVE};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH,
-    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
+    MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::qmp_schema;
 const MAX_SERIAL_NUM: usize = 20;
@@ -31,8 +31,6 @@ const MAX_UNIT_ID: usize = 2;
 
 // Seg_max = queue_size - 2. So, size of each virtqueue for virtio-blk should be larger than 2.
 const MIN_QUEUE_SIZE_BLK: u16 = 2;
-/// Default size of each virtqueue for virtio-blk.
-pub const DEFAULT_QUEUE_SIZE_BLK: u16 = 256;
 // Max size of each virtqueue for virtio-blk.
 const MAX_QUEUE_SIZE_BLK: u16 = 1024;
 
@@ -90,7 +88,7 @@ impl Default for BlkDevConfig {
             chardev: None,
             socket_path: None,
             aio: Some(AIO_NATIVE.to_string()),
-            queue_size: DEFAULT_QUEUE_SIZE_BLK,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }
