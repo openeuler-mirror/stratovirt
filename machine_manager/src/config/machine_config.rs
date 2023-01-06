@@ -334,7 +334,7 @@ impl VmConfig {
         if max_cpus < cpu {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "maxcpus".to_string(),
-                cpu as u64,
+                cpu,
                 true,
                 MAX_NR_CPUS,
                 true,

@@ -721,7 +721,7 @@ impl ScsiRequest {
 
         if !outbuf.is_empty() {
             for (idx, iov) in req.iovec.iter().enumerate() {
-                if outbuf.len() as u64 > iov.iov_len as u64 {
+                if outbuf.len() as u64 > iov.iov_len {
                     debug!(
                         "cmd is {:x}, outbuf len is {}, iov_len is {}, idx is {}, iovec size is {}",
                         self.cmd.command,
@@ -1236,7 +1236,7 @@ fn scsi_command_emulate_mode_sense(
     let mut dev_specific_parameter: u8 = 0;
     let mut nb_sectors = dev_lock.disk_sectors as u32;
     let scsi_type = dev_lock.scsi_type;
-    let block_size = dev_lock.block_size as u32;
+    let block_size = dev_lock.block_size;
     nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
 
     debug!(
@@ -1289,7 +1289,7 @@ fn scsi_command_emulate_mode_sense(
         // Byte[4]: Reserved.
         // Byte[5-7]: Block Length.
         let mut block_desc: Vec<u8> = vec![0; 8];
-        BigEndian::write_u32(&mut block_desc[0..4], nb_sectors as u32 & 0xffffff);
+        BigEndian::write_u32(&mut block_desc[0..4], nb_sectors & 0xffffff);
         BigEndian::write_u32(&mut block_desc[4..8], block_size);
         outbuf.append(&mut block_desc);
     }

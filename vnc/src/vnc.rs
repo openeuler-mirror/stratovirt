@@ -195,7 +195,7 @@ impl DisplayChangeListenerOperations for VncInterface {
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
         let width = cursor.width as u64;
         let height = cursor.height as u64;
-        let bpl = round_up_div(width as u64, BIT_PER_BYTE as u64);
+        let bpl = round_up_div(width, BIT_PER_BYTE as u64);
         // Set the bit for mask.
         let bit_mask: u8 = 0x80;
 
@@ -203,14 +203,14 @@ impl DisplayChangeListenerOperations for VncInterface {
         let first_bit = if cfg!(target_endian = "big") {
             0_usize
         } else {
-            (bytes_per_pixel() - 1) as usize
+            bytes_per_pixel() - 1
         };
 
         for j in 0..height {
             let mut bit = bit_mask;
             for i in 0..width {
                 let idx = ((i + j * width) as usize) * bytes_per_pixel() + first_bit;
-                if let Some(n) = cursor.data.get(idx as usize) {
+                if let Some(n) = cursor.data.get(idx) {
                     if *n == 0xff {
                         mask[(j * bpl + i / BIT_PER_BYTE as u64) as usize] |= bit;
                     }
@@ -553,16 +553,16 @@ pub fn convert_pixel(client_dpm: &DisplayMode, buf: &mut Vec<u8>, color: u32) {
         }
         4 => {
             if client_dpm.client_be {
-                ret = (v as u32).to_be_bytes();
+                ret = v.to_be_bytes();
             } else {
-                ret = (v as u32).to_le_bytes();
+                ret = v.to_le_bytes();
             }
         }
         _ => {
             if client_dpm.client_be {
-                ret = (v as u32).to_be_bytes();
+                ret = v.to_be_bytes();
             } else {
-                ret = (v as u32).to_le_bytes();
+                ret = v.to_le_bytes();
             }
         }
     }
@@ -592,7 +592,7 @@ pub fn raw_send_framebuffer_update(
     let copy_bytes = rect.w as usize * bytes_per_pixel();
 
     for _i in 0..rect.h {
-        write_pixel(data_ptr, copy_bytes as usize, client_dpm, buf);
+        write_pixel(data_ptr, copy_bytes, client_dpm, buf);
         data_ptr = (data_ptr as usize + stride as usize) as *mut u8;
     }
 

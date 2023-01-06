@@ -328,7 +328,7 @@ pub struct FwCfgCommon {
 impl FwCfgCommon {
     fn new(sys_mem: Arc<AddressSpace>) -> Self {
         FwCfgCommon {
-            file_slots: FW_CFG_FILE_SLOTS_DFLT as u16,
+            file_slots: FW_CFG_FILE_SLOTS_DFLT,
             arch_entries: vec![
                 FwCfgEntry::default();
                 (FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT) as usize
@@ -686,7 +686,7 @@ impl FwCfgCommon {
             if addr == 0 {
                 self.dma_addr = GuestAddress(value << 32);
             } else if addr == 4 {
-                self.dma_addr = GuestAddress(self.dma_addr.raw_value() | value as u64);
+                self.dma_addr = GuestAddress(self.dma_addr.raw_value() | value);
                 self.handle_dma_request()?;
             }
         } else if size == 8 && addr == 0 {
@@ -717,7 +717,7 @@ impl FwCfgCommon {
         extract_u64(
             FW_CFG_DMA_SIGNATURE as u64,
             ((8 - addr - size as u64) * 8) as u32,
-            (size * 8) as u32,
+            size * 8,
         )
         .ok_or_else(|| anyhow!("Failed to extract bits from u64"))
     }
@@ -1092,7 +1092,7 @@ fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, off
         1 => data[0] = value as u8,
         2 => BigEndian::write_u16(data, value as u16),
         4 => BigEndian::write_u32(data, value as u32),
-        8 => BigEndian::write_u64(data, value as u64),
+        8 => BigEndian::write_u64(data, value),
         _ => {
             warn!(
                 "Failed to read from FwCfg data register, data length {} is invalid",
@@ -1135,7 +1135,7 @@ impl SysBusDevOps for FwCfgIO {
                     1 => data[0] as u64,
                     2 => BigEndian::read_u16(data) as u64,
                     4 => BigEndian::read_u32(data) as u64,
-                    8 => BigEndian::read_u64(data) as u64,
+                    8 => BigEndian::read_u64(data),
                     _ => 0,
                 };
                 if let Err(e) = self.fwcfg.dma_mem_write(offset - 4, value, size) {

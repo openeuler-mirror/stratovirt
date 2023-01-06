@@ -359,7 +359,7 @@ impl KvmMemoryListener {
             match length {
                 2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
                 4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
@@ -396,7 +396,7 @@ impl KvmMemoryListener {
             match length {
                 2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
                 4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {
@@ -504,7 +504,7 @@ impl KvmIoListener {
             match length {
                 2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
                 4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("unexpected ioeventfd data length {}", length),
             }
         } else {
@@ -541,7 +541,7 @@ impl KvmIoListener {
             match length {
                 2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
                 4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
-                8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u64),
+                8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
         } else {

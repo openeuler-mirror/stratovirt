@@ -484,7 +484,7 @@ impl X86CPUState {
                 }
                 0xb => {
                     // Extended Topology Enumeration Leaf
-                    entry.edx = self.apic_id as u32;
+                    entry.edx = self.apic_id;
                     entry.ecx = entry.index & 0xff;
                     match entry.index {
                         0 => {
@@ -513,7 +513,7 @@ impl X86CPUState {
                         continue;
                     }
 
-                    entry.edx = self.apic_id as u32;
+                    entry.edx = self.apic_id;
                     entry.ecx = entry.index & 0xff;
                     entry.flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
 

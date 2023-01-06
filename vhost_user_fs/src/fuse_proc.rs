@@ -1534,7 +1534,7 @@ pub fn do_fuse_create(
         };
 
         let open_out = FuseOpenOut {
-            fh: fh as u64,
+            fh,
             open_flags: 0,
             padding: 0,
         };

@@ -89,7 +89,7 @@ impl From<GdtEntry> for u64 {
 }
 
 fn write_gdt_table(table: &[u64], guest_mem: &Arc<AddressSpace>) -> Result<()> {
-    let mut boot_gdt_addr = BOOT_GDT_OFFSET as u64;
+    let mut boot_gdt_addr = BOOT_GDT_OFFSET;
     for (_, entry) in table.iter().enumerate() {
         guest_mem
             .write_object(entry, GuestAddress(boot_gdt_addr))
@@ -109,7 +109,7 @@ fn write_idt_value(val: u64, guest_mem: &Arc<AddressSpace>) -> Result<()> {
 }
 
 pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
-    let gdt_table: [u64; BOOT_GDT_MAX as usize] = [
+    let gdt_table: [u64; BOOT_GDT_MAX] = [
         GdtEntry::new(0, 0, 0).into(),            // NULL
         GdtEntry::new(0, 0, 0).into(),            // NULL
         GdtEntry::new(0xa09b, 0, 0xfffff).into(), // CODE

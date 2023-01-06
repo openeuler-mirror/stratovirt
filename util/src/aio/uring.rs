@@ -38,8 +38,7 @@ impl<T: Clone + 'static> IoUringContext<T> {
         if (tmp_entries & -tmp_entries) != tmp_entries || tmp_entries == 0 {
             bail!("Entries must be the power of 2 and larger than 0");
         }
-        let ring =
-            IoUring::new(entries as u32).with_context(|| "Failed to create io_uring instance")?;
+        let ring = IoUring::new(entries).with_context(|| "Failed to create io_uring instance")?;
 
         ring.submitter()
             .register_eventfd(eventfd.as_raw_fd())

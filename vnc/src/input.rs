@@ -244,11 +244,11 @@ impl ClientIoHandler {
         y = ((y as u64 * ABS_MAX) / height as u64) as u16;
 
         // ASCII -> HidCode.
-        let button_mask: u8 = match buf[1] as u8 {
+        let button_mask: u8 = match buf[1] {
             INPUT_POINT_LEFT => 0x01,
             INPUT_POINT_MIDDLE => 0x04,
             INPUT_POINT_RIGHT => 0x02,
-            _ => buf[1] as u8,
+            _ => buf[1],
         };
 
         let locked_input = INPUT.lock().unwrap();

@@ -559,7 +559,7 @@ impl BalloonIoHandler {
             }
             locked_queue
                 .vring
-                .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
+                .add_used(&self.mem_space, req.desc_index, req.elem_cnt)
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
@@ -596,7 +596,7 @@ impl BalloonIoHandler {
             }
             locked_queue
                 .vring
-                .add_used(&self.mem_space, req.desc_index, req.elem_cnt as u32)
+                .add_used(&self.mem_space, req.desc_index, req.elem_cnt)
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
@@ -869,7 +869,7 @@ impl VirtioDevice for Balloon {
 
     /// Get the type of balloon.
     fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_BALLOON as u32
+        VIRTIO_TYPE_BALLOON
     }
 
     /// Get the number of balloon-device queues.

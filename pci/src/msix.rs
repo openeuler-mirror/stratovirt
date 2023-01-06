@@ -267,7 +267,7 @@ impl Msix {
             .irq_route_table
             .lock()
             .unwrap()
-            .add_msi_route(gsi as u32, msix_vector)
+            .add_msi_route(gsi, msix_vector)
             .map_err(|e| {
                 error!("Failed to add MSI-X route, error is {:?}", e);
                 e
@@ -283,7 +283,7 @@ impl Msix {
             .vm_fd
             .as_ref()
             .unwrap()
-            .register_irqfd(call_fd, gsi as u32)
+            .register_irqfd(call_fd, gsi)
             .map_err(|e| {
                 error!("Failed to register irq, error is {:?}", e);
                 e

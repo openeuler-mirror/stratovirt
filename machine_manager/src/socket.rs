@@ -430,7 +430,7 @@ impl SocketRWHandler {
                     let scm_cmsg_header = unsafe {
                         std::slice::from_raw_parts(
                             CMSG_DATA(scm),
-                            std::mem::size_of::<[RawFd; 2]>() as usize,
+                            std::mem::size_of::<[RawFd; 2]>(),
                         )
                     };
                     for fd in scm_cmsg_header.iter() {
