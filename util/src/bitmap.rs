@@ -232,7 +232,7 @@ impl<T: BitOps> Bitmap<T> {
         if num > self.vol() {
             return Err(anyhow!(UtilError::OutOfBound(
                 num as u64,
-                (self.size() as u64 * T::len() as u64) as u64,
+                self.size() as u64 * T::len() as u64,
             )));
         }
         Ok(T::bit_and(

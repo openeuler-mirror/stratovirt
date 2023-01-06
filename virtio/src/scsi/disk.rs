@@ -166,8 +166,7 @@ impl ScsiDevice {
             let mut file = VmConfig::fetch_drive_file(&drive_files, &self.config.path_on_host)?;
             disk_size = file
                 .seek(SeekFrom::End(0))
-                .with_context(|| "Failed to seek the end for scsi device")?
-                as u64;
+                .with_context(|| "Failed to seek the end for scsi device")?;
 
             self.disk_image = Some(Arc::new(file));
         } else {

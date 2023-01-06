@@ -123,7 +123,7 @@ impl MigrationManager {
         fd.read_exact(unsafe {
             std::slice::from_raw_parts_mut(
                 &mut instance as *mut Instance as *mut u8,
-                size_of::<Instance>() as usize,
+                size_of::<Instance>(),
             )
         })
         .with_context(|| "Failed to read instance of object")?;

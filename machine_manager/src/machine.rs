@@ -184,7 +184,7 @@ pub trait DeviceInterface {
     /// Query the version of StratoVirt.
     fn query_version(&self) -> Response {
         let version = Version::new(1, 0, 5);
-        Response::create_response(serde_json::to_value(&version).unwrap(), None)
+        Response::create_response(serde_json::to_value(version).unwrap(), None)
     }
 
     /// Query all commands of StratoVirt.
@@ -331,22 +331,22 @@ pub trait DeviceInterface {
 
     fn query_tpm_models(&self) -> Response {
         let tpm_models = Vec::<String>::new();
-        Response::create_response(serde_json::to_value(&tpm_models).unwrap(), None)
+        Response::create_response(serde_json::to_value(tpm_models).unwrap(), None)
     }
 
     fn query_tpm_types(&self) -> Response {
         let tpm_types = Vec::<String>::new();
-        Response::create_response(serde_json::to_value(&tpm_types).unwrap(), None)
+        Response::create_response(serde_json::to_value(tpm_types).unwrap(), None)
     }
 
     fn query_command_line_options(&self) -> Response {
         let cmd_lines = Vec::<CmdLine>::new();
-        Response::create_response(serde_json::to_value(&cmd_lines).unwrap(), None)
+        Response::create_response(serde_json::to_value(cmd_lines).unwrap(), None)
     }
 
     fn query_migrate_capabilities(&self) -> Response {
         let caps = Vec::<MigrateCapabilities>::new();
-        Response::create_response(serde_json::to_value(&caps).unwrap(), None)
+        Response::create_response(serde_json::to_value(caps).unwrap(), None)
     }
 
     fn query_qmp_schema(&self) -> Response {
@@ -375,38 +375,38 @@ pub trait DeviceInterface {
 
     fn qom_list(&self) -> Response {
         let vec_cmd: Vec<PropList> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn qom_get(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_block(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_named_block_nodes(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_blockstats(&self) -> Response {
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_block_jobs(&self) -> Response {
         // Fix me: qmp command call, return none temporarily.
         let vec_cmd: Vec<ChardevInfo> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_cmd).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_cmd).unwrap(), None)
     }
 
     fn query_gic_capabilities(&self) -> Response {
         let vec_gic: Vec<GicCap> = Vec::new();
-        Response::create_response(serde_json::to_value(&vec_gic).unwrap(), None)
+        Response::create_response(serde_json::to_value(vec_gic).unwrap(), None)
     }
 
     fn query_iothreads(&self) -> Response {

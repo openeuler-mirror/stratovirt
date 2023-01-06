@@ -50,7 +50,7 @@ const XHCI_PCI_OPER_LENGTH: u32 = 0x400;
 const XHCI_PCI_RUNTIME_OFFSET: u32 = XHCI_OFF_RUNTIME;
 const XHCI_PCI_RUNTIME_LENGTH: u32 = (MAX_INTRS as u32 + 1) * 0x20;
 const XHCI_PCI_DOORBELL_OFFSET: u32 = XHCI_OFF_DOORBELL;
-const XHCI_PCI_DOORBELL_LENGTH: u32 = (MAX_SLOTS as u32 + 1) * 0x20;
+const XHCI_PCI_DOORBELL_LENGTH: u32 = (MAX_SLOTS + 1) * 0x20;
 const XHCI_PCI_PORT_OFFSET: u32 = XHCI_PCI_OPER_OFFSET + XHCI_PCI_OPER_LENGTH;
 const XHCI_PCI_PORT_LENGTH: u32 = 0x10;
 const XHCI_MSIX_TABLE_OFFSET: u32 = 0x3000;
@@ -183,7 +183,7 @@ impl PciDevOps for XhciPciDevice {
             DEVICE_ID as usize,
             PCI_DEVICE_ID_REDHAT_XHCI,
         )?;
-        le_write_u16(&mut self.pci_config.config, REVISION_ID as usize, 0x3_u16)?;
+        le_write_u16(&mut self.pci_config.config, REVISION_ID, 0x3_u16)?;
         le_write_u16(
             &mut self.pci_config.config,
             SUB_CLASS_CODE as usize,

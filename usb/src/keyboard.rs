@@ -85,7 +85,7 @@ static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             endpoint_desc: UsbEndpointDescriptor {
                 bLength: USB_DT_ENDPOINT_SIZE,
                 bDescriptorType: USB_DT_ENDPOINT,
-                bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST as u8 | 0x1,
+                bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | 0x1,
                 bmAttributes: USB_ENDPOINT_ATTR_INT,
                 wMaxPacketSize: 8,
                 bInterval: 0xa,

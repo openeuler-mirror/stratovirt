@@ -980,9 +980,9 @@ impl VirtioDevice for Block {
         if !self.blk_cfg.path_on_host.is_empty() {
             let drive_files = self.drive_files.lock().unwrap();
             let mut file = VmConfig::fetch_drive_file(&drive_files, &self.blk_cfg.path_on_host)?;
-            disk_size =
-                file.seek(SeekFrom::End(0))
-                    .with_context(|| "Failed to seek the end for block")? as u64;
+            disk_size = file
+                .seek(SeekFrom::End(0))
+                .with_context(|| "Failed to seek the end for block")?;
             disk_image = Some(Arc::new(file));
         }
         self.disk_image = disk_image;

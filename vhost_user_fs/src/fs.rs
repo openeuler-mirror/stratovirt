@@ -383,7 +383,7 @@ impl FileSystem {
         let proc_file = self.proc_dir.try_clone().unwrap();
         let inode = match self.find_mut_inode(node_id) {
             Some(inode_) => inode_,
-            None => return (None, libc::EBADF as i32),
+            None => return (None, libc::EBADF),
         };
 
         if let Some(lock) = inode.locks.get_mut(&owner) {
@@ -391,7 +391,7 @@ impl FileSystem {
         }
 
         if inode.file_type & libc::S_IFDIR == 0 && inode.file_type & libc::S_IFREG == 0 {
-            return (None, libc::EBADF as i32);
+            return (None, libc::EBADF);
         }
 
         let (file_opt, ret) = open_at(
@@ -415,7 +415,7 @@ impl FileSystem {
     fn delete_file_lock(&mut self, node_id: usize, owner: u64) -> i32 {
         let inode = match self.find_mut_inode(node_id) {
             Some(inode_) => inode_,
-            None => return libc::EBADF as i32,
+            None => return libc::EBADF,
         };
 
         inode.locks.remove(&owner);
@@ -495,7 +495,7 @@ impl FileSystem {
         let inode = match self.find_inode(parent_nodeid) {
             Some(i) => i.clone(),
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
         self.internal_lookup(&inode, name, node_id, fuse_attr)
@@ -511,7 +511,7 @@ impl FileSystem {
         let mut inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
         self.unref_inode(&mut inode, nlookup);
@@ -528,7 +528,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
         let (stat, ret) = fstat_at(
@@ -566,7 +566,7 @@ impl FileSystem {
                         }
                     }
                     _ => {
-                        return libc::EBADF as i32;
+                        return libc::EBADF;
                     }
                 };
             } else {
@@ -582,7 +582,7 @@ impl FileSystem {
                         }
                     }
                     _ => {
-                        return libc::EBADF as i32;
+                        return libc::EBADF;
                     }
                 };
             }
@@ -615,7 +615,7 @@ impl FileSystem {
                     }
                 }
                 _ => {
-                    return libc::EBADF as i32;
+                    return libc::EBADF;
                 }
             };
         }
@@ -630,14 +630,14 @@ impl FileSystem {
                         }
                     }
                     _ => {
-                        return libc::EBADF as i32;
+                        return libc::EBADF;
                     }
                 };
             } else {
                 match self.find_inode(node_id) {
                     Some(i) => {
                         if i.file_type & libc::S_IFREG == 0 && i.file_type & libc::S_IFDIR == 0 {
-                            return libc::EBADF as i32;
+                            return libc::EBADF;
                         }
 
                         let (file_opt, ret) = open_at(
@@ -658,7 +658,7 @@ impl FileSystem {
                         }
                     }
                     _ => {
-                        return libc::EBADF as i32;
+                        return libc::EBADF;
                     }
                 };
             }
@@ -690,7 +690,7 @@ impl FileSystem {
                         }
                     }
                     _ => {
-                        return libc::EBADF as i32;
+                        return libc::EBADF;
                     }
                 };
             } else {
@@ -710,7 +710,7 @@ impl FileSystem {
                         }
                     }
                     _ => {
-                        return libc::EBADF as i32;
+                        return libc::EBADF;
                     }
                 };
             }
@@ -729,7 +729,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -741,7 +741,7 @@ impl FileSystem {
         if let Some(mut buf) = buf_opt {
             buff.append(&mut buf);
         } else {
-            return libc::EBADF as i32;
+            return libc::EBADF;
         }
 
         FUSE_OK
@@ -767,7 +767,7 @@ impl FileSystem {
         let parent_inode = match self.find_inode(in_header.nodeid as usize) {
             Some(i) => i.clone(),
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -810,7 +810,7 @@ impl FileSystem {
         let parent_inode = match self.find_inode(in_header.nodeid as usize) {
             Some(i) => i.clone(),
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -857,7 +857,7 @@ impl FileSystem {
         let parent_dir = match self.find_inode(in_header.nodeid as usize) {
             Some(i) => i.clone(),
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -893,7 +893,7 @@ impl FileSystem {
     pub fn unlink(&mut self, parent_nodeid: usize, name: CString) -> i32 {
         let parent_inode = match self.find_inode(parent_nodeid) {
             Some(i) => i.clone(),
-            None => return libc::EBADF as i32,
+            None => return libc::EBADF,
         };
 
         let (stat, ret) = fstat_at(
@@ -912,7 +912,7 @@ impl FileSystem {
 
         match self.inodes.get(&key) {
             Some(i) => i.clone(),
-            None => return libc::EIO as i32,
+            None => return libc::EIO,
         };
 
         let ret = unlinkat(&parent_inode.file, name, 0);
@@ -933,7 +933,7 @@ impl FileSystem {
     pub fn rmdir(&mut self, parent_nodeid: usize, name: CString) -> i32 {
         let parent_inode = match self.find_inode(parent_nodeid) {
             Some(i) => i.clone(),
-            None => return libc::EBADF as i32,
+            None => return libc::EBADF,
         };
 
         let (stat, ret) = fstat_at(
@@ -952,7 +952,7 @@ impl FileSystem {
 
         match self.inodes.get(&key) {
             Some(i) => i.clone(),
-            None => return libc::EIO as i32,
+            None => return libc::EIO,
         };
 
         let ret = unlinkat(&parent_inode.file, name, libc::AT_REMOVEDIR);
@@ -983,14 +983,14 @@ impl FileSystem {
         let parent_inode = match self.find_inode(parent_nodeid) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
         let newparent_inode = match self.find_inode(newparent_nodeid) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1010,7 +1010,7 @@ impl FileSystem {
 
         match self.inodes.get(&key) {
             Some(_) => {}
-            None => return libc::EIO as i32,
+            None => return libc::EIO,
         };
 
         rename(&parent_inode.file, oldname, &newparent_inode.file, newname)
@@ -1036,12 +1036,12 @@ impl FileSystem {
         let proc_file = self.proc_dir.try_clone().unwrap();
         let parent_inode = match self.find_inode(parent_nodeid) {
             Some(i) => i.clone(),
-            None => return libc::EBADF as i32,
+            None => return libc::EBADF,
         };
 
         let inode = match self.find_mut_inode(old_nodeid) {
             Some(inode_) => inode_,
-            None => return libc::EBADF as i32,
+            None => return libc::EBADF,
         };
 
         let ret = linkat(
@@ -1088,12 +1088,12 @@ impl FileSystem {
         let (inode_fd, file_type) = match self.find_inode(node_id) {
             Some(i) => (i.as_raw_fd(), i.file_type),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
         if file_type & libc::S_IFREG == 0 && file_type & libc::S_IFDIR == 0 {
-            return libc::EBADF as i32;
+            return libc::EBADF;
         }
 
         let (file_opt, ret) = open_at(
@@ -1125,7 +1125,7 @@ impl FileSystem {
                 *fd = file.as_raw_fd();
             }
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         }
 
@@ -1144,7 +1144,7 @@ impl FileSystem {
                 *fd = file.as_raw_fd();
             }
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         }
 
@@ -1162,7 +1162,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1202,12 +1202,12 @@ impl FileSystem {
             let (inode_fd, file_type) = match self.find_inode(fh) {
                 Some(i) => (i.as_raw_fd(), i.file_type),
                 None => {
-                    return libc::EBADF as i32;
+                    return libc::EBADF;
                 }
             };
 
             if file_type & libc::S_IFREG == 0 && file_type & libc::S_IFDIR == 0 {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
 
             let (file_opt, ret_) = open_at(
@@ -1223,7 +1223,7 @@ impl FileSystem {
             if let Some(file) = file_opt {
                 ret = fsync(&file, datasync);
             } else {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         } else {
             match self.file_map.get_value(fh) {
@@ -1231,7 +1231,7 @@ impl FileSystem {
                     ret = fsync(file, datasync);
                 }
                 _ => {
-                    return libc::EBADF as i32;
+                    return libc::EBADF;
                 }
             }
         }
@@ -1260,7 +1260,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1278,7 +1278,7 @@ impl FileSystem {
             if let Some(file) = file_opt {
                 fset_xattr(&file, name, value, size, flags)
             } else {
-                libc::EBADF as i32
+                libc::EBADF
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
@@ -1314,7 +1314,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1338,7 +1338,7 @@ impl FileSystem {
                     buff.append(&mut buf);
                 }
             } else {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
@@ -1377,7 +1377,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1401,7 +1401,7 @@ impl FileSystem {
                     buff.append(&mut buf);
                 }
             } else {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
@@ -1438,7 +1438,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1459,7 +1459,7 @@ impl FileSystem {
                     return ret;
                 }
             } else {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         } else {
             if fchdir(&self.proc_dir) != FUSE_OK {
@@ -1553,7 +1553,7 @@ impl FileSystem {
         let inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1567,7 +1567,7 @@ impl FileSystem {
             return FUSE_OK;
         }
 
-        libc::EBADF as i32
+        libc::EBADF
     }
 
     /// read a directory stream with the directory handler in the host filesystem.
@@ -1592,7 +1592,7 @@ impl FileSystem {
         let dir_inode = match self.find_inode(node_id) {
             Some(i) => i.clone(),
             None => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1600,12 +1600,12 @@ impl FileSystem {
             Some(file) => {
                 let (dirp_opt, ret) = fdopen_dir(file.as_raw_fd());
                 if ret != FUSE_OK {
-                    return libc::EBADF as i32;
+                    return libc::EBADF;
                 }
                 dirp_opt.unwrap()
             }
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1642,7 +1642,7 @@ impl FileSystem {
             let (entry_size, gap) = match round_up((only_entry_size + name_len) as u64, 8) {
                 Some(v) => (v as u32, v as usize - (only_entry_size + name_len)),
                 _ => {
-                    return libc::EINVAL as i32;
+                    return libc::EINVAL;
                 }
             };
             if entry_size > remain {
@@ -1683,7 +1683,7 @@ impl FileSystem {
                 buff.extend_from_slice(
                     FuseDirentplus {
                         entry_out: FuseEntryOut {
-                            nodeid: son_nodeid as u64,
+                            nodeid: son_nodeid,
                             generation: 0,
                             entry_valid: 0,
                             entry_valid_nsec: 0,
@@ -1736,7 +1736,7 @@ impl FileSystem {
                 return ret;
             }
         } else {
-            return libc::EBADF as i32;
+            return libc::EBADF;
         }
 
         FUSE_OK
@@ -1792,7 +1792,7 @@ impl FileSystem {
         file_lock_in: &FuseFileLock,
     ) -> i32 {
         if is_blocking {
-            return libc::EOPNOTSUPP as i32;
+            return libc::EOPNOTSUPP;
         }
 
         let (file_opt, ret) = self.create_file_lock(node_id, owner);
@@ -1843,7 +1843,7 @@ impl FileSystem {
                 return ret;
             }
         } else {
-            return libc::EBADF as i32;
+            return libc::EBADF;
         }
 
         FUSE_OK
@@ -1871,7 +1871,7 @@ impl FileSystem {
         let parent_dir = match self.find_inode(in_header.nodeid as usize) {
             Some(i) => i.clone(),
             _ => {
-                return libc::EBADF as i32;
+                return libc::EBADF;
             }
         };
 
@@ -1934,7 +1934,7 @@ impl FileSystem {
                 return ret;
             }
         } else {
-            return libc::EBADF as i32;
+            return libc::EBADF;
         }
 
         FUSE_OK
@@ -1957,7 +1957,7 @@ impl FileSystem {
             }
             *outoffset = offset_tmp;
         } else {
-            return libc::EBADF as i32;
+            return libc::EBADF;
         }
 
         FUSE_OK

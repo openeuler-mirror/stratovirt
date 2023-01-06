@@ -193,7 +193,7 @@ impl ConsoleHandler {
             }
             if let Some(output) = &mut self.chardev.lock().unwrap().output {
                 let mut locked_output = output.lock().unwrap();
-                if let Err(e) = locked_output.write_all(&buffer[..read_count as usize]) {
+                if let Err(e) = locked_output.write_all(&buffer[..read_count]) {
                     error!("Failed to write to console output: {:?}", e);
                 }
                 if let Err(e) = locked_output.flush() {

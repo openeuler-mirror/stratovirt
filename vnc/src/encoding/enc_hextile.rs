@@ -132,7 +132,7 @@ fn compress_each_tile<'a>(
         _ => {}
     }
 
-    buf.append(&mut (flag as u8).to_be_bytes().to_vec()); // SubEncoding-mask.
+    buf.append(&mut flag.to_be_bytes().to_vec()); // SubEncoding-mask.
     if flag & RAW == 0 {
         if flag & BACKGROUND_SPECIFIC != 0 {
             write_pixel(

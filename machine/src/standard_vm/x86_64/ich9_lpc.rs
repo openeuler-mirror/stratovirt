@@ -110,7 +110,7 @@ impl LPCBridge {
         let cloned_reset_fd = self.reset_req.try_clone().unwrap();
         let write_ops = move |data: &[u8], _addr: GuestAddress, _offset: u64| -> bool {
             let value: u8 = match data.len() {
-                1 => data[0] as u8,
+                1 => data[0],
                 n => {
                     error!("Invalid data length {}", n);
                     return false;

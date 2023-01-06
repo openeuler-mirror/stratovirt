@@ -240,7 +240,7 @@ pub fn init_multifunction(
     if multifunction {
         header_type |= HEADER_TYPE_MULTIFUNC as u16;
     }
-    le_write_u16(config, HEADER_TYPE as usize, header_type as u16)?;
+    le_write_u16(config, HEADER_TYPE as usize, header_type)?;
 
     // Allow two ways of multifunction bit:
     // 1. The multifunction bit of all devices must be set;

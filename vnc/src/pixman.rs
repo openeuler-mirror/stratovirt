@@ -115,14 +115,14 @@ pub fn get_image_width(image: *mut pixman_image_t) -> i32 {
     if image.is_null() {
         return 0;
     }
-    unsafe { pixman_image_get_width(image as *mut pixman_image_t) as i32 }
+    unsafe { pixman_image_get_width(image as *mut pixman_image_t) }
 }
 
 pub fn get_image_height(image: *mut pixman_image_t) -> i32 {
     if image.is_null() {
         return 0;
     }
-    unsafe { pixman_image_get_height(image as *mut pixman_image_t) as i32 }
+    unsafe { pixman_image_get_height(image as *mut pixman_image_t) }
 }
 
 pub fn get_image_stride(image: *mut pixman_image_t) -> i32 {

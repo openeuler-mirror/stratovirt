@@ -104,7 +104,7 @@ fn load_initrd(
 
     let mut initrd_image = File::open(config.initrd.as_ref().unwrap())
         .with_context(|| anyhow!(BootLoaderError::BootLoaderOpenInitrd))?;
-    let initrd_size = initrd_image.metadata().unwrap().len() as u64;
+    let initrd_size = initrd_image.metadata().unwrap().len();
     let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
 
     load_image(&mut initrd_image, 0, FwCfgEntryType::InitrdData, fwcfg)

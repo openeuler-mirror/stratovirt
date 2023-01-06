@@ -275,7 +275,7 @@ pub fn write_data_u16(data: &mut [u8], value: u16) -> bool {
     match data.len() {
         1 => data[0] = value as u8,
         2 => {
-            LittleEndian::write_u16(data, value as u16);
+            LittleEndian::write_u16(data, value);
         }
         n => {
             error!("Invalid data length {} for reading value {}", n, value);

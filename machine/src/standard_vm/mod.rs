@@ -628,7 +628,7 @@ trait AcpiBuilder {
 
         let slit_begin = StdMachine::add_table_to_loader(acpi_data, loader, &slit)
             .with_context(|| "Fail to add SLIT table to loader")?;
-        Ok(slit_begin as u64)
+        Ok(slit_begin)
     }
 
     /// Build ACPI XSDT table, returns the offset of ACPI XSDT table in `acpi_data`.

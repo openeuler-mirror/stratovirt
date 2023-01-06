@@ -70,7 +70,7 @@ fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
         setup_size = 4;
     }
     setup_size = (setup_size + 1) << 9;
-    kernel_image.seek(SeekFrom::Start(setup_size as u64))?;
+    kernel_image.seek(SeekFrom::Start(setup_size))?;
 
     Ok(boot_hdr)
 }
@@ -142,7 +142,7 @@ fn load_initrd(
 
     let mut initrd_image = File::open(config.initrd.as_ref().unwrap())
         .with_context(|| anyhow!(BootLoaderError::BootLoaderOpenInitrd))?;
-    let initrd_size = initrd_image.metadata().unwrap().len() as u64;
+    let initrd_size = initrd_image.metadata().unwrap().len();
     let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
 
     load_image(&mut initrd_image, initrd_addr, sys_mem).with_context(|| "Failed to load image")?;

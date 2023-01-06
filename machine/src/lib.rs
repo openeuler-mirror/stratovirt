@@ -205,20 +205,19 @@ pub trait MachineOps {
         }
 
         if let Some(boot_config) = boot_cfg {
-            for cpu_index in 0..nr_cpus as usize {
-                cpus[cpu_index as usize]
-                    .realize(
-                        boot_config,
-                        topology,
-                        #[cfg(target_arch = "aarch64")]
-                        &vcpu_cfg.unwrap_or_default(),
+            for (cpu_index, cpu) in cpus.iter().enumerate() {
+                cpu.realize(
+                    boot_config,
+                    topology,
+                    #[cfg(target_arch = "aarch64")]
+                    &vcpu_cfg.unwrap_or_default(),
+                )
+                .with_context(|| {
+                    format!(
+                        "Failed to realize arch cpu register/features for CPU {}/KVM",
+                        cpu_index
                     )
-                    .with_context(|| {
-                        format!(
-                            "Failed to realize arch cpu register/features for CPU {}/KVM",
-                            cpu_index
-                        )
-                    })?;
+                })?;
             }
         }
 
@@ -1413,11 +1412,10 @@ pub trait MachineOps {
         }
 
         let nr_vcpus = cpus.len();
-        let cpus_thread_barrier = Arc::new(Barrier::new((nr_vcpus + 1) as usize));
-        for cpu_index in 0..nr_vcpus {
+        let cpus_thread_barrier = Arc::new(Barrier::new(nr_vcpus + 1));
+        for (cpu_index, cpu) in cpus.iter().enumerate() {
             let cpu_thread_barrier = cpus_thread_barrier.clone();
-            let cpu = cpus[cpu_index as usize].clone();
-            if let Err(e) = CPU::start(cpu, cpu_thread_barrier, paused) {
+            if let Err(e) = CPU::start(cpu.clone(), cpu_thread_barrier, paused) {
                 self.deactive_drive_files()?;
                 return Err(anyhow!("Failed to run vcpu{}, {:?}", cpu_index, e));
             }

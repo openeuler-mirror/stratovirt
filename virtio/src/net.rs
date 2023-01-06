@@ -946,7 +946,7 @@ fn get_net_header(iovec: &[libc::iovec], buf: &mut [u8]) -> Result<usize> {
     let mut end: usize = 0;
 
     for elem in iovec {
-        end = cmp::min(start + elem.iov_len as usize, buf.len());
+        end = cmp::min(start + elem.iov_len, buf.len());
         mem_to_buf(&mut buf[start..end], elem.iov_base as u64)?;
         if end >= buf.len() {
             break;
@@ -1204,7 +1204,7 @@ fn get_default_mac_addr() -> Result<[u8; MAC_ADDR_LEN]> {
     let mut locked_mac_table = USED_MAC_TABLE.lock().unwrap();
     for i in FIRST_DEFAULT_MAC[MAC_ADDR_LEN - 1]..MAX_MAC_ADDR_NUM as u8 {
         if locked_mac_table[i as usize] == 0 {
-            mac[MAC_ADDR_LEN - 1] = i as u8;
+            mac[MAC_ADDR_LEN - 1] = i;
             locked_mac_table[i as usize] = 1;
             return Ok(mac);
         }
