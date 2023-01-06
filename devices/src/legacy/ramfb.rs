@@ -136,6 +136,10 @@ impl RamfbState {
 
 impl FwCfgWriteCallback for RamfbState {
     fn write_callback(&mut self, data: Vec<u8>, _start: u64, _len: usize) {
+        if data.len() < 28 {
+            error!("RamfbCfg data format is incorrect");
+            return;
+        }
         let addr = u64::from_be_bytes(
             data.as_slice()
                 .split_at(size_of::<u64>())
