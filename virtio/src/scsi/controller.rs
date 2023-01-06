@@ -205,6 +205,7 @@ impl VirtioDevice for ScsiCntlr {
 
     /// Get the count of virtio device queues.
     fn queue_num(&self) -> usize {
+        // Note: self.config.queues <= MAX_VIRTIO_QUEUE(32).
         self.config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM
     }
 
@@ -244,14 +245,15 @@ impl VirtioDevice for ScsiCntlr {
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let data_len = data.len();
         let config_slice = self.state.config_space.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset,
-                config_len as u64
-            )));
+        let config_len = config_slice.len() as u64;
+
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
 
         // Guest can only set sense_size and cdb_size, which are fixed default values
@@ -577,6 +579,9 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
         }
 
         let mut queue_lock = self.queue.lock().unwrap();
+        // Note: U(response) is the header part of in_iov and self.data_len is the rest part of the in_iov or
+        // the out_iov. in_iov and out_iov total len is no more than DESC_CHAIN_MAX_TOTAL_LEN(1 << 32). So,
+        // it will not overflow here.
         if let Err(ref e) = queue_lock.vring.add_used(
             mem_space,
             self.desc_index,
