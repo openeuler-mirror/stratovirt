@@ -47,6 +47,11 @@ pub struct RamfbState {
     sys_mem: Arc<AddressSpace>,
 }
 
+// SAFETY: The type of image, the field of the struct DisplaySurface
+// is the raw pointer. create_display_surface() method will create
+// image object. The memory that the image pointer refers to is
+// modified by guest OS and accessed by vnc. So implement Sync and
+// Send is safe.
 unsafe impl Sync for RamfbState {}
 unsafe impl Send for RamfbState {}
 
@@ -103,7 +108,9 @@ impl RamfbState {
             format,
             ..Default::default()
         };
-        // pixman_image_create_bits() is C function, it's an unsafe function.
+        // SAFETY: pixman_image_create_bits() is C function. All
+        // parameters passed of the function have been checked.
+        // It returns a raw pointer.
         unsafe {
             ds.image = pixman_image_create_bits(
                 format,
@@ -113,6 +120,12 @@ impl RamfbState {
                 stride as i32,
             );
         }
+
+        if ds.image.is_null() {
+            error!("Failed to create the surface of Ramfb!");
+            return;
+        }
+
         self.surface = Some(ds);
     }
 
