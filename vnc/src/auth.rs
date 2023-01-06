@@ -255,7 +255,7 @@ impl ClientIoHandler {
             // Authentication related information.
             let serverout = unsafe { CStr::from_ptr(serverout as *const c_char) };
             let auth_message = String::from(serverout.to_str().unwrap());
-            buf.append(&mut ((serverout_len + 1) as u32).to_be_bytes().to_vec());
+            buf.append(&mut (serverout_len + 1).to_be_bytes().to_vec());
             buf.append(&mut auth_message.as_bytes().to_vec());
         } else {
             buf.append(&mut (0_u32).to_be_bytes().to_vec());

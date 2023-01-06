@@ -135,7 +135,7 @@ impl RTC {
             tick_offset: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("time wrong")
-                .as_secs() as u64,
+                .as_secs(),
             base_time: Instant::now(),
         };
 

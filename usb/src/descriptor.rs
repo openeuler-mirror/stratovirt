@@ -368,7 +368,7 @@ impl UsbDescriptorOps for UsbDevice {
                     == USB_DIRECTION_DEVICE_TO_HOST;
                 let ep = iface.endpoints[e as usize].endpoint_desc.bEndpointAddress
                     & USB_ENDPOINT_ADDRESS_NUMBER_MASK;
-                let mut usb_ep = self.get_mut_endpoint(in_direction, ep as u8);
+                let mut usb_ep = self.get_mut_endpoint(in_direction, ep);
                 usb_ep.ep_type = iface.endpoints[e as usize].endpoint_desc.bmAttributes
                     & USB_ENDPOINT_ATTR_TRANSFER_TYPE_MASK;
             }

@@ -160,7 +160,7 @@ impl VirtioDevice for Fs {
     }
 
     fn device_type(&self) -> u32 {
-        VIRTIO_TYPE_FS as u32
+        VIRTIO_TYPE_FS
     }
 
     fn queue_num(&self) -> usize {

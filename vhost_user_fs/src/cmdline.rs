@@ -87,7 +87,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
 }
 
 /// Filesystem configuration parsed from command line for the process.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FsConfig {
     /// Source directory in host which can be accessed by guest.
     pub source_dir: String,
@@ -99,18 +99,6 @@ pub struct FsConfig {
     pub root_dir: String,
     /// File object for /proc/self/fd.
     pub proc_dir_opt: Option<File>,
-}
-
-impl Default for FsConfig {
-    fn default() -> Self {
-        FsConfig {
-            source_dir: String::from(""),
-            sock_path: String::from(""),
-            rlimit_nofile: None,
-            root_dir: String::from(""),
-            proc_dir_opt: None,
-        }
-    }
 }
 
 impl FsConfig {

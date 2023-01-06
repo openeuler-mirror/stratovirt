@@ -365,7 +365,7 @@ impl XhciEvent {
             status: self.length | (self.ccode as u32) << EVENT_TRB_CCODE_SHIFT,
             control: (self.slot_id as u32) << EVENT_TRB_SLOT_ID_SHIFT
                 | (self.ep_id as u32) << EVENT_TRB_EP_ID_SHIFT
-                | self.flags as u32
+                | self.flags
                 | (self.trb_type as u32) << TRB_TYPE_SHIFT,
             addr: 0,
             ccs: false,
@@ -1582,7 +1582,7 @@ impl XhciDevice {
     /// Used for device to wakeup endpoint
     pub fn wakeup_endpoint(&mut self, slot_id: u32, ep: &UsbEndpoint) -> Result<()> {
         let ep_id = endpoint_number_to_id(ep.in_direction, ep.ep_number);
-        self.kick_endpoint(slot_id as u32, ep_id as u32)?;
+        self.kick_endpoint(slot_id, ep_id as u32)?;
         Ok(())
     }
 

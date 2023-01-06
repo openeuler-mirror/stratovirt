@@ -625,7 +625,7 @@ impl AcpiBuilder for StdMachine {
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
             .with_context(|| "Fail to add DSTD table to loader")?;
-        Ok(dsdt_begin as u64)
+        Ok(dsdt_begin)
     }
 
     fn build_madt_table(
@@ -662,7 +662,7 @@ impl AcpiBuilder for StdMachine {
 
         let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
             .with_context(|| "Fail to add DSTD table to loader")?;
-        Ok(madt_begin as u64)
+        Ok(madt_begin)
     }
 
     fn build_srat_cpu(&self, proximity_domain: u32, node: &NumaNode, srat: &mut AcpiTable) {
@@ -777,7 +777,7 @@ impl AcpiBuilder for StdMachine {
 
         let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
             .with_context(|| "Fail to add SRAT table to loader")?;
-        Ok(srat_begin as u64)
+        Ok(srat_begin)
     }
 }
 

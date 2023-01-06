@@ -793,7 +793,7 @@ impl VringOps for SplitVring {
         self.next_used += Wrapping(1);
         sys_mem
             .write_object_direct(
-                &(self.next_used.0 as u16),
+                &(self.next_used.0),
                 self.addr_cache.used_ring_host + VRING_IDX_POSITION,
             )
             .with_context(|| "Failed to write next used idx")?;

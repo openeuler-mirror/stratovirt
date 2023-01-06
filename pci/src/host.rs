@@ -180,8 +180,8 @@ impl PciHost {
 
             let mut offset: u32 =
                 (locked_hb.config_addr & !CONFIG_ADDRESS_ENABLE_MASK) + offset as u32;
-            let bus_num = ((offset as u32 >> PIO_BUS_SHIFT) & CONFIG_BUS_MASK) as u8;
-            let devfn = ((offset as u32 >> PIO_DEVFN_SHIFT) & CONFIG_DEVFN_MASK) as u8;
+            let bus_num = ((offset >> PIO_BUS_SHIFT) & CONFIG_BUS_MASK) as u8;
+            let devfn = ((offset >> PIO_DEVFN_SHIFT) & CONFIG_DEVFN_MASK) as u8;
             match locked_hb.find_device(bus_num, devfn) {
                 Some(dev) => {
                     offset &= PIO_OFFSET_MASK;
@@ -203,8 +203,8 @@ impl PciHost {
 
             let mut offset: u32 =
                 (locked_hb.config_addr & !CONFIG_ADDRESS_ENABLE_MASK) + offset as u32;
-            let bus_num = ((offset as u32 >> PIO_BUS_SHIFT) & CONFIG_BUS_MASK) as u8;
-            let devfn = ((offset as u32 >> PIO_DEVFN_SHIFT) & CONFIG_DEVFN_MASK) as u8;
+            let bus_num = ((offset >> PIO_BUS_SHIFT) & CONFIG_BUS_MASK) as u8;
+            let devfn = ((offset >> PIO_DEVFN_SHIFT) & CONFIG_DEVFN_MASK) as u8;
             if let Some(dev) = locked_hb.find_device(bus_num, devfn) {
                 offset &= PIO_OFFSET_MASK;
                 dev.lock().unwrap().write_config(offset as usize, data);

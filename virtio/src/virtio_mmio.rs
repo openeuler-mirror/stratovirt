@@ -214,7 +214,7 @@ impl VirtioMmioCommonConfig {
         let value = match offset {
             MAGIC_VALUE_REG => MMIO_MAGIC_VALUE,
             VERSION_REG => MMIO_VERSION,
-            DEVICE_ID_REG => device.lock().unwrap().device_type() as u32,
+            DEVICE_ID_REG => device.lock().unwrap().device_type(),
             VENDOR_ID_REG => VENDOR_ID,
             DEVICE_FEATURES_REG => {
                 let mut features = device
@@ -482,7 +482,7 @@ impl VirtioMmioDevice {
                     }
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
-                interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
                     .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
@@ -523,11 +523,11 @@ impl SysBusDevOps for VirtioMmioDevice {
                     .device
                     .lock()
                     .unwrap()
-                    .read_config(offset as u64 - 0x100, data)
+                    .read_config(offset - 0x100, data)
                 {
                     error!(
                         "Failed to read virtio-dev config space {} type: {} {:?}",
-                        offset as u64 - 0x100,
+                        offset - 0x100,
                         self.device.lock().unwrap().device_type(),
                         e,
                     );
@@ -595,11 +595,11 @@ impl SysBusDevOps for VirtioMmioDevice {
                         .device
                         .lock()
                         .unwrap()
-                        .write_config(offset as u64 - 0x100, data)
+                        .write_config(offset - 0x100, data)
                     {
                         error!(
                             "Failed to write virtio-dev config space {}, type: {}, {:?}",
-                            offset as u64 - 0x100,
+                            offset - 0x100,
                             self.device.lock().unwrap().device_type(),
                             e,
                         );

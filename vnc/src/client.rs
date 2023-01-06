@@ -361,16 +361,13 @@ impl ClientIoHandler {
         let mut locked_buffer = client.out_buffer.lock().unwrap();
         while let Some(bytes) = locked_buffer.read_front_chunk() {
             let message_len = bytes.len();
-            let send_len: usize;
-            match self.write_msg(bytes) {
-                Ok(ret) => {
-                    send_len = ret;
-                }
+            let send_len = match self.write_msg(bytes) {
+                Ok(ret) => ret,
                 Err(_e) => {
                     self.client.conn_state.lock().unwrap().dis_conn = true;
                     return;
                 }
-            }
+            };
 
             locked_buffer.remove_front(send_len);
             if send_len != message_len {
@@ -717,16 +714,16 @@ impl ClientIoHandler {
         // First color.
         buf.append(&mut (0_u16).to_be_bytes().to_vec());
         // Number of colors.
-        buf.append(&mut (NUM_OF_COLORMAP as u16).to_be_bytes().to_vec());
+        buf.append(&mut NUM_OF_COLORMAP.to_be_bytes().to_vec());
 
         let pf = self.client.client_dpm.lock().unwrap().pf.clone();
-        for i in 0..NUM_OF_COLORMAP as u16 {
+        for i in 0..NUM_OF_COLORMAP {
             let r = ((i >> pf.red.shift) & pf.red.max as u16) << (16 - pf.red.bits);
             let g = ((i >> pf.green.shift) & pf.green.max as u16) << (16 - pf.green.bits);
             let b = ((i >> pf.blue.shift) & pf.blue.max as u16) << (16 - pf.blue.bits);
-            buf.append(&mut (r as u16).to_be_bytes().to_vec());
-            buf.append(&mut (g as u16).to_be_bytes().to_vec());
-            buf.append(&mut (b as u16).to_be_bytes().to_vec());
+            buf.append(&mut r.to_be_bytes().to_vec());
+            buf.append(&mut g.to_be_bytes().to_vec());
+            buf.append(&mut b.to_be_bytes().to_vec());
         }
 
         let client = self.client.clone();
@@ -1099,7 +1096,7 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
     loop {
         // Find the first non-zero bit in dirty bitmap.
         let offset = locked_dirty.find_next_bit(y as usize * bpl).unwrap() as u64;
-        if offset >= height as u64 * bpl as u64 {
+        if offset >= height * bpl as u64 {
             break;
         }
 
@@ -1123,7 +1120,7 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
 
         h = i - y;
         x2 = cmp::min(x2, width / DIRTY_PIXELS_NUM as u64);
-        if x2 > x as u64 {
+        if x2 > x {
             rects.push(Rectangle::new(
                 (x * DIRTY_PIXELS_NUM as u64) as i32,
                 y as i32,
@@ -1195,16 +1192,16 @@ pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
     let mut locked_dpm = client.client_dpm.lock().unwrap();
     locked_dpm.pf.init_pixelformat();
     let big_endian: u8 = u8::from(cfg!(target_endian = "big"));
-    buf.append(&mut (locked_dpm.pf.pixel_bits as u8).to_be_bytes().to_vec()); // Bit per pixel.
-    buf.append(&mut (locked_dpm.pf.depth as u8).to_be_bytes().to_vec()); // Depth.
-    buf.append(&mut (big_endian as u8).to_be_bytes().to_vec()); // Big-endian flag.
+    buf.append(&mut locked_dpm.pf.pixel_bits.to_be_bytes().to_vec()); // Bit per pixel.
+    buf.append(&mut locked_dpm.pf.depth.to_be_bytes().to_vec()); // Depth.
+    buf.append(&mut big_endian.to_be_bytes().to_vec()); // Big-endian flag.
     buf.append(&mut (1_u8).to_be_bytes().to_vec()); // True-color flag.
     buf.append(&mut (locked_dpm.pf.red.max as u16).to_be_bytes().to_vec()); // Red max.
     buf.append(&mut (locked_dpm.pf.green.max as u16).to_be_bytes().to_vec()); // Green max.
     buf.append(&mut (locked_dpm.pf.blue.max as u16).to_be_bytes().to_vec()); // Blue max.
-    buf.append(&mut (locked_dpm.pf.red.shift as u8).to_be_bytes().to_vec()); // Red shift.
-    buf.append(&mut (locked_dpm.pf.green.shift as u8).to_be_bytes().to_vec()); // Green shift.
-    buf.append(&mut (locked_dpm.pf.blue.shift as u8).to_be_bytes().to_vec()); // Blue shift.
+    buf.append(&mut locked_dpm.pf.red.shift.to_be_bytes().to_vec()); // Red shift.
+    buf.append(&mut locked_dpm.pf.green.shift.to_be_bytes().to_vec()); // Green shift.
+    buf.append(&mut locked_dpm.pf.blue.shift.to_be_bytes().to_vec()); // Blue shift.
     buf.append(&mut [0; 3].to_vec()); // Padding.
     drop(locked_dpm);
 }
@@ -1312,7 +1309,7 @@ pub fn display_cursor_define(
             cursor.hot_y as i32,
             cursor.width as i32,
             cursor.height as i32,
-            ENCODING_ALPHA_CURSOR as i32,
+            ENCODING_ALPHA_CURSOR,
             buf,
         );
         buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
@@ -1335,7 +1332,7 @@ pub fn display_cursor_define(
             cursor.hot_y as i32,
             cursor.width as i32,
             cursor.height as i32,
-            ENCODING_RICH_CURSOR as i32,
+            ENCODING_RICH_CURSOR,
             buf,
         );
         let dpm = client.client_dpm.lock().unwrap().clone();

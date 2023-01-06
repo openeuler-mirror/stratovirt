@@ -235,7 +235,7 @@ pub fn readlinkat(file: &File, path: CString) -> (Option<Vec<u8>>, i32) {
     };
 
     if ret == -1 {
-        return (None, errno::errno().0 as i32);
+        return (None, errno::errno().0);
     }
 
     buf.resize(ret as usize, 0);
@@ -257,7 +257,7 @@ pub fn symlinkat(file: &File, name: CString, link_name: CString) -> i32 {
     let ret = unsafe { libc::symlinkat(link_name.as_ptr(), file.as_raw_fd(), name.as_ptr()) };
 
     if ret == -1 {
-        return errno::errno().0 as i32;
+        return errno::errno().0;
     }
 
     FUSE_OK
@@ -329,7 +329,7 @@ pub fn mknodat(file: &File, name: CString, mode: u32, rdev: u32) -> i32 {
     let ret = unsafe { libc::mknodat(file.as_raw_fd(), name.as_ptr(), mode, rdev as u64) };
 
     if ret == -1 {
-        return errno::errno().0 as i32;
+        return errno::errno().0;
     }
 
     FUSE_OK
@@ -366,7 +366,7 @@ pub fn unlinkat(file: &File, name: CString, flags: i32) -> i32 {
     let ret = unsafe { libc::unlinkat(file.as_raw_fd(), name.as_ptr(), flags) };
 
     if ret == -1 {
-        return errno::errno().0 as i32;
+        return errno::errno().0;
     }
 
     FUSE_OK
@@ -395,7 +395,7 @@ pub fn rename(olddir: &File, name: CString, newdir: &File, newname: CString) -> 
     };
 
     if ret != FUSE_OK {
-        return errno::errno().0 as i32;
+        return errno::errno().0;
     }
 
     FUSE_OK
@@ -432,7 +432,7 @@ pub fn linkat(
     };
 
     if ret == -1 {
-        return errno::errno().0 as i32;
+        return errno::errno().0;
     }
 
     FUSE_OK
@@ -816,7 +816,7 @@ pub fn fallocate(file: &File, mode: u32, offset: u64, length: u64) -> i32 {
         unsafe { libc::fallocate(file.as_raw_fd(), mode as i32, offset as i64, length as i64) };
 
     if ret == -1 {
-        return errno::errno().0 as i32;
+        return errno::errno().0;
     }
 
     FUSE_OK
@@ -834,7 +834,7 @@ pub fn lseek(file: &File, offset: u64, whence: u32) -> (u64, i32) {
     let ret = unsafe { libc::lseek(file.as_raw_fd(), offset as i64, whence as i32) };
 
     if ret == -1 {
-        return (0, errno::errno().0 as i32);
+        return (0, errno::errno().0);
     }
 
     (ret as u64, FUSE_OK)
@@ -853,7 +853,7 @@ pub fn set_rlimit(rlim_cur: u64, rlim_max: u64) -> i32 {
     let ret = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
 
     if ret == -1 {
-        return errno::errno().0 as i32;
+        return errno::errno().0;
     }
 
     FUSE_OK

@@ -263,7 +263,7 @@ impl VfioPciDevice {
                 table_offset: (table & MSIX_TABLE_OFFSET) as u64,
                 table_size: (enteries * MSIX_TABLE_ENTRY_SIZE) as u64,
             },
-            enteries: enteries as u16,
+            enteries,
             vfio_irq,
         })
     }
@@ -389,7 +389,7 @@ impl VfioPciDevice {
             let bar_region = if i == table_bar {
                 region
                     .add_subregion(
-                        Region::init_io_region(table_size as u64, table_ops.clone()),
+                        Region::init_io_region(table_size, table_ops.clone()),
                         table_offset,
                     )
                     .with_context(|| anyhow!(VfioError::AddRegBar(i as usize)))?;

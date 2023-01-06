@@ -315,7 +315,7 @@ impl Hid {
         self.convert_to_hid_code();
         data[0] = self.keyboard.modifiers as u8;
         data[1] = 0;
-        let len = (data.len() - 2) as usize;
+        let len = data.len() - 2;
         if self.keyboard.key_num > 6 {
             for i in 0..len {
                 data[i + 2] = HID_USAGE_ERROR_ROLLOVER;

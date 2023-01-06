@@ -266,8 +266,8 @@ impl RootPort {
         // Only unplug device when the slot is on
         // Don't unplug when slot is off for guest OS overwrite the off status before slot on.
         if (status & PCI_EXP_SLTSTA_PDS != 0)
-            && (val as u16 & PCI_EXP_SLTCTL_PCC == PCI_EXP_SLTCTL_PCC)
-            && (val as u16 & PCI_EXP_SLTCTL_PWR_IND_OFF == PCI_EXP_SLTCTL_PWR_IND_OFF)
+            && (val & PCI_EXP_SLTCTL_PCC == PCI_EXP_SLTCTL_PCC)
+            && (val & PCI_EXP_SLTCTL_PWR_IND_OFF == PCI_EXP_SLTCTL_PWR_IND_OFF)
             && (old_ctl & PCI_EXP_SLTCTL_PCC != PCI_EXP_SLTCTL_PCC
                 || old_ctl & PCI_EXP_SLTCTL_PWR_IND_OFF != PCI_EXP_SLTCTL_PWR_IND_OFF)
         {
