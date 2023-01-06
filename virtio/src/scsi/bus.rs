@@ -543,6 +543,7 @@ impl ScsiRequest {
                 iov_len: iov.iov_len,
             };
             aiocb.iovec.push(iovec);
+            // Note: total len of each req is no more than DESC_CHAIN_MAX_TOTAL_LEN (1 << 32).
             aiocb.nbytes += iov.iov_len;
         }
 
@@ -1744,6 +1745,10 @@ fn scsi_command_emulate_get_event_status_notification(
 /// MSF values are converted to LBA values via such formula:
 /// lba = ((m * CD_SECS) + s) * CD_FRAMES + f) - CD_MSF_OFFSET.
 fn lba_to_msf(lba: u32) -> Vec<u8> {
+    // Note: lba is logical block address and it is in sectors.
+    // Max lba is u32::MAX * 512byte / 1024 / 1024 / 1024 = 2047GB.
+    // But, dvd size is less than 4.7G usually and cd size is less than 700M usually.
+    // So it will not overflow here.
     let minute = ((lba + CD_MSF_OFFSET) / CD_FRAMES / CD_SECS) as u8;
     let second = ((lba + CD_MSF_OFFSET) / CD_FRAMES % CD_SECS) as u8;
     let frame = ((lba + CD_MSF_OFFSET) % CD_FRAMES) as u8;
