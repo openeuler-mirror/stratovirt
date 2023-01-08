@@ -16,6 +16,7 @@ use super::{error::ConfigError, pci_args_check};
 use crate::config::{
     CmdParser, ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
+use util::aio::AioEngine;
 
 /// According to Virtio Spec.
 /// Max_channel should be 0.
@@ -152,7 +153,7 @@ pub fn parse_scsi_controller(
     Ok(cntlr_cfg)
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ScsiDevConfig {
     /// Scsi Device id.
     pub id: String,
@@ -167,13 +168,31 @@ pub struct ScsiDevConfig {
     /// If true, use direct access io.
     pub direct: bool,
     /// Async IO type.
-    pub aio_type: Option<String>,
+    pub aio_type: AioEngine,
     /// Boot order.
     pub boot_index: Option<u8>,
     /// Scsi four level hierarchical address(host, channel, target, lun).
     pub channel: u8,
     pub target: u8,
     pub lun: u16,
+}
+
+impl Default for ScsiDevConfig {
+    fn default() -> Self {
+        ScsiDevConfig {
+            id: "".to_string(),
+            path_on_host: "".to_string(),
+            serial: None,
+            bus: "".to_string(),
+            read_only: false,
+            direct: true,
+            aio_type: AioEngine::Native,
+            boot_index: None,
+            channel: 0,
+            target: 0,
+            lun: 0,
+        }
+    }
 }
 
 pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result<ScsiDevConfig> {
@@ -251,7 +270,7 @@ pub fn parse_scsi_device(vm_config: &mut VmConfig, drive_config: &str) -> Result
         scsi_dev_cfg.path_on_host = drive_arg.path_on_host.clone();
         scsi_dev_cfg.read_only = drive_arg.read_only;
         scsi_dev_cfg.direct = drive_arg.direct;
-        scsi_dev_cfg.aio_type = drive_arg.aio.clone();
+        scsi_dev_cfg.aio_type = drive_arg.aio;
     }
 
     Ok(scsi_dev_cfg)

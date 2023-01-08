@@ -516,7 +516,6 @@ impl ScsiRequest {
         aio: &mut Box<Aio<ScsiCompleteCb>>,
         disk: &File,
         direct: bool,
-        aio_type: Option<String>,
         last_aio: bool,
         iocompletecb: ScsiCompleteCb,
     ) -> Result<u32> {
@@ -527,6 +526,8 @@ impl ScsiRequest {
         };
         let mut aiocb = AioCb {
             last_aio,
+            direct,
+            sector_size: SECTOR_SIZE,
             file_fd: disk.as_raw_fd(),
             opcode: OpCode::Noop,
             iovec: Vec::new(),
@@ -548,9 +549,7 @@ impl ScsiRequest {
 
         if self.cmd.command == SYNCHRONIZE_CACHE {
             aiocb.opcode = OpCode::Fdsync;
-            (*aio)
-                .as_mut()
-                .flush_sync(aiocb)
+            aio.submit_request(aiocb)
                 .with_context(|| "Failed to process scsi request for flushing")?;
             return Ok(0);
         }
@@ -558,33 +557,13 @@ impl ScsiRequest {
         match self.cmd.mode {
             ScsiXferMode::ScsiXferFromDev => {
                 aiocb.opcode = OpCode::Preadv;
-                if aio_type.is_some() {
-                    (*aio)
-                        .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE, direct)
-                        .with_context(|| {
-                            "Failed to process scsi request for reading asynchronously"
-                        })?;
-                } else {
-                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
-                        "Failed to process scsi request for reading synchronously"
-                    })?;
-                }
+                aio.submit_request(aiocb)
+                    .with_context(|| "Failed to process scsi request for reading")?;
             }
             ScsiXferMode::ScsiXferToDev => {
                 aiocb.opcode = OpCode::Pwritev;
-                if aio_type.is_some() {
-                    (*aio)
-                        .as_mut()
-                        .rw_aio(aiocb, SECTOR_SIZE, direct)
-                        .with_context(|| {
-                            "Failed to process block request for writing asynchronously"
-                        })?;
-                } else {
-                    (*aio).as_mut().rw_sync(aiocb).with_context(|| {
-                        "Failed to process block request for writing synchronously"
-                    })?;
-                }
+                aio.submit_request(aiocb)
+                    .with_context(|| "Failed to process block request for writing")?;
             }
             _ => {
                 info!("xfer none");

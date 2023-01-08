@@ -17,7 +17,6 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
-use util::aio::{AIO_IOURING, AIO_NATIVE};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
@@ -25,6 +24,7 @@ use crate::config::{
     MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::qmp_schema;
+use util::aio::{aio_probe, AioEngine};
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
@@ -62,7 +62,7 @@ pub struct BlkDevConfig {
     pub boot_index: Option<u8>,
     pub chardev: Option<String>,
     pub socket_path: Option<String>,
-    pub aio: Option<String>,
+    pub aio: AioEngine,
     pub queue_size: u16,
 }
 
@@ -87,7 +87,7 @@ impl Default for BlkDevConfig {
             boot_index: None,
             chardev: None,
             socket_path: None,
-            aio: Some(AIO_NATIVE.to_string()),
+            aio: AioEngine::Native,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
@@ -103,7 +103,7 @@ pub struct DriveConfig {
     pub read_only: bool,
     pub direct: bool,
     pub iops: Option<u64>,
-    pub aio: Option<String>,
+    pub aio: AioEngine,
 }
 
 impl Default for DriveConfig {
@@ -114,7 +114,7 @@ impl Default for DriveConfig {
             read_only: false,
             direct: true,
             iops: None,
-            aio: Some(String::from(AIO_NATIVE)),
+            aio: AioEngine::Native,
         }
     }
 }
@@ -182,13 +182,15 @@ impl ConfigCheck for DriveConfig {
                 true,
             )));
         }
-        if self.aio == Some(String::from(AIO_NATIVE)) && !self.direct {
-            return Err(anyhow!(ConfigError::InvalidParam(
-                "aio".to_string(),
-                "native aio type should be used with \"direct\" on".to_string(),
-            )));
-        }
-        if self.aio.is_none() && self.direct {
+        if self.aio != AioEngine::Off {
+            if self.aio == AioEngine::Native && !self.direct {
+                return Err(anyhow!(ConfigError::InvalidParam(
+                    "aio".to_string(),
+                    "native aio type should be used with \"direct\" on".to_string(),
+                )));
+            }
+            aio_probe(self.aio)?;
+        } else if self.direct {
             return Err(anyhow!(ConfigError::InvalidParam(
                 "aio".to_string(),
                 "low performance expected when use sync io with \"direct\" on".to_string(),
@@ -249,7 +251,7 @@ impl ConfigCheck for BlkDevConfig {
             path_on_host: self.path_on_host.clone(),
             direct: self.direct,
             iops: self.iops,
-            aio: self.aio.clone(),
+            aio: self.aio,
             ..Default::default()
         };
         fake_drive.check()?;
@@ -290,26 +292,15 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         drive.direct = direct.into();
     }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
-    drive.aio = if let Some(aio) = cmd_parser.get_value::<String>("aio")? {
-        let aio_off = "off";
-        if aio != AIO_NATIVE && aio != AIO_IOURING && aio != aio_off {
-            bail!(
-                "Invalid aio configure, should be one of {}|{}|{}",
-                AIO_NATIVE,
-                AIO_IOURING,
-                aio_off
-            );
-        }
-        if aio != aio_off {
-            Some(aio)
-        } else {
-            None
-        }
-    } else if drive.direct {
-        Some(AIO_NATIVE.to_string())
-    } else {
-        None
-    };
+    drive.aio = cmd_parser
+        .get_value::<AioEngine>("aio")?
+        .unwrap_or_else(|| {
+            if drive.direct {
+                AioEngine::Native
+            } else {
+                AioEngine::Off
+            }
+        });
     drive.check()?;
     #[cfg(not(test))]
     drive.check_path()?;
@@ -379,7 +370,7 @@ pub fn parse_blk(
         blkdevcfg.read_only = drive_arg.read_only;
         blkdevcfg.direct = drive_arg.direct;
         blkdevcfg.iops = drive_arg.iops;
-        blkdevcfg.aio = drive_arg.aio.clone();
+        blkdevcfg.aio = drive_arg.aio;
     } else {
         bail!("No drive configured matched for blk device");
     }

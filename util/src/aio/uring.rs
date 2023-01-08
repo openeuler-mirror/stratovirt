@@ -26,13 +26,17 @@ pub(crate) struct IoUringContext {
 }
 
 impl IoUringContext {
+    pub fn probe(entries: u32) -> Result<IoUring> {
+        IoUring::new(entries).with_context(|| "Failed to create io_uring instance.")
+    }
+
     pub fn new(entries: u32, eventfd: &EventFd) -> Result<Self> {
         let tmp_entries = entries as i32;
         // Ensure the power of 2.
         if (tmp_entries & -tmp_entries) != tmp_entries || tmp_entries == 0 {
             bail!("Entries must be the power of 2 and larger than 0");
         }
-        let ring = IoUring::new(entries).with_context(|| "Failed to create io_uring instance")?;
+        let ring = Self::probe(entries)?;
 
         ring.submitter()
             .register_eventfd(eventfd.as_raw_fd())
