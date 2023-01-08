@@ -31,7 +31,7 @@ use crate::ScsiDisk::{
 use address_space::AddressSpace;
 use byteorder::{BigEndian, ByteOrder};
 use log::{debug, error, info};
-use util::aio::{Aio, AioCb, IoCmd, Iovec};
+use util::aio::{Aio, AioCb, Iovec, OpCode};
 
 /// Scsi Operation code.
 pub const TEST_UNIT_READY: u8 = 0x00;
@@ -528,12 +528,11 @@ impl ScsiRequest {
         let mut aiocb = AioCb {
             last_aio,
             file_fd: disk.as_raw_fd(),
-            opcode: IoCmd::Noop,
+            opcode: OpCode::Noop,
             iovec: Vec::new(),
             offset: (self.cmd.lba << offset) as usize,
             nbytes: 0,
-            process: true,
-            iocb: None,
+            user_data: 0,
             iocompletecb,
         };
 
@@ -548,7 +547,7 @@ impl ScsiRequest {
         }
 
         if self.cmd.command == SYNCHRONIZE_CACHE {
-            aiocb.opcode = IoCmd::Fdsync;
+            aiocb.opcode = OpCode::Fdsync;
             (*aio)
                 .as_mut()
                 .flush_sync(aiocb)
@@ -558,7 +557,7 @@ impl ScsiRequest {
 
         match self.cmd.mode {
             ScsiXferMode::ScsiXferFromDev => {
-                aiocb.opcode = IoCmd::Preadv;
+                aiocb.opcode = OpCode::Preadv;
                 if aio_type.is_some() {
                     (*aio)
                         .as_mut()
@@ -573,7 +572,7 @@ impl ScsiRequest {
                 }
             }
             ScsiXferMode::ScsiXferToDev => {
-                aiocb.opcode = IoCmd::Pwritev;
+                aiocb.opcode = OpCode::Pwritev;
                 if aio_type.is_some() {
                     (*aio)
                         .as_mut()
