@@ -935,6 +935,7 @@ dependencies = [
  "libc",
  "log",
  "once_cell",
+ "serde",
  "thiserror",
  "vmm-sys-util",
 ]
