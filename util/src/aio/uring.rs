@@ -12,27 +12,21 @@
 
 use libc;
 use std::os::unix::io::AsRawFd;
-use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use io_uring::{opcode, squeue, types, IoUring};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::libaio::{IoCb, IoCmd};
-use super::{AioCb, AioCompleteFunc, AioContext, CbNode, IoEvent, Result};
+use super::{AioCb, AioContext, AioEvent, OpCode, Result};
 
 /// The io-uring context.
-pub(crate) struct IoUringContext<T: Clone + 'static> {
+pub(crate) struct IoUringContext {
     ring: IoUring,
-    events: Vec<IoEvent>,
-
-    #[allow(dead_code)]
-    // Only used to refering type T.
-    func: Arc<AioCompleteFunc<T>>,
+    events: Vec<AioEvent>,
 }
 
-impl<T: Clone + 'static> IoUringContext<T> {
-    pub fn new(entries: u32, eventfd: &EventFd, func: Arc<AioCompleteFunc<T>>) -> Result<Self> {
+impl IoUringContext {
+    pub fn new(entries: u32, eventfd: &EventFd) -> Result<Self> {
         let tmp_entries = entries as i32;
         // Ensure the power of 2.
         if (tmp_entries & -tmp_entries) != tmp_entries || tmp_entries == 0 {
@@ -44,37 +38,32 @@ impl<T: Clone + 'static> IoUringContext<T> {
             .register_eventfd(eventfd.as_raw_fd())
             .with_context(|| "Failed to register event fd")?;
         let events = Vec::with_capacity(entries as usize);
-        Ok(IoUringContext { ring, func, events })
+        Ok(IoUringContext { ring, events })
     }
 }
 
-impl<T: Clone + 'static> AioContext for IoUringContext<T> {
-    #[allow(clippy::zero_ptr)]
-    /// Submit requests to OS.
-    fn submit(&mut self, _nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize> {
+impl<T: Clone> AioContext<T> for IoUringContext {
+    fn submit(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize> {
         for iocb in iocbp.iter() {
             // SAFETY: iocb is valid until request is finished.
-            let offset = unsafe { (*(*iocb)).aio_offset as libc::off_t };
-            let node = unsafe { (*(*iocb)).data as *mut CbNode<T> };
-            let aiocb = unsafe { &mut (*node).value as *mut AioCb<T> };
-            let raw_fd = unsafe { (*(*iocb)).aio_fildes as i32 };
-            let data = unsafe { (*(*iocb)).data };
-            let code = unsafe { (*aiocb).opcode };
-            let len = unsafe { (*(*iocb)).aio_nbytes };
-            let iovs = unsafe { (*(*iocb)).aio_buf };
-            let fd = types::Fd(raw_fd);
-            let entry = match code {
-                IoCmd::Preadv => opcode::Readv::new(fd, iovs as *const libc::iovec, len as u32)
+            let cb = unsafe { &*(*iocb) };
+            let offset = cb.offset as libc::off_t;
+            let data = cb.user_data;
+            let len = cb.iovec.len();
+            let iovs = cb.iovec.as_ptr();
+            let fd = types::Fd(cb.file_fd);
+            let entry = match cb.opcode {
+                OpCode::Preadv => opcode::Readv::new(fd, iovs as *const libc::iovec, len as u32)
                     .offset(offset)
                     .build()
                     .flags(squeue::Flags::ASYNC)
                     .user_data(data),
-                IoCmd::Pwritev => opcode::Writev::new(fd, iovs as *const libc::iovec, len as u32)
+                OpCode::Pwritev => opcode::Writev::new(fd, iovs as *const libc::iovec, len as u32)
                     .offset(offset)
                     .build()
                     .flags(squeue::Flags::ASYNC)
                     .user_data(data),
-                IoCmd::Fdsync => opcode::Fsync::new(fd)
+                OpCode::Fdsync => opcode::Fsync::new(fd)
                     .build()
                     .flags(squeue::Flags::ASYNC)
                     .user_data(data),
@@ -93,24 +82,15 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
         self.ring.submit().with_context(|| "Failed to submit sqe")
     }
 
-    /// Get the events.
-    fn get_events(&mut self) -> &[IoEvent] {
-        let mut queue = self.ring.completion();
+    fn get_events(&mut self) -> &[AioEvent] {
+        let queue = self.ring.completion();
         self.events.clear();
-        let l = queue.len();
-        for _i in 0..l {
-            match queue.next() {
-                None => break,
-                Some(cqe) => {
-                    let event = IoEvent {
-                        data: cqe.user_data(),
-                        obj: 0,
-                        res: cqe.result() as i64,
-                        res2: 0,
-                    };
-                    self.events.push(event);
-                }
-            }
+        for cqe in queue {
+            self.events.push(AioEvent {
+                user_data: cqe.user_data(),
+                status: 0,
+                res: cqe.result() as i64,
+            });
         }
         &self.events
     }
