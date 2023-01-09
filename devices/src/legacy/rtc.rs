@@ -74,7 +74,7 @@ fn rtc_time_to_tm(time_val: i64) -> libc::tm {
         tm_zone: std::ptr::null_mut(),
     };
 
-    // Safe because `libc::gmtime_r` just convert calendar time to
+    // SAFETY: `libc::gmtime_r` just convert calendar time to
     // broken-down format, and saved to `dest_tm`.
     unsafe { libc::gmtime_r(&time_val, &mut dest_tm) };
 
