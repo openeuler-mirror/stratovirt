@@ -77,6 +77,8 @@ pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_TAG_LENGTH: usize = 36;
 pub const MAX_NODES: u32 = 128;
+/// Default virtqueue size for virtio devices excepts virtio-fs.
+pub const DEFAULT_VIRTQUEUE_SIZE: u16 = 256;
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {

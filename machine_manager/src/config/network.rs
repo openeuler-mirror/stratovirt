@@ -16,11 +16,15 @@ use serde::{Deserialize, Serialize};
 use super::{error::ConfigError, pci_args_check};
 use crate::config::get_chardev_socket_path;
 use crate::config::{
-    CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_PATH_LENGTH,
+    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::{qmp_schema, QmpChannel};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
+
+/// Max virtqueue size of each virtqueue.
+pub const MAX_QUEUE_SIZE_NET: u16 = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetDevcfg {
@@ -98,6 +102,8 @@ pub struct NetworkInterfaceConfig {
     pub queues: u16,
     pub mq: bool,
     pub socket_path: Option<String>,
+    /// All queues of a net device have the same queue size now.
+    pub queue_size: u16,
 }
 
 impl Default for NetworkInterfaceConfig {
@@ -113,6 +119,7 @@ impl Default for NetworkInterfaceConfig {
             queues: 2,
             mq: false,
             socket_path: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }
@@ -150,6 +157,20 @@ impl ConfigCheck for NetworkInterfaceConfig {
                 "socket path".to_string(),
                 MAX_PATH_LENGTH
             )));
+        }
+
+        if self.queue_size < DEFAULT_VIRTQUEUE_SIZE || self.queue_size > MAX_QUEUE_SIZE_NET {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "queue size of net device".to_string(),
+                DEFAULT_VIRTQUEUE_SIZE as u64,
+                true,
+                MAX_QUEUE_SIZE_NET as u64,
+                true
+            )));
+        }
+
+        if self.queue_size & (self.queue_size - 1) != 0 {
+            bail!("queue size of net device should be power of 2!");
         }
 
         Ok(())
@@ -264,7 +285,8 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
         .push("addr")
         .push("multifunction")
         .push("mac")
-        .push("iothread");
+        .push("iothread")
+        .push("queue-size");
 
     cmd_parser.parse(net_config)?;
     pci_args_check(&cmd_parser)?;
@@ -286,6 +308,9 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
     }
     netdevinterfacecfg.iothread = cmd_parser.get_value::<String>("iothread")?;
     netdevinterfacecfg.mac = cmd_parser.get_value::<String>("mac")?;
+    if let Some(queue_size) = cmd_parser.get_value::<u16>("queue-size")? {
+        netdevinterfacecfg.queue_size = queue_size;
+    }
 
     if let Some(netcfg) = &vm_config.netdevs.remove(&netdev) {
         netdevinterfacecfg.id = netid;

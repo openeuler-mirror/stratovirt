@@ -42,8 +42,6 @@ use crate::virtio_has_feature;
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
-/// Size of each virtqueue.
-const QUEUE_SIZE_NET: u16 = 256;
 /// Feature for vhost-net to add virtio_net_hdr for RX, and strip for TX packets.
 const VHOST_NET_F_VIRTIO_NET_HDR: u32 = 27;
 
@@ -195,7 +193,7 @@ impl VirtioDevice for Net {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_NET
+        self.net_cfg.queue_size
     }
 
     /// Get device features from host.
@@ -411,6 +409,7 @@ impl VirtioDevice for Net {
 mod tests {
     use super::*;
     use address_space::*;
+    use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
     use std::fs::File;
 
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
@@ -453,6 +452,7 @@ mod tests {
             queues: 2,
             mq: false,
             socket_path: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
         let conf = vec![net1];
         let confs = Some(conf);
@@ -474,6 +474,7 @@ mod tests {
             queues: 2,
             mq: false,
             socket_path: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
         let conf = vec![net1];
         let confs = Some(conf);

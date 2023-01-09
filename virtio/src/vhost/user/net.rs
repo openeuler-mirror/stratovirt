@@ -40,8 +40,6 @@ use anyhow::{anyhow, Context, Result};
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
-/// Size of each virtqueue.
-const QUEUE_SIZE_NET: u16 = 256;
 
 /// Network device structure.
 pub struct Net {
@@ -176,7 +174,7 @@ impl VirtioDevice for Net {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_NET
+        self.net_cfg.queue_size
     }
 
     /// Get device features from host.

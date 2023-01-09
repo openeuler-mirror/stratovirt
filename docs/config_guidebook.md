@@ -273,7 +273,7 @@ There is only one argument for iothread:
 
 Virtio block device is a virtual block device, which process read and write requests in virtio queue from guest.
 
-10 properties are supported for virtio block device.
+twelve properties are supported for virtio block device.
 
 * id: unique device-id in StratoVirt.
 * file: the path of backend file on host.
@@ -290,11 +290,12 @@ The number ranges from 0 to 255, the smaller the number, the higher the priority
 It determines the order of bootable devices which firmware will use for booting the guest OS.
 * aio: the aio type of block device (optional). Possible values are `native`, `io_uring`, or `off`. If not set, default is `native` if `direct` is true, otherwise default is `off`.
 
-For virtio-blk-pci, three more properties are required.
+For virtio-blk-pci, four more properties are required.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it.
 * multifunction: whether to open multi-function for device. (optional) If not set, default is false.
+* queue-size: the optional virtqueue size for all the queues. (optional) Configuration range is (2, 1024] and queue size must be power of 2. Default queue size is 256.
 
 If you want to boot VM with a virtio block device as rootfs, you should add `root=DEVICE_NAME_IN_GUESTOS`
  in Kernel Parameters. `DEVICE_NAME_IN_GUESTOS` will from `vda` to `vdz` in order.
@@ -305,7 +306,7 @@ If you want to boot VM with a virtio block device as rootfs, you should add `roo
 -device virtio-blk-device,drive=<drive_id>,id=<blkid>[,iothread=<iothread1>][,serial=<serial_num>]
 # virtio pci block device.
 -drive id=<drive_id>,file=<path_on_host>[,readonly={on|off}][,direct={on|off}][,throttling.iops-total=<limit>]
--device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>]
+-device virtio-blk-pci,id=<blk_id>,drive=<drive_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,serial=<serial_num>][,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
 
 ```
 
@@ -318,7 +319,7 @@ You can use it by adding a new device, one more property is supported by vhost-u
 ```shell
 # vhost user blk pci device
 -chardev socket,id=<chardevid>,path=<socket_path>
--device vhost-user-blk-pci,id=<blk_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,num-queues=<N>][,bootindex=<N>]
+-device vhost-user-blk-pci,id=<blk_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,num-queues=<N>][,bootindex=<N>][,queue-size=<queuesize>]
 ```
 
 Note: More features to be supported.
@@ -401,11 +402,12 @@ It has no effect when vhost is set.
   cause the same mac address between two virtio-net devices when one device has mac and the other hasn't.
 * mq: the optional mq attribute enable device multiple queue feature.
 
-Two more properties are supported for virtio pci net device.
+Three more properties are supported for virtio pci net device.
 * bus: name of bus which to attach.
 * addr: including slot number and function number. The first number represents slot number
 of device and the second one represents function number of it. For virtio pci net device, it
 is a single function device, the function number should be set to zero.
+* queue-size: the optional virtqueue size for all the queues. (optional) Configuration range is [256, 4096] and queue size must be power of 2. Default queue size is 256.
 
 ```shell
 # virtio mmio net device
@@ -413,7 +415,7 @@ is a single function device, the function number should be set to zero.
 -device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<macaddr>]
 # virtio pci net device
 -netdev tap,id=<netdevid>,ifname=<host_dev_name>[,queues=<N>]
--device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}]
+-device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by
@@ -769,15 +771,16 @@ Note: Only one tablet can be configured.
 ### 2.16 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
-Five properties can be set for Virtio-Scsi controller.
+Six properties can be set for Virtio-Scsi controller.
 
 * id: unique device id.
 * bus: bus number of the device.
 * addr: including slot number and function number.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
 * num-queues: the optional num-queues attribute controls the number of request queues to be used for the scsi controller. If not set, the default block queue number is 1. The max queues number supported is no more than 32. (optional)
+* queue-size: the optional virtqueue size for all the queues. Configuration range is (2, 1024] and queue size must be power of 2. Default queue size is 256.
 ```shell
--device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,num-queues=<N>]
+-device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,num-queues=<N>][,queue-size=<queuesize>]
 ```
 ### 2.17 Virtio Scsi HardDisk
 Virtio Scsi HardDisk is a virtual block device, which process read and write requests in virtio queue from guest.

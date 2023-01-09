@@ -51,7 +51,7 @@ use devices::legacy::FwCfgOps;
 use machine_manager::config::{
     get_chardev_config, get_netdev_config, get_pci_df, BlkDevConfig, ChardevType, ConfigCheck,
     DriveConfig, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, ScsiCntlrConfig, VmConfig,
-    MAX_VIRTIO_QUEUE,
+    DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::machine::{DeviceInterface, KvmVmState};
 use machine_manager::qmp::{qmp_schema, QmpChannel, Response};
@@ -740,6 +740,7 @@ impl StdMachine {
         } else {
             bail!("Drive not set");
         };
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
         let nr_cpus = locked_vmconfig.machine_config.nr_cpus;
@@ -759,6 +760,7 @@ impl StdMachine {
                 chardev: None,
                 socket_path: None,
                 aio: conf.aio.clone(),
+                queue_size,
             };
             dev.check()?;
             dev
@@ -796,6 +798,7 @@ impl StdMachine {
     ) -> Result<()> {
         let multifunction = args.multifunction.unwrap_or(false);
         let nr_cpus = self.get_vm_config().lock().unwrap().machine_config.nr_cpus;
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let dev_cfg = ScsiCntlrConfig {
             id: args.id.clone(),
             iothread: args.iothread.clone(),
@@ -803,6 +806,7 @@ impl StdMachine {
                 VirtioPciDevice::virtio_pci_auto_queues_num(0, nr_cpus, MAX_VIRTIO_QUEUE)
             }) as u32,
             boot_prefix: None,
+            queue_size,
         };
         dev_cfg.check()?;
 
@@ -848,6 +852,7 @@ impl StdMachine {
         } else {
             bail!("Chardev not set");
         };
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let socket_path = self
             .get_socket_path(&locked_vmconfig, chardev.to_string())
             .with_context(|| "Failed to get socket path")?;
@@ -860,6 +865,7 @@ impl StdMachine {
             boot_index: args.boot_index,
             chardev: Some(chardev.to_string()),
             socket_path,
+            queue_size,
             ..BlkDevConfig::default()
         };
 
@@ -913,6 +919,7 @@ impl StdMachine {
         } else {
             bail!("Netdev not set");
         };
+        let queue_size = args.queue_size.unwrap_or(DEFAULT_VIRTQUEUE_SIZE);
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
         let dev = if let Some(conf) = locked_vmconfig.netdevs.get(netdev) {
@@ -933,6 +940,7 @@ impl StdMachine {
                 queues: conf.queues,
                 mq: conf.queues > 2,
                 socket_path,
+                queue_size,
             };
             dev.check()?;
             dev

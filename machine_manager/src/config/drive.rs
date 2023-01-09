@@ -21,13 +21,18 @@ use util::aio::{AIO_IOURING, AIO_NATIVE};
 
 use super::{error::ConfigError, pci_args_check};
 use crate::config::{
-    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, MAX_PATH_LENGTH,
-    MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
+    get_chardev_socket_path, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
+    MAX_PATH_LENGTH, MAX_STRING_LENGTH, MAX_VIRTIO_QUEUE,
 };
 use crate::qmp::qmp_schema;
 const MAX_SERIAL_NUM: usize = 20;
 const MAX_IOPS: u64 = 1_000_000;
 const MAX_UNIT_ID: usize = 2;
+
+// Seg_max = queue_size - 2. So, size of each virtqueue for virtio-blk should be larger than 2.
+const MIN_QUEUE_SIZE_BLK: u16 = 2;
+// Max size of each virtqueue for virtio-blk.
+const MAX_QUEUE_SIZE_BLK: u16 = 1024;
 
 /// Represent a single drive backend file.
 pub struct DriveFile {
@@ -58,6 +63,7 @@ pub struct BlkDevConfig {
     pub chardev: Option<String>,
     pub socket_path: Option<String>,
     pub aio: Option<String>,
+    pub queue_size: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +88,7 @@ impl Default for BlkDevConfig {
             chardev: None,
             socket_path: None,
             aio: Some(AIO_NATIVE.to_string()),
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         }
     }
 }
@@ -224,6 +231,20 @@ impl ConfigCheck for BlkDevConfig {
             )));
         }
 
+        if self.queue_size <= MIN_QUEUE_SIZE_BLK || self.queue_size > MAX_QUEUE_SIZE_BLK {
+            return Err(anyhow!(ConfigError::IllegalValue(
+                "queue size of block device".to_string(),
+                MIN_QUEUE_SIZE_BLK as u64,
+                false,
+                MAX_QUEUE_SIZE_BLK as u64,
+                true
+            )));
+        }
+
+        if self.queue_size & (self.queue_size - 1) != 0 {
+            bail!("Queue size should be power of 2!");
+        }
+
         let fake_drive = DriveConfig {
             path_on_host: self.path_on_host.clone(),
             direct: self.direct,
@@ -311,7 +332,8 @@ pub fn parse_blk(
         .push("bootindex")
         .push("serial")
         .push("iothread")
-        .push("num-queues");
+        .push("num-queues")
+        .push("queue-size");
 
     cmd_parser.parse(drive_config)?;
 
@@ -348,6 +370,10 @@ pub fn parse_blk(
         blkdevcfg.queues = queues;
     }
 
+    if let Some(queue_size) = cmd_parser.get_value::<u16>("queue-size")? {
+        blkdevcfg.queue_size = queue_size;
+    }
+
     if let Some(drive_arg) = &vm_config.drives.remove(&blkdrive) {
         blkdevcfg.path_on_host = drive_arg.path_on_host.clone();
         blkdevcfg.read_only = drive_arg.read_only;
@@ -373,7 +399,8 @@ pub fn parse_vhost_user_blk_pci(
         .push("bus")
         .push("addr")
         .push("num-queues")
-        .push("chardev");
+        .push("chardev")
+        .push("queue-size");
 
     cmd_parser.parse(drive_config)?;
 
@@ -400,6 +427,10 @@ pub fn parse_vhost_user_blk_pci(
         blkdevcfg.queues = queues;
     } else if let Some(queues) = queues_auto {
         blkdevcfg.queues = queues;
+    }
+
+    if let Some(size) = cmd_parser.get_value::<u16>("queue-size")? {
+        blkdevcfg.queue_size = size;
     }
 
     if let Some(chardev) = &blkdevcfg.chardev {

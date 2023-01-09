@@ -25,8 +25,11 @@ use address_space::AddressSpace;
 use anyhow::{anyhow, bail, Context, Result};
 use devices::legacy::{Chardev, InputReceiver};
 use log::{debug, error};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use machine_manager::{config::VirtioConsole, event_loop::EventLoop};
+use machine_manager::{
+    config::{VirtioConsole, DEFAULT_VIRTQUEUE_SIZE},
+    event_loop::EventLoop,
+    event_loop::{register_event_helper, unregister_event_helper},
+};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -39,8 +42,6 @@ use vmm_sys_util::eventfd::EventFd;
 
 /// Number of virtqueues.
 const QUEUE_NUM_CONSOLE: usize = 2;
-/// Size of virtqueue.
-const QUEUE_SIZE_CONSOLE: u16 = 256;
 
 const BUFF_SIZE: usize = 4096;
 
@@ -307,7 +308,7 @@ impl VirtioDevice for Console {
 
     /// Get the queue size of virtio device.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_CONSOLE
+        DEFAULT_VIRTQUEUE_SIZE
     }
 
     /// Get device features from host.

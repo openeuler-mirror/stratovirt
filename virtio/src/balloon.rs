@@ -26,9 +26,12 @@ use address_space::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use machine_manager::{
-    config::BalloonConfig, event, qmp::qmp_schema::BalloonInfo, qmp::QmpChannel,
+    config::{BalloonConfig, DEFAULT_VIRTQUEUE_SIZE},
+    event,
+    event_loop::{register_event_helper, unregister_event_helper},
+    qmp::qmp_schema::BalloonInfo,
+    qmp::QmpChannel,
 };
 use util::{
     bitmap::Bitmap,
@@ -50,7 +53,6 @@ use super::{
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_F_REPORTING: u32 = 5;
 const VIRTIO_BALLOON_PFN_SHIFT: u32 = 12;
-const QUEUE_SIZE_BALLOON: u16 = 256;
 const QUEUE_NUM_BALLOON: usize = 2;
 const BALLOON_PAGE_SIZE: u64 = 1 << VIRTIO_BALLOON_PFN_SHIFT;
 const BALLOON_INFLATE_EVENT: bool = true;
@@ -883,7 +885,7 @@ impl VirtioDevice for Balloon {
 
     /// Get the zise of balloon queue.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_BALLOON
+        DEFAULT_VIRTQUEUE_SIZE
     }
 
     /// Get the feature of `balloon` device.

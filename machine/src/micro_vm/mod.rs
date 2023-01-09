@@ -64,16 +64,17 @@ use devices::{ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, GI
 use hypervisor::kvm::KVM_FDS;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{kvm_pit_config, KVM_PIT_SPEAKER_DUMMY};
-use machine_manager::config::{
-    parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, DriveFile, Incoming, MigrateMode,
-};
-use machine_manager::event;
-use machine_manager::machine::{
-    DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
-    MachineInterface, MachineLifecycle, MigrateInterface,
-};
 use machine_manager::{
-    config::{BootSource, ConfigCheck, NetworkInterfaceConfig, SerialConfig, VmConfig},
+    config::{
+        parse_blk, parse_incoming_uri, parse_net, BlkDevConfig, BootSource, ConfigCheck, DriveFile,
+        Incoming, MigrateMode, NetworkInterfaceConfig, SerialConfig, VmConfig,
+        DEFAULT_VIRTQUEUE_SIZE,
+    },
+    event,
+    machine::{
+        DeviceInterface, KvmVmState, MachineAddressInterface, MachineExternalInterface,
+        MachineInterface, MachineLifecycle, MigrateInterface,
+    },
     qmp::{qmp_schema, QmpChannel, Response},
 };
 use mem_layout::{LayoutEntryType, MEM_LAYOUT};
@@ -1157,6 +1158,7 @@ impl DeviceInterface for LightMachine {
             } else {
                 None
             },
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
         if let Err(e) = config.check() {
             error!("{:?}", e);
@@ -1206,6 +1208,7 @@ impl DeviceInterface for LightMachine {
             queues: 2,
             mq: false,
             socket_path: None,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };
 
         if let Some(fds) = args.fds {

@@ -18,7 +18,7 @@ use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
-use machine_manager::config::{GpuConfig, VIRTIO_GPU_MAX_SCANOUTS};
+use machine_manager::config::{GpuConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_SCANOUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc};
 use migration_derive::{ByteCode, Desc};
@@ -51,8 +51,6 @@ use vnc::console::{
 
 /// Number of virtqueues.
 const QUEUE_NUM_GPU: usize = 2;
-/// Size of each virtqueue.
-const QUEUE_SIZE_GPU: u16 = 256;
 
 /// Flags for virtio gpu base conf.
 const VIRTIO_GPU_FLAG_VIRGL_ENABLED: u32 = 1;
@@ -1760,7 +1758,7 @@ impl VirtioDevice for Gpu {
 
     /// Get the queue size of virtio gpu.
     fn queue_size(&self) -> u16 {
-        QUEUE_SIZE_GPU
+        DEFAULT_VIRTQUEUE_SIZE
     }
 
     /// Get device features from host.
