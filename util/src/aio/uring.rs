@@ -53,6 +53,7 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
     /// Submit requests to OS.
     fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize> {
         for iocb in iocbp.iter() {
+            // SAFETY: iocb is valid until request is finished.
             let offset = unsafe { (*(*iocb)).aio_offset as libc::off_t };
             let node = unsafe { (*(*iocb)).data as *mut CbNode<T> };
             let aiocb = unsafe { &mut (*node).value as *mut AioCb<T> };
@@ -81,6 +82,7 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
                     bail!("Invalid entry code");
                 }
             };
+            // SAFETY: parameters of the entry are valid until request is finished.
             unsafe {
                 self.ring
                     .submission()

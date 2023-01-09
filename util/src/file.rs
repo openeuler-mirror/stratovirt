@@ -39,6 +39,7 @@ pub fn lock_file(file: &File, path: &str, read_only: bool) -> Result<()> {
     } else {
         (libc::LOCK_EX | libc::LOCK_NB, "write lock")
     };
+    // SAFETY: the file has a valid raw fd.
     let ret = unsafe { libc::flock(file.as_raw_fd(), lockop) };
     if ret < 0 {
         bail!(
@@ -54,6 +55,7 @@ pub fn lock_file(file: &File, path: &str, read_only: bool) -> Result<()> {
 }
 
 pub fn unlock_file(file: &File, path: &str) -> Result<()> {
+    // SAFETY: the file has a valid raw fd.
     let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
     if ret < 0 {
         bail!(

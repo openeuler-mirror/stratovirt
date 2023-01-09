@@ -54,6 +54,8 @@ impl EventLoop {
             }
         }
 
+        // SAFETY: This function is called at startup thus no concurrent accessing to
+        // GLOBAL_EVENT_LOOP. And each iothread has a dedicated EventLoopContext.
         unsafe {
             if GLOBAL_EVENT_LOOP.is_none() {
                 GLOBAL_EVENT_LOOP = Some(EventLoop {
@@ -94,6 +96,7 @@ impl EventLoop {
     ///
     /// * `name` - if None, return main loop, OR return io-thread-loop which is related to `name`.
     pub fn get_ctx(name: Option<&String>) -> Option<&mut EventLoopContext> {
+        // SAFETY: All concurrently accessed data of EventLoopContext is protected.
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 if let Some(name) = name {
@@ -140,6 +143,8 @@ impl EventLoop {
     /// Once run main loop, `epoll` in `MainLoopContext` will execute
     /// `epoll_wait()` function to wait for events.
     pub fn loop_run() -> util::Result<()> {
+        // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
+        // accessing.
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 loop {
