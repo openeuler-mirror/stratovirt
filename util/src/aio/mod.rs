@@ -361,7 +361,7 @@ impl<T: Clone + 'static> Aio<T> {
     }
 }
 
-fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
+pub fn mem_from_buf(buf: &[u8], hva: u64) -> Result<()> {
     // SAFETY: all callers have valid hva address.
     let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
     (&mut slice)
