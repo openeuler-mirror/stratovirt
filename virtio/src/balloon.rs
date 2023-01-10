@@ -24,7 +24,7 @@ use crate::report_virtio_error;
 use address_space::{
     AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use log::{error, warn};
 use machine_manager::{
     config::{BalloonConfig, DEFAULT_VIRTQUEUE_SIZE},
@@ -1042,13 +1042,6 @@ impl VirtioDevice for Balloon {
 
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(None, &mut self.deactivate_evts)
-    }
-
-    fn update_config(
-        &mut self,
-        _dev_config: Option<Arc<dyn machine_manager::config::ConfigCheck>>,
-    ) -> Result<()> {
-        bail!("Unsupported to update configuration")
     }
 }
 
