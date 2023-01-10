@@ -400,13 +400,18 @@ pub fn parse_vhost_user_blk_pci(
         .push("addr")
         .push("num-queues")
         .push("chardev")
-        .push("queue-size");
+        .push("queue-size")
+        .push("bootindex");
 
     cmd_parser.parse(drive_config)?;
 
     pci_args_check(&cmd_parser)?;
 
     let mut blkdevcfg = BlkDevConfig::default();
+
+    if let Some(boot_index) = cmd_parser.get_value::<u8>("bootindex")? {
+        blkdevcfg.boot_index = Some(boot_index);
+    }
 
     if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
         blkdevcfg.chardev = Some(chardev);

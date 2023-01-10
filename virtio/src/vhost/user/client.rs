@@ -455,6 +455,24 @@ impl VhostUserClient {
         Ok(features)
     }
 
+    /// Send u64 value to vhost.
+    fn set_value(&self, request: VhostUserMsgReq, value: u64) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let hdr = VhostUserMsgHdr::new(request as u32, 0, size_of::<u64>() as u32);
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&value), payload_opt, &[])
+            .with_context(|| "Failed to send msg for setting value")?;
+
+        Ok(())
+    }
+
+    /// Set protocol features to vhost.
+    pub fn set_protocol_features(&self, features: u64) -> Result<()> {
+        self.set_value(VhostUserMsgReq::SetProtocolFeatures, features)
+    }
+
     /// Get virtio blk config from vhost.
     pub fn get_virtio_blk_config(&self) -> Result<VirtioBlkConfig> {
         let client = self.client.lock().unwrap();
@@ -548,19 +566,7 @@ impl VhostOps for VhostUserClient {
     }
 
     fn set_features(&self, features: u64) -> Result<()> {
-        let client = self.client.lock().unwrap();
-        let hdr = VhostUserMsgHdr::new(
-            VhostUserMsgReq::SetFeatures as u32,
-            0,
-            size_of::<u64>() as u32,
-        );
-        let payload_opt: Option<&[u8]> = None;
-        client
-            .sock
-            .send_msg(Some(&hdr), Some(&features), payload_opt, &[])
-            .with_context(|| "Failed to send msg for setting features")?;
-
-        Ok(())
+        self.set_value(VhostUserMsgReq::SetFeatures, features)
     }
 
     fn set_mem_table(&self) -> Result<()> {

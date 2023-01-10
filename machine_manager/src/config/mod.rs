@@ -128,8 +128,8 @@ impl VmConfig {
             bail!("kernel file is required for microvm machine type, which is not provided");
         }
 
-        if self.boot_source.initrd.is_none() && self.drives.is_empty() {
-            bail!("Before Vm start, set a initrd or drive_file as rootfs");
+        if self.boot_source.initrd.is_none() && self.drives.is_empty() && self.chardev.is_empty() {
+            bail!("Before Vm start, set a initrd or drive_file or vhost-user blk as rootfs");
         }
 
         let mut stdio_count = 0;
