@@ -15,7 +15,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use log::{debug, error, warn};
 
 use crate::config::*;
-use crate::usb::{usb_packet_transfer, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
+use crate::usb::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 
 /// HID keycode
 const HID_KEYBOARD_LEFT_CONTROL: u8 = 0xe0;
@@ -511,7 +511,7 @@ impl Hid {
                 }
             }
             let len = buf.len();
-            usb_packet_transfer(p, &mut buf, len);
+            p.transfer_packet(&mut buf, len);
         } else {
             error!("Unhandled endpoint {}", p.ep_number);
             p.status = UsbPacketStatus::Stall;

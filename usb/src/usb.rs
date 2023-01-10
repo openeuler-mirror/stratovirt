@@ -342,7 +342,7 @@ pub trait UsbDeviceOps: Send + Sync {
             bail!("data buffer small len {}", device_req.length);
         }
         if p.pid as u8 == USB_TOKEN_OUT {
-            usb_packet_transfer(p, &mut usb_dev.data_buf, device_req.length as usize);
+            p.transfer_packet(&mut usb_dev.data_buf, device_req.length as usize);
         }
         self.handle_control(p, &device_req);
         let usb_dev = self.get_mut_usb_device();
@@ -355,7 +355,7 @@ pub trait UsbDeviceOps: Send + Sync {
         }
         if p.pid as u8 == USB_TOKEN_IN {
             p.actual_length = 0;
-            usb_packet_transfer(p, &mut usb_dev.data_buf, len as usize);
+            p.transfer_packet(&mut usb_dev.data_buf, len as usize);
         }
         Ok(())
     }
@@ -450,6 +450,40 @@ impl UsbPacket {
         self.parameter = 0;
         self.ep_number = ep_number;
     }
+
+    /// Transfer USB packet from host to device or from device to host.
+    ///
+    /// # Arguments
+    ///
+    /// * `vec`     - Data buffer.
+    /// * `len`     - Transfer length.
+    pub fn transfer_packet(&mut self, vec: &mut [u8], len: usize) {
+        let len = min(vec.len(), len);
+        let to_host = self.pid as u8 & USB_TOKEN_IN == USB_TOKEN_IN;
+        let mut copyed = 0;
+        if to_host {
+            for iov in &self.iovecs {
+                let cnt = min(iov.iov_len, len - copyed);
+                let tmp = &vec[copyed..(copyed + cnt)];
+                write_mem(iov.iov_base, tmp);
+                copyed += cnt;
+                if len == copyed {
+                    break;
+                }
+            }
+        } else {
+            for iov in &self.iovecs {
+                let cnt = min(iov.iov_len, len - copyed);
+                let tmp = &mut vec[copyed..(copyed + cnt)];
+                read_mem(iov.iov_base, tmp);
+                copyed += cnt;
+                if len == copyed {
+                    break;
+                }
+            }
+        }
+        self.actual_length = copyed as u32;
+    }
 }
 
 impl Default for UsbPacket {
@@ -478,35 +512,6 @@ fn write_mem(hva: u64, buf: &[u8]) {
     }
 }
 
-/// Transfer packet from host to device or from device to host.
-pub fn usb_packet_transfer(packet: &mut UsbPacket, vec: &mut [u8], len: usize) {
-    let len = min(vec.len(), len);
-    let to_host = packet.pid as u8 & USB_TOKEN_IN == USB_TOKEN_IN;
-    let mut copyed = 0;
-    if to_host {
-        for iov in &packet.iovecs {
-            let cnt = min(iov.iov_len, len - copyed);
-            let tmp = &vec[copyed..(copyed + cnt)];
-            write_mem(iov.iov_base, tmp);
-            copyed += cnt;
-            if len - copyed == 0 {
-                break;
-            }
-        }
-    } else {
-        for iov in &packet.iovecs {
-            let cnt = min(iov.iov_len, len - copyed);
-            let tmp = &mut vec[copyed..(copyed + cnt)];
-            read_mem(iov.iov_base, tmp);
-            copyed += cnt;
-            if len - copyed == 0 {
-                break;
-            }
-        }
-    }
-    packet.actual_length = copyed as u32;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,7 +525,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva, 4));
         packet.iovecs.push(Iovec::new(hva + 4, 2));
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
-        usb_packet_transfer(&mut packet, &mut data, 6);
+        packet.transfer_packet(&mut data, 6);
         assert_eq!(packet.actual_length, 6);
         assert_eq!(buf, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
     }
@@ -534,7 +539,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva, 4));
 
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
-        usb_packet_transfer(&mut packet, &mut data, 6);
+        packet.transfer_packet(&mut data, 6);
         assert_eq!(packet.actual_length, 4);
         assert_eq!(buf, [1, 2, 3, 4, 0, 0, 0, 0, 0, 0]);
     }
@@ -548,7 +553,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva, 4));
 
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
-        usb_packet_transfer(&mut packet, &mut data, 2);
+        packet.transfer_packet(&mut data, 2);
         assert_eq!(packet.actual_length, 2);
         assert_eq!(buf, [1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
@@ -562,7 +567,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva, 10));
 
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
-        usb_packet_transfer(&mut packet, &mut data, 10);
+        packet.transfer_packet(&mut data, 10);
         assert_eq!(packet.actual_length, 6);
         assert_eq!(buf, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
     }
@@ -577,7 +582,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva + 4, 2));
 
         let mut data = [0_u8; 10];
-        usb_packet_transfer(&mut packet, &mut data, 6);
+        packet.transfer_packet(&mut data, 6);
         assert_eq!(packet.actual_length, 6);
         assert_eq!(data, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
     }
@@ -592,7 +597,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva + 4, 2));
 
         let mut data = [0_u8; 10];
-        usb_packet_transfer(&mut packet, &mut data, 10);
+        packet.transfer_packet(&mut data, 10);
         assert_eq!(packet.actual_length, 6);
         assert_eq!(data, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0]);
     }
@@ -606,7 +611,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva, 4));
 
         let mut data = [0_u8; 10];
-        usb_packet_transfer(&mut packet, &mut data, 2);
+        packet.transfer_packet(&mut data, 2);
         assert_eq!(packet.actual_length, 2);
         assert_eq!(data, [1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
@@ -620,7 +625,7 @@ mod tests {
         packet.iovecs.push(Iovec::new(hva, 6));
 
         let mut data = [0_u8; 2];
-        usb_packet_transfer(&mut packet, &mut data, 6);
+        packet.transfer_packet(&mut data, 6);
         assert_eq!(packet.actual_length, 2);
         assert_eq!(data, [1, 2]);
     }
