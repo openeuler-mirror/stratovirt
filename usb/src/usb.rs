@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Result};
 use log::{debug, error};
+use util::aio::{mem_from_buf, mem_to_buf};
 
 use crate::config::*;
 use crate::descriptor::{UsbDescriptor, UsbDescriptorOps};
@@ -465,7 +466,9 @@ impl UsbPacket {
             for iov in &self.iovecs {
                 let cnt = min(iov.iov_len, len - copyed);
                 let tmp = &vec[copyed..(copyed + cnt)];
-                write_mem(iov.iov_base, tmp);
+                if let Err(e) = mem_from_buf(tmp, iov.iov_base) {
+                    error!("Failed to write mem: {}", e);
+                }
                 copyed += cnt;
                 if len == copyed {
                     break;
@@ -475,7 +478,9 @@ impl UsbPacket {
             for iov in &self.iovecs {
                 let cnt = min(iov.iov_len, len - copyed);
                 let tmp = &mut vec[copyed..(copyed + cnt)];
-                read_mem(iov.iov_base, tmp);
+                if let Err(e) = mem_to_buf(tmp, iov.iov_base) {
+                    error!("Failed to read mem {}", e);
+                }
                 copyed += cnt;
                 if len == copyed {
                     break;
@@ -496,19 +501,6 @@ impl Default for UsbPacket {
             actual_length: 0,
             ep_number: 0,
         }
-    }
-}
-
-fn read_mem(hva: u64, buf: &mut [u8]) {
-    let slice = unsafe { std::slice::from_raw_parts(hva as *const u8, buf.len()) };
-    buf.clone_from_slice(&slice[..buf.len()]);
-}
-
-fn write_mem(hva: u64, buf: &[u8]) {
-    use std::io::Write;
-    let mut slice = unsafe { std::slice::from_raw_parts_mut(hva as *mut u8, buf.len()) };
-    if let Err(e) = (&mut slice).write(buf) {
-        error!("Failed to write mem {:?}", e);
     }
 }
 
