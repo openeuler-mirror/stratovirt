@@ -31,7 +31,7 @@ use crate::{
     virtio_has_feature, BlockState, VirtioDevice, VirtioInterrupt, VIRTIO_BLK_F_BLK_SIZE,
     VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
     VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES,
-    VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
 
 pub struct Block {
@@ -101,19 +101,30 @@ impl Block {
         Ok(())
     }
 
-    /// Get config from spdk and setup config space.
-    fn setup_device(&mut self) -> Result<()> {
+    /// Negotiate features with spdk.
+    fn negotiate_features(&mut self) -> Result<()> {
         let client = self.client.as_ref().unwrap();
-        let feature = self.state.device_features;
+        let features = client
+            .lock()
+            .unwrap()
+            .get_features()
+            .with_context(|| "Failed to get features for vhost-user blk")?;
 
-        if virtio_has_feature(feature, VHOST_USER_F_PROTOCOL_FEATURES) {
-            let protocol_feature = client
+        if virtio_has_feature(features, VHOST_USER_F_PROTOCOL_FEATURES) {
+            let protocol_features = client
                 .lock()
                 .unwrap()
                 .get_protocol_features()
                 .with_context(|| "Failed to get protocol features for vhost-user blk")?;
+            let supported_protocol_features =
+                1 << VHOST_USER_PROTOCOL_F_MQ | 1 << VHOST_USER_PROTOCOL_F_CONFIG;
+            client
+                .lock()
+                .unwrap()
+                .set_protocol_features(supported_protocol_features & protocol_features)
+                .with_context(|| "Failed to set protocol features for vhost-user blk")?;
 
-            if virtio_has_feature(protocol_feature, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
+            if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
                 let config = client
                     .lock()
                     .unwrap()
@@ -122,12 +133,12 @@ impl Block {
                 self.state.config_space = config;
             } else {
                 bail!(
-                    "Failed to get config, spdk doesn't support, spdk protocol feature: {:#b}",
-                    protocol_feature
+                    "Failed to get config, spdk doesn't support, spdk protocol features: {:#b}",
+                    protocol_features
                 );
             }
 
-            if virtio_has_feature(protocol_feature, VHOST_USER_PROTOCOL_F_MQ as u32) {
+            if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_MQ as u32) {
                 let max_queue_num = client
                     .lock()
                     .unwrap()
@@ -145,53 +156,28 @@ impl Block {
                 }
             } else if self.blk_cfg.queues > 1 {
                 bail!(
-                    "spdk doesn't support multi queue, spdk protocol feature: {:#b}",
-                    protocol_feature
+                    "spdk doesn't support multi queue, spdk protocol features: {:#b}",
+                    protocol_features
                 );
             }
         }
-        client
-            .lock()
-            .unwrap()
-            .set_virtio_blk_config(self.state.config_space)
-            .with_context(|| "Failed to set config for vhost-user blk")?;
-        Ok(())
-    }
 
-    /// Negotiate feature with spdk.
-    fn negotiate_feature(&mut self) -> Result<()> {
-        let client = self.client.as_ref().unwrap();
-
-        let mut feature = client
-            .lock()
-            .unwrap()
-            .get_features()
-            .with_context(|| "Failed to get features for vhost-user blk")?;
-
-        feature |= 1_u64 << VIRTIO_F_VERSION_1;
-        feature |= 1_u64 << VIRTIO_BLK_F_SIZE_MAX;
-        feature |= 1_u64 << VIRTIO_BLK_F_TOPOLOGY;
-        feature |= 1_u64 << VIRTIO_BLK_F_BLK_SIZE;
-        feature |= 1_u64 << VIRTIO_BLK_F_FLUSH;
-        feature |= 1_u64 << VIRTIO_BLK_F_DISCARD;
-        feature |= 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES;
-        feature |= 1_u64 << VIRTIO_BLK_F_SEG_MAX;
-        feature &= !(1_u64 << VIRTIO_F_RING_PACKED);
-
+        self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
+            | 1_u64 << VIRTIO_BLK_F_SIZE_MAX
+            | 1_u64 << VIRTIO_BLK_F_TOPOLOGY
+            | 1_u64 << VIRTIO_BLK_F_BLK_SIZE
+            | 1_u64 << VIRTIO_BLK_F_FLUSH
+            | 1_u64 << VIRTIO_BLK_F_DISCARD
+            | 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES
+            | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
         if self.blk_cfg.read_only {
-            feature |= 1_u64 << VIRTIO_BLK_F_RO;
+            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
         if self.blk_cfg.queues > 1 {
-            feature |= 1_u64 << VIRTIO_BLK_F_MQ;
+            self.state.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }
+        self.state.device_features &= features;
 
-        self.state.device_features = feature;
-
-        client
-            .lock()
-            .unwrap()
-            .set_features(feature)
-            .with_context(|| "Failed to set features for vhost-user blk")?;
         Ok(())
     }
 }
@@ -200,8 +186,8 @@ impl VirtioDevice for Block {
     /// Realize vhost user blk pci device.
     fn realize(&mut self) -> Result<()> {
         self.init_client()?;
-        self.negotiate_feature()?;
-        self.setup_device()?;
+        self.negotiate_features()?;
+
         Ok(())
     }
 
@@ -271,6 +257,14 @@ impl VirtioDevice for Block {
         } else {
             bail!("Failed to write config to guest for vhost user blk pci, config space address overflow.")
         }
+
+        self.client
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .set_virtio_blk_config(self.state.config_space)
+            .with_context(|| "Failed to set config for vhost-user blk")?;
 
         Ok(())
     }
