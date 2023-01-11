@@ -72,7 +72,7 @@ impl ClientIoHandler {
     pub fn client_vencrypt_init(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let client = self.client.clone();
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let subauth = self.server.security_type.borrow().subauth;
         // VeNCrypt version 0.2.
         if buf[0] != 0 || buf[1] != 2 {
             let mut buf = Vec::new();
@@ -103,7 +103,7 @@ impl ClientIoHandler {
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let auth = u32::from_be_bytes(buf);
         let client = self.client.clone();
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let subauth = self.server.security_type.borrow().subauth;
 
         if auth != subauth as u32 {
             let mut buf = Vec::new();
@@ -123,7 +123,7 @@ impl ClientIoHandler {
         vnc_write(&client, buf);
         self.flush();
 
-        if let Some(tls_config) = self.server.security_type.lock().unwrap().tls_config.clone() {
+        if let Some(tls_config) = self.server.security_type.borrow().tls_config.clone() {
             match rustls::ServerConnection::new(tls_config) {
                 Ok(tls_conn) => {
                     self.tls_conn = Some(tls_conn);
@@ -200,7 +200,7 @@ impl ClientIoHandler {
     }
 
     fn handle_vencrypt_subauth(&mut self) -> Result<()> {
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let subauth = self.server.security_type.borrow().subauth;
         let client = self.client.clone();
         match subauth {
             SubAuthState::VncAuthVencryptX509Sasl => {

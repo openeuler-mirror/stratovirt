@@ -42,6 +42,7 @@ use machine_manager::{
 };
 use once_cell::sync::Lazy;
 use std::{
+    cell::RefCell,
     cmp,
     collections::HashMap,
     net::TcpListener,
@@ -163,10 +164,9 @@ impl DisplayChangeListenerOperations for VncInterface {
         }
         dcl.update_interval = update_interval;
 
-        let mut _rects: i32 = 0;
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
-            _rects += get_rects(client, &server, dirty_num);
+            get_rects(client, dirty_num);
         }
     }
 
@@ -272,8 +272,8 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         keysym2keycode.insert(k, v);
     }
     // Record keyboard state.
-    let keyboard_state: Arc<Mutex<KeyBoardState>> =
-        Arc::new(Mutex::new(KeyBoardState::new(max_keycode as usize)));
+    let keyboard_state: Rc<RefCell<KeyBoardState>> =
+        Rc::new(RefCell::new(KeyBoardState::new(max_keycode as usize)));
 
     let server = Arc::new(VncServer::new(
         get_client_image(),
@@ -330,11 +330,11 @@ fn start_vnc_thread() -> Result<()> {
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
             buf.append(&mut [0_u8; 2].to_vec());
 
-            let locked_surface = server.vnc_surface.lock().unwrap();
-            let width = get_image_width(locked_surface.server_image);
-            let height = get_image_height(locked_surface.server_image);
             for rect in rect_info.rects.iter_mut() {
+                let locked_surface = server.vnc_surface.lock().unwrap();
                 let dpm = rect_info.client.client_dpm.lock().unwrap().clone();
+                let width = dpm.client_width;
+                let height = dpm.client_height;
                 if check_rect(rect, width, height) {
                     let n =
                         send_framebuffer_update(locked_surface.server_image, rect, &dpm, &mut buf);
@@ -345,7 +345,6 @@ fn start_vnc_thread() -> Result<()> {
             }
             buf[2] = (num_rects >> 8) as u8;
             buf[3] = num_rects as u8;
-            drop(locked_surface);
 
             let client = rect_info.client;
             vnc_write(&client, buf);

@@ -43,8 +43,7 @@ use util::{
         NotifierOperation,
     },
 };
-use vmm_sys_util::epoll::EventSet;
-use vmm_sys_util::eventfd::EventFd;
+use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub const APP_NAME: &str = "stratovirt";
 const MAX_RECVBUF_LEN: usize = 1024;
@@ -160,6 +159,8 @@ impl Rectangle {
 /// Display Output mode information of client.
 #[derive(Clone)]
 pub struct DisplayMode {
+    /// Vnc display feature.
+    feature: i32,
     /// Width of client display.
     pub client_width: i32,
     /// Height of client display.
@@ -177,6 +178,7 @@ pub struct DisplayMode {
 impl DisplayMode {
     pub fn new(enc: i32, client_be: bool, convert: bool, pf: PixelFormat) -> Self {
         DisplayMode {
+            feature: 0,
             client_width: 0,
             client_height: 0,
             enc,
@@ -184,6 +186,10 @@ impl DisplayMode {
             convert,
             pf,
         }
+    }
+
+    pub fn has_feature(&self, feature: VncFeatures) -> bool {
+        self.feature & (1 << feature as usize) != 0
     }
 }
 
@@ -234,8 +240,6 @@ pub struct ConnState {
     update_state: UpdateState,
     /// RFB protocol version.
     pub version: VncVersion,
-    /// Vnc display feature.
-    feature: i32,
 }
 
 impl Default for ConnState {
@@ -244,7 +248,6 @@ impl Default for ConnState {
             dis_conn: false,
             update_state: UpdateState::No,
             version: VncVersion::default(),
-            feature: 0,
         }
     }
 }
@@ -265,10 +268,6 @@ impl ConnState {
             UpdateState::Incremental => dirty_num > 0,
             UpdateState::Force => true,
         }
-    }
-
-    pub fn has_feature(&self, feature: VncFeatures) -> bool {
-        self.feature & (1 << feature as usize) != 0
     }
 }
 
@@ -565,7 +564,7 @@ impl ClientIoHandler {
             version.minor = 3;
         }
         self.client.conn_state.lock().unwrap().version = version;
-        let auth = self.server.security_type.lock().unwrap().auth;
+        let auth = self.server.security_type.borrow().auth;
 
         if self.client.conn_state.lock().unwrap().version.minor == 3 {
             error!("Waiting for handle minor=3 ...");
@@ -617,17 +616,17 @@ impl ClientIoHandler {
 
         // Send server framebuffer info.
         let locked_surface = self.server.vnc_surface.lock().unwrap();
-        let mut locked_dpm = client.client_dpm.lock().unwrap();
         let width = get_image_width(locked_surface.server_image);
         let height = get_image_height(locked_surface.server_image);
+        drop(locked_surface);
         if !(0..=MAX_IMAGE_SIZE).contains(&width) || !(0..=MAX_IMAGE_SIZE).contains(&height) {
             error!("Invalid Image Size!");
             return Err(anyhow!(VncError::InvalidImageSize));
         }
+        let mut locked_dpm = client.client_dpm.lock().unwrap();
         locked_dpm.client_width = width;
         locked_dpm.client_height = height;
         drop(locked_dpm);
-        drop(locked_surface);
 
         buf.append(&mut (width as u16).to_be_bytes().to_vec());
         buf.append(&mut (height as u16).to_be_bytes().to_vec());
@@ -644,7 +643,7 @@ impl ClientIoHandler {
     /// Authentication
     fn handle_auth(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
-        let auth = self.server.security_type.lock().unwrap().auth;
+        let auth = self.server.security_type.borrow().auth;
         let client = self.client.clone();
         let version = client.conn_state.lock().unwrap().version.clone();
 
@@ -827,7 +826,6 @@ impl ClientIoHandler {
         }
 
         let mut locked_dpm = self.client.client_dpm.lock().unwrap();
-        let mut locked_state = self.client.conn_state.lock().unwrap();
         while num_encoding > 0 {
             let offset = (4 * num_encoding) as usize;
             let enc = i32::from_be_bytes([
@@ -841,48 +839,48 @@ impl ClientIoHandler {
                     locked_dpm.enc = enc;
                 }
                 ENCODING_HEXTILE => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureHextile as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureHextile as usize;
                     locked_dpm.enc = enc;
                 }
                 ENCODING_TIGHT => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureTight as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureTight as usize;
                     locked_dpm.enc = enc;
                 }
                 ENCODING_ZLIB => {
                     // ZRLE compress better than ZLIB, so prioritize ZRLE.
-                    if locked_state.feature & (1 << VncFeatures::VncFeatureZrle as usize) == 0 {
-                        locked_state.feature |= 1 << VncFeatures::VncFeatureZlib as usize;
+                    if locked_dpm.feature & (1 << VncFeatures::VncFeatureZrle as usize) == 0 {
+                        locked_dpm.feature |= 1 << VncFeatures::VncFeatureZlib as usize;
                         locked_dpm.enc = enc;
                     }
                 }
                 ENCODING_ZRLE => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureZrle as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureZrle as usize;
                     locked_dpm.enc = enc;
                 }
                 ENCODING_ZYWRLE => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureZywrle as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureZywrle as usize;
                     locked_dpm.enc = enc;
                 }
                 ENCODING_DESKTOPRESIZE => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureResize as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureResize as usize;
                 }
                 ENCODING_DESKTOP_RESIZE_EXT => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureResizeExt as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureResizeExt as usize;
                 }
                 ENCODING_POINTER_TYPE_CHANGE => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeaturePointerTypeChange as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeaturePointerTypeChange as usize;
                 }
                 ENCODING_RICH_CURSOR => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureRichCursor as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureRichCursor as usize;
                 }
                 ENCODING_ALPHA_CURSOR => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureAlphaCursor as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureAlphaCursor as usize;
                 }
                 ENCODING_WMVI => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureWmvi as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureWmvi as usize;
                 }
                 ENCODING_LED_STATE => {
-                    locked_state.feature |= 1 << VncFeatures::VncFeatureLedState as usize;
+                    locked_dpm.feature |= 1 << VncFeatures::VncFeatureLedState as usize;
                 }
                 _ => {}
             }
@@ -891,7 +889,6 @@ impl ClientIoHandler {
         }
 
         drop(locked_dpm);
-        drop(locked_state);
         let mut buf: Vec<u8> = Vec::new();
         // VNC desktop resize.
         desktop_resize(&client, &server, &mut buf);
@@ -910,10 +907,10 @@ impl ClientIoHandler {
             return;
         }
         let buf = self.read_incoming_msg();
-        let locked_surface = self.server.vnc_surface.lock().unwrap();
-        let width = get_image_width(locked_surface.server_image);
-        let height = get_image_height(locked_surface.server_image);
-        drop(locked_surface);
+        let locked_dpm = self.client.client_dpm.lock().unwrap();
+        let width = locked_dpm.client_width;
+        let height = locked_dpm.client_height;
+        drop(locked_dpm);
         let client = self.client.clone();
         let mut locked_state = client.conn_state.lock().unwrap();
         if buf[1] != 0 {
@@ -1086,23 +1083,23 @@ impl EventNotifierHelper for ClientIoHandler {
 
 /// Generate the data that needs to be sent.
 /// Add to send queue
-pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: i32) -> i32 {
+pub fn get_rects(client: &Arc<ClientState>, dirty_num: i32) {
     if !client.conn_state.lock().unwrap().is_need_update(dirty_num) {
-        return 0;
+        return;
     }
 
-    let mut num_rects = 0;
     let mut x: u64;
     let mut y: u64 = 0;
     let mut h: u64;
     let mut x2: u64;
     let mut rects = Vec::new();
-    let bpl = client.dirty_bitmap.lock().unwrap().vol() / MAX_WINDOW_HEIGHT as usize;
-    let locked_surface = server.vnc_surface.lock().unwrap();
+    let locked_dpm = client.client_dpm.lock().unwrap();
+    let height = locked_dpm.client_height as u64;
+    let width = locked_dpm.client_width as u64;
+    drop(locked_dpm);
     let mut locked_dirty = client.dirty_bitmap.lock().unwrap();
+    let bpl = locked_dirty.vol() / MAX_WINDOW_HEIGHT as usize;
 
-    let height = get_image_height(locked_surface.server_image) as u64;
-    let width = get_image_width(locked_surface.server_image) as u64;
     loop {
         // Find the first non-zero bit in dirty bitmap.
         let offset = locked_dirty.find_next_bit(y as usize * bpl).unwrap() as u64;
@@ -1123,7 +1120,7 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
             let len = (x2 - x) as usize;
             if let Err(e) = locked_dirty.clear_range(start, len) {
                 error!("clear bitmap error: {:?}", e);
-                return num_rects;
+                return;
             }
             i += 1;
         }
@@ -1137,7 +1134,6 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
                 ((x2 - x) * DIRTY_PIXELS_NUM as u64) as i32,
                 h as i32,
             ));
-            num_rects += 1;
         }
 
         if x == 0 && x2 == width / DIRTY_PIXELS_NUM as u64 {
@@ -1148,19 +1144,13 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
         }
     }
 
+    drop(locked_dirty);
     VNC_RECT_INFO
         .lock()
         .unwrap()
         .push(RectInfo::new(client, rects));
 
-    drop(locked_dirty);
-    drop(locked_surface);
-
-    let mut locked_state = client.conn_state.lock().unwrap();
-    locked_state.update_state = UpdateState::No;
-    drop(locked_state);
-
-    num_rects
+    client.conn_state.lock().unwrap().update_state = UpdateState::No;
 }
 
 fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) -> Result<()> {
@@ -1204,13 +1194,6 @@ pub fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
 /// Set Desktop Size.
 pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &mut Vec<u8>) {
     let locked_surface = server.vnc_surface.lock().unwrap();
-    let locked_state = client.conn_state.lock().unwrap();
-    let mut locked_dpm = client.client_dpm.lock().unwrap();
-    if !locked_state.has_feature(VncFeatures::VncFeatureResizeExt)
-        && !locked_state.has_feature(VncFeatures::VncFeatureResize)
-    {
-        return;
-    }
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
     if !(0..=MAX_IMAGE_SIZE as i32).contains(&width)
@@ -1219,15 +1202,17 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
         error!("Invalid Image Size!");
         return;
     }
-
-    if locked_dpm.client_width == width && locked_dpm.client_height == height {
+    drop(locked_surface);
+    let mut locked_dpm = client.client_dpm.lock().unwrap();
+    if (!locked_dpm.has_feature(VncFeatures::VncFeatureResizeExt)
+        && !locked_dpm.has_feature(VncFeatures::VncFeatureResize))
+        || (locked_dpm.client_width == width && locked_dpm.client_height == height)
+    {
         return;
     }
     locked_dpm.client_width = width;
     locked_dpm.client_height = height;
     drop(locked_dpm);
-    drop(locked_state);
-    drop(locked_surface);
 
     buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
     buf.append(&mut (0_u8).to_be_bytes().to_vec());
@@ -1237,8 +1222,8 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
 
 /// Set color depth for client.
 pub fn set_color_depth(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
-    let locked_state = client.conn_state.lock().unwrap();
-    if locked_state.has_feature(VncFeatures::VncFeatureWmvi) {
+    let mut locked_dpm = client.client_dpm.lock().unwrap();
+    if locked_dpm.has_feature(VncFeatures::VncFeatureWmvi) {
         let width = client.client_dpm.lock().unwrap().client_width;
         let height = client.client_dpm.lock().unwrap().client_height;
         buf.append(&mut (ServerMsg::FramebufferUpdate as u8).to_be_bytes().to_vec());
@@ -1247,14 +1232,8 @@ pub fn set_color_depth(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
         framebuffer_upadate(0, 0, width, height, ENCODING_WMVI, buf);
         buf.append(&mut (ENCODING_RAW as u32).to_be_bytes().to_vec());
         pixel_format_message(client, buf);
-    } else if !client
-        .client_dpm
-        .lock()
-        .unwrap()
-        .pf
-        .is_default_pixel_format()
-    {
-        client.client_dpm.lock().unwrap().convert = true;
+    } else if !locked_dpm.pf.is_default_pixel_format() {
+        locked_dpm.convert = true;
     }
 }
 
@@ -1290,7 +1269,7 @@ pub fn display_cursor_define(
         return;
     }
     if client
-        .conn_state
+        .client_dpm
         .lock()
         .unwrap()
         .has_feature(VncFeatures::VncFeatureAlphaCursor)
@@ -1313,7 +1292,7 @@ pub fn display_cursor_define(
     }
 
     if client
-        .conn_state
+        .client_dpm
         .lock()
         .unwrap()
         .has_feature(VncFeatures::VncFeatureRichCursor)

@@ -145,21 +145,21 @@ impl ClientIoHandler {
         let buf = self.read_incoming_msg();
         let mech_name = String::from_utf8_lossy(&buf).to_string();
 
-        let mut locked_security = self.server.security_type.lock().unwrap();
-        let mech_list: Vec<&str> = locked_security.saslconfig.mech_list.split(',').collect();
+        let mut security = self.server.security_type.borrow_mut();
+        let mech_list: Vec<&str> = security.saslconfig.mech_list.split(',').collect();
         for mech in mech_list {
             if mech_name == *mech {
-                locked_security.saslconfig.mech_name = mech_name;
+                security.saslconfig.mech_name = mech_name;
                 break;
             }
         }
         // Unsupported mechanism.
-        if locked_security.saslconfig.mech_name.is_empty() {
+        if security.saslconfig.mech_name.is_empty() {
             return Err(anyhow!(VncError::AuthFailed(
                 "Unsupported mechanism".to_string()
             )));
         }
-        drop(locked_security);
+        drop(security);
 
         self.update_event_handler(4, ClientIoHandler::get_authmessage_length);
         Ok(())
@@ -199,17 +199,17 @@ impl ClientIoHandler {
 
         let server = self.server.clone();
         let client = self.client.clone();
-        let mut locked_security = server.security_type.lock().unwrap();
+        let mut security = server.security_type.borrow_mut();
         let err: c_int;
         let mut serverout: *const c_char = ptr::null_mut();
         let mut serverout_len: c_uint = 0;
-        let mech_name = CString::new(locked_security.saslconfig.mech_name.as_str()).unwrap();
+        let mech_name = CString::new(security.saslconfig.mech_name.as_str()).unwrap();
 
         // Start authentication.
-        if locked_security.saslconfig.sasl_stage == SaslStage::SaslServerStart {
+        if security.saslconfig.sasl_stage == SaslStage::SaslServerStart {
             unsafe {
                 err = sasl_server_start(
-                    locked_security.saslconfig.sasl_conn,
+                    security.saslconfig.sasl_conn,
                     mech_name.as_ptr(),
                     client_data.as_ptr() as *const c_char,
                     client_len,
@@ -220,7 +220,7 @@ impl ClientIoHandler {
         } else {
             unsafe {
                 err = sasl_server_step(
-                    locked_security.saslconfig.sasl_conn,
+                    security.saslconfig.sasl_conn,
                     client_data.as_ptr() as *const c_char,
                     client_len,
                     &mut serverout,
@@ -230,12 +230,12 @@ impl ClientIoHandler {
         }
 
         if err != SASL_OK && err != SASL_CONTINUE {
-            unsafe { sasl_dispose(&mut locked_security.saslconfig.sasl_conn) }
+            unsafe { sasl_dispose(&mut security.saslconfig.sasl_conn) }
             error!("Auth failed!");
             return Err(anyhow!(VncError::AuthFailed("Auth failed!".to_string())));
         }
         if serverout_len > SASL_DATA_MAX_LEN {
-            unsafe { sasl_dispose(&mut locked_security.saslconfig.sasl_conn) }
+            unsafe { sasl_dispose(&mut security.saslconfig.sasl_conn) }
             error!("SASL data too long");
             return Err(anyhow!(VncError::AuthFailed(
                 "SASL data too long".to_string()
@@ -258,14 +258,14 @@ impl ClientIoHandler {
         } else if err == SASL_CONTINUE {
             buf.append(&mut (0_u8).as_bytes().to_vec());
         }
-        drop(locked_security);
+        drop(security);
 
         if err == SASL_CONTINUE {
             // Authentication continue.
-            let mut locked_security = server.security_type.lock().unwrap();
-            locked_security.saslconfig.sasl_stage = SaslStage::SaslServerStep;
+            let mut security = server.security_type.borrow_mut();
+            security.saslconfig.sasl_stage = SaslStage::SaslServerStep;
             self.update_event_handler(4, ClientIoHandler::get_authmessage_length);
-            drop(locked_security);
+            drop(security);
             return Ok(());
         } else {
             if let Err(err) = self.sasl_check_ssf() {
@@ -344,7 +344,7 @@ impl ClientIoHandler {
                 err
             ))));
         }
-        self.server.security_type.lock().unwrap().saslconfig = saslconfig;
+        self.server.security_type.borrow_mut().saslconfig = saslconfig;
 
         Ok(())
     }
@@ -355,10 +355,10 @@ impl ClientIoHandler {
         let mut err: c_int;
         let ssf: sasl_ssf_t = 256;
         let ssf = &ssf as *const sasl_ssf_t;
-        let locked_security = self.server.security_type.lock().unwrap();
+        let security = self.server.security_type.borrow_mut();
         unsafe {
             err = sasl_setprop(
-                locked_security.saslconfig.sasl_conn,
+                security.saslconfig.sasl_conn,
                 SASL_SSF_EXTERNAL as i32,
                 ssf as *const c_void,
             );
@@ -386,7 +386,7 @@ impl ClientIoHandler {
         let props = &saslprops as *const sasl_security_properties_t;
         unsafe {
             err = sasl_setprop(
-                locked_security.saslconfig.sasl_conn,
+                security.saslconfig.sasl_conn,
                 SASL_SEC_PROPS.try_into().unwrap(),
                 props as *const c_void,
             );
@@ -410,11 +410,11 @@ impl ClientIoHandler {
         let sep = CString::new(",").unwrap();
         let suffix = CString::new("").unwrap();
         let mut mechlist: *const c_char = ptr::null_mut();
-        let mut locked_security = self.server.security_type.lock().unwrap();
+        let mut security = self.server.security_type.borrow_mut();
         let client = self.client.clone();
         unsafe {
             err = sasl_listmech(
-                locked_security.saslconfig.sasl_conn,
+                security.saslconfig.sasl_conn,
                 ptr::null_mut(),
                 prefix.as_ptr(),
                 sep.as_ptr(),
@@ -431,12 +431,12 @@ impl ClientIoHandler {
             )));
         }
         let mech_list = unsafe { CStr::from_ptr(mechlist as *const c_char) };
-        locked_security.saslconfig.mech_list = String::from(mech_list.to_str().unwrap());
+        security.saslconfig.mech_list = String::from(mech_list.to_str().unwrap());
         let mut buf = Vec::new();
-        let len = locked_security.saslconfig.mech_list.len();
+        let len = security.saslconfig.mech_list.len();
         buf.append(&mut (len as u32).to_be_bytes().to_vec());
-        buf.append(&mut locked_security.saslconfig.mech_list.as_bytes().to_vec());
-        drop(locked_security);
+        buf.append(&mut security.saslconfig.mech_list.as_bytes().to_vec());
+        drop(security);
         vnc_write(&client, buf);
         self.flush();
 
@@ -446,19 +446,13 @@ impl ClientIoHandler {
     /// Check whether the ssf layer of sasl meets the strength requirements.
     fn sasl_check_ssf(&mut self) -> Result<()> {
         let server = self.server.clone();
-        let mut locked_security = server.security_type.lock().unwrap();
-        if !locked_security.saslconfig.want_ssf {
+        let mut security = server.security_type.borrow_mut();
+        if !security.saslconfig.want_ssf {
             return Ok(());
         }
         let err: c_int;
         let mut val: *const c_void = ptr::null_mut();
-        unsafe {
-            err = sasl_getprop(
-                locked_security.saslconfig.sasl_conn,
-                SASL_SSF as c_int,
-                &mut val,
-            )
-        }
+        unsafe { err = sasl_getprop(security.saslconfig.sasl_conn, SASL_SSF as c_int, &mut val) }
         if err != SASL_OK {
             error!("sasl_getprop: internal error");
             return Err(anyhow!(VncError::AuthFailed(String::from(
@@ -474,23 +468,23 @@ impl ClientIoHandler {
             ))));
         }
 
-        locked_security.saslconfig.run_ssf = 1;
-        drop(locked_security);
+        security.saslconfig.run_ssf = 1;
+        drop(security);
         Ok(())
     }
 
     /// Check username.
     fn sasl_check_authz(&mut self) -> Result<()> {
-        let locked_security = self.server.security_type.lock().unwrap();
+        let security = self.server.security_type.borrow_mut();
         let mut val: *const c_void = ptr::null_mut();
         let err = unsafe {
             sasl_getprop(
-                locked_security.saslconfig.sasl_conn,
+                security.saslconfig.sasl_conn,
                 SASL_USERNAME as c_int,
                 &mut val,
             )
         };
-        drop(locked_security);
+        drop(security);
         if err != SASL_OK {
             return Err(anyhow!(VncError::AuthFailed(String::from(
                 "Cannot fetch SASL username"
@@ -505,8 +499,8 @@ impl ClientIoHandler {
         let username = String::from(username.to_str().unwrap());
 
         let server = self.server.clone();
-        let locked_security = server.security_type.lock().unwrap();
-        if let Some(saslauth) = &locked_security.saslauth {
+        let security = server.security_type.borrow_mut();
+        if let Some(saslauth) = &security.saslauth {
             if saslauth.identity != username {
                 return Err(anyhow!(VncError::AuthFailed(String::from(
                     "No SASL username set"
@@ -517,7 +511,7 @@ impl ClientIoHandler {
                 "No SASL username set"
             ))));
         }
-        drop(locked_security);
+        drop(security);
 
         Ok(())
     }
