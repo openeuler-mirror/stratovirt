@@ -36,6 +36,7 @@ use machine_manager::{
     event_loop::EventLoop,
 };
 use std::{
+    cell::RefCell,
     cmp,
     collections::HashMap,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -63,9 +64,9 @@ pub struct VncServer {
     /// Client io handler.
     pub client_handlers: Arc<Mutex<HashMap<String, Arc<ClientState>>>>,
     /// Security Type for connection.
-    pub security_type: Arc<Mutex<SecurityType>>,
+    pub security_type: Rc<RefCell<SecurityType>>,
     /// keyboard status.
-    pub keyboard_state: Arc<Mutex<KeyBoardState>>,
+    pub keyboard_state: Rc<RefCell<KeyBoardState>>,
     /// Mapping ASCII to keycode.
     pub keysym2keycode: HashMap<u16, u16>,
     /// Image data of surface.
@@ -85,12 +86,12 @@ impl VncServer {
     /// Create a new VncServer.
     pub fn new(
         guest_image: *mut pixman_image_t,
-        keyboard_state: Arc<Mutex<KeyBoardState>>,
+        keyboard_state: Rc<RefCell<KeyBoardState>>,
         keysym2keycode: HashMap<u16, u16>,
     ) -> Self {
         VncServer {
             client_handlers: Arc::new(Mutex::new(HashMap::new())),
-            security_type: Arc::new(Mutex::new(SecurityType::default())),
+            security_type: Rc::new(RefCell::new(SecurityType::default())),
             keyboard_state,
             keysym2keycode,
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
@@ -565,11 +566,10 @@ pub fn make_server_config(
     // Set security config.
     server
         .security_type
-        .lock()
-        .unwrap()
+        .borrow_mut()
         .set_security_config(vnc_cfg, object)?;
     // Set auth type.
-    server.security_type.lock().unwrap().set_auth()?;
+    server.security_type.borrow_mut().set_auth()?;
 
     Ok(())
 }
