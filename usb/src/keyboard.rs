@@ -161,7 +161,7 @@ pub fn keyboard_event(kbd: &Arc<Mutex<UsbKeyboard>>, scan_codes: &[u32]) -> Resu
 impl UsbDeviceOps for UsbKeyboard {
     fn reset(&mut self) {
         info!("Keyboard device reset");
-        self.usb_device.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
+        self.usb_device.remote_wakeup = 0;
         self.usb_device.addr = 0;
         self.hid.reset();
     }

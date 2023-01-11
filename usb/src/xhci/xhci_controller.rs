@@ -528,6 +528,7 @@ impl XhciDevice {
         for i in 0..self.intrs.len() {
             self.intrs[i].reset();
         }
+        self.cmd_ring.init(0);
     }
 
     /// Reset xhci port.
