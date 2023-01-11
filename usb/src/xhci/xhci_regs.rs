@@ -182,7 +182,7 @@ impl XhciInterrupter {
             erstsz: 0,
             erstba: 0,
             erdp: 0,
-            er_pcs: false,
+            er_pcs: true,
             er_start: 0,
             er_size: 0,
             er_ep_idx: 0,
@@ -195,7 +195,7 @@ impl XhciInterrupter {
         self.erstsz = 0;
         self.erstba = 0;
         self.erdp = 0;
-        self.er_pcs = false;
+        self.er_pcs = true;
         self.er_start = 0;
         self.er_size = 0;
         self.er_ep_idx = 0;
