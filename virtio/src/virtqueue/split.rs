@@ -222,7 +222,10 @@ impl SplitVringDesc {
             let base = self.addr.0;
             let offset = self.len as u64;
             if base > reg_cache.start && base + offset < reg_cache.end {
-                base.checked_add(offset).unwrap();
+                if base.checked_add(offset).is_none() {
+                    error!("The memory of descriptor is invalid, range overflows");
+                    return false;
+                }
                 miss_cached = false;
             }
         } else {
@@ -337,7 +340,10 @@ impl SplitVringDesc {
                 };
                 queue_size = desc.get_desc_num();
                 desc = Self::next_desc(sys_mem, desc_table_host, queue_size, 0, cache)?;
-                desc_size = elem.desc_num + queue_size;
+                desc_size = elem
+                    .desc_num
+                    .checked_add(queue_size)
+                    .ok_or_else(|| anyhow!("The chained desc number overflows"))?;
             }
 
             let iovec = ElemIovec {

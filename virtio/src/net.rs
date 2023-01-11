@@ -1102,6 +1102,8 @@ pub struct VirtioNetState {
     pub driver_features: u64,
     /// Virtio net configurations.
     pub config_space: VirtioNetConfig,
+    /// Device broken status.
+    broken: bool,
 }
 
 /// Network device structure.
@@ -1636,6 +1638,7 @@ unsafe impl Sync for Net {}
 
 impl StateTransfer for Net {
     fn get_state_vec(&self) -> migration::Result<Vec<u8>> {
+        self.state.lock().unwrap().broken = self.broken.load(Ordering::SeqCst);
         Ok(self.state.lock().unwrap().as_bytes().to_vec())
     }
 
@@ -1646,6 +1649,7 @@ impl StateTransfer for Net {
         }
         let mut locked_state = self.state.lock().unwrap();
         locked_state.as_mut_bytes().copy_from_slice(state);
+        self.broken.store(locked_state.broken, Ordering::SeqCst);
 
         Ok(())
     }
