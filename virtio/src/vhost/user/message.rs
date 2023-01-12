@@ -254,6 +254,7 @@ impl Default for VhostUserMemContext {
 
 /// The configuration for the state of virtual ring.
 #[repr(C)]
+#[derive(Default)]
 pub struct VhostUserVringState {
     /// Index for virtual ring.
     pub index: u32,

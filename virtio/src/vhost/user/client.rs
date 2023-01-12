@@ -426,6 +426,26 @@ impl VhostUserClient {
         Ok(())
     }
 
+    pub fn reset_vhost_user(&mut self) -> Result<()> {
+        let mut queue_num = self.queues.len();
+        if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
+            queue_num -= 1;
+        }
+
+        for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
+            self.set_vring_enable(queue_index, false)
+                .with_context(|| format!("Failed to set vring disable, index: {}", queue_index))?;
+            self.get_vring_base(queue_index)
+                .with_context(|| format!("Failed to get vring base, index: {}", queue_index))?;
+        }
+
+        self.queue_evts.clear();
+        self.call_events.clear();
+        self.queues.clear();
+
+        Ok(())
+    }
+
     pub fn add_event(client: &Arc<Mutex<Self>>) -> Result<()> {
         let notifiers = EventNotifierHelper::internal_notifiers(client.clone());
         register_event_helper(notifiers, None, &mut client.lock().unwrap().delete_evts)
@@ -775,7 +795,25 @@ impl VhostOps for VhostUserClient {
         bail!("Does not support for resetting owner")
     }
 
-    fn get_vring_base(&self, _queue_idx: usize) -> Result<u16> {
-        bail!("Does not support for getting vring base")
+    fn get_vring_base(&self, queue_idx: usize) -> Result<u16> {
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::GetVringBase as u32;
+        let hdr = VhostUserMsgHdr::new(
+            request,
+            VhostUserHdrFlag::NeedReply as u32,
+            size_of::<VhostUserVringState>() as u32,
+        );
+
+        let vring_state = VhostUserVringState::new(queue_idx as u32, 0_u32);
+        let payload_opt: Option<&[u8]> = None;
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
+            .with_context(|| "Failed to send msg for getting vring base")?;
+        let res = client
+            .wait_ack_msg::<VhostUserVringState>(request)
+            .with_context(|| "Failed to wait ack msg for getting vring base")?;
+
+        Ok(res.value as u16)
     }
 }
