@@ -1118,13 +1118,13 @@ mod test {
     #[test]
     fn test_region_ioeventfd() {
         let mut fd1 = RegionIoEventFd {
-            fd: EventFd::new(EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((1000, 4u64)),
             data_match: false,
             data: 0,
         };
         // compare length
-        let mut fd2 = fd1.try_clone().unwrap();
+        let mut fd2 = fd1.clone();
         fd2.addr_range.size = 8;
         assert!(fd1.before(&fd2));
 
