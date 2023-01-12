@@ -139,7 +139,7 @@ impl RTC {
             base_time: Instant::now(),
         };
 
-        let tm = rtc_time_to_tm(rtc.get_current_value() as i64);
+        let tm = rtc_time_to_tm(rtc.get_current_value());
         rtc.set_rtc_cmos(tm);
 
         rtc.init_rtc_reg();
@@ -205,7 +205,7 @@ impl RTC {
             return false;
         }
 
-        let tm = rtc_time_to_tm(self.get_current_value() as i64);
+        let tm = rtc_time_to_tm(self.get_current_value());
         self.set_rtc_cmos(tm);
         match self.cur_index {
             RTC_REG_A => {
@@ -282,8 +282,8 @@ impl RTC {
     }
 
     /// Get current clock value.
-    fn get_current_value(&self) -> u64 {
-        self.base_time.elapsed().as_secs() + self.tick_offset
+    fn get_current_value(&self) -> i64 {
+        (self.base_time.elapsed().as_secs() as i128 + self.tick_offset as i128) as i64
     }
 
     fn set_rtc_cmos(&mut self, tm: libc::tm) {
