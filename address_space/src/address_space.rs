@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use migration::{migration::Migratable, MigrationManager};
 use util::byte_code::ByteCode;
+use util::test_helper::is_test_enabled;
 
 use crate::{
     AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener, ListenerReqType, Region,
@@ -473,6 +474,40 @@ impl AddressSpace {
 
         let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
         let offset_in_region = fr.offset_in_region + offset;
+
+        if is_test_enabled() {
+            for evtfd in self.ioeventfds.lock().unwrap().iter() {
+                if addr != evtfd.addr_range.base || count != evtfd.addr_range.size {
+                    continue;
+                }
+                if !evtfd.data_match {
+                    evtfd.fd.write(1).unwrap();
+                    return Ok(());
+                }
+
+                let mut buf = Vec::new();
+                src.read_to_end(&mut buf).unwrap();
+
+                if buf.len() <= 8 {
+                    let data = u64::from_bytes(buf.as_slice()).unwrap();
+                    if *data == evtfd.data {
+                        evtfd.fd.write(1).unwrap();
+                        return Ok(());
+                    }
+                }
+
+                return fr.owner
+                    .write(&mut buf.as_slice(), region_base, offset_in_region, count)
+                    .with_context(||
+                        format!(
+                            "Failed to write region, region base 0x{:X}, offset in region 0x{:X}, size 0x{:X}",
+                            region_base.raw_value(),
+                            offset_in_region,
+                            count
+                        ));
+            }
+        }
+
         fr.owner
             .write(src, region_base, offset_in_region, count)
             .with_context(||

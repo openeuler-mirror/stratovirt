@@ -34,6 +34,7 @@ pub mod reader;
 pub mod seccomp;
 pub mod syscall;
 pub mod tap;
+pub mod test_helper;
 pub mod time;
 pub mod trace;
 pub mod unix;

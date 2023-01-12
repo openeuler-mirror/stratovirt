@@ -187,6 +187,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_value(true)
         )
         .arg(
+            Arg::with_name("mod-test")
+            .long("mod-test")
+            .value_name("unix:socket_path")
+            .help("set module test's unixsocket path")
+            .takes_value(true)
+        )
+        .arg(
             Arg::with_name("drive")
             .multiple(true)
             .long("drive")
