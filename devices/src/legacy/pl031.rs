@@ -121,7 +121,7 @@ impl PL031 {
 
     /// Get current clock value.
     fn get_current_value(&self) -> u32 {
-        self.base_time.elapsed().as_secs() as u32 + self.tick_offset
+        (self.base_time.elapsed().as_secs() as u128 + self.tick_offset as u128) as u32
     }
 
     fn inject_interrupt(&self) {
