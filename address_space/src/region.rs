@@ -88,9 +88,10 @@ impl fmt::Debug for Region {
 /// Used to trigger events.
 /// If `data_match` is enabled, the `EventFd` is triggered iff `data` is written
 /// to the specified address.
+#[derive(Clone)]
 pub struct RegionIoEventFd {
     /// EventFd to be triggered when guest writes to the address.
-    pub fd: vmm_sys_util::eventfd::EventFd,
+    pub fd: Arc<vmm_sys_util::eventfd::EventFd>,
     /// Addr_range contains two params as follows:
     /// base: in addr_range is the address of EventFd.
     /// size: can be 2, 4, 8 bytes.
@@ -131,21 +132,6 @@ impl RegionIoEventFd {
             return self.data < other.data;
         }
         false
-    }
-
-    /// Return the cloned Region IoEventFd,
-    /// return error if failed to clone EventFd.
-    pub(crate) fn try_clone(&self) -> Result<RegionIoEventFd> {
-        let fd = self
-            .fd
-            .try_clone()
-            .map_err(|_| anyhow!(AddressSpaceError::IoEventFd))?;
-        Ok(RegionIoEventFd {
-            fd,
-            addr_range: self.addr_range,
-            data_match: self.data_match,
-            data: self.data,
-        })
     }
 }
 
@@ -668,18 +654,13 @@ impl Region {
     /// Set the ioeventfds within this Region,
     /// Return the IoEvent of a `Region`.
     pub fn set_ioeventfds(&self, new_fds: &[RegionIoEventFd]) {
-        *self.io_evtfds.lock().unwrap() = new_fds.iter().map(|e| e.try_clone().unwrap()).collect();
+        *self.io_evtfds.lock().unwrap() = new_fds.to_vec();
     }
 
     /// Get the ioeventfds within this Region,
     /// these fds will be register to `KVM` and used for guest notifier.
     pub fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
-        self.io_evtfds
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|e| e.try_clone().unwrap())
-            .collect()
+        self.io_evtfds.lock().unwrap().to_vec()
     }
 
     /// Add sub-region to this region.
