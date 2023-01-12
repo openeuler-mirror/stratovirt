@@ -14,6 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, warn};
 use std::fmt;
 use std::fmt::Debug;
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
@@ -131,6 +132,21 @@ impl RegionIoEventFd {
         if self.data != other.data {
             return self.data < other.data;
         }
+        false
+    }
+
+    /// Check if this `RegionIoEventFd` has the same address but different fd number.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Other `RegionIoEventFd`.
+    pub(crate) fn fd_changed(&self, other: &RegionIoEventFd) -> bool {
+        if self.addr_range.base == other.addr_range.base
+            && self.fd.as_raw_fd() != other.fd.as_raw_fd()
+        {
+            return true;
+        }
+
         false
     }
 }

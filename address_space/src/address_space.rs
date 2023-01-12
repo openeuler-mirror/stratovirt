@@ -286,7 +286,11 @@ impl AddressSpace {
         while old_idx < old_evtfds.len() || new_idx < new_evtfds.len() {
             let old_fd = old_evtfds.get(old_idx);
             let new_fd = new_evtfds.get(new_idx);
-            if old_fd.is_some() && (new_fd.is_none() || old_fd.unwrap().before(new_fd.unwrap())) {
+            if old_fd.is_some()
+                && (new_fd.is_none()
+                    || old_fd.unwrap().before(new_fd.unwrap())
+                    || new_fd.unwrap().fd_changed(old_fd.unwrap()))
+            {
                 self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)
                     .with_context(|| {
                         anyhow!(AddressSpaceError::UpdateTopology(
@@ -297,7 +301,9 @@ impl AddressSpace {
                     })?;
                 old_idx += 1;
             } else if new_fd.is_some()
-                && (old_fd.is_none() || new_fd.unwrap().before(old_fd.unwrap()))
+                && (old_fd.is_none()
+                    || new_fd.unwrap().before(old_fd.unwrap())
+                    || new_fd.unwrap().fd_changed(old_fd.unwrap()))
             {
                 self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)
                     .with_context(|| {
