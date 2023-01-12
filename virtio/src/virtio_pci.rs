@@ -820,7 +820,6 @@ impl VirtioPciDevice {
                 return false;
             }
         }
-        update_dev_id(&self.parent_bus, self.devfn, &self.dev_id);
         true
     }
 
@@ -1258,7 +1257,11 @@ impl PciDevOps for VirtioPciDevice {
             .lock()
             .unwrap()
             .reset()
-            .with_context(|| "Fail to reset virtio device")
+            .with_context(|| "Failed to reset virtio device")?;
+        self.common_config.lock().unwrap().reset();
+        self.deactivate_device();
+
+        Ok(())
     }
 
     fn get_dev_path(&self) -> Option<String> {
