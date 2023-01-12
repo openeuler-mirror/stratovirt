@@ -18,6 +18,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::debug;
 
 use crate::xhci::xhci_controller::dma_read_bytes;
+use crate::UsbError;
 use anyhow::{bail, Result};
 
 /// Transfer Request Block
@@ -253,7 +254,9 @@ impl XhciRing {
                     self.ccs = !self.ccs;
                 }
             } else {
-                self.dequeue += TRB_SIZE as u64;
+                self.dequeue = self.dequeue.checked_add(TRB_SIZE as u64).ok_or(
+                    UsbError::MemoryAccessOverflow(self.dequeue, TRB_SIZE as u64),
+                )?;
                 return Ok(Some(trb));
             }
         }
@@ -303,7 +306,9 @@ impl XhciRing {
                 }
             } else {
                 td.push(trb);
-                dequeue += TRB_SIZE as u64;
+                dequeue = dequeue
+                    .checked_add(TRB_SIZE as u64)
+                    .ok_or(UsbError::MemoryAccessOverflow(dequeue, TRB_SIZE as u64))?;
                 if trb_type == TRBType::TrSetup {
                     ctrl_td = true;
                 } else if trb_type == TRBType::TrStatus {

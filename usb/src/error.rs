@@ -29,4 +29,6 @@ pub enum UsbError {
         #[from]
         source: std::io::Error,
     },
+    #[error("Memory access overflow, addr: 0x{0:X} offset: 0x{1:X}")]
+    MemoryAccessOverflow(u64, u64),
 }
