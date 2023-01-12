@@ -883,7 +883,7 @@ mod test {
     #[test]
     fn test_update_ioeventfd() {
         let ioeventfds = vec![RegionIoEventFd {
-            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((0, std::mem::size_of::<u32>() as u64)),
             data_match: true,
             data: 64_u64,
@@ -945,7 +945,7 @@ mod test {
     #[test]
     fn test_subregion_ioeventfd() {
         let ioeventfds = vec![RegionIoEventFd {
-            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((0, 4)),
             data_match: true,
             data: 0_64,
