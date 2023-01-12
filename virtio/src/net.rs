@@ -1612,19 +1612,8 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        if let Some(ctrl_info) = &self.ctrl_info {
-            let mut locked_ctrl = ctrl_info.lock().unwrap();
-            locked_ctrl.rx_mode = Default::default();
-            locked_ctrl.mac_info = Default::default();
-            locked_ctrl.vlan_map = HashMap::new();
-        } else {
-            bail!("Control information is None");
-        }
-
+        unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
+        self.ctrl_info = None;
         Ok(())
     }
 }
