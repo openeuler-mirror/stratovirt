@@ -637,7 +637,7 @@ impl SysBusDevOps for VirtioMmioDevice {
                 Ok(fd) => fd,
             };
             ret.push(RegionIoEventFd {
-                fd: eventfd_clone,
+                fd: Arc::new(eventfd_clone),
                 addr_range: AddressRange::from((addr, std::mem::size_of::<u32>() as u64)),
                 data_match: true,
                 data: index as u64,

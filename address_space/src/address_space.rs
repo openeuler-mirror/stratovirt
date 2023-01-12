@@ -326,7 +326,7 @@ impl AddressSpace {
         for fr in self.flat_view.load().0.iter() {
             let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region).0;
             for evtfd in fr.owner.ioeventfds().iter() {
-                let mut evtfd_clone = evtfd.try_clone()?;
+                let mut evtfd_clone = evtfd.clone();
                 evtfd_clone.addr_range.base =
                     evtfd_clone.addr_range.base.unchecked_add(region_base);
                 if fr
