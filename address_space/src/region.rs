@@ -1123,6 +1123,14 @@ mod test {
             data_match: false,
             data: 0,
         };
+        // comapre fd: unchanged
+        let mut fd2 = fd1.clone();
+        assert!(!fd2.fd_changed(&fd1));
+
+        // comapre fd: changed
+        fd2.fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
+        assert!(fd2.fd_changed(&fd1));
+
         // compare length
         let mut fd2 = fd1.clone();
         fd2.addr_range.size = 8;
