@@ -26,8 +26,10 @@ use machine_manager::{
     signal_handler::{exit_with_code, register_kill_signal, VM_EXIT_GENE_ERR},
     socket::Socket,
     temp_cleaner::TempCleaner,
+    test_server::TestSock,
 };
 use util::loop_context::EventNotifierHelper;
+use util::test_helper::{is_test_enabled, set_test_enabled};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
 use thiserror::Error;
@@ -87,6 +89,10 @@ fn main() {
 
 fn run() -> Result<()> {
     let cmd_args = create_args_parser().get_matches()?;
+
+    if cmd_args.is_present("mod-test") {
+        set_test_enabled();
+    }
 
     if let Some(logfile_path) = cmd_args.value_of("display log") {
         if logfile_path.is_empty() {
@@ -173,6 +179,9 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     let mut sockets = Vec::new();
     let vm: Arc<Mutex<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
         MachineType::MicroVm => {
+            if is_test_enabled() {
+                panic!("module test framework does not support microvm.")
+            }
             let vm = Arc::new(Mutex::new(
                 LightMachine::new(vm_config).with_context(|| "Failed to init MicroVM")?,
             ));
@@ -192,16 +201,32 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
                 .with_context(|| "Failed to realize standard VM.")?;
             EventLoop::set_manager(vm.clone(), None);
 
+            if is_test_enabled() {
+                let sock_path = cmd_args.value_of("mod-test");
+                let test_sock = Some(TestSock::new(sock_path.unwrap().as_str(), vm.clone()));
+                EventLoop::update_event(
+                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(
+                        test_sock.unwrap(),
+                    ))),
+                    None,
+                )
+                .with_context(|| "Failed to add test socket to MainLoop")?;
+            }
+
             for listener in listeners {
                 sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
             }
             vm
         }
         MachineType::None => {
+            if is_test_enabled() {
+                panic!("please specify machine type.")
+            }
             let vm = Arc::new(Mutex::new(
                 StdMachine::new(vm_config).with_context(|| "Failed to init NoneVM")?,
             ));
             EventLoop::set_manager(vm.clone(), None);
+
             for listener in listeners {
                 sockets.push(Socket::from_unix_listener(listener, Some(vm.clone())));
             }

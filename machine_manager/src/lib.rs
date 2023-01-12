@@ -31,3 +31,4 @@ pub mod signal_handler;
 pub mod socket;
 pub mod temp_cleaner;
 pub use error::MachineManagerError;
+pub mod test_server;

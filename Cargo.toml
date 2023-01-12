@@ -46,6 +46,7 @@ members = [
     "vhost_user_fs",
     "ozone",
     "vfio",
+    "tests/mod_test",
 ]
 
 [[bin]]

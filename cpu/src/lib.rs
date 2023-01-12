@@ -74,6 +74,7 @@ use log::{error, info, warn};
 use machine_manager::event;
 use machine_manager::machine::MachineInterface;
 use machine_manager::{qmp::qmp_schema as schema, qmp::QmpChannel};
+use util::test_helper::is_test_enabled;
 use vmm_sys_util::signal::{register_signal_handler, Killable};
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
@@ -705,14 +706,19 @@ impl CPUThreadWorker {
         info!("vcpu{} start running", self.thread_cpu.id);
         while let Ok(true) = self.ready_for_running() {
             #[cfg(not(test))]
-            if !self
-                .thread_cpu
-                .kvm_vcpu_exec()
-                .with_context(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
             {
-                break;
+                if is_test_enabled() {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                if !self
+                    .thread_cpu
+                    .kvm_vcpu_exec()
+                    .with_context(|| format!("VCPU {}/KVM emulate error!", self.thread_cpu.id()))?
+                {
+                    break;
+                }
             }
-
             #[cfg(test)]
             {
                 thread::sleep(Duration::from_millis(5));
