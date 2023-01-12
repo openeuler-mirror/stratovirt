@@ -142,16 +142,7 @@ impl RTC {
         let tm = rtc_time_to_tm(rtc.get_current_value() as i64);
         rtc.set_rtc_cmos(tm);
 
-        // Set Time frequency divider and Rate selection frequency in Register-A.
-        // Bits 6-4 = Time frequency divider (010 = 32.768KHz).
-        // Bits 3-0 = Rate selection frequency (110 = 1.024KHz, 976.562s).
-        rtc.cmos_data[RTC_REG_A as usize] = 0x26;
-
-        // Set 24 hour mode in Register-B.
-        rtc.cmos_data[RTC_REG_B as usize] = 0x02;
-
-        // Set VRT bit in Register-D, indicates that RAM and time are valid.
-        rtc.cmos_data[RTC_REG_D as usize] = 0x80;
+        rtc.init_rtc_reg();
 
         Ok(rtc)
     }
@@ -193,6 +184,19 @@ impl RTC {
             self.cmos_data[CMOS_MEM_ABOVE_4GB.1 as usize] = (mem_data >> 8) as u8;
             self.cmos_data[CMOS_MEM_ABOVE_4GB.2 as usize] = (mem_data >> 16) as u8;
         }
+    }
+
+    fn init_rtc_reg(&mut self) {
+        // Set Time frequency divider and Rate selection frequency in Register-A.
+        // Bits 6-4 = Time frequency divider (010 = 32.768KHz).
+        // Bits 3-0 = Rate selection frequency (110 = 1.024KHz, 976.562s).
+        self.cmos_data[RTC_REG_A as usize] = 0x26;
+
+        // Set 24 hour mode in Register-B.
+        self.cmos_data[RTC_REG_B as usize] = 0x02;
+
+        // Set VRT bit in Register-D, indicates that RAM and time are valid.
+        self.cmos_data[RTC_REG_D as usize] = 0x80;
     }
 
     fn read_data(&mut self, data: &mut [u8]) -> bool {
@@ -388,7 +392,7 @@ impl SysBusDevOps for RTC {
 
     fn reset(&mut self) -> sysbus::Result<()> {
         self.cmos_data.fill(0);
-        self.cmos_data[RTC_REG_D as usize] = 0x80;
+        self.init_rtc_reg();
         self.set_memory(self.mem_size, self.gap_start);
         Ok(())
     }
