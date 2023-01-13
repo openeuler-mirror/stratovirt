@@ -23,7 +23,6 @@ use util::num_ops::read_u32;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::client::VhostUserClient;
-use crate::block::VirtioBlkConfig;
 use crate::vhost::VhostOps;
 use crate::VhostUser::client::{VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ};
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
@@ -69,16 +68,6 @@ impl Block {
             }
             None => return Err(anyhow!("Failed to get client when stoping event")),
         };
-
-        Ok(())
-    }
-
-    fn clean_up(&mut self) -> Result<()> {
-        self.delete_event()?;
-        self.state.config_space = VirtioBlkConfig::default();
-        self.state.device_features = 0u64;
-        self.state.driver_features = 0u64;
-        self.client = None;
 
         Ok(())
     }
@@ -290,15 +279,14 @@ impl VirtioDevice for Block {
 
     /// Deactivate device.
     fn deactivate(&mut self) -> Result<()> {
+        self.client
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .reset_vhost_user()?;
         self.call_events.clear();
-        self.clean_up()?;
-        self.realize()
-    }
-
-    /// Reset device.
-    fn reset(&mut self) -> Result<()> {
-        self.clean_up()?;
-        self.realize()
+        self.delete_event()
     }
 
     /// Unrealize device.
