@@ -628,7 +628,7 @@ mod test {
     fn generate_region_ioeventfd<T: Into<u64>>(addr: u64, datamatch: T) -> RegionIoEventFd {
         let data = datamatch.into();
         RegionIoEventFd {
-            fd: EventFd::new(EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((addr, std::mem::size_of::<T>() as u64)),
             data_match: data != 0,
             data,
@@ -799,21 +799,21 @@ mod test {
             .is_ok());
 
         // Delete ioeventfd with wrong address will cause an error.
-        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        let mut evtfd_to_del = evtfd.clone();
         evtfd_to_del.addr_range.base.0 = evtfd_to_del.addr_range.base.0 - 2;
         assert!(kml
             .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
             .is_err());
 
         // Delete ioeventfd with inconsistent data-match will cause error.
-        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        let mut evtfd_to_del = evtfd.clone();
         evtfd_to_del.data_match = false;
         assert!(kml
             .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
             .is_err());
 
         // Delete ioeventfd with inconsistent matched data will cause an error.
-        let mut evtfd_to_del = evtfd.try_clone().unwrap();
+        let mut evtfd_to_del = evtfd.clone();
         evtfd_to_del.data = 128_u64;
         assert!(kml
             .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)

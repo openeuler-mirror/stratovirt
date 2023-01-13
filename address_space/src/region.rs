@@ -14,6 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, warn};
 use std::fmt;
 use std::fmt::Debug;
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
@@ -88,9 +89,10 @@ impl fmt::Debug for Region {
 /// Used to trigger events.
 /// If `data_match` is enabled, the `EventFd` is triggered iff `data` is written
 /// to the specified address.
+#[derive(Clone)]
 pub struct RegionIoEventFd {
     /// EventFd to be triggered when guest writes to the address.
-    pub fd: vmm_sys_util::eventfd::EventFd,
+    pub fd: Arc<vmm_sys_util::eventfd::EventFd>,
     /// Addr_range contains two params as follows:
     /// base: in addr_range is the address of EventFd.
     /// size: can be 2, 4, 8 bytes.
@@ -133,19 +135,19 @@ impl RegionIoEventFd {
         false
     }
 
-    /// Return the cloned Region IoEventFd,
-    /// return error if failed to clone EventFd.
-    pub(crate) fn try_clone(&self) -> Result<RegionIoEventFd> {
-        let fd = self
-            .fd
-            .try_clone()
-            .map_err(|_| anyhow!(AddressSpaceError::IoEventFd))?;
-        Ok(RegionIoEventFd {
-            fd,
-            addr_range: self.addr_range,
-            data_match: self.data_match,
-            data: self.data,
-        })
+    /// Check if this `RegionIoEventFd` has the same address but different fd number.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Other `RegionIoEventFd`.
+    pub(crate) fn fd_changed(&self, other: &RegionIoEventFd) -> bool {
+        if self.addr_range.base == other.addr_range.base
+            && self.fd.as_raw_fd() != other.fd.as_raw_fd()
+        {
+            return true;
+        }
+
+        false
     }
 }
 
@@ -668,18 +670,13 @@ impl Region {
     /// Set the ioeventfds within this Region,
     /// Return the IoEvent of a `Region`.
     pub fn set_ioeventfds(&self, new_fds: &[RegionIoEventFd]) {
-        *self.io_evtfds.lock().unwrap() = new_fds.iter().map(|e| e.try_clone().unwrap()).collect();
+        *self.io_evtfds.lock().unwrap() = new_fds.to_vec();
     }
 
     /// Get the ioeventfds within this Region,
     /// these fds will be register to `KVM` and used for guest notifier.
     pub fn ioeventfds(&self) -> Vec<RegionIoEventFd> {
-        self.io_evtfds
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|e| e.try_clone().unwrap())
-            .collect()
+        self.io_evtfds.lock().unwrap().to_vec()
     }
 
     /// Add sub-region to this region.
@@ -1121,13 +1118,21 @@ mod test {
     #[test]
     fn test_region_ioeventfd() {
         let mut fd1 = RegionIoEventFd {
-            fd: EventFd::new(EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((1000, 4u64)),
             data_match: false,
             data: 0,
         };
+        // comapre fd: unchanged
+        let mut fd2 = fd1.clone();
+        assert!(!fd2.fd_changed(&fd1));
+
+        // comapre fd: changed
+        fd2.fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
+        assert!(fd2.fd_changed(&fd1));
+
         // compare length
-        let mut fd2 = fd1.try_clone().unwrap();
+        let mut fd2 = fd1.clone();
         fd2.addr_range.size = 8;
         assert!(fd1.before(&fd2));
 

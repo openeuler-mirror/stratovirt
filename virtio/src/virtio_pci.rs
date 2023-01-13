@@ -693,7 +693,7 @@ impl VirtioPciDevice {
         for (index, eventfd) in eventfds.events.into_iter().enumerate() {
             let addr = index as u64 * u64::from(VIRTIO_PCI_CAP_NOTIFY_OFF_MULTIPLIER);
             ret.push(RegionIoEventFd {
-                fd: eventfd,
+                fd: Arc::new(eventfd),
                 addr_range: AddressRange::from((addr, 2u64)),
                 data_match: false,
                 data: index as u64,

@@ -286,7 +286,11 @@ impl AddressSpace {
         while old_idx < old_evtfds.len() || new_idx < new_evtfds.len() {
             let old_fd = old_evtfds.get(old_idx);
             let new_fd = new_evtfds.get(new_idx);
-            if old_fd.is_some() && (new_fd.is_none() || old_fd.unwrap().before(new_fd.unwrap())) {
+            if old_fd.is_some()
+                && (new_fd.is_none()
+                    || old_fd.unwrap().before(new_fd.unwrap())
+                    || new_fd.unwrap().fd_changed(old_fd.unwrap()))
+            {
                 self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)
                     .with_context(|| {
                         anyhow!(AddressSpaceError::UpdateTopology(
@@ -297,7 +301,9 @@ impl AddressSpace {
                     })?;
                 old_idx += 1;
             } else if new_fd.is_some()
-                && (old_fd.is_none() || new_fd.unwrap().before(old_fd.unwrap()))
+                && (old_fd.is_none()
+                    || new_fd.unwrap().before(old_fd.unwrap())
+                    || new_fd.unwrap().fd_changed(old_fd.unwrap()))
             {
                 self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)
                     .with_context(|| {
@@ -326,7 +332,7 @@ impl AddressSpace {
         for fr in self.flat_view.load().0.iter() {
             let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region).0;
             for evtfd in fr.owner.ioeventfds().iter() {
-                let mut evtfd_clone = evtfd.try_clone()?;
+                let mut evtfd_clone = evtfd.clone();
                 evtfd_clone.addr_range.base =
                     evtfd_clone.addr_range.base.unchecked_add(region_base);
                 if fr
@@ -877,7 +883,7 @@ mod test {
     #[test]
     fn test_update_ioeventfd() {
         let ioeventfds = vec![RegionIoEventFd {
-            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((0, std::mem::size_of::<u32>() as u64)),
             data_match: true,
             data: 64_u64,
@@ -939,7 +945,7 @@ mod test {
     #[test]
     fn test_subregion_ioeventfd() {
         let ioeventfds = vec![RegionIoEventFd {
-            fd: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             addr_range: AddressRange::from((0, 4)),
             data_match: true,
             data: 0_64,
