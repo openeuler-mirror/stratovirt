@@ -286,11 +286,14 @@ impl AddressSpace {
         while old_idx < old_evtfds.len() || new_idx < new_evtfds.len() {
             let old_fd = old_evtfds.get(old_idx);
             let new_fd = new_evtfds.get(new_idx);
-            if old_fd.is_some()
-                && (new_fd.is_none()
-                    || old_fd.unwrap().before(new_fd.unwrap())
-                    || new_fd.unwrap().fd_changed(old_fd.unwrap()))
-            {
+
+            if old_fd == new_fd {
+                old_idx += 1;
+                new_idx += 1;
+                continue;
+            }
+            // Delete old_fd, but do not delete it if it's after new_fd, as it may match later.
+            if old_fd.is_some() && (new_fd.is_none() || !old_fd.unwrap().after(new_fd.unwrap())) {
                 self.call_listeners(None, old_fd, ListenerReqType::DeleteIoeventfd)
                     .with_context(|| {
                         anyhow!(AddressSpaceError::UpdateTopology(
@@ -300,11 +303,9 @@ impl AddressSpace {
                         ))
                     })?;
                 old_idx += 1;
-            } else if new_fd.is_some()
-                && (old_fd.is_none()
-                    || new_fd.unwrap().before(old_fd.unwrap())
-                    || new_fd.unwrap().fd_changed(old_fd.unwrap()))
-            {
+            }
+            // Add new_fd, but do not add it if it's after old_fd, as it may match later.
+            if new_fd.is_some() && (old_fd.is_none() || !new_fd.unwrap().after(old_fd.unwrap())) {
                 self.call_listeners(None, new_fd, ListenerReqType::AddIoeventfd)
                     .with_context(|| {
                         anyhow!(AddressSpaceError::UpdateTopology(
@@ -313,9 +314,6 @@ impl AddressSpace {
                             RegionType::IO,
                         ))
                     })?;
-                new_idx += 1;
-            } else {
-                old_idx += 1;
                 new_idx += 1;
             }
         }
