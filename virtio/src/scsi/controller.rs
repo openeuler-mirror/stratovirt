@@ -595,7 +595,7 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
             .should_notify(mem_space, self.driver_features)
         {
             if let Err(e) =
-                (*self.interrupt_cb.as_ref())(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
             {
                 bail!(
                     "Failed to trigger interrupt(aio completion) for scsi controller, error is {:?}",

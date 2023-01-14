@@ -97,7 +97,7 @@ pub struct Aio<T: Clone + 'static> {
 impl<T: Clone + 'static> Aio<T> {
     pub fn new(func: Arc<AioCompleteFunc<T>>, engine: Option<&String>) -> Result<Self> {
         let max_events: usize = 128;
-        let fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let fd = EventFd::new(libc::EFD_NONBLOCK)?;
         let aio = if let Some(engine) = engine {
             engine
         } else {
