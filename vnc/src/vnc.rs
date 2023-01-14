@@ -242,12 +242,10 @@ impl DisplayChangeListenerOperations for VncInterface {
 ///
 /// * `VncConfig` `object`- vnc related parameters
 pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
-    let vnc_cfg;
-    if let Some(v) = vnc {
-        vnc_cfg = v;
-    } else {
-        return Ok(());
-    }
+    let vnc_cfg = match vnc {
+        Some(cfg) => cfg,
+        None => return Ok(()),
+    };
 
     let addr = format!("{}:{}", vnc_cfg.ip, vnc_cfg.port);
     let listener: TcpListener = match TcpListener::bind(addr.as_str()) {
