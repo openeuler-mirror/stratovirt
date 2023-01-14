@@ -52,8 +52,8 @@ use virtio::{
 
 struct FsIoHandler {
     queue: Queue,
-    kick_evt: EventFd,
-    call_evt: EventFd,
+    kick_evt: Arc<EventFd>,
+    call_evt: Arc<EventFd>,
     mem_space: Arc<AddressSpace>,
     driver_features: u64,
     fs: Arc<Mutex<FileSystem>>,
@@ -62,8 +62,8 @@ struct FsIoHandler {
 impl FsIoHandler {
     fn new(
         queue_config: QueueConfig,
-        kick_evt: &EventFd,
-        call_evt: &EventFd,
+        kick_evt: Arc<EventFd>,
+        call_evt: Arc<EventFd>,
         mem_space: &Arc<AddressSpace>,
         driver_features: u64,
         fs: Arc<Mutex<FileSystem>>,
@@ -76,8 +76,8 @@ impl FsIoHandler {
 
         Ok(FsIoHandler {
             queue,
-            kick_evt: kick_evt.try_clone().unwrap(),
-            call_evt: call_evt.try_clone().unwrap(),
+            kick_evt,
+            call_evt,
             mem_space: mem_space.clone(),
             driver_features,
             fs,
@@ -145,8 +145,8 @@ impl EventNotifierHelper for FsIoHandler {
 
 struct QueueInfo {
     config: QueueConfig,
-    kick_evt: Option<EventFd>,
-    call_evt: Option<EventFd>,
+    kick_evt: Option<Arc<EventFd>>,
+    call_evt: Option<Arc<EventFd>>,
 }
 
 impl QueueInfo {
@@ -394,7 +394,7 @@ impl VhostUserReqHandler for VirtioFs {
             .get_mut_queue_config(index)
             .map(|queue_info| {
                 let call_evt = unsafe { EventFd::from_raw_fd(fd) };
-                queue_info.call_evt = Some(call_evt);
+                queue_info.call_evt = Some(Arc::new(call_evt));
             })
             .with_context(|| format!("Failed to set vring call, index: {}", index))?;
         Ok(())
@@ -409,7 +409,7 @@ impl VhostUserReqHandler for VirtioFs {
             .get_mut_queue_config(index)
             .map(|queue_info| {
                 let kick_evt = unsafe { EventFd::from_raw_fd(fd) };
-                queue_info.kick_evt = Some(kick_evt);
+                queue_info.kick_evt = Some(Arc::new(kick_evt));
             })
             .with_context(|| format!("Failed to set vring kick, index: {}", index))?;
         Ok(())
@@ -439,8 +439,8 @@ impl VhostUserReqHandler for VirtioFs {
             let fs_handler = Arc::new(Mutex::new(
                 FsIoHandler::new(
                     queue_info.config,
-                    queue_info.kick_evt.as_ref().unwrap(),
-                    queue_info.call_evt.as_ref().unwrap(),
+                    queue_info.kick_evt.as_ref().unwrap().clone(),
+                    queue_info.call_evt.as_ref().unwrap().clone(),
                     &self.sys_mem,
                     driver_features,
                     self.fs.clone(),

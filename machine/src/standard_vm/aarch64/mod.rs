@@ -129,11 +129,11 @@ pub struct StdMachine {
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
-    power_button: EventFd,
+    power_button: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     /// Reset request, handle VM `Reset` event.
-    reset_req: EventFd,
+    reset_req: Arc<EventFd>,
     /// Device Tree Blob.
     dtb_vec: Vec<u8>,
     /// List of guest NUMA nodes information.
@@ -186,12 +186,15 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state: Arc::new((Mutex::new(KvmVmState::Created), Condvar::new())),
-            power_button: EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+            power_button: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
                 anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
-            })?,
+            })?),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
-            reset_req: EventFd::new(libc::EFD_NONBLOCK)
-                .with_context(|| anyhow!(MachineError::InitEventFdErr("reset_req".to_string())))?,
+            reset_req: Arc::new(
+                EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                    anyhow!(MachineError::InitEventFdErr("reset_req".to_string()))
+                })?,
+            ),
             dtb_vec: Vec::new(),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
@@ -475,7 +478,7 @@ impl MachineOps for StdMachine {
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
         locked_vm
-            .register_reset_event(&locked_vm.reset_req, clone_vm)
+            .register_reset_event(locked_vm.reset_req.clone(), clone_vm)
             .with_context(|| "Fail to register reset event")?;
         locked_vm.numa_nodes = locked_vm.add_numa_nodes(vm_config)?;
         locked_vm.init_memory(
@@ -551,7 +554,7 @@ impl MachineOps for StdMachine {
                 .with_context(|| "Failed to create ACPI tables")?;
         }
 
-        locked_vm.register_power_event(&locked_vm.power_button)?;
+        locked_vm.register_power_event(locked_vm.power_button.clone())?;
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
         MigrationManager::register_vm_instance(vm.clone());

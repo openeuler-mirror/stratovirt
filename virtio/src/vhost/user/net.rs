@@ -52,7 +52,7 @@ pub struct Net {
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
     /// The notifier events from host.
-    call_events: Vec<EventFd>,
+    call_events: Vec<Arc<EventFd>>,
     /// EventFd for deactivate control Queue.
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
@@ -66,7 +66,7 @@ impl Net {
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             mem_space: mem_space.clone(),
             client: None,
-            call_events: Vec::<EventFd>::new(),
+            call_events: Vec::<Arc<EventFd>>::new(),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
         }
@@ -233,7 +233,7 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let driver_features = self.state.lock().unwrap().driver_features;
@@ -275,9 +275,9 @@ impl VirtioDevice for Net {
     }
 
     /// Set guest notifiers for notifying the guest.
-    fn set_guest_notifiers(&mut self, queue_evts: &[EventFd]) -> Result<()> {
+    fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
         for fd in queue_evts.iter() {
-            let cloned_evt_fd = fd.try_clone().unwrap();
+            let cloned_evt_fd = fd.clone();
             self.call_events.push(cloned_evt_fd);
         }
 

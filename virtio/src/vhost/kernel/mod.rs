@@ -427,7 +427,7 @@ impl VhostOps for VhostBackend {
         Ok(vring_state.num as u16)
     }
 
-    fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_call(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let vring_file = VhostVringFile {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),
@@ -441,7 +441,7 @@ impl VhostOps for VhostBackend {
         Ok(())
     }
 
-    fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_kick(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let vring_file = VhostVringFile {
             index: queue_idx as u32,
             fd: fd.as_raw_fd(),

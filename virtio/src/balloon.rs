@@ -507,15 +507,15 @@ struct BalloonIoHandler {
     /// Inflate queue.
     inf_queue: Arc<Mutex<Queue>>,
     /// Inflate EventFd.
-    inf_evt: EventFd,
+    inf_evt: Arc<EventFd>,
     /// Deflate queue.
     def_queue: Arc<Mutex<Queue>>,
     /// Deflate EventFd.
-    def_evt: EventFd,
+    def_evt: Arc<EventFd>,
     /// Reporting queue.
     report_queue: Option<Arc<Mutex<Queue>>>,
     /// Reporting EventFd.
-    report_evt: Option<EventFd>,
+    report_evt: Option<Arc<EventFd>>,
     /// Device is broken or not.
     device_broken: Arc<AtomicBool>,
     /// The interrupt call back function.
@@ -979,7 +979,7 @@ impl VirtioDevice for Balloon {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         if queues.len() != self.queue_num() {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(
@@ -1286,14 +1286,14 @@ mod tests {
         let queue1 = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
         let queue2 = Arc::new(Mutex::new(Queue::new(queue_config_def, 1).unwrap()));
 
-        let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let event_def = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let event_inf = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        let event_def = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
 
         let mut handler = BalloonIoHandler {
             driver_features: bln.driver_features,
             mem_space: mem_space.clone(),
             inf_queue: queue1,
-            inf_evt: event_inf.try_clone().unwrap(),
+            inf_evt: event_inf.clone(),
             def_queue: queue2,
             def_evt: event_def,
             report_queue: None,
@@ -1395,8 +1395,8 @@ mod tests {
         let mut queues: Vec<Arc<Mutex<Queue>>> = Vec::new();
         let queue1 = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
         queues.push(queue1);
-        let event_inf = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let queue_evts: Vec<EventFd> = vec![event_inf.try_clone().unwrap()];
+        let event_inf = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        let queue_evts: Vec<Arc<EventFd>> = vec![event_inf.clone()];
 
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),

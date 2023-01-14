@@ -1301,8 +1301,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `power_button` - Eventfd of the power button.
-    fn register_power_event(&self, power_button: &EventFd) -> Result<()> {
-        let power_button = power_button.try_clone().unwrap();
+    fn register_power_event(&self, power_button: Arc<EventFd>) -> Result<()> {
         let button_fd = power_button.as_raw_fd();
         let power_button_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = power_button.read().unwrap();

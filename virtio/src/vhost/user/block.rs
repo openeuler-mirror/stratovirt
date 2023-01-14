@@ -43,7 +43,7 @@ pub struct Block {
     /// Vhost user client
     client: Option<Arc<Mutex<VhostUserClient>>>,
     /// The notifier events from host.
-    call_events: Vec<EventFd>,
+    call_events: Vec<Arc<EventFd>>,
 }
 
 impl Block {
@@ -53,7 +53,7 @@ impl Block {
             state: BlockState::default(),
             mem_space: mem_space.clone(),
             client: None,
-            call_events: Vec::<EventFd>::new(),
+            call_events: Vec::<Arc<EventFd>>::new(),
         }
     }
 
@@ -264,7 +264,7 @@ impl VirtioDevice for Block {
         _mem_space: Arc<AddressSpace>,
         _interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<crate::Queue>>],
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let mut client = match &self.client {
             Some(client) => client.lock().unwrap(),
@@ -298,9 +298,9 @@ impl VirtioDevice for Block {
     }
 
     /// Set guest notifiers for notifying the guest.
-    fn set_guest_notifiers(&mut self, queue_evts: &[EventFd]) -> Result<()> {
+    fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
         for fd in queue_evts.iter() {
-            let cloned_evt_fd = fd.try_clone().unwrap();
+            let cloned_evt_fd = fd.clone();
             self.call_events.push(cloned_evt_fd);
         }
 

@@ -90,14 +90,14 @@ const MAXIMUM_NR_QUEUES: usize = 8;
 /// HostNotifyInfo includes the info needed for notifying backend from guest.
 pub struct HostNotifyInfo {
     /// Eventfds which notify backend to use the avail ring.
-    events: Vec<EventFd>,
+    events: Vec<Arc<EventFd>>,
 }
 
 impl HostNotifyInfo {
     pub fn new(queue_num: usize) -> Self {
         let mut events = Vec::new();
         for _i in 0..queue_num {
-            events.push(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+            events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
         }
 
         HostNotifyInfo { events }
@@ -327,7 +327,7 @@ pub struct VirtioMmioDevice {
     // The entity of low level device.
     pub device: Arc<Mutex<dyn VirtioDevice>>,
     // EventFd used to send interrupt to VM
-    interrupt_evt: EventFd,
+    interrupt_evt: Arc<EventFd>,
     // Interrupt status.
     interrupt_status: Arc<AtomicU32>,
     // HostNotifyInfo used for guest notifier
@@ -351,7 +351,7 @@ impl VirtioMmioDevice {
 
         VirtioMmioDevice {
             device,
-            interrupt_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            interrupt_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             interrupt_status: Arc::new(AtomicU32::new(0)),
             host_notify_info: HostNotifyInfo::new(queue_num),
             state: Arc::new(Mutex::new(VirtioMmioState {
@@ -425,21 +425,14 @@ impl VirtioMmioDevice {
         }
         drop(locked_state);
 
-        let mut queue_evts = Vec::<EventFd>::new();
+        let mut queue_evts = Vec::<Arc<EventFd>>::new();
         for fd in self.host_notify_info.events.iter() {
-            let evt_fd_clone = match fd.try_clone() {
-                Ok(fd) => fd,
-                Err(e) => {
-                    error!("Failed to clone IoEventFd, {:?}", e);
-                    continue;
-                }
-            };
-            queue_evts.push(evt_fd_clone);
+            queue_evts.push(fd.clone());
         }
 
         let mut events = Vec::new();
         for _i in 0..self.device.lock().unwrap().queue_num() {
-            events.push(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+            events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
         }
 
         self.device.lock().unwrap().set_guest_notifiers(&events)?;
@@ -460,7 +453,7 @@ impl VirtioMmioDevice {
 
     fn assign_interrupt_cb(&mut self) {
         let interrupt_status = self.interrupt_status.clone();
-        let interrupt_evt = self.interrupt_evt.try_clone().unwrap();
+        let interrupt_evt = self.interrupt_evt.clone();
         let cloned_state = self.state.clone();
         let cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, needs_reset: bool| {
@@ -629,15 +622,8 @@ impl SysBusDevOps for VirtioMmioDevice {
         let mut ret = Vec::new();
         for (index, eventfd) in self.host_notify_info.events.iter().enumerate() {
             let addr = u64::from(NOTIFY_REG_OFFSET);
-            let eventfd_clone = match eventfd.try_clone() {
-                Err(e) => {
-                    error!("Failed to clone ioeventfd, error is {:?}", e);
-                    continue;
-                }
-                Ok(fd) => fd,
-            };
             ret.push(RegionIoEventFd {
-                fd: Arc::new(eventfd_clone),
+                fd: eventfd.clone(),
                 addr_range: AddressRange::from((addr, std::mem::size_of::<u32>() as u64)),
                 data_match: true,
                 data: index as u64,
@@ -647,7 +633,7 @@ impl SysBusDevOps for VirtioMmioDevice {
     }
 
     fn interrupt_evt(&self) -> Option<&EventFd> {
-        Some(&self.interrupt_evt)
+        Some(self.interrupt_evt.as_ref())
     }
 
     fn get_sys_resource(&mut self) -> Option<&mut SysRes> {
@@ -724,16 +710,9 @@ impl StateTransfer for VirtioMmioDevice {
 impl MigrationHook for VirtioMmioDevice {
     fn resume(&mut self) -> migration::Result<()> {
         if self.state.lock().unwrap().activated {
-            let mut queue_evts = Vec::<EventFd>::new();
+            let mut queue_evts = Vec::<Arc<EventFd>>::new();
             for fd in self.host_notify_info.events.iter() {
-                let evt_fd_clone = match fd.try_clone() {
-                    Ok(fd) => fd,
-                    Err(e) => {
-                        error!("Failed to clone IoEventFd, {:?}", e);
-                        continue;
-                    }
-                };
-                queue_evts.push(evt_fd_clone);
+                queue_evts.push(fd.clone());
             }
 
             if let Some(cb) = self.interrupt_cb.clone() {
@@ -890,7 +869,7 @@ mod tests {
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
             _queues: &[Arc<Mutex<Queue>>],
-            mut _queue_evts: Vec<EventFd>,
+            mut _queue_evts: Vec<Arc<EventFd>>,
         ) -> Result<()> {
             self.b_active = true;
             Ok(())
