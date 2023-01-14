@@ -20,6 +20,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::loop_context::EventLoopContext;
 use crate::time::NANOSECONDS_PER_SECOND;
+use anyhow::Result;
 
 /// Used to improve the accuracy of bucket level.
 const ACCURACY_SCALE: u64 = 1000;
@@ -45,14 +46,14 @@ impl LeakBucket {
     /// # Arguments
     ///
     /// * `units_ps` - units per second.
-    pub fn new(units_ps: u64) -> Self {
-        LeakBucket {
+    pub fn new(units_ps: u64) -> Result<Self> {
+        Ok(LeakBucket {
             capacity: units_ps * ACCURACY_SCALE,
             level: 0,
             prev_time: Instant::now(),
             timer_started: false,
-            timer_wakeup: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
-        }
+            timer_wakeup: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+        })
     }
 
     /// Return true if the bucket is full, and caller must return directly instead of launching IO.

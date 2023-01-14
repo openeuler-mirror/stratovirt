@@ -333,7 +333,10 @@ impl VirtioDevice for Rng {
                 .unwrap()
                 .try_clone()
                 .with_context(|| "Failed to clone random file for virtio rng")?,
-            leak_bucket: self.rng_cfg.bytes_per_sec.map(LeakBucket::new),
+            leak_bucket: match self.rng_cfg.bytes_per_sec {
+                Some(bps) => Some(LeakBucket::new(bps)?),
+                None => None,
+            },
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
