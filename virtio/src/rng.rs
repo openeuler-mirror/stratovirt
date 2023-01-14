@@ -60,7 +60,7 @@ fn get_req_data_size(in_iov: &[ElemIovec]) -> Result<u32> {
 
 struct RngHandler {
     queue: Arc<Mutex<Queue>>,
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     mem_space: Arc<AddressSpace>,
@@ -319,7 +319,7 @@ impl VirtioDevice for Rng {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let handler = RngHandler {
             queue: queues[0].clone(),
@@ -535,8 +535,8 @@ mod tests {
     #[test]
     fn test_rng_process_queue_01() {
         let mem_space = address_space_init();
-        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        let cloned_interrupt_evt = interrupt_evt.clone();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
@@ -567,7 +567,7 @@ mod tests {
         let file = TempFile::new().unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
-            queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            queue_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),
@@ -618,8 +618,8 @@ mod tests {
     #[test]
     fn test_rng_process_queue_02() {
         let mem_space = address_space_init();
-        let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
-        let cloned_interrupt_evt = interrupt_evt.try_clone().unwrap();
+        let interrupt_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+        let cloned_interrupt_evt = interrupt_evt.clone();
         let interrupt_status = Arc::new(AtomicU32::new(0));
         let interrupt_cb = Arc::new(Box::new(
             move |int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
@@ -650,7 +650,7 @@ mod tests {
         let file = TempFile::new().unwrap();
         let mut rng_handler = RngHandler {
             queue: Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap())),
-            queue_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            queue_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             interrupt_cb,
             driver_features: 0_u64,
             mem_space: mem_space.clone(),

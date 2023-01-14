@@ -252,7 +252,7 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let driver_features = self.state.lock().unwrap().driver_features;
@@ -324,7 +324,7 @@ impl VirtioDevice for Net {
                     )
                 })?;
                 backend
-                    .set_vring_kick(queue_index, &queue_evts[index * 2 + queue_index])
+                    .set_vring_kick(queue_index, queue_evts[index * 2 + queue_index].clone())
                     .with_context(|| {
                         format!(
                             "Failed to set vring kick for vhost net, index: {}",
@@ -335,12 +335,14 @@ impl VirtioDevice for Net {
                 drop(queue);
 
                 let host_notify = VhostNotify {
-                    notify_evt: EventFd::new(libc::EFD_NONBLOCK)
-                        .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
+                    notify_evt: Arc::new(
+                        EventFd::new(libc::EFD_NONBLOCK)
+                            .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
+                    ),
                     queue: queue_mutex.clone(),
                 };
                 backend
-                    .set_vring_call(queue_index, &host_notify.notify_evt)
+                    .set_vring_call(queue_index, host_notify.notify_evt.clone())
                     .with_context(|| {
                         format!(
                             "Failed to set vring call for vhost net, index: {}",

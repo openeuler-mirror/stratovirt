@@ -182,7 +182,7 @@ pub struct LightMachine {
     // Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     // VM power button, handle VM `Shutdown` event.
-    power_button: EventFd,
+    power_button: Arc<EventFd>,
     // All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     // Drive backend files.
@@ -216,8 +216,10 @@ impl LightMachine {
 
         // Machine state init
         let vm_state = Arc::new((Mutex::new(KvmVmState::Created), Condvar::new()));
-        let power_button = EventFd::new(libc::EFD_NONBLOCK)
-            .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
+        let power_button =
+            Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+                anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
+            })?);
 
         Ok(LightMachine {
             cpu_topo: CpuTopology::new(
@@ -845,7 +847,7 @@ impl MachineOps for LightMachine {
         }
 
         locked_vm
-            .register_power_event(&locked_vm.power_button)
+            .register_power_event(locked_vm.power_button.clone())
             .with_context(|| anyhow!(MachineError::InitEventFdErr("power_button".to_string())))?;
 
         MigrationManager::register_vm_instance(vm.clone());

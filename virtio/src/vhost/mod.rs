@@ -23,7 +23,7 @@ use anyhow::Result;
 /// Vhost vring call notify structure.
 pub struct VhostNotify {
     /// Used to register in vhost kernel, when virtio queue have io request will notify to vhost.
-    pub notify_evt: EventFd,
+    pub notify_evt: Arc<EventFd>,
     /// The related virtio queue.
     pub queue: Arc<Mutex<Queue>>,
 }
@@ -82,14 +82,14 @@ pub trait VhostOps {
     /// # Arguments
     /// * `queue_idx` - Index of the queue to modify.
     /// * `fd` - EventFd to trigger.
-    fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()>;
+    fn set_vring_call(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()>;
 
     /// Set eventfd to poll for added buffers.
     ///
     /// # Arguments
     /// * `queue_idx` - Index of the queue to modify.
     /// * `fd` - EventFd that will be signaled from guest.
-    fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()>;
+    fn set_vring_kick(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()>;
 
     /// Set the status of ring.
     ///

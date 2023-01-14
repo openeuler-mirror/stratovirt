@@ -491,9 +491,9 @@ struct GpuIoHandler {
     /// The address space to which the GPU device belongs.
     mem_space: Arc<AddressSpace>,
     /// Eventfd for contorl virtqueue.
-    ctrl_queue_evt: EventFd,
+    ctrl_queue_evt: Arc<EventFd>,
     /// Eventfd for cursor virtqueue.
-    cursor_queue_evt: EventFd,
+    cursor_queue_evt: Arc<EventFd>,
     /// Callback to trigger an interrupt.
     interrupt_cb: Arc<VirtioInterrupt>,
     /// Bit mask of features negotiated by the backend and the frontend.
@@ -1815,7 +1815,7 @@ impl VirtioDevice for Gpu {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         if queues.len() != QUEUE_NUM_GPU {
             return Err(anyhow!(VirtioError::IncorrectQueueNum(

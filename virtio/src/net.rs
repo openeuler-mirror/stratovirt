@@ -428,7 +428,7 @@ pub struct CtrlVirtio {
     /// The control queue.
     queue: Arc<Mutex<Queue>>,
     /// The eventfd used to notify the control queue event.
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
     /// The information about control command.
     ctrl_info: Arc<Mutex<CtrlInfo>>,
 }
@@ -436,7 +436,7 @@ pub struct CtrlVirtio {
 impl CtrlVirtio {
     pub fn new(
         queue: Arc<Mutex<Queue>>,
-        queue_evt: EventFd,
+        queue_evt: Arc<EventFd>,
         ctrl_info: Arc<Mutex<CtrlInfo>>,
     ) -> Self {
         Self {
@@ -627,11 +627,11 @@ impl EventNotifierHelper for NetCtrlHandler {
 
 struct TxVirtio {
     queue: Arc<Mutex<Queue>>,
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
 }
 
 impl TxVirtio {
-    fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
+    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
         TxVirtio { queue, queue_evt }
     }
 }
@@ -639,11 +639,11 @@ impl TxVirtio {
 struct RxVirtio {
     queue_full: bool,
     queue: Arc<Mutex<Queue>>,
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
 }
 
 impl RxVirtio {
-    fn new(queue: Arc<Mutex<Queue>>, queue_evt: EventFd) -> Self {
+    fn new(queue: Arc<Mutex<Queue>>, queue_evt: Arc<EventFd>) -> Self {
         RxVirtio {
             queue_full: false,
             queue,
@@ -661,7 +661,7 @@ struct NetIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
     receiver: Receiver<SenderConfig>,
-    update_evt: EventFd,
+    update_evt: Arc<EventFd>,
     device_broken: Arc<AtomicBool>,
     is_listening: bool,
     ctrl_info: Arc<Mutex<CtrlInfo>>,
@@ -1117,7 +1117,7 @@ pub struct Net {
     /// The send half of Rust's channel to send tap information.
     senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
-    update_evt: EventFd,
+    update_evt: Arc<EventFd>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
@@ -1133,7 +1133,7 @@ impl Default for Net {
             taps: None,
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            update_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
@@ -1148,7 +1148,7 @@ impl Net {
             taps: None,
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
-            update_evt: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            update_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
@@ -1484,7 +1484,7 @@ impl VirtioDevice for Net {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
@@ -1540,7 +1540,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 receiver,
-                update_evt: self.update_evt.try_clone().unwrap(),
+                update_evt: self.update_evt.clone(),
                 device_broken: self.broken.clone(),
                 is_listening: true,
                 ctrl_info: ctrl_info.clone(),

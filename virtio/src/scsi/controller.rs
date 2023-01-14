@@ -267,7 +267,7 @@ impl VirtioDevice for ScsiCntlr {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let queue_num = queues.len();
         if queue_num < SCSI_MIN_QUEUE_NUM {
@@ -612,7 +612,7 @@ pub struct ScsiCtrlHandler {
     /// The ctrl virtqueue.
     queue: Arc<Mutex<Queue>>,
     /// EventFd for the ctrl virtqueue.
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
     /// The address space to which the scsi HBA belongs.
     mem_space: Arc<AddressSpace>,
     /// The interrupt callback function.
@@ -724,7 +724,7 @@ pub struct ScsiEventHandler {
     /// The Event virtqueue.
     _queue: Arc<Mutex<Queue>>,
     /// EventFd for the Event virtqueue.
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
     /// The address space to which the scsi HBA belongs.
     _mem_space: Arc<AddressSpace>,
     /// The interrupt callback function.
@@ -770,7 +770,7 @@ pub struct ScsiCmdHandler {
     /// The Cmd virtqueue.
     queue: Arc<Mutex<Queue>>,
     /// EventFd for the Cmd virtqueue.
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
     /// The address space to which the scsi HBA belongs.
     mem_space: Arc<AddressSpace>,
     /// The interrupt callback function.

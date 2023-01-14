@@ -62,7 +62,7 @@ pub struct Message {
 
 /// GSI information for routing msix.
 struct GsiMsiRoute {
-    irq_fd: Option<EventFd>,
+    irq_fd: Arc<EventFd>,
     gsi: i32,
     msg: Message,
 }
@@ -198,7 +198,7 @@ impl Msix {
                 .vm_fd
                 .as_ref()
                 .unwrap()
-                .unregister_irqfd(route.irq_fd.as_ref().unwrap(), route.gsi as u32)
+                .unregister_irqfd(route.irq_fd.as_ref(), route.gsi as u32)
                 .map_err(|e| {
                     error!("Failed to unregister irq, error is {:?}", e);
                     e
@@ -231,7 +231,7 @@ impl Msix {
                 .vm_fd
                 .as_ref()
                 .unwrap()
-                .register_irqfd(route.irq_fd.as_ref().unwrap(), route.gsi as u32)
+                .register_irqfd(route.irq_fd.as_ref(), route.gsi as u32)
                 .map_err(|e| {
                     error!("Failed to register irq, error is {:?}", e);
                     e
@@ -240,7 +240,7 @@ impl Msix {
         Ok(())
     }
 
-    pub fn register_irqfd(&mut self, vector: u16, call_fd: &EventFd) -> Result<()> {
+    pub fn register_irqfd(&mut self, vector: u16, call_fd: Arc<EventFd>) -> Result<()> {
         let entry = self.get_message(vector);
         let msix_vector = MsiVector {
             msg_addr_lo: entry.address_lo,
@@ -283,14 +283,14 @@ impl Msix {
             .vm_fd
             .as_ref()
             .unwrap()
-            .register_irqfd(call_fd, gsi)
+            .register_irqfd(call_fd.as_ref(), gsi)
             .map_err(|e| {
                 error!("Failed to register irq, error is {:?}", e);
                 e
             })?;
 
         let gsi_route = GsiMsiRoute {
-            irq_fd: Some(call_fd.try_clone().unwrap()),
+            irq_fd: call_fd,
             gsi: gsi as i32,
             msg: entry,
         };
@@ -300,26 +300,24 @@ impl Msix {
 
     pub fn unregister_irqfd(&mut self) -> Result<()> {
         for (_, route) in self.gsi_msi_routes.iter() {
-            if let Some(fd) = &route.irq_fd.as_ref() {
-                KVM_FDS
-                    .load()
-                    .unregister_irqfd(fd, route.gsi as u32)
-                    .map_err(|e| {
-                        error!("Failed to unregister irq, error is {:?}", e);
-                        e
-                    })?;
+            KVM_FDS
+                .load()
+                .unregister_irqfd(route.irq_fd.as_ref(), route.gsi as u32)
+                .map_err(|e| {
+                    error!("Failed to unregister irq, error is {:?}", e);
+                    e
+                })?;
 
-                KVM_FDS
-                    .load()
-                    .irq_route_table
-                    .lock()
-                    .unwrap()
-                    .release_gsi(route.gsi as u32)
-                    .map_err(|e| {
-                        error!("Failed to release gsi, error is {:?}", e);
-                        e
-                    })?;
-            }
+            KVM_FDS
+                .load()
+                .irq_route_table
+                .lock()
+                .unwrap()
+                .release_gsi(route.gsi as u32)
+                .map_err(|e| {
+                    error!("Failed to release gsi, error is {:?}", e);
+                    e
+                })?;
         }
         self.gsi_msi_routes.clear();
         Ok(())

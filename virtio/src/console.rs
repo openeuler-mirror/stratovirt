@@ -71,7 +71,7 @@ impl VirtioConsoleConfig {
 struct ConsoleHandler {
     input_queue: Arc<Mutex<Queue>>,
     output_queue: Arc<Mutex<Queue>>,
-    output_queue_evt: EventFd,
+    output_queue_evt: Arc<EventFd>,
     mem_space: Arc<AddressSpace>,
     interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
@@ -353,7 +353,7 @@ impl VirtioDevice for Console {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         queue_evts.remove(0); // input_queue_evt never used
 

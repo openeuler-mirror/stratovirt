@@ -12,6 +12,7 @@
 
 /// We use Leaky Bucket Algorithm to limit iops of block device and qmp.
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::Arc;
 use std::time::Instant;
 
 use log::error;
@@ -35,7 +36,7 @@ pub struct LeakBucket {
     timer_started: bool,
     /// When bucket is ready for allowing more IO operation, the internal callback will write this FD.
     /// This FD should be listened by IO thread.
-    timer_wakeup: EventFd,
+    timer_wakeup: Arc<EventFd>,
 }
 
 impl LeakBucket {
@@ -50,7 +51,7 @@ impl LeakBucket {
             level: 0,
             prev_time: Instant::now(),
             timer_started: false,
-            timer_wakeup: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            timer_wakeup: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
         }
     }
 
@@ -82,7 +83,7 @@ impl LeakBucket {
 
         // need to be throttled
         if self.level > self.capacity {
-            let wakeup_clone = self.timer_wakeup.try_clone().unwrap();
+            let wakeup_clone = self.timer_wakeup.clone();
             let func = Box::new(move || {
                 wakeup_clone
                     .write(1)
