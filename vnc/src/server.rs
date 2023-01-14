@@ -341,11 +341,12 @@ impl VncSurface {
     /// Return the number of dirty area.
     pub fn update_server_image(&mut self) -> i32 {
         let mut dirty_num = 0;
-        let height = self.get_min_height();
+        let height = self.get_min_height() as usize;
         let g_bpl = self.guest_dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
+        let total_dirty_bits = height.checked_mul(g_bpl).unwrap_or(0);
 
         let mut offset = self.guest_dirty_bitmap.find_next_bit(0).unwrap();
-        if offset >= (height as usize) * g_bpl {
+        if offset >= total_dirty_bits {
             return dirty_num;
         }
 

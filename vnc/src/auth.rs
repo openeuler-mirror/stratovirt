@@ -116,17 +116,9 @@ impl ClientIoHandler {
     pub fn get_mechname_length(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-
-        if len > MECHNAME_MAX_LEN {
-            error!("SASL mechname too long");
+        if !(MECHNAME_MIN_LEN..MECHNAME_MAX_LEN).contains(&len) {
             return Err(anyhow!(VncError::AuthFailed(String::from(
-                "SASL mechname too long"
-            ))));
-        }
-        if len < MECHNAME_MIN_LEN {
-            error!("SASL mechname too short");
-            return Err(anyhow!(VncError::AuthFailed(String::from(
-                "SASL mechname too short"
+                "SASL mechname too short or too long"
             ))));
         }
 
