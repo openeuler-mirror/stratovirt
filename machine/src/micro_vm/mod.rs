@@ -378,26 +378,6 @@ impl LightMachine {
     }
 
     fn add_replaceable_device(&self, id: &str, driver: &str, slot: usize) -> Result<()> {
-        let index = if driver.contains("net") {
-            if slot >= MMIO_REPLACEABLE_NET_NR {
-                return Err(anyhow!(MicroVmError::RplDevLmtErr(
-                    "net".to_string(),
-                    MMIO_REPLACEABLE_NET_NR
-                )));
-            }
-            slot + MMIO_REPLACEABLE_BLK_NR
-        } else if driver.contains("blk") {
-            if slot >= MMIO_REPLACEABLE_BLK_NR {
-                return Err(anyhow!(MicroVmError::RplDevLmtErr(
-                    "block".to_string(),
-                    MMIO_REPLACEABLE_BLK_NR
-                )));
-            }
-            slot
-        } else {
-            bail!("Unsupported replaceable device type.");
-        };
-
         // Find the configuration by id.
         let configs_lock = self.replaceable_info.configs.lock().unwrap();
         let mut dev_config = None;
@@ -409,6 +389,34 @@ impl LightMachine {
         if dev_config.is_none() {
             bail!("Failed to find device configuration.");
         }
+
+        // Sanity check for config, driver and slot.
+        let cfg_any = dev_config.as_ref().unwrap().as_any();
+        let index = if driver.contains("net") {
+            if slot >= MMIO_REPLACEABLE_NET_NR {
+                return Err(anyhow!(MicroVmError::RplDevLmtErr(
+                    "net".to_string(),
+                    MMIO_REPLACEABLE_NET_NR
+                )));
+            }
+            if cfg_any.downcast_ref::<NetworkInterfaceConfig>().is_none() {
+                return Err(anyhow!(MicroVmError::DevTypeErr("net".to_string())));
+            }
+            slot + MMIO_REPLACEABLE_BLK_NR
+        } else if driver.contains("blk") {
+            if slot >= MMIO_REPLACEABLE_BLK_NR {
+                return Err(anyhow!(MicroVmError::RplDevLmtErr(
+                    "block".to_string(),
+                    MMIO_REPLACEABLE_BLK_NR
+                )));
+            }
+            if cfg_any.downcast_ref::<BlkDevConfig>().is_none() {
+                return Err(anyhow!(MicroVmError::DevTypeErr("blk".to_string())));
+            }
+            slot
+        } else {
+            bail!("Unsupported replaceable device type.");
+        };
 
         // Find the replaceable device and replace it.
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
