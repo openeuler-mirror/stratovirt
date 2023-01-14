@@ -11,14 +11,16 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use libc::{c_void, read};
+use libc::{c_void, read, EFD_NONBLOCK};
 use log::warn;
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::UtilError;
 use anyhow::{anyhow, Context, Result};
@@ -181,6 +183,13 @@ pub struct EventLoopContext {
     epoll: Epoll,
     /// Control epoll loop running.
     manager: Option<Arc<Mutex<dyn EventLoopManager>>>,
+    /// Used to wakeup epoll to re-evaluate events or timers.
+    kick_event: EventFd,
+    /// Used to avoid unnecessary kick operation when the
+    /// next re-evaluation is performed before next epoll.
+    kick_me: AtomicBool,
+    /// Used to identify that a kick operation ocurred.
+    kicked: AtomicBool,
     /// Fds registered to the `EventLoop`.
     events: Arc<RwLock<BTreeMap<RawFd, Box<EventNotifier>>>>,
     /// Events abandoned are stored in garbage collector.
@@ -198,13 +207,46 @@ unsafe impl Send for EventLoopContext {}
 impl EventLoopContext {
     /// Constructs a new `EventLoopContext`.
     pub fn new() -> Self {
-        EventLoopContext {
+        let mut ctx = EventLoopContext {
             epoll: Epoll::new().unwrap(),
             manager: None,
+            kick_event: EventFd::new(EFD_NONBLOCK).unwrap(),
+            kick_me: AtomicBool::new(false),
+            kicked: AtomicBool::new(false),
             events: Arc::new(RwLock::new(BTreeMap::new())),
             gc: Arc::new(RwLock::new(Vec::new())),
             ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
             timers: Arc::new(Mutex::new(Vec::new())),
+        };
+        ctx.init_kick();
+        ctx
+    }
+
+    fn init_kick(&mut self) {
+        let kick_handler: Rc<NotifierCallback> = Rc::new(|_, fd| {
+            read_fd(fd);
+            None
+        });
+        self.add_event(EventNotifier::new(
+            NotifierOperation::AddExclusion,
+            self.kick_event.as_raw_fd(),
+            None,
+            EventSet::IN,
+            vec![kick_handler],
+        ))
+        .unwrap();
+    }
+
+    // Force epoll.wait to exit to re-evaluate events and timers.
+    fn kick(&mut self) {
+        self.kicked.store(true, Ordering::SeqCst);
+        if self.kick_me.load(Ordering::SeqCst) {
+            if let Err(e) = self.kick_event.write(1) {
+                // Rarely fails when event is full, even if this
+                // occurs, no need to add event again, so log is
+                // enough for error handling.
+                warn!("Failed to kick eventloop, {:?}", e);
+            }
         }
     }
 
@@ -398,6 +440,7 @@ impl EventLoopContext {
                 }
             }
         }
+        self.kick();
 
         Ok(())
     }
@@ -460,10 +503,14 @@ impl EventLoopContext {
             }
         }
         timers.insert(index, timer);
+        drop(timers);
+        self.kick();
     }
 
     /// Get the expire_time of the soonest Timer, and then translate it to timeout.
     fn timers_min_timeout(&self) -> i32 {
+        // The kick event happens before re-evaluate can be ignored.
+        self.kicked.store(false, Ordering::SeqCst);
         let timers = self.timers.lock().unwrap();
         if timers.is_empty() {
             return -1;
@@ -503,12 +550,22 @@ impl EventLoopContext {
         }
     }
 
-    fn epoll_wait_manager(&mut self, time_out: i32) -> Result<bool> {
+    fn epoll_wait_manager(&mut self, mut time_out: i32) -> Result<bool> {
+        let need_kick = time_out != 0;
+        if need_kick {
+            self.kick_me.store(true, Ordering::SeqCst);
+            if self.kicked.load(Ordering::SeqCst) {
+                time_out = 0;
+            }
+        }
         let ev_count = match self.epoll.wait(time_out, &mut self.ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(anyhow!(UtilError::EpollWait(e))),
         };
+        if need_kick {
+            self.kick_me.store(false, Ordering::SeqCst);
+        }
 
         for i in 0..ev_count {
             // SAFETY: elements in self.events_map never get released in other functions
@@ -569,7 +626,6 @@ pub fn read_fd(fd: RawFd) -> u64 {
 #[cfg(test)]
 mod test {
     use super::*;
-    use libc::*;
     use std::os::unix::io::{AsRawFd, RawFd};
     use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
