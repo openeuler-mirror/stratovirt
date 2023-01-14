@@ -19,7 +19,7 @@ use crate::{
     utils::BuffPool,
     vnc::{
         framebuffer_upadate, set_area_dirty, write_pixel, BIT_PER_BYTE, DIRTY_PIXELS_NUM,
-        DIRTY_WIDTH_BITS, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH, MIN_OUTPUT_LIMIT,
+        DIRTY_WIDTH_BITS, MAX_IMAGE_SIZE, MAX_WINDOW_HEIGHT, MIN_OUTPUT_LIMIT,
         OUTPUT_THROTTLE_SCALE, VNC_RECT_INFO,
     },
     VncError,
@@ -620,9 +620,7 @@ impl ClientIoHandler {
         let mut locked_dpm = client.client_dpm.lock().unwrap();
         let width = get_image_width(locked_surface.server_image);
         let height = get_image_height(locked_surface.server_image);
-        if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
-            || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
-        {
+        if !(0..=MAX_IMAGE_SIZE).contains(&width) || !(0..=MAX_IMAGE_SIZE).contains(&height) {
             error!("Invalid Image Size!");
             return Err(anyhow!(VncError::InvalidImageSize));
         }
@@ -1215,8 +1213,8 @@ pub fn desktop_resize(client: &Arc<ClientState>, server: &Arc<VncServer>, buf: &
     }
     let width = get_image_width(locked_surface.server_image);
     let height = get_image_height(locked_surface.server_image);
-    if !(0..=MAX_WINDOW_WIDTH as i32).contains(&width)
-        || !(0..=MAX_WINDOW_HEIGHT as i32).contains(&height)
+    if !(0..=MAX_IMAGE_SIZE as i32).contains(&width)
+        || !(0..=MAX_IMAGE_SIZE as i32).contains(&height)
     {
         error!("Invalid Image Size!");
         return;
