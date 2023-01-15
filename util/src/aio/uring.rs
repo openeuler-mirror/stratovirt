@@ -51,7 +51,7 @@ impl<T: Clone + 'static> IoUringContext<T> {
 impl<T: Clone + 'static> AioContext for IoUringContext<T> {
     #[allow(clippy::zero_ptr)]
     /// Submit requests to OS.
-    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize> {
+    fn submit(&mut self, _nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize> {
         for iocb in iocbp.iter() {
             // SAFETY: iocb is valid until request is finished.
             let offset = unsafe { (*(*iocb)).aio_offset as libc::off_t };
@@ -90,9 +90,7 @@ impl<T: Clone + 'static> AioContext for IoUringContext<T> {
                     .with_context(|| "Failed to push entry")?;
             }
         }
-        self.ring
-            .submit_and_wait(nr as usize)
-            .with_context(|| "Failed to submit sqe")
+        self.ring.submit().with_context(|| "Failed to submit sqe")
     }
 
     /// Get the events.
