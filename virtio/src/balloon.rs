@@ -922,7 +922,7 @@ impl VirtioDevice for Balloon {
 
         let config_len = size_of::<VirtioBalloonConfig>() as u64;
         let data_len = data.len() as u64;
-        if offset + data_len > config_len {
+        if offset >= config_len {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
 
@@ -1190,13 +1190,50 @@ mod tests {
 
         let mem_space = address_space_init();
         let balloon = Balloon::new(&bln_cfg, mem_space, false);
-        let write_data = [0, 0, 0, 0, 1, 0, 0, 0];
-        let mut random_data: Vec<u8> = vec![0; 8];
+        let ret_data = [0, 0, 0, 0, 1, 0, 0, 0];
+        let mut read_data: Vec<u8> = vec![0; 8];
         let addr = 0x00;
         assert_eq!(balloon.get_balloon_memory_size(), 0);
         balloon.actual.store(1, Ordering::Release);
-        balloon.read_config(addr, &mut random_data).unwrap();
-        assert_eq!(random_data, write_data);
+        balloon.read_config(addr, &mut read_data).unwrap();
+        assert_eq!(read_data, ret_data);
+    }
+
+    #[test]
+    fn test_read_config_partial() {
+        let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
+            deflate_on_oom: true,
+            free_page_reporting: Default::default(),
+        };
+
+        let mem_space = address_space_init();
+        let balloon = Balloon::new(&bln_cfg, mem_space, false);
+        let ret_data = [1, 0, 0, 0, 0, 0, 0, 0];
+        let mut read_data: Vec<u8> = vec![0; 8];
+        let addr = 0x4;
+        assert_eq!(balloon.get_balloon_memory_size(), 0);
+        balloon.actual.store(1, Ordering::Release);
+        balloon.read_config(addr, &mut read_data).unwrap();
+        assert_eq!(read_data, ret_data);
+    }
+
+    #[test]
+    fn test_read_config_overflow() {
+        let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
+            deflate_on_oom: true,
+            free_page_reporting: Default::default(),
+        };
+
+        let mem_space = address_space_init();
+        let balloon = Balloon::new(&bln_cfg, mem_space, false);
+        let mut read_data: Vec<u8> = vec![0; 8];
+        let addr: u64 = 0xffff_ffff_ffff_ffff;
+        assert_eq!(balloon.get_balloon_memory_size(), 0);
+        balloon.actual.store(1, Ordering::Release);
+        let ret = balloon.read_config(addr, &mut read_data);
+        assert!(ret.is_err());
     }
 
     #[test]
