@@ -923,7 +923,7 @@ pub struct Block {
     /// Callback to trigger interrupt.
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// The sending half of Rust's channel to send the image file.
-    senders: Option<Vec<Sender<SenderConfig>>>,
+    senders: Vec<Sender<SenderConfig>>,
     /// Eventfd for config space update.
     update_evts: Vec<Arc<EventFd>>,
     /// Eventfd for device deactivate.
@@ -942,7 +942,7 @@ impl Default for Block {
             disk_sectors: 0,
             state: BlockState::default(),
             interrupt_cb: None,
-            senders: None,
+            senders: Vec::new(),
             update_evts: Vec::new(),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
@@ -962,7 +962,7 @@ impl Block {
             disk_sectors: 0,
             state: BlockState::default(),
             interrupt_cb: None,
-            senders: None,
+            senders: Vec::new(),
             update_evts: Vec::new(),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
@@ -1105,15 +1105,12 @@ impl VirtioDevice for Block {
         mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
-        let mut senders = Vec::new();
-
         for queue in queues.iter() {
             let queue_evt = queue_evts.remove(0);
             if !queue.lock().unwrap().is_enabled() {
                 continue;
             }
             let (sender, receiver) = channel();
-            senders.push(sender);
             let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
             let aio = Box::new(Aio::new(
                 Arc::new(BlockIoHandler::complete_func),
@@ -1147,9 +1144,8 @@ impl VirtioDevice for Block {
                 &mut self.deactivate_evts,
             )?;
             self.update_evts.push(update_evt);
+            self.senders.push(sender);
         }
-
-        self.senders = Some(senders);
         self.broken.store(false, Ordering::SeqCst);
 
         Ok(())
@@ -1158,6 +1154,7 @@ impl VirtioDevice for Block {
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(self.blk_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
         self.update_evts.clear();
+        self.senders.clear();
         Ok(())
     }
 
@@ -1176,24 +1173,21 @@ impl VirtioDevice for Block {
 
         self.realize()?;
 
-        if let Some(senders) = &self.senders {
-            for sender in senders {
-                sender
-                    .send((
-                        self.disk_image.clone(),
-                        self.disk_sectors,
-                        self.blk_cfg.serial_num.clone(),
-                        self.blk_cfg.direct,
-                        self.blk_cfg.aio,
-                    ))
-                    .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
-            }
-
-            for update_evt in &self.update_evts {
-                update_evt
-                    .write(1)
-                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
-            }
+        for sender in &self.senders {
+            sender
+                .send((
+                    self.disk_image.clone(),
+                    self.disk_sectors,
+                    self.blk_cfg.serial_num.clone(),
+                    self.blk_cfg.direct,
+                    self.blk_cfg.aio,
+                ))
+                .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
+        }
+        for update_evt in &self.update_evts {
+            update_evt
+                .write(1)
+                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
         }
 
         Ok(())
@@ -1286,7 +1280,7 @@ mod tests {
         assert_eq!(block.state.config_space.as_bytes().len(), CONFIG_SPACE_SIZE);
         assert!(block.disk_image.is_none());
         assert!(block.interrupt_cb.is_none());
-        assert!(block.senders.is_none());
+        assert!(block.senders.is_empty());
 
         // Realize block device: create TempFile as backing file.
         block.blk_cfg.read_only = true;
