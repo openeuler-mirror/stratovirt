@@ -108,7 +108,7 @@ pub struct Fs {
     acked_features: u64,
     mem_space: Arc<AddressSpace>,
     /// The notifier events from host.
-    call_events: Vec<EventFd>,
+    call_events: Vec<Arc<EventFd>>,
     deactivate_evts: Vec<RawFd>,
     enable_irqfd: bool,
 }
@@ -129,7 +129,7 @@ impl Fs {
             avail_features: 0_u64,
             acked_features: 0_u64,
             mem_space,
-            call_events: Vec::<EventFd>::new(),
+            call_events: Vec::<Arc<EventFd>>::new(),
             deactivate_evts: Vec::new(),
             enable_irqfd,
         }
@@ -218,7 +218,7 @@ impl VirtioDevice for Fs {
         _mem_space: Arc<AddressSpace>,
         interrup_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let mut host_notifies = Vec::new();
         let mut client = match &self.client {
@@ -233,7 +233,7 @@ impl VirtioDevice for Fs {
         if !self.enable_irqfd {
             for (queue_index, queue_mutex) in queues.iter().enumerate() {
                 let host_notify = VhostNotify {
-                    notify_evt: self.call_events[queue_index].try_clone().unwrap(),
+                    notify_evt: self.call_events[queue_index].clone(),
                     queue: queue_mutex.clone(),
                 };
                 host_notifies.push(host_notify);
@@ -252,9 +252,9 @@ impl VirtioDevice for Fs {
     }
 
     /// Set guest notifiers for notifying the guest.
-    fn set_guest_notifiers(&mut self, queue_evts: &[EventFd]) -> Result<()> {
+    fn set_guest_notifiers(&mut self, queue_evts: &[Arc<EventFd>]) -> Result<()> {
         for fd in queue_evts.iter() {
-            let cloned_evt_fd = fd.try_clone().unwrap();
+            let cloned_evt_fd = fd.clone();
             self.call_events.push(cloned_evt_fd);
         }
         match &self.client {

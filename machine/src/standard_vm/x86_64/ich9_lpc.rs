@@ -51,8 +51,8 @@ pub struct LPCBridge {
     pm_evt: Arc<Mutex<AcpiPmEvent>>,
     pm_ctrl: Arc<Mutex<AcpiPmCtrl>>,
     /// Reset request trigged by ACPI PM1 Control Registers.
-    pub reset_req: EventFd,
-    pub shutdown_req: EventFd,
+    pub reset_req: Arc<EventFd>,
+    pub shutdown_req: Arc<EventFd>,
 }
 
 impl LPCBridge {
@@ -65,8 +65,8 @@ impl LPCBridge {
             pm_evt: Arc::new(Mutex::new(AcpiPmEvent::new())),
             pm_ctrl: Arc::new(Mutex::new(AcpiPmCtrl::new())),
             rst_ctrl: Arc::new(AtomicU8::new(0)),
-            reset_req: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            shutdown_req: EventFd::new(libc::EFD_NONBLOCK).unwrap(),
+            reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+            shutdown_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
         }
     }
 
@@ -107,7 +107,7 @@ impl LPCBridge {
         };
 
         let cloned_rst_ctrl = self.rst_ctrl.clone();
-        let cloned_reset_fd = self.reset_req.try_clone().unwrap();
+        let cloned_reset_fd = self.reset_req.clone();
         let write_ops = move |data: &[u8], _addr: GuestAddress, _offset: u64| -> bool {
             let value: u8 = match data.len() {
                 1 => data[0],
@@ -142,7 +142,7 @@ impl LPCBridge {
             true
         };
 
-        let cloned_shutdown_fd = self.shutdown_req.try_clone().unwrap();
+        let cloned_shutdown_fd = self.shutdown_req.clone();
         let write_ops = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool {
             cloned_shutdown_fd.write(1).unwrap();
             true
@@ -189,7 +189,7 @@ impl LPCBridge {
         };
 
         let clone_pmctrl = self.pm_ctrl.clone();
-        let cloned_shutdown_fd = self.shutdown_req.try_clone().unwrap();
+        let cloned_shutdown_fd = self.shutdown_req.clone();
         let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
             if clone_pmctrl.lock().unwrap().write(data, addr, offset) {
                 cloned_shutdown_fd.write(1).unwrap();

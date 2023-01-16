@@ -251,7 +251,7 @@ impl VirtioDevice for Vsock {
         _: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         let cid = self.vsock_cfg.guest_cid;
         let mut host_notifies = Vec::new();
@@ -294,19 +294,21 @@ impl VirtioDevice for Vsock {
                     format!("Failed to set vring base for vsock, index: {}", queue_index)
                 })?;
             backend
-                .set_vring_kick(queue_index, &queue_evts[queue_index])
+                .set_vring_kick(queue_index, queue_evts[queue_index].clone())
                 .with_context(|| {
                     format!("Failed to set vring kick for vsock, index: {}", queue_index)
                 })?;
             drop(queue);
 
             let host_notify = VhostNotify {
-                notify_evt: EventFd::new(libc::EFD_NONBLOCK)
-                    .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
+                notify_evt: Arc::new(
+                    EventFd::new(libc::EFD_NONBLOCK)
+                        .with_context(|| anyhow!(VirtioError::EventFdCreate))?,
+                ),
                 queue: queue_mutex.clone(),
             };
             backend
-                .set_vring_call(queue_index, &host_notify.notify_evt)
+                .set_vring_call(queue_index, host_notify.notify_evt.clone())
                 .with_context(|| {
                     format!("Failed to set vring call for vsock, index: {}", queue_index)
                 })?;

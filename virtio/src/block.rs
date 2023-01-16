@@ -387,7 +387,7 @@ struct BlockIoHandler {
     /// The virtqueue.
     queue: Arc<Mutex<Queue>>,
     /// Eventfd of the virtqueue for IO event.
-    queue_evt: EventFd,
+    queue_evt: Arc<EventFd>,
     /// The address space to which the block device belongs.
     mem_space: Arc<AddressSpace>,
     /// The image file opened by the block device.
@@ -407,7 +407,7 @@ struct BlockIoHandler {
     /// The receiving half of Rust's channel to receive the image file.
     receiver: Receiver<SenderConfig>,
     /// Eventfd for config space update.
-    update_evt: EventFd,
+    update_evt: Arc<EventFd>,
     /// Device is broken or not.
     device_broken: Arc<AtomicBool>,
     /// Callback to trigger an interrupt.
@@ -582,7 +582,7 @@ impl BlockIoHandler {
             let now = Instant::now();
             if (now - start_time).as_millis() > MAX_MILLIS_TIME_PROCESS_QUEUE as u128 {
                 // Make sure we can come back.
-                self.queue_evt.try_clone()?.write(1)?;
+                self.queue_evt.write(1)?;
                 break;
             }
 
@@ -915,7 +915,7 @@ pub struct Block {
     /// The sending half of Rust's channel to send the image file.
     senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
-    update_evts: Vec<EventFd>,
+    update_evts: Vec<Arc<EventFd>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
@@ -1092,7 +1092,7 @@ impl VirtioDevice for Block {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
         self.interrupt_cb = Some(interrupt_cb.clone());
         let mut senders = Vec::new();
@@ -1101,7 +1101,7 @@ impl VirtioDevice for Block {
             let (sender, receiver) = channel();
             senders.push(sender);
 
-            let update_evt = EventFd::new(libc::EFD_NONBLOCK)?;
+            let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
             let engine = self.blk_cfg.aio.as_ref();
             let handler = BlockIoHandler {
                 queue: queue.clone(),
@@ -1115,7 +1115,7 @@ impl VirtioDevice for Block {
                 aio: Box::new(Aio::new(Arc::new(BlockIoHandler::complete_func), engine)?),
                 driver_features: self.state.driver_features,
                 receiver,
-                update_evt: update_evt.try_clone()?,
+                update_evt: update_evt.clone(),
                 device_broken: self.broken.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 iothread: self.blk_cfg.iothread.clone(),
@@ -1454,7 +1454,7 @@ mod tests {
 
         let queues: Vec<Arc<Mutex<Queue>>> =
             vec![Arc::new(Mutex::new(Queue::new(queue_config, 1).unwrap()))];
-        let event = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        let event = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
 
         // activate block device
         block
@@ -1462,7 +1462,7 @@ mod tests {
                 mem_space.clone(),
                 interrupt_cb,
                 &queues,
-                vec![event.try_clone().unwrap()],
+                vec![event.clone()],
             )
             .unwrap();
 

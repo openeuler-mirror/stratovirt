@@ -188,10 +188,9 @@ trait StdMachineOps: AcpiBuilder {
     /// * `clone_vm` - Reference of the StdMachine.
     fn register_reset_event(
         &self,
-        reset_req: &EventFd,
+        reset_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
     ) -> MachineResult<()> {
-        let reset_req = reset_req.try_clone().unwrap();
         let reset_req_fd = reset_req.as_raw_fd();
         let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = reset_req.read().unwrap();
@@ -216,12 +215,11 @@ trait StdMachineOps: AcpiBuilder {
     #[cfg(target_arch = "x86_64")]
     fn register_acpi_shutdown_event(
         &self,
-        shutdown_req: &EventFd,
+        shutdown_req: Arc<EventFd>,
         clone_vm: Arc<Mutex<StdMachine>>,
     ) -> MachineResult<()> {
         use util::loop_context::gen_delete_notifiers;
 
-        let shutdown_req = shutdown_req.try_clone().unwrap();
         let shutdown_req_fd = shutdown_req.as_raw_fd();
         let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = shutdown_req.read().unwrap();

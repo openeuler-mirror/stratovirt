@@ -207,28 +207,18 @@ impl Queue {
 }
 
 /// Virt Queue Notify EventFds
+#[derive(Clone)]
 pub struct NotifyEventFds {
-    pub events: Vec<EventFd>,
+    pub events: Vec<Arc<EventFd>>,
 }
 
 impl NotifyEventFds {
     pub fn new(queue_num: usize) -> Self {
         let mut events = Vec::new();
         for _i in 0..queue_num {
-            events.push(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+            events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
         }
 
         NotifyEventFds { events }
-    }
-}
-
-impl Clone for NotifyEventFds {
-    fn clone(&self) -> NotifyEventFds {
-        let mut queue_evts = Vec::<EventFd>::new();
-        for fd in self.events.iter() {
-            let cloned_evt_fd = fd.try_clone().unwrap();
-            queue_evts.push(cloned_evt_fd);
-        }
-        NotifyEventFds { events: queue_evts }
     }
 }

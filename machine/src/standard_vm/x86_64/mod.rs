@@ -113,7 +113,7 @@ pub struct StdMachine {
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// VM power button, handle VM `Shutdown` event.
-    power_button: EventFd,
+    power_button: Arc<EventFd>,
     /// All configuration information of virtual machine.
     vm_config: Arc<Mutex<VmConfig>>,
     /// List of guest NUMA nodes information.
@@ -169,9 +169,9 @@ impl StdMachine {
             ))),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_state,
-            power_button: EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
+            power_button: Arc::new(EventFd::new(libc::EFD_NONBLOCK).with_context(|| {
                 anyhow!(MachineError::InitEventFdErr("power_button".to_string()))
-            })?,
+            })?),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
             boot_order_list: Arc::new(Mutex::new(Vec::new())),
@@ -245,9 +245,9 @@ impl StdMachine {
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
         let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
-        self.register_reset_event(&ich.reset_req, vm)
+        self.register_reset_event(ich.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
-        self.register_acpi_shutdown_event(&ich.shutdown_req, clone_vm)
+        self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
             .with_context(|| "Fail to register shutdown event in LPC")?;
         ich.realize()?;
         Ok(())
@@ -462,7 +462,7 @@ impl MachineOps for StdMachine {
                 .with_context(|| "Failed to create ACPI tables")?;
         }
 
-        locked_vm.register_power_event(&locked_vm.power_button)?;
+        locked_vm.register_power_event(locked_vm.power_button.clone())?;
 
         locked_vm
             .reset_fwcfg_boot_order()

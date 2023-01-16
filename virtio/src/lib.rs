@@ -334,7 +334,7 @@ pub trait VirtioDevice: Send {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queues: &[Arc<Mutex<Queue>>],
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()>;
 
     /// Deactivate virtio device, this function remove event fd
@@ -366,7 +366,7 @@ pub trait VirtioDevice: Send {
     /// # Arguments
     ///
     /// * `_queue_evts` - The notifier events from host.
-    fn set_guest_notifiers(&mut self, _queue_evts: &[EventFd]) -> Result<()> {
+    fn set_guest_notifiers(&mut self, _queue_evts: &[Arc<EventFd>]) -> Result<()> {
         Ok(())
     }
 

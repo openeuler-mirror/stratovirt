@@ -297,8 +297,8 @@ pub struct VhostUserClient {
     mem_info: VhostUserMemInfo,
     delete_evts: Vec<RawFd>,
     queues: Vec<Arc<Mutex<Queue>>>,
-    queue_evts: Vec<EventFd>,
-    call_events: Vec<EventFd>,
+    queue_evts: Vec<Arc<EventFd>>,
+    call_events: Vec<Arc<EventFd>>,
     pub features: u64,
     reconnecting: bool,
 }
@@ -339,16 +339,16 @@ impl VhostUserClient {
     }
 
     /// Save eventfd used for reconnection.
-    pub fn set_queue_evts(&mut self, queue_evts: &[EventFd]) {
+    pub fn set_queue_evts(&mut self, queue_evts: &[Arc<EventFd>]) {
         for evt in queue_evts.iter() {
-            self.queue_evts.push(evt.try_clone().unwrap());
+            self.queue_evts.push(evt.clone());
         }
     }
 
     /// Save irqfd used for reconnection.
-    pub fn set_call_events(&mut self, call_events: &[EventFd]) {
+    pub fn set_call_events(&mut self, call_events: &[Arc<EventFd>]) {
         for evt in call_events.iter() {
-            self.call_events.push(evt.try_clone().unwrap());
+            self.call_events.push(evt.clone());
         }
     }
 
@@ -398,14 +398,14 @@ impl VhostUserClient {
                     queue_index,
                 )
             })?;
-            self.set_vring_kick(queue_index, &self.queue_evts[queue_index])
+            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
                 .with_context(|| {
                     format!(
                         "Failed to set vring kick for vhost-user net, index: {}",
                         queue_index,
                     )
                 })?;
-            self.set_vring_call(queue_index, &self.call_events[queue_index])
+            self.set_vring_call(queue_index, self.call_events[queue_index].clone())
                 .with_context(|| {
                     format!(
                         "Failed to set vring call for vhost-user net, index: {}",
@@ -718,7 +718,7 @@ impl VhostOps for VhostUserClient {
         Ok(())
     }
 
-    fn set_vring_call(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_call(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(
@@ -742,7 +742,7 @@ impl VhostOps for VhostUserClient {
         Ok(())
     }
 
-    fn set_vring_kick(&self, queue_idx: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_kick(&self, queue_idx: usize, fd: Arc<EventFd>) -> Result<()> {
         let client = self.client.lock().unwrap();
         if queue_idx as u64 > client.max_queue_num {
             bail!(

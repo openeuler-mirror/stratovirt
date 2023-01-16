@@ -693,7 +693,7 @@ impl VirtioPciDevice {
         for (index, eventfd) in eventfds.events.into_iter().enumerate() {
             let addr = index as u64 * u64::from(VIRTIO_PCI_CAP_NOTIFY_OFF_MULTIPLIER);
             ret.push(RegionIoEventFd {
-                fd: Arc::new(eventfd),
+                fd: eventfd.clone(),
                 addr_range: AddressRange::from((addr, 2u64)),
                 data_match: false,
                 data: index as u64,
@@ -1012,7 +1012,7 @@ impl VirtioPciDevice {
         min(queues_max as u16 - queues_fixed, nr_cpus as u16)
     }
 
-    fn queues_register_irqfd(&self, call_fds: &[EventFd]) -> bool {
+    fn queues_register_irqfd(&self, call_fds: &[Arc<EventFd>]) -> bool {
         let mut locked_msix = if let Some(msix) = &self.config.msix {
             msix.lock().unwrap()
         } else {
@@ -1035,7 +1035,7 @@ impl VirtioPciDevice {
             }
 
             if locked_msix
-                .register_irqfd(vector, &call_fds[queue_index])
+                .register_irqfd(vector, call_fds[queue_index].clone())
                 .is_err()
             {
                 return false;
@@ -1508,7 +1508,7 @@ mod tests {
             _mem_space: Arc<AddressSpace>,
             _interrupt_cb: Arc<VirtioInterrupt>,
             _queues: &[Arc<Mutex<Queue>>],
-            _queue_evts: Vec<EventFd>,
+            _queue_evts: Vec<Arc<EventFd>>,
         ) -> VirtioResult<()> {
             self.is_activated = true;
             Ok(())
