@@ -165,7 +165,7 @@ pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: i32, y: i32
 impl UsbDeviceOps for UsbTablet {
     fn reset(&mut self) {
         info!("Tablet device reset");
-        self.usb_device.remote_wakeup &= !USB_DEVICE_REMOTE_WAKEUP;
+        self.usb_device.remote_wakeup = 0;
         self.usb_device.addr = 0;
         self.hid.reset();
     }

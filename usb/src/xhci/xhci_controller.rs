@@ -17,6 +17,8 @@ use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::{anyhow, bail, Context, Result};
+
 use address_space::{AddressSpace, GuestAddress};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
@@ -30,7 +32,7 @@ use crate::xhci::xhci_ring::{
     TRBCCode, TRBType, XhciEventRingSeg, XhciRing, XhciTRB, TRB_EV_ED, TRB_SIZE, TRB_TR_IDT,
     TRB_TR_IOC, TRB_TR_ISP, TRB_TYPE_SHIFT,
 };
-use anyhow::{bail, Context, Result};
+use crate::UsbError;
 
 use super::xhci_ring::SETUP_TRB_TR_LEN;
 use super::xhci_ring::TRB_TR_DIR;
@@ -83,6 +85,10 @@ const TRANSFER_LEN_MASK: u32 = 0xffffff;
 const XHCI_MAX_PORT2: u8 = 15;
 const XHCI_MAX_PORT3: u8 = 15;
 const XHCI_DEFAULT_PORT: u8 = 4;
+/// Input Context.
+const INPUT_CONTEXT_SIZE: u64 = 0x420;
+/// Device Context.
+const DEVICE_CONTEXT_SIZE: u64 = 0x400;
 /// Slot Context.
 const SLOT_INPUT_CTX_OFFSET: u64 = 0x20;
 const SLOT_CTX_MAX_EXIT_LATENCY_MASK: u32 = 0xffff;
@@ -528,6 +534,7 @@ impl XhciDevice {
         for i in 0..self.intrs.len() {
             self.intrs[i].reset();
         }
+        self.cmd_ring.init(0);
     }
 
     /// Reset xhci port.
@@ -753,6 +760,13 @@ impl XhciDevice {
 
     fn address_device(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
         let ictx = trb.parameter;
+        if ictx.checked_add(INPUT_CONTEXT_SIZE).is_none() {
+            bail!(
+                "Input Context access overflow, addr {:x} size {:x}",
+                ictx,
+                INPUT_CONTEXT_SIZE
+            );
+        }
         let ccode = self.check_input_ctx(ictx)?;
         if ccode != TRBCCode::Success {
             return Ok(ccode);
@@ -760,7 +774,10 @@ impl XhciDevice {
         let mut slot_ctx = XhciSlotCtx::default();
         dma_read_u32(
             &self.mem_space,
-            GuestAddress(ictx + SLOT_INPUT_CTX_OFFSET),
+            GuestAddress(
+                // It is safe to plus here becuase we previously verify the address.
+                ictx + SLOT_INPUT_CTX_OFFSET,
+            ),
             slot_ctx.as_mut_dwords(),
         )?;
         let bsr = trb.control & TRB_CR_BSR == TRB_CR_BSR;
@@ -781,9 +798,16 @@ impl XhciDevice {
             error!("No device found in usb port.");
             return Ok(TRBCCode::UsbTransactionError);
         };
-        let ctx_addr = self.get_device_context_addr(slot_id);
+        let ctx_addr = self.get_device_context_addr(slot_id)?;
         let mut octx = 0;
         dma_read_u64(&self.mem_space, GuestAddress(ctx_addr), &mut octx)?;
+        if octx.checked_add(DEVICE_CONTEXT_SIZE).is_none() {
+            bail!(
+                "Device Context access overflow, addr {:x} size {:x}",
+                octx,
+                DEVICE_CONTEXT_SIZE
+            );
+        }
         self.slots[(slot_id - 1) as usize].usb_port = Some(usb_port.clone());
         self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
         dev.lock().unwrap().reset();
@@ -840,8 +864,16 @@ impl XhciDevice {
         locked_dev.handle_control(&mut p, &device_req);
     }
 
-    fn get_device_context_addr(&self, slot_id: u32) -> u64 {
-        self.oper.dcbaap + (8 * slot_id) as u64
+    fn get_device_context_addr(&self, slot_id: u32) -> Result<u64> {
+        self.oper
+            .dcbaap
+            .checked_add((8 * slot_id) as u64)
+            .ok_or_else(|| {
+                anyhow!(UsbError::MemoryAccessOverflow(
+                    self.oper.dcbaap,
+                    (8 * slot_id) as u64
+                ))
+            })
     }
 
     fn configure_endpoint(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
@@ -876,6 +908,13 @@ impl XhciDevice {
     }
 
     fn config_slot_ep(&mut self, slot_id: u32, ictx: u64) -> Result<TRBCCode> {
+        if ictx.checked_add(INPUT_CONTEXT_SIZE).is_none() {
+            bail!(
+                "Input Context access overflow, addr {:x} size {:x}",
+                ictx,
+                INPUT_CONTEXT_SIZE
+            );
+        }
         let mut ictl_ctx = XhciInputCtrlCtx::default();
         dma_read_u32(
             &self.mem_space,
@@ -928,6 +967,13 @@ impl XhciDevice {
             return Ok(TRBCCode::ContextStateError);
         }
         let ictx = trb.parameter;
+        if ictx.checked_add(INPUT_CONTEXT_SIZE).is_none() {
+            bail!(
+                "Input Context access overflow, addr {:x} size {:x}",
+                ictx,
+                INPUT_CONTEXT_SIZE
+            );
+        }
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
         let mut ictl_ctx = XhciInputCtrlCtx::default();
         dma_read_u32(
@@ -943,7 +989,10 @@ impl XhciDevice {
             let mut islot_ctx = XhciSlotCtx::default();
             dma_read_u32(
                 &self.mem_space,
-                GuestAddress(ictx + SLOT_INPUT_CTX_OFFSET),
+                GuestAddress(
+                    // It is safe to plus here becuase we previously verify the address.
+                    ictx + SLOT_INPUT_CTX_OFFSET,
+                ),
                 islot_ctx.as_mut_dwords(),
             )?;
             let mut slot_ctx = XhciSlotCtx::default();
@@ -963,19 +1012,26 @@ impl XhciDevice {
             let mut iep_ctx = XhciEpCtx::default();
             dma_read_u32(
                 &self.mem_space,
-                GuestAddress(ictx + EP_INPUT_CTX_OFFSET),
+                GuestAddress(
+                    // It is safe to use plus here becuase we previously verify the address.
+                    ictx + EP_INPUT_CTX_OFFSET,
+                ),
                 iep_ctx.as_mut_dwords(),
             )?;
             let mut ep_ctx = XhciEpCtx::default();
             dma_read_u32(
                 &self.mem_space,
-                GuestAddress(octx + EP_CTX_OFFSET),
+                GuestAddress(
+                    // It is safe to use plus here becuase we previously verify the address.
+                    octx + EP_CTX_OFFSET,
+                ),
                 ep_ctx.as_mut_dwords(),
             )?;
             ep_ctx.ep_info2 &= !EP_CTX_MAX_PACKET_SIZE_MASK;
             ep_ctx.ep_info2 |= iep_ctx.ep_info2 & EP_CTX_MAX_PACKET_SIZE_MASK;
             dma_write_u32(
                 &self.mem_space,
+                // It is safe to use plus here becuase we previously verify the address.
                 GuestAddress(octx + EP_CTX_OFFSET),
                 ep_ctx.as_dwords(),
             )?;
@@ -1020,6 +1076,7 @@ impl XhciDevice {
         let mut ep_ctx = XhciEpCtx::default();
         dma_read_u32(
             &self.mem_space,
+            // It is safe to use plus here becuase we previously verify the address on the outer layer.
             GuestAddress(input_ctx + EP_INPUT_CTX_OFFSET + entry_offset),
             ep_ctx.as_mut_dwords(),
         )?;
@@ -1027,12 +1084,14 @@ impl XhciDevice {
         let mut epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         epctx.epid = ep_id;
         epctx.enabled = true;
+        // It is safe to use plus here becuase we previously verify the address on the outer layer.
         epctx.init_ctx(output_ctx + EP_CTX_OFFSET + entry_offset, &ep_ctx);
         epctx.state = EP_RUNNING;
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= EP_RUNNING;
         dma_write_u32(
             &self.mem_space,
+            // It is safe to use plus here becuase we previously verify the address on the outer layer.
             GuestAddress(output_ctx + EP_CTX_OFFSET + entry_offset),
             ep_ctx.as_dwords(),
         )?;
@@ -1461,7 +1520,7 @@ impl XhciDevice {
     /// Submit the succeed transfer TRBs.
     fn submit_transfer(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         // Event Data Transfer Length Accumulator
-        let mut edtla = 0;
+        let mut edtla: u32 = 0;
         let mut left = xfer.packet.actual_length;
         for i in 0..xfer.td.len() {
             let trb = &xfer.td[i];
@@ -1475,7 +1534,11 @@ impl XhciDevice {
                         xfer.status = TRBCCode::ShortPacket;
                     }
                     left -= chunk;
-                    edtla += chunk;
+                    if let Some(v) = edtla.checked_add(chunk) {
+                        edtla = v;
+                    } else {
+                        bail!("Event Data Transfer Length Accumulator overflow, edtla {:x} offset {:x}", edtla, chunk);
+                    }
                 }
                 TRBType::TrStatus => {}
                 _ => {
@@ -1616,9 +1679,14 @@ impl XhciDevice {
             bail!("Invalid index, out of range {}", idx);
         }
         let intr = &self.intrs[idx as usize];
-        if intr.erdp < intr.er_start
-            || intr.erdp >= (intr.er_start + (TRB_SIZE * intr.er_size) as u64)
-        {
+        let er_end = intr
+            .er_start
+            .checked_add((TRB_SIZE * intr.er_size) as u64)
+            .ok_or(UsbError::MemoryAccessOverflow(
+                intr.er_start,
+                (TRB_SIZE * intr.er_size) as u64,
+            ))?;
+        if intr.erdp < intr.er_start || intr.erdp >= er_end {
             bail!(
                 "DMA out of range, erdp {} er_start {:x} er_size {}",
                 intr.erdp,

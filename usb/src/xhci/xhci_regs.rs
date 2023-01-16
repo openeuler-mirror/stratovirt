@@ -19,9 +19,9 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
 use util::num_ops::{read_data_u32, read_u32, write_data_u32, write_u64_high, write_u64_low};
 
-use crate::config::*;
 use crate::xhci::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
 use crate::xhci::xhci_ring::{TRBCCode, TRBType, TRB_C, TRB_SIZE};
+use crate::{config::*, UsbError};
 use anyhow::Result;
 
 /// Capability offset or size.
@@ -182,7 +182,7 @@ impl XhciInterrupter {
             erstsz: 0,
             erstba: 0,
             erdp: 0,
-            er_pcs: false,
+            er_pcs: true,
             er_start: 0,
             er_size: 0,
             er_ep_idx: 0,
@@ -195,7 +195,7 @@ impl XhciInterrupter {
         self.erstsz = 0;
         self.erstba = 0;
         self.erdp = 0;
-        self.er_pcs = false;
+        self.er_pcs = true;
         self.er_start = 0;
         self.er_size = 0;
         self.er_ep_idx = 0;
@@ -218,7 +218,13 @@ impl XhciInterrupter {
     }
 
     fn write_trb(&mut self, trb: &XhciTRB) -> Result<()> {
-        let addr = self.er_start + (TRB_SIZE * self.er_ep_idx) as u64;
+        let addr = self
+            .er_start
+            .checked_add((TRB_SIZE * self.er_ep_idx) as u64)
+            .ok_or(UsbError::MemoryAccessOverflow(
+                self.er_start,
+                (TRB_SIZE * self.er_ep_idx) as u64,
+            ))?;
         let mut buf = [0_u8; TRB_SIZE as usize];
         LittleEndian::write_u64(&mut buf, trb.parameter);
         LittleEndian::write_u32(&mut buf[8..], trb.status);
@@ -508,10 +514,21 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 intr.erdp = write_u64_low(intr.erdp, erdp_lo);
                 if value & ERDP_EHB == ERDP_EHB {
                     let erdp = intr.erdp;
-                    let dp_idx = (erdp - intr.er_start) / TRB_SIZE as u64;
+                    let er_end = if let Some(addr) =
+                        intr.er_start.checked_add((TRB_SIZE * intr.er_size) as u64)
+                    {
+                        addr
+                    } else {
+                        error!(
+                            "Memory access overflow, addr {:x} offset {:x}",
+                            intr.er_start,
+                            (TRB_SIZE * intr.er_size) as u64
+                        );
+                        return false;
+                    };
                     if erdp >= intr.er_start
-                        && erdp < intr.er_start + (TRB_SIZE * intr.er_size) as u64
-                        && dp_idx != intr.er_ep_idx as u64
+                        && erdp < er_end
+                        && (erdp - intr.er_start) / TRB_SIZE as u64 != intr.er_ep_idx as u64
                     {
                         xhci.send_intr(idx);
                     }
