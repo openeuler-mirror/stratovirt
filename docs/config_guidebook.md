@@ -857,10 +857,10 @@ Sample Configuration：
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
 
-### 2.18 Virtio-fs
+### 2.19 Virtio-fs
 Virtio-fs is a shared file system that lets virtual machines access a directory tree on the host. Unlike existing approaches, it is designed to offer local file system semantics and performance.
 
-### 2.18.1 virtio fs device
+#### 2.19.1 virtio fs device
 Three properties can be set for virtio fs device.
 * chardevid: id for char device
 * device_id: the unique id for device
@@ -871,7 +871,7 @@ Three properties can be set for virtio fs device.
 -device vhost-user-fs-pci,id=<device id>,chardev=<chardevid>,tag=<mount tag>
 ```
 
-### 2.18.2 vhost_user_fs
+#### 2.19.2 vhost_user_fs
 The vhost-user filesystem device contains virtio fs device and the vhost-user server which can be connected with the vhost-user client in StratoVirt through socket.
 
 Seven properties are supported for vhost_user_fs.
