@@ -439,7 +439,7 @@ impl BlockIoHandler {
                 merged_iovs += req_iovs;
                 merged_bytes += req_bytes;
             } else {
-                if io {
+                if io || req.out_header.request_type == VIRTIO_BLK_T_FLUSH {
                     *last_aio_index = merge_req_queue.len();
                 }
                 merge_req_queue.push(req);

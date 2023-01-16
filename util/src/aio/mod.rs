@@ -172,12 +172,18 @@ impl<T: Clone + 'static> Aio<T> {
         match cb.opcode {
             OpCode::Preadv | OpCode::Pwritev => {
                 if self.ctx.is_some() {
-                    self.rw_aio(cb)
+                    self.rw_async(cb)
                 } else {
                     self.rw_sync(cb)
                 }
             }
-            OpCode::Fdsync => self.flush_sync(cb),
+            OpCode::Fdsync => {
+                if self.ctx.is_some() {
+                    self.flush_async(cb)
+                } else {
+                    self.flush_sync(cb)
+                }
+            }
             OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
         }
     }
@@ -264,7 +270,7 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    fn rw_aio(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn rw_async(&mut self, cb: AioCb<T>) -> Result<()> {
         let last_aio = cb.last_aio;
         let mut node = Box::new(Node::new(cb));
         node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
@@ -392,6 +398,10 @@ impl<T: Clone + 'static> Aio<T> {
             }
             _ => bail!("Failed to do misaligned rw: unknown cmd type"),
         }
+    }
+
+    fn flush_async(&mut self, cb: AioCb<T>) -> Result<()> {
+        self.rw_async(cb)
     }
 
     fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
