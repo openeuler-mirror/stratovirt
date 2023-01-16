@@ -754,15 +754,19 @@ impl EventNotifierHelper for BlockIoHandler {
             if h_lock.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
-            let done = h_lock
-                .process_queue()
-                .with_context(|| "Failed to handle block IO")
-                .ok()?;
-            if done {
-                Some(Vec::new())
-            } else {
-                None
-            }
+            return match h_lock.process_queue() {
+                Ok(done) => {
+                    if done {
+                        Some(Vec::new())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to handle block IO {:?}", e);
+                    None
+                }
+            };
         });
         notifiers.push(build_event_notifier(
             handler_raw.queue_evt.as_raw_fd(),
@@ -812,15 +816,19 @@ impl EventNotifierHelper for BlockIoHandler {
             if h_lock.aio.get_engine() == AioEngine::Off {
                 return None;
             }
-            let done = h_lock
-                .aio_complete_handler()
-                .with_context(|| "Failed to handle aio")
-                .ok()?;
-            if done {
-                Some(Vec::new())
-            } else {
-                None
-            }
+            return match h_lock.aio_complete_handler() {
+                Ok(done) => {
+                    if done {
+                        Some(Vec::new())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to handle aio {:?}", e);
+                    None
+                }
+            };
         });
         notifiers.push(build_event_notifier(
             handler_raw.aio.fd.as_raw_fd(),
