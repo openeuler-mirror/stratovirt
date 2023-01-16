@@ -1108,20 +1108,26 @@ impl VirtioDevice for Block {
         let mut senders = Vec::new();
 
         for queue in queues.iter() {
+            let queue_evt = queue_evts.remove(0);
+            if !queue.lock().unwrap().is_enabled() {
+                continue;
+            }
             let (sender, receiver) = channel();
             senders.push(sender);
-
             let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
-            let engine = self.blk_cfg.aio;
+            let aio = Box::new(Aio::new(
+                Arc::new(BlockIoHandler::complete_func),
+                self.blk_cfg.aio,
+            )?);
             let handler = BlockIoHandler {
                 queue: queue.clone(),
-                queue_evt: queue_evts.remove(0),
+                queue_evt,
                 mem_space: mem_space.clone(),
                 disk_image: self.disk_image.clone(),
                 disk_sectors: self.disk_sectors,
                 direct: self.blk_cfg.direct,
                 serial_num: self.blk_cfg.serial_num.clone(),
-                aio: Box::new(Aio::new(Arc::new(BlockIoHandler::complete_func), engine)?),
+                aio,
                 driver_features: self.state.driver_features,
                 receiver,
                 update_evt: update_evt.clone(),
