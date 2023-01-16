@@ -212,9 +212,8 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         net.ifname = ifname;
     }
     if let Some(queue_pairs) = cmd_parser.get_value::<u16>("queues")? {
-        let queues = queue_pairs * 2;
-
-        if !is_netdev_queues_valid(queues) {
+        let queues = queue_pairs.checked_mul(2);
+        if queues.is_none() || !is_netdev_queues_valid(queues.unwrap()) {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "number queues of net device".to_string(),
                 1,
@@ -224,7 +223,7 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
             )));
         }
 
-        net.queues = queues;
+        net.queues = queues.unwrap();
     }
 
     if let Some(tap_fd) = parse_fds(&cmd_parser, "fd")? {
@@ -233,7 +232,10 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         net.tap_fds = Some(tap_fds);
     }
     if let Some(fds) = &net.tap_fds {
-        let fds_num = (fds.len() * 2) as u16;
+        let fds_num =
+            fds.len()
+                .checked_mul(2)
+                .ok_or_else(|| anyhow!("Invalid fds number {}", fds.len()))? as u16;
         if fds_num > net.queues {
             net.queues = fds_num;
         }
@@ -255,7 +257,11 @@ fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
         net.vhost_fds = Some(vhost_fds);
     }
     if let Some(fds) = &net.vhost_fds {
-        let fds_num = (fds.len() * 2) as u16;
+        let fds_num = fds
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| anyhow!("Invalid vhostfds number {}", fds.len()))?
+            as u16;
         if fds_num > net.queues {
             net.queues = fds_num;
         }
@@ -331,13 +337,18 @@ pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkIn
 }
 
 pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<NetDevcfg> {
+    let queues = args
+        .queues
+        .unwrap_or(1)
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("Invalid 'queues' value"))?;
     let mut config = NetDevcfg {
         id: args.id,
         tap_fds: None,
         vhost_type: None,
         vhost_fds: None,
         ifname: String::new(),
-        queues: args.queues.unwrap_or(1) * 2,
+        queues,
         chardev: args.chardev,
     };
 

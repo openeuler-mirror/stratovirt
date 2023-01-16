@@ -236,14 +236,22 @@ impl CtrlInfo {
                 continue;
             }
 
-            let mut macs = vec![0_u8; entries as usize * MAC_ADDR_LEN];
-            *data_iovec = get_buf_and_discard(mem_space, data_iovec, &mut macs)
-                .with_context(|| "Failed to get multicast MAC entries".to_string())?;
+            let size = entries as u64 * MAC_ADDR_LEN as u64;
+            if size > Element::iovec_size(data_iovec) {
+                bail!("Invalid request for setting mac table.");
+            }
             if entries as usize > CTRL_MAC_TABLE_LEN - mac_table_len {
+                *data_iovec = iov_discard_front(data_iovec, size)
+                    .with_context(|| "Failed to discard iovec from front side".to_string())?
+                    .to_vec();
                 *overflow = true;
                 mac_table.clear();
                 continue;
             }
+
+            let mut macs = vec![0_u8; size as usize];
+            *data_iovec = get_buf_and_discard(mem_space, data_iovec, &mut macs)
+                .with_context(|| "Failed to get multicast MAC entries".to_string())?;
 
             mac_table.clear();
             for i in 0..entries {
@@ -486,8 +494,8 @@ impl NetCtrlHandler {
             // Validate the control request.
             let in_size = Element::iovec_size(&elem.in_iovec);
             let out_size = Element::iovec_size(&elem.out_iovec);
-            if in_size < mem::size_of_val(&ack) as u32
-                || out_size < mem::size_of::<CtrlHdr>() as u32
+            if in_size < mem::size_of_val(&ack) as u64
+                || out_size < mem::size_of::<CtrlHdr>() as u64
             {
                 bail!(
                     "Invalid length, in_iovec size is {}, out_iovec size is {}",
@@ -940,7 +948,10 @@ fn get_net_header(iovec: &[libc::iovec], buf: &mut [u8]) -> Result<usize> {
     let mut end: usize = 0;
 
     for elem in iovec {
-        end = cmp::min(start + elem.iov_len, buf.len());
+        end = start
+            .checked_add(elem.iov_len)
+            .ok_or_else(|| anyhow!("Overflow when getting the net header"))?;
+        end = cmp::min(end, buf.len());
         mem_to_buf(&mut buf[start..end], elem.iov_base as u64)?;
         if end >= buf.len() {
             break;
@@ -1487,6 +1498,9 @@ impl VirtioDevice for Net {
         mut queue_evts: Vec<EventFd>,
     ) -> Result<()> {
         let queue_num = queues.len();
+        if queue_num == 0 {
+            bail!("Length of queues is 0 when activating virtio net");
+        }
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.state.clone())));
         self.ctrl_info = Some(ctrl_info.clone());
         let driver_features = self.state.lock().unwrap().driver_features;

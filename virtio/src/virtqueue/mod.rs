@@ -91,10 +91,10 @@ impl Element {
         }
     }
 
-    pub fn iovec_size(iovec: &[ElemIovec]) -> u32 {
-        let mut size: u32 = 0;
+    pub fn iovec_size(iovec: &[ElemIovec]) -> u64 {
+        let mut size: u64 = 0;
         for elem in iovec.iter() {
-            size += elem.len;
+            size += elem.len as u64;
         }
         size
     }
