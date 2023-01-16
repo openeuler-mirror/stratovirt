@@ -179,9 +179,18 @@ impl VhostUserMemInfo {
     fn addr_to_host(&self, addr: GuestAddress) -> Option<u64> {
         let addr = addr.raw_value();
         for reg_info in self.regions.lock().unwrap().iter() {
-            if addr >= reg_info.region.guest_phys_addr
-                && addr < reg_info.region.guest_phys_addr + reg_info.region.memory_size
-            {
+            let gpa_end = reg_info
+                .region
+                .guest_phys_addr
+                .checked_add(reg_info.region.memory_size)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Overflow when adding gpa with memory_size in region {:x?}",
+                        reg_info.region
+                    )
+                })
+                .ok()?;
+            if addr >= reg_info.region.guest_phys_addr && addr < gpa_end {
                 let offset = addr - reg_info.region.guest_phys_addr;
                 return Some(reg_info.region.userspace_addr + offset);
             }
