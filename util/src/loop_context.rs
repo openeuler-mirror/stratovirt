@@ -255,12 +255,19 @@ impl EventLoopContext {
     }
 
     fn clear_gc(&mut self) {
+        let max_cnt = self.gc.write().unwrap().len();
+        let mut pop_cnt = 0;
+
         loop {
             // Loop to avoid hold lock for long time.
-            let mut gc = self.gc.write().unwrap();
-            if gc.pop().is_none() {
+            if pop_cnt >= max_cnt {
                 break;
             }
+            // SAFETY: We will stop removing when reach max_cnt and no other place
+            // removes element of gc. This is to avoid infinite poping if other
+            // thread continuously adds element to gc.
+            self.gc.write().unwrap().remove(0);
+            pop_cnt += 1;
         }
     }
 
