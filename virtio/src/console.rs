@@ -380,10 +380,6 @@ impl VirtioDevice for Console {
         self.chardev.lock().unwrap().deactivated = true;
         unregister_event_helper(None, &mut self.deactivate_evts)
     }
-
-    fn reset(&mut self) -> Result<()> {
-        self.deactivate()
-    }
 }
 
 impl StateTransfer for Console {
