@@ -29,7 +29,6 @@ pub use sasl_auth::*;
 pub use scsi::*;
 pub use tls_creds::*;
 pub use usb::*;
-use util::AsAny;
 pub use vfio::*;
 pub use vnc::*;
 
@@ -57,15 +56,21 @@ pub mod vnc;
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{Seek, SeekFrom};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
+use util::align::is_aligned;
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
-use util::{file::open_file, trace::enable_trace_events};
+use util::{
+    file::{get_file_alignment, open_file},
+    trace::enable_trace_events,
+    AsAny,
+};
 
 pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
@@ -262,12 +267,26 @@ impl VmConfig {
                 ));
             }
         }
+        let mut file = open_file(path, read_only, direct)?;
+        let (req_align, buf_align) = get_file_alignment(&file, direct);
+        if req_align == 0 || buf_align == 0 {
+            bail!(
+                "Failed to detect alignment requirement of drive file {}.",
+                path
+            );
+        }
+        let file_size = file.seek(SeekFrom::End(0))?;
+        if !is_aligned(file_size, req_align) {
+            bail!("The size of file {} is not aligned to {}.", path, req_align);
+        }
         let drive_file = DriveFile {
-            file: open_file(path, read_only, direct)?,
+            file,
             count: 1,
             read_only,
             path: path.to_string(),
             locked: false,
+            req_align,
+            buf_align,
         };
         drive_files.insert(path.to_string(), drive_file);
         Ok(())
@@ -299,6 +318,17 @@ impl VmConfig {
                 .file
                 .try_clone()
                 .with_context(|| format!("Failed to clone drive backend file {}", path)),
+            None => Err(anyhow!("The file {} is not in drive backend", path)),
+        }
+    }
+
+    /// Get alignment requirement from drive file store.
+    pub fn fetch_drive_align(
+        drive_files: &HashMap<String, DriveFile>,
+        path: &str,
+    ) -> Result<(u32, u32)> {
+        match drive_files.get(path) {
+            Some(drive_file) => Ok((drive_file.req_align, drive_file.buf_align)),
             None => Err(anyhow!("The file {} is not in drive backend", path)),
         }
     }

@@ -20,11 +20,14 @@ use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use std::{cmp, str::FromStr};
 
+use libc::c_void;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
+use crate::align::{align_down, align_up, is_aligned};
+use crate::unix::host_page_size;
 use anyhow::{anyhow, bail, Context, Result};
 use libaio::LibaioContext;
 pub use raw::*;
@@ -39,6 +42,8 @@ const AIO_OFF: &str = "off";
 const AIO_NATIVE: &str = "native";
 /// Io-uring aio type.
 const AIO_IOURING: &str = "io_uring";
+/// Max bytes of bounce buffer for misaligned IO.
+const MAX_LEN_BOUNCE_BUFF: u64 = 1 << 20;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
 pub enum AioEngine {
@@ -91,7 +96,8 @@ pub enum OpCode {
 pub struct AioCb<T: Clone> {
     pub last_aio: bool,
     pub direct: bool,
-    pub sector_size: u64,
+    pub req_align: u32,
+    pub buf_align: u32,
     pub file_fd: RawFd,
     pub opcode: OpCode,
     pub iovec: Vec<Iovec>,
@@ -153,20 +159,31 @@ impl<T: Clone + 'static> Aio<T> {
         self.engine
     }
 
-    pub fn submit_request(&mut self, cb: AioCb<T>) -> Result<()> {
-        if cb.direct && (cb.opcode == OpCode::Preadv || cb.opcode == OpCode::Pwritev) {
-            for iov in cb.iovec.iter() {
-                if iov.iov_base % cb.sector_size != 0 || iov.iov_len % cb.sector_size != 0 {
-                    let res = self.handle_misaligned_rw(&cb).map_or_else(
-                        |e| {
-                            error!("{:?}", e);
-                            -1
-                        },
-                        |_| 0,
-                    );
-                    return (self.complete_func)(&cb, res);
-                }
+    pub fn submit_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
+        if self.request_misaligned(&cb) {
+            let max_len = align_down(cb.nbytes + cb.req_align as u64 * 2, cb.req_align);
+            // Set upper limit of buffer length to avoid OOM.
+            let buff_len = cmp::min(max_len, MAX_LEN_BOUNCE_BUFF);
+            // SAFETY: we allocate aligned memory and free it later. Alignment is set to
+            // host page size to decrease the count of allocated pages.
+            let bounce_buffer =
+                unsafe { libc::memalign(host_page_size() as usize, buff_len as usize) };
+            if bounce_buffer.is_null() {
+                error!("Failed to alloc memory for misaligned read/write.");
+                return (self.complete_func)(&cb, -1);
             }
+
+            let res = match self.handle_misaligned_rw(&mut cb, bounce_buffer, buff_len) {
+                Ok(()) => 0,
+                Err(e) => {
+                    error!("{:?}", e);
+                    -1
+                }
+            };
+
+            // SAFETY: the memory is allocated by us and will not be used anymore.
+            unsafe { libc::free(bounce_buffer) };
+            return (self.complete_func)(&cb, res);
         }
 
         match cb.opcode {
@@ -298,78 +315,152 @@ impl<T: Clone + 'static> Aio<T> {
         (self.complete_func)(&cb, ret)
     }
 
-    fn handle_misaligned_rw(&mut self, cb: &AioCb<T>) -> Result<()> {
-        // SAFETY: only get the host page size.
-        let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+    fn request_misaligned(&self, cb: &AioCb<T>) -> bool {
+        if cb.direct && (cb.opcode == OpCode::Preadv || cb.opcode == OpCode::Pwritev) {
+            if !is_aligned(cb.offset as u64, cb.req_align) {
+                return true;
+            }
+            for iov in cb.iovec.iter() {
+                if !is_aligned(iov.iov_base, cb.buf_align) {
+                    return true;
+                }
+                if !is_aligned(iov.iov_len, cb.req_align) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_misaligned_rw(
+        &mut self,
+        cb: &mut AioCb<T>,
+        bounce_buffer: *mut c_void,
+        buffer_len: u64,
+    ) -> Result<()> {
+        let offset_align = align_down(cb.offset as u64, cb.req_align);
+        let high = cb.offset as u64 + cb.nbytes;
+        let high_align = align_up(high, cb.req_align);
+
         match cb.opcode {
             OpCode::Preadv => {
-                // SAFETY: we allocate aligned memory and free it later.
-                // Alignment is set to host page size to decrease the count of allocated pages.
-                let aligned_buffer =
-                    unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
-                if aligned_buffer.is_null() {
-                    bail!("Failed to alloc memory for misaligned read");
-                }
-                let len = raw_read(
-                    cb.file_fd,
-                    aligned_buffer as u64,
-                    cb.nbytes as usize,
-                    cb.offset,
-                );
-                if len < 0 || len as u64 != cb.nbytes {
-                    // SAFETY: the memory is allocated by us and will not be used anymore.
-                    unsafe { libc::free(aligned_buffer) };
-                    bail!("Failed to do raw read for misaligned read.");
-                }
-
-                // SAFETY: the memory is allocated by us.
-                let src = unsafe {
-                    std::slice::from_raw_parts(aligned_buffer as *const u8, cb.nbytes as usize)
-                };
-                let res = iov_from_buf_direct(&cb.iovec, src).and_then(|v| {
-                    if v == cb.nbytes as usize {
-                        Ok(())
-                    } else {
-                        Err(anyhow!("Failed to copy iovs to buff for misaligned read"))
+                let mut offset = offset_align;
+                let mut iovecs = &mut cb.iovec[..];
+                loop {
+                    // Step1: Read file to bounce buffer.
+                    let nbytes = cmp::min(high_align - offset, buffer_len);
+                    let len = raw_read(
+                        cb.file_fd,
+                        bounce_buffer as u64,
+                        nbytes as usize,
+                        offset as usize,
+                    );
+                    if len < 0 || len as u64 != nbytes {
+                        bail!("Failed to do raw read for misaligned read.");
                     }
-                });
-                // SAFETY: the memory is allocated by us and will not be used anymore.
-                unsafe { libc::free(aligned_buffer) };
-                res
+
+                    let real_offset = cmp::max(offset, cb.offset as u64);
+                    let real_high = cmp::min(offset + nbytes, high);
+                    let real_nbytes = real_high - real_offset;
+                    // SAFETY: the memory is allocated by us.
+                    let src = unsafe {
+                        std::slice::from_raw_parts(
+                            (bounce_buffer as u64 + real_offset - offset) as *const u8,
+                            real_nbytes as usize,
+                        )
+                    };
+
+                    // Step2: Copy bounce buffer to iovec.
+                    iov_from_buf_direct(iovecs, src).and_then(|v| {
+                        if v == real_nbytes as usize {
+                            Ok(())
+                        } else {
+                            Err(anyhow!("Failed to copy iovs to buff for misaligned read"))
+                        }
+                    })?;
+
+                    // Step3: Adjust offset and iovec for next loop.
+                    offset += nbytes;
+                    if offset >= high_align {
+                        break;
+                    }
+                    iovecs = iov_discard_front_direct(iovecs, real_nbytes)
+                        .ok_or_else(|| anyhow!("Failed to adjust iovec for misaligned read"))?;
+                }
+                Ok(())
             }
             OpCode::Pwritev => {
-                // SAFETY: we allocate aligned memory and free it later.
-                let aligned_buffer =
-                    unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };
-                if aligned_buffer.is_null() {
-                    bail!("Failed to alloc memory for misaligned write");
-                }
-                // SAFETY: the memory is allocated by us.
-                let dst = unsafe {
-                    std::slice::from_raw_parts_mut(aligned_buffer as *mut u8, cb.nbytes as usize)
-                };
-                if let Err(e) = iov_to_buf_direct(&cb.iovec, dst).and_then(|v| {
-                    if v == cb.nbytes as usize {
-                        Ok(())
-                    } else {
-                        Err(anyhow!("Failed to copy iovs to buff for misaligned write"))
+                // Load the head from file before fill iovec to buffer.
+                if cb.offset as u64 > offset_align {
+                    let len = raw_read(
+                        cb.file_fd,
+                        bounce_buffer as u64,
+                        cb.req_align as usize,
+                        offset_align as usize,
+                    );
+                    if len < 0 || len as u32 != cb.req_align {
+                        bail!("Failed to load head for misaligned write.");
                     }
-                }) {
-                    // SAFETY: the memory is allocated by us and will not be used anymore.
-                    unsafe { libc::free(aligned_buffer) };
-                    return Err(e);
                 }
+                // Is head and tail in the same alignment section?
+                let tail_loaded = (offset_align + cb.req_align as u64) >= high;
+                let need_tail = !tail_loaded && (high_align > high);
 
-                let len = raw_write(
-                    cb.file_fd,
-                    aligned_buffer as u64,
-                    cb.nbytes as usize,
-                    cb.offset,
-                );
-                // SAFETY: the memory is allocated by us and will not be used anymore.
-                unsafe { libc::free(aligned_buffer) };
-                if len < 0 || len as u64 != cb.nbytes {
-                    bail!("Failed to do raw write for misaligned write.");
+                let mut offset = offset_align;
+                let mut iovecs = &mut cb.iovec[..];
+                loop {
+                    // Step1: Load iovec to bounce buffer.
+                    let nbytes = cmp::min(high_align - offset, buffer_len);
+
+                    let real_offset = cmp::max(offset, cb.offset as u64);
+                    let real_high = cmp::min(offset + nbytes, high);
+                    let real_nbytes = real_high - real_offset;
+
+                    if real_high == high && need_tail {
+                        let len = raw_read(
+                            cb.file_fd,
+                            bounce_buffer as u64 + nbytes - cb.req_align as u64,
+                            cb.req_align as usize,
+                            (offset + nbytes) as usize - cb.req_align as usize,
+                        );
+                        if len < 0 || len as u32 != cb.req_align {
+                            bail!("Failed to load tail for misaligned write.");
+                        }
+                    }
+
+                    // SAFETY: the memory is allocated by us.
+                    let dst = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            (bounce_buffer as u64 + real_offset - offset) as *mut u8,
+                            real_nbytes as usize,
+                        )
+                    };
+                    iov_to_buf_direct(iovecs, dst).and_then(|v| {
+                        if v == real_nbytes as usize {
+                            Ok(())
+                        } else {
+                            Err(anyhow!("Failed to copy iovs to buff for misaligned write"))
+                        }
+                    })?;
+
+                    // Step2: Write bounce buffer to file.
+                    let len = raw_write(
+                        cb.file_fd,
+                        bounce_buffer as u64,
+                        nbytes as usize,
+                        offset as usize,
+                    );
+                    if len < 0 || len as u64 != nbytes {
+                        bail!("Failed to do raw write for misaligned write.");
+                    }
+
+                    // Step3: Adjuest offset and iovec for next loop.
+                    offset += nbytes;
+                    if offset >= high_align {
+                        break;
+                    }
+                    iovecs = iov_discard_front_direct(iovecs, real_nbytes)
+                        .ok_or_else(|| anyhow!("Failed to adjust iovec for misaligned write"))?;
                 }
                 Ok(())
             }
