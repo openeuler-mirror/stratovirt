@@ -284,41 +284,17 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     fn rw_sync(&mut self, cb: AioCb<T>) -> Result<()> {
-        let ret = match cb.opcode {
-            OpCode::Preadv => {
-                let mut r = 0;
-                let mut off = cb.offset;
-                for iov in cb.iovec.iter() {
-                    r = raw_read(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)
-                        .unwrap_or_else(|e| {
-                            error!("Failed to do sync read, {:?}", e);
-                            -1
-                        });
-                    if r < 0 {
-                        break;
-                    }
-                    off += iov.iov_len as usize;
-                }
-                r
-            }
-            OpCode::Pwritev => {
-                let mut r = 0;
-                let mut off = cb.offset;
-                for iov in cb.iovec.iter() {
-                    r = raw_write(cb.file_fd, iov.iov_base, iov.iov_len as usize, off)
-                        .unwrap_or_else(|e| {
-                            error!("Failed to do sync write, {:?}", e);
-                            -1
-                        });
-                    if r < 0 {
-                        break;
-                    }
-                    off += iov.iov_len as usize;
-                }
-                r
-            }
+        let mut ret = match cb.opcode {
+            OpCode::Preadv => raw_readv(cb.file_fd, &cb.iovec, cb.offset),
+            OpCode::Pwritev => raw_writev(cb.file_fd, &cb.iovec, cb.offset),
             _ => -1,
         };
+        if ret < 0 {
+            error!("Failed to do sync read/write.");
+        } else if ret as u64 != cb.nbytes {
+            error!("Incomplete sync read/write.");
+            ret = -1;
+        }
         (self.complete_func)(&cb, ret)
     }
 
@@ -334,17 +310,17 @@ impl<T: Clone + 'static> Aio<T> {
                 if aligned_buffer.is_null() {
                     bail!("Failed to alloc memory for misaligned read");
                 }
-                raw_read(
+                let len = raw_read(
                     cb.file_fd,
                     aligned_buffer as u64,
                     cb.nbytes as usize,
                     cb.offset,
-                )
-                .map_err(|e| {
+                );
+                if len < 0 || len as u64 != cb.nbytes {
                     // SAFETY: the memory is allocated by us and will not be used anymore.
                     unsafe { libc::free(aligned_buffer) };
-                    anyhow!("Failed to do raw read for misaligned read, {:?}", e)
-                })?;
+                    bail!("Failed to do raw read for misaligned read.");
+                }
 
                 // SAFETY: the memory is allocated by us.
                 let src = unsafe {
@@ -384,17 +360,18 @@ impl<T: Clone + 'static> Aio<T> {
                     return Err(e);
                 }
 
-                let res = raw_write(
+                let len = raw_write(
                     cb.file_fd,
                     aligned_buffer as u64,
                     cb.nbytes as usize,
                     cb.offset,
-                )
-                .map(|_| {})
-                .map_err(|e| anyhow!("Failed to do raw write for misaligned write, {:?}", e));
+                );
                 // SAFETY: the memory is allocated by us and will not be used anymore.
                 unsafe { libc::free(aligned_buffer) };
-                res
+                if len < 0 || len as u64 != cb.nbytes {
+                    bail!("Failed to do raw write for misaligned write.");
+                }
+                Ok(())
             }
             _ => bail!("Failed to do misaligned rw: unknown cmd type"),
         }
@@ -405,10 +382,10 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
-        let ret = raw_datasync(cb.file_fd).unwrap_or_else(|e| {
-            error!("Failed to do sync flush, {:?}", e);
-            -1
-        });
+        let ret = raw_datasync(cb.file_fd);
+        if ret < 0 {
+            error!("Failed to do sync flush.");
+        }
         (self.complete_func)(&cb, ret)
     }
 }

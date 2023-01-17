@@ -620,8 +620,8 @@ impl BlockIoHandler {
             && aiocb.opcode == OpCode::Pwritev
             && ret >= 0
         {
-            if let Err(ref e) = raw_datasync(aiocb.file_fd) {
-                error!("Failed to flush data before send response to guest {:?}", e);
+            if raw_datasync(aiocb.file_fd) < 0 {
+                error!("Failed to flush data before send response to guest.");
                 status = VIRTIO_BLK_S_IOERR;
             }
         }
