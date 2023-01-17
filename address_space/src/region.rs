@@ -113,41 +113,23 @@ impl fmt::Debug for RegionIoEventFd {
     }
 }
 
-impl RegionIoEventFd {
-    /// Calculate if this `RegionIoEventFd` is located before the given one.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - Other `RegionIoEventFd`.
-    pub(crate) fn before(&self, other: &RegionIoEventFd) -> bool {
-        if self.addr_range.base != other.addr_range.base {
-            return self.addr_range.base < other.addr_range.base;
-        }
-        if self.addr_range.size != other.addr_range.size {
-            return self.addr_range.size < other.addr_range.size;
-        }
-        if self.data_match != other.data_match {
-            return self.data_match && (!other.data_match);
-        }
-        if self.data != other.data {
-            return self.data < other.data;
-        }
-        false
+impl PartialEq for RegionIoEventFd {
+    fn eq(&self, other: &Self) -> bool {
+        self.addr_range == other.addr_range
+            && self.data_match == other.data_match
+            && self.data == other.data
+            && self.fd.as_raw_fd() == other.fd.as_raw_fd()
     }
+}
 
-    /// Check if this `RegionIoEventFd` has the same address but different fd number.
+impl RegionIoEventFd {
+    /// Calculate if this `RegionIoEventFd` is located after the given one.
     ///
     /// # Arguments
     ///
     /// * `other` - Other `RegionIoEventFd`.
-    pub(crate) fn fd_changed(&self, other: &RegionIoEventFd) -> bool {
-        if self.addr_range.base == other.addr_range.base
-            && self.fd.as_raw_fd() != other.fd.as_raw_fd()
-        {
-            return true;
-        }
-
-        false
+    pub fn after(&self, other: &RegionIoEventFd) -> bool {
+        self.addr_range.base.0 >= (other.addr_range.base.0 + other.addr_range.size)
     }
 }
 
@@ -1123,33 +1105,44 @@ mod test {
             data_match: false,
             data: 0,
         };
-        // comapre fd: unchanged
+        // comapre unchanged
         let mut fd2 = fd1.clone();
-        assert!(!fd2.fd_changed(&fd1));
+        assert!(fd2 == fd1);
 
-        // comapre fd: changed
+        // comapre fd
         fd2.fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
-        assert!(fd2.fd_changed(&fd1));
+        assert!(fd2 != fd1);
 
         // compare length
-        let mut fd2 = fd1.clone();
+        fd2.fd = fd1.fd.clone();
+        assert!(fd2 == fd1);
         fd2.addr_range.size = 8;
-        assert!(fd1.before(&fd2));
+        assert!(fd1 != fd2);
 
         // compare address
-        fd2.addr_range.base.0 = 1024;
         fd2.addr_range.size = 4;
-        assert!(fd1.before(&fd2));
+        assert!(fd2 == fd1);
+        fd2.addr_range.base.0 = 1024;
+        assert!(fd1 != fd2);
 
         // compare datamatch
         fd2.addr_range = fd1.addr_range;
+        assert!(fd2 == fd1);
         fd2.data_match = true;
-        assert_eq!(fd1.before(&fd2), false);
+        assert!(fd1 != fd2);
 
         // if datamatch, compare data
         fd1.data_match = true;
+        assert!(fd2 == fd1);
         fd2.data = 10u64;
-        assert!(fd1.before(&fd2));
+        assert!(fd1 != fd2);
+
+        // test after
+        fd2.data = 0;
+        assert!(fd2 == fd1);
+        assert!(!fd2.after(&fd1));
+        fd2.addr_range.base.0 = 1004;
+        assert!(fd2.after(&fd1));
     }
 
     // test add/del sub-region to container-region, and check priority
