@@ -95,7 +95,7 @@ pub struct AioCompleteCb {
     mem_space: Arc<AddressSpace>,
     /// The head of merged Request list.
     req: Rc<Request>,
-    interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     driver_features: u64,
 }
 
@@ -104,7 +104,7 @@ impl AioCompleteCb {
         queue: Arc<Mutex<Queue>>,
         mem_space: Arc<AddressSpace>,
         req: Rc<Request>,
-        interrupt_cb: Option<Arc<VirtioInterrupt>>,
+        interrupt_cb: Arc<VirtioInterrupt>,
         driver_features: u64,
     ) -> Self {
         AioCompleteCb {
@@ -147,11 +147,9 @@ impl AioCompleteCb {
             .vring
             .should_notify(&self.mem_space, self.driver_features)
         {
-            if let Err(e) = (*self.interrupt_cb.as_ref().unwrap())(
-                &VirtioInterruptType::Vring,
-                Some(&queue_lock),
-                false,
-            ) {
+            if let Err(e) =
+                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+            {
                 bail!(
                     "Failed to trigger interrupt(blk io completion), error is {:?}",
                     e
@@ -510,7 +508,7 @@ impl BlockIoHandler {
                     self.queue.clone(),
                     self.mem_space.clone(),
                     Rc::new(req),
-                    Some(self.interrupt_cb.clone()),
+                    self.interrupt_cb.clone(),
                     self.driver_features,
                 );
                 // unlock queue, because it will be hold below.
@@ -537,7 +535,7 @@ impl BlockIoHandler {
                 self.queue.clone(),
                 self.mem_space.clone(),
                 req_rc.clone(),
-                Some(self.interrupt_cb.clone()),
+                self.interrupt_cb.clone(),
                 self.driver_features,
             );
             if let Some(disk_img) = self.disk_image.as_ref() {
@@ -678,7 +676,7 @@ impl BlockIoHandler {
             }
         };
 
-        if let Err(e) = (*self.interrupt_cb)(&VirtioInterruptType::Config, None, false) {
+        if let Err(e) = (self.interrupt_cb)(&VirtioInterruptType::Config, None, false) {
             error!(
                 "{:?}. {:?}",
                 VirtioError::InterruptTrigger("block", VirtioInterruptType::Config),
@@ -1119,7 +1117,10 @@ impl VirtioDevice for Block {
                 device_broken: self.broken.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 iothread: self.blk_cfg.iothread.clone(),
-                leak_bucket: self.blk_cfg.iops.map(LeakBucket::new),
+                leak_bucket: match self.blk_cfg.iops {
+                    Some(iops) => Some(LeakBucket::new(iops)?),
+                    None => None,
+                },
             };
 
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));

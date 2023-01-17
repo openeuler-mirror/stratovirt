@@ -1542,11 +1542,9 @@ impl GpuIoHandler {
                     .vring
                     .should_notify(&self.mem_space, self.driver_features)
                 {
-                    if let Err(e) = (*self.interrupt_cb.as_ref())(
-                        &VirtioInterruptType::Vring,
-                        Some(&queue_lock),
-                        false,
-                    ) {
+                    if let Err(e) =
+                        (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
+                    {
                         error!(
                             "Failed to trigger interrupt(aio completion) for gpu device, error is {:?}",
                             e

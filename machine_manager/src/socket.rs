@@ -186,12 +186,17 @@ impl Socket {
     /// Create socket's accepted stream to `event_notifier`.
     fn create_event_notifier(&mut self, shared_socket: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
-        self.accept();
 
-        let leak_bucket = Arc::new(Mutex::new(LeakBucket::new(LEAK_BUCKET_LIMIT)));
+        let leak_bucket = LeakBucket::new(LEAK_BUCKET_LIMIT);
+        if let Err(e) = leak_bucket {
+            error!("Failed to create leak bucket, {:?}", e);
+            return notifiers;
+        }
+        let leak_bucket = Arc::new(Mutex::new(leak_bucket.unwrap()));
         let shared_leak_bucket = leak_bucket.clone();
         let leak_bucket_fd = leak_bucket.lock().unwrap().as_raw_fd();
 
+        self.accept();
         let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
             if event == EventSet::IN {
                 let socket_mutexed = shared_socket.lock().unwrap();
