@@ -1253,13 +1253,13 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> PciResult<()> {
+        self.deactivate_device();
         self.device
             .lock()
             .unwrap()
             .reset()
             .with_context(|| "Failed to reset virtio device")?;
         self.common_config.lock().unwrap().reset();
-        self.deactivate_device();
 
         Ok(())
     }
