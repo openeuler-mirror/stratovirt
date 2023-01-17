@@ -346,7 +346,8 @@ pub trait VirtioDevice: Send {
         );
     }
 
-    /// Reset virtio device.
+    /// Reset virtio device, used to do some special reset action for
+    /// different device.
     fn reset(&mut self) -> Result<()> {
         Ok(())
     }
