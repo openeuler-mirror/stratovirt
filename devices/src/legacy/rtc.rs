@@ -139,19 +139,10 @@ impl RTC {
             base_time: Instant::now(),
         };
 
-        let tm = rtc_time_to_tm(rtc.get_current_value() as i64);
+        let tm = rtc_time_to_tm(rtc.get_current_value());
         rtc.set_rtc_cmos(tm);
 
-        // Set Time frequency divider and Rate selection frequency in Register-A.
-        // Bits 6-4 = Time frequency divider (010 = 32.768KHz).
-        // Bits 3-0 = Rate selection frequency (110 = 1.024KHz, 976.562s).
-        rtc.cmos_data[RTC_REG_A as usize] = 0x26;
-
-        // Set 24 hour mode in Register-B.
-        rtc.cmos_data[RTC_REG_B as usize] = 0x02;
-
-        // Set VRT bit in Register-D, indicates that RAM and time are valid.
-        rtc.cmos_data[RTC_REG_D as usize] = 0x80;
+        rtc.init_rtc_reg();
 
         Ok(rtc)
     }
@@ -195,13 +186,26 @@ impl RTC {
         }
     }
 
+    fn init_rtc_reg(&mut self) {
+        // Set Time frequency divider and Rate selection frequency in Register-A.
+        // Bits 6-4 = Time frequency divider (010 = 32.768KHz).
+        // Bits 3-0 = Rate selection frequency (110 = 1.024KHz, 976.562s).
+        self.cmos_data[RTC_REG_A as usize] = 0x26;
+
+        // Set 24 hour mode in Register-B.
+        self.cmos_data[RTC_REG_B as usize] = 0x02;
+
+        // Set VRT bit in Register-D, indicates that RAM and time are valid.
+        self.cmos_data[RTC_REG_D as usize] = 0x80;
+    }
+
     fn read_data(&mut self, data: &mut [u8]) -> bool {
         if data.len() != 1 {
             error!("RTC only supports reading data byte by byte.");
             return false;
         }
 
-        let tm = rtc_time_to_tm(self.get_current_value() as i64);
+        let tm = rtc_time_to_tm(self.get_current_value());
         self.set_rtc_cmos(tm);
         match self.cur_index {
             RTC_REG_A => {
@@ -278,8 +282,8 @@ impl RTC {
     }
 
     /// Get current clock value.
-    fn get_current_value(&self) -> u64 {
-        self.base_time.elapsed().as_secs() + self.tick_offset
+    fn get_current_value(&self) -> i64 {
+        (self.base_time.elapsed().as_secs() as i128 + self.tick_offset as i128) as i64
     }
 
     fn set_rtc_cmos(&mut self, tm: libc::tm) {
@@ -388,7 +392,7 @@ impl SysBusDevOps for RTC {
 
     fn reset(&mut self) -> sysbus::Result<()> {
         self.cmos_data.fill(0);
-        self.cmos_data[RTC_REG_D as usize] = 0x80;
+        self.init_rtc_reg();
         self.set_memory(self.mem_size, self.gap_start);
         Ok(())
     }
