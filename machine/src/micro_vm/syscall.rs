@@ -107,7 +107,9 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_getpid),
         BpfRule::new(libc::SYS_fstat),
         BpfRule::new(libc::SYS_pread64),
+        BpfRule::new(libc::SYS_preadv),
         BpfRule::new(libc::SYS_pwrite64),
+        BpfRule::new(libc::SYS_pwritev),
         BpfRule::new(libc::SYS_statx),
         #[cfg(all(target_env = "musl", target_arch = "x86_64"))]
         BpfRule::new(libc::SYS_stat),
