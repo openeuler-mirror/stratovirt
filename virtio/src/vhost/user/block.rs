@@ -92,31 +92,23 @@ impl Block {
 
     /// Negotiate features with spdk.
     fn negotiate_features(&mut self) -> Result<()> {
-        let client = self.client.as_ref().unwrap();
-        let features = client
-            .lock()
-            .unwrap()
+        let locked_client = self.client.as_ref().unwrap().lock().unwrap();
+        let features = locked_client
             .get_features()
             .with_context(|| "Failed to get features for vhost-user blk")?;
 
         if virtio_has_feature(features, VHOST_USER_F_PROTOCOL_FEATURES) {
-            let protocol_features = client
-                .lock()
-                .unwrap()
+            let protocol_features = locked_client
                 .get_protocol_features()
                 .with_context(|| "Failed to get protocol features for vhost-user blk")?;
             let supported_protocol_features =
                 1 << VHOST_USER_PROTOCOL_F_MQ | 1 << VHOST_USER_PROTOCOL_F_CONFIG;
-            client
-                .lock()
-                .unwrap()
+            locked_client
                 .set_protocol_features(supported_protocol_features & protocol_features)
                 .with_context(|| "Failed to set protocol features for vhost-user blk")?;
 
             if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
-                let config = client
-                    .lock()
-                    .unwrap()
+                let config = locked_client
                     .get_virtio_blk_config()
                     .with_context(|| "Failed to get config for vhost-user blk")?;
                 self.state.config_space = config;
@@ -128,9 +120,7 @@ impl Block {
             }
 
             if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_MQ as u32) {
-                let max_queue_num = client
-                    .lock()
-                    .unwrap()
+                let max_queue_num = locked_client
                     .get_max_queue_num()
                     .with_context(|| "Failed to get queue num for vhost-user blk")?;
                 if self.queue_num() > max_queue_num as usize {
@@ -150,6 +140,7 @@ impl Block {
                 );
             }
         }
+        drop(locked_client);
 
         self.state.device_features = 1_u64 << VIRTIO_F_VERSION_1
             | 1_u64 << VIRTIO_BLK_F_SIZE_MAX

@@ -379,8 +379,7 @@ impl VhostUserClient {
         // Set all vring num to notify ovs/dpdk how many queues it needs to poll
         // before setting vring info.
         for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
-            let queue = queue_mutex.lock().unwrap();
-            let actual_size = queue.vring.actual_size();
+            let actual_size = queue_mutex.lock().unwrap().vring.actual_size();
             self.set_vring_num(queue_index, actual_size)
                 .with_context(|| {
                     format!(
@@ -391,9 +390,7 @@ impl VhostUserClient {
         }
 
         for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
-            let queue = queue_mutex.lock().unwrap();
-            let queue_config = queue.vring.get_queue_config();
-
+            let queue_config = queue_mutex.lock().unwrap().vring.get_queue_config();
             self.set_vring_addr(&queue_config, queue_index, 0)
                 .with_context(|| {
                     format!(
@@ -468,11 +465,11 @@ impl VhostUserClient {
 
     /// Send get protocol features request to vhost.
     pub fn get_protocol_features(&self) -> Result<u64> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetProtocolFeatures as u32;
         let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -486,10 +483,11 @@ impl VhostUserClient {
 
     /// Send u64 value to vhost.
     fn set_value(&self, request: VhostUserMsgReq, value: u64) -> Result<()> {
-        let client = self.client.lock().unwrap();
         let hdr = VhostUserMsgHdr::new(request as u32, 0, size_of::<u64>() as u32);
         let payload_opt: Option<&[u8]> = None;
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
             .send_msg(Some(&hdr), Some(&value), payload_opt, &[])
             .with_context(|| "Failed to send msg for setting value")?;
@@ -504,7 +502,6 @@ impl VhostUserClient {
 
     /// Get virtio blk config from vhost.
     pub fn get_virtio_blk_config(&self) -> Result<VirtioBlkConfig> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetConfig as u32;
         let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
         let hdr = VhostUserMsgHdr::new(
@@ -520,6 +517,7 @@ impl VhostUserClient {
                 config_len,
             )
         });
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -547,11 +545,11 @@ impl VhostUserClient {
 
     /// Get max queues number that vhost supports.
     pub fn get_max_queue_num(&self) -> Result<u64> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetQueueNum as u32;
         let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -565,11 +563,12 @@ impl VhostUserClient {
 
 impl VhostOps for VhostUserClient {
     fn set_owner(&self) -> Result<()> {
-        let client = self.client.lock().unwrap();
         let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::SetOwner as u32, 0, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
             .with_context(|| "Failed to send msg for setting owner")?;
@@ -578,11 +577,11 @@ impl VhostOps for VhostUserClient {
     }
 
     fn get_features(&self) -> Result<u64> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetFeatures as u32;
         let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, 0);
         let body_opt: Option<&u32> = None;
         let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
@@ -611,12 +610,14 @@ impl VhostOps for VhostUserClient {
             memcontext.region_add(region_info.region);
             fds.push(region_info.file_back.file.as_raw_fd());
         }
+        drop(mem_regions);
 
-        let client = self.client.lock().unwrap();
         let len = size_of::<VhostUserMemHdr>() + num_region * size_of::<RegionMemInfo>();
         let hdr = VhostUserMsgHdr::new(VhostUserMsgReq::SetMemTable as u32, 0, len as u32);
         let memhdr = VhostUserMemHdr::new(num_region as u32, 0);
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
             .send_msg(
                 Some(&hdr),
@@ -655,7 +656,6 @@ impl VhostOps for VhostUserClient {
     }
 
     fn set_vring_addr(&self, queue: &QueueConfig, index: usize, flags: u32) -> Result<()> {
-        let client = self.client.lock().unwrap();
         let hdr = VhostUserMsgHdr::new(
             VhostUserMsgReq::SetVringAddr as u32,
             0,
@@ -694,7 +694,9 @@ impl VhostOps for VhostUserClient {
             avail_user_addr,
             log_guest_addr: 0_u64,
         };
-        client
+        self.client
+            .lock()
+            .unwrap()
             .sock
             .send_msg(Some(&hdr), Some(&_vring_addr), payload_opt, &[])
             .with_context(|| "Failed to send msg for setting vring addr")?;
@@ -805,7 +807,6 @@ impl VhostOps for VhostUserClient {
     }
 
     fn get_vring_base(&self, queue_idx: usize) -> Result<u16> {
-        let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::GetVringBase as u32;
         let hdr = VhostUserMsgHdr::new(
             request,
@@ -815,6 +816,7 @@ impl VhostOps for VhostUserClient {
 
         let vring_state = VhostUserVringState::new(queue_idx as u32, 0_u32);
         let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
