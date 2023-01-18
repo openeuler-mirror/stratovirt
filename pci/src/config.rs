@@ -323,6 +323,8 @@ pub struct Bar {
     address: u64,
     pub size: u64,
     pub region: Option<Region>,
+    pub parent_io_region: Option<Arc<Mutex<Region>>>,
+    pub parent_mem_region: Option<Arc<Mutex<Region>>>,
 }
 
 /// Capbility ID defined by PCIe/PCI spec.
@@ -400,6 +402,8 @@ impl PciConfig {
                 address: 0,
                 size: 0,
                 region: None,
+                parent_io_region: None,
+                parent_mem_region: None,
             });
         }
 
@@ -615,6 +619,25 @@ impl PciConfig {
         Ok(())
     }
 
+    /// General reset process for pci devices
+    pub fn reset(&mut self) -> Result<()> {
+        self.reset_common_regs()?;
+
+        if let Err(e) = self.update_bar_mapping(
+            #[cfg(target_arch = "x86_64")]
+            None,
+            None,
+        ) {
+            error!("{:?}", e);
+        }
+
+        if let Some(msix) = &self.msix {
+            msix.lock().unwrap().reset();
+        }
+
+        Ok(())
+    }
+
     /// Get base offset of the capability in PCIe/PCI configuration space.
     ///
     /// # Arguments
@@ -791,6 +814,39 @@ impl PciConfig {
                 continue;
             }
 
+            if self.bars[id].address != BAR_SPACE_UNMAPPED {
+                match self.bars[id].region_type {
+                    #[cfg(target_arch = "x86_64")]
+                    RegionType::Io => {
+                        if self.bars[id].parent_io_region.is_some() {
+                            self.bars[id]
+                                .parent_io_region
+                                .as_ref()
+                                .unwrap()
+                                .lock()
+                                .unwrap()
+                                .delete_subregion(self.bars[id].region.as_ref().unwrap())
+                                .with_context(|| {
+                                    format!("Failed to unmap BAR{} in I/O space.", id)
+                                })?;
+                        }
+                    }
+                    _ => {
+                        if self.bars[id].parent_mem_region.is_some() {
+                            self.bars[id]
+                                .parent_mem_region
+                                .as_ref()
+                                .unwrap()
+                                .lock()
+                                .unwrap()
+                                .delete_subregion(self.bars[id].region.as_ref().unwrap())
+                                .with_context(|| anyhow!(PciError::UnregMemBar(id)))?
+                        }
+                    }
+                }
+                self.bars[id].address = BAR_SPACE_UNMAPPED;
+            }
+
             if self.is_bar_region_empty(
                 id,
                 #[cfg(target_arch = "x86_64")]
@@ -800,36 +856,27 @@ impl PciConfig {
                 return Ok(());
             }
 
-            if self.bars[id].address != BAR_SPACE_UNMAPPED {
-                match self.bars[id].region_type {
-                    RegionType::Io => {
-                        #[cfg(target_arch = "x86_64")]
-                        io_region
-                            .unwrap()
-                            .delete_subregion(self.bars[id].region.as_ref().unwrap())
-                            .with_context(|| format!("Failed to unmap BAR{} in I/O space.", id))?;
-                    }
-                    _ => mem_region
-                        .unwrap()
-                        .delete_subregion(self.bars[id].region.as_ref().unwrap())
-                        .with_context(|| anyhow!(PciError::UnregMemBar(id)))?,
-                }
-                self.bars[id].address = BAR_SPACE_UNMAPPED;
-            }
             if new_addr != BAR_SPACE_UNMAPPED {
                 match self.bars[id].region_type {
+                    #[cfg(target_arch = "x86_64")]
                     RegionType::Io => {
-                        #[cfg(target_arch = "x86_64")]
                         io_region
                             .unwrap()
                             .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
                             .with_context(|| format!("Failed to map BAR{} in I/O space.", id))?;
+                        self.bars[id].parent_io_region =
+                            Some(Arc::new(Mutex::new(io_region.unwrap().clone())));
                     }
-                    _ => mem_region
-                        .unwrap()
-                        .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
-                        .with_context(|| anyhow!(PciError::UnregMemBar(id)))?,
+                    _ => {
+                        mem_region
+                            .unwrap()
+                            .add_subregion(self.bars[id].region.clone().unwrap(), new_addr)
+                            .with_context(|| anyhow!(PciError::UnregMemBar(id)))?;
+                        self.bars[id].parent_mem_region =
+                            Some(Arc::new(Mutex::new(mem_region.unwrap().clone())));
+                    }
                 }
+
                 self.bars[id].address = new_addr;
             }
         }

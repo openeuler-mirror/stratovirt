@@ -813,8 +813,6 @@ impl VirtioPciDevice {
         self.queues.lock().unwrap().clear();
         if self.device_activated.load(Ordering::Acquire) {
             self.device_activated.store(false, Ordering::Release);
-            let cloned_msix = self.config.msix.as_ref().unwrap().clone();
-            cloned_msix.lock().unwrap().reset();
             if let Err(e) = self.device.lock().unwrap().deactivate() {
                 error!("Failed to deactivate virtio device, error is {:?}", e);
                 return false;
@@ -1260,6 +1258,8 @@ impl PciDevOps for VirtioPciDevice {
             .reset()
             .with_context(|| "Failed to reset virtio device")?;
         self.common_config.lock().unwrap().reset();
+
+        self.config.reset()?;
 
         Ok(())
     }

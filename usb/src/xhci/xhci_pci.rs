@@ -281,6 +281,9 @@ impl PciDevOps for XhciPciDevice {
 
     fn reset(&mut self, _reset_child_device: bool) -> pci::Result<()> {
         self.xhci.lock().unwrap().reset();
+
+        self.pci_config.reset()?;
+
         Ok(())
     }
 }
