@@ -20,9 +20,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use machine_manager::config::{GpuConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_SCANOUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use migration::{DeviceStateDesc, FieldDesc};
+use migration::{DeviceStateDesc, FieldDesc, MigrationManager};
 use migration_derive::{ByteCode, Desc};
-use std::cmp;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -49,23 +48,23 @@ use vnc::console::{
     display_replace_surface, DisplayMouse, DisplaySurface, HardWareOperations,
 };
 
-/// Number of virtqueues.
+// number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
 
-/// Flags for virtio gpu base conf.
+// flags for virtio gpu base conf
 const VIRTIO_GPU_FLAG_VIRGL_ENABLED: u32 = 1;
 #[allow(unused)]
 const VIRTIO_GPU_FLAG_STATS_ENABLED: u32 = 2;
 const VIRTIO_GPU_FLAG_EDID_ENABLED: u32 = 3;
 
-/// Features which virtio gpu cmd can support
+// features which virtio gpu cmd can support
 const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
 
-/// flag used to distinguish the cmd type and format VirtioGpuRequest
+// Flags used to distinguish the cmd type and format VirtioGpuRequest.
 const VIRTIO_GPU_CMD_CTRL: u32 = 0;
 const VIRTIO_GPU_CMD_CURSOR: u32 = 1;
 
-/// virtio_gpu_ctrl_type: 2d commands.
+// virtio_gpu_ctrl_type: 2d commands
 const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
 const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
 const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
@@ -74,24 +73,22 @@ const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
 const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
-const VIRTIO_GPU_CMD_GET_CAPSET_INFO: u32 = 0x0108;
-const VIRTIO_GPU_CMD_GET_CAPSET: u32 = 0x0109;
 const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010a;
-/// virtio_gpu_ctrl_type: cursor commands.
+// virtio_gpu_ctrl_type: cursor commands
 const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
 const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
-/// virtio_gpu_ctrl_type: success responses.
+// virtio_gpu_ctrl_type: success responses
 const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
-/// virtio_gpu_ctrl_type: error responses.
+// virtio_gpu_ctrl_type: error responses
 const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
 const VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY: u32 = 0x1201;
 const VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID: u32 = 0x1202;
 const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
 const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 
-/// simple formats for fbcon/X use
+// simple formats for fbcon/X use
 const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
 const VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM: u32 = 2;
 const VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM: u32 = 3;
@@ -176,8 +173,6 @@ impl VirtioGpuCtrlHdr {
             | VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D
             | VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING
             | VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING
-            | VIRTIO_GPU_CMD_GET_CAPSET_INFO
-            | VIRTIO_GPU_CMD_GET_CAPSET
             | VIRTIO_GPU_CMD_GET_EDID => true,
             _ => {
                 error!("request type {} is not supported for GPU", self.hdr_type);
@@ -486,7 +481,7 @@ impl GpuScanout {
 struct GpuIoHandler {
     /// The virtqueue for for sending control commands.
     ctrl_queue: Arc<Mutex<Queue>>,
-    /// The virtqueue for sending cursor updates
+    /// The virtqueue for sending cursor updates.
     cursor_queue: Arc<Mutex<Queue>>,
     /// The address space to which the GPU device belongs.
     mem_space: Arc<AddressSpace>,
@@ -506,7 +501,7 @@ struct GpuIoHandler {
     base_conf: VirtioGpuBaseConf,
     /// States of all request in scanout.
     req_states: [VirtioGpuReqState; VIRTIO_GPU_MAX_SCANOUTS],
-    ///
+    /// Scanouts of gpu.
     scanouts: Vec<GpuScanout>,
     /// Max host mem for resource.
     max_hostmem: u64,
@@ -549,23 +544,23 @@ fn create_surface(
     surface
 }
 
-impl GpuIoHandler {
-    fn gpu_get_pixman_format(&mut self, format: u32) -> Result<pixman_format_code_t> {
-        match format {
-            VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM => Ok(pixman_format_code_t::PIXMAN_a8r8g8b8),
-            VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM => Ok(pixman_format_code_t::PIXMAN_x8r8g8b8),
-            VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM => Ok(pixman_format_code_t::PIXMAN_b8g8r8a8),
-            VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM => Ok(pixman_format_code_t::PIXMAN_b8g8r8x8),
-            VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM => Ok(pixman_format_code_t::PIXMAN_a8b8g8r8),
-            VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM => Ok(pixman_format_code_t::PIXMAN_r8g8b8x8),
-            VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM => Ok(pixman_format_code_t::PIXMAN_r8g8b8a8),
-            VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM => Ok(pixman_format_code_t::PIXMAN_x8b8g8r8),
-            _ => {
-                bail!("Unsupport pixman format")
-            }
+fn gpu_get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
+    match format {
+        VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM => Ok(pixman_format_code_t::PIXMAN_a8r8g8b8),
+        VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM => Ok(pixman_format_code_t::PIXMAN_x8r8g8b8),
+        VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM => Ok(pixman_format_code_t::PIXMAN_b8g8r8a8),
+        VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM => Ok(pixman_format_code_t::PIXMAN_b8g8r8x8),
+        VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM => Ok(pixman_format_code_t::PIXMAN_a8b8g8r8),
+        VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM => Ok(pixman_format_code_t::PIXMAN_r8g8b8x8),
+        VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM => Ok(pixman_format_code_t::PIXMAN_r8g8b8a8),
+        VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM => Ok(pixman_format_code_t::PIXMAN_x8b8g8r8),
+        _ => {
+            bail!("Unsupport pixman format")
         }
     }
+}
 
+impl GpuIoHandler {
     fn gpu_get_image_hostmem(
         &mut self,
         format: pixman_format_code_t,
@@ -831,9 +826,8 @@ impl GpuIoHandler {
             resource_id: info_create_2d.resource_id,
             ..Default::default()
         };
-        let pixman_format = self
-            .gpu_get_pixman_format(res.format)
-            .with_context(|| "Fail to parse guest format")?;
+        let pixman_format =
+            gpu_get_pixman_format(res.format).with_context(|| "Fail to parse guest format")?;
         res.host_mem =
             self.gpu_get_image_hostmem(pixman_format, info_create_2d.width, info_create_2d.height);
         if res.host_mem + self.used_hostmem < self.max_hostmem {
@@ -882,7 +876,7 @@ impl GpuIoHandler {
                     if (res.scanouts_bitmask & (1 << i)) != 0 {
                         let scanout = &mut self.scanouts[i as usize];
                         if scanout.resource_id != 0 {
-                            // disable the scanout.
+                            // disable the scanout
                             res.scanouts_bitmask &= !(1 << i);
                             display_replace_surface(scanout.con_id, None);
                             scanout.clear();
@@ -957,10 +951,10 @@ impl GpuIoHandler {
             );
         }
 
-        // TODO refactor to disable function
+        // TODO: refactor to disable function
         let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
         if info_set_scanout.resource_id == 0 {
-            // set resource_id to 0 means disable the scanout.
+            // Set resource_id to 0 means disable the scanout.
             if let Some(res_index) = self
                 .resources_list
                 .iter()
@@ -1292,7 +1286,7 @@ impl GpuIoHandler {
             return;
         }
 
-        // we divide regions into that need to be copied and can be skipped
+        // We divide regions into that need to be copied and can be skipped.
         let src_cpy_section: usize = (info_transfer.rect.width * bpp) as usize;
         let src_expected: usize = info_transfer.offset as usize
             + ((info_transfer.rect.height - 1) * stride as u32) as usize
@@ -1744,6 +1738,12 @@ impl VirtioDevice for Gpu {
         Ok(())
     }
 
+    /// Unrealize low level device.
+    fn unrealize(&mut self) -> Result<()> {
+        MigrationManager::unregister_device_instance(GpuState::descriptor(), &self.gpu_conf.id);
+        Ok(())
+    }
+
     /// Get the virtio device type, refer to Virtio Spec.
     fn device_type(&self) -> u32 {
         VIRTIO_TYPE_GPU
@@ -1778,36 +1778,45 @@ impl VirtioDevice for Gpu {
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
         let config_slice = self.state.config.as_bytes();
         let config_len = config_slice.len() as u64;
-        if offset >= config_len {
+
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
-        }
+
+        let read_end: usize = offset as usize + data.len();
+        data.write_all(&config_slice[offset as usize..read_end])?;
+
         Ok(())
     }
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let data_len = data.len();
-        let config_slice = self.state.config.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset,
-                config_len as u64
-            )));
+        let mut config_cpy = self.state.config;
+        let config_cpy_slice = config_cpy.as_mut_bytes();
+        let config_len = config_cpy_slice.len() as u64;
+
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
 
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
-
+        config_cpy_slice[(offset as usize)..(offset as usize + data.len())].copy_from_slice(data);
         if self.state.config.events_clear != 0 {
-            self.state.config.events_read &= !self.state.config.events_clear;
+            self.state.config.events_read &= !config_cpy.events_clear;
         }
 
         Ok(())
     }
 
+    /// Activate the virtio device, this function is called by vcpu thread when frontend
+    /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(
         &mut self,
         mem_space: Arc<AddressSpace>,
