@@ -135,6 +135,8 @@ impl Block {
                     protocol_features
                 );
             }
+        } else {
+            bail!("Bad spdk feature: {:#b}", features);
         }
         drop(locked_client);
 
