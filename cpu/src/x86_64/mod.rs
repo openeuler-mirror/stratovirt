@@ -243,7 +243,7 @@ impl X86CPUState {
             .set_lapic(&self.lapic)
             .with_context(|| format!("Failed to set lapic for CPU {}", self.apic_id))?;
         vcpu_fd
-            .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len]).unwrap())
+            .set_msrs(&Msrs::from_entries(&self.msr_list[0..self.msr_len])?)
             .with_context(|| format!("Failed to set msrs for CPU {}", self.apic_id))?;
         vcpu_fd
             .set_vcpu_events(&self.cpu_events)
@@ -392,9 +392,9 @@ impl X86CPUState {
         }
     }
 
-    fn adjust_cpuid(&self, cpuid: &mut CpuId) {
+    fn adjust_cpuid(&self, cpuid: &mut CpuId) -> Result<()> {
         if self.nr_dies < 2 {
-            return;
+            return Ok(());
         }
 
         // Intel CPU topology with multi-dies support requies CPUID[0x1f].
@@ -402,21 +402,22 @@ impl X86CPUState {
         for entry in entries.iter_mut() {
             if entry.function == 0 {
                 if entry.eax >= 0x1f {
-                    return;
+                    return Ok(());
                 } else {
                     entry.eax = 0x1f;
                 }
                 break;
             }
         }
-        (0..4).for_each(|index| {
+        for index in 0..4 {
             let entry = kvm_cpuid_entry2 {
                 function: 0x1f,
                 index,
                 ..Default::default()
             };
-            cpuid.push(entry).unwrap();
-        });
+            cpuid.push(entry)?;
+        }
+        Ok(())
     }
 
     fn setup_cpuid(&self, vcpu_fd: &Arc<VcpuFd>) -> Result<()> {
@@ -432,7 +433,7 @@ impl X86CPUState {
             .with_context(|| {
                 format!("Failed to get supported cpuid for CPU {}/KVM", self.apic_id)
             })?;
-        self.adjust_cpuid(&mut cpuid);
+        self.adjust_cpuid(&mut cpuid)?;
         let entries = cpuid.as_mut_slice();
 
         for entry in entries.iter_mut() {
@@ -564,7 +565,7 @@ impl X86CPUState {
 
 impl StateTransfer for CPU {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let mut msr_entries = self.caps.create_msr_entries();
+        let mut msr_entries = self.caps.create_msr_entries()?;
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
 
         cpu_state_locked.mp_state = self.fd.get_mp_state()?;

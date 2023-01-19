@@ -905,7 +905,10 @@ impl MachineLifecycle for LightMachine {
             return false;
         }
 
-        self.power_button.write(1).unwrap();
+        if self.power_button.write(1).is_err() {
+            error!("Micro vm write power button failed");
+            return false;
+        }
         true
     }
 
@@ -1631,6 +1634,7 @@ impl device_tree::CompileFDT for LightMachine {
         self.generate_memory_node(fdt)?;
         self.generate_devices_node(fdt)?;
         self.generate_chosen_node(fdt)?;
+        // SAFETY: ARM architecture must have interrupt controllers in user mode.
         self.irq_chip.as_ref().unwrap().generate_fdt_node(fdt)?;
 
         fdt.end_node(node_dep)?;

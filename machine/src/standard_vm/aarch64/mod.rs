@@ -14,6 +14,7 @@ mod pci_host_root;
 mod syscall;
 
 pub use crate::error::MachineError;
+use log::error;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -843,6 +844,7 @@ impl AcpiBuilder for StdMachine {
         gic_redist.base_addr = MEM_LAYOUT[LayoutEntryType::GicRedist as usize].0;
         gic_redist.length = 16;
         madt.append_child(&gic_redist.aml_bytes());
+        // SAFETY: ARM architecture must have interrupt controllers in user mode.
         if self.irq_chip.as_ref().unwrap().get_redist_count() > 1 {
             gic_redist.range_length = MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].1 as u32;
             gic_redist.base_addr = MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].0;
@@ -911,6 +913,7 @@ impl AcpiBuilder for StdMachine {
         srat.append_child(&[0_u8; 8_usize]);
 
         let mut next_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        // SAFETY: the SRAT table is created only when numa node configured.
         for (id, node) in self.numa_nodes.as_ref().unwrap().iter() {
             self.build_srat_cpu(*id, node, &mut srat);
             next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
@@ -963,12 +966,18 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
 
-        self.power_button.write(1).unwrap();
+        if self.power_button.write(1).is_err() {
+            error!("ARM stdndard vm write power button failed");
+            return false;
+        }
         true
     }
 
     fn reset(&mut self) -> bool {
-        self.reset_req.write(1).unwrap();
+        if self.reset_req.write(1).is_err() {
+            error!("ARM standard vm write reset req failed");
+            return false;
+        }
         true
     }
 
@@ -1406,15 +1415,19 @@ impl CompileFDTHelper for StdMachine {
             let mut locked_dev = dev.lock().unwrap();
             match locked_dev.get_type() {
                 SysBusDevType::PL011 => {
+                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_serial_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
                 }
                 SysBusDevType::Rtc => {
+                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_rtc_device_node(fdt, locked_dev.get_sys_resource().unwrap())?
                 }
                 SysBusDevType::VirtioMmio => {
+                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_virtio_devices_node(fdt, locked_dev.get_sys_resource().unwrap())?
                 }
                 SysBusDevType::FwCfg => {
+                    // SAFETY: Legacy devices guarantee is not empty.
                     generate_fwcfg_device_node(fdt, locked_dev.get_sys_resource().unwrap())?;
                 }
                 _ => (),

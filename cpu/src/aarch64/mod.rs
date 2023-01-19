@@ -308,7 +308,7 @@ impl StateTransfer for CPU {
             cpu_state_locked.mp_state = mp_state;
         }
 
-        let mut cpreg_list = RegList::new(KVM_MAX_CPREG_ENTRIES).unwrap();
+        let mut cpreg_list = RegList::new(KVM_MAX_CPREG_ENTRIES)?;
         self.fd.get_reg_list(&mut cpreg_list)?;
         cpu_state_locked.cpreg_len = 0;
         for (index, cpreg) in cpreg_list.as_slice().iter().enumerate() {
