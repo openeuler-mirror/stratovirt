@@ -254,6 +254,19 @@ impl ConnState {
         self.dis_conn
     }
 
+    /// Whether the client's image data needs to be updated.
+    pub fn is_need_update(&mut self, dirty_num: i32) -> bool {
+        if self.is_disconnect() {
+            return false;
+        }
+
+        match self.update_state {
+            UpdateState::No => false,
+            UpdateState::Incremental => dirty_num > 0,
+            UpdateState::Force => true,
+        }
+    }
+
     pub fn has_feature(&self, feature: VncFeatures) -> bool {
         self.feature & (1 << feature as usize) != 0
     }
@@ -1076,7 +1089,7 @@ impl EventNotifierHelper for ClientIoHandler {
 /// Generate the data that needs to be sent.
 /// Add to send queue
 pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: i32) -> i32 {
-    if !is_need_update(client) || dirty_num == 0 {
+    if !client.conn_state.lock().unwrap().is_need_update(dirty_num) {
         return 0;
     }
 
@@ -1169,21 +1182,6 @@ fn vnc_write_tls_message(tc: &mut ServerConnection, stream: &mut TcpStream) -> R
     }
 
     Ok(())
-}
-
-/// Whether the client's image data needs to be updated.
-pub fn is_need_update(client: &Arc<ClientState>) -> bool {
-    match client.conn_state.lock().unwrap().update_state {
-        UpdateState::No => false,
-        UpdateState::Incremental => {
-            // throttle_output_offset
-            true
-        }
-        UpdateState::Force => {
-            // force_update_offset
-            true
-        }
-    }
 }
 
 /// Set pixformat for client.
