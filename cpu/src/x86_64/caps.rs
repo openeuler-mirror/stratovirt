@@ -12,6 +12,7 @@
 
 use kvm_bindings::{kvm_msr_entry, Msrs};
 use kvm_ioctls::{Cap, Kvm};
+use vmm_sys_util::fam::Error;
 
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/arch/x86/include/asm/msr-index.h#L558
 const MSR_IA32_MISC_ENABLE: ::std::os::raw::c_uint = 0x1a0;
@@ -45,7 +46,7 @@ impl X86CPUCaps {
     }
 
     /// Create `Msrs` (a list of `kvm_msr_entry`) from capabilities supported_msrs.
-    pub fn create_msr_entries(&self) -> Msrs {
+    pub fn create_msr_entries(&self) -> Result<Msrs, Error> {
         let entry_vec: Vec<kvm_msr_entry> = self
             .supported_msrs
             .iter()
@@ -65,6 +66,6 @@ impl X86CPUCaps {
                 }
             })
             .collect();
-        Msrs::from_entries(&entry_vec).unwrap()
+        Msrs::from_entries(&entry_vec)
     }
 }

@@ -28,6 +28,7 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 
 use log::warn;
 use util::file::{lock_file, unlock_file};
+use util::loop_context::read_fd;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 pub use micro_vm::LightMachine;
@@ -543,7 +544,7 @@ pub trait MachineOps {
     }
 
     fn reset_fwcfg_boot_order(&mut self) -> Result<()> {
-        // unwrap is safe because stand machine always make sure it not return null.
+        // SAFETY: unwrap is safe because stand machine always make sure it not return null.
         let boot_order_vec = self.get_boot_order_list().unwrap();
         let mut locked_boot_order_vec = boot_order_vec.lock().unwrap().clone();
         if locked_boot_order_vec.is_empty() {
@@ -577,7 +578,7 @@ pub trait MachineOps {
     ///
     /// * `bootindex` - The boot index of the device.
     fn check_bootindex(&mut self, boot_index: u8) -> Result<()> {
-        // Unwrap is safe because StdMachine will overwrite this function,
+        // SAFETY: Unwrap is safe because StdMachine will overwrite this function,
         // which ensure boot_order_list is not None.
         let boot_order_list = self.get_boot_order_list().unwrap();
         if boot_order_list
@@ -600,6 +601,8 @@ pub trait MachineOps {
     /// * `dev_path` - The firmware device path of the device.
     /// * `dev_id` - The id of the device.
     fn add_bootindex_devices(&mut self, boot_index: u8, dev_path: &str, dev_id: &str) {
+        // SAFETY: Unwrap is safe because StdMachine will overwrite this function,
+        // which ensure boot_order_list is not None.
         let boot_order_list = self.get_boot_order_list().unwrap();
         boot_order_list.lock().unwrap().push(BootIndexInfo {
             boot_index,
@@ -1304,7 +1307,7 @@ pub trait MachineOps {
     fn register_power_event(&self, power_button: Arc<EventFd>) -> Result<()> {
         let button_fd = power_button.as_raw_fd();
         let power_button_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
-            let _ret = power_button.read().unwrap();
+            read_fd(button_fd);
             None
         });
         let notifier = EventNotifier::new(
@@ -1452,6 +1455,7 @@ pub trait MachineOps {
         }
 
         #[cfg(target_arch = "aarch64")]
+        // SAFETY: ARM architecture must have interrupt controllers in user mode.
         irq_chip.as_ref().unwrap().stop();
 
         *vm_state = KvmVmState::Paused;

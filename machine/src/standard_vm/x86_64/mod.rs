@@ -244,7 +244,7 @@ impl StdMachine {
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
         let clone_vm = vm.clone();
         let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
-        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone());
+        let ich = ich9_lpc::LPCBridge::new(root_bus, self.sys_io.clone())?;
         self.register_reset_event(ich.reset_req.clone(), vm)
             .with_context(|| "Fail to register reset event in LPC")?;
         self.register_acpi_shutdown_event(ich.shutdown_req.clone(), clone_vm)
@@ -809,7 +809,10 @@ impl MachineLifecycle for StdMachine {
             return false;
         }
 
-        self.power_button.write(1).unwrap();
+        if self.power_button.write(1).is_err() {
+            error!("X86 standard vm write power button failed");
+            return false;
+        }
         true
     }
 

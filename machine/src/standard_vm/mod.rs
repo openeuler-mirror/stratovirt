@@ -23,7 +23,7 @@ pub use aarch64::StdMachine;
 use log::error;
 use machine_manager::event_loop::EventLoop;
 use util::aio::AIO_NATIVE;
-use util::loop_context::{EventNotifier, NotifierCallback, NotifierOperation};
+use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 #[cfg(target_arch = "x86_64")]
@@ -193,7 +193,7 @@ trait StdMachineOps: AcpiBuilder {
     ) -> MachineResult<()> {
         let reset_req_fd = reset_req.as_raw_fd();
         let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
-            let _ret = reset_req.read().unwrap();
+            read_fd(reset_req_fd);
             if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
                 error!("Fail to reboot standard VM, {:?}", e);
             }
@@ -822,6 +822,7 @@ impl StdMachine {
         let result =
             self.add_virtio_pci_device(&args.id, pci_bdf, device.clone(), multifunction, false);
         let pci_dev = if let Err(ref e) = result {
+            // SAFETY: unwrap is safe because Standard machine always make sure it not return null.
             self.get_scsi_cntlr_list()
                 .unwrap()
                 .lock()
