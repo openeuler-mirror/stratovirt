@@ -44,6 +44,8 @@ pub enum ConfigError {
     FieldIsMissing(&'static str, &'static str),
     #[error("{0} must >{} {1} and <{} {3}.", if *.2 {"="} else {""}, if *.4 {"="} else {""})]
     IllegalValue(String, u64, bool, u64, bool),
+    #[error("{0} must {}{} {3}.", if *.1 {">"} else {"<"}, if *.2 {"="} else {""})]
+    IllegalValueUnilateral(String, bool, bool, u64),
     #[error("Mac address is illegal.")]
     MacFormatError,
     #[error("Unknown vhost type.")]

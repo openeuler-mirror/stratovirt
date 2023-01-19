@@ -18,7 +18,7 @@ use crate::VirtioError;
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
-use machine_manager::config::{GpuConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_SCANOUTS};
+use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_SCANOUTS};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationManager};
 use migration_derive::{ByteCode, Desc};
@@ -1687,7 +1687,7 @@ pub struct GpuState {
 #[derive(Default)]
 pub struct Gpu {
     /// Configuration of the GPU device.
-    gpu_conf: GpuConfig,
+    gpu_cfg: GpuDevConfig,
     /// Status of the GPU device.
     state: GpuState,
     /// Callback to trigger interrupt.
@@ -1697,21 +1697,21 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    pub fn new(gpu_conf: GpuConfig) -> Gpu {
+    pub fn new(gpu_cfg: GpuDevConfig) -> Gpu {
         let mut state = GpuState::default();
 
-        state.base_conf.xres = gpu_conf.xres;
-        state.base_conf.yres = gpu_conf.yres;
-        if gpu_conf.edid {
+        state.base_conf.xres = gpu_cfg.xres;
+        state.base_conf.yres = gpu_cfg.yres;
+        if gpu_cfg.edid {
             state.base_conf.flags &= 1 << VIRTIO_GPU_FLAG_EDID_ENABLED;
         }
-        state.base_conf.max_outputs = gpu_conf.max_outputs;
+        state.base_conf.max_outputs = gpu_cfg.max_outputs;
         state.device_features = 1u64 << VIRTIO_F_VERSION_1;
         state.device_features |= 1u64 << VIRTIO_F_RING_EVENT_IDX;
         state.device_features |= 1u64 << VIRTIO_F_RING_INDIRECT_DESC;
 
         Self {
-            gpu_conf,
+            gpu_cfg,
             state,
             interrupt_cb: None,
             deactivate_evts: Vec::new(),
@@ -1722,10 +1722,10 @@ impl Gpu {
 impl VirtioDevice for Gpu {
     /// Realize virtio gpu device.
     fn realize(&mut self) -> Result<()> {
-        if self.gpu_conf.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 {
+        if self.gpu_cfg.max_outputs > VIRTIO_GPU_MAX_SCANOUTS as u32 {
             bail!(
                 "Invalid max_outputs {} which is bigger than {}",
-                self.gpu_conf.max_outputs,
+                self.gpu_cfg.max_outputs,
                 VIRTIO_GPU_MAX_SCANOUTS
             );
         }
@@ -1740,7 +1740,7 @@ impl VirtioDevice for Gpu {
 
     /// Unrealize low level device.
     fn unrealize(&mut self) -> Result<()> {
-        MigrationManager::unregister_device_instance(GpuState::descriptor(), &self.gpu_conf.id);
+        MigrationManager::unregister_device_instance(GpuState::descriptor(), &self.gpu_cfg.id);
         Ok(())
     }
 
@@ -1853,7 +1853,7 @@ impl VirtioDevice for Gpu {
             base_conf: self.state.base_conf,
             scanouts,
             req_states,
-            max_hostmem: self.gpu_conf.max_hostmem,
+            max_hostmem: self.gpu_cfg.max_hostmem,
             used_hostmem: 0,
         };
         gpu_handler.req_states[0].width = self.state.base_conf.xres;
