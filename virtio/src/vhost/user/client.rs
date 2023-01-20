@@ -10,8 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fs::File;
 use std::mem::size_of;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
@@ -35,13 +36,17 @@ use super::message::{
 };
 use super::sock::VhostUserSock;
 use crate::block::VirtioBlkConfig;
+use crate::virtio_has_feature;
 use crate::VhostUser::message::VhostUserConfig;
 use anyhow::{anyhow, bail, Context, Result};
+use util::unix::do_mmap;
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
 /// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
+/// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
+pub const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
 
 struct ClientInternal {
     // Used to send requests to the vhost user backend in userspace.
@@ -59,15 +64,24 @@ impl ClientInternal {
     }
 
     fn wait_ack_msg<T: Sized + Default>(&self, request: u32) -> Result<T> {
+        self.wait_ack_msg_and_data::<T>(request, None, &mut [])
+    }
+
+    fn wait_ack_msg_and_data<T: Sized + Default>(
+        &self,
+        request: u32,
+        payload_opt: Option<&mut [u8]>,
+        fds: &mut [RawFd],
+    ) -> Result<T> {
         let mut hdr = VhostUserMsgHdr::default();
         let mut body: T = Default::default();
-        let payload_opt: Option<&mut [u8]> = None;
-
-        let (recv_len, _fds_num) = self
+        let (recv_len, fds_num) = self
             .sock
-            .recv_msg(Some(&mut hdr), Some(&mut body), payload_opt, &mut [])
+            .recv_msg(Some(&mut hdr), Some(&mut body), payload_opt, fds)
             .with_context(|| "Failed to recv ack msg")?;
-
+        if fds_num != fds.len() {
+            bail!("Unexpected fds num: {}, expected: {}", fds_num, fds.len());
+        }
         if request != hdr.request
             || recv_len != (size_of::<VhostUserMsgHdr>() + size_of::<T>())
             || !hdr.is_reply()
@@ -300,16 +314,43 @@ impl Listener for VhostUserMemInfo {
     }
 }
 
+/// Struct for set and get inflight fd request, field is defined by dpdk.
+#[repr(C)]
+#[derive(Debug, Default, Clone)]
+pub struct VhostUserInflight {
+    // The size of memory area to track inflight I/O.
+    pub mmap_size: u64,
+    // The offset from the start of the supplied file descriptor.
+    pub mmap_offset: u64,
+    // The number of virtqueues.
+    pub queue_num: u16,
+    // The size of virtqueues.
+    pub queue_size: u16,
+}
+
+/// Struct for saving inflight info, create this struct to save inflight info when
+/// vhost client start, use this struct to set inflight fd when vhost client reconnect.
+#[derive(Debug)]
+pub struct VhostInflight {
+    // The inflight file.
+    pub file: Arc<File>,
+    // Fd mmap addr, used for migration.
+    pub addr: u64,
+    pub inner: VhostUserInflight,
+}
+
 /// Struct for communication with the vhost user backend in userspace
 pub struct VhostUserClient {
     client: Arc<Mutex<ClientInternal>>,
     mem_info: VhostUserMemInfo,
     delete_evts: Vec<RawFd>,
+    mem_space: Arc<AddressSpace>,
     queues: Vec<Arc<Mutex<Queue>>>,
     queue_evts: Vec<Arc<EventFd>>,
     call_events: Vec<Arc<EventFd>>,
     pub features: u64,
     reconnecting: bool,
+    inflight: Option<VhostInflight>,
 }
 
 impl VhostUserClient {
@@ -332,11 +373,13 @@ impl VhostUserClient {
             client,
             mem_info,
             delete_evts: Vec::new(),
+            mem_space: mem_space.clone(),
             queues: Vec::new(),
             queue_evts: Vec::new(),
             call_events: Vec::new(),
             features: 0,
             reconnecting: false,
+            inflight: None,
         })
     }
 
@@ -361,6 +404,46 @@ impl VhostUserClient {
         }
     }
 
+    /// Set inflight fd, include get inflight fd from vhost and set inflight to vhost.
+    pub fn set_inflight(&mut self, queue_num: u16, queue_size: u16) -> Result<()> {
+        let protocol_feature = self
+            .get_protocol_features()
+            .with_context(|| "Failed to get protocol features for vhost-user blk")?;
+        if virtio_has_feature(
+            protocol_feature,
+            VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD as u32,
+        ) {
+            if self.inflight.is_none() {
+                // Expect 1 fd.
+                let mut fds = [RawFd::default()];
+                let vhost_user_inflight = self.get_inflight_fd(queue_num, queue_size, &mut fds)?;
+                let file = Arc::new(unsafe { File::from_raw_fd(fds[0]) });
+                let hva = do_mmap(
+                    &Some(file.as_ref()),
+                    vhost_user_inflight.mmap_size,
+                    vhost_user_inflight.mmap_offset,
+                    true,
+                    true,
+                    false,
+                )?;
+                let inflight = VhostInflight {
+                    file,
+                    addr: hva as u64,
+                    inner: vhost_user_inflight,
+                };
+                self.inflight = Some(inflight);
+            }
+            let inflight = self.inflight.as_ref().unwrap();
+            self.set_inflight_fd(inflight.inner.clone(), inflight.file.as_raw_fd())?;
+        } else {
+            bail!(
+                "Failed to get inflight fd, spdk doesn't support, spdk protocol feature: {:#b}",
+                protocol_feature
+            );
+        }
+        Ok(())
+    }
+
     /// Activate device by vhost-user protocol.
     pub fn activate_vhost_user(&mut self) -> Result<()> {
         self.set_owner()
@@ -376,6 +459,16 @@ impl VhostUserClient {
         if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
             queue_num -= 1;
         }
+
+        let queue_size = self
+            .queues
+            .first()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .vring
+            .actual_size();
+        self.set_inflight(queue_num as u16, queue_size)?;
         // Set all vring num to notify ovs/dpdk how many queues it needs to poll
         // before setting vring info.
         for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
@@ -390,7 +483,9 @@ impl VhostUserClient {
         }
 
         for (queue_index, queue_mutex) in self.queues.iter().enumerate().take(queue_num) {
-            let queue_config = queue_mutex.lock().unwrap().vring.get_queue_config();
+            let queue = queue_mutex.lock().unwrap();
+            let queue_config = queue.vring.get_queue_config();
+
             self.set_vring_addr(&queue_config, queue_index, 0)
                 .with_context(|| {
                     format!(
@@ -398,12 +493,14 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            self.set_vring_base(queue_index, 0).with_context(|| {
-                format!(
-                    "Failed to set vring base for vhost-user net, index: {}",
-                    queue_index,
-                )
-            })?;
+            let last_avail_idx = queue.vring.get_avail_idx(&self.mem_space)?;
+            self.set_vring_base(queue_index, last_avail_idx)
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring base for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
             self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
                 .with_context(|| {
                     format!(
@@ -558,6 +655,56 @@ impl VhostUserClient {
             .wait_ack_msg::<u64>(request)
             .with_context(|| "Failed to wait ack msg for getting queue num")?;
         Ok(queue_num)
+    }
+
+    /// Get inflight file info and inflight fd from vhost.
+    pub fn get_inflight_fd(
+        &self,
+        queue_num: u16,
+        queue_size: u16,
+        fds: &mut [RawFd],
+    ) -> Result<VhostUserInflight> {
+        let request = VhostUserMsgReq::GetInflightFd as u32;
+        let data_len = size_of::<VhostUserInflight>();
+        let hdr =
+            VhostUserMsgHdr::new(request, VhostUserHdrFlag::NeedReply as u32, data_len as u32);
+        let inflight = VhostUserInflight {
+            mmap_size: 0,
+            mmap_offset: 0,
+            queue_num,
+            queue_size,
+        };
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = Some(unsafe {
+            from_raw_parts(
+                (&inflight as *const VhostUserInflight) as *const u8,
+                data_len,
+            )
+        });
+        let client = self.client.lock().unwrap();
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .with_context(|| "Failed to send msg for getting inflight fd")?;
+        let res = client
+            .wait_ack_msg_and_data::<VhostUserInflight>(request, None, fds)
+            .with_context(|| "Failed to wait ack msg for getting inflight fd")?;
+        Ok(res)
+    }
+
+    /// Set inflight file info and send inflight fd to vhost.
+    pub fn set_inflight_fd(&self, inflight: VhostUserInflight, fd: RawFd) -> Result<()> {
+        let request = VhostUserMsgReq::SetInflightFd as u32;
+        let len = size_of::<VhostUserInflight>();
+        let hdr = VhostUserMsgHdr::new(request, 0, len as u32);
+        let payload_opt: Option<&[u8]> = None;
+        self.client
+            .lock()
+            .unwrap()
+            .sock
+            .send_msg(Some(&hdr), Some(&inflight), payload_opt, &[fd])
+            .with_context(|| "Failed to send msg for setting inflight fd")?;
+        Ok(())
     }
 }
 
