@@ -163,6 +163,9 @@ pub trait VringOps {
     /// The number of descriptor chains in the available ring.
     fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
 
+    /// Get the avail index of the vring.
+    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+
     /// Get the region cache information of the SplitVring.
     fn get_cache(&self) -> &Option<RegionCache>;
 }
