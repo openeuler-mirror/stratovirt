@@ -197,19 +197,7 @@ impl VirtioDevice for Fs {
         Ok(())
     }
 
-    fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let data_len = data.len();
-        let config_slice = self.config.as_mut_bytes();
-        let config_len = config_slice.len();
-        if offset as usize + data_len > config_len {
-            return Err(anyhow!(VirtioError::DevConfigOverflow(
-                offset,
-                config_len as u64
-            )));
-        }
-
-        config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
-
+    fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
         Ok(())
     }
 
