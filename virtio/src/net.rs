@@ -1128,7 +1128,7 @@ pub struct Net {
     /// The send half of Rust's channel to send tap information.
     senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
-    update_evt: Arc<EventFd>,
+    update_evts: Vec<Arc<EventFd>>,
     /// Eventfd for device deactivate.
     deactivate_evts: Vec<RawFd>,
     /// Device is broken or not.
@@ -1144,7 +1144,7 @@ impl Default for Net {
             taps: None,
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
-            update_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+            update_evts: Vec::new(),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
@@ -1159,7 +1159,7 @@ impl Net {
             taps: None,
             state: Arc::new(Mutex::new(VirtioNetState::default())),
             senders: None,
-            update_evt: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+            update_evts: Vec::new(),
             deactivate_evts: Vec::new(),
             broken: Arc::new(AtomicBool::new(false)),
             ctrl_info: None,
@@ -1558,6 +1558,7 @@ impl VirtioDevice for Net {
                     .with_context(|| "Failed to set tap offload")?;
             }
 
+            let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
             let mut handler = NetIoHandler {
                 rx: RxVirtio::new(rx_queue, rx_queue_evt),
                 tx: TxVirtio::new(tx_queue, tx_queue_evt),
@@ -1567,7 +1568,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 receiver,
-                update_evt: self.update_evt.clone(),
+                update_evt: update_evt.clone(),
                 device_broken: self.broken.clone(),
                 is_listening: true,
                 ctrl_info: ctrl_info.clone(),
@@ -1583,6 +1584,7 @@ impl VirtioDevice for Net {
                 self.net_cfg.iothread.as_ref(),
                 &mut self.deactivate_evts,
             )?;
+            self.update_evts.push(update_evt);
         }
         self.senders = Some(senders);
         self.broken.store(false, Ordering::SeqCst);
@@ -1632,9 +1634,11 @@ impl VirtioDevice for Net {
                 }
             }
 
-            self.update_evt
-                .write(1)
-                .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+            for update_evt in &self.update_evts {
+                update_evt
+                    .write(1)
+                    .with_context(|| anyhow!(VirtioError::EventFdWrite))?;
+            }
         }
 
         Ok(())
@@ -1642,6 +1646,7 @@ impl VirtioDevice for Net {
 
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(self.net_cfg.iothread.as_ref(), &mut self.deactivate_evts)?;
+        self.update_evts.clear();
         self.ctrl_info = None;
         Ok(())
     }
