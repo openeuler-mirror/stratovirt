@@ -36,6 +36,7 @@ use super::config::{
     PREF_MEMORY_LIMIT, PREF_MEM_RANGE_64BIT, SUB_CLASS_CODE, VENDOR_ID,
 };
 use crate::bus::PciBus;
+use crate::config::{BRIDGE_CONTROL, BRIDGE_CTL_SEC_BUS_RESET};
 use crate::hotplug::HotplugOps;
 use crate::msix::init_msix;
 use crate::{init_multifunction, PciError};
@@ -398,6 +399,8 @@ impl PciDevOps for RootPort {
         let old_status =
             le_read_u16(&self.config.config, (cap_offset + PCI_EXP_SLTSTA) as usize).unwrap();
 
+        let old_br_ctl = le_read_u16(&self.config.config, BRIDGE_CONTROL.into()).unwrap();
+
         self.config.write(
             offset,
             data,
@@ -406,6 +409,17 @@ impl PciDevOps for RootPort {
             Some(&self.io_region),
             Some(&self.mem_region),
         );
+
+        let new_br_ctl = le_read_u16(&self.config.config, BRIDGE_CONTROL.into()).unwrap();
+        if (!old_br_ctl & new_br_ctl & BRIDGE_CTL_SEC_BUS_RESET) != 0 {
+            if let Err(e) = self.reset(true) {
+                error!(
+                    "Failed to reset child devices under root port {}: {}",
+                    self.name, e
+                )
+            }
+        }
+
         if ranges_overlap(offset, end, COMMAND as usize, (COMMAND + 1) as usize)
             || ranges_overlap(offset, end, IO_BASE as usize, (IO_BASE + 2) as usize)
             || ranges_overlap(
