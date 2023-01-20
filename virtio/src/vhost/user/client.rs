@@ -40,7 +40,7 @@ use anyhow::{anyhow, bail, Context, Result};
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
-/// Vhost supports `VHOST_USER_GET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
+/// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 
 struct ClientInternal {
