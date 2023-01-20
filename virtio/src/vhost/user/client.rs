@@ -364,13 +364,13 @@ impl VhostUserClient {
     /// Activate device by vhost-user protocol.
     pub fn activate_vhost_user(&mut self) -> Result<()> {
         self.set_owner()
-            .with_context(|| "Failed to set owner for vhost-user net")?;
+            .with_context(|| "Failed to set owner for vhost-user")?;
 
         self.set_features(self.features)
-            .with_context(|| "Failed to set features for vhost-user net")?;
+            .with_context(|| "Failed to set features for vhost-user")?;
 
         self.set_mem_table()
-            .with_context(|| "Failed to set mem table for vhost-user net")?;
+            .with_context(|| "Failed to set mem table for vhost-user")?;
 
         let mut queue_num = self.queues.len();
         if ((self.features & (1 << VIRTIO_NET_F_CTRL_VQ)) != 0) && (queue_num % 2 != 0) {
@@ -383,7 +383,7 @@ impl VhostUserClient {
             self.set_vring_num(queue_index, actual_size)
                 .with_context(|| {
                     format!(
-                        "Failed to set vring num for vhost-user net, index: {}, size: {}",
+                        "Failed to set vring num for vhost-user, index: {}, size: {}",
                         queue_index, actual_size,
                     )
                 })?;
@@ -394,7 +394,7 @@ impl VhostUserClient {
             self.set_vring_addr(&queue_config, queue_index, 0)
                 .with_context(|| {
                     format!(
-                        "Failed to set vring addr for vhost-user net, index: {}",
+                        "Failed to set vring addr for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
@@ -407,14 +407,14 @@ impl VhostUserClient {
             self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
                 .with_context(|| {
                     format!(
-                        "Failed to set vring kick for vhost-user net, index: {}",
+                        "Failed to set vring kick for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
             self.set_vring_call(queue_index, self.call_events[queue_index].clone())
                 .with_context(|| {
                     format!(
-                        "Failed to set vring call for vhost-user net, index: {}",
+                        "Failed to set vring call for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
@@ -423,7 +423,7 @@ impl VhostUserClient {
         for (queue_index, _) in self.queues.iter().enumerate().take(queue_num) {
             self.set_vring_enable(queue_index, true).with_context(|| {
                 format!(
-                    "Failed to set vring enable for vhost-user net, index: {}",
+                    "Failed to set vring enable for vhost-user, index: {}",
                     queue_index,
                 )
             })?;
