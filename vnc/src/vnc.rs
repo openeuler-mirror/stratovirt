@@ -25,8 +25,8 @@ use crate::{
     encoding::enc_hextile::hextile_send_framebuffer_update,
     input::KeyBoardState,
     pixman::{
-        bytes_per_pixel, get_image_data, get_image_height, get_image_stride, get_image_width,
-        unref_pixman_image,
+        bytes_per_pixel, create_pixman_image, get_image_data, get_image_height, get_image_stride,
+        get_image_width, ref_pixman_image, unref_pixman_image,
     },
     round_up, round_up_div,
     server::{make_server_config, VncConnHandler, VncServer, VncSurface},
@@ -54,7 +54,7 @@ use std::{
 use util::{
     bitmap::Bitmap,
     loop_context::EventNotifierHelper,
-    pixman::{pixman_format_code_t, pixman_image_create_bits, pixman_image_ref, pixman_image_t},
+    pixman::{pixman_format_code_t, pixman_image_t},
 };
 
 /// The number of dirty pixels represented bt one bit in dirty bitmap.
@@ -90,7 +90,7 @@ impl DisplayChangeListenerOperations for VncInterface {
         unref_pixman_image(locked_vnc_surface.guest_image);
 
         // Vnc_pixman_image_ref
-        locked_vnc_surface.guest_image = unsafe { pixman_image_ref(surface.image) };
+        locked_vnc_surface.guest_image = ref_pixman_image(surface.image);
         locked_vnc_surface.guest_format = surface.format;
 
         let guest_width: i32 = get_image_width(locked_vnc_surface.guest_image);
@@ -445,15 +445,13 @@ pub fn update_server_surface(server: &Arc<VncServer>) {
     let g_height = get_image_height(locked_vnc_surface.guest_image);
     let width = vnc_width(g_width);
     let height = vnc_height(g_height);
-    locked_vnc_surface.server_image = unsafe {
-        pixman_image_create_bits(
-            pixman_format_code_t::PIXMAN_x8r8g8b8,
-            width,
-            height,
-            ptr::null_mut(),
-            0,
-        )
-    };
+    locked_vnc_surface.server_image = create_pixman_image(
+        pixman_format_code_t::PIXMAN_x8r8g8b8,
+        width,
+        height,
+        ptr::null_mut(),
+        0,
+    );
 
     locked_vnc_surface.guest_dirty_bitmap.clear_all();
     set_area_dirty(
@@ -535,6 +533,7 @@ pub fn write_pixel(
 ) {
     if !client_dpm.convert {
         let mut con = vec![0; copy_bytes];
+        // SAFETY: it can be ensure the raw pointer will not exceed the range.
         unsafe {
             ptr::copy(data_ptr as *mut u8, con.as_mut_ptr(), copy_bytes);
         }
@@ -543,6 +542,7 @@ pub fn write_pixel(
         let num = copy_bytes >> 2;
         let ptr = data_ptr as *mut u32;
         for i in 0..num {
+            // SAFETY: it can be ensure the raw pointer will not exceed the range.
             let color = unsafe { *ptr.add(i) };
             convert_pixel(client_dpm, buf, color);
         }
@@ -655,15 +655,13 @@ fn send_framebuffer_update(
 /// Initialize a default image
 /// Default: width is 640, height is 480, stride is 640 * 4
 fn get_client_image() -> *mut pixman_image_t {
-    unsafe {
-        pixman_image_create_bits(
-            pixman_format_code_t::PIXMAN_x8r8g8b8,
-            640,
-            480,
-            ptr::null_mut(),
-            640 * 4,
-        )
-    }
+    create_pixman_image(
+        pixman_format_code_t::PIXMAN_x8r8g8b8,
+        640,
+        480,
+        ptr::null_mut(),
+        640 * 4,
+    )
 }
 
 pub static VNC_SERVERS: Lazy<Mutex<Vec<Arc<VncServer>>>> = Lazy::new(|| Mutex::new(Vec::new()));

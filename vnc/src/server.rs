@@ -19,7 +19,8 @@ use crate::{
     input::KeyBoardState,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
-        get_image_width, unref_pixman_image,
+        get_image_width, pixman_image_linebuf_create, pixman_image_linebuf_fill,
+        unref_pixman_image,
     },
     round_up_div,
     vencrypt::{make_vencrypt_config, TlsCreds, ANON_CERT, X509_CERT},
@@ -50,10 +51,7 @@ use util::{
     loop_context::{
         read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
     },
-    pixman::{
-        pixman_format_bpp, pixman_format_code_t, pixman_image_composite, pixman_image_create_bits,
-        pixman_image_t, pixman_op_t,
-    },
+    pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_t},
 };
 use vmm_sys_util::epoll::EventSet;
 
@@ -79,6 +77,10 @@ pub struct VncServer {
     pub conn_limits: usize,
 }
 
+// SAFETY:
+// 1. The raw pointer in rust doesn't impl Send, the target thread can only read the memory of image by this pointer.
+// 2. It can be sure that Rc<RefCell<SecurityType>> and Rc<RefCell<KeyBoardState>> are used only in single thread.
+// So implement Send and Sync is safe.
 unsafe impl Send for VncServer {}
 unsafe impl Sync for VncServer {}
 
@@ -359,7 +361,16 @@ impl VncSurface {
             s_info.stride as usize,
         );
 
-        let line_buf = self.get_one_line_buf(&mut s_info, &mut g_info);
+        let mut line_buf = ptr::null_mut();
+        if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
+            line_buf = pixman_image_linebuf_create(
+                pixman_format_code_t::PIXMAN_x8r8g8b8,
+                get_image_width(self.server_image),
+            );
+            g_info.stride = s_info.stride;
+            g_info.length = g_info.stride;
+        }
+
         loop {
             let mut y = offset / g_bpl;
             let x = offset % g_bpl;
@@ -367,22 +378,13 @@ impl VncSurface {
                 (s_info.data as usize + y * s_info.stride as usize + x * cmp_bytes) as *mut u8;
 
             if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
-                unsafe {
-                    pixman_image_composite(
-                        pixman_op_t::PIXMAN_OP_SRC,
-                        self.guest_image,
-                        ptr::null_mut(),
-                        line_buf,
-                        0,
-                        y as i16,
-                        0,
-                        0,
-                        0,
-                        0,
-                        self.get_min_width() as u16,
-                        1,
-                    );
-                };
+                pixman_image_linebuf_fill(
+                    line_buf,
+                    self.guest_image,
+                    self.get_min_width(),
+                    0_i32,
+                    y as i32,
+                );
                 g_info.ptr = get_image_data(line_buf) as *mut u8;
             } else {
                 g_info.ptr = (g_info.data as usize + y * g_info.stride as usize) as *mut u8;
@@ -441,6 +443,7 @@ impl VncSurface {
                 _cmp_bytes = line_bytes as usize - x * cmp_bytes;
             }
 
+            // SAFETY: it can be ensure the raw pointer will not exceed the range.
             unsafe {
                 if libc::memcmp(
                     s_info.ptr as *mut libc::c_void,
@@ -466,35 +469,6 @@ impl VncSurface {
         }
 
         count
-    }
-
-    /// Transfer dirty data to buff in one line
-    ///
-    /// # Arguments
-    ///
-    /// * `s_info` - Info of Server image.
-    /// * `g_info` - Info of Guest image.
-    fn get_one_line_buf(
-        &self,
-        s_info: &mut ImageInfo,
-        g_info: &mut ImageInfo,
-    ) -> *mut pixman_image_t {
-        let mut line_buf = ptr::null_mut();
-        if self.guest_format != pixman_format_code_t::PIXMAN_x8r8g8b8 {
-            line_buf = unsafe {
-                pixman_image_create_bits(
-                    pixman_format_code_t::PIXMAN_x8r8g8b8,
-                    get_image_width(self.server_image),
-                    1,
-                    ptr::null_mut(),
-                    0,
-                )
-            };
-            g_info.stride = s_info.stride;
-            g_info.length = g_info.stride;
-        }
-
-        line_buf
     }
 }
 

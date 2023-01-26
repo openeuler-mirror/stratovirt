@@ -17,8 +17,10 @@ use util::pixman::{
     pixman_format_depth, pixman_format_g, pixman_format_r, pixman_image_composite,
     pixman_image_create_bits, pixman_image_create_solid_fill, pixman_image_get_data,
     pixman_image_get_format, pixman_image_get_height, pixman_image_get_stride,
-    pixman_image_get_width, pixman_image_t, pixman_image_unref, pixman_op_t,
+    pixman_image_get_width, pixman_image_ref, pixman_image_t, pixman_image_unref, pixman_op_t,
 };
+
+const MAX_IMAGE_SIZE: i32 = 65535;
 
 #[derive(Clone, Default)]
 pub struct ColorInfo {
@@ -111,6 +113,8 @@ impl PixelFormat {
     }
 }
 
+// SAFETY: Before calling the c function of pixman. All
+// parameters passed of the function have been checked.
 pub fn get_image_width(image: *mut pixman_image_t) -> i32 {
     if image.is_null() {
         return 0;
@@ -146,6 +150,20 @@ pub fn get_image_format(image: *mut pixman_image_t) -> pixman_format_code_t {
     unsafe { pixman_image_get_format(image as *mut pixman_image_t) }
 }
 
+pub fn create_pixman_image(
+    image_format: pixman_format_code_t,
+    width: i32,
+    height: i32,
+    image_data: *mut u32,
+    stride: i32,
+) -> *mut pixman_image_t {
+    if !(0..MAX_IMAGE_SIZE).contains(&width) || !(0..MAX_IMAGE_SIZE).contains(&height) {
+        return ptr::null_mut() as *mut pixman_image_t;
+    }
+
+    unsafe { pixman_image_create_bits(image_format, width, height, image_data as *mut u32, stride) }
+}
+
 /// Bpp: bit per pixel
 pub fn bytes_per_pixel() -> usize {
     ((pixman_format_bpp(pixman_format_code_t::PIXMAN_x8r8g8b8 as u32) + 7) / 8) as usize
@@ -160,6 +178,62 @@ pub fn unref_pixman_image(image: *mut pixman_image_t) {
         return;
     }
     unsafe { pixman_image_unref(image as *mut pixman_image_t) };
+}
+
+/// Increase the reference of image
+/// # Arguments
+///
+/// * `image` - the pointer to image in pixman
+pub fn ref_pixman_image(image: *mut pixman_image_t) -> *mut pixman_image_t {
+    if image.is_null() {
+        return ptr::null_mut() as *mut pixman_image_t;
+    }
+    unsafe { pixman_image_ref(image as *mut pixman_image_t) }
+}
+
+/// Create a pixman image with a height of 1
+pub fn pixman_image_linebuf_create(
+    image_format: pixman_format_code_t,
+    width: i32,
+) -> *mut pixman_image_t {
+    if !(0..MAX_IMAGE_SIZE).contains(&width) {
+        return ptr::null_mut() as *mut pixman_image_t;
+    }
+    unsafe { pixman_image_create_bits(image_format, width, 1, ptr::null_mut(), 0) }
+}
+
+pub fn pixman_image_linebuf_fill(
+    line_buf: *mut pixman_image_t,
+    fb: *mut pixman_image_t,
+    width: i32,
+    x: i32,
+    y: i32,
+) {
+    if line_buf.is_null()
+        || fb.is_null()
+        || !(0..MAX_IMAGE_SIZE).contains(&width)
+        || !(0..MAX_IMAGE_SIZE).contains(&x)
+        || !(0..MAX_IMAGE_SIZE).contains(&y)
+    {
+        return;
+    };
+
+    unsafe {
+        pixman_image_composite(
+            pixman_op_t::PIXMAN_OP_SRC,
+            fb as *mut pixman_image_t,
+            ptr::null_mut(),
+            line_buf as *mut pixman_image_t,
+            x as i16,
+            y as i16,
+            0,
+            0,
+            0,
+            0,
+            width as u16,
+            1,
+        );
+    };
 }
 
 pub enum ColorNames {
@@ -539,7 +613,7 @@ pub fn pixman_glyph_from_vgafont(height: i32, ch: u32) -> *mut pixman_image_t {
     let glyph;
 
     unsafe {
-        glyph = pixman_image_create_bits(
+        glyph = create_pixman_image(
             pixman_format_code_t::PIXMAN_a8,
             8,
             height,

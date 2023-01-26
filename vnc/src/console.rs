@@ -11,8 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::pixman::{
-    get_image_height, get_image_width, pixman_glyph_from_vgafont, pixman_glyph_render,
-    unref_pixman_image, ColorNames, COLOR_TABLE_RGB,
+    create_pixman_image, get_image_height, get_image_width, pixman_glyph_from_vgafont,
+    pixman_glyph_render, unref_pixman_image, ColorNames, COLOR_TABLE_RGB,
 };
 use anyhow::Result;
 use log::error;
@@ -22,7 +22,7 @@ use std::{
     cmp, ptr,
     sync::{Arc, Mutex, Weak},
 };
-use util::pixman::{pixman_format_code_t, pixman_image_create_bits, pixman_image_t};
+use util::pixman::{pixman_format_code_t, pixman_image_t};
 
 static CONSOLES: Lazy<Arc<Mutex<ConsoleList>>> =
     Lazy::new(|| Arc::new(Mutex::new(ConsoleList::new())));
@@ -626,10 +626,7 @@ fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySur
     let mut surface = DisplaySurface::default();
 
     // One pixel occupies four bytes.
-    unsafe {
-        surface.image =
-            pixman_image_create_bits(surface.format, width, height, ptr::null_mut(), width * 4);
-    }
+    surface.image = create_pixman_image(surface.format, width, height, ptr::null_mut(), width * 4);
     if surface.image.is_null() {
         error!("create default surface failed!");
         return None;
