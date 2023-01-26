@@ -175,6 +175,9 @@ pub trait DeviceInterface {
     /// Query balloon's size.
     fn query_balloon(&self) -> Response;
 
+    /// Query the info of vnc server.
+    fn query_vnc(&self) -> Response;
+
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
 

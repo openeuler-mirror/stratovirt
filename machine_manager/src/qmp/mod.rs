@@ -449,6 +449,7 @@ fn qmp_command_exec(
         (cancel_migrate, cancel_migrate),
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
+        (query_vnc, query_vnc),
         (list_type, list_type),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (device_list_properties, device_list_properties, typename),
