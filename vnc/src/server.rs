@@ -14,7 +14,7 @@ use crate::{
     auth::SaslAuth,
     auth::{AuthState, SaslConfig, SubAuthState},
     client::vnc_write,
-    client::{ClientIoHandler, ClientState},
+    client::{vnc_flush, ClientIoHandler, ClientState},
     console::DisplayMouse,
     input::KeyBoardState,
     pixman::{
@@ -345,8 +345,11 @@ impl VncSurface {
         let height = self.get_min_height() as usize;
         let g_bpl = self.guest_dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
         let total_dirty_bits = height.checked_mul(g_bpl).unwrap_or(0);
+        let mut offset = self
+            .guest_dirty_bitmap
+            .find_next_bit(0)
+            .unwrap_or(total_dirty_bits);
 
-        let mut offset = self.guest_dirty_bitmap.find_next_bit(0).unwrap();
         if offset >= total_dirty_bits {
             return dirty_num;
         }
@@ -392,8 +395,11 @@ impl VncSurface {
             g_info.ptr = (g_info.ptr as usize + x * cmp_bytes) as *mut u8;
             dirty_num += self.update_one_line(x, y, &mut s_info, &mut g_info, cmp_bytes);
             y += 1;
-            offset = self.guest_dirty_bitmap.find_next_bit(y * g_bpl).unwrap();
-            if offset >= (height as usize) * g_bpl {
+            offset = self
+                .guest_dirty_bitmap
+                .find_next_bit(y * g_bpl)
+                .unwrap_or(total_dirty_bits);
+            if offset >= total_dirty_bits {
                 break;
             }
         }
@@ -425,7 +431,7 @@ impl VncSurface {
             if !self
                 .guest_dirty_bitmap
                 .contain(x + y * VNC_BITMAP_WIDTH as usize)
-                .unwrap()
+                .unwrap_or(false)
             {
                 x += 1;
                 g_info.ptr = (g_info.ptr as usize + cmp_bytes) as *mut u8;
@@ -434,7 +440,7 @@ impl VncSurface {
             }
             self.guest_dirty_bitmap
                 .clear(x + y * VNC_BITMAP_WIDTH as usize)
-                .unwrap();
+                .unwrap_or_else(|e| error!("Error occurrs during clearing the bitmap: {:?}", e));
             let mut _cmp_bytes = cmp_bytes;
             if (x + 1) * cmp_bytes > line_bytes as usize {
                 _cmp_bytes = line_bytes as usize - x * cmp_bytes;
@@ -511,7 +517,7 @@ fn set_dirty_for_each_clients(x: usize, y: usize) {
             .lock()
             .unwrap()
             .set(x + y * VNC_BITMAP_WIDTH as usize)
-            .unwrap();
+            .unwrap_or_else(|e| error!("{:?}", e));
     }
 }
 
@@ -539,7 +545,7 @@ pub fn handle_connection(
         server.clone(),
     )));
     vnc_write(&client, "RFB 003.008\n".as_bytes().to_vec());
-    client_io.lock().unwrap().flush();
+    vnc_flush(&client);
     server
         .client_handlers
         .lock()

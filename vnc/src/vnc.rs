@@ -12,7 +12,7 @@
 
 use crate::{
     client::{
-        desktop_resize, display_cursor_define, get_rects, set_color_depth, vnc_flush_notify,
+        desktop_resize, display_cursor_define, get_rects, set_color_depth, vnc_flush,
         vnc_update_output_throttle, vnc_write, DisplayMode, RectInfo, Rectangle, ServerMsg,
         ENCODING_HEXTILE, ENCODING_RAW,
     },
@@ -122,7 +122,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             // Cursor define.
             display_cursor_define(client, &server, &mut buf);
             vnc_write(client, buf);
-            vnc_flush_notify(client);
+            vnc_flush(client);
             client.dirty_bitmap.lock().unwrap().clear_all();
             set_area_dirty(
                 &mut client.dirty_bitmap.lock().unwrap(),
@@ -233,7 +233,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             let mut buf: Vec<u8> = Vec::new();
             display_cursor_define(client, &server, &mut buf);
             vnc_write(client, buf);
-            vnc_flush_notify(client);
+            vnc_flush(client);
         }
     }
 }
@@ -348,9 +348,8 @@ fn start_vnc_thread() -> Result<()> {
 
             let client = rect_info.client;
             vnc_write(&client, buf);
-            vnc_flush_notify(&client);
-        })
-        .unwrap();
+            vnc_flush(&client);
+        })?;
     Ok(())
 }
 

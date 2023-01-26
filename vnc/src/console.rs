@@ -464,7 +464,7 @@ pub fn console_close(con_id: Option<usize>) {
 
     unsafe {
         let len = CONSOLES.console_list.len();
-        let id = con_id.unwrap();
+        let id = con_id.unwrap_or(0);
         if id >= len {
             return;
         }
