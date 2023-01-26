@@ -1089,6 +1089,16 @@ impl DeviceInterface for LightMachine {
         )
     }
 
+    /// VNC is not supported by light machine currently.
+    fn query_vnc(&self) -> Response {
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "The service of VNC is not supported".to_string(),
+            ),
+            None,
+        )
+    }
+
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         // get slot of bus by addr or lun
         let mut slot = 0;

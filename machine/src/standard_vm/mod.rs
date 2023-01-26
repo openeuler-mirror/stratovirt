@@ -26,6 +26,8 @@ use util::aio::AIO_NATIVE;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
+#[cfg(not(target_env = "musl"))]
+use vnc::vnc::qmp_query_vnc;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
@@ -1094,6 +1096,19 @@ impl DeviceInterface for StdMachine {
         Response::create_error_response(
             qmp_schema::QmpErrorClass::DeviceNotActive(
                 "No balloon device has been activated".to_string(),
+            ),
+            None,
+        )
+    }
+
+    fn query_vnc(&self) -> Response {
+        #[cfg(not(target_env = "musl"))]
+        if let Some(vnc_info) = qmp_query_vnc() {
+            return Response::create_response(serde_json::to_value(&vnc_info).unwrap(), None);
+        }
+        Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError(
+                "The service of VNC is not supported".to_string(),
             ),
             None,
         )

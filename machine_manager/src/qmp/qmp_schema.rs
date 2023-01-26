@@ -166,6 +166,13 @@ pub enum QmpCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    #[serde(rename = "query-vnc")]
+    query_vnc {
+        #[serde(default)]
+        arguments: query_vnc,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "migrate")]
     migrate {
         arguments: migrate,
@@ -1288,6 +1295,63 @@ pub struct BalloonInfo {
     pub actual: u64,
 }
 
+/// query-vnc:
+/// Information about current VNC server.
+///
+/// # Examples
+///
+/// For pc machine type started with -vnc ip:port(for example: 0.0.0.0:0):
+/// ```text
+/// -> { "execute": "query-vnc" }
+/// <- {"return": {
+///         "enabled": true,
+///         "host": "0.0.0.0",
+///         "service": "50401",
+///         "auth": "None",
+///         "family": "ipv4",
+///         "clients": [
+///             "host": "127.0.0.1",
+///             "service": "50401",
+///             "family": "ipv4",
+///         ]
+///         }
+///     }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct query_vnc {}
+impl Command for query_vnc {
+    type Res = VncInfo;
+    fn back(self) -> VncInfo {
+        Default::default()
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct VncInfo {
+    #[serde(rename = "enabled")]
+    pub enabled: bool,
+    #[serde(rename = "host")]
+    pub host: String,
+    #[serde(rename = "service")]
+    pub service: String,
+    #[serde(rename = "auth")]
+    pub auth: String,
+    #[serde(rename = "family")]
+    pub family: String,
+    #[serde(rename = "clients")]
+    pub clients: Vec<VncClientInfo>,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct VncClientInfo {
+    #[serde(rename = "host")]
+    pub host: String,
+    #[serde(rename = "service")]
+    pub service: String,
+    #[serde(rename = "family")]
+    pub family: String,
+}
+
 /// balloon:
 ///
 /// Advice VM to change memory size with the argument `value`.
@@ -1353,7 +1417,7 @@ impl Command for query_version {
 /// {"name":"cont"},{"name":"device_add"},{"name":"device_del"},{"name":"netdev_add"},
 /// {"name":"netdev_del"},{"name":"query-hotpluggable-cpus"},{"name":"query-cpus"},
 /// {"name":"query_status"},{"name":"getfd"},{"name":"blockdev_add"},
-/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},
+/// {"name":"blockdev_del"},{"name":"balloon"},{"name":"query_balloon"},{"name":"query_vnc"},
 /// {"name":"migrate"},{"name":"query_migrate"},{"name":"query_version"},
 /// {"name":"query_target"},{"name":"query_commands"}]}
 /// ```
