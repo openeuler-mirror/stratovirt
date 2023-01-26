@@ -387,14 +387,10 @@ impl ClientIoHandler {
         }
 
         if !locked_buffer.is_empty() {
-            vnc_flush_notify(&client);
+            vnc_flush(&client);
         }
 
         drop(locked_buffer);
-    }
-
-    pub fn flush(&mut self) {
-        self.client_handle_write();
     }
 
     /// Read buf from stream, return the size.
@@ -556,7 +552,7 @@ impl ClientIoHandler {
             let mut buf = Vec::new();
             buf.append(&mut (AuthState::Invalid as u32).to_be_bytes().to_vec());
             vnc_write(&client, buf);
-            self.flush();
+            vnc_flush(&client);
             return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         }
 
@@ -589,7 +585,7 @@ impl ClientIoHandler {
             vnc_write(&client, buf.to_vec());
             self.update_event_handler(1, ClientIoHandler::handle_auth);
         }
-        self.flush();
+        vnc_flush(&client);
         Ok(())
     }
 
@@ -608,7 +604,7 @@ impl ClientIoHandler {
                 break;
             }
             if client.addr != addr {
-                client.disconn_evt.lock().unwrap().write(1).unwrap();
+                vnc_disconnect_start(client);
                 len -= 1;
             }
         }
@@ -635,7 +631,7 @@ impl ClientIoHandler {
         buf.append(&mut (APP_NAME.to_string().len() as u32).to_be_bytes().to_vec());
         buf.append(&mut APP_NAME.to_string().as_bytes().to_vec());
         vnc_write(&client, buf);
-        self.flush();
+        vnc_flush(&client);
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
     }
@@ -676,7 +672,7 @@ impl ClientIoHandler {
                 return Err(anyhow!(VncError::AuthFailed(String::from("handle_auth"))));
             }
         }
-        self.flush();
+        vnc_flush(&client);
         Ok(())
     }
 
@@ -737,7 +733,7 @@ impl ClientIoHandler {
 
         let client = self.client.clone();
         vnc_write(&client, buf);
-        self.flush();
+        vnc_flush(&client);
     }
 
     /// Set image format.
@@ -895,7 +891,7 @@ impl ClientIoHandler {
         // VNC display cursor define.
         display_cursor_define(&client, &server, &mut buf);
         vnc_write(&client, buf);
-        vnc_flush_notify(&client);
+        vnc_flush(&client);
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
         Ok(())
     }
@@ -950,7 +946,7 @@ impl ClientIoHandler {
         }
         let client = self.client.clone();
         vnc_write(&client, buf);
-        self.flush();
+        vnc_flush(&client);
     }
 
     /// Read the data from the receiver buffer.
@@ -1013,7 +1009,7 @@ impl EventNotifierHelper for ClientIoHandler {
             }
             // Do disconnection event.
             if client.conn_state.lock().unwrap().is_disconnect() {
-                client.disconn_evt.lock().unwrap().write(1).unwrap();
+                vnc_disconnect_start(&client);
             }
             drop(locked_client_io);
             None
@@ -1036,8 +1032,8 @@ impl EventNotifierHelper for ClientIoHandler {
             let client = locked_client_io.client.clone();
             locked_client_io.client_handle_write();
             // do disconnection event.
-            if client.conn_state.lock().unwrap().dis_conn {
-                client.disconn_evt.lock().unwrap().write(1).unwrap();
+            if client.conn_state.lock().unwrap().is_disconnect() {
+                vnc_disconnect_start(&client);
             }
             drop(locked_client_io);
             None
@@ -1347,7 +1343,22 @@ pub fn vnc_update_output_throttle(client: &Arc<ClientState>) {
         .set_limit(Some(offset as usize));
 }
 
-/// Consume the output buffer.
-pub fn vnc_flush_notify(client: &Arc<ClientState>) {
-    client.write_fd.lock().unwrap().write(1).unwrap();
+/// Flush the output buffer.
+pub fn vnc_flush(client: &Arc<ClientState>) {
+    client
+        .write_fd
+        .lock()
+        .unwrap()
+        .write(1)
+        .unwrap_or_else(|e| error!("Error occurrs during data flush:{:?}", e));
+}
+
+/// Disconnect for vnc client.
+pub fn vnc_disconnect_start(client: &Arc<ClientState>) {
+    client
+        .disconn_evt
+        .lock()
+        .unwrap()
+        .write(1)
+        .unwrap_or_else(|e| error!("Error occurrs during disconnection: {:?}", e));
 }

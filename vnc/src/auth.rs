@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use crate::{
-    client::{vnc_write, ClientIoHandler, APP_NAME},
+    client::{vnc_flush, vnc_write, ClientIoHandler, APP_NAME},
     VncError,
 };
 use anyhow::{anyhow, Result};
@@ -203,7 +203,7 @@ impl ClientIoHandler {
         let err: c_int;
         let mut serverout: *const c_char = ptr::null_mut();
         let mut serverout_len: c_uint = 0;
-        let mech_name = CString::new(security.saslconfig.mech_name.as_str()).unwrap();
+        let mech_name = CString::new(security.saslconfig.mech_name.as_str())?;
 
         // Start authentication.
         if security.saslconfig.sasl_stage == SaslStage::SaslServerStart {
@@ -246,7 +246,7 @@ impl ClientIoHandler {
         if serverout_len > 0 {
             // Authentication related information.
             let serverout = unsafe { CStr::from_ptr(serverout as *const c_char) };
-            let auth_message = String::from(serverout.to_str().unwrap());
+            let auth_message = String::from(serverout.to_str().unwrap_or(""));
             buf.append(&mut (serverout_len + 1).to_be_bytes().to_vec());
             buf.append(&mut auth_message.as_bytes().to_vec());
         } else {
@@ -272,7 +272,7 @@ impl ClientIoHandler {
                 // Reject auth: the strength of ssf is too weak.
                 auth_reject(&mut buf);
                 vnc_write(&client, buf);
-                self.flush();
+                vnc_flush(&client);
                 return Err(err);
             }
 
@@ -280,7 +280,7 @@ impl ClientIoHandler {
                 // Reject auth: wrong sasl username.
                 auth_reject(&mut buf);
                 vnc_write(&client, buf);
-                self.flush();
+                vnc_flush(&client);
                 return Err(err);
             }
             // Accpet auth.
@@ -288,7 +288,7 @@ impl ClientIoHandler {
         }
 
         vnc_write(&client, buf);
-        self.flush();
+        vnc_flush(&client);
         self.update_event_handler(1, ClientIoHandler::handle_client_init);
         Ok(())
     }
@@ -296,23 +296,13 @@ impl ClientIoHandler {
     /// Sasl server init.
     fn sasl_server_init(&mut self) -> Result<()> {
         let mut err: c_int;
-        let service = CString::new(SERVICE).unwrap();
-        let appname = CString::new(APP_NAME).unwrap();
-        let local_addr = self
-            .stream
-            .local_addr()
-            .unwrap()
-            .to_string()
-            .replace(':', ";");
-        let remote_addr = self
-            .stream
-            .peer_addr()
-            .unwrap()
-            .to_string()
-            .replace(':', ";");
+        let service = CString::new(SERVICE)?;
+        let appname = CString::new(APP_NAME)?;
+        let local_addr = self.stream.local_addr()?.to_string().replace(':', ";");
+        let remote_addr = self.stream.peer_addr()?.to_string().replace(':', ";");
         info!("local_addr: {} remote_addr: {}", local_addr, remote_addr);
-        let local_addr = CString::new(local_addr).unwrap();
-        let remote_addr = CString::new(remote_addr).unwrap();
+        let local_addr = CString::new(local_addr)?;
+        let remote_addr = CString::new(remote_addr)?;
         // Sasl server init.
         unsafe {
             err = sasl_server_init(ptr::null_mut(), appname.as_ptr());
@@ -387,7 +377,7 @@ impl ClientIoHandler {
         unsafe {
             err = sasl_setprop(
                 security.saslconfig.sasl_conn,
-                SASL_SEC_PROPS.try_into().unwrap(),
+                SASL_SEC_PROPS.try_into()?,
                 props as *const c_void,
             );
         }
@@ -406,9 +396,9 @@ impl ClientIoHandler {
     /// Send the mechlist to client.
     fn send_mech_list(&mut self) -> Result<()> {
         let err: c_int;
-        let prefix = CString::new("").unwrap();
-        let sep = CString::new(",").unwrap();
-        let suffix = CString::new("").unwrap();
+        let prefix = CString::new("")?;
+        let sep = CString::new(",")?;
+        let suffix = CString::new("")?;
         let mut mechlist: *const c_char = ptr::null_mut();
         let mut security = self.server.security_type.borrow_mut();
         let client = self.client.clone();
@@ -431,14 +421,14 @@ impl ClientIoHandler {
             )));
         }
         let mech_list = unsafe { CStr::from_ptr(mechlist as *const c_char) };
-        security.saslconfig.mech_list = String::from(mech_list.to_str().unwrap());
+        security.saslconfig.mech_list = String::from(mech_list.to_str()?);
         let mut buf = Vec::new();
         let len = security.saslconfig.mech_list.len();
         buf.append(&mut (len as u32).to_be_bytes().to_vec());
         buf.append(&mut security.saslconfig.mech_list.as_bytes().to_vec());
         drop(security);
         vnc_write(&client, buf);
-        self.flush();
+        vnc_flush(&client);
 
         Ok(())
     }
@@ -496,7 +486,7 @@ impl ClientIoHandler {
             ))));
         }
         let username = unsafe { CStr::from_ptr(val as *const c_char) };
-        let username = String::from(username.to_str().unwrap());
+        let username = String::from(username.to_str()?);
 
         let server = self.server.clone();
         let security = server.security_type.borrow_mut();
