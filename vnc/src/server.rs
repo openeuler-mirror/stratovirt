@@ -15,7 +15,7 @@ use crate::{
     auth::{AuthState, SaslConfig, SubAuthState},
     client::vnc_write,
     client::{vnc_flush, ClientIoHandler, ClientState},
-    console::DisplayMouse,
+    console::{DisplayChangeListener, DisplayMouse},
     input::KeyBoardState,
     pixman::{
         bytes_per_pixel, get_image_data, get_image_format, get_image_height, get_image_stride,
@@ -43,7 +43,7 @@ use std::{
     os::unix::prelude::{AsRawFd, RawFd},
     ptr,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 use util::{
     bitmap::Bitmap,
@@ -74,7 +74,7 @@ pub struct VncServer {
     /// Data for cursor image.
     pub vnc_cursor: Arc<Mutex<VncCursor>>,
     /// Display Change Listener.
-    pub display_listener: Arc<Mutex<DisplayChangeListener>>,
+    pub display_listener: Option<Weak<Mutex<DisplayChangeListener>>>,
     /// Connection limit.
     pub conn_limits: usize,
 }
@@ -88,6 +88,7 @@ impl VncServer {
         guest_image: *mut pixman_image_t,
         keyboard_state: Rc<RefCell<KeyBoardState>>,
         keysym2keycode: HashMap<u16, u16>,
+        display_listener: Option<Weak<Mutex<DisplayChangeListener>>>,
     ) -> Self {
         VncServer {
             client_handlers: Arc::new(Mutex::new(HashMap::new())),
@@ -96,7 +97,7 @@ impl VncServer {
             keysym2keycode,
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
             vnc_cursor: Arc::new(Mutex::new(VncCursor::default())),
-            display_listener: Arc::new(Mutex::new(DisplayChangeListener::default())),
+            display_listener,
             conn_limits: CONNECTION_LIMIT,
         }
     }
@@ -277,12 +278,6 @@ impl SecurityType {
         }
         Ok(())
     }
-}
-
-/// Display change listener registered in console.
-#[derive(Default)]
-pub struct DisplayChangeListener {
-    pub dcl_id: Option<usize>,
 }
 
 /// Image date of cursor.

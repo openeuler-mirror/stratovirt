@@ -138,7 +138,7 @@ impl DisplayChangeListenerOperations for VncInterface {
     }
 
     /// Refresh server_image to guest_image.
-    fn dpy_refresh(&self, dcl: &mut DisplayChangeListener) {
+    fn dpy_refresh(&self, dcl: &Arc<Mutex<DisplayChangeListener>>) {
         if VNC_SERVERS.lock().unwrap().is_empty() {
             return;
         }
@@ -146,10 +146,11 @@ impl DisplayChangeListenerOperations for VncInterface {
         if server.client_handlers.lock().unwrap().is_empty() {
             return;
         }
-        graphic_hardware_update(dcl.con_id);
+        let con_id = dcl.lock().unwrap().con_id;
+        graphic_hardware_update(con_id);
 
         // Update refresh interval.
-        let mut update_interval = dcl.update_interval;
+        let mut update_interval = dcl.lock().unwrap().update_interval;
         let dirty_num = server.vnc_surface.lock().unwrap().update_server_image();
         if dirty_num != 0 {
             update_interval /= 2;
@@ -162,7 +163,7 @@ impl DisplayChangeListenerOperations for VncInterface {
                 update_interval = DISPLAY_UPDATE_INTERVAL_MAX;
             }
         }
-        dcl.update_interval = update_interval;
+        dcl.lock().unwrap().update_interval = update_interval;
 
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
@@ -275,24 +276,27 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
     let keyboard_state: Rc<RefCell<KeyBoardState>> =
         Rc::new(RefCell::new(KeyBoardState::new(max_keycode as usize)));
 
+    let vnc_opts = Arc::new(VncInterface::default());
+    let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(None, vnc_opts)));
+
     let server = Arc::new(VncServer::new(
         get_client_image(),
         keyboard_state,
         keysym2keycode,
+        Some(Arc::downgrade(&dcl)),
     ));
+
     // Parameter configuation for VncServeer.
     make_server_config(&server, vnc_cfg, object)?;
 
     // Add an VncServer.
     add_vnc_server(server.clone());
 
-    // Register the event to listen for client's connection.
-    let vnc_io = Arc::new(Mutex::new(VncConnHandler::new(listener, server.clone())));
-
     // Register in display console.
-    let vnc_opts = Rc::new(VncInterface::default());
-    let dcl_id = register_display(vnc_opts);
-    server.display_listener.lock().unwrap().dcl_id = dcl_id;
+    register_display(&dcl)?;
+
+    // Register the event to listen for client's connection.
+    let vnc_io = Arc::new(Mutex::new(VncConnHandler::new(listener, server)));
 
     // Vnc_thread: a thread to send the framebuffer
     start_vnc_thread()?;

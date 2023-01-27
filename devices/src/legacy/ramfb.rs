@@ -18,13 +18,12 @@ use anyhow::Context;
 use drm_fourcc::DrmFourcc;
 use log::error;
 use std::mem::size_of;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use sysbus::{Result as SysBusResult, SysBus, SysBusDevOps, SysBusDevType};
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 use vnc::console::{
-    console_init, display_graphic_update, display_replace_surface, get_console_by_id,
-    DisplaySurface, HardWareOperations,
+    console_init, display_graphic_update, display_replace_surface, DisplayConsole, DisplaySurface,
+    HardWareOperations,
 };
 
 const BYTES_PER_PIXELS: u32 = 8;
@@ -185,20 +184,24 @@ impl FwCfgWriteCallback for RamfbState {
 
         self.create_display_surface(width, height, format, stride, addr);
 
-        let ramfb_opts = Rc::new(RamfbInterface::default());
-        let con_id = console_init(ramfb_opts);
-        display_replace_surface(con_id, self.surface);
+        let ramfb_opts = Arc::new(RamfbInterface {
+            width: width as i32,
+            height: height as i32,
+        });
+        let con = console_init(ramfb_opts);
+        display_replace_surface(&con, self.surface)
+            .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
     }
 }
 
-#[derive(Default)]
-pub struct RamfbInterface {}
+pub struct RamfbInterface {
+    width: i32,
+    height: i32,
+}
 impl HardWareOperations for RamfbInterface {
-    fn hw_update(&self, con_id: Option<usize>) {
-        let con = get_console_by_id(con_id);
-        if let Some(c) = con {
-            display_graphic_update(con_id, 0, 0, c.width, c.height);
-        }
+    fn hw_update(&self, con: Arc<Mutex<DisplayConsole>>) {
+        display_graphic_update(&Some(Arc::downgrade(&con)), 0, 0, self.width, self.height)
+            .unwrap_or_else(|e| error!("Error occurs during graphic updating: {:?}", e));
     }
 }
 
