@@ -12,9 +12,17 @@
 
 use super::{
     Element, Queue, VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_GPU,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+    VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
+    VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
+    VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
+    VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID,
+    VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY,
+    VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_DISPLAY_INFO, VIRTIO_GPU_RESP_OK_EDID,
+    VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
-use crate::VirtioError;
+use crate::{VirtioError, VIRTIO_GPU_F_EDID};
 use address_space::{AddressSpace, GuestAddress};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
@@ -51,42 +59,9 @@ use vnc::console::{
 // number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
 
-// flags for virtio gpu base conf
-const VIRTIO_GPU_FLAG_VIRGL_ENABLED: u32 = 1;
-#[allow(unused)]
-const VIRTIO_GPU_FLAG_STATS_ENABLED: u32 = 2;
-const VIRTIO_GPU_FLAG_EDID_ENABLED: u32 = 3;
-
-// features which virtio gpu cmd can support
-const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
-
-// Flags used to distinguish the cmd type and format VirtioGpuRequest.
+// the type of virtio gpu cmd
 const VIRTIO_GPU_CMD_CTRL: u32 = 0;
 const VIRTIO_GPU_CMD_CURSOR: u32 = 1;
-
-// virtio_gpu_ctrl_type: 2d commands
-const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
-const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
-const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
-const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
-const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
-const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
-const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
-const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
-const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010a;
-// virtio_gpu_ctrl_type: cursor commands
-const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
-const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
-// virtio_gpu_ctrl_type: success responses
-const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
-const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
-const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
-// virtio_gpu_ctrl_type: error responses
-const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
-const VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY: u32 = 0x1201;
-const VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID: u32 = 0x1202;
-const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
-const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 
 // simple formats for fbcon/X use
 const VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM: u32 = 1;
@@ -97,22 +72,6 @@ const VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM: u32 = 67;
 const VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM: u32 = 68;
 const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
 const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
-
-#[derive(Clone, Copy, Debug, ByteCode)]
-pub struct VirtioGpuConfig {
-    events_read: u32,
-    events_clear: u32,
-    num_scanouts: u32,
-    reserved: u32,
-}
-
-#[derive(Clone, Copy, Debug, ByteCode)]
-pub struct VirtioGpuBaseConf {
-    max_outputs: u32,
-    flags: u32,
-    xres: u32,
-    yres: u32,
-}
 
 #[derive(Debug)]
 struct GpuResource {
@@ -465,6 +424,7 @@ struct GpuScanout {
     x: u32,
     y: u32,
     resource_id: u32,
+    // Unused with vnc backend, work in others.
     cursor: VirtioGpuUpdateCursor,
 }
 
@@ -497,11 +457,11 @@ struct GpuIoHandler {
     resources_list: Vec<GpuResource>,
     /// The bit mask of whether scanout is enabled or not.
     enable_output_bitmask: u32,
-    /// Baisc Configure of GPU device.
-    base_conf: VirtioGpuBaseConf,
+    /// The number of scanouts
+    num_scanouts: u32,
     /// States of all request in scanout.
     req_states: [VirtioGpuReqState; VIRTIO_GPU_MAX_SCANOUTS],
-    /// Scanouts of gpu.
+    /// Scanouts of gpu, mouse doesn't realize copy trait, so it is a vector.
     scanouts: Vec<GpuScanout>,
     /// Max host mem for resource.
     max_hostmem: u64,
@@ -687,7 +647,7 @@ impl GpuIoHandler {
         *need_interrupt = true;
         let mut display_info = VirtioGpuDisplayInfo::default();
         display_info.header.hdr_type = VIRTIO_GPU_RESP_OK_DISPLAY_INFO;
-        for i in 0..self.base_conf.max_outputs {
+        for i in 0..self.num_scanouts {
             if (self.enable_output_bitmask & (1 << i)) != 0 {
                 let i = i as usize;
                 display_info.pmodes[i].enabled = 1;
@@ -738,10 +698,10 @@ impl GpuIoHandler {
                 ))
             })?;
 
-        if edid_req.scanouts >= self.base_conf.max_outputs {
+        if edid_req.scanouts >= self.num_scanouts {
             error!(
                 "The scanouts {} of request exceeds the max_outputs {}",
-                edid_req.scanouts, self.base_conf.max_outputs
+                edid_req.scanouts, self.num_scanouts
             );
             return self.gpu_response_nodata(
                 need_interrupt,
@@ -872,7 +832,7 @@ impl GpuIoHandler {
         {
             let res = &mut self.resources_list[res_index];
             if res.scanouts_bitmask != 0 {
-                for i in 0..self.base_conf.max_outputs {
+                for i in 0..self.num_scanouts {
                     if (res.scanouts_bitmask & (1 << i)) != 0 {
                         let scanout = &mut self.scanouts[i as usize];
                         if scanout.resource_id != 0 {
@@ -939,7 +899,7 @@ impl GpuIoHandler {
                 ))
             })?;
 
-        if info_set_scanout.scanout_id >= self.base_conf.max_outputs {
+        if info_set_scanout.scanout_id >= self.num_scanouts {
             error!(
                 "The scanout id {} is out of range",
                 info_set_scanout.scanout_id
@@ -1135,7 +1095,7 @@ impl GpuIoHandler {
                     info_res_flush.rect.width,
                     info_res_flush.rect.height,
                 );
-                for i in 0..self.base_conf.max_outputs {
+                for i in 0..self.num_scanouts {
                     // Flushes any scanouts the resource is being used on.
                     if res.scanouts_bitmask & (1 << i) != 0 {
                         let scanout = &self.scanouts[i as usize];
@@ -1553,11 +1513,8 @@ impl GpuIoHandler {
 
     fn ctrl_queue_evt_handler(&mut self) -> Result<()> {
         let mut queue = self.ctrl_queue.lock().unwrap();
-        if !queue.is_valid(&self.mem_space) {
-            bail!("Failed to handle any request, the queue is not ready");
-        }
-
         let mut req_queue = Vec::new();
+
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             if elem.desc_num == 0 {
                 break;
@@ -1582,9 +1539,6 @@ impl GpuIoHandler {
     fn cursor_queue_evt_handler(&mut self) -> Result<()> {
         let cursor_queue = self.cursor_queue.clone();
         let mut queue = cursor_queue.lock().unwrap();
-        if !queue.is_valid(&self.mem_space) {
-            bail!("Failed to handle any request, the queue is not ready");
-        }
 
         while let Ok(elem) = queue.vring.pop_avail(&self.mem_space, self.driver_features) {
             if elem.desc_num == 0 {
@@ -1668,6 +1622,14 @@ impl EventNotifierHelper for GpuIoHandler {
     }
 }
 
+#[derive(Clone, Copy, Debug, ByteCode)]
+pub struct VirtioGpuConfig {
+    events_read: u32,
+    events_clear: u32,
+    num_scanouts: u32,
+    reserved: u32,
+}
+
 /// State of gpu device.
 #[repr(C)]
 #[derive(Clone, Copy, Desc, ByteCode)]
@@ -1678,9 +1640,7 @@ pub struct GpuState {
     /// Bit mask of features negotiated by the backend and the frontend.
     driver_features: u64,
     /// Config space of the GPU device.
-    config: VirtioGpuConfig,
-    /// Baisc Configure of GPU device.
-    base_conf: VirtioGpuBaseConf,
+    config_space: VirtioGpuConfig,
 }
 
 /// GPU device structure.
@@ -1698,24 +1658,17 @@ pub struct Gpu {
 
 impl Gpu {
     pub fn new(gpu_cfg: GpuDevConfig) -> Gpu {
-        let mut state = GpuState::default();
-
-        state.base_conf.xres = gpu_cfg.xres;
-        state.base_conf.yres = gpu_cfg.yres;
-        if gpu_cfg.edid {
-            state.base_conf.flags &= 1 << VIRTIO_GPU_FLAG_EDID_ENABLED;
-        }
-        state.base_conf.max_outputs = gpu_cfg.max_outputs;
-        state.device_features = 1u64 << VIRTIO_F_VERSION_1;
-        state.device_features |= 1u64 << VIRTIO_F_RING_EVENT_IDX;
-        state.device_features |= 1u64 << VIRTIO_F_RING_INDIRECT_DESC;
-
         Self {
             gpu_cfg,
-            state,
+            state: GpuState::default(),
             interrupt_cb: None,
             deactivate_evts: Vec::new(),
         }
+    }
+
+    fn build_device_config_space(&mut self) {
+        self.state.config_space.num_scanouts = self.gpu_cfg.max_outputs;
+        self.state.config_space.reserved = 0;
     }
 }
 
@@ -1730,10 +1683,14 @@ impl VirtioDevice for Gpu {
             );
         }
 
-        // Virgl is not supported.
-        self.state.base_conf.flags &= !(1 << VIRTIO_GPU_FLAG_VIRGL_ENABLED);
-        self.state.config.num_scanouts = self.state.base_conf.max_outputs;
-        self.state.config.reserved = 0;
+        self.state.device_features = 1u64 << VIRTIO_F_VERSION_1;
+        self.state.device_features |= 1u64 << VIRTIO_F_RING_EVENT_IDX;
+        self.state.device_features |= 1u64 << VIRTIO_F_RING_INDIRECT_DESC;
+        if self.gpu_cfg.edid {
+            self.state.device_features |= 1 << VIRTIO_GPU_F_EDID;
+        }
+
+        self.build_device_config_space();
 
         Ok(())
     }
@@ -1776,7 +1733,7 @@ impl VirtioDevice for Gpu {
 
     /// Read data of config from guest.
     fn read_config(&self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_slice = self.state.config.as_bytes();
+        let config_slice = self.state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
 
         if offset
@@ -1795,7 +1752,7 @@ impl VirtioDevice for Gpu {
 
     /// Write data to config from guest.
     fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let mut config_cpy = self.state.config;
+        let mut config_cpy = self.state.config_space;
         let config_cpy_slice = config_cpy.as_mut_bytes();
         let config_len = config_cpy_slice.len() as u64;
 
@@ -1808,8 +1765,8 @@ impl VirtioDevice for Gpu {
         }
 
         config_cpy_slice[(offset as usize)..(offset as usize + data.len())].copy_from_slice(data);
-        if self.state.config.events_clear != 0 {
-            self.state.config.events_read &= !config_cpy.events_clear;
+        if self.state.config_space.events_clear != 0 {
+            self.state.config_space.events_read &= !config_cpy.events_clear;
         }
 
         Ok(())
@@ -1830,6 +1787,7 @@ impl VirtioDevice for Gpu {
                 queues.len()
             )));
         }
+
         self.interrupt_cb = Some(interrupt_cb.clone());
         let req_states = [VirtioGpuReqState::default(); VIRTIO_GPU_MAX_SCANOUTS];
         let mut scanouts = vec![];
@@ -1850,17 +1808,18 @@ impl VirtioDevice for Gpu {
             driver_features: self.state.driver_features,
             resources_list: Vec::new(),
             enable_output_bitmask: 1,
-            base_conf: self.state.base_conf,
-            scanouts,
+            num_scanouts: self.gpu_cfg.max_outputs,
             req_states,
+            scanouts,
             max_hostmem: self.gpu_cfg.max_hostmem,
             used_hostmem: 0,
         };
-        gpu_handler.req_states[0].width = self.state.base_conf.xres;
-        gpu_handler.req_states[0].height = self.state.base_conf.yres;
+        gpu_handler.req_states[0].width = self.gpu_cfg.xres;
+        gpu_handler.req_states[0].height = self.gpu_cfg.yres;
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(gpu_handler)));
         register_event_helper(notifiers, None, &mut self.deactivate_evts)?;
+
         Ok(())
     }
 
