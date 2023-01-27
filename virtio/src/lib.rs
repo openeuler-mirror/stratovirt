@@ -162,6 +162,8 @@ pub const VIRTIO_BLK_F_TOPOLOGY: u32 = 10;
 pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 /// WRITE ZEROES is supported.
 pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
+/// GPU EDID feature is supported.
+pub const VIRTIO_GPU_F_EDID: u32 = 1;
 
 /// The device sets control ok status to driver.
 pub const VIRTIO_NET_OK: u8 = 0;
@@ -236,6 +238,49 @@ pub const VIRTIO_BLK_S_OK: u8 = 0;
 pub const VIRTIO_BLK_S_IOERR: u8 = 1;
 /// Unsupport.
 pub const VIRTIO_BLK_S_UNSUPP: u8 = 2;
+
+/// The Type of virtio gpu, refer to Virtio Spec.
+/// 2D commands:
+/// Retrieve the current output configuration.
+pub const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
+/// Create a 2D resource on the host.
+pub const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
+/// Destroy a resource on the host.
+pub const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
+/// Set the scanout parameters for a single output.
+pub const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
+/// Flush a scanout resource.
+pub const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
+/// Transfer from guest memory to host resource.
+pub const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
+/// Assign backing pages to a resource.
+pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
+/// Detach backing pages from a resource.
+pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
+//// Retrieve the EDID data for a given scanout.
+pub const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010a;
+/// update cursor
+pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
+/// move cursor
+pub const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
+/// Success for cmd without data back.
+pub const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
+/// Success for VIRTIO_GPU_CMD_GET_DISPLAY_INFO.
+pub const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+/// Success for VIRTIO_GPU_CMD_GET_EDID.
+pub const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
+/// unspecificated
+pub const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
+/// out of host memory
+pub const VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY: u32 = 0x1201;
+/// invalid id of scanout
+pub const VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID: u32 = 0x1202;
+/// invalid id of 2D resource
+pub const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
+/// invalid parameter
+pub const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
+/// Flags in virtio gpu cmd which means need a fence.
+pub const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
 
 /// Interrupt status: Used Buffer Notification
 pub const VIRTIO_MMIO_INT_VRING: u32 = 0x01;
