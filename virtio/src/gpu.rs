@@ -34,7 +34,7 @@ use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 use util::aio::{iov_discard_front_direct, iov_from_buf_direct, iov_to_buf_direct};
 use util::byte_code::ByteCode;
@@ -54,7 +54,7 @@ use util::{aio::Iovec, edid::EdidInfo};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 use vnc::console::{
     console_close, console_init, display_cursor_define, display_graphic_update,
-    display_replace_surface, DisplayMouse, DisplaySurface, HardWareOperations,
+    display_replace_surface, DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations,
 };
 
 // number of virtqueues
@@ -364,7 +364,7 @@ impl ByteCode for VirtioGpuUpdateCursor {}
 
 #[derive(Default)]
 struct GpuScanout {
-    con_id: Option<usize>,
+    con: Option<Weak<Mutex<DisplayConsole>>>,
     surface: Option<DisplaySurface>,
     mouse: Option<DisplayMouse>,
     width: u32,
@@ -446,7 +446,8 @@ fn create_surface(
             // update surface in scanout.
             scanout.surface = Some(surface);
             pixman_image_unref(rect);
-            display_replace_surface(scanout.con_id, scanout.surface);
+            display_replace_surface(&scanout.con, scanout.surface)
+                .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
         }
     };
     surface
@@ -497,7 +498,8 @@ fn disable_scanout(scanout: &mut GpuScanout) {
         return;
     }
     // TODO: present 'Guest disabled display.' in surface.
-    display_replace_surface(scanout.con_id, None);
+    display_replace_surface(&scanout.con, None)
+        .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
     scanout.clear();
 }
 
@@ -623,7 +625,7 @@ impl GpuIoHandler {
                 }
             }
             if let Some(mouse) = &mut scanout.mouse {
-                display_cursor_define(scanout.con_id, mouse);
+                display_cursor_define(&scanout.con, mouse)?;
             }
             scanout.cursor = info_cursor;
         } else {
@@ -981,12 +983,12 @@ impl GpuIoHandler {
                         );
                         let extents = pixman_region_extents(final_reg_ptr);
                         display_graphic_update(
-                            scanout.con_id,
+                            &scanout.con,
                             (*extents).x1 as i32,
                             (*extents).y1 as i32,
                             ((*extents).x2 - (*extents).x1) as i32,
                             ((*extents).y2 - (*extents).y1) as i32,
-                        );
+                        )?;
                         pixman_region_fini(rect_reg_ptr);
                         pixman_region_fini(final_reg_ptr);
                     }
@@ -1401,7 +1403,8 @@ impl GpuIoHandler {
 impl Drop for GpuIoHandler {
     fn drop(&mut self) {
         for scanout in &self.scanouts {
-            console_close(scanout.con_id);
+            console_close(&scanout.con)
+                .unwrap_or_else(|e| error!("Error occurs during console closing:{:?}", e));
         }
 
         while !self.resources_list.is_empty() {
@@ -1625,8 +1628,8 @@ impl VirtioDevice for Gpu {
         let mut scanouts = vec![];
         for _i in 0..VIRTIO_GPU_MAX_SCANOUTS {
             let mut scanout = GpuScanout::default();
-            let gpu_opts = Rc::new(GpuOpts::default());
-            scanout.con_id = console_init(gpu_opts);
+            let gpu_opts = Arc::new(GpuOpts::default());
+            scanout.con = console_init(gpu_opts);
             scanouts.push(scanout);
         }
 
