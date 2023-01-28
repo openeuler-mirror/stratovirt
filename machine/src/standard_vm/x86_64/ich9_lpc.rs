@@ -56,8 +56,8 @@ pub struct LPCBridge {
 }
 
 impl LPCBridge {
-    pub fn new(parent_bus: Weak<Mutex<PciBus>>, sys_io: Arc<AddressSpace>) -> Self {
-        Self {
+    pub fn new(parent_bus: Weak<Mutex<PciBus>>, sys_io: Arc<AddressSpace>) -> Result<Self> {
+        Ok(Self {
             config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
             parent_bus,
             sys_io,
@@ -65,9 +65,9 @@ impl LPCBridge {
             pm_evt: Arc::new(Mutex::new(AcpiPmEvent::new())),
             pm_ctrl: Arc::new(Mutex::new(AcpiPmCtrl::new())),
             rst_ctrl: Arc::new(AtomicU8::new(0)),
-            reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
-            shutdown_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
-        }
+            reset_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+            shutdown_req: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+        })
     }
 
     fn update_pm_base(&self) -> Result<()> {
@@ -117,7 +117,10 @@ impl LPCBridge {
                 }
             };
             if value & 0x4_u8 != 0 {
-                cloned_reset_fd.write(1).unwrap();
+                if cloned_reset_fd.write(1).is_err() {
+                    error!("X86 standard vm write reset fd failed");
+                    return false;
+                }
                 return true;
             }
             cloned_rst_ctrl.store(value & 0xA, Ordering::SeqCst);
@@ -144,7 +147,10 @@ impl LPCBridge {
 
         let cloned_shutdown_fd = self.shutdown_req.clone();
         let write_ops = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool {
-            cloned_shutdown_fd.write(1).unwrap();
+            if cloned_shutdown_fd.write(1).is_err() {
+                error!("X86 standard vm write shutdown fd failed");
+                return false;
+            }
             true
         };
 
@@ -191,8 +197,11 @@ impl LPCBridge {
         let clone_pmctrl = self.pm_ctrl.clone();
         let cloned_shutdown_fd = self.shutdown_req.clone();
         let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
-            if clone_pmctrl.lock().unwrap().write(data, addr, offset) {
-                cloned_shutdown_fd.write(1).unwrap();
+            if clone_pmctrl.lock().unwrap().write(data, addr, offset)
+                && cloned_shutdown_fd.write(1).is_err()
+            {
+                error!("X86 standard vm write shutdown fd failed");
+                return false;
             }
             true
         };
