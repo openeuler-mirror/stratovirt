@@ -518,6 +518,7 @@ impl VhostUserClient {
         );
         let cnf = VhostUserConfig::new(0, 0, VirtioBlkConfig::default())?;
         let body_opt: Option<&u32> = None;
+        // SAFETY: the memory is allocated by us and it has been already aligned.
         let payload_opt: Option<&[u8]> = Some(unsafe {
             from_raw_parts(
                 (&cnf as *const VhostUserConfig<VirtioBlkConfig>) as *const u8,
