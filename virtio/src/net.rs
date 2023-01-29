@@ -1461,12 +1461,15 @@ impl VirtioDevice for Net {
         let locked_state = self.state.lock().unwrap();
         let config_slice = locked_state.config_space.as_bytes();
         let config_len = config_slice.len() as u64;
-        if offset >= config_len {
+        if offset
+            .checked_add(data.len() as u64)
+            .filter(|&end| end <= config_len)
+            .is_none()
+        {
             return Err(anyhow!(VirtioError::DevConfigOverflow(offset, config_len)));
         }
-        if let Some(end) = offset.checked_add(data.len() as u64) {
-            data.write_all(&config_slice[offset as usize..cmp::min(end, config_len) as usize])?;
-        }
+        data.write_all(&config_slice[offset as usize..(offset as usize + data.len())])?;
+
         Ok(())
     }
 
@@ -1476,11 +1479,21 @@ impl VirtioDevice for Net {
         let mut locked_state = self.state.lock().unwrap();
         let driver_features = locked_state.driver_features;
         let config_slice = locked_state.config_space.as_mut_bytes();
+
+        if offset
+            .checked_add(data_len as u64)
+            .filter(|&end| end <= MAC_ADDR_LEN as u64)
+            .is_none()
+        {
+            return Err(anyhow!(VirtioError::DevConfigOverflow(
+                offset,
+                config_slice.len() as u64
+            )));
+        }
+
         if !virtio_has_feature(driver_features, VIRTIO_NET_F_CTRL_MAC_ADDR)
             && !virtio_has_feature(driver_features, VIRTIO_F_VERSION_1)
-            && offset == 0
-            && data_len == MAC_ADDR_LEN
-            && *data != config_slice[0..data_len]
+            && *data != config_slice[offset as usize..(offset as usize + data_len)]
         {
             config_slice[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
         }
@@ -1703,7 +1716,7 @@ mod tests {
 
         net.write_config(0x00, &write_data).unwrap();
         net.read_config(0x00, &mut random_data).unwrap();
-        assert_ne!(random_data, write_data);
+        assert_eq!(random_data, write_data);
 
         net.write_config(0x00, &origin_data).unwrap();
 
@@ -1725,14 +1738,14 @@ mod tests {
 
         let offset: u64 = len;
         let mut data: Vec<u8> = vec![0; 1];
-        assert_eq!(net.write_config(offset, &mut data).is_ok(), true);
+        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
 
         let offset: u64 = len - 1;
         let mut data: Vec<u8> = vec![0; 1];
-        assert_eq!(net.write_config(offset, &mut data).is_ok(), true);
+        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
 
         let offset: u64 = 0;
         let mut data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(net.write_config(offset, &mut data).is_ok(), true);
+        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
     }
 }
