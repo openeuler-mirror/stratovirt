@@ -58,17 +58,13 @@ impl Block {
     }
 
     fn delete_event(&mut self) -> Result<()> {
-        match &self.client {
-            Some(client) => {
-                client
-                    .lock()
-                    .unwrap()
-                    .delete_event()
-                    .with_context(|| "Failed to delete vhost-user blk event")?;
-            }
-            None => return Err(anyhow!("Failed to get client when stoping event")),
-        };
-
+        self.client
+            .as_ref()
+            .ok_or_else(|| anyhow!("Failed to get client when stoping event"))?
+            .lock()
+            .unwrap()
+            .delete_event()
+            .with_context(|| "Failed to delete vhost-user blk event")?;
         Ok(())
     }
 
@@ -240,7 +236,7 @@ impl VirtioDevice for Block {
 
         self.client
             .as_ref()
-            .unwrap()
+            .ok_or_else(|| anyhow!("Failed to get client when writing config"))?
             .lock()
             .unwrap()
             .set_virtio_blk_config(self.state.config_space)
@@ -272,7 +268,7 @@ impl VirtioDevice for Block {
     fn deactivate(&mut self) -> Result<()> {
         self.client
             .as_ref()
-            .unwrap()
+            .ok_or_else(|| anyhow!("Failed to get client when deactivating device"))?
             .lock()
             .unwrap()
             .reset_vhost_user()?;

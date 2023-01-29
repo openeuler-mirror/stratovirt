@@ -234,7 +234,10 @@ impl VhostUserMemInfo {
             return Ok(());
         }
 
-        let file_back = fr.owner.get_file_backend().unwrap();
+        let file_back = fr
+            .owner
+            .get_file_backend()
+            .ok_or_else(|| anyhow!("Failed to get file backend"))?;
         let mut mem_regions = self.regions.lock().unwrap();
         let host_address = match fr.owner.get_host_address() {
             Some(addr) => addr,
@@ -289,10 +292,14 @@ impl Listener for VhostUserMemInfo {
     ) -> std::result::Result<(), anyhow::Error> {
         match req_type {
             ListenerReqType::AddRegion => {
-                self.add_mem_range(range.unwrap())?;
+                self.add_mem_range(
+                    range.ok_or_else(|| anyhow!("Flat range is None when adding region"))?,
+                )?;
             }
             ListenerReqType::DeleteRegion => {
-                self.delete_mem_range(range.unwrap())?;
+                self.delete_mem_range(
+                    range.ok_or_else(|| anyhow!("Flat range is None when deleting region"))?,
+                )?;
             }
             _ => {}
         }
