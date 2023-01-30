@@ -37,7 +37,7 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use log::{info, warn};
+use log::{error, info, warn};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -558,13 +558,19 @@ impl QmpChannel {
     #[allow(clippy::unused_io_amount)]
     pub fn send_event(event: &schema::QmpEvent) {
         if Self::is_connected() {
-            let event_str = serde_json::to_string(&event).unwrap();
+            let mut event_str = serde_json::to_string(&event).unwrap();
             let mut writer_unlocked = Self::inner().event_writer.write().unwrap();
             let writer = writer_unlocked.as_mut().unwrap();
-            writer.flush().unwrap();
-            writer.write(event_str.as_bytes()).unwrap();
-            writer.write(&[b'\r']).unwrap();
-            writer.write(&[b'\n']).unwrap();
+
+            if let Err(e) = writer.flush() {
+                error!("flush err, {:?}", e);
+                return;
+            }
+            event_str.push_str("\r\n");
+            if let Err(e) = writer.write(event_str.as_bytes()) {
+                error!("write err, {:?}", e);
+                return;
+            }
             info!("EVENT: --> {:?}", event);
         }
     }

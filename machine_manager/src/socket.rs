@@ -27,10 +27,7 @@ use util::loop_context::{
 use vmm_sys_util::epoll::EventSet;
 
 use crate::machine::MachineExternalInterface;
-use crate::{
-    qmp::qmp_schema::QmpEvent,
-    qmp::{QmpChannel, QmpGreeting, Response},
-};
+use crate::qmp::{QmpChannel, QmpGreeting, Response};
 
 const MAX_SOCKET_MSG_LENGTH: usize = 8192;
 pub(crate) const LEAK_BUCKET_LIMIT: u64 = 100;
@@ -101,9 +98,6 @@ impl Socket {
                 self.bind_unix_stream(stream);
             }
         }
-
-        QmpChannel::bind_writer(SocketRWHandler::new(self.get_stream_fd()));
-        self.send_response(true);
     }
 
     /// Accept a new incoming connection unix stream from unix listener.
@@ -151,26 +145,12 @@ impl Socket {
         SocketHandler::new(self.get_stream_fd())
     }
 
-    /// In qmp feature, send event to client.
-    ///
-    /// # Arguments
-    ///
-    /// * `event` - The `QmpEvent` will be sent to client.
-    pub fn send_event(&self, event: &QmpEvent) {
-        if self.is_connected() {
-            let mut handler = self.get_socket_handler();
-            let event_str = serde_json::to_string(&event).unwrap();
-            handler.send_str(&event_str).unwrap();
-            info!("EVENT: --> {:?}", event);
-        }
-    }
-
     /// In qmp feature, send empty or greeting response to client.
     ///
     /// # Arguments
     ///
     /// * `is_greeting` - Whether sending greeting response or not.
-    pub fn send_response(&self, is_greeting: bool) {
+    pub fn send_response(&self, is_greeting: bool) -> std::io::Result<()> {
         if self.is_connected() {
             let mut handler = self.get_socket_handler();
             let resp = if is_greeting {
@@ -178,9 +158,10 @@ impl Socket {
             } else {
                 serde_json::to_string(&Response::create_empty_response()).unwrap() + "\r"
             };
-            handler.send_str(&resp).unwrap();
+            handler.send_str(&resp)?;
             info!("QMP: --> {:?}", resp);
         }
+        Ok(())
     }
 
     /// Create socket's accepted stream to `event_notifier`.
@@ -197,6 +178,12 @@ impl Socket {
         let leak_bucket_fd = leak_bucket.lock().unwrap().as_raw_fd();
 
         self.accept();
+        QmpChannel::bind_writer(SocketRWHandler::new(self.get_stream_fd()));
+        if let Err(e) = self.send_response(true) {
+            error!("{:?}", e);
+            QmpChannel::unbind();
+            return notifiers;
+        }
         let handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
             if event == EventSet::IN {
                 let socket_mutexed = shared_socket.lock().unwrap();
@@ -470,7 +457,7 @@ impl SocketRWHandler {
     /// # Errors
     /// The socket file descriptor is broken.
     fn write_fd(&mut self, length: usize) -> std::io::Result<()> {
-        use libc::{c_void, iovec, msghdr, sendmsg};
+        use libc::{c_void, iovec, msghdr, sendmsg, MSG_NOSIGNAL};
 
         let mut iov = iovec {
             iov_base: self.buf.as_slice()[(self.pos - length)..(self.pos - 1)].as_ptr()
@@ -489,7 +476,7 @@ impl SocketRWHandler {
         mhdr.msg_controllen = 0;
         mhdr.msg_flags = 0;
 
-        if unsafe { sendmsg(self.socket_fd, &mhdr, 0) } == -1 {
+        if unsafe { sendmsg(self.socket_fd, &mhdr, MSG_NOSIGNAL) } == -1 {
             Err(Error::new(
                 ErrorKind::BrokenPipe,
                 "The socket pipe is broken!",
