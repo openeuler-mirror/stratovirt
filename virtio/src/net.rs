@@ -678,6 +678,7 @@ struct NetIoHandler {
 
 impl NetIoHandler {
     fn read_from_tap(queue: &mut Queue, iovecs: &[libc::iovec], tap: &mut Tap) -> i32 {
+        // SAFETY: the arguments of readv has been checked and is correct.
         let size = unsafe {
             libc::readv(
                 tap.as_raw_fd() as libc::c_int,
@@ -741,6 +742,7 @@ impl NetIoHandler {
                 self.rx.queue_full = true;
                 break;
             }
+
             rx_packets += 1;
             if rx_packets > self.queue_size {
                 self.rx
@@ -749,12 +751,15 @@ impl NetIoHandler {
                     .with_context(|| "Failed to trigger rx queue event".to_string())?;
                 break;
             }
+
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
                 .with_context(|| "Failed to pop avail ring for net rx")?;
             if elem.desc_num == 0 {
                 break;
+            } else if elem.in_iovec.is_empty() {
+                bail!("The lengh of in iovec is 0");
             }
             let iovecs = NetIoHandler::get_libc_iovecs(
                 &self.mem_space,
@@ -829,6 +834,7 @@ impl NetIoHandler {
 
     fn send_packets(&self, tap_fd: libc::c_int, iovecs: &[libc::iovec]) -> i8 {
         loop {
+            // SAFETY: the arguments of writev has been checked and is correct.
             let size = unsafe {
                 libc::writev(
                     tap_fd,
@@ -861,7 +867,10 @@ impl NetIoHandler {
                 .with_context(|| "Failed to pop avail ring for net tx")?;
             if elem.desc_num == 0 {
                 break;
+            } else if elem.out_iovec.is_empty() {
+                bail!("The lengh of out iovec is 0");
             }
+
             tx_packets += 1;
             if tx_packets >= self.queue_size {
                 self.tx
@@ -870,6 +879,7 @@ impl NetIoHandler {
                     .with_context(|| "Failed to trigger tx queue event".to_string())?;
                 break;
             }
+
             let iovecs = NetIoHandler::get_libc_iovecs(
                 &self.mem_space,
                 queue.vring.get_cache(),
@@ -881,7 +891,7 @@ impl NetIoHandler {
             } else {
                 -1_i32
             };
-            if tap_fd != -1 && !iovecs.is_empty() && self.send_packets(tap_fd, &iovecs) == -1 {
+            if tap_fd != -1 && self.send_packets(tap_fd, &iovecs) == -1 {
                 queue.vring.push_back();
                 self.tx.queue_evt.write(1).with_context(|| {
                     "Failed to trigger tx queue event when writev blocked".to_string()
