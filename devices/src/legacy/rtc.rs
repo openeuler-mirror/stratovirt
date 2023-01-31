@@ -460,6 +460,17 @@ mod test {
         assert_eq!(cmos_read(&mut rtc, RTC_YEAR), 0x13);
         assert_eq!(cmos_read(&mut rtc, RTC_CENTURY_BCD), 0x20);
 
+        // Set rtc time: 2080-11-13 02:04:56, ensure there is no year-2080 overflow.
+        cmos_write(&mut rtc, RTC_YEAR, 0x80);
+
+        assert!((cmos_read(&mut rtc, RTC_SECONDS) - 0x56) <= WIGGLE);
+        assert_eq!(cmos_read(&mut rtc, RTC_MINUTES), 0x04);
+        assert_eq!(cmos_read(&mut rtc, RTC_HOURS), 0x02);
+        assert_eq!(cmos_read(&mut rtc, RTC_DAY_OF_MONTH), 0x13);
+        assert_eq!(cmos_read(&mut rtc, RTC_MONTH), 0x11);
+        assert_eq!(cmos_read(&mut rtc, RTC_YEAR), 0x80);
+        assert_eq!(cmos_read(&mut rtc, RTC_CENTURY_BCD), 0x20);
+
         Ok(())
     }
 
