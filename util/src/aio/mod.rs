@@ -390,3 +390,16 @@ pub fn iov_to_buf_direct(iovec: &[Iovec], buf: &mut [u8]) -> Result<usize> {
     }
     Ok(end)
 }
+
+/// Discard "size" bytes of the front of iovec.
+pub fn iov_discard_front_direct(iovec: &mut [Iovec], mut size: u64) -> Option<&mut [Iovec]> {
+    for (index, iov) in iovec.iter_mut().enumerate() {
+        if iov.iov_len as u64 > size {
+            iov.iov_base += size;
+            iov.iov_len -= size as u64;
+            return Some(&mut iovec[index..]);
+        }
+        size -= iov.iov_len as u64;
+    }
+    None
+}
