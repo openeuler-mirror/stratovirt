@@ -852,6 +852,10 @@ impl VringOps for SplitVring {
         Ok((avail_idx - self.next_avail).0)
     }
 
+    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
+        SplitVring::get_avail_idx(self, sys_mem)
+    }
+
     fn get_cache(&self) -> &Option<RegionCache> {
         &self.cache
     }
