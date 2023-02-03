@@ -257,8 +257,9 @@ root bus named pcie.0. As a result, a total of 32 pci devices can be configured.
 
 ### 2.1 iothread
 
-Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads due to `iothread` configuration,
-and these threads can be used by devices exclusively improving performance.
+Iothread is used by devices to improve io performance. StratoVirt will spawn some extra threads due to `iothread` configuration, and these threads can be used by devices exclusively improving performance.
+
+Note: iothread is strongly recommanded if a specific device supports it, otherwise the main thread has the risk of getting stuck.
 
 There is only one argument for iothread:
 

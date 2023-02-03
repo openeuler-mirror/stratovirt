@@ -17,7 +17,7 @@ mod uring;
 use std::clone::Clone;
 use std::cmp;
 use std::io::Write;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use std::sync::Arc;
 
 use log::error;
@@ -25,68 +25,61 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
 use anyhow::{anyhow, bail, Context, Result};
-pub use libaio::*;
+use libaio::LibaioContext;
 pub use raw::*;
 use uring::IoUringContext;
 
 type CbList<T> = List<AioCb<T>>;
 type CbNode<T> = Node<AioCb<T>>;
 
-#[repr(C)]
-#[allow(non_camel_case_types)]
-#[derive(Default, Clone)]
-pub struct IoEvent {
-    pub data: u64,
-    pub obj: u64,
-    pub res: i64,
-    pub res2: i64,
-}
-
 /// Io-uring aio type.
 pub const AIO_IOURING: &str = "io_uring";
 /// Native aio type.
 pub const AIO_NATIVE: &str = "native";
 
-/// The trait for Asynchronous IO operation.
-trait AioContext {
-    /// Submit IO requests to the OS, the nr submitted is returned.
-    fn submit(&mut self, nr: i64, iocbp: &mut [*mut IoCb]) -> Result<usize>;
-    /// Get the IO events of the requests sumbitted earlier.
-    fn get_events(&mut self) -> &[IoEvent];
+#[derive(Debug, Clone)]
+pub struct Iovec {
+    pub iov_base: u64,
+    pub iov_len: u64,
 }
 
-pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
+/// The trait for Asynchronous IO operation.
+trait AioContext<T: Clone> {
+    /// Submit IO requests to the OS, the nr submitted is returned.
+    fn submit(&mut self, iocbp: &[*const AioCb<T>]) -> Result<usize>;
+    /// Get the IO events of the requests sumbitted earlier.
+    fn get_events(&mut self) -> &[AioEvent];
+}
+
+pub struct AioEvent {
+    pub user_data: u64,
+    pub status: i64,
+    pub res: i64,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum OpCode {
+    Noop = 0,
+    Preadv = 1,
+    Pwritev = 2,
+    Fdsync = 3,
+}
 
 pub struct AioCb<T: Clone> {
     pub last_aio: bool,
     pub file_fd: RawFd,
-    pub opcode: IoCmd,
+    pub opcode: OpCode,
     pub iovec: Vec<Iovec>,
     pub offset: usize,
     pub nbytes: u64,
-    pub process: bool,
-    pub iocb: Option<Box<IoCb>>,
+    pub user_data: u64,
     pub iocompletecb: T,
 }
 
-impl<T: Clone> AioCb<T> {
-    pub fn new(cb: T) -> Self {
-        AioCb {
-            last_aio: true,
-            file_fd: 0,
-            opcode: IoCmd::Noop,
-            iovec: Vec::new(),
-            offset: 0,
-            nbytes: 0,
-            process: false,
-            iocb: None,
-            iocompletecb: cb,
-        }
-    }
-}
+pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
 
 pub struct Aio<T: Clone + 'static> {
-    ctx: Box<dyn AioContext>,
+    ctx: Box<dyn AioContext<T>>,
     pub fd: EventFd,
     pub aio_in_queue: CbList<T>,
     pub aio_in_flight: CbList<T>,
@@ -104,10 +97,10 @@ impl<T: Clone + 'static> Aio<T> {
             AIO_NATIVE
         };
 
-        let ctx: Box<dyn AioContext> = if aio == AIO_IOURING {
-            Box::new(IoUringContext::new(max_events as u32, &fd, func.clone())?)
+        let ctx: Box<dyn AioContext<T>> = if aio == AIO_IOURING {
+            Box::new(IoUringContext::new(max_events as u32, &fd)?)
         } else {
-            Box::new(LibaioContext::new(max_events as i32)?)
+            Box::new(LibaioContext::new(max_events as u32, &fd)?)
         };
 
         Ok(Aio {
@@ -126,12 +119,15 @@ impl<T: Clone + 'static> Aio<T> {
         for evt in self.ctx.get_events() {
             // SAFETY: evt.data is specified by submit and not dropped at other place.
             unsafe {
-                let node = evt.data as *mut CbNode<T>;
-                let res = if (evt.res2 == 0) && (evt.res == (*node).value.nbytes as i64) {
+                let node = evt.user_data as *mut CbNode<T>;
+                let res = if (evt.status == 0) && (evt.res == (*node).value.nbytes as i64) {
                     done = true;
                     evt.res
                 } else {
-                    error!("Async IO request failed, res2 {} res {}", evt.res2, evt.res);
+                    error!(
+                        "Async IO request failed, status {} res {}",
+                        evt.status, evt.res
+                    );
                     -1
                 };
 
@@ -151,9 +147,8 @@ impl<T: Clone + 'static> Aio<T> {
 
             for _ in self.aio_in_flight.len..self.max_events {
                 match self.aio_in_queue.pop_tail() {
-                    Some(mut node) => {
-                        let iocb = node.value.iocb.as_mut().unwrap();
-                        iocbs.push(&mut **iocb as *mut IoCb);
+                    Some(node) => {
+                        iocbs.push(&node.value as *const AioCb<T>);
                         self.aio_in_flight.add_head(node);
                     }
                     None => break,
@@ -161,13 +156,10 @@ impl<T: Clone + 'static> Aio<T> {
             }
 
             // The iocbs must not be empty.
-            let (nr, is_err) = match self
-                .ctx
-                .submit(iocbs.len() as i64, &mut iocbs)
-                .map_err(|e| {
-                    error!("{}", e);
-                    e
-                }) {
+            let (nr, is_err) = match self.ctx.submit(&iocbs).map_err(|e| {
+                error!("{}", e);
+                e
+            }) {
                 Ok(nr) => (nr, false),
                 Err(_) => (0, true),
             };
@@ -212,20 +204,9 @@ impl<T: Clone + 'static> Aio<T> {
             }
         }
 
-        let mut iocb = IoCb {
-            aio_lio_opcode: cb.opcode as u16,
-            aio_fildes: cb.file_fd as u32,
-            aio_buf: (*cb.iovec).as_ptr() as u64,
-            aio_nbytes: cb.iovec.len() as u64,
-            aio_offset: cb.offset as u64,
-            aio_flags: IOCB_FLAG_RESFD,
-            aio_resfd: self.fd.as_raw_fd() as u32,
-            ..Default::default()
-        };
         let last_aio = cb.last_aio;
         let mut node = Box::new(Node::new(cb));
-        iocb.data = (&mut (*node) as *mut CbNode<T>) as u64;
-        node.value.iocb = Some(Box::new(iocb));
+        node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
 
         self.aio_in_queue.add_head(node);
         if last_aio || self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
@@ -237,7 +218,7 @@ impl<T: Clone + 'static> Aio<T> {
 
     pub fn rw_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let ret = match cb.opcode {
-            IoCmd::Preadv => {
+            OpCode::Preadv => {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
@@ -253,7 +234,7 @@ impl<T: Clone + 'static> Aio<T> {
                 }
                 r
             }
-            IoCmd::Pwritev => {
+            OpCode::Pwritev => {
                 let mut r = 0;
                 let mut off = cb.offset;
                 for iov in cb.iovec.iter() {
@@ -278,7 +259,7 @@ impl<T: Clone + 'static> Aio<T> {
         // SAFETY: only get the host page size.
         let host_page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
         match cb.opcode {
-            IoCmd::Preadv => {
+            OpCode::Preadv => {
                 // SAFETY: we allocate aligned memory and free it later.
                 // Alignment is set to host page size to decrease the count of allocated pages.
                 let aligned_buffer =
@@ -313,7 +294,7 @@ impl<T: Clone + 'static> Aio<T> {
                 unsafe { libc::free(aligned_buffer) };
                 res
             }
-            IoCmd::Pwritev => {
+            OpCode::Pwritev => {
                 // SAFETY: we allocate aligned memory and free it later.
                 let aligned_buffer =
                     unsafe { libc::memalign(host_page_size as usize, cb.nbytes as usize) };

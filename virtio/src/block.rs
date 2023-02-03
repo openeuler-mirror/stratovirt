@@ -42,7 +42,7 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::{iov_from_buf_direct, raw_datasync, Aio, AioCb, IoCmd, Iovec, AIO_NATIVE};
+use util::aio::{iov_from_buf_direct, raw_datasync, Aio, AioCb, Iovec, OpCode, AIO_NATIVE};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
@@ -304,7 +304,7 @@ impl Request {
         let direct = iohandler.direct;
         match request_type {
             VIRTIO_BLK_T_IN => {
-                aiocb.opcode = IoCmd::Preadv;
+                aiocb.opcode = OpCode::Preadv;
                 if aio_type.is_some() {
                     aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
                         "Failed to process block request for reading asynchronously"
@@ -316,7 +316,7 @@ impl Request {
                 }
             }
             VIRTIO_BLK_T_OUT => {
-                aiocb.opcode = IoCmd::Pwritev;
+                aiocb.opcode = OpCode::Pwritev;
                 if aio_type.is_some() {
                     aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
                         "Failed to process block request for writing asynchronously"
@@ -328,7 +328,7 @@ impl Request {
                 }
             }
             VIRTIO_BLK_T_FLUSH => {
-                aiocb.opcode = IoCmd::Fdsync;
+                aiocb.opcode = OpCode::Fdsync;
                 aio.flush_sync(aiocb)
                     .with_context(|| "Failed to process block request for flushing")?;
             }
@@ -542,12 +542,11 @@ impl BlockIoHandler {
                 let aiocb = AioCb {
                     last_aio: req_index == last_aio_req_index,
                     file_fd: disk_img.as_raw_fd(),
-                    opcode: IoCmd::Noop,
+                    opcode: OpCode::Noop,
                     iovec: Vec::new(),
                     offset: (req_rc.out_header.sector << SECTOR_SHIFT) as usize,
                     nbytes: 0,
-                    process: true,
-                    iocb: None,
+                    user_data: 0,
                     iocompletecb: aiocompletecb,
                 };
                 req_rc.execute(self, aiocb)?;
@@ -634,7 +633,7 @@ impl BlockIoHandler {
         // When driver does not accept FLUSH feature, the device must be of
         // writethrough cache type, so flush data before updating used ring.
         if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
-            && aiocb.opcode == IoCmd::Pwritev
+            && aiocb.opcode == OpCode::Pwritev
             && ret >= 0
         {
             if let Err(ref e) = raw_datasync(aiocb.file_fd) {
