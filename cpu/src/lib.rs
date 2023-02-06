@@ -688,7 +688,14 @@ impl CPUThreadWorker {
         // reset its running environment.
         #[cfg(not(test))]
         self.thread_cpu
-            .reset()
+            .arch_cpu
+            .lock()
+            .unwrap()
+            .reset_vcpu(
+                &self.thread_cpu.fd,
+                #[cfg(target_arch = "x86_64")]
+                &self.thread_cpu.caps,
+            )
             .with_context(|| "Failed to reset for cpu register state")?;
 
         // Wait for all vcpu to complete the running
