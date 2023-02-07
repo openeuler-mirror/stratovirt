@@ -93,6 +93,13 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .takes_value(true),
         )
         .arg(
+            Arg::with_name("accel")
+            .long("accel")
+            .value_name("[accel]")
+            .help("select accelerator, only 'kvm' is supported now.")
+            .takes_value(true),
+        )
+        .arg(
             Arg::with_name("smp")
             .long("smp")
             .value_name("[cpus=]<n>[,maxcpus=<cpus>][,sockets=<sockets>][,dies=<dies>][,clusters=<clusters>][,cores=<cores>][,threads=<threads>]")
@@ -451,6 +458,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     // Parse cmdline args which need to set in VmConfig
     add_args_to_config!((args.value_of("name")), vm_cfg, add_name);
     add_args_to_config!((args.value_of("machine")), vm_cfg, add_machine);
+    add_args_to_config!((args.value_of("accel")), vm_cfg, add_accel);
     add_args_to_config!((args.value_of("memory")), vm_cfg, add_memory);
     add_args_to_config!((args.value_of("mem-path")), vm_cfg, add_mem_path);
     add_args_to_config!((args.value_of("smp")), vm_cfg, add_cpu);
