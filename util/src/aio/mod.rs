@@ -15,12 +15,13 @@ mod raw;
 mod uring;
 
 use std::clone::Clone;
-use std::cmp;
 use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
+use std::{cmp, str::FromStr};
 
-use log::error;
+use log::{error, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::link_list::{List, Node};
@@ -32,10 +33,32 @@ use uring::IoUringContext;
 type CbList<T> = List<AioCb<T>>;
 type CbNode<T> = Node<AioCb<T>>;
 
-/// Io-uring aio type.
-pub const AIO_IOURING: &str = "io_uring";
+/// None aio type.
+const AIO_OFF: &str = "off";
 /// Native aio type.
-pub const AIO_NATIVE: &str = "native";
+const AIO_NATIVE: &str = "native";
+/// Io-uring aio type.
+const AIO_IOURING: &str = "io_uring";
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
+pub enum AioEngine {
+    Off = 0,
+    Native = 1,
+    IoUring = 2,
+}
+
+impl FromStr for AioEngine {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            AIO_OFF => Ok(AioEngine::Off),
+            AIO_NATIVE => Ok(AioEngine::Native),
+            AIO_IOURING => Ok(AioEngine::IoUring),
+            _ => Err(()),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Iovec {
@@ -67,6 +90,8 @@ pub enum OpCode {
 
 pub struct AioCb<T: Clone> {
     pub last_aio: bool,
+    pub direct: bool,
+    pub sector_size: u64,
     pub file_fd: RawFd,
     pub opcode: OpCode,
     pub iovec: Vec<Iovec>,
@@ -79,7 +104,8 @@ pub struct AioCb<T: Clone> {
 pub type AioCompleteFunc<T> = fn(&AioCb<T>, i64) -> Result<()>;
 
 pub struct Aio<T: Clone + 'static> {
-    ctx: Box<dyn AioContext<T>>,
+    ctx: Option<Box<dyn AioContext<T>>>,
+    engine: AioEngine,
     pub fd: EventFd,
     pub aio_in_queue: CbList<T>,
     pub aio_in_flight: CbList<T>,
@@ -87,24 +113,34 @@ pub struct Aio<T: Clone + 'static> {
     complete_func: Arc<AioCompleteFunc<T>>,
 }
 
+pub fn aio_probe(engine: AioEngine) -> Result<()> {
+    match engine {
+        AioEngine::Off => {}
+        AioEngine::Native => {
+            let ctx = LibaioContext::probe(1)?;
+            // SAFETY: if no err, ctx is valid.
+            unsafe { libc::syscall(libc::SYS_io_destroy, ctx) };
+        }
+        AioEngine::IoUring => {
+            IoUringContext::probe(1)?;
+        }
+    }
+    Ok(())
+}
+
 impl<T: Clone + 'static> Aio<T> {
-    pub fn new(func: Arc<AioCompleteFunc<T>>, engine: Option<&String>) -> Result<Self> {
+    pub fn new(func: Arc<AioCompleteFunc<T>>, engine: AioEngine) -> Result<Self> {
         let max_events: usize = 128;
         let fd = EventFd::new(libc::EFD_NONBLOCK)?;
-        let aio = if let Some(engine) = engine {
-            engine
-        } else {
-            AIO_NATIVE
-        };
-
-        let ctx: Box<dyn AioContext<T>> = if aio == AIO_IOURING {
-            Box::new(IoUringContext::new(max_events as u32, &fd)?)
-        } else {
-            Box::new(LibaioContext::new(max_events as u32, &fd)?)
+        let ctx: Option<Box<dyn AioContext<T>>> = match engine {
+            AioEngine::Off => None,
+            AioEngine::Native => Some(Box::new(LibaioContext::new(max_events as u32, &fd)?)),
+            AioEngine::IoUring => Some(Box::new(IoUringContext::new(max_events as u32, &fd)?)),
         };
 
         Ok(Aio {
             ctx,
+            engine,
             fd,
             aio_in_queue: List::new(),
             aio_in_flight: List::new(),
@@ -113,10 +149,46 @@ impl<T: Clone + 'static> Aio<T> {
         })
     }
 
-    pub fn handle(&mut self) -> Result<bool> {
-        let mut done = false;
+    pub fn get_engine(&self) -> AioEngine {
+        self.engine
+    }
 
-        for evt in self.ctx.get_events() {
+    pub fn submit_request(&mut self, cb: AioCb<T>) -> Result<()> {
+        if cb.direct && (cb.opcode == OpCode::Preadv || cb.opcode == OpCode::Pwritev) {
+            for iov in cb.iovec.iter() {
+                if iov.iov_base % cb.sector_size != 0 || iov.iov_len % cb.sector_size != 0 {
+                    let res = self.handle_misaligned_rw(&cb).map_or_else(
+                        |e| {
+                            error!("{:?}", e);
+                            -1
+                        },
+                        |_| 0,
+                    );
+                    return (self.complete_func)(&cb, res);
+                }
+            }
+        }
+
+        return match cb.opcode {
+            OpCode::Preadv | OpCode::Pwritev => {
+                if self.ctx.is_some() {
+                    self.rw_aio(cb)
+                } else {
+                    self.rw_sync(cb)
+                }
+            }
+            OpCode::Fdsync => self.flush_sync(cb),
+            OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
+        };
+    }
+
+    pub fn handle_complete(&mut self) -> Result<bool> {
+        let mut done = false;
+        if self.ctx.is_none() {
+            warn!("Can not handle aio complete with invalid ctx.");
+            return Ok(done);
+        }
+        for evt in self.ctx.as_mut().unwrap().get_events() {
             // SAFETY: evt.data is specified by submit and not dropped at other place.
             unsafe {
                 let node = evt.user_data as *mut CbNode<T>;
@@ -142,6 +214,10 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     fn process_list(&mut self) -> Result<()> {
+        if self.ctx.is_none() {
+            warn!("Can not process aio list with invalid ctx.");
+            return Ok(());
+        }
         while self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
             let mut iocbs = Vec::new();
 
@@ -156,12 +232,12 @@ impl<T: Clone + 'static> Aio<T> {
             }
 
             // The iocbs must not be empty.
-            let (nr, is_err) = match self.ctx.submit(&iocbs).map_err(|e| {
-                error!("{}", e);
-                e
-            }) {
+            let (nr, is_err) = match self.ctx.as_mut().unwrap().submit(&iocbs) {
                 Ok(nr) => (nr, false),
-                Err(_) => (0, true),
+                Err(e) => {
+                    error!("{:?}", e);
+                    (0, true)
+                }
             };
 
             // Push back unsubmitted requests. This should rarely happen, so the
@@ -188,22 +264,7 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    pub fn rw_aio(&mut self, cb: AioCb<T>, sector_size: u64, direct: bool) -> Result<()> {
-        if direct {
-            for iov in cb.iovec.iter() {
-                if iov.iov_base % sector_size != 0 || iov.iov_len % sector_size != 0 {
-                    let res = self.handle_misaligned_rw(&cb).map_or_else(
-                        |e| {
-                            error!("{:?}", e);
-                            -1
-                        },
-                        |_| 0,
-                    );
-                    return (self.complete_func)(&cb, res);
-                }
-            }
-        }
-
+    fn rw_aio(&mut self, cb: AioCb<T>) -> Result<()> {
         let last_aio = cb.last_aio;
         let mut node = Box::new(Node::new(cb));
         node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
@@ -216,7 +277,7 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
-    pub fn rw_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn rw_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let ret = match cb.opcode {
             OpCode::Preadv => {
                 let mut r = 0;
@@ -333,7 +394,7 @@ impl<T: Clone + 'static> Aio<T> {
         }
     }
 
-    pub fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
+    fn flush_sync(&mut self, cb: AioCb<T>) -> Result<()> {
         let ret = raw_datasync(cb.file_fd).unwrap_or_else(|e| {
             error!("Failed to do sync flush, {:?}", e);
             -1

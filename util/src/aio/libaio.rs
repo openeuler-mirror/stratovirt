@@ -64,7 +64,7 @@ enum IoCmd {
 }
 
 #[allow(non_camel_case_types)]
-enum IoContext {}
+pub(crate) enum IoContext {}
 
 pub(crate) struct LibaioContext {
     ctx: *mut IoContext,
@@ -98,15 +98,18 @@ struct AioRing {
 }
 
 impl LibaioContext {
-    pub fn new(max_size: u32, eventfd: &EventFd) -> Result<Self> {
+    pub fn probe(max_size: u32) -> Result<*mut IoContext> {
         let mut ctx = std::ptr::null_mut();
-
         // SAFETY: ctx is a valid ptr.
         let ret = unsafe { libc::syscall(libc::SYS_io_setup, max_size, &mut ctx) };
         if ret < 0 {
-            bail!("Failed to setup aio context, return {}.", ret);
+            bail!("Failed to setup linux native aio context, return {}.", ret);
         }
+        Ok(ctx)
+    }
 
+    pub fn new(max_size: u32, eventfd: &EventFd) -> Result<Self> {
+        let ctx = Self::probe(max_size)?;
         Ok(LibaioContext {
             ctx,
             resfd: eventfd.as_raw_fd(),

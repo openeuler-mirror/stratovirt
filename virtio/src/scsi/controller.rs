@@ -38,7 +38,7 @@ use machine_manager::{
     config::{ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
 };
-use util::aio::{Aio, AioCb, Iovec};
+use util::aio::{Aio, AioCb, AioEngine, Iovec};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -818,7 +818,7 @@ impl EventNotifierHelper for ScsiCmdHandler {
                     return None;
                 }
                 if let Some(aio) = &mut h_lock.aio {
-                    if let Err(ref e) = aio.handle() {
+                    if let Err(ref e) = aio.handle_complete() {
                         error!("Failed to handle aio, {:?}", e);
                         report_virtio_error(
                             h_lock.interrupt_cb.clone(),
@@ -921,7 +921,6 @@ impl ScsiCmdHandler {
                 // If found device's lun id is not equal to request lun id, this request is a target request.
                 scsi_req.emulate_execute(scsicompletecb, req_lun_id, lun)?;
             } else {
-                let aio_type = scsi_device_lock.config.aio_type.clone();
                 let direct = scsi_device_lock.config.direct;
                 let disk_img = scsi_device_lock.disk_image.as_ref().unwrap().clone();
                 drop(scsi_device_lock);
@@ -931,7 +930,7 @@ impl ScsiCmdHandler {
                     Arc::new(Mutex::new(scsi_req.clone())),
                 );
                 if let Some(ref mut aio) = self.aio {
-                    scsi_req.execute(aio, &disk_img, direct, aio_type, true, scsicompletecb)?;
+                    scsi_req.execute(aio, &disk_img, direct, true, scsicompletecb)?;
                 }
             }
         }
@@ -957,7 +956,10 @@ impl ScsiCmdHandler {
     }
 
     fn build_aio(&self) -> Result<Box<Aio<ScsiCompleteCb>>> {
-        Ok(Box::new(Aio::new(Arc::new(Self::complete_func), None)?))
+        Ok(Box::new(Aio::new(
+            Arc::new(Self::complete_func),
+            AioEngine::Off,
+        )?))
     }
 }
 

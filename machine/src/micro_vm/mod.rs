@@ -30,7 +30,7 @@
 
 pub mod error;
 pub use error::MicroVmError;
-use util::aio::AIO_NATIVE;
+use util::aio::AioEngine;
 
 mod mem_layout;
 mod syscall;
@@ -1167,9 +1167,9 @@ impl DeviceInterface for LightMachine {
             socket_path: None,
             // TODO Add aio option by qmp, now we set it based on "direct".
             aio: if direct {
-                Some(String::from(AIO_NATIVE))
+                AioEngine::Native
             } else {
-                None
+                AioEngine::Off
             },
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
         };

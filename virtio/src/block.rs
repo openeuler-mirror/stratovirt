@@ -42,7 +42,7 @@ use migration::{
     StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
-use util::aio::{iov_from_buf_direct, raw_datasync, Aio, AioCb, Iovec, OpCode, AIO_NATIVE};
+use util::aio::{iov_from_buf_direct, raw_datasync, Aio, AioCb, AioEngine, Iovec, OpCode};
 use util::byte_code::ByteCode;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
@@ -68,7 +68,7 @@ const MAX_NUM_MERGE_BYTES: u64 = i32::MAX as u64;
 /// Max time for every round of process queue.
 const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
 
-type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, Option<String>);
+type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, AioEngine);
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -300,36 +300,20 @@ impl Request {
 
         let aio = &mut iohandler.aio;
         let serial_num = &iohandler.serial_num;
-        let aio_type = &iohandler.aio_type;
-        let direct = iohandler.direct;
         match request_type {
             VIRTIO_BLK_T_IN => {
                 aiocb.opcode = OpCode::Preadv;
-                if aio_type.is_some() {
-                    aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
-                        "Failed to process block request for reading asynchronously"
-                    })?;
-                } else {
-                    aio.rw_sync(aiocb).with_context(|| {
-                        "Failed to process block request for reading synchronously"
-                    })?;
-                }
+                aio.submit_request(aiocb)
+                    .with_context(|| "Failed to process block request for reading")?;
             }
             VIRTIO_BLK_T_OUT => {
                 aiocb.opcode = OpCode::Pwritev;
-                if aio_type.is_some() {
-                    aio.rw_aio(aiocb, SECTOR_SIZE, direct).with_context(|| {
-                        "Failed to process block request for writing asynchronously"
-                    })?;
-                } else {
-                    aio.rw_sync(aiocb).with_context(|| {
-                        "Failed to process block request for writing synchronously"
-                    })?;
-                }
+                aio.submit_request(aiocb)
+                    .with_context(|| "Failed to process block request for writing")?;
             }
             VIRTIO_BLK_T_FLUSH => {
                 aiocb.opcode = OpCode::Fdsync;
-                aio.flush_sync(aiocb)
+                aio.submit_request(aiocb)
                     .with_context(|| "Failed to process block request for flushing")?;
             }
             VIRTIO_BLK_T_GET_ID => {
@@ -396,8 +380,6 @@ struct BlockIoHandler {
     serial_num: Option<String>,
     /// If use direct access io.
     direct: bool,
-    /// Async IO type.
-    aio_type: Option<String>,
     /// Aio context.
     aio: Box<Aio<AioCompleteCb>>,
     /// Bit mask of features negotiated by the backend and the frontend.
@@ -541,6 +523,8 @@ impl BlockIoHandler {
             if let Some(disk_img) = self.disk_image.as_ref() {
                 let aiocb = AioCb {
                     last_aio: req_index == last_aio_req_index,
+                    direct: self.direct,
+                    sector_size: SECTOR_SIZE,
                     file_fd: disk_img.as_raw_fd(),
                     opcode: OpCode::Noop,
                     iovec: Vec::new(),
@@ -646,7 +630,7 @@ impl BlockIoHandler {
     }
 
     fn aio_complete_handler(&mut self) -> Result<bool> {
-        self.aio.handle().map_err(|e| {
+        self.aio.handle_complete().map_err(|e| {
             report_virtio_error(
                 self.interrupt_cb.clone(),
                 self.driver_features,
@@ -657,13 +641,14 @@ impl BlockIoHandler {
     }
 
     fn update_evt_handler(&mut self) {
+        let aio_engine;
         match self.receiver.recv() {
-            Ok((image, disk_sectors, serial_num, direct, aio_type)) => {
+            Ok((image, disk_sectors, serial_num, direct, aio)) => {
                 self.disk_sectors = disk_sectors;
                 self.disk_image = image;
                 self.serial_num = serial_num;
                 self.direct = direct;
-                self.aio_type = aio_type;
+                aio_engine = aio;
             }
             Err(e) => {
                 error!("Failed to receive config in updating handler {:?}", e);
@@ -671,9 +656,26 @@ impl BlockIoHandler {
                 self.disk_image = None;
                 self.serial_num = None;
                 self.direct = true;
-                self.aio_type = Some(String::from(AIO_NATIVE));
+                aio_engine = AioEngine::Native;
             }
         };
+
+        if self.aio.get_engine() != aio_engine {
+            match Aio::new(Arc::new(Self::complete_func), aio_engine) {
+                Ok(aio) => {
+                    self.aio = Box::new(aio);
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    report_virtio_error(
+                        self.interrupt_cb.clone(),
+                        self.driver_features,
+                        &self.device_broken,
+                    );
+                    return;
+                }
+            }
+        }
 
         if let Err(e) = (self.interrupt_cb)(&VirtioInterruptType::Config, None, false) {
             error!(
@@ -752,15 +754,19 @@ impl EventNotifierHelper for BlockIoHandler {
             if h_lock.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
-            let done = h_lock
-                .process_queue()
-                .with_context(|| "Failed to handle block IO")
-                .ok()?;
-            if done {
-                Some(Vec::new())
-            } else {
-                None
-            }
+            return match h_lock.process_queue() {
+                Ok(done) => {
+                    if done {
+                        Some(Vec::new())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to handle block IO {:?}", e);
+                    None
+                }
+            };
         });
         notifiers.push(build_event_notifier(
             handler_raw.queue_evt.as_raw_fd(),
@@ -807,15 +813,22 @@ impl EventNotifierHelper for BlockIoHandler {
             if h_lock.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
-            let done = h_lock
-                .aio_complete_handler()
-                .with_context(|| "Failed to handle aio")
-                .ok()?;
-            if done {
-                Some(Vec::new())
-            } else {
-                None
+            if h_lock.aio.get_engine() == AioEngine::Off {
+                return None;
             }
+            return match h_lock.aio_complete_handler() {
+                Ok(done) => {
+                    if done {
+                        Some(Vec::new())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to handle aio {:?}", e);
+                    None
+                }
+            };
         });
         notifiers.push(build_event_notifier(
             handler_raw.aio.fd.as_raw_fd(),
@@ -1099,7 +1112,7 @@ impl VirtioDevice for Block {
             senders.push(sender);
 
             let update_evt = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
-            let engine = self.blk_cfg.aio.as_ref();
+            let engine = self.blk_cfg.aio;
             let handler = BlockIoHandler {
                 queue: queue.clone(),
                 queue_evt: queue_evts.remove(0),
@@ -1107,7 +1120,6 @@ impl VirtioDevice for Block {
                 disk_image: self.disk_image.clone(),
                 disk_sectors: self.disk_sectors,
                 direct: self.blk_cfg.direct,
-                aio_type: self.blk_cfg.aio.clone(),
                 serial_num: self.blk_cfg.serial_num.clone(),
                 aio: Box::new(Aio::new(Arc::new(BlockIoHandler::complete_func), engine)?),
                 driver_features: self.state.driver_features,
@@ -1166,7 +1178,7 @@ impl VirtioDevice for Block {
                         self.disk_sectors,
                         self.blk_cfg.serial_num.clone(),
                         self.blk_cfg.direct,
-                        self.blk_cfg.aio.clone(),
+                        self.blk_cfg.aio,
                     ))
                     .with_context(|| anyhow!(VirtioError::ChannelSend("image fd".to_string())))?;
             }
