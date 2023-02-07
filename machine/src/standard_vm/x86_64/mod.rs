@@ -185,20 +185,24 @@ impl StdMachine {
         let mut locked_vm = vm.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            Result::with_context(cpu.kick(), || format!("Failed to kick vcpu{}", cpu_index))?;
+            cpu.pause()
+                .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
 
             cpu.set_to_boot_state();
         }
 
-        Result::with_context(locked_vm.reset_all_devices(), || {
-            "Fail to reset all devices"
-        })?;
-        Result::with_context(locked_vm.reset_fwcfg_boot_order(), || {
-            "Fail to update boot order information to FwCfg device"
-        })?;
+        locked_vm
+            .reset_all_devices()
+            .with_context(|| "Fail to reset all devices")?;
+        locked_vm
+            .reset_fwcfg_boot_order()
+            .with_context(|| "Fail to update boot order information to FwCfg device")?;
 
         for (cpu_index, cpu) in locked_vm.cpus.iter().enumerate() {
-            Result::with_context(cpu.reset(), || format!("Failed to reset vcpu{}", cpu_index))?;
+            cpu.reset()
+                .with_context(|| format!("Failed to reset vcpu{}", cpu_index))?;
+            cpu.resume()
+                .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
         }
 
         Ok(())
