@@ -238,13 +238,24 @@ mod test {
     fn test_set_year_20xx() {
         let mut rtc = PL031::default();
         // Set rtc time: 2013-11-13 02:04:56.
-        let wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
+        let mut wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
         let mut data = [0; 4];
         LittleEndian::write_u32(&mut data, wtick);
         PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
 
         PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
-        let rtick = LittleEndian::read_u32(&data);
+        let mut rtick = LittleEndian::read_u32(&data);
+
+        assert!((rtick - wtick) <= WIGGLE);
+
+        // Set rtc time: 2080-11-13 02:04:56, ensure there is no year-2080 overflow.
+        wtick = mktime64(2080, 11, 13, 2, 4, 56) as u32;
+        data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_DR);
+        rtick = LittleEndian::read_u32(&data);
 
         assert!((rtick - wtick) <= WIGGLE);
     }
