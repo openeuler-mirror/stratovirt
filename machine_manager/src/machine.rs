@@ -175,6 +175,9 @@ pub trait DeviceInterface {
     /// Query balloon's size.
     fn query_balloon(&self) -> Response;
 
+    /// Query the info of vnc server.
+    fn query_vnc(&self) -> Response;
+
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
 
@@ -293,6 +296,7 @@ pub trait DeviceInterface {
             ("nec-usb-xhci", "base-xhci"),
             ("usb-tablet", "usb-hid"),
             ("usb-kbd", "usb-hid"),
+            ("virtio-gpu-pci", "virtio-gpu"),
         ];
 
         for list in list_types {

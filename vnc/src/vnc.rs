@@ -38,6 +38,7 @@ use log::error;
 use machine_manager::{
     config::{ObjectConfig, VncConfig},
     event_loop::EventLoop,
+    qmp::qmp_schema::{VncClientInfo, VncInfo},
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -356,6 +357,30 @@ fn start_vnc_thread() -> Result<()> {
 /// Add a vnc server during initialization.
 fn add_vnc_server(server: Arc<VncServer>) {
     VNC_SERVERS.lock().unwrap().push(server);
+}
+
+/// Qmp: return the information about current VNC server.
+pub fn qmp_query_vnc() -> Option<VncInfo> {
+    let mut vnc_info = VncInfo::default();
+    if VNC_SERVERS.lock().unwrap().is_empty() {
+        vnc_info.enabled = false;
+        return Some(vnc_info);
+    }
+    vnc_info.enabled = true;
+    let server = VNC_SERVERS.lock().unwrap()[0].clone();
+    vnc_info.family = "ipv4".to_string();
+
+    let mut locked_handler = server.client_handlers.lock().unwrap();
+    for client in locked_handler.values_mut() {
+        let mut client_info = VncClientInfo {
+            host: client.addr.clone(),
+            ..Default::default()
+        };
+        client_info.family = "ipv4".to_string();
+        vnc_info.clients.push(client_info);
+    }
+
+    Some(vnc_info)
 }
 
 /// Set dirty in bitmap.
