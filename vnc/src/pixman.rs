@@ -162,15 +162,15 @@ pub fn unref_pixman_image(image: *mut pixman_image_t) {
     unsafe { pixman_image_unref(image as *mut pixman_image_t) };
 }
 
-pub enum QemuColorNames {
-    QemuColorBlack = 0,
-    QemuColorBlue = 1,
-    QemuColorGreen = 2,
-    QemuColorCyan = 3,
-    QemuColorRed = 4,
-    QemuColorMagenta = 5,
-    QemuColorYellow = 6,
-    QemuColorWhite = 7,
+pub enum ColorNames {
+    ColorBlack = 0,
+    ColorBlue = 1,
+    ColorGreen = 2,
+    ColorCyan = 3,
+    ColorRed = 4,
+    ColorMagenta = 5,
+    ColorYellow = 6,
+    ColorWhite = 7,
 }
 
 pub const COLOR_TABLE_RGB: [[pixman_color_t; 8]; 2] = [
