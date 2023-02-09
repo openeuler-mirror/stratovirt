@@ -167,6 +167,7 @@ pub enum QmpCommand {
         id: Option<String>,
     },
     #[serde(rename = "query-vnc")]
+    #[strum(serialize = "query-vnc")]
     query_vnc {
         #[serde(default)]
         arguments: query_vnc,
