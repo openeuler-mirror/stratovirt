@@ -12,7 +12,7 @@
 
 use crate::pixman::{
     get_image_height, get_image_width, pixman_glyph_from_vgafont, pixman_glyph_render,
-    unref_pixman_image, QemuColorNames, COLOR_TABLE_RGB,
+    unref_pixman_image, ColorNames, COLOR_TABLE_RGB,
 };
 use log::error;
 use machine_manager::event_loop::EventLoop;
@@ -567,8 +567,8 @@ fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySur
         return None;
     }
 
-    let fg = COLOR_TABLE_RGB[0][QemuColorNames::QemuColorWhite as usize];
-    let bg = COLOR_TABLE_RGB[0][QemuColorNames::QemuColorBlack as usize];
+    let fg = COLOR_TABLE_RGB[0][ColorNames::ColorWhite as usize];
+    let bg = COLOR_TABLE_RGB[0][ColorNames::ColorBlack as usize];
     let x = (width / FONT_WIDTH - msg.len() as i32) / 2;
     let y = (height / FONT_HEIGHT - 1) / 2;
 
