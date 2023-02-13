@@ -581,18 +581,16 @@ impl GpuIoHandler {
                     unsafe {
                         let res_width = pixman_image_get_width(res.pixman_image);
                         let res_height = pixman_image_get_height(res.pixman_image);
+                        let mse = scanout.mouse.as_mut().unwrap();
 
-                        if res_width as u32 == scanout.mouse.as_ref().unwrap().width
-                            && res_height as u32 == scanout.mouse.as_ref().unwrap().height
-                        {
-                            let pixels = scanout.mouse.as_ref().unwrap().width
-                                * scanout.mouse.as_ref().unwrap().height;
+                        if res_width as u32 == mse.width && res_height as u32 == mse.height {
+                            let pixels = mse.width * mse.height;
                             let mouse_data_size = pixels * (size_of::<u32>() as u32);
                             let mut con = vec![0u8; 64 * 64 * 4];
                             let res_data_ptr = pixman_image_get_data(res.pixman_image) as *mut u8;
                             ptr::copy(res_data_ptr, con.as_mut_ptr(), mouse_data_size as usize);
-                            scanout.mouse.as_mut().unwrap().data.clear();
-                            scanout.mouse.as_mut().unwrap().data.append(&mut con);
+                            mse.data.clear();
+                            mse.data.append(&mut con);
                         }
                     }
                 }
@@ -1035,6 +1033,7 @@ impl GpuIoHandler {
         &mut self,
         info_transfer: &VirtioGpuTransferToHost2d,
     ) {
+        // SAFETY: unwrap is safe because it has been checked in params check.
         let res = self
             .resources_list
             .iter()
@@ -1391,6 +1390,7 @@ impl Drop for GpuIoHandler {
 
 impl EventNotifierHelper for GpuIoHandler {
     fn internal_notifiers(handler: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
+        let handler_raw = handler.lock().unwrap();
         let mut notifiers = Vec::new();
 
         // Register event notifier for ctrl_queue_evt.
@@ -1404,7 +1404,7 @@ impl EventNotifierHelper for GpuIoHandler {
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            handler.lock().unwrap().ctrl_queue_evt.as_raw_fd(),
+            handler_raw.ctrl_queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
             vec![h],
@@ -1421,7 +1421,7 @@ impl EventNotifierHelper for GpuIoHandler {
         });
         notifiers.push(EventNotifier::new(
             NotifierOperation::AddShared,
-            handler.lock().unwrap().cursor_queue_evt.as_raw_fd(),
+            handler_raw.cursor_queue_evt.as_raw_fd(),
             None,
             EventSet::IN,
             vec![h],
