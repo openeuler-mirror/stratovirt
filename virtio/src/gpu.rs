@@ -474,6 +474,23 @@ fn get_image_hostmem(format: pixman_format_code_t, width: u32, height: u32) -> u
     height as u64 * stride
 }
 
+fn is_rect_in_resouce(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
+    if rect
+        .x_coord
+        .checked_add(rect.width)
+        .filter(|&sum| sum <= res.width)
+        .is_some()
+        && rect
+            .y_coord
+            .checked_add(rect.height)
+            .filter(|&sum| sum <= res.height)
+            .is_some()
+    {
+        return true;
+    }
+    false
+}
+
 impl GpuIoHandler {
     fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
         if header.out_len < size_of::<T>() as u32 {
@@ -697,7 +714,13 @@ impl GpuIoHandler {
 
         res.host_mem =
             get_image_hostmem(pixman_format, info_create_2d.width, info_create_2d.height);
-        if res.host_mem + self.used_hostmem < self.max_hostmem {
+
+        if res
+            .host_mem
+            .checked_add(self.used_hostmem)
+            .filter(|&sum| sum <= self.max_hostmem)
+            .is_some()
+        {
             res.pixman_image = unsafe {
                 pixman_image_create_bits(
                     pixman_format,
@@ -795,14 +818,9 @@ impl GpuIoHandler {
             .position(|x| x.resource_id == info_set_scanout.resource_id)
         {
             let res = &self.resources_list[res_index];
-            if info_set_scanout.rect.x_coord > res.width
-                || info_set_scanout.rect.y_coord > res.height
-                || info_set_scanout.rect.width > res.width
-                || info_set_scanout.rect.height > res.height
-                || info_set_scanout.rect.width < 16
+            if info_set_scanout.rect.width < 16
                 || info_set_scanout.rect.height < 16
-                || info_set_scanout.rect.width + info_set_scanout.rect.x_coord > res.width
-                || info_set_scanout.rect.height + info_set_scanout.rect.y_coord > res.height
+                || !is_rect_in_resouce(&info_set_scanout.rect, res)
             {
                 error!(
                     "GuestError: The resource (id: {} width: {} height: {}) is outfit for scanout (id: {} width: {} height: {} x_coord: {} y_coord: {}).",
@@ -903,13 +921,7 @@ impl GpuIoHandler {
             .position(|x| x.resource_id == info_res_flush.resource_id)
         {
             let res = &self.resources_list[res_index];
-            if info_res_flush.rect.x_coord > res.width
-                || info_res_flush.rect.y_coord > res.height
-                || info_res_flush.rect.width > res.width
-                || info_res_flush.rect.height > res.height
-                || info_res_flush.rect.width + info_res_flush.rect.x_coord > res.width
-                || info_res_flush.rect.height + info_res_flush.rect.y_coord > res.height
-            {
+            if !is_rect_in_resouce(&info_res_flush.rect, res) {
                 error!(
                     "GuestError: The resource (id: {} width: {} height: {}) is outfit for flush rectangle (width: {} height: {} x_coord: {} y_coord: {}).",
                     res.resource_id, res.width, res.height,
@@ -1005,13 +1017,7 @@ impl GpuIoHandler {
             return VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
         }
 
-        if info_transfer.rect.x_coord > res.width
-            || info_transfer.rect.y_coord > res.height
-            || info_transfer.rect.width > res.width
-            || info_transfer.rect.height > res.height
-            || info_transfer.rect.width + info_transfer.rect.x_coord > res.width
-            || info_transfer.rect.height + info_transfer.rect.y_coord > res.height
-        {
+        if !is_rect_in_resouce(&info_transfer.rect, res) {
             error!(
                 "GuestError: The resource (id: {} width: {} height: {}) is outfit for transfer rectangle (offset: {} width: {} height: {} x_coord: {} y_coord: {}).",
                 res.resource_id,
