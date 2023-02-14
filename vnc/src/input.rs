@@ -194,7 +194,7 @@ impl ClientIoHandler {
         if (ASCII_A..=ASCII_Z).contains(&keysym) {
             keysym += UPPERCASE_TO_LOWERCASE;
         }
-        let mut locked_kbd_state = server.keyboard_state.lock().unwrap();
+        let mut kbd_state = server.keyboard_state.borrow_mut();
         let dcl_id = self.server.display_listener.lock().unwrap().dcl_id;
 
         let keycode: u16 = match server.keysym2keycode.get(&(keysym as u16)) {
@@ -207,18 +207,17 @@ impl ClientIoHandler {
         if (KEYCODE_1..KEYCODE_9 + 1).contains(&keycode)
             && down
             && dcl_id.is_some()
-            && locked_kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
-            && locked_kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
+            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModCtrl)
+            && kbd_state.keyboard_modifier_get(KeyboardModifier::KeyModAlt)
         {
-            locked_kbd_state.keyboard_state_reset();
+            kbd_state.keyboard_state_reset();
             console_select(Some((keycode - KEYCODE_1) as usize));
         }
 
-        if let Err(e) = locked_kbd_state.keyboard_state_update(keycode, down) {
+        if let Err(e) = kbd_state.keyboard_state_update(keycode, down) {
             error!("{:?}", e);
             return;
         }
-        drop(locked_kbd_state);
         do_key_event(keycode, down);
 
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);

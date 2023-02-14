@@ -12,7 +12,7 @@
 
 use crate::{
     auth::SubAuthState,
-    client::{vnc_write, ClientIoHandler},
+    client::{vnc_flush, vnc_write, ClientIoHandler},
     VncError,
 };
 use anyhow::{anyhow, Result};
@@ -72,14 +72,14 @@ impl ClientIoHandler {
     pub fn client_vencrypt_init(&mut self) -> Result<()> {
         let buf = self.read_incoming_msg();
         let client = self.client.clone();
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let subauth = self.server.security_type.borrow().subauth;
         // VeNCrypt version 0.2.
         if buf[0] != 0 || buf[1] != 2 {
             let mut buf = Vec::new();
             // Reject version.
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
             vnc_write(&client, buf);
-            self.flush();
+            vnc_flush(&client);
             return Err(anyhow!(VncError::UnsupportRFBProtocolVersion));
         } else {
             let mut buf = Vec::new();
@@ -92,7 +92,7 @@ impl ClientIoHandler {
             vnc_write(&client, buf);
         }
 
-        self.flush();
+        vnc_flush(&client);
         self.update_event_handler(4, ClientIoHandler::client_vencrypt_auth);
         Ok(())
     }
@@ -103,14 +103,14 @@ impl ClientIoHandler {
         let buf = [buf[0], buf[1], buf[2], buf[3]];
         let auth = u32::from_be_bytes(buf);
         let client = self.client.clone();
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let subauth = self.server.security_type.borrow().subauth;
 
         if auth != subauth as u32 {
             let mut buf = Vec::new();
             // Reject auth.
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
             vnc_write(&client, buf);
-            self.flush();
+            vnc_flush(&client);
             error!("Authentication failed");
             return Err(anyhow!(VncError::AuthFailed(String::from(
                 "Authentication failed"
@@ -121,9 +121,9 @@ impl ClientIoHandler {
         // Accept auth.
         buf.append(&mut (1_u8).to_be_bytes().to_vec());
         vnc_write(&client, buf);
-        self.flush();
+        vnc_flush(&client);
 
-        if let Some(tls_config) = self.server.security_type.lock().unwrap().tls_config.clone() {
+        if let Some(tls_config) = self.server.security_type.borrow().tls_config.clone() {
             match rustls::ServerConnection::new(tls_config) {
                 Ok(tls_conn) => {
                     self.tls_conn = Some(tls_conn);
@@ -200,7 +200,7 @@ impl ClientIoHandler {
     }
 
     fn handle_vencrypt_subauth(&mut self) -> Result<()> {
-        let subauth = self.server.security_type.lock().unwrap().subauth;
+        let subauth = self.server.security_type.borrow().subauth;
         let client = self.client.clone();
         match subauth {
             SubAuthState::VncAuthVencryptX509Sasl => {
@@ -211,7 +211,7 @@ impl ClientIoHandler {
             SubAuthState::VncAuthVencryptX509None => {
                 let buf = [0u8; 4];
                 vnc_write(&client, buf.to_vec());
-                self.flush();
+                vnc_flush(&client);
                 self.expect = 1;
                 self.msg_handler = ClientIoHandler::handle_client_init;
             }
@@ -224,7 +224,7 @@ impl ClientIoHandler {
                     buf.append(&mut (err_msg.len() as u32).to_be_bytes().to_vec());
                     buf.append(&mut err_msg.as_bytes().to_vec());
                     vnc_write(&client, buf);
-                    self.flush();
+                    vnc_flush(&client);
                 }
                 error!("Unsupported subauth type");
                 return Err(anyhow!(VncError::MakeTlsConnectionFailed(String::from(
@@ -254,7 +254,7 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
         };
         let mut client_auth_roots = RootCertStore::empty();
         for root in roots {
-            client_auth_roots.add(&root).unwrap();
+            client_auth_roots.add(&root)?;
         }
         if CLIENT_REQUIRE_AUTH {
             AllowAnyAuthenticatedClient::new(client_auth_roots)
@@ -294,7 +294,7 @@ pub fn make_vencrypt_config(args: &TlsCreds) -> Result<Arc<rustls::ServerConfig>
     // Limit data size in one time.
     config.session_storage = rustls::server::ServerSessionMemoryCache::new(MAXIMUM_SESSION_STORAGE);
     // Tickets.
-    config.ticketer = rustls::Ticketer::new().unwrap();
+    config.ticketer = rustls::Ticketer::new()?;
     config.alpn_protocols = Vec::new();
 
     Ok(Arc::new(config))
@@ -349,8 +349,7 @@ fn load_certs(filepath: &str) -> Result<Vec<rustls::Certificate>> {
         }
     };
     let mut reader = BufReader::new(certfile);
-    let certs = rustls_pemfile::certs(&mut reader)
-        .unwrap()
+    let certs = rustls_pemfile::certs(&mut reader)?
         .iter()
         .map(|v| rustls::Certificate(v.clone()))
         .collect();

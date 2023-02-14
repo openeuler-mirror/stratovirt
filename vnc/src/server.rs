@@ -14,7 +14,7 @@ use crate::{
     auth::SaslAuth,
     auth::{AuthState, SaslConfig, SubAuthState},
     client::vnc_write,
-    client::{ClientIoHandler, ClientState},
+    client::{vnc_flush, ClientIoHandler, ClientState},
     console::DisplayMouse,
     input::KeyBoardState,
     pixman::{
@@ -36,6 +36,7 @@ use machine_manager::{
     event_loop::EventLoop,
 };
 use std::{
+    cell::RefCell,
     cmp,
     collections::HashMap,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -63,9 +64,9 @@ pub struct VncServer {
     /// Client io handler.
     pub client_handlers: Arc<Mutex<HashMap<String, Arc<ClientState>>>>,
     /// Security Type for connection.
-    pub security_type: Arc<Mutex<SecurityType>>,
+    pub security_type: Rc<RefCell<SecurityType>>,
     /// keyboard status.
-    pub keyboard_state: Arc<Mutex<KeyBoardState>>,
+    pub keyboard_state: Rc<RefCell<KeyBoardState>>,
     /// Mapping ASCII to keycode.
     pub keysym2keycode: HashMap<u16, u16>,
     /// Image data of surface.
@@ -85,12 +86,12 @@ impl VncServer {
     /// Create a new VncServer.
     pub fn new(
         guest_image: *mut pixman_image_t,
-        keyboard_state: Arc<Mutex<KeyBoardState>>,
+        keyboard_state: Rc<RefCell<KeyBoardState>>,
         keysym2keycode: HashMap<u16, u16>,
     ) -> Self {
         VncServer {
             client_handlers: Arc::new(Mutex::new(HashMap::new())),
-            security_type: Arc::new(Mutex::new(SecurityType::default())),
+            security_type: Rc::new(RefCell::new(SecurityType::default())),
             keyboard_state,
             keysym2keycode,
             vnc_surface: Arc::new(Mutex::new(VncSurface::new(guest_image))),
@@ -341,11 +342,15 @@ impl VncSurface {
     /// Return the number of dirty area.
     pub fn update_server_image(&mut self) -> i32 {
         let mut dirty_num = 0;
-        let height = self.get_min_height();
+        let height = self.get_min_height() as usize;
         let g_bpl = self.guest_dirty_bitmap.vol() / MAX_WINDOW_HEIGHT as usize;
+        let total_dirty_bits = height.checked_mul(g_bpl).unwrap_or(0);
+        let mut offset = self
+            .guest_dirty_bitmap
+            .find_next_bit(0)
+            .unwrap_or(total_dirty_bits);
 
-        let mut offset = self.guest_dirty_bitmap.find_next_bit(0).unwrap();
-        if offset >= (height as usize) * g_bpl {
+        if offset >= total_dirty_bits {
             return dirty_num;
         }
 
@@ -390,8 +395,11 @@ impl VncSurface {
             g_info.ptr = (g_info.ptr as usize + x * cmp_bytes) as *mut u8;
             dirty_num += self.update_one_line(x, y, &mut s_info, &mut g_info, cmp_bytes);
             y += 1;
-            offset = self.guest_dirty_bitmap.find_next_bit(y * g_bpl).unwrap();
-            if offset >= (height as usize) * g_bpl {
+            offset = self
+                .guest_dirty_bitmap
+                .find_next_bit(y * g_bpl)
+                .unwrap_or(total_dirty_bits);
+            if offset >= total_dirty_bits {
                 break;
             }
         }
@@ -423,7 +431,7 @@ impl VncSurface {
             if !self
                 .guest_dirty_bitmap
                 .contain(x + y * VNC_BITMAP_WIDTH as usize)
-                .unwrap()
+                .unwrap_or(false)
             {
                 x += 1;
                 g_info.ptr = (g_info.ptr as usize + cmp_bytes) as *mut u8;
@@ -432,7 +440,7 @@ impl VncSurface {
             }
             self.guest_dirty_bitmap
                 .clear(x + y * VNC_BITMAP_WIDTH as usize)
-                .unwrap();
+                .unwrap_or_else(|e| error!("Error occurrs during clearing the bitmap: {:?}", e));
             let mut _cmp_bytes = cmp_bytes;
             if (x + 1) * cmp_bytes > line_bytes as usize {
                 _cmp_bytes = line_bytes as usize - x * cmp_bytes;
@@ -509,7 +517,7 @@ fn set_dirty_for_each_clients(x: usize, y: usize) {
             .lock()
             .unwrap()
             .set(x + y * VNC_BITMAP_WIDTH as usize)
-            .unwrap();
+            .unwrap_or_else(|e| error!("{:?}", e));
     }
 }
 
@@ -537,7 +545,7 @@ pub fn handle_connection(
         server.clone(),
     )));
     vnc_write(&client, "RFB 003.008\n".as_bytes().to_vec());
-    client_io.lock().unwrap().flush();
+    vnc_flush(&client);
     server
         .client_handlers
         .lock()
@@ -564,11 +572,10 @@ pub fn make_server_config(
     // Set security config.
     server
         .security_type
-        .lock()
-        .unwrap()
+        .borrow_mut()
         .set_security_config(vnc_cfg, object)?;
     // Set auth type.
-    server.security_type.lock().unwrap().set_auth()?;
+    server.security_type.borrow_mut().set_auth()?;
 
     Ok(())
 }

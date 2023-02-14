@@ -12,7 +12,7 @@
 
 use crate::{
     client::{
-        desktop_resize, display_cursor_define, get_rects, set_color_depth, vnc_flush_notify,
+        desktop_resize, display_cursor_define, get_rects, set_color_depth, vnc_flush,
         vnc_update_output_throttle, vnc_write, DisplayMode, RectInfo, Rectangle, ServerMsg,
         ENCODING_HEXTILE, ENCODING_RAW,
     },
@@ -42,6 +42,7 @@ use machine_manager::{
 };
 use once_cell::sync::Lazy;
 use std::{
+    cell::RefCell,
     cmp,
     collections::HashMap,
     net::TcpListener,
@@ -65,6 +66,7 @@ pub const MAX_WINDOW_HEIGHT: u16 = 2048;
 pub const DIRTY_WIDTH_BITS: u16 = MAX_WINDOW_WIDTH / DIRTY_PIXELS_NUM;
 pub const VNC_BITMAP_WIDTH: u64 =
     round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) * u64::BITS as u64;
+pub const MAX_IMAGE_SIZE: i32 = 65535;
 
 /// Output throttle scale.
 pub const OUTPUT_THROTTLE_SCALE: i32 = 5;
@@ -120,7 +122,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             // Cursor define.
             display_cursor_define(client, &server, &mut buf);
             vnc_write(client, buf);
-            vnc_flush_notify(client);
+            vnc_flush(client);
             client.dirty_bitmap.lock().unwrap().clear_all();
             set_area_dirty(
                 &mut client.dirty_bitmap.lock().unwrap(),
@@ -162,10 +164,9 @@ impl DisplayChangeListenerOperations for VncInterface {
         }
         dcl.update_interval = update_interval;
 
-        let mut _rects: i32 = 0;
         let mut locked_handlers = server.client_handlers.lock().unwrap();
         for client in locked_handlers.values_mut() {
-            _rects += get_rects(client, &server, dirty_num);
+            get_rects(client, dirty_num);
         }
     }
 
@@ -232,7 +233,7 @@ impl DisplayChangeListenerOperations for VncInterface {
             let mut buf: Vec<u8> = Vec::new();
             display_cursor_define(client, &server, &mut buf);
             vnc_write(client, buf);
-            vnc_flush_notify(client);
+            vnc_flush(client);
         }
     }
 }
@@ -271,8 +272,8 @@ pub fn vnc_init(vnc: &Option<VncConfig>, object: &ObjectConfig) -> Result<()> {
         keysym2keycode.insert(k, v);
     }
     // Record keyboard state.
-    let keyboard_state: Arc<Mutex<KeyBoardState>> =
-        Arc::new(Mutex::new(KeyBoardState::new(max_keycode as usize)));
+    let keyboard_state: Rc<RefCell<KeyBoardState>> =
+        Rc::new(RefCell::new(KeyBoardState::new(max_keycode as usize)));
 
     let server = Arc::new(VncServer::new(
         get_client_image(),
@@ -329,11 +330,11 @@ fn start_vnc_thread() -> Result<()> {
             buf.append(&mut (0_u8).to_be_bytes().to_vec());
             buf.append(&mut [0_u8; 2].to_vec());
 
-            let locked_surface = server.vnc_surface.lock().unwrap();
-            let width = get_image_width(locked_surface.server_image);
-            let height = get_image_height(locked_surface.server_image);
             for rect in rect_info.rects.iter_mut() {
+                let locked_surface = server.vnc_surface.lock().unwrap();
                 let dpm = rect_info.client.client_dpm.lock().unwrap().clone();
+                let width = dpm.client_width;
+                let height = dpm.client_height;
                 if check_rect(rect, width, height) {
                     let n =
                         send_framebuffer_update(locked_surface.server_image, rect, &dpm, &mut buf);
@@ -344,13 +345,11 @@ fn start_vnc_thread() -> Result<()> {
             }
             buf[2] = (num_rects >> 8) as u8;
             buf[3] = num_rects as u8;
-            drop(locked_surface);
 
             let client = rect_info.client;
             vnc_write(&client, buf);
-            vnc_flush_notify(&client);
-        })
-        .unwrap();
+            vnc_flush(&client);
+        })?;
     Ok(())
 }
 
@@ -466,11 +465,20 @@ pub fn update_server_surface(server: &Arc<VncServer>) {
 
 /// Check if the suface for VncClient is need update
 fn check_surface(locked_vnc_surface: &mut VncSurface, surface: &DisplaySurface) -> bool {
+    let guest_width = get_image_width(surface.image);
+    let guest_height = get_image_height(surface.image);
+    let server_width = get_image_width(locked_vnc_surface.server_image);
+    let server_height = get_image_height(locked_vnc_surface.server_image);
+    if !(0..=MAX_IMAGE_SIZE).contains(&guest_width) || !(0..=MAX_IMAGE_SIZE).contains(&guest_height)
+    {
+        return false;
+    }
+
     if surface.image.is_null()
         || locked_vnc_surface.server_image.is_null()
         || locked_vnc_surface.guest_format != surface.format
-        || get_image_width(locked_vnc_surface.server_image) != get_image_width(surface.image)
-        || get_image_height(locked_vnc_surface.server_image) != get_image_height(surface.image)
+        || guest_width != server_width
+        || guest_height != server_height
     {
         return true;
     }
@@ -480,21 +488,13 @@ fn check_surface(locked_vnc_surface: &mut VncSurface, surface: &DisplaySurface) 
 
 /// Check if rectangle is in spec
 fn check_rect(rect: &mut Rectangle, width: i32, height: i32) -> bool {
-    if rect.x >= width {
+    if rect.x >= width || rect.y >= height {
         return false;
     }
 
     rect.w = cmp::min(width - rect.x, rect.w);
-    if rect.w == 0 {
-        return false;
-    }
-
-    if rect.y >= height {
-        return false;
-    }
-
     rect.h = cmp::min(height - rect.y, rect.h);
-    if rect.h == 0 {
+    if rect.w <= 0 || rect.h <= 0 {
         return false;
     }
 
