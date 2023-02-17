@@ -34,7 +34,7 @@ use super::super::super::{
     VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ, VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
 };
 use super::super::VhostOps;
-use super::VhostUserClient;
+use super::{VhostBackendType, VhostUserClient};
 use crate::error::VirtioError;
 use anyhow::{anyhow, Context, Result};
 
@@ -113,8 +113,13 @@ impl VirtioDevice for Net {
             .as_ref()
             .map(|path| path.to_string())
             .with_context(|| "vhost-user: socket path is not found")?;
-        let client = VhostUserClient::new(&self.mem_space, &socket_path, self.queue_num() as u64)
-            .with_context(|| {
+        let client = VhostUserClient::new(
+            &self.mem_space,
+            &socket_path,
+            self.queue_num() as u64,
+            VhostBackendType::TypeNet,
+        )
+        .with_context(|| {
             "Failed to create the client which communicates with the server for vhost-user net"
         })?;
         let client = Arc::new(Mutex::new(client));
