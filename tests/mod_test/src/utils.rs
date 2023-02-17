@@ -13,6 +13,8 @@
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 pub fn get_rand_str(size: usize) -> String {
     thread_rng()
@@ -58,4 +60,41 @@ pub fn swap_u64(value: u64) -> u64 {
     let lower_u32 = swap_u32(value as u32) as u64;
     let higher_u32 = swap_u32((value >> 32) as u32) as u64;
     lower_u32 << 32 | higher_u32
+}
+
+pub const TEST_IMAGE_SIZE: u64 = 64 * 1024 * 1024;
+/// Create image file.
+pub fn create_img(size: u64, flag: u8) -> String {
+    let rng_name: String = get_rand_str(8);
+
+    assert!(cfg!(target_os = "linux"));
+
+    let mut image_path = format!("/tmp/stratovirt-{}.img", rng_name);
+    if flag == 1 {
+        image_path = format!("/var/log/stratovirt-{}.img", rng_name);
+    }
+
+    let image_path_of = format!("of={}", &image_path);
+    let image_size_of = format!("bs={}", size);
+    let output = Command::new("dd")
+        .arg("if=/dev/zero")
+        .arg(&image_path_of)
+        .arg(&image_size_of)
+        .arg("count=1")
+        .output()
+        .expect("failed to create image");
+    assert!(output.status.success());
+    image_path
+}
+
+/// Delete image file.
+pub fn cleanup_img(image_path: String) {
+    let img_path = Path::new(&image_path);
+    assert!(img_path.exists());
+
+    let metadata = fs::metadata(img_path).expect("can not get file metadata");
+    let file_type = metadata.file_type();
+    assert!(file_type.is_file());
+
+    fs::remove_file(img_path).expect("lack permissions to remove the file");
 }

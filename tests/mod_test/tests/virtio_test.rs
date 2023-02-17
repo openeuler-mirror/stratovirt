@@ -26,12 +26,12 @@ use mod_test::libdriver::virtio::{
 };
 use mod_test::libdriver::virtio_block::{
     add_blk_request, set_up, tear_down, virtio_blk_read, virtio_blk_request, virtio_blk_write,
-    TestVirtBlkReq, DEFAULT_IO_REQS, REQ_ADDR_LEN, REQ_DATA_LEN, REQ_STATUS_OFFSET,
-    TEST_IMAGE_SIZE, TIMEOUT_US, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT,
+    TestVirtBlkReq, DEFAULT_IO_REQS, REQ_ADDR_LEN, REQ_DATA_LEN, REQ_STATUS_OFFSET, TIMEOUT_US,
+    VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
 };
 use mod_test::libdriver::virtio_pci_modern::{TestVirtioPciDev, VirtioPciCommonCfg};
 use mod_test::libtest::TestState;
+use mod_test::utils::TEST_IMAGE_SIZE;
 
 fn add_request(
     test_state: Rc<RefCell<TestState>>,

@@ -16,18 +16,18 @@ use mod_test::libdriver::malloc::GuestAllocator;
 use mod_test::libdriver::virtio::TestVringDescEntry;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps};
 use mod_test::libdriver::virtio_block::{
-    add_blk_request, create_blk, create_blk_img, set_up, tear_down, virtio_blk_defalut_feature,
-    virtio_blk_read, virtio_blk_request, virtio_blk_write, TestVirtBlkReq, DEFAULT_IO_REQS,
-    REQ_ADDR_LEN, REQ_DATA_LEN, REQ_STATUS_LEN, TEST_IMAGE_SIZE, TIMEOUT_US, VIRTIO_BLK_F_BARRIER,
-    VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_CONFIG_WCE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
-    VIRTIO_BLK_F_GEOMETRY, VIRTIO_BLK_F_LIFETIME, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
-    VIRTIO_BLK_F_SECURE_ERASE, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY,
-    VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
-    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_ILLGEAL, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT,
+    add_blk_request, create_blk, set_up, tear_down, virtio_blk_defalut_feature, virtio_blk_read,
+    virtio_blk_request, virtio_blk_write, TestVirtBlkReq, DEFAULT_IO_REQS, REQ_ADDR_LEN,
+    REQ_DATA_LEN, REQ_STATUS_LEN, TIMEOUT_US, VIRTIO_BLK_F_BARRIER, VIRTIO_BLK_F_BLK_SIZE,
+    VIRTIO_BLK_F_CONFIG_WCE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_GEOMETRY,
+    VIRTIO_BLK_F_LIFETIME, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SECURE_ERASE,
+    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES,
+    VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_FLUSH,
+    VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_ILLGEAL, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::TestState;
+use mod_test::utils::{create_img, TEST_IMAGE_SIZE};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -194,7 +194,7 @@ fn blk_basic() {
 ///   1/2/4: success, 3: failed.
 #[test]
 fn blk_features_negotiate() {
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE, 0));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
     let device_args = Rc::new(String::from(",num-queues=4"));
     let drive_args = Rc::new(String::from(",direct=false,readonly=on"));
     let other_args = Rc::new(String::from(""));
@@ -448,7 +448,7 @@ fn blk_feature_flush() {
 ///   1/2/3: success.
 #[test]
 fn blk_feature_mq() {
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE, 0));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
     let device_args = Rc::new(String::from(",num-queues=4"));
     let drive_args = Rc::new(String::from(",direct=false"));
     let other_args = Rc::new(String::from(""));
@@ -559,7 +559,7 @@ fn blk_feature_mq() {
 ///   1/2/3: success.
 #[test]
 fn blk_all_features() {
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE_1M, 1));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE_1M, 1));
     let device_args = Rc::new(String::from(
         ",multifunction=on,serial=111111,num-queues=4,bootindex=1,iothread=iothread1",
     ));
@@ -615,7 +615,7 @@ fn blk_all_features() {
 #[test]
 fn blk_small_file_511b() {
     let size = 511;
-    let image_path = Rc::new(create_blk_img(size, 1));
+    let image_path = Rc::new(create_img(size, 1));
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=false"));
     let other_args = Rc::new(String::from(""));
@@ -715,7 +715,7 @@ fn blk_small_file_511b() {
 #[test]
 fn blk_serial() {
     let serial_num = String::from("11111111111111111111");
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE, 0));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
     let device_args = Rc::new(format!(",serial={}", serial_num));
     let drive_args = Rc::new(String::from(",direct=false"));
     let other_args = Rc::new(String::from(""));
@@ -772,7 +772,7 @@ fn blk_serial() {
 ///   1/2/3: success.
 #[test]
 fn blk_iops() {
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE, 0));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=false,throttling.iops-total=1"));
     let other_args = Rc::new(String::from(""));
@@ -835,7 +835,7 @@ fn blk_iops() {
 ///   1/2/3: success.
 #[test]
 fn blk_aio_native() {
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE_1M, 1));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE_1M, 1));
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=on,aio=native"));
     let other_args = Rc::new(String::from(""));
@@ -884,7 +884,7 @@ fn blk_aio_native() {
 ///   1/2/3: success.
 #[test]
 fn blk_aio_io_uring() {
-    let image_path = Rc::new(create_blk_img(TEST_IMAGE_SIZE_1M, 1));
+    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE_1M, 1));
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=on,aio=io_uring"));
     let other_args = Rc::new(String::from(""));
