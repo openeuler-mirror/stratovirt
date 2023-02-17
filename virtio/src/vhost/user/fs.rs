@@ -38,7 +38,7 @@ use util::num_ops::read_u32;
 
 use super::super::super::{Queue, VirtioDevice, VIRTIO_TYPE_FS};
 use super::super::{VhostNotify, VhostOps};
-use super::VhostUserClient;
+use super::{VhostBackendType, VhostUserClient};
 use crate::{VirtioInterrupt, VirtioInterruptType};
 use anyhow::{anyhow, Context, Result};
 
@@ -143,10 +143,15 @@ impl VirtioDevice for Fs {
         self.config.num_request_queues = VIRTIO_FS_REQ_QUEUES_NUM as u32;
 
         let queues_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
-        let client = VhostUserClient::new(&self.mem_space, &self.fs_cfg.sock, queues_num as u64)
-            .with_context(|| {
-                "Failed to create the client which communicates with the server for virtio fs"
-            })?;
+        let client = VhostUserClient::new(
+            &self.mem_space,
+            &self.fs_cfg.sock,
+            queues_num as u64,
+            VhostBackendType::TypeFs,
+        )
+        .with_context(|| {
+            "Failed to create the client which communicates with the server for virtio fs"
+        })?;
         let client = Arc::new(Mutex::new(client));
         VhostUserClient::add_event(&client)?;
         self.avail_features = client

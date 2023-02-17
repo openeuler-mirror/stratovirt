@@ -346,6 +346,13 @@ pub struct VhostInflight {
     pub inner: VhostUserInflight,
 }
 
+#[derive(PartialEq)]
+pub enum VhostBackendType {
+    TypeNet,
+    TypeBlock,
+    TypeFs,
+}
+
 /// Struct for communication with the vhost user backend in userspace
 pub struct VhostUserClient {
     client: Arc<Mutex<ClientInternal>>,
@@ -358,10 +365,16 @@ pub struct VhostUserClient {
     pub features: u64,
     reconnecting: bool,
     inflight: Option<VhostInflight>,
+    backend_type: VhostBackendType,
 }
 
 impl VhostUserClient {
-    pub fn new(mem_space: &Arc<AddressSpace>, path: &str, max_queue_num: u64) -> Result<Self> {
+    pub fn new(
+        mem_space: &Arc<AddressSpace>,
+        path: &str,
+        max_queue_num: u64,
+        backend_type: VhostBackendType,
+    ) -> Result<Self> {
         let mut sock = VhostUserSock::new(path);
         sock.domain.connect().with_context(|| {
             format!(
@@ -387,6 +400,7 @@ impl VhostUserClient {
             features: 0,
             reconnecting: false,
             inflight: None,
+            backend_type,
         })
     }
 
@@ -413,6 +427,10 @@ impl VhostUserClient {
 
     /// Set inflight fd, include get inflight fd from vhost and set inflight to vhost.
     pub fn set_inflight(&mut self, queue_num: u16, queue_size: u16) -> Result<()> {
+        if self.backend_type != VhostBackendType::TypeBlock {
+            // Only vhost-user-blk supports inflight fd now.
+            return Ok(());
+        }
         let protocol_feature = self
             .get_protocol_features()
             .with_context(|| "Failed to get protocol features for vhost-user blk")?;
