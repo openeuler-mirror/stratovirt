@@ -24,7 +24,7 @@ use crate::ScsiCntlr::{
 use crate::ScsiDisk::{
     ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
-    SCSI_TYPE_ROM,
+    SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
 use address_space::AddressSpace;
 use byteorder::{BigEndian, ByteOrder};
@@ -481,14 +481,45 @@ impl ScsiRequest {
         scsibus: Arc<Mutex<ScsiBus>>,
         scsidevice: Arc<Mutex<ScsiDevice>>,
     ) -> Result<Self> {
+        let req_lock = req.lock().unwrap();
+        let cdb = req_lock.req.cdb;
+        let req_size = req_lock.data_len;
+
         if let Some(cmd) = scsibus
             .lock()
             .unwrap()
-            .scsi_bus_parse_req_cdb(req.lock().unwrap().req.cdb, scsidevice.clone())
+            .scsi_bus_parse_req_cdb(cdb, scsidevice.clone())
         {
             let ops = cmd.command;
             let opstype = scsi_operation_type(ops);
             let _resid = cmd.xfer;
+
+            if ops == WRITE_10 || ops == READ_10 {
+                let dev_lock = scsidevice.lock().unwrap();
+                let disk_size = dev_lock.disk_sectors << SECTOR_SHIFT;
+                let disk_type = dev_lock.scsi_type;
+                drop(dev_lock);
+                let offset_shift = match disk_type {
+                    SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
+                    _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
+                };
+                let offset = if let Some(off) = cmd.lba.checked_shl(offset_shift) {
+                    off
+                } else {
+                    bail!("Too large offset IO!");
+                };
+
+                if offset
+                    .checked_add(req_size as u64)
+                    .filter(|&off| off <= disk_size)
+                    .is_none()
+                {
+                    bail!(
+                        "Error CDB! ops {}, read/write length {} from {} is larger than disk size {}",
+                        ops, req_size, offset, disk_size,
+                    );
+                }
+            }
 
             Ok(ScsiRequest {
                 cmd,
