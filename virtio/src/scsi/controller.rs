@@ -462,7 +462,7 @@ pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
     desc_index: u16,
     /// Read or Write data, HVA, except resp.
     pub iovec: Vec<Iovec>,
-    data_len: u32,
+    pub data_len: u32,
     _cdb_size: u32,
     _sense_size: u32,
     mode: ScsiXferMode,
