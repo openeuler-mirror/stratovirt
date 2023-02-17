@@ -110,22 +110,6 @@ pub struct ScsiDevice {
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
-impl Default for ScsiDevice {
-    fn default() -> Self {
-        ScsiDevice {
-            config: Default::default(),
-            state: Default::default(),
-            disk_image: None,
-            req_align: 1,
-            buf_align: 1,
-            disk_sectors: 0,
-            block_size: SCSI_DISK_DEFAULT_BLOCK_SIZE,
-            scsi_type: SCSI_TYPE_DISK,
-            parent_bus: Weak::new(),
-            drive_files: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-}
 
 impl ScsiDevice {
     pub fn new(
