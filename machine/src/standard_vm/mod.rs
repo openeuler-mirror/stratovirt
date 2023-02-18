@@ -1482,11 +1482,13 @@ impl DeviceInterface for StdMachine {
         let mut fd = None;
         if args.region_type.eq("rom_device_region") || args.region_type.eq("ram_device_region") {
             if let Some(file_name) = args.device_fd_path {
-                fd = Some(std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&file_name)
-                    .unwrap());
+                fd = Some(
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&file_name)
+                        .unwrap(),
+                );
             }
         }
 

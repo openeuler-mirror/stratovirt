@@ -17,6 +17,7 @@ use std::slice::from_raw_parts;
 use std::{thread, time};
 
 use rand::Rng;
+use util::aio::{aio_probe, AioEngine};
 use util::byte_code::ByteCode;
 use util::offset_of;
 
@@ -354,7 +355,7 @@ impl VirtioScsiTest {
             target,
             lun,
             data_out: None,
-            data_in_length: data_in_length as u32, // Read 1sector data.
+            data_in_length: data_in_length as u32, // Read 1 sector data.
             expect_response: VIRTIO_SCSI_S_OK,
             expect_result_data,
             expect_sense: None,
@@ -1812,34 +1813,37 @@ fn aio_model_test() {
     let target = 0x1;
     let mut lun = 0x2;
     let mut device_vec: Vec<ScsiDeviceConfig> = Vec::new();
-    // Scsi Disk 1. AIO io_uring. Direct false.
-    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
-    device_vec.push(ScsiDeviceConfig {
-        cntlr_id: 0,
-        device_type: ScsiDeviceType::ScsiHd,
-        image_path: image_path.clone(),
-        target: target,
-        lun: lun,
-        read_only: false,
-        direct: false,
-        aio: TestAioType::AioIOUring,
-        serial: None,
-    });
 
-    // Scsi Disk 2. AIO io_uring. Direct true.
-    lun += 1;
-    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1));
-    device_vec.push(ScsiDeviceConfig {
-        cntlr_id: 0,
-        device_type: ScsiDeviceType::ScsiHd,
-        image_path: image_path.clone(),
-        target: target,
-        lun: lun,
-        read_only: false,
-        direct: true,
-        aio: TestAioType::AioIOUring,
-        serial: None,
-    });
+    if aio_probe(AioEngine::IoUring).is_ok() {
+        // Scsi Disk 1. AIO io_uring. Direct false.
+        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0));
+        device_vec.push(ScsiDeviceConfig {
+            cntlr_id: 0,
+            device_type: ScsiDeviceType::ScsiHd,
+            image_path: image_path.clone(),
+            target: target,
+            lun: lun,
+            read_only: false,
+            direct: false,
+            aio: TestAioType::AioIOUring,
+            serial: None,
+        });
+
+        // Scsi Disk 2. AIO io_uring. Direct true.
+        lun += 1;
+        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1));
+        device_vec.push(ScsiDeviceConfig {
+            cntlr_id: 0,
+            device_type: ScsiDeviceType::ScsiHd,
+            image_path: image_path.clone(),
+            target: target,
+            lun: lun,
+            read_only: false,
+            direct: true,
+            aio: TestAioType::AioIOUring,
+            serial: None,
+        });
+    }
 
     // Scsi Disk 3. AIO OFF. Direct true. This is not allowed.
     // Stratovirt will report "low performance expect when use sync io with direct on"
@@ -1861,20 +1865,22 @@ fn aio_model_test() {
     // Scsi Disk 5. AIO native. Direct false. This is not allowed.
     // Stratovirt will report "native aio type should be used with direct on"
 
-    // Scsi Disk 6. AIO native. Direct true.
-    lun += 1;
-    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1));
-    device_vec.push(ScsiDeviceConfig {
-        cntlr_id: 0,
-        device_type: ScsiDeviceType::ScsiHd,
-        image_path: image_path.clone(),
-        target: target,
-        lun: lun,
-        read_only: false,
-        direct: true,
-        aio: TestAioType::AioNative,
-        serial: None,
-    });
+    if aio_probe(AioEngine::Native).is_ok() {
+        // Scsi Disk 6. AIO native. Direct true.
+        lun += 1;
+        let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 1));
+        device_vec.push(ScsiDeviceConfig {
+            cntlr_id: 0,
+            device_type: ScsiDeviceType::ScsiHd,
+            image_path: image_path.clone(),
+            target: target,
+            lun: lun,
+            read_only: false,
+            direct: true,
+            aio: TestAioType::AioNative,
+            serial: None,
+        });
+    }
 
     let (cntlr, state, alloc) = scsi_test_init(cntlrcfg, device_vec.clone());
     let features = virtio_scsi_defalut_feature(cntlr.clone());
