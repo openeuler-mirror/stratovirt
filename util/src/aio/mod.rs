@@ -169,7 +169,7 @@ impl<T: Clone + 'static> Aio<T> {
             }
         }
 
-        return match cb.opcode {
+        match cb.opcode {
             OpCode::Preadv | OpCode::Pwritev => {
                 if self.ctx.is_some() {
                     self.rw_aio(cb)
@@ -179,7 +179,7 @@ impl<T: Clone + 'static> Aio<T> {
             }
             OpCode::Fdsync => self.flush_sync(cb),
             OpCode::Noop => Err(anyhow!("Aio opcode is not specified.")),
-        };
+        }
     }
 
     pub fn handle_complete(&mut self) -> Result<bool> {
