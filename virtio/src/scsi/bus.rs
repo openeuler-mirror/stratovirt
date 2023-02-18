@@ -1067,7 +1067,11 @@ fn scsi_command_emulate_target_inquiry(lun: u16, cmd: &ScsiCommand) -> Result<Ve
         outbuf[2] = 5;
         // HISUP(hierarchical support). Response Data Format(must be 2).
         outbuf[3] = 0x12;
-        outbuf[4] = len as u8 - 5;
+        outbuf[4] = if len <= 5 {
+            bail!("Invalid xfer field in INQUIRY command");
+        } else {
+            len as u8 - 5
+        };
         // SYNC, CMDQUE(the logical unit supports the task management model).
         outbuf[7] = 0x12;
     }
