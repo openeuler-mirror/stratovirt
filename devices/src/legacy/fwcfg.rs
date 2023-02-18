@@ -176,25 +176,6 @@ struct FwCfgFile {
     name: [u8; 56],
 }
 
-impl Eq for FwCfgFile {}
-
-impl PartialEq for FwCfgFile {
-    fn eq(&self, other: &Self) -> bool {
-        self.name.to_vec() == other.name.to_vec()
-    }
-}
-
-impl Default for FwCfgFile {
-    fn default() -> Self {
-        FwCfgFile {
-            size: 0_u32,
-            select: 0_u16,
-            reserved: 0_u16,
-            name: [0_u8; 56],
-        }
-    }
-}
-
 impl FwCfgFile {
     fn new(size: u32, select: u16, name: &str) -> Self {
         let len = std::cmp::min(56, name.len());
