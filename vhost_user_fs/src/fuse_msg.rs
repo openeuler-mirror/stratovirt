@@ -236,7 +236,7 @@ impl FuseBuffer {
         Ok(cstring)
     }
 
-    fn read_slice(
+    pub fn read_slice(
         &mut self,
         sys_mem: &Arc<AddressSpace>,
         dst: &mut [u8],
