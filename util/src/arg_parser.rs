@@ -467,9 +467,13 @@ impl<'a> Arg<'a> {
 
     /// Produce help message for argument.
     fn help_message(&self) -> (String, HelpType) {
+        let mut help_str;
+
         if self.hiddable {
-            (String::new(), HelpType::Hidden)
-        } else if self.short.is_some() {
+            return (String::new(), HelpType::Hidden);
+        }
+
+        if self.short.is_some() {
             let font_str = format!(
                 "{}{}{}, {}{}",
                 FOUR_BLANK,
@@ -478,29 +482,41 @@ impl<'a> Arg<'a> {
                 PREFIX_CHARS_LONG,
                 self.long.unwrap_or("")
             );
-            let mut help_str = format!("{}{}", TWENTY_FOUT_BLANK, self.help.unwrap_or(""));
+            help_str = format!("{}{}", TWENTY_FOUT_BLANK, self.help.unwrap_or(""));
             let font_offset = font_str.len();
             help_str.replace_range(..font_offset, &font_str);
-            (help_str, HelpType::Flags)
-        } else {
-            let font_str = if self.values.is_some() {
-                format!(
-                    "{}{}{} {}...",
-                    EIGHT_BLANK,
-                    PREFIX_CHARS_LONG,
-                    self.long.unwrap(),
-                    self.value_name.unwrap_or(self.name)
-                )
+            return (help_str, HelpType::Flags);
+        }
+
+        if self.long.is_some() || self.opt_long.is_some() {
+            let font_str = if self.long.is_some() {
+                if self.values.is_some() {
+                    format!(
+                        "{}{}{} {}...",
+                        EIGHT_BLANK,
+                        PREFIX_CHARS_LONG,
+                        self.long.unwrap(),
+                        self.value_name.unwrap_or(self.name)
+                    )
+                } else {
+                    format!(
+                        "{}{}{} {}",
+                        EIGHT_BLANK,
+                        PREFIX_CHARS_LONG,
+                        self.long.unwrap(),
+                        self.value_name.unwrap_or(self.name)
+                    )
+                }
             } else {
                 format!(
-                    "{}{}{} {}",
+                    "{}{}{}={}",
                     EIGHT_BLANK,
-                    PREFIX_CHARS_LONG,
-                    self.long.unwrap(),
+                    PREFIX_OPT_LONG,
+                    self.opt_long.unwrap(),
                     self.value_name.unwrap_or(self.name)
                 )
             };
-            let mut help_str = format!(
+            help_str = format!(
                 "{}{}{}{}",
                 TWENTY_FOUT_BLANK,
                 TWENTY_FOUT_BLANK,
@@ -513,8 +529,10 @@ impl<'a> Arg<'a> {
             } else {
                 help_str.replace_range(..font_offset, &font_str);
             }
-            (help_str, HelpType::Optional)
+            return (help_str, HelpType::Optional);
         }
+
+        (String::new(), HelpType::Hidden)
     }
 
     fn possible_value_check(&self, value: &'a str) -> bool {
