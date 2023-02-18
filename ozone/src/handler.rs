@@ -330,6 +330,7 @@ impl OzoneHandler {
 /// Disinfect the process before launching the ozone process.
 fn disinfect_process() -> Result<()> {
     let fd_entries = read_dir(SELF_FD).with_context(|| "Failed to open process fd proc")?;
+    let mut open_fds = vec![];
     for entry in fd_entries {
         if entry.is_err() {
             break;
@@ -339,9 +340,17 @@ fn disinfect_process() -> Result<()> {
         let fd = file_name.parse::<libc::c_int>().unwrap_or(0);
 
         if fd > 2 {
-            syscall::close(fd).with_context(|| format!("Failed to close fd: {}", fd))?;
+            open_fds.push(fd);
         }
     }
+
+    for fd in open_fds {
+        let ret = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if ret != -1 {
+            syscall::close(fd).with_context(|| format!("Failed to close fd: {}", fd))?
+        }
+    }
+
     Ok(())
 }
 
