@@ -30,6 +30,7 @@ use std::{
 
 use address_space::Region;
 use anyhow::Ok;
+use machine_manager::config::DemoDevConfig;
 
 use crate::{
     config::{
@@ -40,11 +41,9 @@ use crate::{
 };
 pub use anyhow::{bail, Result};
 
-//bar[0] for msix and bar[1] for dev mmio mem
-const DEMO_DEV_BAR_NUM: u8 = 2;
-
 pub struct DemoDev {
     name: String,
+    cmd_cfg: DemoDevConfig,
     config: PciConfig,
     mem_region: Region,
     devfn: u8,
@@ -53,10 +52,11 @@ pub struct DemoDev {
 }
 
 impl DemoDev {
-    pub fn new(name: String, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+    pub fn new(cfg: DemoDevConfig, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
         DemoDev {
-            name,
-            config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, DEMO_DEV_BAR_NUM),
+            name: cfg.id.clone(),
+            cmd_cfg: cfg.clone(),
+            config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
             mem_region: Region::init_container_region(u64::max_value() >> 10),
             devfn,
             parent_bus,
@@ -91,9 +91,26 @@ impl PciDevOps for DemoDev {
         le_write_u16(config, SUB_CLASS_CODE as usize, CLASS_CODE_DEMO)?;
         config[HEADER_TYPE as usize] = HEADER_TYPE_ENDPOINT;
 
-        let region = Region::init_container_region(0x1000);
-        self.config
-            .register_bar(1, region, RegionType::Mem64Bit, false, 0x1000)?;
+        let region_size = self
+            .cmd_cfg
+            .bar_size
+            .checked_mul(self.cmd_cfg.bar_num as u64);
+        if region_size.is_none() {
+            bail!(
+                "bar size overflow with 0x{:x} * 0x{:x}",
+                self.cmd_cfg.bar_size,
+                self.cmd_cfg.bar_num
+            );
+        }
+        let region_size = region_size.unwrap();
+        let region = Region::init_container_region(region_size as u64);
+        self.config.register_bar(
+            1,
+            region,
+            RegionType::Mem64Bit,
+            false,
+            self.cmd_cfg.bar_size as u64,
+        )?;
         init_msix(
             0,
             1,

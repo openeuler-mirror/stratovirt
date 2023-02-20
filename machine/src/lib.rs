@@ -1289,7 +1289,7 @@ pub trait MachineOps {
         let demo_cfg = parse_demo_dev(vm_config, cfg_args.to_string())
             .with_context(|| "failed to parse cmdline for demo dev.")?;
 
-        let demo_dev = DemoDev::new(demo_cfg.id, devfn, parent_bus);
+        let demo_dev = DemoDev::new(demo_cfg, devfn, parent_bus);
 
         demo_dev.realize()
     }
