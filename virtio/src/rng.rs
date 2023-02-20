@@ -112,13 +112,15 @@ impl RngHandler {
             }
 
             let mut buffer = vec![0_u8; size as usize];
-            raw_read(
+            let ret = raw_read(
                 self.random_file.as_raw_fd(),
                 buffer.as_mut_ptr() as u64,
                 size as usize,
                 0,
-            )
-            .with_context(|| format!("Failed to read random file, size: {}", size))?;
+            );
+            if ret < 0 || ret as u32 != size {
+                bail!("Failed to read random file, size: {}", size);
+            }
 
             self.write_req_data(&elem.in_iovec, &mut buffer)?;
 

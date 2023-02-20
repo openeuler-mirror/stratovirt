@@ -12,9 +12,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -178,11 +176,6 @@ pub const SCSI_SENSE_BUF_SIZE: usize = 252;
 
 /// SERVICE ACTION IN subcodes.
 pub const SUBCODE_READ_CAPACITY_16: u8 = 0x10;
-
-/// Used to compute the number of sectors.
-const SECTOR_SHIFT: u8 = 9;
-/// Size of a sector of the block device.
-const SECTOR_SIZE: u64 = (0x01_u64) << SECTOR_SHIFT;
 
 /// Sense Keys.
 pub const NO_SENSE: u8 = 0x00;
@@ -514,28 +507,14 @@ impl ScsiRequest {
     pub fn execute(
         &self,
         aio: &mut Box<Aio<ScsiCompleteCb>>,
-        disk: &File,
-        direct: bool,
-        last_aio: bool,
-        iocompletecb: ScsiCompleteCb,
+        mut aiocb: AioCb<ScsiCompleteCb>,
     ) -> Result<u32> {
         let dev_lock = self.dev.lock().unwrap();
         let offset = match dev_lock.scsi_type {
             SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
             _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
         };
-        let mut aiocb = AioCb {
-            last_aio,
-            direct,
-            sector_size: SECTOR_SIZE,
-            file_fd: disk.as_raw_fd(),
-            opcode: OpCode::Noop,
-            iovec: Vec::new(),
-            offset: (self.cmd.lba << offset) as usize,
-            nbytes: 0,
-            user_data: 0,
-            iocompletecb,
-        };
+        aiocb.offset = (self.cmd.lba << offset) as usize;
 
         for iov in self.virtioscsireq.lock().unwrap().iovec.iter() {
             let iovec = Iovec {

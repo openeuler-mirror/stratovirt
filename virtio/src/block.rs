@@ -68,7 +68,15 @@ const MAX_NUM_MERGE_BYTES: u64 = i32::MAX as u64;
 /// Max time for every round of process queue.
 const MAX_MILLIS_TIME_PROCESS_QUEUE: u16 = 100;
 
-type SenderConfig = (Option<Arc<File>>, u64, Option<String>, bool, AioEngine);
+type SenderConfig = (
+    Option<Arc<File>>,
+    u32,
+    u32,
+    u64,
+    Option<String>,
+    bool,
+    AioEngine,
+);
 
 fn get_serial_num_config(serial_num: &str) -> Vec<u8> {
     let mut id_bytes = vec![0; VIRTIO_BLK_ID_BYTES as usize];
@@ -374,6 +382,10 @@ struct BlockIoHandler {
     mem_space: Arc<AddressSpace>,
     /// The image file opened by the block device.
     disk_image: Option<Arc<File>>,
+    /// The align requirement of request(offset/len).
+    pub req_align: u32,
+    /// The align requirement of buffer(iova_base).
+    pub buf_align: u32,
     /// The number of sectors of the disk image.
     disk_sectors: u64,
     /// Serial number of the block device.
@@ -439,7 +451,7 @@ impl BlockIoHandler {
                 merged_iovs += req_iovs;
                 merged_bytes += req_bytes;
             } else {
-                if io {
+                if io || req.out_header.request_type == VIRTIO_BLK_T_FLUSH {
                     *last_aio_index = merge_req_queue.len();
                 }
                 merge_req_queue.push(req);
@@ -524,7 +536,8 @@ impl BlockIoHandler {
                 let aiocb = AioCb {
                     last_aio: req_index == last_aio_req_index,
                     direct: self.direct,
-                    sector_size: SECTOR_SIZE,
+                    req_align: self.req_align,
+                    buf_align: self.buf_align,
                     file_fd: disk_img.as_raw_fd(),
                     opcode: OpCode::Noop,
                     iovec: Vec::new(),
@@ -619,11 +632,10 @@ impl BlockIoHandler {
         if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
             && aiocb.opcode == OpCode::Pwritev
             && ret >= 0
+            && raw_datasync(aiocb.file_fd) < 0
         {
-            if let Err(ref e) = raw_datasync(aiocb.file_fd) {
-                error!("Failed to flush data before send response to guest {:?}", e);
-                status = VIRTIO_BLK_S_IOERR;
-            }
+            error!("Failed to flush data before send response to guest.");
+            status = VIRTIO_BLK_S_IOERR;
         }
 
         complete_cb.complete_request(status)
@@ -643,9 +655,11 @@ impl BlockIoHandler {
     fn update_evt_handler(&mut self) {
         let aio_engine;
         match self.receiver.recv() {
-            Ok((image, disk_sectors, serial_num, direct, aio)) => {
+            Ok((image, req_align, buf_align, disk_sectors, serial_num, direct, aio)) => {
                 self.disk_sectors = disk_sectors;
                 self.disk_image = image;
+                self.req_align = req_align;
+                self.buf_align = buf_align;
                 self.serial_num = serial_num;
                 self.direct = direct;
                 aio_engine = aio;
@@ -654,6 +668,8 @@ impl BlockIoHandler {
                 error!("Failed to receive config in updating handler {:?}", e);
                 self.disk_sectors = 0;
                 self.disk_image = None;
+                self.req_align = 1;
+                self.buf_align = 1;
                 self.serial_num = None;
                 self.direct = true;
                 aio_engine = AioEngine::Native;
@@ -916,6 +932,10 @@ pub struct Block {
     blk_cfg: BlkDevConfig,
     /// Image file opened.
     disk_image: Option<Arc<File>>,
+    /// The align requirement of request(offset/len).
+    pub req_align: u32,
+    /// The align requirement of buffer(iova_base).
+    pub buf_align: u32,
     /// Number of sectors of the image file.
     disk_sectors: u64,
     /// Status of block device.
@@ -939,6 +959,8 @@ impl Default for Block {
         Block {
             blk_cfg: Default::default(),
             disk_image: None,
+            req_align: 1,
+            buf_align: 1,
             disk_sectors: 0,
             state: BlockState::default(),
             interrupt_cb: None,
@@ -959,6 +981,8 @@ impl Block {
         Self {
             blk_cfg,
             disk_image: None,
+            req_align: 1,
+            buf_align: 1,
             disk_sectors: 0,
             state: BlockState::default(),
             interrupt_cb: None,
@@ -1007,18 +1031,23 @@ impl VirtioDevice for Block {
             self.state.config_space.num_queues = self.blk_cfg.queues;
         }
 
-        let mut disk_image = None;
-        let mut disk_size = DUMMY_IMG_SIZE;
+        self.disk_image = None;
+        self.disk_sectors = DUMMY_IMG_SIZE >> SECTOR_SHIFT;
+        self.req_align = 1;
+        self.buf_align = 1;
         if !self.blk_cfg.path_on_host.is_empty() {
             let drive_files = self.drive_files.lock().unwrap();
             let mut file = VmConfig::fetch_drive_file(&drive_files, &self.blk_cfg.path_on_host)?;
-            disk_size = file
+            let alignments = VmConfig::fetch_drive_align(&drive_files, &self.blk_cfg.path_on_host)?;
+            let disk_size = file
                 .seek(SeekFrom::End(0))
                 .with_context(|| "Failed to seek the end for block")?;
-            disk_image = Some(Arc::new(file));
+
+            self.disk_image = Some(Arc::new(file));
+            self.disk_sectors = disk_size >> SECTOR_SHIFT;
+            self.req_align = alignments.0;
+            self.buf_align = alignments.1;
         }
-        self.disk_image = disk_image;
-        self.disk_sectors = disk_size >> SECTOR_SHIFT;
         self.state.config_space.capacity = self.disk_sectors;
 
         Ok(())
@@ -1121,6 +1150,8 @@ impl VirtioDevice for Block {
                 queue_evt,
                 mem_space: mem_space.clone(),
                 disk_image: self.disk_image.clone(),
+                req_align: self.req_align,
+                buf_align: self.buf_align,
                 disk_sectors: self.disk_sectors,
                 direct: self.blk_cfg.direct,
                 serial_num: self.blk_cfg.serial_num.clone(),
@@ -1177,6 +1208,8 @@ impl VirtioDevice for Block {
             sender
                 .send((
                     self.disk_image.clone(),
+                    self.req_align,
+                    self.buf_align,
                     self.disk_sectors,
                     self.blk_cfg.serial_num.clone(),
                     self.blk_cfg.direct,

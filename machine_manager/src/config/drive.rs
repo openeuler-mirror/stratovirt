@@ -46,6 +46,10 @@ pub struct DriveFile {
     pub read_only: bool,
     /// File lock status.
     pub locked: bool,
+    /// The align requirement of request(offset/len).
+    pub req_align: u32,
+    /// The align requirement of buffer(iova_base).
+    pub buf_align: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

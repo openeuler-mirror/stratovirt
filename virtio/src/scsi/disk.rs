@@ -94,6 +94,10 @@ pub struct ScsiDevice {
     pub state: ScsiDevState,
     /// Image file opened.
     pub disk_image: Option<Arc<File>>,
+    /// The align requirement of request(offset/len).
+    pub req_align: u32,
+    /// The align requirement of buffer(iova_base).
+    pub buf_align: u32,
     /// Number of sectors of the image file.
     pub disk_sectors: u64,
     /// Scsi Device block size.
@@ -112,6 +116,8 @@ impl Default for ScsiDevice {
             config: Default::default(),
             state: Default::default(),
             disk_image: None,
+            req_align: 1,
+            buf_align: 1,
             disk_sectors: 0,
             block_size: SCSI_DISK_DEFAULT_BLOCK_SIZE,
             scsi_type: SCSI_TYPE_DISK,
@@ -131,6 +137,8 @@ impl ScsiDevice {
             config,
             state: ScsiDevState::new(),
             disk_image: None,
+            req_align: 1,
+            buf_align: 1,
             disk_sectors: 0,
             block_size: 0,
             scsi_type,
@@ -167,10 +175,15 @@ impl ScsiDevice {
             disk_size = file
                 .seek(SeekFrom::End(0))
                 .with_context(|| "Failed to seek the end for scsi device")?;
-
             self.disk_image = Some(Arc::new(file));
+
+            let alignments = VmConfig::fetch_drive_align(&drive_files, &self.config.path_on_host)?;
+            self.req_align = alignments.0;
+            self.buf_align = alignments.1;
         } else {
             self.disk_image = None;
+            self.req_align = 1;
+            self.buf_align = 1;
         }
 
         self.disk_sectors = disk_size >> SECTOR_SHIFT;

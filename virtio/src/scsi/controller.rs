@@ -38,7 +38,7 @@ use machine_manager::{
     config::{ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
     event_loop::EventLoop,
 };
-use util::aio::{Aio, AioCb, AioEngine, Iovec};
+use util::aio::{Aio, AioCb, AioEngine, Iovec, OpCode};
 use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
@@ -923,6 +923,8 @@ impl ScsiCmdHandler {
             } else {
                 let direct = scsi_device_lock.config.direct;
                 let disk_img = scsi_device_lock.disk_image.as_ref().unwrap().clone();
+                let req_align = scsi_device_lock.req_align;
+                let buf_align = scsi_device_lock.buf_align;
                 drop(scsi_device_lock);
 
                 let scsicompletecb = ScsiCompleteCb::new(
@@ -930,7 +932,20 @@ impl ScsiCmdHandler {
                     Arc::new(Mutex::new(scsi_req.clone())),
                 );
                 if let Some(ref mut aio) = self.aio {
-                    scsi_req.execute(aio, &disk_img, direct, true, scsicompletecb)?;
+                    let aiocb = AioCb {
+                        last_aio: true,
+                        direct,
+                        req_align,
+                        buf_align,
+                        file_fd: disk_img.as_raw_fd(),
+                        opcode: OpCode::Noop,
+                        iovec: Vec::new(),
+                        offset: 0,
+                        nbytes: 0,
+                        user_data: 0,
+                        iocompletecb: scsicompletecb,
+                    };
+                    scsi_req.execute(aio, aiocb)?;
                 }
             }
         }

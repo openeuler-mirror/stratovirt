@@ -128,19 +128,24 @@ impl<T: Clone> AioContext<T> for LibaioContext {
             let opcode = match cb.opcode {
                 OpCode::Preadv => IoCmd::Preadv,
                 OpCode::Pwritev => IoCmd::Pwritev,
+                OpCode::Fdsync => IoCmd::Fdsync,
                 _ => bail!("Failed to submit aio, opcode is not supported."),
+            };
+            let aio_buf = match cb.opcode {
+                OpCode::Fdsync => 0,
+                _ => cb.iovec.as_ptr() as u64,
             };
             iocbs.push(IoCb {
                 data: cb.user_data,
                 aio_lio_opcode: opcode as u16,
                 aio_fildes: cb.file_fd as u32,
-                aio_buf: cb.iovec.as_ptr() as u64,
+                aio_buf,
                 aio_nbytes: cb.iovec.len() as u64,
                 aio_offset: cb.offset as u64,
                 aio_flags: IOCB_FLAG_RESFD,
                 aio_resfd: self.resfd as u32,
                 ..Default::default()
-            })
+            });
         }
 
         // SYS_io_submit needs vec of references.
