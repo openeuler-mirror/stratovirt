@@ -63,25 +63,8 @@ impl DemoDev {
             dev_id: Arc::new(AtomicU16::new(0)),
         }
     }
-}
 
-// reference to https://pci-ids.ucw.cz/read/PC?restrict=1
-// "DEAD BEEF" seems will not be used for a long time.
-const VENDOR_ID_DEMO: u16 = 0xDEAD;
-const DEVICE_ID_DEMO: u16 = 0xBEEF;
-// reference to https://pci-ids.ucw.cz/read/PD/
-const CLASS_CODE_DEMO: u16 = 0xEE;
-
-impl PciDevOps for DemoDev {
-    fn init_write_mask(&mut self) -> Result<()> {
-        self.config.init_common_write_mask()
-    }
-
-    fn init_write_clear_mask(&mut self) -> Result<()> {
-        self.config.init_common_write_clear_mask()
-    }
-
-    fn realize(mut self) -> Result<()> {
+    fn init_pci_config(&mut self) -> Result<()> {
         self.init_write_mask()?;
         self.init_write_clear_mask()?;
 
@@ -91,6 +74,10 @@ impl PciDevOps for DemoDev {
         le_write_u16(config, SUB_CLASS_CODE as usize, CLASS_CODE_DEMO)?;
         config[HEADER_TYPE as usize] = HEADER_TYPE_ENDPOINT;
 
+        Ok(())
+    }
+
+    fn init_bars(&mut self) -> Result<()> {
         let region_size = self
             .cmd_cfg
             .bar_size
@@ -111,6 +98,44 @@ impl PciDevOps for DemoDev {
             false,
             self.cmd_cfg.bar_size as u64,
         )?;
+        Ok(())
+    }
+
+    fn attach_to_parent_bus(self) -> Result<()> {
+        let parent_bus = self.parent_bus.upgrade().unwrap();
+        let mut locked_parent_bus = parent_bus.lock().unwrap();
+        if locked_parent_bus.devices.get(&self.devfn).is_some() {
+            bail!("device already existed");
+        }
+        let devfn = self.devfn;
+        let demo_pci_dev = Arc::new(Mutex::new(self));
+        locked_parent_bus.devices.insert(devfn, demo_pci_dev);
+
+        Ok(())
+    }
+}
+
+// reference to https://pci-ids.ucw.cz/read/PC?restrict=1
+// "DEAD BEEF" seems will not be used for a long time.
+const VENDOR_ID_DEMO: u16 = 0xDEAD;
+const DEVICE_ID_DEMO: u16 = 0xBEEF;
+// reference to https://pci-ids.ucw.cz/read/PD/
+const CLASS_CODE_DEMO: u16 = 0xEE;
+
+impl PciDevOps for DemoDev {
+    fn init_write_mask(&mut self) -> Result<()> {
+        self.config.init_common_write_mask()
+    }
+
+    fn init_write_clear_mask(&mut self) -> Result<()> {
+        self.config.init_common_write_clear_mask()
+    }
+
+    /// Realize PCI/PCIe device.
+    fn realize(mut self) -> Result<()> {
+        self.init_pci_config()?;
+        self.init_bars()?;
+
         init_msix(
             0,
             1,
@@ -121,15 +146,7 @@ impl PciDevOps for DemoDev {
             None,
         )?;
 
-        let parent_bus = self.parent_bus.upgrade().unwrap();
-        let mut locked_parent_bus = parent_bus.lock().unwrap();
-        if locked_parent_bus.devices.get(&self.devfn).is_some() {
-            bail!("device already existed");
-        }
-        let devfn = self.devfn;
-        let demo_pci_dev = Arc::new(Mutex::new(self));
-        locked_parent_bus.devices.insert(devfn, demo_pci_dev);
-
+        self.attach_to_parent_bus()?;
         Ok(())
     }
 
