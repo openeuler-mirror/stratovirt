@@ -10,17 +10,27 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-/// DemoDev is a demo PCIe device, that has 2 bars, 1 for msix, 1 for data handling.
-/// 1. its functionality is to print heximal values that the guest writes,
-///    and do nothing if the guest reads its device memory.
-/// 2. After printing, it sends back a msix interrupt to the guest, which
-/// means that it has also msix capability. We assume msix bar is in bar 0.
+/// DemoDev is a demo PCIe device, that can have device properites configurable, eg.
+/// bar num, max msix vector num, etc.
+/// It can have 0-6 bars, if set, msix always lives in bar 0, data handling in bar 1.
+/// 1. its functionality is to read and write data for the guest, meanwhile, do a little
+///    mathmetic logic(multiply data[0] with 2) with the write op.
+/// 2. After r/w, it sends back a msix interrupt to the guest, which means that it has
+///    also msix capability. We assume msix bar is in bar 0.
 /// 3. Finally, it supports hotplug/hotunplug.
 /// As that it has device memory, it means it has a bar space, we assume the
 /// bar size is 4KB in bar 1.
+/// As that it has device memory, it means it has a bar space other than the msix one.(
+/// therotically they can share the same bar as well).
 ///
-/// The cmdline for the device is: -device pcie-demo-dev,addr=0x5,bus=pcie.0,id=demo0
+/// Note: developers can also add yourself mmio r/w ops for this device by changing the
+/// callback fn write_data_internal_func(), using trait to expand this function is recommended.
+///
+/// The example cmdline for the device is:
+///     "-device pcie-demo-dev,addr=0x5,bus=pcie.0,id=demo0,bar_num=3,bar_size=4096"
+///
 use std::{
+    collections::HashMap,
     sync::Mutex,
     sync::{
         atomic::{AtomicU16, Ordering},
@@ -28,14 +38,14 @@ use std::{
     },
 };
 
-use address_space::Region;
-use anyhow::Ok;
+use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
 use machine_manager::config::DemoDevConfig;
+use once_cell::sync::Lazy;
 
 use crate::{
     config::{
-        PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT,
-        PCIE_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
+        PciConfig, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT, PCIE_CONFIG_SPACE_SIZE,
+        SUB_CLASS_CODE, VENDOR_ID,
     },
     init_msix, le_write_u16, PciBus, PciDevOps,
 };
@@ -45,19 +55,26 @@ pub struct DemoDev {
     name: String,
     cmd_cfg: DemoDevConfig,
     config: PciConfig,
-    mem_region: Region,
+    sys_mem: Arc<AddressSpace>,
     devfn: u8,
     parent_bus: Weak<Mutex<PciBus>>,
     dev_id: Arc<AtomicU16>,
 }
 
+static mut HASHMAP: Lazy<Mutex<HashMap<u64, u8>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 impl DemoDev {
-    pub fn new(cfg: DemoDevConfig, devfn: u8, parent_bus: Weak<Mutex<PciBus>>) -> Self {
+    pub fn new(
+        cfg: DemoDevConfig,
+        devfn: u8,
+        sys_mem: Arc<AddressSpace>,
+        parent_bus: Weak<Mutex<PciBus>>,
+    ) -> Self {
         DemoDev {
             name: cfg.id.clone(),
             cmd_cfg: cfg.clone(),
             config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
-            mem_region: Region::init_container_region(u64::max_value() >> 10),
+            sys_mem,
             devfn,
             parent_bus,
             dev_id: Arc::new(AtomicU16::new(0)),
@@ -77,30 +94,6 @@ impl DemoDev {
         Ok(())
     }
 
-    fn init_bars(&mut self) -> Result<()> {
-        let region_size = self
-            .cmd_cfg
-            .bar_size
-            .checked_mul(self.cmd_cfg.bar_num as u64);
-        if region_size.is_none() {
-            bail!(
-                "bar size overflow with 0x{:x} * 0x{:x}",
-                self.cmd_cfg.bar_size,
-                self.cmd_cfg.bar_num
-            );
-        }
-        let region_size = region_size.unwrap();
-        let region = Region::init_container_region(region_size as u64);
-        self.config.register_bar(
-            1,
-            region,
-            RegionType::Mem64Bit,
-            false,
-            self.cmd_cfg.bar_size as u64,
-        )?;
-        Ok(())
-    }
-
     fn attach_to_parent_bus(self) -> Result<()> {
         let parent_bus = self.parent_bus.upgrade().unwrap();
         let mut locked_parent_bus = parent_bus.lock().unwrap();
@@ -110,6 +103,49 @@ impl DemoDev {
         let devfn = self.devfn;
         let demo_pci_dev = Arc::new(Mutex::new(self));
         locked_parent_bus.devices.insert(devfn, demo_pci_dev);
+
+        Ok(())
+    }
+
+    // do some mathmetic algrithm when writing to mmio.
+    // here we just multiply it with 2.
+    fn write_data_internal_func(innum: u8) -> u8 {
+        innum.checked_mul(2).unwrap_or(0)
+    }
+
+    fn register_data_handling_bar(&mut self) -> Result<()> {
+        let write_ops = move |data: &[u8], addr: GuestAddress, _offset: u64| -> bool {
+            let d = Self::write_data_internal_func(data[0]);
+            unsafe {
+                // supports only saving data[0] now for simplification
+                HASHMAP.lock().unwrap().insert(addr.raw_value(), d);
+            }
+            true
+        };
+
+        let read_ops = move |data: &mut [u8], addr: GuestAddress, _offset: u64| -> bool {
+            unsafe {
+                data[0] = *HASHMAP.lock().unwrap().get(&addr.raw_value()).unwrap_or(&0);
+                // rm the data after reading, as we assume that the data becomes useless after the test process checked the addr.
+                HASHMAP.lock().unwrap().remove(&addr.raw_value());
+            }
+            true
+        };
+
+        let region_ops = RegionOps {
+            read: Arc::new(read_ops),
+            write: Arc::new(write_ops),
+        };
+
+        let region = Region::init_io_region(self.cmd_cfg.bar_size, region_ops);
+
+        self.config.register_bar(
+            0,
+            region,
+            crate::config::RegionType::Mem64Bit,
+            false,
+            self.cmd_cfg.bar_size,
+        )?;
 
         Ok(())
     }
@@ -134,17 +170,20 @@ impl PciDevOps for DemoDev {
     /// Realize PCI/PCIe device.
     fn realize(mut self) -> Result<()> {
         self.init_pci_config()?;
-        self.init_bars()?;
 
-        init_msix(
-            0,
-            1,
-            &mut self.config,
-            self.dev_id.clone(),
-            &self.name,
-            None,
-            None,
-        )?;
+        if self.cmd_cfg.bar_num > 0 {
+            init_msix(
+                0,
+                1,
+                &mut self.config,
+                self.dev_id.clone(),
+                &self.name,
+                None,
+                None,
+            )?;
+        }
+
+        self.register_data_handling_bar()?;
 
         self.attach_to_parent_bus()?;
         Ok(())
@@ -162,16 +201,13 @@ impl PciDevOps for DemoDev {
 
     /// write the pci configuration space
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let parent_bus = self.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
-
         self.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
             None,
-            Some(&locked_parent_bus.mem_region),
+            Some(self.sys_mem.root()),
         );
     }
 
