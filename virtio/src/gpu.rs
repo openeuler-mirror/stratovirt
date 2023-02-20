@@ -491,6 +491,16 @@ fn is_rect_in_resouce(rect: &VirtioGpuRect, res: &GpuResource) -> bool {
     false
 }
 
+// Mask resource's scanout bit before disable a scanout.
+fn disable_scanout(scanout: &mut GpuScanout) {
+    if scanout.resource_id == 0 {
+        return;
+    }
+    // TODO: present 'Guest disabled display.' in surface.
+    display_replace_surface(scanout.con_id, None);
+    scanout.clear();
+}
+
 impl GpuIoHandler {
     fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
         if header.out_len < size_of::<T>() as u32 {
@@ -744,6 +754,28 @@ impl GpuIoHandler {
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
 
+    fn resource_destroy(&mut self, res_index: usize) {
+        let res = &mut self.resources_list[res_index];
+
+        if res.scanouts_bitmask == 0 {
+            return;
+        }
+
+        for i in 0..self.num_scanouts {
+            if (res.scanouts_bitmask & (1 << i)) != 0 {
+                let scanout = &mut self.scanouts[i as usize];
+                res.scanouts_bitmask &= !(1 << i);
+                disable_scanout(scanout);
+            }
+        }
+
+        unsafe {
+            pixman_image_unref(res.pixman_image);
+        }
+        self.used_hostmem -= res.host_mem;
+        res.iov.clear();
+    }
+
     fn cmd_resource_unref(&mut self, req: &VirtioGpuRequest) -> Result<()> {
         let mut info_resource_unref = VirtioGpuResourceUnref::default();
         self.get_request(req, &mut info_resource_unref)?;
@@ -753,25 +785,7 @@ impl GpuIoHandler {
             .iter()
             .position(|x| x.resource_id == info_resource_unref.resource_id)
         {
-            let res = &mut self.resources_list[res_index];
-            if res.scanouts_bitmask != 0 {
-                for i in 0..self.num_scanouts {
-                    if (res.scanouts_bitmask & (1 << i)) != 0 {
-                        let scanout = &mut self.scanouts[i as usize];
-                        if scanout.resource_id != 0 {
-                            // disable the scanout
-                            res.scanouts_bitmask &= !(1 << i);
-                            display_replace_surface(scanout.con_id, None);
-                            scanout.clear();
-                        }
-                    }
-                }
-            }
-            unsafe {
-                pixman_image_unref(res.pixman_image);
-            }
-            self.used_hostmem -= res.host_mem;
-            res.iov.clear();
+            self.resource_destroy(res_index);
             self.resources_list.remove(res_index);
             self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
         } else {
@@ -795,7 +809,6 @@ impl GpuIoHandler {
             return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID, req);
         }
 
-        // TODO: refactor to disable function
         let scanout = &mut self.scanouts[info_set_scanout.scanout_id as usize];
         if info_set_scanout.resource_id == 0 {
             // Set resource_id to 0 means disable the scanout.
@@ -807,8 +820,7 @@ impl GpuIoHandler {
                 let res = &mut self.resources_list[res_index];
                 res.scanouts_bitmask &= !(1 << info_set_scanout.scanout_id);
             }
-            display_replace_surface(scanout.con_id, None);
-            scanout.clear();
+            disable_scanout(scanout);
             return self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req);
         }
 
@@ -1390,6 +1402,11 @@ impl Drop for GpuIoHandler {
     fn drop(&mut self) {
         for scanout in &self.scanouts {
             console_close(scanout.con_id);
+        }
+
+        while !self.resources_list.is_empty() {
+            self.resource_destroy(0);
+            self.resources_list.remove(0);
         }
     }
 }
