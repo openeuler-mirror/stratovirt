@@ -292,15 +292,13 @@ fn parse_drive(cmd_parser: CmdParser) -> Result<DriveConfig> {
         drive.direct = direct.into();
     }
     drive.iops = cmd_parser.get_value::<u64>("throttling.iops-total")?;
-    drive.aio = cmd_parser
-        .get_value::<AioEngine>("aio")?
-        .unwrap_or_else(|| {
-            if drive.direct {
-                AioEngine::Native
-            } else {
-                AioEngine::Off
-            }
-        });
+    drive.aio = cmd_parser.get_value::<AioEngine>("aio")?.unwrap_or({
+        if drive.direct {
+            AioEngine::Native
+        } else {
+            AioEngine::Off
+        }
+    });
     drive.check()?;
     #[cfg(not(test))]
     drive.check_path()?;
