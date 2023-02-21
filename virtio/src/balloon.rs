@@ -147,10 +147,10 @@ fn iov_to_buf<T: ByteCode>(
 fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int) {
     // Safe, because the memory to be freed is allocated by guest.
     if unsafe { libc::madvise(addr, len, advice) } != 0 {
-        let evt_type = if advice == libc::MADV_WILLNEED {
-            "WILLNEED".to_string()
-        } else {
-            "DONTNEED".to_string()
+        let evt_type = match advice {
+            libc::MADV_DONTNEED => "DONTNEED".to_string(),
+            libc::MADV_REMOVE => "REMOVE".to_string(),
+            _ => "WILLNEED".to_string(),
         };
         let e = std::io::Error::last_os_error();
         error!(
