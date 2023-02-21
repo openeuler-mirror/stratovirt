@@ -44,7 +44,7 @@ pub const SCSI_DISK_F_REMOVABLE: u32 = 0;
 pub const SCSI_DISK_F_DPOFUA: u32 = 1;
 
 /// Used to compute the number of sectors.
-const SECTOR_SHIFT: u8 = 9;
+pub const SECTOR_SHIFT: u8 = 9;
 /// Size of the dummy block device.
 const DUMMY_IMG_SIZE: u64 = 0;
 pub const DEFAULT_SECTOR_SIZE: u32 = 1_u32 << SECTOR_SHIFT;
@@ -108,23 +108,6 @@ pub struct ScsiDevice {
     pub parent_bus: Weak<Mutex<ScsiBus>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
-}
-
-impl Default for ScsiDevice {
-    fn default() -> Self {
-        ScsiDevice {
-            config: Default::default(),
-            state: Default::default(),
-            disk_image: None,
-            req_align: 1,
-            buf_align: 1,
-            disk_sectors: 0,
-            block_size: SCSI_DISK_DEFAULT_BLOCK_SIZE,
-            scsi_type: SCSI_TYPE_DISK,
-            parent_bus: Weak::new(),
-            drive_files: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
 }
 
 impl ScsiDevice {

@@ -462,7 +462,7 @@ pub struct VirtioScsiRequest<T: Clone + ByteCode, U: Clone + ByteCode> {
     desc_index: u16,
     /// Read or Write data, HVA, except resp.
     pub iovec: Vec<Iovec>,
-    data_len: u32,
+    pub data_len: u32,
     _cdb_size: u32,
     _sense_size: u32,
     mode: ScsiXferMode,
@@ -483,6 +483,15 @@ impl<T: Clone + ByteCode, U: Clone + ByteCode> VirtioScsiRequest<T, U> {
         driver_features: u64,
         elem: &Element,
     ) -> Result<Self> {
+        if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() {
+            bail!(
+                "Missed header for scsi request: out {} in {} desc num {}",
+                elem.out_iovec.len(),
+                elem.in_iovec.len(),
+                elem.desc_num
+            );
+        }
+
         let out_iov_elem = elem.out_iovec.get(0).unwrap();
         if out_iov_elem.len < size_of::<T>() as u32 {
             bail!(

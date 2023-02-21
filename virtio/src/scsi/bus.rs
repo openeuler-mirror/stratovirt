@@ -24,7 +24,7 @@ use crate::ScsiCntlr::{
 use crate::ScsiDisk::{
     ScsiDevice, DEFAULT_SECTOR_SIZE, SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
     SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT, SCSI_DISK_F_DPOFUA, SCSI_DISK_F_REMOVABLE, SCSI_TYPE_DISK,
-    SCSI_TYPE_ROM,
+    SCSI_TYPE_ROM, SECTOR_SHIFT,
 };
 use address_space::AddressSpace;
 use byteorder::{BigEndian, ByteOrder};
@@ -481,14 +481,45 @@ impl ScsiRequest {
         scsibus: Arc<Mutex<ScsiBus>>,
         scsidevice: Arc<Mutex<ScsiDevice>>,
     ) -> Result<Self> {
+        let req_lock = req.lock().unwrap();
+        let cdb = req_lock.req.cdb;
+        let req_size = req_lock.data_len;
+
         if let Some(cmd) = scsibus
             .lock()
             .unwrap()
-            .scsi_bus_parse_req_cdb(req.lock().unwrap().req.cdb, scsidevice.clone())
+            .scsi_bus_parse_req_cdb(cdb, scsidevice.clone())
         {
             let ops = cmd.command;
             let opstype = scsi_operation_type(ops);
             let _resid = cmd.xfer;
+
+            if ops == WRITE_10 || ops == READ_10 {
+                let dev_lock = scsidevice.lock().unwrap();
+                let disk_size = dev_lock.disk_sectors << SECTOR_SHIFT;
+                let disk_type = dev_lock.scsi_type;
+                drop(dev_lock);
+                let offset_shift = match disk_type {
+                    SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
+                    _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
+                };
+                let offset = if let Some(off) = cmd.lba.checked_shl(offset_shift) {
+                    off
+                } else {
+                    bail!("Too large offset IO!");
+                };
+
+                if offset
+                    .checked_add(req_size as u64)
+                    .filter(|&off| off <= disk_size)
+                    .is_none()
+                {
+                    bail!(
+                        "Error CDB! ops {}, read/write length {} from {} is larger than disk size {}",
+                        ops, req_size, offset, disk_size,
+                    );
+                }
+            }
 
             Ok(ScsiRequest {
                 cmd,
@@ -588,7 +619,6 @@ impl ScsiRequest {
                     sense = Some(SCSI_SENSE_NO_SENSE);
                     Ok(Vec::new())
                 }
-                WRITE_SAME_10 | WRITE_SAME_16 => Ok(Vec::new()),
                 TEST_UNIT_READY => {
                     let dev_lock = self.dev.lock().unwrap();
                     if dev_lock.disk_image.is_none() {
@@ -756,7 +786,6 @@ fn scsi_cdb_length(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE]) -> i32 {
 fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDevice>>) -> i32 {
     let dev_lock = dev.lock().unwrap();
     let block_size = dev_lock.block_size as i32;
-    let scsi_type = dev_lock.scsi_type;
     drop(dev_lock);
 
     let mut xfer = match cdb[0] >> 5 {
@@ -774,79 +803,24 @@ fn scsi_cdb_xfer(cdb: &[u8; VIRTIO_SCSI_CDB_DEFAULT_SIZE], dev: Arc<Mutex<ScsiDe
     };
 
     match cdb[0] {
-        TEST_UNIT_READY | REWIND | START_STOP | SET_CAPACITY | WRITE_FILEMARKS
-        | WRITE_FILEMARKS_16 | SPACE | RESERVE | RELEASE | ERASE | ALLOW_MEDIUM_REMOVAL
-        | SEEK_10 | SYNCHRONIZE_CACHE | SYNCHRONIZE_CACHE_16 | LOCATE_16 | LOCK_UNLOCK_CACHE
-        | SET_CD_SPEED | SET_LIMITS | WRITE_LONG_10 | UPDATE_BLOCK | RESERVE_TRACK
-        | SET_READ_AHEAD | PRE_FETCH | PRE_FETCH_16 | ALLOW_OVERWRITE => {
+        TEST_UNIT_READY | START_STOP | SYNCHRONIZE_CACHE | SYNCHRONIZE_CACHE_16 => {
             xfer = 0;
-        }
-        VERIFY_10 | VERIFY_12 | VERIFY_16 => {
-            if cdb[1] & 2 == 0 {
-                xfer = 0;
-            } else if cdb[1] & 4 != 0 {
-                xfer = 1;
-            }
-            xfer *= block_size;
-        }
-        WRITE_SAME_10 | WRITE_SAME_16 => {
-            if cdb[1] & 1 != 0 {
-                xfer = 0;
-            } else {
-                xfer = block_size;
-            }
         }
         READ_CAPACITY_10 => {
             xfer = 8;
         }
-        READ_BLOCK_LIMITS => {
-            xfer = 6;
-        }
-        SEND_VOLUME_TAG => {
-            xfer = match scsi_type {
-                SCSI_TYPE_DISK => i32::from(cdb[9]) | i32::from(cdb[8]) << 8,
-                _ => i32::from(cdb[10]) | i32::from(cdb[8]) << 8,
-            };
-        }
-        WRITE_6 | READ_6 | READ_REVERSE => {
+        WRITE_6 | READ_6 => {
             // length 0 means 256 blocks.
             if xfer == 0 {
                 xfer = 256 * block_size;
             }
         }
-        WRITE_10 | WRITE_VERIFY_10 | WRITE_12 | WRITE_VERIFY_12 | WRITE_16 | WRITE_VERIFY_16
-        | READ_10 | READ_12 | READ_16 => {
+        WRITE_10 | WRITE_12 | WRITE_16 | READ_10 | READ_12 | READ_16 => {
             xfer *= block_size;
         }
-        FORMAT_UNIT => {
-            xfer = if (scsi_type == SCSI_TYPE_ROM) && (cdb[1] & 16 != 0) {
-                12
-            } else if cdb[1] & 16 == 0 {
-                0
-            } else if cdb[1] & 32 == 0 {
-                4
-            } else {
-                8
-            };
-        }
-        INQUIRY | RECEIVE_DIAGNOSTIC | SEND_DIAGNOSTIC => {
+        INQUIRY => {
             xfer = i32::from(cdb[4]) | i32::from(cdb[3]) << 8;
         }
-        READ_CD | READ_BUFFER | WRITE_BUFFER | SEND_CUE_SHEET => {
-            xfer = i32::from(cdb[8]) | i32::from(cdb[7]) << 8 | (u32::from(cdb[6]) << 16) as i32;
-        }
-        PERSISTENT_RESERVE_OUT => {
-            xfer = BigEndian::read_i32(&cdb[5..]);
-        }
-        ERASE_12 => {}
-        MECHANISM_STATUS | READ_DVD_STRUCTURE | SEND_DVD_STRUCTURE | MAINTENANCE_OUT
-        | MAINTENANCE_IN => {
-            if scsi_type == SCSI_TYPE_ROM {
-                xfer = i32::from(cdb[9]) | i32::from(cdb[8]) << 8;
-            }
-        }
-        ATA_PASSTHROUGH_12 => {}
-        ATA_PASSTHROUGH_16 => {}
         _ => {}
     }
     xfer
