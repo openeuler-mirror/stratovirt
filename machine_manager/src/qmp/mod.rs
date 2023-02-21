@@ -750,20 +750,22 @@ mod tests {
         socket.bind_unix_stream(server);
 
         // 1.send greeting response
-        socket.send_response(true);
+        let res = socket.send_response(true);
         let length = client.read(&mut buffer).unwrap();
         let qmp_response: QmpGreeting =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_greeting = QmpGreeting::create_greeting(1, 0, 5);
         assert_eq!(qmp_greeting, qmp_response);
+        assert_eq!(res.is_err(), false);
 
         // 2.send empty response
-        socket.send_response(false);
+        let res = socket.send_response(false);
         let length = client.read(&mut buffer).unwrap();
         let qmp_response: Response =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_empty_response = Response::create_empty_response();
         assert_eq!(qmp_empty_response, qmp_response);
+        assert_eq!(res.is_err(), false);
 
         // After test. Environment Recover
         recover_unix_socket_environment("07");
