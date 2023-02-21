@@ -28,6 +28,7 @@ use crate::usb::{
     UsbPacketStatus,
 };
 use crate::xhci::xhci_controller::XhciDevice;
+use vnc::input::{register_pointer, PointerOpts};
 
 const INPUT_BUTTON_WHEEL_UP: u32 = 0x08;
 const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x10;
@@ -134,34 +135,43 @@ impl UsbTablet {
         self.usb_device
             .init_descriptor(DESC_DEVICE_TABLET.clone(), s)?;
         let tablet = Arc::new(Mutex::new(self));
+        let tablet_adapter = Arc::new(Mutex::new(UsbTabletAdapter {
+            tablet: tablet.clone(),
+        }));
+        register_pointer("UsbTablet", tablet_adapter);
         Ok(tablet)
     }
 }
 
-// Used for VNC to send pointer event.
-pub fn pointer_event(tablet: &Arc<Mutex<UsbTablet>>, button: u32, x: u32, y: u32) -> Result<()> {
-    let mut locked_tablet = tablet.lock().unwrap();
-    if locked_tablet.hid.num >= QUEUE_LENGTH {
-        debug!("Pointer queue is full!");
-        // Return ok to ignore the request.
-        return Ok(());
+pub struct UsbTabletAdapter {
+    tablet: Arc<Mutex<UsbTablet>>,
+}
+
+impl PointerOpts for UsbTabletAdapter {
+    fn do_point_event(&mut self, button: u32, x: u32, y: u32) -> Result<()> {
+        let mut locked_tablet = self.tablet.lock().unwrap();
+        if locked_tablet.hid.num >= QUEUE_LENGTH {
+            debug!("Pointer queue is full!");
+            // Return ok to ignore the request.
+            return Ok(());
+        }
+        let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
+        let mut evt = &mut locked_tablet.hid.pointer.queue[index];
+        if button == INPUT_BUTTON_WHEEL_UP {
+            evt.pos_z = 1;
+        } else if button == INPUT_BUTTON_WHEEL_DOWN {
+            evt.pos_z = -1;
+        } else {
+            evt.pos_z = 0;
+        }
+        evt.button_state = button & INPUT_BUTTON_MASK;
+        evt.pos_x = min(x, INPUT_COORDINATES_MAX);
+        evt.pos_y = min(y, INPUT_COORDINATES_MAX);
+        locked_tablet.hid.num += 1;
+        drop(locked_tablet);
+        let clone_tablet = self.tablet.clone();
+        notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDeviceOps>>))
     }
-    let index = ((locked_tablet.hid.head + locked_tablet.hid.num) & QUEUE_MASK) as usize;
-    let mut evt = &mut locked_tablet.hid.pointer.queue[index];
-    if button == INPUT_BUTTON_WHEEL_UP {
-        evt.pos_z = 1;
-    } else if button == INPUT_BUTTON_WHEEL_DOWN {
-        evt.pos_z = -1;
-    } else {
-        evt.pos_z = 0;
-    }
-    evt.button_state = button & INPUT_BUTTON_MASK;
-    evt.pos_x = min(x, INPUT_COORDINATES_MAX);
-    evt.pos_y = min(y, INPUT_COORDINATES_MAX);
-    locked_tablet.hid.num += 1;
-    drop(locked_tablet);
-    let clone_tablet = tablet.clone();
-    notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDeviceOps>>))
 }
 
 impl UsbDeviceOps for UsbTablet {

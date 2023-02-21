@@ -27,6 +27,7 @@ use crate::usb::{
     UsbPacketStatus,
 };
 use crate::xhci::xhci_controller::XhciDevice;
+use vnc::input::{register_keyboard, KeyboardOpts};
 
 /// Keyboard device descriptor
 static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -100,6 +101,13 @@ const STR_PRODUCT_KEYBOARD_INDEX: u8 = 2;
 const STR_CONFIG_KEYBOARD_INDEX: u8 = 3;
 const STR_SERIAL_KEYBOARD_INDEX: u8 = 4;
 
+// Up flag.
+const SCANCODE_UP: u16 = 0x80;
+// Grey keys.
+const SCANCODE_GREY: u16 = 0x80;
+// Used to expand Grey keys.
+const SCANCODE_EMUL0: u16 = 0xe0;
+
 /// String descriptor
 const DESC_STRINGS: [&str; 5] = [
     "",
@@ -116,6 +124,41 @@ pub struct UsbKeyboard {
     hid: Hid,
     /// USB controller used to notify controller to transfer data.
     ctrl: Option<Weak<Mutex<XhciDevice>>>,
+}
+
+pub struct UsbKeyboardAdapter {
+    usb_kbd: Arc<Mutex<UsbKeyboard>>,
+}
+
+impl KeyboardOpts for UsbKeyboardAdapter {
+    fn do_key_event(&mut self, keycode: u16, down: bool) -> Result<()> {
+        let mut scan_codes = Vec::new();
+        let mut keycode = keycode;
+        if keycode & SCANCODE_GREY != 0 {
+            scan_codes.push(SCANCODE_EMUL0 as u32);
+            keycode &= !SCANCODE_GREY;
+        }
+
+        if !down {
+            keycode |= SCANCODE_UP;
+        }
+        scan_codes.push(keycode as u32);
+
+        let mut locked_kbd = self.usb_kbd.lock().unwrap();
+        if scan_codes.len() as u32 + locked_kbd.hid.num > QUEUE_LENGTH {
+            debug!("Keyboard queue is full!");
+            // Return ok to ignore the request.
+            return Ok(());
+        }
+        for code in scan_codes {
+            let index = ((locked_kbd.hid.head + locked_kbd.hid.num) & QUEUE_MASK) as usize;
+            locked_kbd.hid.num += 1;
+            locked_kbd.hid.keyboard.keycodes[index] = code;
+        }
+        drop(locked_kbd);
+        let clone_kbd = self.usb_kbd.clone();
+        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDeviceOps>>))
+    }
 }
 
 impl UsbKeyboard {
@@ -135,26 +178,13 @@ impl UsbKeyboard {
         self.usb_device
             .init_descriptor(DESC_DEVICE_KEYBOARD.clone(), s)?;
         let kbd = Arc::new(Mutex::new(self));
+        let kbd_adapter = Arc::new(Mutex::new(UsbKeyboardAdapter {
+            usb_kbd: kbd.clone(),
+        }));
+        register_keyboard("UsbKeyboard", kbd_adapter);
+
         Ok(kbd)
     }
-}
-
-// Used for VNC to send keyboard event.
-pub fn keyboard_event(kbd: &Arc<Mutex<UsbKeyboard>>, scan_codes: &[u32]) -> Result<()> {
-    let mut locked_kbd = kbd.lock().unwrap();
-    if scan_codes.len() as u32 + locked_kbd.hid.num > QUEUE_LENGTH {
-        debug!("Keyboard queue is full!");
-        // Return ok to ignore the request.
-        return Ok(());
-    }
-    for code in scan_codes {
-        let index = ((locked_kbd.hid.head + locked_kbd.hid.num) & QUEUE_MASK) as usize;
-        locked_kbd.hid.num += 1;
-        locked_kbd.hid.keyboard.keycodes[index] = *code;
-    }
-    drop(locked_kbd);
-    let clone_kbd = kbd.clone();
-    notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDeviceOps>>))
 }
 
 impl UsbDeviceOps for UsbKeyboard {
