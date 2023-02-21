@@ -987,6 +987,7 @@ dependencies = [
  "pci",
  "thiserror",
  "util",
+ "vnc",
 ]
 
 [[package]]
@@ -1106,27 +1107,18 @@ dependencies = [
 name = "vnc"
 version = "2.2.0"
 dependencies = [
- "acpi",
- "address_space",
  "anyhow",
  "bitintr",
- "byteorder",
- "hypervisor",
  "libc",
  "log",
  "machine_manager",
- "migration",
- "migration_derive",
  "once_cell",
- "pci",
  "rustls",
  "rustls-pemfile",
  "sasl2-sys",
  "serde_json",
  "sscanf",
- "sysbus",
  "thiserror",
- "usb",
  "util",
  "vmm-sys-util",
 ]

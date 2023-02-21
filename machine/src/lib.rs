@@ -48,17 +48,17 @@ use devices::legacy::FwCfgOps;
 use devices::InterruptController;
 
 use hypervisor::kvm::KVM_FDS;
-#[cfg(not(target_env = "musl"))]
-use machine_manager::config::parse_gpu;
 use machine_manager::config::{
     complete_numa_node, get_multi_function, get_pci_bdf, parse_balloon, parse_blk, parse_demo_dev,
     parse_device_id, parse_fs, parse_net, parse_numa_distance, parse_numa_mem, parse_rng_dev,
-    parse_root_port, parse_scsi_controller, parse_scsi_device, parse_usb_keyboard,
-    parse_usb_tablet, parse_vfio, parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial,
-    parse_vsock, parse_xhci, BootIndexInfo, DriveFile, Incoming, MachineMemConfig, MigrateMode,
-    NumaConfig, NumaDistance, NumaNode, NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig,
-    VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    parse_root_port, parse_scsi_controller, parse_scsi_device, parse_vfio,
+    parse_vhost_user_blk_pci, parse_virtconsole, parse_virtio_serial, parse_vsock, BootIndexInfo,
+    DriveFile, Incoming, MachineMemConfig, MigrateMode, NumaConfig, NumaDistance, NumaNode,
+    NumaNodes, PFlashConfig, PciBdf, SerialConfig, VfioConfig, VmConfig, FAST_UNPLUG_ON,
+    MAX_VIRTIO_QUEUE,
 };
+#[cfg(not(target_env = "musl"))]
+use machine_manager::config::{parse_gpu, parse_usb_keyboard, parse_usb_tablet, parse_xhci};
 use machine_manager::{
     event_loop::EventLoop,
     machine::{KvmVmState, MachineInterface},
@@ -68,9 +68,9 @@ use pci::{DemoDev, PciBus, PciDevOps, PciHost, RootPort};
 use standard_vm::Result as StdResult;
 pub use standard_vm::StdMachine;
 use sysbus::{SysBus, SysBusDevOps};
+#[cfg(not(target_env = "musl"))]
 use usb::{
     keyboard::UsbKeyboard, tablet::UsbTablet, usb::UsbDeviceOps, xhci::xhci_pci::XhciPciDevice,
-    INPUT,
 };
 use util::{
     arg_parser,
@@ -1068,6 +1068,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - XHCI Configuration.
+    #[cfg(not(target_env = "musl"))]
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
         let bdf = get_pci_bdf(cfg_args)?;
         let device_cfg = parse_xhci(cfg_args)?;
@@ -1114,6 +1115,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Keyboard Configuration.
+    #[cfg(not(target_env = "musl"))]
     fn add_usb_keyboard(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_keyboard(cfg_args)?;
         let keyboard = UsbKeyboard::new(device_cfg.id);
@@ -1132,9 +1134,7 @@ pub trait MachineOps {
         }
         xhci_pci
             .unwrap()
-            .attach_device(&(kbd.clone() as Arc<Mutex<dyn UsbDeviceOps>>))?;
-        let mut locked_input = INPUT.lock().unwrap();
-        locked_input.keyboard = Some(kbd);
+            .attach_device(&(kbd as Arc<Mutex<dyn UsbDeviceOps>>))?;
         Ok(())
     }
 
@@ -1143,6 +1143,7 @@ pub trait MachineOps {
     /// # Arguments
     ///
     /// * `cfg_args` - Tablet Configuration.
+    #[cfg(not(target_env = "musl"))]
     fn add_usb_tablet(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = parse_usb_tablet(cfg_args)?;
         let tablet = UsbTablet::new(device_cfg.id);
@@ -1161,9 +1162,7 @@ pub trait MachineOps {
         }
         xhci_pci
             .unwrap()
-            .attach_device(&(tbt.clone() as Arc<Mutex<dyn UsbDeviceOps>>))?;
-        let mut locked_input = INPUT.lock().unwrap();
-        locked_input.tablet = Some(tbt);
+            .attach_device(&(tbt as Arc<Mutex<dyn UsbDeviceOps>>))?;
         Ok(())
     }
 
@@ -1245,12 +1244,15 @@ pub trait MachineOps {
                 "vhost-user-fs-pci" | "vhost-user-fs-device" => {
                     self.add_virtio_fs(vm_config, cfg_args)?;
                 }
+                #[cfg(not(target_env = "musl"))]
                 "nec-usb-xhci" => {
                     self.add_usb_xhci(cfg_args)?;
                 }
+                #[cfg(not(target_env = "musl"))]
                 "usb-kbd" => {
                     self.add_usb_keyboard(vm_config, cfg_args)?;
                 }
+                #[cfg(not(target_env = "musl"))]
                 "usb-tablet" => {
                     self.add_usb_tablet(vm_config, cfg_args)?;
                 }
