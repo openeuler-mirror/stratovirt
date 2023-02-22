@@ -286,7 +286,10 @@ impl SplitVringDesc {
     /// Return true if the indirect descriptor is valid.
     /// The len can be divided evenly by the size of descriptor and can not be zero.
     fn is_valid_indirect_desc(&self) -> bool {
-        if self.len == 0 || u64::from(self.len) % DESCRIPTOR_LEN != 0 {
+        if self.len == 0
+            || u64::from(self.len) % DESCRIPTOR_LEN != 0
+            || u64::from(self.len) / DESCRIPTOR_LEN > u16::MAX as u64
+        {
             error!("The indirect descriptor is invalid, len: {}", self.len);
             return false;
         }
