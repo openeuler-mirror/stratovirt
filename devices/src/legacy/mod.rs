@@ -52,7 +52,7 @@ pub use pflash::PFlash;
 #[cfg(target_arch = "aarch64")]
 pub use pl011::PL011;
 #[cfg(target_arch = "aarch64")]
-pub use pl031::PL031;
+pub use pl031::{PL031, RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
 #[cfg(target_arch = "aarch64")]
 #[cfg(not(target_env = "musl"))]
 pub use ramfb::Ramfb;
