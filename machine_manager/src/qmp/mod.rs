@@ -453,6 +453,7 @@ fn qmp_command_exec(
         (query_vnc, query_vnc),
         (list_type, list_type),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
+        (input_event, input_event, key, value),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
         (blockdev_del, blockdev_del, node_name),

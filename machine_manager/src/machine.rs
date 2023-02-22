@@ -420,6 +420,11 @@ pub trait DeviceInterface {
     }
 
     fn update_region(&mut self, args: UpdateRegionArgument) -> Response;
+
+    // Send event to input device for testing only.
+    fn input_event(&self, _k: String, _v: String) -> Response {
+        Response::create_empty_response()
+    }
 }
 
 /// Migrate external api

@@ -28,7 +28,10 @@ use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOpera
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 #[cfg(not(target_env = "musl"))]
-use vnc::vnc::qmp_query_vnc;
+use vnc::{
+    input::{key_event, point_event},
+    vnc::qmp_query_vnc,
+};
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::StdMachine;
 
@@ -1596,4 +1599,44 @@ impl DeviceInterface for StdMachine {
 
         Response::create_empty_response()
     }
+
+    #[cfg(not(target_env = "musl"))]
+    fn input_event(&self, key: String, value: String) -> Response {
+        match send_input_event(key, value) {
+            Ok(()) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+}
+
+#[cfg(not(target_env = "musl"))]
+fn send_input_event(key: String, value: String) -> Result<()> {
+    match key.as_str() {
+        "keyboard" => {
+            let vec: Vec<&str> = value.split(',').collect();
+            if vec.len() != 2 {
+                bail!("Invalid keyboard format: {}", value);
+            }
+            let keycode = vec[0].parse::<u16>()?;
+            let down = vec[1].parse::<u8>()? == 1;
+            key_event(keycode, down)?;
+        }
+        "pointer" => {
+            let vec: Vec<&str> = value.split(',').collect();
+            if vec.len() != 3 {
+                bail!("Invalid pointer format: {}", value);
+            }
+            let x = vec[0].parse::<u32>()?;
+            let y = vec[1].parse::<u32>()?;
+            let btn = vec[2].parse::<u32>()?;
+            point_event(btn, x, y)?;
+        }
+        _ => {
+            bail!("Invalid input type: {}", key);
+        }
+    };
+    Ok(())
 }
