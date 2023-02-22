@@ -1308,6 +1308,12 @@ pub trait MachineOps {
             balloon_allow_list(&mut bpf_rules);
         }
 
+        if let Ok(cov_enable) = std::env::var("STRATOVIRT_COV") {
+            if cov_enable.eq("on") {
+                coverage_allow_list(&mut bpf_rules);
+            }
+        }
+
         for bpf_rule in &mut bpf_rules {
             seccomp_filter.push(bpf_rule);
         }
@@ -1656,4 +1662,11 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
 /// Description of the trace for eventnotifier.
 fn trace_eventnotifier(eventnotifier: &EventNotifier) {
     util::ftrace!(trace_eventnotifier, "{:#?}", eventnotifier);
+}
+
+fn coverage_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
+    syscall_allow_list.extend(vec![
+        BpfRule::new(libc::SYS_fcntl),
+        BpfRule::new(libc::SYS_ftruncate),
+    ])
 }
