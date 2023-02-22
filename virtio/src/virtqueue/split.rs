@@ -344,6 +344,7 @@ impl SplitVringDesc {
                     .desc_num
                     .checked_add(queue_size)
                     .ok_or_else(|| anyhow!("The chained desc number overflows"))?;
+                continue;
             }
 
             let iovec = ElemIovec {
@@ -1631,6 +1632,33 @@ mod tests {
             GuestAddress(0x444),
             100,
             VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE,
+            1,
+        )
+        .unwrap();
+        if let Err(err) = vring.pop_avail(&sys_space, features) {
+            assert_eq!(err.to_string(), "Failed to get vring element");
+        } else {
+            assert!(false);
+        }
+
+        // The VIRTQ_DESC_F_NEXT must not set to the descriptor in indirect table.
+        vring
+            .set_desc(
+                &sys_space,
+                0,
+                GuestAddress(SYSTEM_SPACE_SIZE / 2),
+                16,
+                VIRTQ_DESC_F_INDIRECT,
+                0,
+            )
+            .unwrap();
+
+        set_indirect_desc(
+            &sys_space,
+            GuestAddress(SYSTEM_SPACE_SIZE / 2),
+            GuestAddress(0x444),
+            100,
+            VIRTQ_DESC_F_INDIRECT | VIRTQ_DESC_F_WRITE,
             1,
         )
         .unwrap();
