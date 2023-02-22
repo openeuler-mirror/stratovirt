@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use devices::legacy::{RTC_CR, RTC_DR, RTC_IMSC, RTC_LR};
-use mod_test::libtest::{test_init, test_stop, TestState};
+use mod_test::libtest::{test_init, TestState};
 use rand::{thread_rng, Rng};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -42,6 +42,7 @@ fn pl031_write_reg(ts: &TestState, reg: u64, val: u32) {
 }
 
 #[test]
+#[cfg(target_arch = "aarch64")]
 fn check_time() {
     let mut ts = test_init(Vec::new());
 
@@ -59,10 +60,11 @@ fn check_time() {
     assert!((time4 - time3) <= 1);
     assert!((wall_time - time4) <= 1);
 
-    test_stop(&mut ts);
+    ts.stop();
 }
 
 #[test]
+#[cfg(target_arch = "aarch64")]
 fn set_time() {
     let mut ts = test_init(Vec::new());
     let time1 = pl031_read_time(&ts);
@@ -75,28 +77,32 @@ fn set_time() {
 
     assert!((time2 - time1) >= time_lapse);
     assert!((time2 - time1) <= time_lapse + 1);
-    test_stop(&mut ts);
+
+    ts.stop();
 }
 
 #[test]
+#[cfg(target_arch = "aarch64")]
 fn rtc_enable() {
     let mut ts = test_init(Vec::new());
 
     assert_eq!(pl031_read_reg(&ts, RTC_CR), 1);
-    test_stop(&mut ts);
+    ts.stop();
 }
 
 #[test]
+#[cfg(target_arch = "aarch64")]
 fn set_mask() {
     let mut ts = test_init(Vec::new());
 
     pl031_write_reg(&ts, RTC_IMSC, 1);
 
     assert_eq!(pl031_read_reg(&ts, RTC_IMSC), 1);
-    test_stop(&mut ts);
+    ts.stop();
 }
 
 #[test]
+#[cfg(target_arch = "aarch64")]
 fn reg_fuzz() {
     let mut ts = test_init(Vec::new());
     let mut rng = thread_rng();
@@ -108,5 +114,5 @@ fn reg_fuzz() {
         pl031_write_reg(&ts, reg, val);
     }
 
-    test_stop(&mut ts);
+    ts.stop();
 }
